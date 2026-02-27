@@ -1,0 +1,49 @@
+unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	request_body {
+		max_size 10MB
+	}
+
+	# WebSocket tunnel — agents connect here
+	handle /tunnel {
+		reverse_proxy relay:8765
+	}
+
+	# CDP WebSocket proxy — clients connect here
+	handle /cdp/* {
+		reverse_proxy relay:8765
+	}
+
+	# REST API — orchestrator uses these
+	handle /api/* {
+		reverse_proxy relay:8765
+	}
+
+	# MCP server — Mode B users connect here
+	handle /mcp/* {
+		reverse_proxy mcp:8766
+	}
+
+	# Health check
+	handle /health {
+		reverse_proxy relay:8765
+	}
+
+	# Web UI API
+	handle /web/* {
+		reverse_proxy web:8080
+	}
+
+	# Web UI — catch-all serves mobile control panel
+	handle {
+		reverse_proxy web:8080
+	}
+}

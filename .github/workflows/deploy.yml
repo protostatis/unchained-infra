@@ -1,0 +1,85 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deploy secrets
+        id: check-secrets
+        env:
+          HAS_SECRETS: ${{ secrets.EC2_SSH_KEY != '' && secrets.EC2_HOST != '' && secrets.PRIVATE_CORE_REPO_PAT != '' }}
+        run: echo "available=$HAS_SECRETS" >> "$GITHUB_OUTPUT"
+
+      - name: Skip notice
+        if: steps.check-secrets.outputs.available != 'true'
+        run: |
+          echo "Skipped — deploy secrets not configured"
+          exit 0
+
+      - uses: actions/checkout@v4
+        if: steps.check-secrets.outputs.available == 'true'
+
+      - name: Checkout private core
+        if: steps.check-secrets.outputs.available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: protostatis/unchained-core-private
+          token: ${{ secrets.PRIVATE_CORE_REPO_PAT }}
+          path: private-core
+
+      - name: Overlay private core files
+        if: steps.check-secrets.outputs.available == 'true'
+        run: |
+          ./tools/install_private_core.sh private-core/unchained unchained
+
+      - name: Deploy to EC2
+        if: steps.check-secrets.outputs.available == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/unchained-key.pem
+          chmod 600 ~/.ssh/unchained-key.pem
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts 2>/dev/null
+
+          EC2_USER="ubuntu"
+          REMOTE_DIR="/home/$EC2_USER/unchained"
+          SSH_CMD="ssh -i ~/.ssh/unchained-key.pem $EC2_USER@$EC2_HOST"
+          SCP_CMD="scp -i ~/.ssh/unchained-key.pem"
+
+          $SCP_CMD Dockerfile docker-compose.yml Caddyfile $EC2_USER@$EC2_HOST:$REMOTE_DIR/
+
+          $SSH_CMD "mkdir -p $REMOTE_DIR/unchained/benchmark"
+
+          $SCP_CMD \
+            unchained/relay.py unchained/rate_limit.py unchained/auth.py \
+            unchained/cloud_tools.py \
+            unchained/private_core_client.py unchained/private_core_contracts.py \
+            unchained/private_core_server.py unchained/private_core_engine.py \
+            unchained/api.py unchained/mcp_server.py unchained/orchestrator.py \
+            unchained/cdp.py unchained/ddm.py unchained/intel.py \
+            unchained/web.py unchained/web_state.py \
+            unchained/provision_helpers.py unchained/template_utils.py \
+            unchained/agent_package.py unchained/chrome_bridge.py \
+            unchained/chat_agent_cli.py unchained/chat_agent_openrouter.py \
+            unchained/chat_agent_gemini.py unchained/chat_agent_codex.py \
+            unchained/chat_agent_sdk.py unchained/signup_agent.py \
+            unchained/nudge.py unchained/reflex.py unchained/scheduled_tasks.py \
+            unchained/pyproject.toml unchained/CLAUDE.md \
+            unchained/scheduled_jobs.example.json unchained/favicon.svg \
+            $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/
+
+          $SCP_CMD \
+            unchained/benchmark/__init__.py \
+            unchained/benchmark/progress_critic.py \
+            unchained/benchmark/intermediate_goal.py \
+            $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/
+
+          $SSH_CMD "cd $REMOTE_DIR && docker compose up -d --build"
+          $SSH_CMD "docker compose -f $REMOTE_DIR/docker-compose.yml ps"

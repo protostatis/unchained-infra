@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e94560"/>
+      <stop offset="100%" stop-color="#c23152"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="256" fill="#0a0a0f"/>
+  <!-- Left chain link (intact, fading) -->
+  <rect x="88" y="178" width="160" height="156" rx="78" ry="78"
+        fill="none" stroke="#333" stroke-width="36"/>
+  <!-- Right chain link (breaking free) -->
+  <!-- Bottom-left arc of right link -->
+  <path d="M 264,334 A 78,78 0 0,1 264,178"
+        fill="none" stroke="url(#g)" stroke-width="36" stroke-linecap="round"/>
+  <!-- Top-right fragment flying away -->
+  <path d="M 264,178 A 78,78 0 0,1 380,256"
+        fill="none" stroke="url(#g)" stroke-width="36" stroke-linecap="round"
+        transform="translate(18,-14) rotate(8, 322, 217)"/>
+  <!-- Bottom-right fragment flying away -->
+  <path d="M 380,256 A 78,78 0 0,1 264,334"
+        fill="none" stroke="url(#g)" stroke-width="36" stroke-linecap="round"
+        transform="translate(22,12) rotate(-6, 322, 295)"/>
+  <!-- Spark particles at break points -->
+  <circle cx="290" cy="170" r="6" fill="#e94560" opacity="0.9"/>
+  <circle cx="310" cy="155" r="4" fill="#e94560" opacity="0.7"/>
+  <circle cx="275" cy="150" r="3" fill="#e94560" opacity="0.5"/>
+  <circle cx="298" cy="348" r="6" fill="#e94560" opacity="0.9"/>
+  <circle cx="318" cy="362" r="4" fill="#e94560" opacity="0.7"/>
+  <circle cx="282" cy="365" r="3" fill="#e94560" opacity="0.5"/>
+</svg>

@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  public-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./unchained
+
+      - name: Run public-safe tests
+        run: |
+          cd unchained
+          python test_open_core_boundary.py
+          python test_cloud_tools_click.py
+
+      - name: Run OSS boundary guards
+        run: |
+          python tools/oss_guard/check_private_imports.py
+          python tools/oss_guard/check_agent_artifact_leaks.py
+
+  private-integrated-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check private core access
+        id: check-pat
+        env:
+          HAS_PAT: ${{ secrets.PRIVATE_CORE_REPO_PAT != '' }}
+        run: echo "available=$HAS_PAT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private core
+        if: steps.check-pat.outputs.available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: protostatis/unchained-core-private
+          token: ${{ secrets.PRIVATE_CORE_REPO_PAT }}
+          path: private-core
+
+      - name: Overlay private core files
+        if: steps.check-pat.outputs.available == 'true'
+        run: |
+          ./tools/install_private_core.sh private-core/unchained unchained
+
+      - uses: actions/setup-python@v5
+        if: steps.check-pat.outputs.available == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        if: steps.check-pat.outputs.available == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./unchained
+
+      - name: Run integrated tests
+        if: steps.check-pat.outputs.available == 'true'
+        run: |
+          cd unchained
+          python test_dom_density.py
+          python test_page_intel.py
+          python test_reflex.py
+          python test_tab_leak.py
+          python test_web_contracts.py
+
+      - name: Skip notice
+        if: steps.check-pat.outputs.available != 'true'
+        run: echo "Skipped — PRIVATE_CORE_REPO_PAT not configured"
