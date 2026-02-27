@@ -1,0 +1,139 @@
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - relay
+      - mcp
+      - web
+    networks:
+      - edge
+      - app
+    restart: unless-stopped
+
+  relay:
+    build: .
+    expose:
+      - "8765"
+    volumes:
+      - relay_data:/data
+    environment:
+      - UNCHAINED_DB_PATH=/data/auth.db
+      - PRIVATE_CORE_URL=http://private-core:8770
+      - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+    networks:
+      - app
+    restart: unless-stopped
+
+  private-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "private_core_server.py", "--host", "0.0.0.0", "--port", "8770"]
+    expose:
+      - "8770"
+    environment:
+      - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+    networks:
+      - app
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "mcp_server.py", "--host", "0.0.0.0"]
+    expose:
+      - "8766"
+    volumes:
+      - relay_data:/data
+    environment:
+      - UNCHAINED_DB_PATH=/data/auth.db
+      - RELAY_INTERNAL_URL=ws://relay:8765
+      - PRIVATE_CORE_URL=http://private-core:8770
+      - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+    depends_on:
+      - relay
+      - private-core
+    networks:
+      - app
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "web.py", "--host", "0.0.0.0"]
+    expose:
+      - "8080"
+    volumes:
+      - relay_data:/data
+    environment:
+      - UNCHAINED_DB_PATH=/data/auth.db
+      - RELAY_INTERNAL_URL=ws://relay:8765
+      - PRIVATE_CORE_URL=http://private-core:8770
+      - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - JWT_SECRET=${JWT_SECRET}
+      - ALLOWED_EMAILS=${ALLOWED_EMAILS}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - FROM_EMAIL=${FROM_EMAIL:-noreply@unchainedsky.com}
+      - ADMIN_EMAILS=${ADMIN_EMAILS}
+      - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
+      - TRIAL_AGENT_ID=${TRIAL_AGENT_ID:-}
+      - HEADLESS_API_KEY=${HEADLESS_API_KEY:-}
+      - PROVIDER_KEY_SALT=${PROVIDER_KEY_SALT:-}
+    depends_on:
+      - relay
+      - private-core
+    networks:
+      - app
+      - egress
+    restart: unless-stopped
+
+  trial-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "chat_agent_openrouter.py",
+              "--agent", "${TRIAL_AGENT_ID:-a-trial0000}"]
+    volumes:
+      - relay_data:/data
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-arcee-ai/trinity-large-preview:free}
+      - UNCHAINED_API_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
+      - UNCHAINED_SERVER=ws://web:8080
+      - RELAY_HOST=relay
+      - RELAY_PORT=8765
+      - SESSION_DIR=/data/sessions
+      - PRIVATE_CORE_URL=http://private-core:8770
+      - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+    depends_on:
+      - relay
+      - web
+      - private-core
+    networks:
+      - app
+      - egress
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  relay_data:
+
+networks:
+  edge:
+  egress:
+  app:
+    internal: true

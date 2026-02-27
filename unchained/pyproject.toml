@@ -1,0 +1,47 @@
+[project]
+name = "unchained"
+version = "0.1.0"
+description = "Browser automation framework — CDP transport, DOM Density Map, Bayesian page intelligence"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "websockets>=16.0",
+    "aiohttp>=3.11",
+    "anthropic>=0.49",
+    "fastmcp>=2.0",
+    "PyJWT>=2.0",
+    "cryptography>=42.0",
+    "pypdf>=4.0",
+    "edge-tts>=7.0",
+    "openrouter-agent-cli>=0.1.2",
+]
+
+[tool.setuptools]
+packages = ["benchmark"]
+py-modules = [
+    "agent_package", "agent_stream", "api", "auth",
+    "canvas_density", "canvas_intercept", "cdp", "cdp_tool",
+    "chat_agent_cli", "chat_agent_codex", "chat_agent_gemini",
+    "chat_agent_openrouter", "chat_agent_sdk",
+    "chrome_bridge", "cloud_tools", "ddm", "dom_stream", "engage_cdp",
+    "intel", "maps_stream", "mcp_server", "nudge", "orchestrator",
+    "private_core_client", "private_core_contracts",
+    "private_core_engine", "private_core_server",
+    "provision_helpers", "rate_limit", "reflex", "relay",
+    "scheduled_tasks", "signup_agent", "stream_ctl",
+    "template_utils", "web", "web_state", "webmcp",
+]
+
+[project.scripts]
+unchained-ddm = "ddm:main"
+unchained-intel = "intel:main"
+unchained-cdp = "cdp:main"
+unchained-agent = "agent:main"
+unchained-relay = "relay:main"
+unchained-auth = "auth:main"
+unchained-api = "api:main"
+unchained-mcp = "mcp_server:main"
+unchained-orchestrator = "orchestrator:main"
+unchained-scheduled = "scheduled_tasks:main"
+unchained-private-core = "private_core_server:main"

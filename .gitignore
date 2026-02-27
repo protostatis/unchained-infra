@@ -1,0 +1,26 @@
+# OS files
+.DS_Store
+
+# Python
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Tool outputs
+tiktok/screenshots/
+tiktok/*.mp4
+tiktok/voice_samples/
+tiktok/uv.lock
+
+# Logs
+logs/
+
+# Benchmark results
+unchained/benchmark/results/*.jsonl
+
+# Secrets
+.env
+.env.*
+!.env.*.example

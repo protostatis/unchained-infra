@@ -1,0 +1,56 @@
+services:
+  headless-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.headless
+    command: [
+      "python", "chrome_bridge.py", "start",
+      "--relay", "${UNCHAINED_RELAY_URL:?UNCHAINED_RELAY_URL_required}",
+      "--profile", "${CDP_PROFILE:-ec2-headless}",
+      "--headless"
+    ]
+    volumes:
+      - headless_data:/data
+    environment:
+      - UNCHAINED_DATA_DIR=/data
+      - UNCHAINED_RELAY_URL=${UNCHAINED_RELAY_URL:?UNCHAINED_RELAY_URL_required}
+      - UNCHAINED_API_KEY=${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}
+      - CDP_PORT=${CDP_PORT:-9222}
+      - CDP_PROFILE=${CDP_PROFILE:-ec2-headless}
+      - UNCHAINED_CHROME_HEADLESS=1
+      - UNCHAINED_CHROME_ARGS=${UNCHAINED_CHROME_ARGS:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  headless-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.headless
+    command: [
+      "python", "chat_agent_openrouter.py",
+      "--agent", "${TRIAL_AGENT_ID:?TRIAL_AGENT_ID_required}",
+      "--server", "${UNCHAINED_SERVER:-wss://api.unchainedsky.com}"
+    ]
+    volumes:
+      - headless_data:/data
+    environment:
+      - UNCHAINED_DATA_DIR=/data
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-arcee-ai/trinity-large-preview:free}
+      - UNCHAINED_API_KEY=${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}
+      - UNCHAINED_SERVER=${UNCHAINED_SERVER:-wss://api.unchainedsky.com}
+      - RELAY_HOST=${RELAY_HOST:-api.unchainedsky.com}
+      - RELAY_PORT=${RELAY_PORT:-443}
+      - SESSION_DIR=/data/sessions
+    depends_on:
+      headless-bridge:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  headless_data:

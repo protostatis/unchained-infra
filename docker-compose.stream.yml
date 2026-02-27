@@ -1,0 +1,40 @@
+# docker-compose.stream.yml — 24/7 autonomous streaming
+#
+# Usage:
+#   docker compose -f docker-compose.stream.yml build
+#   docker compose -f docker-compose.stream.yml up          # records to ./output/stream.flv
+#
+# RTMP streaming:
+#   RTMP_URL=rtmp://a.rtmp.youtube.com/live2/YOUR_KEY docker compose -f docker-compose.stream.yml up
+#
+# Or set YOUTUBE_STREAM_KEY in .env:
+#   YOUTUBE_STREAM_KEY=xxxx-xxxx-xxxx docker compose -f docker-compose.stream.yml up
+
+services:
+  stream:
+    build:
+      context: .
+      dockerfile: Dockerfile.stream
+    init: true
+    shm_size: 2gb
+    environment:
+      - RTMP_URL=${RTMP_URL:-}
+      - YOUTUBE_STREAM_KEY=${YOUTUBE_STREAM_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - TWITCH_CHANNEL=${TWITCH_CHANNEL:-}
+      - TWITCH_CHAT_ACCESS_TOKEN=${TWITCH_CHAT_ACCESS_TOKEN:-}
+      - DISPLAY=:99
+      - ENABLE_NOVNC=${ENABLE_NOVNC:-0}
+      - NOVNC_BIND=${NOVNC_BIND:-127.0.0.1}
+      - NOVNC_PASSWORD=${NOVNC_PASSWORD:-}
+    ports:
+      - "8878:8878"   # overlay preview
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./output:/output
+    restart: unless-stopped

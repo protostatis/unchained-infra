@@ -1,0 +1,29 @@
+{
+  "jobs": [
+    {
+      "id": "daily-summary",
+      "prompt": "Open my dashboard and summarize anything important since yesterday.",
+      "schedule": {
+        "daily_at": "14:00"
+      },
+      "use_stable_session": true,
+      "timeout_seconds": 240
+    },
+    {
+      "id": "quick-health-check",
+      "prompt": "Check if the status page shows incidents and report back.",
+      "schedule": {
+        "every_minutes": 30
+      },
+      "retry_seconds": 120
+    },
+    {
+      "id": "one-time-export",
+      "prompt": "Export this week's report as CSV and confirm where it was downloaded.",
+      "schedule": {
+        "at": "2026-03-01T18:00:00Z"
+      },
+      "enabled": false
+    }
+  ]
+}

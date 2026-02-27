@@ -1,0 +1,46 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Headless Chromium + CA roots/fonts for modern websites.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    ca-certificates \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 10001 -s /bin/bash unchained \
+    && mkdir -p /app /data \
+    && chown -R unchained:unchained /app /data
+
+# Copy only modules required by chrome_bridge + OpenRouter trial agent.
+COPY unchained/auth.py .
+COPY unchained/chat_agent_openrouter.py .
+COPY unchained/chrome_bridge.py .
+COPY unchained/cloud_tools.py .
+COPY unchained/cdp.py .
+COPY unchained/ddm.py .
+COPY unchained/intel.py .
+COPY unchained/nudge.py .
+COPY unchained/reflex.py .
+COPY unchained/CLAUDE.md .
+
+RUN pip install --no-cache-dir \
+    websockets>=16.0 \
+    httpx>=0.28.1 \
+    aiohttp>=3.11 \
+    anthropic>=0.49 \
+    fastmcp>=2.0 \
+    PyJWT>=2.0 \
+    cryptography>=42.0 \
+    pypdf>=4.0
+
+ENV PYTHONUNBUFFERED=1 \
+    HOME=/home/unchained \
+    UNCHAINED_DATA_DIR=/data \
+    CDP_PORT=9222 \
+    UNCHAINED_CHROME_HEADLESS=1
+
+USER 10001:10001
+
+CMD ["python", "chat_agent_openrouter.py", "--help"]
