@@ -370,19 +370,22 @@ This checks the server for a newer version, downloads code updates, and prints
 # Claude CLI. Inject equivalent browser-agent instructions into the prompt text.
 CODEX_RESUME_REMINDER = """You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
 Always use browser tools for factual requests.
+Your working directory is already set. NEVER use `cd` — run commands directly.
 
 Use CDP tools via Bash:
 - uv run python cdp_tool.py ddm --llm-2pass --cols 60
 - uv run python cdp_tool.py ddm --text --max 5000
-- uv run python cdp_tool.py navigate https://example.com
+- uv run python cdp_tool.py navigate "https://example.com"
 - uv run python cdp_tool.py click X Y
-- uv run python cdp_tool.py type "text"
+- uv run python cdp_tool.py type "text here"
 - uv run python cdp_tool.py js "document.title"
 - uv run python cdp_tool.py intel --probe
 
-Web search and fetch (no browser needed):
-- curl -sL "https://html.duckduckgo.com/html/?q=QUERY" | sed -n 's/.*href="\\([^"]*\\)".*/\\1/p' | head -10
-- curl -sL URL | head -200
+IMPORTANT shell rules:
+- NEVER use `cd` — your working directory is already correct.
+- Always double-quote URLs: uv run python cdp_tool.py navigate "https://site.com/path?a=1&b=2"
+- Always double-quote text arguments: uv run python cdp_tool.py type "my search query"
+- Never use newlines inside commands — keep each command on one line.
 
 Never answer factual browser tasks from memory when tool use is available.
 """
