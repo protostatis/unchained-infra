@@ -1067,10 +1067,16 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             item_id = str(item.get("id", "")).strip()
             item_type = (item.get("type") or "").lower()
             codex_tool_start_times.pop(item_id, None)  # clear search timer
+            # Send tool_result for non-command_execution items that had a tool_start
+            _tracked = codex_tool_items.pop(item_id, None)
+            if _tracked and item_type != "command_execution":
+                await ws.send(json.dumps({
+                    "session_id": sid, "type": "tool_result",
+                    "name": _tracked[0], "data": "completed",
+                    "is_screenshot": False, "visible": False,
+                }))
             if item_type == "command_execution":
-                tool_name, tool_input = codex_tool_items.pop(
-                    item_id, _codex_tool_name_and_input(str(item.get("command", "")))
-                )
+                tool_name, tool_input = _tracked or _codex_tool_name_and_input(str(item.get("command", "")))
                 out = str(item.get("aggregated_output") or "").strip()
                 if not out:
                     exit_code = item.get("exit_code")
@@ -1163,7 +1169,8 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             continue
 
     if timed_out:
-        error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
+        if not error_text:
+            error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except Exception:
@@ -1194,10 +1201,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
         response = streamed_text.strip()
 
     if timed_out and not response:
-        response = (
-            f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s before returning a final response. "
-            "Try a narrower prompt or switch to gpt-5.1-codex-mini for faster results."
-        )
+        response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
 
     if proc.returncode and proc.returncode < 0:
         proc_pid = getattr(proc, "pid", None)
@@ -1215,10 +1219,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             return
         if not response:
             if timed_out:
-                response = (
-                    f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s before returning a final response. "
-                    "Try a narrower prompt or switch to gpt-5.1-codex-mini for faster results."
-                )
+                response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
             else:
                 sig = -proc.returncode
                 response = f"Codex CLI terminated unexpectedly (signal {sig})."
