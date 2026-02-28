@@ -57,6 +57,7 @@ class PrivateCoreClient:
 
         self.token = token if token is not None else os.environ.get("PRIVATE_CORE_TOKEN", "")
         self.timeout_seconds = timeout_seconds
+        self._http_client: httpx.AsyncClient | None = None
 
     async def execute(self, op: str, **kwargs: Any) -> Any:
         """Execute one private-core operation and return its result payload."""
@@ -69,15 +70,30 @@ class PrivateCoreClient:
             return await self._execute_http(op, **kwargs)
         return await self._execute_inprocess(op, **kwargs)
 
+    def _get_http_client(self) -> httpx.AsyncClient:
+        """Return a persistent HTTP client, creating it on first use."""
+        if self._http_client is None or self._http_client.is_closed:
+            headers = {"Content-Type": "application/json"}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            self._http_client = httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                headers=headers,
+            )
+        return self._http_client
+
+    async def close(self):
+        """Close the persistent HTTP client."""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+            self._http_client = None
+
     async def _execute_http(self, op: str, **kwargs: Any) -> Any:
-        headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
         payload = {"op": op, **kwargs}
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                resp = await client.post(f"{self.base_url}{CORE_EXECUTE_PATH}", json=payload, headers=headers)
+            client = self._get_http_client()
+            resp = await client.post(f"{self.base_url}{CORE_EXECUTE_PATH}", json=payload)
         except Exception as exc:  # pragma: no cover - network path
             raise PrivateCoreError(f"Failed to reach private core: {exc}") from exc
 
