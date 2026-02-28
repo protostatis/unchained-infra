@@ -62,7 +62,7 @@ KEY = os.environ.get("UNCHAINED_API_KEY", "")
 SERVER = os.environ.get("UNCHAINED_SERVER", "wss://api.unchainedsky.com/chat/ws")
 RELAY_HOST = os.environ.get("UNCHAINED_RELAY_HOST", "api.unchainedsky.com")
 RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
-CWD = os.path.expanduser("~/Projects/unchained/unchained")
+CWD = os.path.expanduser("~/unchained-agent/unchained")
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
@@ -988,6 +988,8 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
     streamed_text = ""
     error_text = ""
     codex_tool_items: dict[str, tuple[str, str]] = {}
+    codex_tool_start_times: dict[str, float] = {}  # item_id -> monotonic start
+    SEARCH_TIMEOUT_S = float(os.environ.get("SEARCH_TIMEOUT_S", "60"))
     timed_out = False
     deadline = time.monotonic() + CODEX_MAX_RUNTIME_S if CODEX_MAX_RUNTIME_S > 0 else None
 
@@ -999,6 +1001,19 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
                 timed_out = True
                 break
             read_timeout = min(read_timeout, max(0.05, remaining))
+        # Check for stalled search tools
+        if SEARCH_TIMEOUT_S > 0 and codex_tool_start_times:
+            now = time.monotonic()
+            for _tid, _tstart in list(codex_tool_start_times.items()):
+                elapsed = now - _tstart
+                if elapsed > SEARCH_TIMEOUT_S:
+                    tool_name = codex_tool_items.get(_tid, ("search", ""))[0]
+                    log.info("[%s] Search tool %s stalled after %.0fs, killing subprocess", sid, tool_name, elapsed)
+                    timed_out = True
+                    error_text = f"Search timed out after {int(elapsed)}s — please try again"
+                    break
+            if timed_out:
+                break
         try:
             raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=read_timeout)
         except asyncio.TimeoutError:
@@ -1035,12 +1050,23 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
                     "session_id": sid, "type": "tool_start",
                     "name": tool_name, "input": tool_input,
                 }))
+            else:
+                # Track non-Bash tools (WebSearch, WebFetch, etc.)
+                log.info("  Codex item.started: id=%s type=%s", item_id, item_type)
+                if item_id and "search" in item_type:
+                    codex_tool_items[item_id] = ("websearch", str(item.get("query", ""))[:100])
+                    codex_tool_start_times[item_id] = time.monotonic()
+                    await ws.send(json.dumps({
+                        "session_id": sid, "type": "tool_start",
+                        "name": "websearch", "input": str(item.get("query", ""))[:100],
+                    }))
             continue
 
         if etype == "item.completed":
             item = event.get("item") or {}
             item_id = str(item.get("id", "")).strip()
             item_type = (item.get("type") or "").lower()
+            codex_tool_start_times.pop(item_id, None)  # clear search timer
             if item_type == "command_execution":
                 tool_name, tool_input = codex_tool_items.pop(
                     item_id, _codex_tool_name_and_input(str(item.get("command", "")))
