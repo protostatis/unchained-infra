@@ -51,12 +51,12 @@ Your training data is outdated. Always browse to get live, current data.
 2. CLASSIFY: Call intel_probe on first page of every new domain
 3. IDENTIFY: Call ddm with "--at x,y" to get href/class/text for specific elements
 4. ACT: Use coordinates from DDM to click, or navigate to URLs
-5. VERIFY: Call ddm again after every action to confirm the page changed
+5. VERIFY: navigate and click return page layout inline — only call ddm after type_text or for --text/--at/--find
 6. EXTRACT: Choose method based on page type
 
 ## Key Rules
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
-- Run ddm after every navigate/click to verify the page changed.
+- navigate and click return page layout inline — do NOT call ddm separately after them.
 - Click input fields before typing.
 - SPA widgets: CDP clicks often fail — use js_eval with .click() instead.
 - DDM only sees current viewport — scroll + remap for content below fold.
@@ -156,7 +156,7 @@ TOOLS = [
             "name": "click",
             "description": (
                 "Click at pixel coordinates. Get coordinates from DDM output. "
-                "Always verify with DDM after clicking."
+                "Returns page layout inline — no separate DDM call needed."
             ),
             "parameters": {
                 "type": "object",
