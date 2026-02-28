@@ -10,8 +10,8 @@ This directory contains the Unchained browser automation platform. When running 
 ### #2: No More Than 1 Click Per Second
 **NEVER click faster than 1 per second.** Rapid clicks trigger anti-bot detection and cause actions to silently fail.
 
-### #3: DDM Verify After Every Action
-**After every click/navigate/submit, run DDM to verify the page state actually changed.** If DDM shows the same elements, the action failed silently — try a different approach (JS `.click()`, URL params, different selector). Never assume a click worked just because it didn't throw an error.
+### #3: Navigate and Click Return DDM — No Separate Call Needed
+**`navigate` and `click` already return DDM page layout in their output (under "=== Page Layout ===").** Read that section to verify the page changed — do NOT call `ddm` separately after them. Only call `ddm` separately after `type`, or for `--text`, `--at x,y`, `--find`, `--js` flags. If DDM shows the same elements after an action, the action failed silently — try a different approach (JS `.click()`, URL params, different selector).
 
 ### #4: Click to Focus Before Typing
 **Before typing, always click the target input field first.** Key events go to whichever element has focus — if nothing is focused, the event goes nowhere and silently fails.
@@ -39,8 +39,8 @@ uv run python cdp_tool.py ddm --at 694,584               # Element details at pi
 uv run python cdp_tool.py ddm --js "expression"          # Execute JS on page, return JSON
 
 # Navigation & Interaction
-uv run python cdp_tool.py navigate https://example.com   # Go to URL
-uv run python cdp_tool.py click 500 300                  # Click at pixel coordinates
+uv run python cdp_tool.py navigate https://example.com   # Go to URL (returns page layout — no ddm needed)
+uv run python cdp_tool.py click 500 300                  # Click at coordinates (returns page layout — no ddm needed)
 uv run python cdp_tool.py type "search query"            # Type into focused input
 uv run python cdp_tool.py js "document.title"            # Run JavaScript on page
 
@@ -86,8 +86,7 @@ Tab IDs are Chrome-assigned strings. Use the first 6-12 characters as a prefix (
 
 Every browsing task follows this pipeline:
 
-**Step 1: ORIENT** — `ddm --llm-2pass --cols 60` on every new page
-Shows page layout, all interactive elements with labels and pixel coordinates (~500 tokens).
+**Step 1: ORIENT** — `navigate` and `click` already return DDM page layout in their output (under "=== Page Layout ==="). Read that — do NOT call `ddm` separately after them. Only call `ddm` separately after `type`, or for `--text`, `--at x,y`, `--find`, `--js`.
 
 **Step 2: IDENTIFY** — `ddm --at x,y` on targets from Step 1
 Returns href, class, text, aria-* for elements you want to interact with.
@@ -98,7 +97,7 @@ Fingerprints the page and ranks 8 extraction strategies. Reveals framework (Nuxt
 **Step 4: ACT** — Use coordinates from DDM to click, or navigate to URLs from --at
 For SPA widgets, use `js` with `.click()` on the element.
 
-**Step 5: VERIFY** — DDM again after every action to confirm page changed.
+**Step 5: VERIFY** — After `navigate` or `click`, check the "=== Page Layout ===" in their output. After `type` or other actions, run `ddm` to verify.
 
 **Step 6: EXTRACT** — Choose method based on page type:
 - Simple text (HN, Wikipedia, blogs): `ddm --text --max 5000`
