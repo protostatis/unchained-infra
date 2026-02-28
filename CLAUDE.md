@@ -126,9 +126,9 @@ CDP_WS_URL=ws://127.0.0.1:8765/cdp/<agent_id>/auto uv run ddm.py --llm-2pass
 
 **NEVER click, dispatch mouse events, or send key events faster than 1 per second when browsing via CDP.** Rapid automated clicks trigger anti-bot detection and cause actions to silently fail. Always `await asyncio.sleep(1)` minimum between any two interactive actions.
 
-### #3: DDM Verify After Every Action
+### #3: Navigate and Click Return DDM — No Separate Call Needed
 
-**After every CDP action (click, navigate, form submit), run `ddm.py --llm-2pass` to verify the page state actually changed before proceeding.** If DDM shows the same elements as before, the action failed silently — try a different approach (JS `.click()`, URL params, different selector) instead of repeating the same failed action.
+**`navigate` and `click` already return DDM page layout in their output (under "=== Page Layout ===").** Read that section to verify the page changed — do NOT call `ddm` separately after them. Only call `ddm` separately after `type`, or for `--text`, `--at x,y`, `--find`, `--js` flags. If DDM shows the same elements after an action, the action failed silently — try a different approach (JS `.click()`, URL params, different selector).
 
 ### #4: Click to Focus Before Key Events
 
@@ -163,7 +163,7 @@ uv run ddm.py --at g48,40 --cols 60         # By grid coords (prefix 'g')
 
 **Step 3: ACT** — Use href to navigate, or CDP click at coordinates.
 
-**Step 4: VERIFY** — `ddm --llm-2pass` again after action.
+**Step 4: VERIFY** — `navigate` and `click` already return DDM layout. After `type` or other actions, run `ddm --llm-2pass`.
 
 **Step 5: CLASSIFY (if extracting data)** — `intel --probe`
 → Fingerprints the page and ranks 8 extraction strategies via Bayesian model (~100 tokens).
@@ -349,6 +349,6 @@ Step 3: EXTRACT   → choose path based on --probe:
   Path E — data_testid >40% → --extract --strategy data_testid
   Path F — fallback        → ddm --text + JS querySelectorAll
 Step 4: ACT       → ddm --at x,y + CDP click/type
-Step 5: VERIFY    → ddm --llm-2pass
+Step 5: VERIFY    → navigate/click already return DDM layout; only run ddm after type
 Step 6: Screenshot → only for visual state
 ```

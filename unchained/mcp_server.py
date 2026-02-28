@@ -32,8 +32,8 @@ mcp = FastMCP(
     instructions=(
         "Unchained browser automation tools. Use DDM (dom density map) for "
         "page orientation (~500 tokens), intel for extraction strategy "
-        "classification, and CDP tools for interaction. Always DDM first, "
-        "then act, then DDM to verify."
+        "classification, and CDP tools for interaction. Navigate and click "
+        "return page layout inline — no separate DDM call needed after them."
     ),
 )
 
