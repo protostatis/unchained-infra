@@ -150,7 +150,9 @@ class BenchmarkBrowser:
         )
 
     async def close(self):
-        await self.client.close()
+        close_fn = getattr(self.client, "close", None)
+        if close_fn is not None:
+            await close_fn()
 
     async def create_tab(self, url: str = "about:blank") -> str:
         if not self.config.agent_id:

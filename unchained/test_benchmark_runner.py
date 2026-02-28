@@ -80,6 +80,18 @@ class TestBenchmarkRunner(unittest.TestCase):
 
 
 class TestBenchmarkBrowser(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_close_tolerates_older_private_core_client(self):
+        browser = BenchmarkBrowser(
+            BenchmarkConfig(
+                agent_id="claude-test",
+                relay_host="127.0.0.1",
+                relay_port=8765,
+            )
+        )
+        browser.client = SimpleNamespace()
+
+        await browser.close()
+
     async def test_local_tab_lifecycle_uses_private_core_client(self):
         browser = BenchmarkBrowser(
             BenchmarkConfig(
