@@ -311,11 +311,11 @@ uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs o
 
 ## DDM-First Methodology
 
-1. **ORIENT**: `navigate` and `click` already return DDM page layout in their output (under "=== Page Layout ==="). Read that section — do NOT call `ddm` separately after navigate or click. Only call `ddm` separately after `type`, for `--text`, `--at x,y`, `--find`, or `--js`.
+1. **ORIENT**: `navigate` and `click` return DDM page layout in their output (under "=== Page Layout ==="). Read that section — do NOT call `ddm` separately after navigate or click. If "=== Page Layout ===" is missing, run `ddm --llm-2pass --cols 60` as fallback. Only call `ddm` separately after `type`, for `--text`, `--at x,y`, `--find`, or `--js`.
 2. **IDENTIFY**: `ddm --at x,y` to get href, class, text for elements you want to interact with
 3. **CLASSIFY**: `intel --probe` on unknown SPAs — identifies framework and best extraction strategy
 4. **ACT**: Use coordinates from DDM to click, or navigate to URLs. For SPA widgets, use `js` with .click()
-5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" section already in the tool output. After `type` or other actions, run `ddm` to verify.
+5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" section in the tool output. If it's missing, run `ddm --llm-2pass --cols 60`. After `type`, `press_enter`, or `submit_form`, always run `ddm` to verify.
 6. **EXTRACT**: Choose by page type:
    - Simple text: `ddm --text --max 5000`
    - Shadow DOM (Reddit): `intel --extract`

@@ -156,7 +156,7 @@ Many sites have predictable URL patterns. ALWAYS try navigating directly before 
 - ArXiv: navigate to https://arxiv.org/search/?query=QUERY (replace spaces with +)
 - GitHub: navigate to https://github.com/OWNER/REPO/issues for issues
 
-If you must use a search form: click the input → type_text → press_enter or submit_form → check the page layout in the tool output.
+If you must use a search form: click the input → type_text → press_enter or submit_form → run ddm to check results.
 If the form doesn't work after ONE attempt, navigate directly to the URL instead.
 
 ## Key Gotchas
