@@ -1,10 +1,13 @@
-"""Claude CLI agent executor for benchmark."""
+"""CLI agent executor for benchmark."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
+import signal
+import tempfile
 import time
 
 from benchmark.common import BenchmarkConfig, TaskResult, extract_cdp_tool_name
@@ -21,6 +24,9 @@ except RuntimeError:
     _HAS_INTERMEDIATE_GOAL = False
 
 CWD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
+CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
 
 
 def _build_system_prompt() -> str:
@@ -66,6 +72,58 @@ uv run python cdp_tool.py screenshot
 """
 
 
+def _build_codex_prompt(task_prompt: str) -> str:
+    return (
+        "[SYSTEM PROMPT]\n"
+        f"{_build_system_prompt()}\n"
+        "[/SYSTEM PROMPT]\n\n"
+        f"User request:\n{(task_prompt or '').strip()}\n"
+    )
+
+
+def _is_codex_cli_model(model: str | None) -> bool:
+    return (model or "").startswith("codex-cli:")
+
+
+def _resolve_codex_model(model: str | None) -> str:
+    raw = (model or "").strip()
+    if raw.startswith("codex-cli:"):
+        resolved = raw.split(":", 1)[1].strip()
+        return resolved or DEFAULT_CODEX_MODEL
+    return DEFAULT_CODEX_MODEL
+
+
+def _collect_text_strings(obj) -> list[str]:
+    out: list[str] = []
+    if isinstance(obj, str):
+        s = obj.strip()
+        if s:
+            out.append(s)
+        return out
+    if isinstance(obj, list):
+        for value in obj:
+            out.extend(_collect_text_strings(value))
+        return out
+    if not isinstance(obj, dict):
+        return out
+
+    text = obj.get("text")
+    if isinstance(text, str) and text.strip():
+        out.append(text.strip())
+    for key in ("content", "output_text", "parts"):
+        if key in obj:
+            out.extend(_collect_text_strings(obj.get(key)))
+    return out
+
+
+def _codex_tool_name_and_command(command: str) -> tuple[str, str]:
+    cmd = (command or "").strip()
+    shell_match = re.match(r"^/bin/(?:zsh|bash)\s+-lc\s+'(.+)'$", cmd, re.DOTALL)
+    if shell_match:
+        cmd = shell_match.group(1).strip()
+    return extract_cdp_tool_name(cmd), cmd
+
+
 async def _terminate_process(proc: asyncio.subprocess.Process, grace_seconds: float = 5.0):
     if proc.returncode is not None:
         return
@@ -77,34 +135,17 @@ async def _terminate_process(proc: asyncio.subprocess.Process, grace_seconds: fl
         await proc.wait()
 
 
-async def run_task(
-    task: dict,
+async def _run_task_claude(
+    task_prompt: str,
     *,
     config: BenchmarkConfig,
-    model: str | None = None,
-    max_turns: int = 25,
-    intermediate_goal_mode: str = "off",
+    model: str | None,
+    max_turns: int,
+    timeout: int | float,
 ) -> TaskResult:
     """Run one task through Claude CLI."""
     result = TaskResult()
     cli_model = model or "sonnet"
-    timeout = task.get("timeout_seconds", 120)
-    task_prompt = task["task"]
-
-    if _HAS_INTERMEDIATE_GOAL:
-        hardness_estimate = estimate_hardness(task)
-        enable_intermediate_goal = should_enable_intermediate_goal(
-            intermediate_goal_mode,
-            hardness_estimate.score,
-        )
-        result.intermediate_goal_mode = (intermediate_goal_mode or "off").lower()
-        result.intermediate_goal_enabled = enable_intermediate_goal
-        result.hardness = hardness_estimate.to_dict()
-        if enable_intermediate_goal:
-            contract = build_intermediate_goal_contract(task, hardness_estimate)
-            task_prompt = f"{task_prompt}\n\n{contract}"
-    else:
-        result.intermediate_goal_mode = "off"
 
     cmd = [
         "claude",
@@ -205,4 +246,238 @@ async def run_task(
         result.error = f"Exception: {exc}"
 
     result.wall_seconds = time.monotonic() - start
+    return result
+
+
+async def _run_task_codex(
+    task_prompt: str,
+    *,
+    config: BenchmarkConfig,
+    model: str | None,
+    timeout: int | float,
+) -> TaskResult:
+    """Run one task through Codex CLI."""
+    result = TaskResult()
+    codex_model = _resolve_codex_model(model)
+    output_file = os.path.join(
+        tempfile.gettempdir(),
+        f"benchmark_codex_last_{os.getpid()}_{int(time.time() * 1000)}",
+    )
+    config_args: list[str] = []
+    if CODEX_REASONING_EFFORT in {"low", "medium", "high"}:
+        config_args = ["-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
+
+    cmd = [
+        CODEX_BIN,
+        "exec",
+        *config_args,
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "--output-last-message",
+        output_file,
+        "-C",
+        CWD,
+        "-m",
+        codex_model,
+        "-",
+    ]
+
+    start = time.monotonic()
+    response = ""
+    streamed_text = ""
+    error_text = ""
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=config.subprocess_env(),
+            cwd=CWD,
+            start_new_session=True,
+        )
+
+        assert proc.stdin is not None
+        proc.stdin.write(_build_codex_prompt(task_prompt).encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+        async def _read_stream():
+            nonlocal response, streamed_text, error_text
+            assert proc.stdout is not None
+            async for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+                if etype == "item.started":
+                    item = event.get("item") or {}
+                    item_type = str(item.get("type", "") or "").lower()
+                    if item_type == "command_execution":
+                        tool_name, command = _codex_tool_name_and_command(str(item.get("command", "") or ""))
+                        result.record_tool_call(
+                            tool_name,
+                            {"command": command},
+                            call_signature=f"{tool_name}:{command}",
+                        )
+                    elif "search" in item_type:
+                        result.record_tool_call(
+                            "websearch",
+                            {"query": str(item.get("query", "") or "")[:200]},
+                        )
+                    continue
+
+                if etype == "item.completed":
+                    item = event.get("item") or {}
+                    item_type = str(item.get("type", "") or "").lower()
+                    if item_type in ("assistant_message", "message", "output_text"):
+                        text_bits = _collect_text_strings(item)
+                        if text_bits:
+                            response = "\n".join(text_bits).strip()
+                    elif item_type == "error":
+                        msg = item.get("message", "")
+                        if isinstance(msg, str) and msg.strip():
+                            error_text = msg.strip()
+                    continue
+
+                if etype == "item.delta":
+                    delta_bits = _collect_text_strings(event.get("delta"))
+                    if delta_bits:
+                        chunk = "\n".join(delta_bits).strip()
+                        if chunk:
+                            if streamed_text:
+                                streamed_text += "\n"
+                            streamed_text += chunk
+                    continue
+
+                if etype == "turn.completed":
+                    usage = event.get("usage") or {}
+                    result.prompt_tokens += int(usage.get("input_tokens", 0) or 0)
+                    result.completion_tokens += int(usage.get("output_tokens", 0) or 0)
+                    result.total_tokens += int(usage.get("input_tokens", 0) or 0)
+                    result.total_tokens += int(usage.get("output_tokens", 0) or 0)
+                    bits = _collect_text_strings(event)
+                    if bits:
+                        maybe = "\n".join(bits).strip()
+                        if maybe and len(maybe) > len(response):
+                            response = maybe
+                    continue
+
+                if etype == "turn.failed":
+                    err = event.get("error") or {}
+                    msg = err.get("message", "") if isinstance(err, dict) else ""
+                    if isinstance(msg, str) and msg.strip():
+                        error_text = msg.strip()
+                    continue
+
+                if etype == "error":
+                    msg = event.get("message", "")
+                    if isinstance(msg, str) and msg.strip():
+                        error_text = msg.strip()
+                    continue
+
+        try:
+            await asyncio.wait_for(_read_stream(), timeout=timeout)
+        except asyncio.TimeoutError:
+            result.error = f"Timeout after {timeout}s"
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                await proc.wait()
+        else:
+            await proc.wait()
+
+        if not response and os.path.exists(output_file):
+            try:
+                with open(output_file, "r", encoding="utf-8", errors="replace") as handle:
+                    response = handle.read().strip()
+            except Exception:
+                pass
+
+        if not response and streamed_text:
+            response = streamed_text.strip()
+        if response:
+            result.answer = response
+        elif error_text:
+            result.error = error_text[:400]
+        elif proc.returncode and proc.returncode != 0:
+            assert proc.stderr is not None
+            stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+            result.error = stderr_text[:400] or f"Exit code {proc.returncode}"
+
+    except FileNotFoundError:
+        result.error = "codex CLI not found"
+    except Exception as exc:
+        result.error = f"Exception: {exc}"
+    finally:
+        try:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+        except Exception:
+            pass
+
+    result.wall_seconds = time.monotonic() - start
+    return result
+
+
+async def run_task(
+    task: dict,
+    *,
+    config: BenchmarkConfig,
+    model: str | None = None,
+    max_turns: int = 25,
+    intermediate_goal_mode: str = "off",
+) -> TaskResult:
+    """Run one task through Claude CLI or Codex CLI."""
+    timeout = task.get("timeout_seconds", 120)
+    task_prompt = task["task"]
+    intermediate_goal_enabled = False
+    intermediate_goal_mode_resolved = (intermediate_goal_mode or "off").lower()
+    hardness: dict[str, object] = {}
+
+    if _HAS_INTERMEDIATE_GOAL:
+        hardness_estimate = estimate_hardness(task)
+        intermediate_goal_enabled = should_enable_intermediate_goal(
+            intermediate_goal_mode,
+            hardness_estimate.score,
+        )
+        hardness = hardness_estimate.to_dict()
+        if intermediate_goal_enabled:
+            contract = build_intermediate_goal_contract(task, hardness_estimate)
+            task_prompt = f"{task_prompt}\n\n{contract}"
+
+    if _is_codex_cli_model(model):
+        result = await _run_task_codex(
+            task_prompt,
+            config=config,
+            model=model,
+            timeout=timeout,
+        )
+    else:
+        result = await _run_task_claude(
+            task_prompt,
+            config=config,
+            model=model,
+            max_turns=max_turns,
+            timeout=timeout,
+        )
+
+    result.intermediate_goal_mode = intermediate_goal_mode_resolved if _HAS_INTERMEDIATE_GOAL else "off"
+    result.intermediate_goal_enabled = intermediate_goal_enabled
+    result.hardness = hardness
     return result
