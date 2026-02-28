@@ -50,11 +50,11 @@ screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
 
 ## DDM-First Methodology
 
-1. **ORIENT**: `navigate` and `click` already include DDM page layout in their output — read the "=== Page Layout ===" section. Only call `ddm` separately for `--text`, `--at x,y`, `--find`, or after `type_text`/`press_enter`.
+1. **ORIENT**: `navigate` and `click` include DDM page layout in their output — read the "=== Page Layout ===" section. If it's missing, run `ddm` as fallback. Only call `ddm` separately for `--text`, `--at x,y`, `--find`, or after `type_text`/`press_enter`/`submit_form`.
 2. **CLASSIFY**: `intel_probe` on first page of every new domain — identifies framework, data stores, best strategy. Skip on subsequent pages of same domain.
 3. **IDENTIFY**: `ddm` with "--at x,y" flags to get href, class, text for elements you want to interact with
 4. **ACT**: Use coordinates from DDM to click, or navigate to URLs. For SPA widgets, use `js_eval` with .click()
-5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" in the tool output — no separate DDM call needed. After `type_text` or other actions, run `ddm` to verify.
+5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" in the tool output. If missing, run `ddm` as fallback. After `type_text`, `press_enter`, or `submit_form`, always run `ddm` to verify.
 6. **EXTRACT**: Choose by page type (informed by probe results):
    - Simple text: `ddm` with "--text --max 5000" flags
    - Shadow DOM (Reddit): `intel_extract` with host_attrs strategy
