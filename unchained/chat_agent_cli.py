@@ -66,7 +66,7 @@ CWD = os.path.expanduser("~/Projects/unchained/unchained")
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
-CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "300"))
+CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
