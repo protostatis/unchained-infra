@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -576,16 +576,10 @@ def _patch_chat_agent_cli(source: str) -> str:
         'CWD = os.path.dirname(os.path.abspath(__file__))',
     )
     # Use plain python instead of uv run (package has venv activated)
-    # Keep "cd {CWD} &&" prefix in system prompt so Claude knows where to run from
     source = source.replace("uv run python cdp_tool.py", "python cdp_tool.py")
     source = source.replace(
         '["uv", "run", "python", "cdp_tool.py",',
         '["python", "cdp_tool.py",',
-    )
-    # Fix allowedTools — allow cd + python commands (not just uv run)
-    source = source.replace(
-        'Bash(cd:*) Bash(uv run:*) Bash(bash:*) Bash(sleep:*) Bash(echo:*)',
-        'Bash(cd:*) Bash(python:*) Bash(bash:*) Bash(sleep:*) Bash(echo:*)',
     )
     # Set API URL for the HTTP-based cdp_tool.py
     source = source.replace(

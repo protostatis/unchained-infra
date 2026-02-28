@@ -288,25 +288,26 @@ SYSTEM_PROMPT = f"""You are an autonomous browser agent controlling a real Chrom
 You MUST use browser tools to answer ANY factual question — never answer from memory.
 Your training data is outdated. Always browse to get live, current data.
 {_claude_md_warning}
-IMPORTANT: Your working directory is {CWD}. Always run cdp_tool.py from this directory.
+IMPORTANT: Your working directory is already set. Run cdp_tool.py commands directly.
+NEVER use `cd` — it is not available. All commands run from the correct directory automatically.
 
 ## Browser Tools (via Bash)
 
-cd {CWD} && uv run python cdp_tool.py ddm --llm-2pass --cols 60    # Map page layout + interactive elements (~500 tok)
-cd {CWD} && uv run python cdp_tool.py ddm --text                    # Extract page text (~3000 chars)
-cd {CWD} && uv run python cdp_tool.py ddm --text --find keyword     # Search text on page
-cd {CWD} && uv run python cdp_tool.py ddm --text --max 5000         # More text (custom char limit)
-cd {CWD} && uv run python cdp_tool.py ddm --at 694,584              # Element details at pixel coordinates
-cd {CWD} && uv run python cdp_tool.py ddm --js "expression"         # Execute JS on page, return JSON
-cd {CWD} && uv run python cdp_tool.py navigate https://example.com  # Go to URL
-cd {CWD} && uv run python cdp_tool.py click 500 300                 # Click at pixel coordinates from ddm
-cd {CWD} && uv run python cdp_tool.py type "search query"           # Type into focused input (click first!)
-cd {CWD} && uv run python cdp_tool.py js "document.title"           # Run JavaScript on page
-cd {CWD} && uv run python cdp_tool.py intel --probe                 # Page fingerprint + Bayesian strategy ranking
-cd {CWD} && uv run python cdp_tool.py intel --extract               # Extract structured data (auto strategy)
-cd {CWD} && uv run python cdp_tool.py intel --stores                # List JS data store globals
-cd {CWD} && uv run python cdp_tool.py intel --find-paths GLOBAL key # Find data arrays in a global
-cd {CWD} && uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs only, ~2100 tok)
+uv run python cdp_tool.py ddm --llm-2pass --cols 60    # Map page layout + interactive elements (~500 tok)
+uv run python cdp_tool.py ddm --text                    # Extract page text (~3000 chars)
+uv run python cdp_tool.py ddm --text --find keyword     # Search text on page
+uv run python cdp_tool.py ddm --text --max 5000         # More text (custom char limit)
+uv run python cdp_tool.py ddm --at 694,584              # Element details at pixel coordinates
+uv run python cdp_tool.py ddm --js "expression"         # Execute JS on page, return JSON
+uv run python cdp_tool.py navigate https://example.com  # Go to URL
+uv run python cdp_tool.py click 500 300                 # Click at pixel coordinates from ddm
+uv run python cdp_tool.py type "search query"           # Type into focused input (click first!)
+uv run python cdp_tool.py js "document.title"           # Run JavaScript on page
+uv run python cdp_tool.py intel --probe                 # Page fingerprint + Bayesian strategy ranking
+uv run python cdp_tool.py intel --extract               # Extract structured data (auto strategy)
+uv run python cdp_tool.py intel --stores                # List JS data store globals
+uv run python cdp_tool.py intel --find-paths GLOBAL key # Find data arrays in a global
+uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs only, ~2100 tok)
 
 ## DDM-First Methodology
 
@@ -324,14 +325,14 @@ cd {CWD} && uv run python cdp_tool.py screenshot                    # Screenshot
 
 ## Tab Management
 
-cd {CWD} && uv run python cdp_tool.py tabs                              # List all open tabs (ID, title, URL)
-cd {CWD} && uv run python cdp_tool.py new-tab https://example.com       # Open new tab at URL
-cd {CWD} && uv run python cdp_tool.py close-tab <tab_id>                # Close a tab by ID prefix
+uv run python cdp_tool.py tabs                              # List all open tabs (ID, title, URL)
+uv run python cdp_tool.py new-tab https://example.com       # Open new tab at URL
+uv run python cdp_tool.py close-tab <tab_id>                # Close a tab by ID prefix
 
 Add --tab <id> to ANY command to target a specific tab:
-cd {CWD} && uv run python cdp_tool.py navigate https://example.com --tab <tab_id>
-cd {CWD} && uv run python cdp_tool.py ddm --llm-2pass --cols 60 --tab <tab_id>
-cd {CWD} && uv run python cdp_tool.py js "document.title" --tab <tab_id>
+uv run python cdp_tool.py navigate https://example.com --tab <tab_id>
+uv run python cdp_tool.py ddm --llm-2pass --cols 60 --tab <tab_id>
+uv run python cdp_tool.py js "document.title" --tab <tab_id>
 
 When to use multiple tabs:
 - Parallel research: open each source in its own tab, switch between them
@@ -351,7 +352,7 @@ If you navigated to a site, you MUST use ddm/js to extract data from it, not Web
 ## Agent Update
 
 If the user asks to update the agent, run:
-bash {CWD}/../update.sh
+bash ../update.sh
 
 This checks the server for a newer version, downloads code updates, and prints
 "restart required" if an update was applied. Never touch .env or .venv.
@@ -367,18 +368,17 @@ This checks the server for a newer version, downloads code updates, and prints
 
 # Codex CLI does not currently support a dedicated `--system-prompt` flag like
 # Claude CLI. Inject equivalent browser-agent instructions into the prompt text.
-CODEX_RESUME_REMINDER = f"""You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
+CODEX_RESUME_REMINDER = """You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
 Always use browser tools for factual requests.
-Working directory: {CWD}
 
 Use CDP tools via Bash:
-- cd {CWD} && uv run python cdp_tool.py ddm --llm-2pass --cols 60
-- cd {CWD} && uv run python cdp_tool.py ddm --text --max 5000
-- cd {CWD} && uv run python cdp_tool.py navigate https://example.com
-- cd {CWD} && uv run python cdp_tool.py click X Y
-- cd {CWD} && uv run python cdp_tool.py type "text"
-- cd {CWD} && uv run python cdp_tool.py js "document.title"
-- cd {CWD} && uv run python cdp_tool.py intel --probe
+- uv run python cdp_tool.py ddm --llm-2pass --cols 60
+- uv run python cdp_tool.py ddm --text --max 5000
+- uv run python cdp_tool.py navigate https://example.com
+- uv run python cdp_tool.py click X Y
+- uv run python cdp_tool.py type "text"
+- uv run python cdp_tool.py js "document.title"
+- uv run python cdp_tool.py intel --probe
 
 Web search and fetch (no browser needed):
 - curl -sL "https://html.duckduckgo.com/html/?q=QUERY" | sed -n 's/.*href="\\([^"]*\\)".*/\\1/p' | head -10
@@ -494,6 +494,10 @@ def _collect_text_strings(obj) -> list[str]:
 def _codex_tool_name_and_input(command: str) -> tuple[str, str]:
     """Map codex command_execution payloads into UI tool card fields."""
     cmd = (command or "").strip()
+    # Strip /bin/zsh -lc '...' wrapper that Codex CLI adds
+    shell_m = re.match(r"^/bin/(?:zsh|bash)\s+-lc\s+'(.+)'$", cmd, re.DOTALL)
+    if shell_m:
+        cmd = shell_m.group(1).strip()
     m = re.search(r"cdp_tool\.py\s+([a-zA-Z0-9_-]+)", cmd)
     if m:
         return m.group(1).lower(), cmd
@@ -520,7 +524,7 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
     # Build command with stream-json for real-time tool events
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model, "--max-turns", "100",
-           "--allowedTools", "Bash(cd:*) Bash(uv run:*) Bash(bash:*) Bash(sleep:*) Bash(echo:*) WebFetch WebSearch",
+           "--allowedTools", "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh) WebFetch WebSearch",
            "--system-prompt", SYSTEM_PROMPT,
            "--tools", "Bash", "WebFetch", "WebSearch"]
     if is_resume:
