@@ -19,6 +19,7 @@ logs/
 
 # Benchmark results
 unchained/benchmark/results/*.jsonl
+unchained/bench_results_*.json
 
 # Secrets
 .env

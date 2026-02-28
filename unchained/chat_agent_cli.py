@@ -299,8 +299,8 @@ uv run python cdp_tool.py ddm --text --find keyword     # Search text on page
 uv run python cdp_tool.py ddm --text --max 5000         # More text (custom char limit)
 uv run python cdp_tool.py ddm --at 694,584              # Element details at pixel coordinates
 uv run python cdp_tool.py ddm --js "expression"         # Execute JS on page, return JSON
-uv run python cdp_tool.py navigate https://example.com  # Go to URL
-uv run python cdp_tool.py click 500 300                 # Click at pixel coordinates from ddm
+uv run python cdp_tool.py navigate https://example.com  # Go to URL (returns page layout — no ddm needed)
+uv run python cdp_tool.py click 500 300                 # Click at coordinates (returns page layout — no ddm needed)
 uv run python cdp_tool.py type "search query"           # Type into focused input (click first!)
 uv run python cdp_tool.py js "document.title"           # Run JavaScript on page
 uv run python cdp_tool.py intel --probe                 # Page fingerprint + Bayesian strategy ranking
@@ -311,11 +311,11 @@ uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs o
 
 ## DDM-First Methodology
 
-1. **ORIENT**: `ddm --llm-2pass --cols 60` on every new page — shows all interactive elements with coordinates
+1. **ORIENT**: `navigate` and `click` already return DDM page layout in their output (under "=== Page Layout ==="). Read that section — do NOT call `ddm` separately after navigate or click. Only call `ddm` separately after `type`, for `--text`, `--at x,y`, `--find`, or `--js`.
 2. **IDENTIFY**: `ddm --at x,y` to get href, class, text for elements you want to interact with
 3. **CLASSIFY**: `intel --probe` on unknown SPAs — identifies framework and best extraction strategy
 4. **ACT**: Use coordinates from DDM to click, or navigate to URLs. For SPA widgets, use `js` with .click()
-5. **VERIFY**: DDM again after every action to confirm the page changed
+5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" section already in the tool output. After `type` or other actions, run `ddm` to verify.
 6. **EXTRACT**: Choose by page type:
    - Simple text: `ddm --text --max 5000`
    - Shadow DOM (Reddit): `intel --extract`
@@ -359,7 +359,7 @@ This checks the server for a newer version, downloads code updates, and prints
 
 ## Key Rules
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
-- Run ddm after every navigate/click to verify the page changed.
+- navigate and click already return DDM page layout — do NOT call ddm separately after them. Only call ddm after type, or for --text, --at, --find, --js flags.
 - Click input fields before typing.
 - SPA widgets: CDP clicks often fail — use `js` with .click() instead.
 - DDM only sees current viewport — scroll + remap for content below fold.
