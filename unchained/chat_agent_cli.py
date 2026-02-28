@@ -525,11 +525,17 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
 
     # Build command with stream-json for real-time tool events
+    allowed = "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh)"
+    tools = ["Bash"]
+    # Optional: set CLAUDE_ENABLE_WEB_TOOLS=1 to enable WebFetch/WebSearch
+    if os.environ.get("CLAUDE_ENABLE_WEB_TOOLS"):
+        allowed += " WebFetch WebSearch"
+        tools += ["WebFetch", "WebSearch"]
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model, "--max-turns", "100",
-           "--allowedTools", "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh) WebFetch WebSearch",
+           "--allowedTools", allowed,
            "--system-prompt", SYSTEM_PROMPT,
-           "--tools", "Bash", "WebFetch", "WebSearch"]
+           "--tools"] + tools
     if is_resume:
         cmd += ["--resume", claude_sid]
 
