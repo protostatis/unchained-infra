@@ -40,6 +40,8 @@ services:
       - "8770"
     environment:
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+      - RELAY_INTERNAL_HOST=relay
+      - RELAY_INTERNAL_PORT=8765
     networks:
       - app
     restart: unless-stopped

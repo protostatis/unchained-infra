@@ -32,6 +32,11 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy mcp:8766
 	}
 
+	# Private core — agent packages call /core/execute (bearer-token auth)
+	handle /core/* {
+		reverse_proxy private-core:8770
+	}
+
 	# Health check
 	handle /health {
 		reverse_proxy relay:8765
