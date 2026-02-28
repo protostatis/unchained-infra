@@ -42,19 +42,19 @@ intel_probe    — DOM fingerprint + Bayesian strategy ranking (~100 tok). Ident
 intel_extract  — Extract structured data with auto-selected strategy. Optionally force a strategy.
 intel_stores   — List JS data store globals (>10KB). Use on Nuxt/Next/YouTube sites.
 intel_find_paths — Find data arrays in a JS global by keyword. Use after intel_stores.
-navigate       — Go to a URL
-click          — Click at pixel coordinates from DDM
+navigate       — Go to a URL. Returns page title + DDM layout (no separate DDM call needed).
+click          — Click at pixel coordinates from DDM. Returns diff + DDM layout (no separate DDM call needed).
 type_text      — Type into focused input (click first!)
 js_eval        — Execute JavaScript on page, return result
 screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
 
 ## DDM-First Methodology
 
-1. **ORIENT**: `ddm` on every new page — shows all interactive elements with coordinates
+1. **ORIENT**: `navigate` and `click` include DDM page layout in their output — read the "=== Page Layout ===" section. If it's missing, run `ddm` as fallback. Only call `ddm` separately for `--text`, `--at x,y`, `--find`, or after `type_text`/`press_enter`/`submit_form`.
 2. **CLASSIFY**: `intel_probe` on first page of every new domain — identifies framework, data stores, best strategy. Skip on subsequent pages of same domain.
 3. **IDENTIFY**: `ddm` with "--at x,y" flags to get href, class, text for elements you want to interact with
 4. **ACT**: Use coordinates from DDM to click, or navigate to URLs. For SPA widgets, use `js_eval` with .click()
-5. **VERIFY**: DDM again after every action to confirm the page changed
+5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" in the tool output. If missing, run `ddm` as fallback. After `type_text`, `press_enter`, or `submit_form`, always run `ddm` to verify.
 6. **EXTRACT**: Choose by page type (informed by probe results):
    - Simple text: `ddm` with "--text --max 5000" flags
    - Shadow DOM (Reddit): `intel_extract` with host_attrs strategy
@@ -64,7 +64,7 @@ screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
 
 ## Key Rules
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
-- Run ddm after every navigate/click to verify the page changed.
+- navigate and click already return DDM layout — do NOT call ddm separately after them. Only call ddm after type_text, press_enter, or submit_form.
 - type_text auto-focuses the single visible input. Click first if multiple inputs exist.
 - SPA widgets: CDP clicks often fail — use `js_eval` with .click() instead.
 - DDM only sees current viewport — scroll + remap for content below fold.
@@ -176,7 +176,11 @@ TOOLS = [
     },
     {
         "name": "navigate",
-        "description": "Navigate the browser to a URL.",
+        "description": (
+            "Navigate the browser to a URL. Returns page title plus DDM "
+            "page layout with all interactive elements and coordinates. "
+            "No separate ddm call needed after navigate."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -189,10 +193,10 @@ TOOLS = [
     {
         "name": "click",
         "description": (
-            "Click at pixel coordinates. Returns what was clicked plus a "
-            "'--- changed ---' diff showing new interactive elements with (x,y) "
-            "coordinates, focus changes, URL changes. '--- no change ---' means "
-            "the click had no effect."
+            "Click at pixel coordinates. Returns what was clicked, a "
+            "'--- changed ---' diff, plus DDM page layout with all interactive "
+            "elements and coordinates. No separate ddm call needed after click. "
+            "'--- no change ---' means the click had no effect."
         ),
         "input_schema": {
             "type": "object",
