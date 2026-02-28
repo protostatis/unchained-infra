@@ -156,7 +156,7 @@ Many sites have predictable URL patterns. ALWAYS try navigating directly before 
 - ArXiv: navigate to https://arxiv.org/search/?query=QUERY (replace spaces with +)
 - GitHub: navigate to https://github.com/OWNER/REPO/issues for issues
 
-If you must use a search form: click the input → type_text → press_enter or submit_form → verify with ddm.
+If you must use a search form: click the input → type_text → press_enter or submit_form → run ddm to check results.
 If the form doesn't work after ONE attempt, navigate directly to the URL instead.
 
 ## Key Gotchas
@@ -285,7 +285,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "navigate",
-            "description": "Navigate the browser to a URL. Always call ddm() after to verify the page loaded.",
+            "description": "Navigate the browser to a URL. Returns page layout with interactive elements — no separate ddm call needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -300,7 +300,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "Click at pixel coordinates. Returns what was clicked plus a '--- changed ---' diff showing new interactive elements with (x,y) coordinates, focus changes, URL changes. '--- no change ---' means the click had no effect — try a different coordinate or use js_eval.",
+            "description": "Click at pixel coordinates. Returns what was clicked, a '--- changed ---' diff, plus page layout with interactive elements — no separate ddm call needed. '--- no change ---' means the click had no effect — try a different coordinate or use js_eval.",
             "parameters": {
                 "type": "object",
                 "properties": {

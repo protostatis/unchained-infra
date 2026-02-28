@@ -62,11 +62,11 @@ KEY = os.environ.get("UNCHAINED_API_KEY", "")
 SERVER = os.environ.get("UNCHAINED_SERVER", "wss://api.unchainedsky.com/chat/ws")
 RELAY_HOST = os.environ.get("UNCHAINED_RELAY_HOST", "api.unchainedsky.com")
 RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
-CWD = os.path.expanduser("~/Projects/unchained/unchained")
+CWD = os.path.expanduser("~/unchained-agent/unchained")
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
-CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "300"))
+CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -299,8 +299,8 @@ uv run python cdp_tool.py ddm --text --find keyword     # Search text on page
 uv run python cdp_tool.py ddm --text --max 5000         # More text (custom char limit)
 uv run python cdp_tool.py ddm --at 694,584              # Element details at pixel coordinates
 uv run python cdp_tool.py ddm --js "expression"         # Execute JS on page, return JSON
-uv run python cdp_tool.py navigate https://example.com  # Go to URL
-uv run python cdp_tool.py click 500 300                 # Click at pixel coordinates from ddm
+uv run python cdp_tool.py navigate https://example.com  # Go to URL (returns page layout — no ddm needed)
+uv run python cdp_tool.py click 500 300                 # Click at coordinates (returns page layout — no ddm needed)
 uv run python cdp_tool.py type "search query"           # Type into focused input (click first!)
 uv run python cdp_tool.py js "document.title"           # Run JavaScript on page
 uv run python cdp_tool.py intel --probe                 # Page fingerprint + Bayesian strategy ranking
@@ -311,11 +311,11 @@ uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs o
 
 ## DDM-First Methodology
 
-1. **ORIENT**: `ddm --llm-2pass --cols 60` on every new page — shows all interactive elements with coordinates
+1. **ORIENT**: `navigate` and `click` return DDM page layout in their output (under "=== Page Layout ==="). Read that section — do NOT call `ddm` separately after navigate or click. If "=== Page Layout ===" is missing, run `ddm --llm-2pass --cols 60` as fallback. Only call `ddm` separately after `type`, for `--text`, `--at x,y`, `--find`, or `--js`.
 2. **IDENTIFY**: `ddm --at x,y` to get href, class, text for elements you want to interact with
 3. **CLASSIFY**: `intel --probe` on unknown SPAs — identifies framework and best extraction strategy
 4. **ACT**: Use coordinates from DDM to click, or navigate to URLs. For SPA widgets, use `js` with .click()
-5. **VERIFY**: DDM again after every action to confirm the page changed
+5. **VERIFY**: After `navigate` or `click`, check the "=== Page Layout ===" section in the tool output. If it's missing, run `ddm --llm-2pass --cols 60`. After `type`, `press_enter`, or `submit_form`, always run `ddm` to verify.
 6. **EXTRACT**: Choose by page type:
    - Simple text: `ddm --text --max 5000`
    - Shadow DOM (Reddit): `intel --extract`
@@ -359,7 +359,7 @@ This checks the server for a newer version, downloads code updates, and prints
 
 ## Key Rules
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
-- Run ddm after every navigate/click to verify the page changed.
+- navigate and click already return DDM page layout — do NOT call ddm separately after them. Only call ddm after type, or for --text, --at, --find, --js flags.
 - Click input fields before typing.
 - SPA widgets: CDP clicks often fail — use `js` with .click() instead.
 - DDM only sees current viewport — scroll + remap for content below fold.
@@ -525,11 +525,17 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
 
     # Build command with stream-json for real-time tool events
+    allowed = "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh)"
+    tools = ["Bash"]
+    # Optional: set CLAUDE_ENABLE_WEB_TOOLS=1 to enable WebFetch/WebSearch
+    if os.environ.get("CLAUDE_ENABLE_WEB_TOOLS"):
+        allowed += " WebFetch WebSearch"
+        tools += ["WebFetch", "WebSearch"]
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model, "--max-turns", "100",
-           "--allowedTools", "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh) WebFetch WebSearch",
+           "--allowedTools", allowed,
            "--system-prompt", SYSTEM_PROMPT,
-           "--tools", "Bash", "WebFetch", "WebSearch"]
+           "--tools"] + tools
     if is_resume:
         cmd += ["--resume", claude_sid]
 
@@ -988,6 +994,8 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
     streamed_text = ""
     error_text = ""
     codex_tool_items: dict[str, tuple[str, str]] = {}
+    codex_tool_start_times: dict[str, float] = {}  # item_id -> monotonic start
+    SEARCH_TIMEOUT_S = float(os.environ.get("SEARCH_TIMEOUT_S", "60"))
     timed_out = False
     deadline = time.monotonic() + CODEX_MAX_RUNTIME_S if CODEX_MAX_RUNTIME_S > 0 else None
 
@@ -999,6 +1007,19 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
                 timed_out = True
                 break
             read_timeout = min(read_timeout, max(0.05, remaining))
+        # Check for stalled search tools
+        if SEARCH_TIMEOUT_S > 0 and codex_tool_start_times:
+            now = time.monotonic()
+            for _tid, _tstart in list(codex_tool_start_times.items()):
+                elapsed = now - _tstart
+                if elapsed > SEARCH_TIMEOUT_S:
+                    tool_name = codex_tool_items.get(_tid, ("search", ""))[0]
+                    log.info("[%s] Search tool %s stalled after %.0fs, killing subprocess", sid, tool_name, elapsed)
+                    timed_out = True
+                    error_text = f"Search timed out after {int(elapsed)}s — please try again"
+                    break
+            if timed_out:
+                break
         try:
             raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=read_timeout)
         except asyncio.TimeoutError:
@@ -1035,16 +1056,33 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
                     "session_id": sid, "type": "tool_start",
                     "name": tool_name, "input": tool_input,
                 }))
+            else:
+                # Track non-Bash tools (WebSearch, WebFetch, etc.)
+                log.info("  Codex item.started: id=%s type=%s", item_id, item_type)
+                if item_id and "search" in item_type:
+                    codex_tool_items[item_id] = ("websearch", str(item.get("query", ""))[:100])
+                    codex_tool_start_times[item_id] = time.monotonic()
+                    await ws.send(json.dumps({
+                        "session_id": sid, "type": "tool_start",
+                        "name": "websearch", "input": str(item.get("query", ""))[:100],
+                    }))
             continue
 
         if etype == "item.completed":
             item = event.get("item") or {}
             item_id = str(item.get("id", "")).strip()
             item_type = (item.get("type") or "").lower()
+            codex_tool_start_times.pop(item_id, None)  # clear search timer
+            # Send tool_result for non-command_execution items that had a tool_start
+            _tracked = codex_tool_items.pop(item_id, None)
+            if _tracked and item_type != "command_execution":
+                await ws.send(json.dumps({
+                    "session_id": sid, "type": "tool_result",
+                    "name": _tracked[0], "data": "completed",
+                    "is_screenshot": False, "visible": False,
+                }))
             if item_type == "command_execution":
-                tool_name, tool_input = codex_tool_items.pop(
-                    item_id, _codex_tool_name_and_input(str(item.get("command", "")))
-                )
+                tool_name, tool_input = _tracked or _codex_tool_name_and_input(str(item.get("command", "")))
                 out = str(item.get("aggregated_output") or "").strip()
                 if not out:
                     exit_code = item.get("exit_code")
@@ -1137,7 +1175,8 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             continue
 
     if timed_out:
-        error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
+        if not error_text:
+            error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except Exception:
@@ -1168,10 +1207,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
         response = streamed_text.strip()
 
     if timed_out and not response:
-        response = (
-            f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s before returning a final response. "
-            "Try a narrower prompt or switch to gpt-5.1-codex-mini for faster results."
-        )
+        response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
 
     if proc.returncode and proc.returncode < 0:
         proc_pid = getattr(proc, "pid", None)
@@ -1189,10 +1225,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             return
         if not response:
             if timed_out:
-                response = (
-                    f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s before returning a final response. "
-                    "Try a narrower prompt or switch to gpt-5.1-codex-mini for faster results."
-                )
+                response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
             else:
                 sig = -proc.returncode
                 response = f"Codex CLI terminated unexpectedly (signal {sig})."
