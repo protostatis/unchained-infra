@@ -10068,6 +10068,12 @@ async def _on_cleanup(app_: web.Application):
     _state.gemini_cleanup_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
+    # Close persistent HTTP client for private-core.
+    try:
+        from private_core_client import get_private_core_client
+        await get_private_core_client().close()
+    except Exception:
+        pass
     # Terminate all Gemini agent subprocesses.
     for aid, proc in list(_gemini_procs.items()):
         if proc.poll() is None:
