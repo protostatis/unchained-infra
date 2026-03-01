@@ -102,6 +102,25 @@ services:
       - egress
     restart: unless-stopped
 
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scheduled_tasks.py", "daemon-multi",
+              "--jobs-dir", "/data/scheduler_jobs",
+              "--db-path", "/data/auth.db",
+              "--poll-seconds", "30"]
+    volumes:
+      - relay_data:/data
+    environment:
+      - UNCHAINED_API_URL=http://web:8080
+      - UNCHAINED_DB_PATH=/data/auth.db
+    depends_on:
+      - web
+    networks:
+      - app
+    restart: unless-stopped
+
   trial-agent:
     build:
       context: .
