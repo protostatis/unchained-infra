@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.10"
+VERSION = "0.3.11"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -314,7 +314,17 @@ if $DAEMON; then
 
     echo "[$(date)] Starting chat agent..."
     trap "kill $BRIDGE_PID 2>/dev/null; exit" INT TERM
-    PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py
+    # caffeinate -i prevents macOS App Nap from suspending the agent
+    AGENT_CMD=(env PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py)
+    if command -v caffeinate &>/dev/null; then
+      AGENT_CMD=(caffeinate -i -- "${AGENT_CMD[@]}")
+    fi
+    while true; do
+      "${AGENT_CMD[@]}"
+      EXIT_CODE=$?
+      echo "[$(date)] Agent exited (code $EXIT_CODE). Restarting in 5s..."
+      sleep 5
+    done
   ) >> "$LOGFILE" 2>&1 &
   DAEMON_PID=$!
 
@@ -335,7 +345,12 @@ else
 
   echo "Starting chat agent..."
   trap "kill $BRIDGE_PID 2>/dev/null; exit" INT TERM
-  PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py
+  # caffeinate -i prevents macOS App Nap from suspending the agent
+  if command -v caffeinate &>/dev/null; then
+    caffeinate -i -- env PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py
+  else
+    PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py
+  fi
 fi
 """
 
