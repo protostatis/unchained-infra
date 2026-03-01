@@ -4126,7 +4126,7 @@ CHAT_CLAUDE_SDK_HTML = (
         "No Gemini SDK key provisioned. Visit /setup to get one.",
         "No Claude SDK key provisioned. Visit /setup to get one.",
     )
-    .replace("'Gemini SDK Chat'", "'Claude SDK Chat'")
+    .replace("Gemini SDK Chat", "Claude SDK Chat")
     .replace(
         "Browser agent powered by your provisioned Gemini SDK key.",
         "Browser agent powered by your provisioned Claude SDK key.",
