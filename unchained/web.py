@@ -4204,6 +4204,9 @@ CHAT_CODEX_HTML = (
     if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
       document.getElementById('modelsel').value = saved;
     }
+  }
+  if (document.getElementById('modelsel').value.startsWith('codex-cli:')) {
+    document.querySelectorAll('#modelsel option[value^="codex-sdk:"]').forEach(o => o.remove());
   }""",
     )
     .replace(
