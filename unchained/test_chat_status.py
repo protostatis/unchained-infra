@@ -1,0 +1,91 @@
+"""Tests for chat status reporting on the local chat page."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+import web
+
+
+class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
+    """Ensure /web/chat/status reports chat and browser bridge separately."""
+
+    def setUp(self):
+        self._chat_agents = dict(web._chat_agents)
+        self._chat_agent_users = dict(web._chat_agent_users)
+        web._chat_agents.clear()
+        web._chat_agent_users.clear()
+
+    def tearDown(self):
+        web._chat_agents.clear()
+        web._chat_agents.update(self._chat_agents)
+        web._chat_agent_users.clear()
+        web._chat_agent_users.update(self._chat_agent_users)
+
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_only_status_reports_bridge_separately(self, mock_auth, mock_check_relay):
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        mock_check_relay.return_value = True
+
+        request = SimpleNamespace(query={"chat_only": "1", "model": "claude-sonnet-4-6"})
+        response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertFalse(data["connected"])
+        self.assertFalse(data["chat_connected"])
+        self.assertTrue(data["bridge_connected"])
+        self.assertEqual(data["chat_agent_id"], "claude-abc12345")
+        self.assertEqual(data["bridge_agent_id"], "claude-abc12345")
+
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_only_status_reports_mismatch_independently(self, mock_auth, mock_check_relay):
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-expected",
+            "key_hash": "expected",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        mock_check_relay.return_value = False
+        web._chat_agents["claude-other"] = SimpleNamespace(closed=False)
+        web._chat_agent_users["claude-other"] = "u-test"
+
+        request = SimpleNamespace(query={"chat_only": "1", "model": "claude-sonnet-4-6"})
+        response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertFalse(data["chat_connected"])
+        self.assertFalse(data["bridge_connected"])
+        self.assertTrue(data["mismatch"])
+        self.assertEqual(data["mismatch_agent_id"], "claude-other")
+
+
+class TestLocalChatTemplate(unittest.TestCase):
+    """Protect local-chat status markers in the exported HTML."""
+
+    def test_local_chat_html_has_separate_status_markers(self):
+        self.assertIn('id="agentstatus"', web.CLAUDE_CHAT_HTML)
+        self.assertIn('id="bridgestatus"', web.CLAUDE_CHAT_HTML)
+        self.assertIn('id="banner-detail"', web.CLAUDE_CHAT_HTML)
+        self.assertIn("Browser bridge and chat agent are tracked separately.", web.CLAUDE_CHAT_HTML)
+
+
+if __name__ == "__main__":
+    unittest.main()

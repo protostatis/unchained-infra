@@ -19,6 +19,7 @@ async def fetch_relay_profiles(
     agent_id: str,
     relay_host: str,
     relay_port: int,
+    headers: dict[str, str] | None = None,
     timeout: float = 5.0,
 ) -> list[dict]:
     """Fetch profile list from the user's bridge via relay API."""
@@ -29,7 +30,7 @@ async def fetch_relay_profiles(
         url = f"{scheme}://{relay_host}:{relay_port}/api/agents/{agent_id}/profiles"
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=timeout)
+            resp = await client.get(url, timeout=timeout, headers=headers)
             if resp.is_success:
                 return resp.json().get("profiles", [])
     except Exception:
