@@ -1378,6 +1378,22 @@ body::before{
   </div>
 </div>
 
+<!-- Case Study -->
+<div class="getstarted" style="padding-top:0">
+  <div class="gs-header">
+    <h2>See It In Action</h2>
+    <p>Real conversations, real results. See what the agent can do end-to-end.</p>
+  </div>
+  <div class="cards">
+    <div class="card demo" style="grid-column:1/-1">
+      <div class="card-badge">Case Study</div>
+      <div class="card-title">Rental Relisting on Zillow</div>
+      <div class="card-desc">From market research to published listing in one conversation. The agent researched comps, negotiated pricing, caught lease typos, scheduled tours, and published&mdash;all hands-free.</div>
+      <a href="/case-study/zillow-rental" class="card-btn">Read Case Study &#8594;</a>
+    </div>
+  </div>
+</div>
+
 <div class="footer">
   <div class="footer-links">
     <a href="/demo">Demo</a>
@@ -1577,6 +1593,352 @@ if ('IntersectionObserver' in window) {
   }).catch(function(){});
 })();
 </script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# HTML — Zillow Rental Relisting Case Study
+# ---------------------------------------------------------------------------
+
+CASE_STUDY_ZILLOW_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Case Study: Rental Relisting on Zillow &mdash; Unchained</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+:root{
+  --bg:#0a0a0f;--surface:#111119;--subtle:#222;
+  --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
+  --text:#e8e8ec;--muted:#666;
+}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow-x:hidden;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;z-index:0;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Hero ── */
+.hero{
+  position:relative;z-index:1;
+  max-width:800px;margin:0 auto;padding:120px 24px 80px;
+  text-align:center;
+}
+.hero-back{
+  display:inline-block;margin-bottom:32px;
+  font-size:13px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;
+  text-decoration:none;
+}
+.hero-back:hover{color:var(--accent);text-decoration:none}
+.hero h1{
+  font-size:clamp(28px,5vw,44px);font-weight:700;
+  line-height:1.2;margin-bottom:20px;
+}
+.hero h1 span{color:var(--accent)}
+.hero .subtitle{
+  font-size:clamp(16px,2.5vw,20px);
+  color:var(--muted);line-height:1.6;max-width:560px;margin:0 auto;
+}
+
+/* ── Segments ── */
+.segment{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:0 24px 64px;
+}
+.segment-label{
+  font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;
+  color:var(--accent);margin-bottom:12px;
+}
+.segment h2{
+  font-size:clamp(20px,3.5vw,28px);font-weight:600;margin-bottom:24px;
+}
+
+/* ── Chat bubbles ── */
+.chat{
+  background:#1a1a2e;border:1px solid var(--subtle);
+  border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px;
+  margin-bottom:24px;
+}
+.bubble{
+  max-width:88%;padding:12px 16px;border-radius:14px;
+  font-size:14px;line-height:1.6;word-break:break-word;
+}
+.bubble.user{
+  align-self:flex-end;background:#2a1a3e;border:1px solid #3a2a5e;
+  border-bottom-right-radius:4px;color:#eee;
+}
+.bubble.asst{
+  align-self:flex-start;background:#1e2a3e;border:1px solid #2a3a5e;
+  border-bottom-left-radius:4px;color:#eee;
+}
+.bubble table{
+  width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;
+}
+.bubble th,.bubble td{
+  text-align:left;padding:6px 10px;border-bottom:1px solid #2a3a5e;
+}
+.bubble th{color:var(--accent);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+.bubble ul,.bubble ol{margin:8px 0 8px 18px}
+.bubble li{margin:4px 0;font-size:13px;line-height:1.5}
+.bubble strong{font-weight:600}
+
+/* ── Callout ── */
+.callout{
+  display:flex;align-items:center;gap:14px;
+  background:var(--surface);border:1px solid var(--subtle);
+  border-left:3px solid var(--accent);
+  border-radius:0 12px 12px 0;padding:16px 20px;
+  margin-bottom:24px;
+}
+.callout-icon{font-size:24px;flex-shrink:0}
+.callout-text{
+  font-size:14px;font-weight:500;letter-spacing:0.3px;
+}
+
+/* ── CTA ── */
+.cta-section{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:40px 24px 100px;
+  text-align:center;
+}
+.cta-section h2{
+  font-size:clamp(22px,4vw,32px);font-weight:600;margin-bottom:12px;
+}
+.cta-section p{
+  color:var(--muted);font-size:15px;line-height:1.7;margin-bottom:32px;
+}
+.cta-buttons{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.cta-btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:14px 32px;border-radius:8px;
+  font-size:15px;font-weight:600;letter-spacing:0.5px;
+  text-decoration:none;transition:all 0.2s;
+}
+.cta-btn:hover{text-decoration:none}
+.cta-btn.primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.cta-btn.primary:hover{box-shadow:0 0 30px var(--accent-glow);opacity:0.9}
+.cta-btn.secondary{background:transparent;color:var(--text);border:1px solid #444}
+.cta-btn.secondary:hover{border-color:#666}
+
+/* ── Footer ── */
+.footer{
+  position:relative;z-index:1;
+  text-align:center;padding:0 24px 48px;
+  color:var(--muted);font-size:12px;letter-spacing:1px;
+}
+.footer-links{display:flex;gap:24px;justify-content:center;margin-bottom:16px}
+.footer-links a{color:var(--muted);text-decoration:none;font-size:13px;letter-spacing:0.5px;transition:color 0.15s}
+.footer-links a:hover{color:var(--accent)}
+
+@media(max-width:640px){
+  .hero{padding:80px 16px 48px}
+  .segment{padding:0 16px 48px}
+  .bubble{max-width:95%;font-size:13px}
+  .bubble table{font-size:11px}
+  .bubble th,.bubble td{padding:4px 6px}
+  .cta-buttons{flex-direction:column;align-items:center}
+}
+</style>
+</head>
+<body>
+
+<!-- Hero -->
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>Case Study: <span>Rental Relisting</span> on Zillow</h1>
+  <p class="subtitle">From market research to published listing in one conversation. See how the agent helped a landlord price, configure, and publish a rental&mdash;hands-free.</p>
+</div>
+
+<!-- Segment 1: Market Research -->
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Research Rental Comps</h2>
+  <div class="chat">
+    <div class="bubble user">Go to Zillow and review my property in Lakeview, Chicago. I&rsquo;m the owner, I want to put it up for rent for end of April.</div>
+    <div class="bubble asst">
+      <strong>Comparable 2BD/2BA Rentals Nearby</strong>
+      <table>
+        <tr><th>Property</th><th>Rent</th><th>Sqft</th><th>Notes</th></tr>
+        <tr><td>1144 W Roscoe 3E</td><td>$4,400</td><td>1,350</td><td>Closest comp &mdash; utilities incl, pets OK</td></tr>
+        <tr><td>The Yellin, 1348 W Roscoe</td><td>$4,395</td><td>1,088</td><td>Newer build</td></tr>
+        <tr><td>Five Points, 3605 N Ravenswood</td><td>$3,750+</td><td>1,110</td><td></td></tr>
+        <tr><td>3419 N Paulina St</td><td>$3,450</td><td>1,230</td><td></td></tr>
+        <tr><td>3052 N Lincoln Ave 3F</td><td>$3,400</td><td>1,200</td><td></td></tr>
+      </table>
+      <p><strong>Your current rent ($3,500)</strong> is significantly below market. Zillow Rent Zestimate: <strong>$4,201/mo</strong>. Market range for 2bd/2ba in Lakeview: $3,125&ndash;$4,900.</p>
+      <p>My suggestion: List at <strong>$4,200/mo</strong>.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#127760;</div>
+    <div class="callout-text">Researches live market data from active listings and builds a comp table automatically.</div>
+  </div>
+</div>
+
+<!-- Segment 2: Price Negotiation -->
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Adjust Pricing to Your Judgment</h2>
+  <div class="chat">
+    <div class="bubble user">I think $4,200 is too much, this is a 2 bed.</div>
+    <div class="bubble asst">
+      <p>You make a fair point. The $4,200+ listings are newer builds or include utilities. Your more realistic comparables:</p>
+      <table>
+        <tr><th>Property</th><th>Rent</th><th>Sqft</th></tr>
+        <tr><td>3419 N Paulina St</td><td>$3,450</td><td>1,230</td></tr>
+        <tr><td>3052 N Lincoln Ave 3F</td><td>$3,400</td><td>1,200</td></tr>
+        <tr><td>Five Points Lake View</td><td>$3,750+</td><td>1,110</td></tr>
+      </table>
+      <p>A sweet spot might be <strong>$3,700/mo</strong> &mdash; a reasonable ~6% increase over current rent, competitive enough to attract quality tenants quickly.</p>
+    </div>
+    <div class="bubble user">Okay $3,700 sounds good.</div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128200;</div>
+    <div class="callout-text">Adapts recommendations to your judgment instead of pushing a single answer.</div>
+  </div>
+</div>
+
+<!-- Segment 3: Lease Review -->
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Review Lease Terms &amp; Catch Errors</h2>
+  <div class="chat">
+    <div class="bubble user">Can you review the lease terms to see we are up to date?</div>
+    <div class="bubble asst">
+      <p><strong>Issues found:</strong></p>
+      <ul>
+        <li>&ldquo;None smoking indoor&rdquo; &mdash; <strong>typo</strong>, should be &ldquo;No smoking indoors&rdquo;</li>
+        <li>Application Fee: $75/applicant &mdash; can be removed if using Zillow-only applications ($35 handled by Zillow)</li>
+      </ul>
+      <p><strong>Suggested additions:</strong> renter&rsquo;s insurance requirement, early termination clause, Cook County Just Housing Initiative compliance.</p>
+    </div>
+    <div class="bubble user">Can we make the application Zillow-only so we don&rsquo;t have to state the $75 fee?</div>
+    <div class="bubble asst">
+      <p><strong>Changes made:</strong></p>
+      <ul>
+        <li>Fixed typo: &ldquo;None smoking indoor&rdquo; &rarr; &ldquo;No smoking indoors&rdquo;</li>
+        <li>Removed: Application Fee $75 per applicant (Zillow handles at $35)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128270;</div>
+    <div class="callout-text">Reviews documents, catches typos, and suggests practical improvements.</div>
+  </div>
+</div>
+
+<!-- Segment 4: Tour Scheduling -->
+<div class="segment">
+  <div class="segment-label">Step 4</div>
+  <h2>Schedule Property Tours</h2>
+  <div class="chat">
+    <div class="bubble user">The renter agreed we can tour while they&rsquo;re there. Make it available starting the 15th. Also add weekday evenings&mdash;my helper can show the place after 6pm.</div>
+    <div class="bubble asst">
+      <p><strong>All 6 tour dates set:</strong></p>
+      <table>
+        <tr><th>Day</th><th>Date</th><th>Time</th></tr>
+        <tr><td>Sunday</td><td>March 15</td><td>10:00am &ndash; 2:00pm</td></tr>
+        <tr><td>Tuesday</td><td>March 17</td><td>6:00pm &ndash; 8:00pm</td></tr>
+        <tr><td>Wednesday</td><td>March 18</td><td>6:00pm &ndash; 8:00pm</td></tr>
+        <tr><td>Thursday</td><td>March 19</td><td>6:00pm &ndash; 8:00pm</td></tr>
+        <tr><td>Saturday</td><td>March 21</td><td>10:00am &ndash; 2:00pm</td></tr>
+        <tr><td>Sunday</td><td>March 22</td><td>10:00am &ndash; 2:00pm</td></tr>
+      </table>
+      <p>Good mix of weekends (daytime) and weekday evenings (after work).</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128197;</div>
+    <div class="callout-text">Navigates date pickers and complex multi-step form workflows.</div>
+  </div>
+</div>
+
+<!-- Segment 5: Published -->
+<div class="segment">
+  <div class="segment-label">Step 5</div>
+  <h2>Listing Published &amp; Verified</h2>
+  <div class="chat">
+    <div class="bubble user">Go ahead and after you post, make sure to review it.</div>
+    <div class="bubble asst">
+      <p>Your listing is <strong>live!</strong> Here&rsquo;s how renters see it:</p>
+      <table>
+        <tr><th>Detail</th><th>Value</th></tr>
+        <tr><td>Monthly rent</td><td><strong>$3,700</strong></td></tr>
+        <tr><td>Security deposit</td><td>$3,700</td></tr>
+        <tr><td>Available</td><td>April 18, 2026</td></tr>
+        <tr><td>Size</td><td>2 bd / 2 ba / 1,300 sqft</td></tr>
+        <tr><td>Walk Score</td><td>96/100</td></tr>
+        <tr><td>Transit Score</td><td>72/100</td></tr>
+      </table>
+      <p>Syndicated across <strong>Zillow, Trulia, and HotPads</strong>. With April 18 availability and competitive $3,700 pricing, you should start getting leads soon.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#9989;</div>
+    <div class="callout-text">End-to-end task completion&mdash;from research to published listing in one session.</div>
+  </div>
+</div>
+
+<!-- Segment 6: Ongoing Monitoring -->
+<div class="segment">
+  <div class="segment-label">Step 6</div>
+  <h2>Set Up Ongoing Monitoring</h2>
+  <div class="chat">
+    <div class="bubble user">I&rsquo;d like to set up a task for weekly review. Can you give me a prompt that would run every Monday?</div>
+    <div class="bubble asst">
+      <p>Here&rsquo;s a ready-to-use weekly prompt:</p>
+      <ul>
+        <li><strong>Listing status</strong> &mdash; confirm still active, flag errors</li>
+        <li><strong>Lead activity</strong> &mdash; views, saves, new applications, pending tour requests</li>
+        <li><strong>Market check</strong> &mdash; active comps, price range, new competitors</li>
+        <li><strong>Rent Zestimate</strong> &mdash; flag changes &gt; $50</li>
+        <li><strong>Tour calendar</strong> &mdash; ensure 3+ upcoming slots</li>
+        <li><strong>Action items</strong> &mdash; specific recommendations for the week</li>
+      </ul>
+      <p>Schedule it as a recurring Monday 8am reminder and paste it into the agent.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128260;</div>
+    <div class="callout-text">Generates reusable automation prompts you can schedule and repeat.</div>
+  </div>
+</div>
+
+<!-- CTA Section -->
+<div class="cta-section">
+  <h2>Your browser agent, ready when you are</h2>
+  <p>The agent works with your real browser, your real logins, and your real data. No screenshots to upload, no copy-paste&mdash;just tell it what to do.</p>
+  <div class="cta-buttons">
+    <a href="/demo" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="footer-links">
+    <a href="/">Home</a>
+    <a href="/demo">Demo</a>
+    <a href="/trial">Free Tier</a>
+    <a href="mailto:hello@unchainedsky.com">Contact</a>
+  </div>
+  <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
+</div>
+
 </body>
 </html>"""
 
@@ -6825,6 +7187,11 @@ async def handle_chat_claude_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_case_study_zillow(request: web.Request) -> web.Response:
+    """Serve the Zillow rental relisting case study page (public, no auth)."""
+    return web.Response(text=CASE_STUDY_ZILLOW_HTML, content_type="text/html")
+
+
 async def handle_demo_page(request: web.Request) -> web.Response:
     """Serve the headless demo chat HTML page."""
     html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
@@ -10278,6 +10645,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/chat-codex", handle_chat_codex_page),
     ("GET", "/chat-claude", handle_chat_claude_page),
     ("GET", "/demo", handle_demo_page),
+    ("GET", "/case-study/zillow-rental", handle_case_study_zillow),
     ("GET", "/local", handle_local_page),
     ("GET", "/app", handle_claude_page),
     ("GET", "/chat/ws", handle_chat_ws),
