@@ -1425,9 +1425,36 @@ async def main():
                     await ws.send(json.dumps(info))
 
         except Exception as e:
-            print(f"Error: {e}. Reconnecting in 3s...")
-            import traceback; traceback.print_exc()
+            log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
             await asyncio.sleep(3)
 
 
-asyncio.run(main())
+def _run():
+    """Top-level entry with signal and crash logging."""
+    import atexit
+
+    def _on_exit():
+        log.info("Agent process exiting (atexit)")
+
+    def _on_signal(signum, frame):
+        sig_name = signal.Signals(signum).name
+        log.warning("Agent received %s (signal %d) — exiting", sig_name, signum)
+        sys.exit(128 + signum)
+
+    atexit.register(_on_exit)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Agent stopped by KeyboardInterrupt")
+    except SystemExit as e:
+        log.info("Agent SystemExit (code=%s)", e.code)
+        raise
+    except BaseException:
+        log.critical("Agent crashed with unhandled exception", exc_info=True)
+        raise
+
+
+_run()
