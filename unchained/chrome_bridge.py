@@ -976,20 +976,52 @@ def cmd_start(config: dict):
         headless=config.get("chrome_headless", False),
     )
 
+    import atexit
+    import logging
+
+    log = logging.getLogger("chrome_bridge")
+    if not log.handlers:
+        _log_dir = os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained"))
+        os.makedirs(_log_dir, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            handlers=[
+                logging.FileHandler(os.path.join(_log_dir, "bridge.log")),
+                logging.StreamHandler(),
+            ],
+        )
+
     loop = asyncio.new_event_loop()
 
     def _shutdown(sig, frame):
+        sig_name = signal.Signals(sig).name
+        log.warning("[bridge] received %s (signal %d) — shutting down", sig_name, sig)
         loop.call_soon_threadsafe(lambda: asyncio.ensure_future(agent.stop()))
 
+    def _on_exit():
+        log.info("[bridge] process exiting (atexit)")
+
+    atexit.register(_on_exit)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
+    try:
+        signal.signal(signal.SIGHUP, _shutdown)
+    except (OSError, ValueError):
+        pass  # SIGHUP not available on Windows
 
     try:
         loop.run_until_complete(agent.start())
+    except KeyboardInterrupt:
+        log.info("[bridge] stopped by KeyboardInterrupt")
+    except BaseException:
+        log.critical("[bridge] crashed with unhandled exception", exc_info=True)
+        raise
     finally:
         _remove_pid()
         loop.close()
-        print("[agent] stopped")
+        log.info("[bridge] stopped")
 
 
 def cmd_status():
