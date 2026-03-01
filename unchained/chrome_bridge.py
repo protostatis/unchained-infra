@@ -833,6 +833,11 @@ def _is_agent_running() -> bool:
     pid = _read_pid()
     if pid is None:
         return False
+    if pid == os.getpid():
+        # Stale PID file from a previous container/run that happened to use the
+        # same PID (always PID 1 in Docker). This is us, not a duplicate agent.
+        _remove_pid()
+        return False
     try:
         os.kill(pid, 0)  # signal 0 = check existence
         return True
