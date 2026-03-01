@@ -9014,11 +9014,11 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 .modal h2{font-size:18px;font-weight:600;margin-bottom:20px}
 .field{margin-bottom:16px}
 .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
-.field input[type="text"],.field input[type="number"],.field textarea,.field input[type="datetime-local"]{
+.field input[type="text"],.field input[type="number"],.field textarea,.field input[type="datetime-local"],.field select{
   width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);
   border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;
 }
-.field input:focus,.field textarea:focus{outline:none;border-color:var(--accent)}
+.field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent)}
 .field textarea{min-height:80px;resize:vertical;line-height:1.5}
 .field .hint{font-size:11px;color:var(--muted);margin-top:4px}
 
@@ -9145,6 +9145,29 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 
     <details class="adv-fields">
       <summary>Advanced Settings</summary>
+      <div class="field" style="margin-top:10px">
+        <label for="f-model">Model</label>
+        <select id="f-model" onchange="syncSchedulerModelField()">
+          <option value="">Default: Claude CLI Opus</option>
+          <option value="claude-sonnet-4-6">Claude CLI: Sonnet 4.6</option>
+          <option value="claude-opus-4-6">Claude CLI: Opus 4.6</option>
+          <option value="claude-haiku-4-5-20251001">Claude CLI: Haiku 4.5</option>
+          <option value="claude-sdk:claude-sonnet-4-6">Claude SDK: Sonnet 4.6</option>
+          <option value="claude-sdk:claude-opus-4-6">Claude SDK: Opus 4.6</option>
+          <option value="claude-sdk:claude-haiku-4-5-20251001">Claude SDK: Haiku 4.5</option>
+          <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI: GPT-5.1 Codex Mini</option>
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+          <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
+          <option value="upstage/solar-pro-3:free">OpenRouter: Solar Detailed</option>
+          <option value="__custom__">Custom model ID</option>
+        </select>
+        <span class="hint">Leave on default to use your normal local Claude CLI agent. Choose Custom for any raw model ID.</span>
+      </div>
+      <div class="field" id="f-model-custom-wrap" style="display:none">
+        <label for="f-model-custom">Custom Model ID</label>
+        <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.1-codex">
+      </div>
       <div class="adv-grid" style="margin-top:10px">
         <div class="field">
           <label>Timeout (seconds)</label>
@@ -9251,6 +9274,59 @@ function getPreview(id){
   return preview[id] || {};
 }
 
+function formatSchedulerModel(model){
+  const value=String(model||'').trim();
+  if(!value) return 'Default: Claude CLI Opus';
+  const labels={
+    'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
+    'claude-opus-4-6':'Claude CLI: Opus 4.6',
+    'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5',
+    'claude-sdk:claude-sonnet-4-6':'Claude SDK: Sonnet 4.6',
+    'claude-sdk:claude-opus-4-6':'Claude SDK: Opus 4.6',
+    'claude-sdk:claude-haiku-4-5-20251001':'Claude SDK: Haiku 4.5',
+    'codex-cli:gpt-5.1-codex-mini':'Codex CLI: GPT-5.1 Codex Mini',
+    'gemini-2.5-flash':'Gemini 2.5 Flash',
+    'gemini-2.5-pro':'Gemini 2.5 Pro',
+    'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
+    'upstage/solar-pro-3:free':'OpenRouter: Solar Detailed'
+  };
+  return labels[value]||value;
+}
+
+function syncSchedulerModelField(){
+  const select=document.getElementById('f-model');
+  const customWrap=document.getElementById('f-model-custom-wrap');
+  if(!select||!customWrap) return;
+  customWrap.style.display=select.value==='__custom__'?'block':'none';
+}
+
+function setSchedulerModelValue(value){
+  const model=String(value||'').trim();
+  const select=document.getElementById('f-model');
+  const custom=document.getElementById('f-model-custom');
+  if(!select||!custom) return;
+  const known=[...select.options].some(opt=>opt.value===model);
+  if(!model){
+    select.value='';
+    custom.value='';
+  }else if(known){
+    select.value=model;
+    custom.value='';
+  }else{
+    select.value='__custom__';
+    custom.value=model;
+  }
+  syncSchedulerModelField();
+}
+
+function getSchedulerModelValue(){
+  const select=document.getElementById('f-model');
+  const custom=document.getElementById('f-model-custom');
+  if(!select||!custom) return '';
+  if(select.value==='__custom__') return custom.value.trim();
+  return select.value.trim();
+}
+
 // ── Render ──
 function render(){
   const list=document.getElementById('job-list');
@@ -9269,6 +9345,7 @@ function render(){
     const nextAgo=p.next_run_at?new Date(p.next_run_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'—';
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
     const lastOutput=p.last_output?'<div class="card-output"><span class="label">Last output</span>'+esc(p.last_output)+'</div>':'';
+    const modelMeta='<span>'+esc(formatSchedulerModel(j.model||''))+'</span>';
     return '<div class="card'+(en?'':' disabled')+'">' +
       '<div class="card-top">' +
         '<label class="toggle"><input type="checkbox" '+(en?'checked':'')+' onchange="toggleJob('+i+',this.checked)"><span class="slider"></span></label>' +
@@ -9282,6 +9359,7 @@ function render(){
       '<div class="card-prompt">'+esc((j.prompt||'').substring(0,120))+'</div>' +
       '<div class="card-schedule">'+esc(scheduleToText(j.schedule))+'</div>' +
       '<div class="card-meta">' +
+        modelMeta +
         (lastAgo?'<span>Last: '+esc(lastAgo)+'</span>':'') +
         (p.last_status?'<span class="'+statusCls+'">'+esc(p.last_status)+'</span>':'') +
         (p.run_count?'<span>'+p.run_count+' run'+(p.run_count==1?'':'s')+'</span>':'') +
@@ -9360,6 +9438,7 @@ function openAddModal(){
   document.getElementById('f-once').value='';
   document.getElementById('f-timeout').value='180';
   document.getElementById('f-retry').value='0';
+  setSchedulerModelValue('');
   document.getElementById('f-headless').checked=false;
   document.getElementById('f-session').checked=false;
   openModal();
@@ -9391,9 +9470,10 @@ function openEditModal(i){
 
   // Advanced
   document.getElementById('f-timeout').value=j.timeout_seconds||180;
-  document.getElementById('f-retry').value=j.retry_after_seconds||0;
+  document.getElementById('f-retry').value=j.retry_after_seconds||j.retry_seconds||0;
+  setSchedulerModelValue(j.model||'');
   document.getElementById('f-headless').checked=!!j.headless;
-  document.getElementById('f-session').checked=!!j.keep_session;
+  document.getElementById('f-session').checked=!!(j.keep_session||j.use_stable_session);
 
   openModal();
 }
@@ -9421,13 +9501,15 @@ async function saveModal(){
 
   const timeout=parseInt(document.getElementById('f-timeout').value)||180;
   const retry=parseInt(document.getElementById('f-retry').value)||0;
+  const model=getSchedulerModelValue();
   const headless=document.getElementById('f-headless').checked;
   const keepSession=document.getElementById('f-session').checked;
 
   const job={id:name,prompt:prompt,schedule:schedule,enabled:true,timeout_seconds:timeout};
-  if(retry>0) job.retry_after_seconds=retry;
+  if(model) job.model=model;
+  if(retry>0) job.retry_seconds=retry;
   if(headless) job.headless=true;
-  if(keepSession) job.keep_session=true;
+  if(keepSession) job.use_stable_session=true;
 
   if(editingIndex>=0){
     // Preserve enabled state from existing job

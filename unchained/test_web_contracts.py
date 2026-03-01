@@ -111,6 +111,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             "CHAT_GEMINI_HTML",
             "HEADLESS_DEMO_HTML",
             "CLAUDE_CHAT_HTML",
+            "SCHEDULER_HTML",
             "SETUP_HTML",
             "ADMIN_HTML",
         ]
@@ -125,6 +126,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("closeInstallModal", web.CLAUDE_CHAT_HTML)
         self.assertIn('id="modelsel"', web.CLAUDE_CHAT_HTML)
         self.assertIn("model: currentModel()", web.CLAUDE_CHAT_HTML)
+        self.assertIn('id="f-model"', web.SCHEDULER_HTML)
+        self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
+        self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
 
 if __name__ == "__main__":
