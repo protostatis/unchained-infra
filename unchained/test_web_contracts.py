@@ -87,6 +87,11 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/provision/confirm"),
             ("POST", "/web/provision/save-manual"),
             ("POST", "/web/provision/revoke"),
+            ("GET", "/scheduler"),
+            ("GET", "/web/scheduler/jobs"),
+            ("POST", "/web/scheduler/jobs"),
+            ("POST", "/web/scheduler/preview"),
+            ("GET", "/web/scheduler/history"),
         }
         if not web.GOOGLE_CLIENT_ID:
             expected.add(("POST", "/auth/dev"))
