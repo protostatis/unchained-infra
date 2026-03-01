@@ -2,26 +2,33 @@
 
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
 import unittest
+from unittest.mock import patch
 
 # Ensure unchained/ is on the path
 sys.path.insert(0, os.path.dirname(__file__))
 
 from scheduled_tasks import (  # noqa: E402
+    append_run_record,
     ChatTriggerClient,
     JobState,
     SchedulerEngine,
     TriggerResult,
     jobs_to_payload,
+    latest_success_output,
     load_jobs,
+    load_run_history,
     load_state,
     parse_jobs_payload,
     preview_jobs,
     run_due_jobs_once,
+    run_due_jobs_multi_once,
     save_state,
+    _scheduler_slug,
 )
 
 
@@ -194,6 +201,69 @@ class TestScheduledTasks(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]["is_due"])
         self.assertEqual(rows[0]["id"], "a")
+
+    def test_history_append_and_tail_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "sched.state.json"
+            append_run_record(state_path, "job-a", True, "first", _utc(2026, 2, 25, 12, 0, 0), max_records=3)
+            append_run_record(state_path, "job-a", False, "second", _utc(2026, 2, 25, 12, 1, 0), max_records=3)
+            append_run_record(state_path, "job-a", True, "third", _utc(2026, 2, 25, 12, 2, 0), max_records=3)
+            append_run_record(state_path, "job-a", True, "fourth", _utc(2026, 2, 25, 12, 3, 0), max_records=3)
+
+            rows = load_run_history(state_path, "job-a", limit=10)
+            self.assertEqual([row["detail"] for row in rows], ["fourth", "third", "second"])
+            self.assertEqual(latest_success_output(state_path, "job-a"), "fourth")
+
+    def test_run_due_jobs_multi_once_uses_per_user_api_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            jobs_dir = Path(td) / "scheduler_jobs"
+            jobs_dir.mkdir()
+            db_path = Path(td) / "auth.db"
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE users (user_id TEXT PRIMARY KEY, api_key TEXT)")
+                conn.execute(
+                    "INSERT INTO users (user_id, api_key) VALUES (?, ?)",
+                    ("u-user1", "uc_live_user1"),
+                )
+
+            slug = _scheduler_slug("u-user1")
+            jobs_path = jobs_dir / f"{slug}.jobs.json"
+            jobs_path.write_text(
+                """{
+  "jobs": [
+    {"id": "job1", "prompt": "p1", "schedule": {"at": "2026-02-25T09:00:00Z"}}
+  ]
+}
+"""
+            )
+
+            calls: list[tuple[str, str]] = []
+
+            class FakeClient:
+                def __init__(self, api_url: str, api_key: str):
+                    self.api_url = api_url
+                    self.api_key = api_key
+
+                def trigger(self, **kwargs):
+                    calls.append((self.api_key, kwargs.get("prompt", "")))
+                    return TriggerResult(ok=True, text="ok")
+
+            with patch("scheduled_tasks.ChatTriggerClient", FakeClient):
+                batches = run_due_jobs_multi_once(
+                    jobs_dir=jobs_dir,
+                    db_path=db_path,
+                    api_url="http://web:8080",
+                    now=_utc(2026, 2, 25, 9, 0, 1),
+                    sleep_between_jobs=0.0,
+                )
+
+            self.assertEqual(len(batches), 1)
+            self.assertEqual(calls, [("uc_live_user1", "p1")])
+            state = load_state(jobs_dir / f"{slug}.state.json")
+            self.assertEqual(state["job1"].last_status, "success")
+            history = load_run_history(jobs_dir / f"{slug}.state.json", "job1", limit=5)
+            self.assertEqual(history[0]["detail"], "ok")
 
 
 if __name__ == "__main__":

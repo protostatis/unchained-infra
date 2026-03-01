@@ -313,6 +313,19 @@ def _scheduler_write_jobs_payload(user_id: str, payload: dict) -> None:
     os.replace(tmp_name, path)
 
 
+def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
+    import scheduled_tasks as st
+
+    state_path = _scheduler_state_path(user_id)
+    state = st.load_state(state_path)
+    preview = st.preview_jobs(jobs, state=state)
+    for row in preview:
+        last_output = st.latest_success_output(state_path, row["id"], limit=20)
+        if last_output:
+            row["last_output"] = last_output[:500]
+    return preview
+
+
 def _is_openrouter_model(model: str) -> bool:
     return "/" in (model or "")
 
@@ -8971,6 +8984,8 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 .card-meta{display:flex;gap:12px;font-size:11px;color:var(--muted);flex-wrap:wrap}
 .card-meta .status-ok{color:var(--green)}
 .card-meta .status-fail{color:var(--red)}
+.card-output{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:#cfd5e6;line-height:1.5;white-space:pre-wrap}
+.card-output .label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em}
 .card.disabled{opacity:0.5}
 
 /* Toggle switch */
@@ -9030,6 +9045,18 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 
 /* Import modal */
 .import-area textarea{width:100%;min-height:160px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px 12px;font-family:'SF Mono','Menlo',monospace;font-size:12px;resize:vertical;line-height:1.5}
+.history-list{display:flex;flex-direction:column;gap:10px}
+.history-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px}
+.history-item summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
+.history-item summary::-webkit-details-marker{display:none}
+.history-left{display:flex;align-items:center;gap:8px;min-width:0}
+.history-status{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
+.history-status.ok{background:rgba(76,175,80,0.14);color:#95d5b2}
+.history-status.err{background:rgba(239,83,80,0.14);color:#fca5a5}
+.history-ts{font-size:12px;color:var(--muted)}
+.history-len{font-size:11px;color:var(--muted);flex-shrink:0}
+.history-detail{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;line-height:1.5;color:#dbe3f4;white-space:pre-wrap;word-break:break-word}
+.history-empty{font-size:13px;color:var(--muted);padding:12px 0}
 
 @media (max-width:480px){
   .sched-option{flex-wrap:wrap}
@@ -9161,11 +9188,25 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
   </div>
 </div>
 
+<!-- History Modal -->
+<div class="modal-overlay" id="history-modal">
+  <div class="modal">
+    <h2 id="history-title">Run History</h2>
+    <div id="history-list" class="history-list">
+      <div class="history-empty">Loading…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeHistoryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──
 let jobs = [];
 let preview = {};
 let editingIndex = -1;
+let historyJobId = '';
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -9227,11 +9268,13 @@ function render(){
     const lastAgo=timeAgo(p.last_run_at);
     const nextAgo=p.next_run_at?new Date(p.next_run_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'—';
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
+    const lastOutput=p.last_output?'<div class="card-output"><span class="label">Last output</span>'+esc(p.last_output)+'</div>':'';
     return '<div class="card'+(en?'':' disabled')+'">' +
       '<div class="card-top">' +
         '<label class="toggle"><input type="checkbox" '+(en?'checked':'')+' onchange="toggleJob('+i+',this.checked)"><span class="slider"></span></label>' +
         '<span class="name">'+esc(j.id||'Untitled')+'</span>' +
         '<span class="actions">' +
+          '<button title="History" onclick="openHistoryModal('+i+')">History</button>' +
           '<button title="Edit" onclick="openEditModal('+i+')">Edit</button>' +
           '<button class="del-btn" title="Delete" onclick="deleteJob('+i+')">&#10005;</button>' +
         '</span>' +
@@ -9244,6 +9287,7 @@ function render(){
         (p.run_count?'<span>'+p.run_count+' run'+(p.run_count==1?'':'s')+'</span>':'') +
         '<span>Next: '+esc(nextAgo)+'</span>' +
       '</div>' +
+      lastOutput +
     '</div>';
   }).join('');
 }
@@ -9429,16 +9473,78 @@ async function doImport(){
   }
 }
 
+function closeHistoryModal(){
+  historyJobId='';
+  document.getElementById('history-title').textContent='Run History';
+  document.getElementById('history-list').innerHTML='<div class="history-empty">Loading…</div>';
+  document.getElementById('history-modal').classList.remove('open');
+}
+
+function renderHistory(records){
+  const list=document.getElementById('history-list');
+  if(!records.length){
+    list.innerHTML='<div class="history-empty">No runs recorded yet.</div>';
+    return;
+  }
+  list.innerHTML=records.map((rec,idx)=>{
+    const ok=!!rec.ok;
+    const status=ok?'Success':'Error';
+    const ts=rec.ts ? new Date(rec.ts).toLocaleString() : 'Unknown time';
+    const detail=String(rec.detail||'').trim();
+    const length=Number.isFinite(Number(rec.len)) ? Number(rec.len) : detail.length;
+    const detailHtml=detail ? esc(detail) : '<span class="history-empty">No detail</span>';
+    return '<details class="history-item"'+(idx===0?' open':'')+'>' +
+      '<summary>' +
+        '<span class="history-left">' +
+          '<span class="history-status '+(ok?'ok':'err')+'">'+status+'</span>' +
+          '<span class="history-ts">'+esc(ts)+'</span>' +
+        '</span>' +
+        '<span class="history-len">'+esc(length+' chars')+'</span>' +
+      '</summary>' +
+      '<div class="history-detail">'+detailHtml+'</div>' +
+    '</details>';
+  }).join('');
+}
+
+async function loadHistory(){
+  if(!historyJobId) return;
+  const list=document.getElementById('history-list');
+  list.innerHTML='<div class="history-empty">Loading…</div>';
+  try{
+    const r=await fetch('/web/scheduler/history?job_id='+encodeURIComponent(historyJobId)+'&limit=20');
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.error||'load failed');
+    renderHistory(data.records||[]);
+  }catch(e){
+    list.innerHTML='<div class="history-empty">Load failed: '+esc(e.message)+'</div>';
+  }
+}
+
+async function openHistoryModal(i){
+  const job=jobs[i];
+  if(!job) return;
+  historyJobId=job.id||'';
+  document.getElementById('history-title').textContent='Run History: '+historyJobId;
+  document.getElementById('history-modal').classList.add('open');
+  await loadHistory();
+}
+
 // Close modals on overlay click
 document.querySelectorAll('.modal-overlay').forEach(el=>{
-  el.addEventListener('click',e=>{if(e.target===el){el.classList.remove('open');editingIndex=-1;}});
+  el.addEventListener('click',e=>{
+    if(e.target!==el) return;
+    if(el.id==='job-modal') closeModal();
+    else if(el.id==='import-modal') closeImportModal();
+    else if(el.id==='history-modal') closeHistoryModal();
+  });
 });
 
 // Close modals on Escape
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
-    document.querySelectorAll('.modal-overlay.open').forEach(el=>{el.classList.remove('open');});
-    editingIndex=-1;
+    closeModal();
+    closeImportModal();
+    closeHistoryModal();
   }
 });
 
@@ -9484,8 +9590,7 @@ async def handle_scheduler_jobs(request: web.Request) -> web.Response:
         payload = _scheduler_read_jobs_payload(user_id)
         try:
             jobs = st.parse_jobs_payload(payload)
-            state = st.load_state(_scheduler_state_path(user_id))
-            preview = st.preview_jobs(jobs, state=state)
+            preview = _scheduler_preview_rows(user_id, jobs)
             return web.json_response({"jobs": st.jobs_to_payload(jobs)["jobs"], "preview": preview})
         except Exception:
             return web.json_response({"jobs": [], "preview": []})
@@ -9507,8 +9612,7 @@ async def handle_scheduler_jobs(request: web.Request) -> web.Response:
 
     canonical = st.jobs_to_payload(jobs)
     _scheduler_write_jobs_payload(user_id, canonical)
-    state = st.load_state(_scheduler_state_path(user_id))
-    preview = st.preview_jobs(jobs, state=state)
+    preview = _scheduler_preview_rows(user_id, jobs)
     return web.json_response({"ok": True, "jobs": canonical["jobs"], "preview": preview})
 
 
@@ -9536,9 +9640,37 @@ async def handle_scheduler_preview(request: web.Request) -> web.Response:
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
 
-    state = st.load_state(_scheduler_state_path(user_id))
-    preview = st.preview_jobs(jobs, state=state)
+    preview = _scheduler_preview_rows(user_id, jobs)
     return web.json_response({"preview": preview, "server_time": int(time.time())})
+
+
+async def handle_scheduler_history(request: web.Request) -> web.Response:
+    """GET /web/scheduler/history — recent persisted run records for one job."""
+    auth_info = _authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    user_id = auth_info["user_id"]
+    job_id = str(request.query.get("job_id", "") or "").strip()
+    if not job_id:
+        return web.json_response({"error": "job_id required"}, status=400)
+
+    try:
+        limit = int(request.query.get("limit", "20") or "20")
+    except ValueError:
+        return web.json_response({"error": "limit must be an integer"}, status=400)
+    limit = max(1, min(limit, 50))
+
+    import scheduled_tasks as st
+
+    try:
+        jobs = st.parse_jobs_payload(_scheduler_read_jobs_payload(user_id))
+    except Exception:
+        jobs = []
+    if job_id not in {job.id for job in jobs}:
+        return web.json_response({"error": "job not found"}, status=404)
+
+    records = st.load_run_history(_scheduler_state_path(user_id), job_id, limit=limit)
+    return web.json_response({"records": records, "job_id": job_id})
 
 
 # ---------------------------------------------------------------------------
@@ -9996,6 +10128,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/scheduler", handle_scheduler_page),
     ("GET", "/web/scheduler/jobs", handle_scheduler_jobs),
     ("POST", "/web/scheduler/jobs", handle_scheduler_jobs),
+    ("GET", "/web/scheduler/history", handle_scheduler_history),
     ("POST", "/web/scheduler/preview", handle_scheduler_preview),
     ("GET", "/admin", handle_admin_page),
     ("GET", "/admin/users", handle_admin_users),

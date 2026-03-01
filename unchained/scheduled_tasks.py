@@ -15,12 +15,14 @@ Schedule formats:
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 from typing import Any
@@ -32,6 +34,7 @@ DEFAULT_JOBS_PATH = Path("scheduled_jobs.json")
 DEFAULT_STATE_PATH = Path("scheduled_jobs.state.json")
 DEFAULT_API_URL = os.environ.get("UNCHAINED_API_URL", "https://api.unchainedsky.com")
 DEFAULT_API_KEY = os.environ.get("UNCHAINED_API_KEY", "")
+DEFAULT_DB_PATH = Path(os.environ.get("UNCHAINED_DB_PATH", os.path.expanduser("~/.unchained/auth.db")))
 
 
 def _utcnow() -> datetime:
@@ -65,6 +68,10 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
 
 def _agent_key_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()[:8]
+
+
+def _scheduler_slug(user_id: str) -> str:
+    return hashlib.sha256(user_id.encode()).hexdigest()[:24]
 
 
 def _default_session_id(api_key: str, job_id: str) -> str:
@@ -195,7 +202,7 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
         timeout_seconds = int(item.get("timeout_seconds", 180))
         if timeout_seconds <= 0:
             raise ValueError(f"job {job_id!r} timeout_seconds must be > 0")
-        retry_seconds = int(item.get("retry_seconds", 0))
+        retry_seconds = int(item.get("retry_seconds", item.get("retry_after_seconds", 0)))
         if retry_seconds < 0:
             raise ValueError(f"job {job_id!r} retry_seconds must be >= 0")
 
@@ -207,7 +214,7 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
                 enabled=bool(item.get("enabled", True)),
                 model=str(item.get("model", "")),
                 session_id=str(item.get("session_id", "")),
-                use_stable_session=bool(item.get("use_stable_session", False)),
+                use_stable_session=bool(item.get("use_stable_session", item.get("keep_session", False))),
                 headless=bool(item.get("headless", False)),
                 timeout_seconds=timeout_seconds,
                 retry_seconds=retry_seconds,
@@ -302,6 +309,137 @@ def save_state(path: Path, state: dict[str, JobState]) -> None:
         tmp.write("\n")
         tmp_name = tmp.name
     os.replace(tmp_name, path)
+
+
+def _history_path(state_path: Path, job_id: str) -> Path:
+    stem = state_path.name
+    if stem.endswith(".state.json"):
+        stem = stem[: -len(".state.json")]
+    else:
+        stem = state_path.stem
+    job_token = hashlib.sha256(job_id.encode()).hexdigest()[:16]
+    return state_path.parent / f"{stem}.history.{job_token}.jsonl"
+
+
+def append_run_record(
+    state_path: Path,
+    job_id: str,
+    ok: bool,
+    detail: str,
+    ran_at: datetime,
+    *,
+    max_records: int = 50,
+) -> None:
+    history_path = _history_path(state_path, job_id)
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": _isoformat_utc(ran_at),
+        "ok": bool(ok),
+        "detail": str(detail or ""),
+        "len": len(str(detail or "")),
+    }
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    if max_records <= 0:
+        return
+
+    lines = deque(maxlen=max_records)
+    with history_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.strip():
+                lines.append(line)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=str(history_path.parent), encoding="utf-8") as tmp:
+        for line in lines:
+            tmp.write(line)
+        tmp_name = tmp.name
+    os.replace(tmp_name, history_path)
+
+
+def load_run_history(state_path: Path, job_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    history_path = _history_path(state_path, job_id)
+    if limit <= 0 or not history_path.exists():
+        return []
+    rows: deque[dict[str, Any]] = deque(maxlen=limit)
+    with history_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                rows.append(record)
+    return list(reversed(list(rows)))
+
+
+def latest_success_output(state_path: Path, job_id: str, limit: int = 50) -> str:
+    for record in load_run_history(state_path, job_id, limit=limit):
+        if record.get("ok"):
+            detail = str(record.get("detail", "") or "").strip()
+            if detail:
+                return detail
+    return ""
+
+
+def _state_path_for_jobs(jobs_path: Path) -> Path:
+    name = jobs_path.name
+    if name.endswith(".jobs.json"):
+        return jobs_path.with_name(f"{name[:-len('.jobs.json')]}.state.json")
+    return jobs_path.with_name(f"{jobs_path.stem}.state.json")
+
+
+def _load_api_keys_by_scheduler_slug(db_path: Path) -> dict[str, str]:
+    if not db_path.exists():
+        return {}
+    keys: dict[str, str] = {}
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT user_id, api_key FROM users WHERE api_key IS NOT NULL AND api_key != ''"
+        ).fetchall()
+    for user_id, api_key in rows:
+        if not user_id or not api_key:
+            continue
+        keys[_scheduler_slug(str(user_id))] = str(api_key)
+    return keys
+
+
+def run_due_jobs_multi_once(
+    *,
+    jobs_dir: Path,
+    db_path: Path,
+    api_url: str,
+    now: datetime | None = None,
+    sleep_between_jobs: float = 1.0,
+) -> list[tuple[Path, list[RunOutcome]]]:
+    now = now or _utcnow()
+    api_keys = _load_api_keys_by_scheduler_slug(db_path)
+    all_outcomes: list[tuple[Path, list[RunOutcome]]] = []
+    for jobs_path in sorted(jobs_dir.glob("*.jobs.json")):
+        slug = jobs_path.name[: -len(".jobs.json")]
+        api_key = api_keys.get(slug, "")
+        if not api_key:
+            print(f"[{_isoformat_utc(_utcnow())}] scheduler skip {jobs_path.name}: no API key for slug")
+            continue
+        state_path = _state_path_for_jobs(jobs_path)
+        try:
+            client = ChatTriggerClient(api_url, api_key)
+            outcomes = run_due_jobs_once(
+                jobs_path=jobs_path,
+                state_path=state_path,
+                trigger_client=client,
+                now=now,
+                sleep_between_jobs=sleep_between_jobs,
+                api_key_for_sessions=api_key,
+            )
+        except Exception as exc:
+            print(f"[{_isoformat_utc(_utcnow())}] scheduler skip {jobs_path.name}: {exc}")
+            continue
+        if outcomes:
+            all_outcomes.append((jobs_path, outcomes))
+    return all_outcomes
 
 
 class SchedulerEngine:
@@ -472,6 +610,10 @@ def run_due_jobs_once(
         )
         engine.mark_run(job, run_now, result.ok, result.error)
         detail = result.text if result.ok else result.error
+        try:
+            append_run_record(state_path, job.id, result.ok, detail, run_now)
+        except Exception as history_error:
+            detail = f"{detail}\n[history write failed: {history_error}]".strip()
         outcomes.append(RunOutcome(job_id=job.id, ok=result.ok, detail=detail))
 
         # Serial execution reduces browser contention and anti-bot risk.
@@ -529,6 +671,12 @@ def main() -> None:
     daemon.add_argument("--poll-seconds", type=float, default=30.0)
     daemon.add_argument("--sleep-between-jobs", type=float, default=1.0)
 
+    daemon_multi = sub.add_parser("daemon-multi", help="Multi-user daemon for server deployment")
+    daemon_multi.add_argument("--jobs-dir", required=True, help="Directory with *.jobs.json files")
+    daemon_multi.add_argument("--poll-seconds", type=float, default=30.0)
+    daemon_multi.add_argument("--sleep-between-jobs", type=float, default=1.0)
+    daemon_multi.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Path to auth.db for per-user API keys")
+
     args = parser.parse_args()
     jobs_path = Path(args.jobs)
     state_path = Path(args.state)
@@ -553,10 +701,10 @@ def main() -> None:
             print(f"{job.id:24s} {str(job.enabled):7s} {next_run:24s} {status:10s} {js.run_count:5d}")
         return
 
-    if not args.api_key:
+    if args.command != "daemon-multi" and not args.api_key:
         raise SystemExit("API key missing. Set UNCHAINED_API_KEY or pass --api-key.")
 
-    client = ChatTriggerClient(args.api_url, args.api_key)
+    client = ChatTriggerClient(args.api_url, args.api_key) if args.command != "daemon-multi" else None
 
     if args.command == "run-due":
         outcomes = run_due_jobs_once(
@@ -573,6 +721,39 @@ def main() -> None:
             status = "OK" if out.ok else "ERR"
             print(f"[{status}] {out.job_id}: {out.detail[:240]}")
         return
+
+    if args.command == "daemon-multi":
+        poll_seconds = float(args.poll_seconds)
+        if poll_seconds <= 0:
+            raise SystemExit("--poll-seconds must be > 0")
+        jobs_dir = Path(args.jobs_dir)
+        db_path = Path(args.db_path)
+        if not jobs_dir.exists():
+            raise SystemExit(f"jobs dir not found: {jobs_dir}")
+        if not db_path.exists():
+            raise SystemExit(f"auth db not found: {db_path}")
+        print(
+            "Scheduler multi-user daemon started. "
+            f"jobs_dir={jobs_dir} db={db_path} poll={poll_seconds}s"
+        )
+        while True:
+            try:
+                batches = run_due_jobs_multi_once(
+                    jobs_dir=jobs_dir,
+                    db_path=db_path,
+                    api_url=args.api_url,
+                    sleep_between_jobs=float(args.sleep_between_jobs),
+                )
+                for jobs_path, outcomes in batches:
+                    for out in outcomes:
+                        status = "OK" if out.ok else "ERR"
+                        print(
+                            f"[{_isoformat_utc(_utcnow())}] "
+                            f"[{jobs_path.name}] [{status}] {out.job_id}: {out.detail[:240]}"
+                        )
+            except Exception as e:
+                print(f"[{_isoformat_utc(_utcnow())}] scheduler tick error: {e}")
+            time.sleep(poll_seconds)
 
     # daemon mode
     poll_seconds = float(args.poll_seconds)
