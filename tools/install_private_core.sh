@@ -9,7 +9,16 @@ if [[ ! -d "$SRC_DIR" ]]; then
   exit 1
 fi
 
-for f in cdp.py ddm.py intel.py private_core_engine.py private_core_server.py private_core_contracts.py; do
+for f in \
+  cdp.py \
+  ddm.py \
+  intel.py \
+  private_core_engine.py \
+  private_core_server.py \
+  private_core_contracts.py \
+  CLAUDE.md \
+  LABEL_RESOLUTION.md
+do
   if [[ ! -f "$SRC_DIR/$f" ]]; then
     echo "missing private core file: $SRC_DIR/$f" >&2
     exit 1
