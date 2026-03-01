@@ -31,6 +31,7 @@ jobs:
         run: |
           python tools/oss_guard/check_private_imports.py
           python tools/oss_guard/check_agent_artifact_leaks.py
+          python tools/oss_guard/check_public_doc_leaks.py
 
   private-integrated-tests:
     runs-on: ubuntu-latest
