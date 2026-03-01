@@ -1989,8 +1989,10 @@ body{
 }
 #topbar .left{display:flex;align-items:center;gap:12px}
 #topbar .agent{font-family:var(--mono);font-size:14px;color:var(--accent)}
-#topbar .status{font-size:11px;color:var(--muted)}
-#topbar .status.online{color:#4caf50}
+#topbar .status-stack{display:flex;flex-wrap:wrap;gap:6px}
+#topbar .status{font-size:11px;color:var(--muted);border:1px solid #444;padding:3px 8px;border-radius:999px}
+#topbar .status.online{color:#4caf50;border-color:#2f6f39}
+#topbar .status.warn{color:#f0d58b;border-color:#7a6326}
 #topbar .nav{display:flex;gap:8px}
 #topbar .nav a{
   color:var(--muted);text-decoration:none;font-size:12px;
@@ -2179,6 +2181,8 @@ body{
   padding:8px 16px;background:#2a1a1a;border-bottom:1px solid #444;
   font-size:13px;color:var(--muted);flex-shrink:0;
 }
+#download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+#download-banner .detail{font-size:11px;color:#8f9199}
 #download-banner a{
   color:var(--accent);text-decoration:none;font-weight:600;
   border:1px solid var(--accent);padding:4px 12px;border-radius:6px;
@@ -5642,7 +5646,10 @@ body{
   <div id="topbar">
     <div class="left">
       <span class="agent" id="agentlabel"></span>
-      <span class="status" id="agentstatus">agent offline</span>
+      <div class="status-stack">
+        <span class="status" id="agentstatus">chat agent offline</span>
+        <span class="status" id="bridgestatus">browser bridge offline</span>
+      </div>
     </div>
     <div class="nav">
       <a href="/trial">Free Trial</a>
@@ -5666,7 +5673,10 @@ body{
   </div>
 
   <div id="download-banner" style="display:none">
-    <span id="banner-msg">Your agent is offline.</span>
+    <div class="copy">
+      <span id="banner-msg">Your local chat agent is offline.</span>
+      <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
+    </div>
     <a href="#" onclick="showBannerInstall();return false" id="banner-connect">Install (curl)</a>
     <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
   </div>
@@ -5816,37 +5826,66 @@ function onModelChange(model) {
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
 
-function updateAgentStatusUI(connected, codexCliSupported = true, mismatch = false) {
-  const el = document.getElementById('agentstatus');
+function updateStatusPill(el, text, mode) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateAgentStatusUI(data) {
+  const chatEl = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
   const bannerMsg = document.getElementById('banner-msg');
+  const bannerDetail = document.getElementById('banner-detail');
   const bannerConnect = document.getElementById('banner-connect');
   const bannerZip = document.getElementById('banner-zip');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
-  if (bannerMsg) bannerMsg.textContent = 'Your agent is offline.';
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+  const codexCliSupported = data.codex_cli_supported !== false;
+  if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
+  if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
   if (bannerConnect) bannerConnect.textContent = 'Install (curl)';
   if (bannerZip) bannerZip.style.display = '';
-  if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires local agent + Codex CLI login.';
+  if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
-    bannerMsg.textContent = 'Codex CLI requires an updated local agent package.';
+    bannerMsg.textContent = 'Codex CLI requires an updated local chat agent package.';
   }
-  if (connected) {
-    if (isCodexCli) el.textContent = 'codex cli online';
-    else el.textContent = 'agent online';
-    el.className = 'status online';
-    if (banner) banner.style.display = 'none';
+
+  if (bridgeConnected) {
+    updateStatusPill(bridgeEl, 'browser bridge online', 'online');
+  } else {
+    updateStatusPill(bridgeEl, 'browser bridge offline', '');
+  }
+
+  if (chatConnected) {
+    if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
+    else updateStatusPill(chatEl, 'chat agent online', 'online');
+    if (bridgeConnected) {
+      if (banner) banner.style.display = 'none';
+    } else {
+      if (bannerMsg) bannerMsg.textContent = 'Your browser bridge is offline.';
+      if (bannerDetail) bannerDetail.textContent = 'Chat is connected, but browser actions and setup profile detection on this machine need the bridge.';
+      if (banner) banner.style.display = 'flex';
+    }
   } else if (mismatch) {
-    el.textContent = 'wrong profile';
-    el.className = 'status';
-    if (bannerMsg) bannerMsg.textContent = 'Agent connected under a different profile. Reinstall or switch accounts.';
+    updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
+    if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+    if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
     if (bannerConnect) bannerConnect.textContent = 'Reinstall (curl)';
     if (banner) banner.style.display = 'flex';
   } else {
-    if (isCodexCli && !codexCliSupported) el.textContent = 'codex cli requires update';
-    else if (isCodexCli) el.textContent = 'codex cli offline';
-    else el.textContent = 'agent offline';
-    el.className = 'status';
+    if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
+    else if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
+    else updateStatusPill(chatEl, 'chat agent offline', '');
+    if (bridgeConnected) {
+      if (bannerDetail) bannerDetail.textContent = 'Browser bridge is online, so setup and browser control can still work on this machine.';
+    } else if (bannerDetail) {
+      bannerDetail.textContent = 'Start the full local agent package to bring both browser bridge and chat agent online.';
+    }
     if (banner) banner.style.display = 'flex';
   }
 }
@@ -5876,7 +5915,7 @@ async function checkAgentStatus() {
       const data = await r.json();
       lastAgentConnected = data.connected;
       lastCodexCliSupported = data.codex_cli_supported !== false;
-      updateAgentStatusUI(data.connected, lastCodexCliSupported, !!data.mismatch);
+      updateAgentStatusUI(data);
     }
   } catch(e) {}
 }
@@ -7208,13 +7247,18 @@ async def handle_chat_status(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    agent_id = auth_info.get("agent_id", "")
+    bridge_agent_id = auth_info.get("agent_id", "")
+    agent_id = bridge_agent_id
     ws = _chat_agents.get(agent_id)
-    connected = ws is not None and not ws.closed
+    chat_connected = ws is not None and not ws.closed
+    connected = chat_connected
     chat_only = request.query.get("chat_only") == "1"
+    bridge_connected = False
+    if bridge_agent_id:
+        bridge_connected = await _check_relay_agent(bridge_agent_id)
     # If not connected via chat WebSocket, check if agent is on the relay
     if not connected and agent_id and not chat_only:
-        connected = await _check_relay_agent(agent_id)
+        connected = bridge_connected
 
     model_hint = request.query.get("model", "")
     wants_gemini = request.query.get("gemini") == "1"
@@ -7257,7 +7301,8 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             # Codex CLI runs on local CLI agent; no provider key required.
             codex_agent_id = auth_info.get("agent_id", "")
             cws = _chat_agents.get(codex_agent_id)
-            codex_connected = cws is not None and not cws.closed
+            codex_chat_connected = cws is not None and not cws.closed
+            codex_connected = codex_chat_connected
             if not codex_connected and codex_agent_id and not chat_only:
                 codex_connected = await _check_relay_agent(codex_agent_id)
             caps = _chat_agent_caps.get(codex_agent_id, {})
@@ -7278,6 +7323,7 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             cws = _chat_agents.get(codex_agent_id)
             codex_connected = cws is not None and not cws.closed
         if prefer_cli:
+            chat_connected = codex_chat_connected
             connected = codex_connected
             agent_id = codex_agent_id
 
@@ -7298,13 +7344,14 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             claude_sdk_connected = cws is not None and not cws.closed
 
             # Make base status reflect the currently selected model lane.
+            chat_connected = claude_sdk_connected
             connected = claude_sdk_connected
             agent_id = claude_sdk_agent_id
 
     # Detect agent ID mismatch: user's expected agent isn't connected but
     # another agent belonging to the same user IS connected (different profile/key).
     mismatch_agent = ""
-    if not connected and agent_id:
+    if not chat_connected and agent_id:
         user_id = auth_info.get("user_id", "")
         if user_id:
             for other_id, other_uid in _chat_agent_users.items():
@@ -7315,6 +7362,10 @@ async def handle_chat_status(request: web.Request) -> web.Response:
                         break
 
     resp = {"connected": connected, "agent_id": agent_id}
+    resp["chat_connected"] = chat_connected
+    resp["chat_agent_id"] = agent_id
+    resp["bridge_connected"] = bridge_connected
+    resp["bridge_agent_id"] = bridge_agent_id
     if mismatch_agent:
         resp["mismatch"] = True
         resp["mismatch_agent_id"] = mismatch_agent
@@ -9780,6 +9831,7 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
                 agent_id=agent_id,
                 relay_host=relay_host,
                 relay_port=relay_port,
+                headers=_relay_auth_headers(),
             )
 
     return web.json_response({"profiles": profiles})
