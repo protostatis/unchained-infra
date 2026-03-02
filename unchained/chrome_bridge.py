@@ -169,7 +169,8 @@ class Agent:
         while self.running:
             try:
                 await self._connect_and_run()
-            except (ConnectionError, OSError,
+            # asyncio.TimeoutError is not consistently an OSError across Python versions.
+            except (ConnectionError, OSError, asyncio.TimeoutError,
                     websockets.exceptions.ConnectionClosed,
                     websockets.exceptions.InvalidURI,
                     websockets.exceptions.InvalidHandshake) as e:
