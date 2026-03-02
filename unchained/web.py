@@ -1312,9 +1312,8 @@ body::before{
         <span class="req">Auto-provision</span>
       </div>
       <div class="card-steps">
-        <div class="step"><span class="step-num">1</span>Sign in to console.anthropic.com in Chrome</div>
-        <div class="step"><span class="step-num">2</span>Click Provision (or paste manually)</div>
-        <div class="step"><span class="step-num">3</span>Open the chat page</div>
+        <div class="step"><span class="step-num">1</span>Provision or paste your OpenAI key</div>
+        <div class="step"><span class="step-num">2</span>Open the chat page</div>
       </div>
       <a href="/setup?provider=claude-sdk" class="card-btn">Setup &#8594;</a>
       <a href="/chat-claude" class="card-btn card-btn-secondary">Open Chat &#8594;</a>
@@ -1400,6 +1399,7 @@ body::before{
     <a href="/demo">Demo</a>
     <a href="/trial">Free Tier</a>
     <a href="/setup">API Setup</a>
+    <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
     <a href="mailto:hello@unchainedsky.com">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
