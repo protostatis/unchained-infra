@@ -1275,18 +1275,18 @@ body::before{
         <div class="step"><span class="step-num">2</span>Run the one-line install command</div>
         <div class="step"><span class="step-num">3</span>Chat &mdash; the agent drives your browser</div>
       </div>
-      <div class="card-note">Free-tier models are lightweight. For stronger results, upgrade to a full SDK lane.</div>
+      <div class="card-note">Free-tier models are lightweight. For stronger results, upgrade to a full API lane.</div>
       <a href="/trial" class="card-btn">Start Free &#8594;</a>
     </div>
 
     <!-- Section: SDK Agent Lanes -->
-    <div class="section-label">SDK Agent Lanes &mdash; provision an API key once, then chat</div>
+    <div class="section-label">API Agent Lanes &mdash; provision an API key once, then chat</div>
 
     <div class="sdk-row">
     <!-- Gemini SDK -->
     <div class="card sdk">
-      <div class="card-badge">Gemini SDK &mdash; FREE TRIAL</div>
-      <div class="card-title">Gemini SDK</div>
+      <div class="card-badge">Gemini API &mdash; FREE TRIAL</div>
+      <div class="card-title">Gemini API</div>
       <div class="card-desc">Provision a Gemini API key once via your Chrome browser. Full Gemini model capability &mdash; auto-provisioned in ~30 seconds.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
@@ -1303,12 +1303,13 @@ body::before{
 
     <!-- Claude SDK -->
     <div class="card sdk">
-      <div class="card-badge">Claude SDK</div>
-      <div class="card-title">Claude SDK</div>
-      <div class="card-desc">Provision an Anthropic API key once. Full Claude model capability &mdash; auto-provision or paste your key and start chatting.</div>
+      <div class="card-badge">Claude API</div>
+      <div class="card-title">Claude API</div>
+      <div class="card-desc">Provision an Anthropic API key once. Full Claude model capability &mdash; auto-provisioned or paste manually.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Anthropic account</span>
+        <span class="req">Auto-provision</span>
       </div>
       <div class="card-steps">
         <div class="step"><span class="step-num">1</span>Sign in to console.anthropic.com in Chrome</div>
@@ -1321,8 +1322,8 @@ body::before{
 
     <!-- Codex SDK -->
     <div class="card sdk">
-      <div class="card-badge">Codex SDK</div>
-      <div class="card-title">Codex SDK</div>
+      <div class="card-badge">Codex API</div>
+      <div class="card-title">Codex API</div>
       <div class="card-desc">Provision an OpenAI API key once. Model routing optimized for Codex &mdash; auto-provisioned or paste manually.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
@@ -1398,7 +1399,7 @@ body::before{
   <div class="footer-links">
     <a href="/demo">Demo</a>
     <a href="/trial">Free Tier</a>
-    <a href="/setup">SDK Setup</a>
+    <a href="/setup">API Setup</a>
     <a href="mailto:hello@unchainedsky.com">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -3489,7 +3490,7 @@ CHAT_GEMINI_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Unchained — Gemini SDK</title>
+<title>Unchained — Gemini API</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -3728,8 +3729,8 @@ body{
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained Gemini SDK</h1>
-  <div class="sub">AI browser agent powered by your Gemini SDK key</div>
+  <h1>Unchained Gemini API</h1>
+  <div class="sub">AI browser agent powered by your Gemini API key</div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -3745,7 +3746,7 @@ body{
        data-logo_alignment="center"
        data-width="320"></div>
   <div id="loginerr"></div>
-  <a href="/setup" style="color:#888;font-size:12px;margin-top:4px;text-decoration:none">Need a Gemini SDK key? Set up here &rarr;</a>
+  <a href="/setup" style="color:#888;font-size:12px;margin-top:4px;text-decoration:none">Need a Gemini API key? Set up here &rarr;</a>
 </div>
 
 <!-- Main -->
@@ -3770,14 +3771,14 @@ body{
   </div>
 
   <div id="nokey-banner">
-    <span>No Gemini SDK key provisioned.</span>
+    <span>No Gemini API key provisioned.</span>
     <a href="/setup">Provision Key</a>
   </div>
 
   <div id="chat">
     <div id="chat-hints">
-      <div class="hint-title">Gemini SDK Chat</div>
-      <div class="hint-sub">Browser agent powered by your provisioned Gemini SDK key.</div>
+      <div class="hint-title">Gemini API Chat</div>
+      <div class="hint-sub">Browser agent powered by your provisioned Gemini API key.</div>
       <div class="hint-examples">
         <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower')">Look up the Eiffel Tower on Wikipedia</div>
         <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City')">Check the NYC weather on weather.gov</div>
@@ -3961,8 +3962,8 @@ function showHintsIfEmpty() {
   if (document.getElementById('chat-hints')) return;
   document.getElementById('chat').innerHTML =
     '<div id="chat-hints">' +
-    '<div class="hint-title">Gemini SDK Chat</div>' +
-    '<div class="hint-sub">Browser agent powered by your provisioned Gemini SDK key.</div>' +
+    '<div class="hint-title">Gemini API Chat</div>' +
+    '<div class="hint-sub">Browser agent powered by your provisioned Gemini API key.</div>' +
     '<div class="hint-examples">' +
     '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower\')">Look up the Eiffel Tower on Wikipedia</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City\')">Check the NYC weather on weather.gov</div>' +
@@ -4354,7 +4355,7 @@ async function doCancel() {
 async function doSend() {
   if (sending) return;
   if (!geminiProvisioned) {
-    alert('No Gemini SDK key provisioned. Visit /setup to get one.');
+    alert('No Gemini API key provisioned. Visit /setup to get one.');
     return;
   }
   const input = document.getElementById('msginput');
@@ -4464,19 +4465,19 @@ async function doSend() {
 
 CHAT_CLAUDE_SDK_HTML = (
     CHAT_GEMINI_HTML
-    .replace("Unchained — Gemini SDK", "Unchained — Claude SDK")
-    .replace("Unchained Gemini SDK", "Unchained Claude SDK")
-    .replace("AI browser agent powered by your Gemini SDK key", "AI browser agent powered by your Claude SDK key")
-    .replace("Need a Gemini SDK key? Set up here &rarr;", "Need a Claude SDK key? Set up here &rarr;")
+    .replace("Unchained — Gemini API", "Unchained — Claude API")
+    .replace("Unchained Gemini API", "Unchained Claude API")
+    .replace("AI browser agent powered by your Gemini API key", "AI browser agent powered by your Claude API key")
+    .replace("Need a Gemini API key? Set up here &rarr;", "Need a Claude API key? Set up here &rarr;")
     .replace('href="/setup"', 'href="/setup?provider=claude-sdk"')
-    .replace("No Gemini SDK key provisioned.", "No Claude SDK key provisioned.")
+    .replace("No Gemini API key provisioned.", "No Claude API key provisioned.")
     .replace(
         """      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
       <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
       <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>""",
-        """      <option value="claude-sdk:claude-sonnet-4-6">Claude SDK · Sonnet 4.6</option>
-      <option value="claude-sdk:claude-opus-4-6">Claude SDK · Opus 4.6</option>
-      <option value="claude-sdk:claude-haiku-4-5-20251001">Claude SDK · Haiku 4.5</option>""",
+        """      <option value="claude-sdk:claude-sonnet-4-6">Claude API · Sonnet 4.6</option>
+      <option value="claude-sdk:claude-opus-4-6">Claude API · Opus 4.6</option>
+      <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API · Haiku 4.5</option>""",
     )
     .replace("let geminiProvisioned = false;", "let claudeSdkProvisioned = false;")
     .replace("source: 'gemini'", "source: 'claude-sdk'")
@@ -4502,13 +4503,13 @@ CHAT_CLAUDE_SDK_HTML = (
     )
     .replace("if (!geminiProvisioned) {", "if (!claudeSdkProvisioned) {")
     .replace(
-        "No Gemini SDK key provisioned. Visit /setup to get one.",
-        "No Claude SDK key provisioned. Visit /setup to get one.",
+        "No Gemini API key provisioned. Visit /setup to get one.",
+        "No Claude API key provisioned. Visit /setup to get one.",
     )
-    .replace("Gemini SDK Chat", "Claude SDK Chat")
+    .replace("Gemini API Chat", "Claude API Chat")
     .replace(
-        "Browser agent powered by your provisioned Gemini SDK key.",
-        "Browser agent powered by your provisioned Claude SDK key.",
+        "Browser agent powered by your provisioned Gemini API key.",
+        "Browser agent powered by your provisioned Claude API key.",
     )
     .replace(
         """  const saved = localStorage.getItem('unchained_claude_sdk_model');
@@ -4530,22 +4531,22 @@ CHAT_CLAUDE_SDK_HTML = (
 
 CHAT_CODEX_HTML = (
     CHAT_GEMINI_HTML
-    .replace("Unchained — Gemini SDK", "Unchained — Codex")
-    .replace("Unchained Gemini SDK", "Unchained Codex")
-    .replace("AI browser agent powered by your Gemini SDK key", "AI browser agent powered by your Codex API key")
-    .replace("Need a Gemini SDK key? Set up here &rarr;", "Need a Codex key? Set up here &rarr;")
-    .replace("No Gemini SDK key provisioned.", "No Codex key provisioned.")
-    .replace("Gemini SDK Chat", "Codex Chat")
+    .replace("Unchained — Gemini API", "Unchained — Codex")
+    .replace("Unchained Gemini API", "Unchained Codex")
+    .replace("AI browser agent powered by your Gemini API key", "AI browser agent powered by your Codex API key")
+    .replace("Need a Gemini API key? Set up here &rarr;", "Need a Codex key? Set up here &rarr;")
+    .replace("No Gemini API key provisioned.", "No Codex key provisioned.")
+    .replace("Gemini API Chat", "Codex Chat")
     .replace(
-        "Browser agent powered by your provisioned Gemini SDK key.",
+        "Browser agent powered by your provisioned Gemini API key.",
         "Browser agent powered by your provisioned Codex API key.",
     )
     .replace(
         """      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
       <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
       <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>""",
-        """      <option value="codex-sdk:codex-mini-latest">Codex SDK · codex-mini-latest</option>
-      <option value="codex-sdk:gpt-5-codex">Codex SDK · gpt-5-codex</option>
+        """      <option value="codex-sdk:codex-mini-latest">Codex API · codex-mini-latest</option>
+      <option value="codex-sdk:gpt-5-codex">Codex API · gpt-5-codex</option>
       <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI · gpt-5.1-codex-mini</option>
       <option value="codex-cli:gpt-5-codex">Codex CLI · gpt-5-codex</option>""",
     )
@@ -4592,7 +4593,7 @@ CHAT_CODEX_HTML = (
         "if (!geminiProvisioned) {",
         "if (!codexProvisioned && !currentModel().startsWith('codex-cli:')) {",
     )
-    .replace("No Gemini SDK key provisioned. Visit /setup to get one.", "No Codex key provisioned. Visit /setup to get one.")
+    .replace("No Gemini API key provisioned. Visit /setup to get one.", "No Codex key provisioned. Visit /setup to get one.")
 )
 
 # ---------------------------------------------------------------------------
@@ -4926,7 +4927,7 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an SDK</a>.</div>
+  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
   <div id="agent-bar">
     <span id="agent-action"></span>
@@ -7358,7 +7359,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         gemini_key = signup_agent.get_provider_key(auth_info["user_id"], "gemini")
         if not gemini_key:
             return web.json_response(
-                {"error": "No Gemini SDK key. Visit /setup to provision one."},
+                {"error": "No Gemini API key. Visit /setup to provision one."},
                 status=400,
             )
         # Lazy spawn if not running
@@ -7366,7 +7367,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         ws = _chat_agents.get(chat_agent_id)
         if ws is None or ws.closed:
             return web.json_response(
-                {"error": "Gemini SDK agent starting up. Try again in a few seconds."},
+                {"error": "Gemini API agent starting up. Try again in a few seconds."},
                 status=503,
             )
     elif is_claude_sdk:
@@ -7375,7 +7376,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         claude_key = signup_agent.get_provider_key(user_id, "claude-sdk")
         if not claude_key:
             return web.json_response(
-                {"error": "No Claude SDK key. Visit /setup to provision one."},
+                {"error": "No Claude API key. Visit /setup to provision one."},
                 status=400,
             )
         _spawn_claude_sdk_agent(user_id, auth_info["key"], claude_key)
@@ -7389,7 +7390,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     break
         if ws is None or ws.closed:
             return web.json_response(
-                {"error": "Claude SDK agent starting up. Try again in a few seconds."},
+                {"error": "Claude API agent starting up. Try again in a few seconds."},
                 status=503,
             )
     elif is_codex_sdk:
@@ -8528,13 +8529,13 @@ body{
 
     <!-- Step: Provision Provider Key -->
     <div class="step" id="step-provision">
-      <h2 id="provision-step-title">Step 2: Provision Gemini SDK Key</h2>
+      <h2 id="provision-step-title">Step 2: Provision Gemini API Key</h2>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <label for="provider-select" style="font-size:13px;color:var(--muted)">Provider:</label>
         <select id="provider-select" onchange="onProviderChange(this.value)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--fg);font-size:13px">
-          <option value="gemini">Gemini SDK</option>
-          <option value="claude-sdk">Claude SDK</option>
-          <option value="codex-sdk">Codex SDK</option>
+          <option value="gemini">Gemini API</option>
+          <option value="claude-sdk">Claude API</option>
+          <option value="codex-sdk">Codex API</option>
         </select>
       </div>
       <div id="local-mode-hint" style="display:none;color:var(--muted);font-size:13px;margin-bottom:10px">
@@ -8544,7 +8545,7 @@ body{
         Prefer full control? Access this page from your computer at <code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">localhost:8080/setup</code> to use visible Chrome mode.
       </div>
       <button class="provision-btn" id="provision-btn" onclick="startProvision()" disabled>
-        Provision Gemini SDK API Key
+        Provision Gemini API Key
       </button>
       <div class="provision-status" id="provision-status"></div>
       <div id="manual-key-section" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -8667,10 +8668,10 @@ let agentConnected = false;
 let statusPollTimer = null;
 
 function providerLabel(provider) {
-  if (provider === 'claude-sdk') return 'Claude SDK';
-  if (provider === 'codex-sdk') return 'Codex SDK';
+  if (provider === 'claude-sdk') return 'Claude API';
+  if (provider === 'codex-sdk') return 'Codex API';
   if (provider === 'codex-cli') return 'Codex CLI';
-  if (provider === 'gemini') return 'Gemini SDK';
+  if (provider === 'gemini') return 'Gemini API';
   if (!provider) return 'Provider';
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
@@ -8692,7 +8693,7 @@ function updateProvisionUiTexts() {
   const localOnly = (p === 'codex-cli');
   title.textContent = (isLocal ? 'Step 2: Provision ' : 'Step 3: Provision ') + label + ' Key';
   if (localOnly) btn.textContent = 'Use Local Codex CLI';
-  else btn.textContent = 'Provision ' + label + ' API Key';
+  else btn.textContent = 'Provision ' + label + ' Key';
   if (p === 'gemini') input.placeholder = 'AIzaSy...';
   else if (p === 'claude-sdk') input.placeholder = 'sk-ant-...';
   else input.placeholder = 'sk-...';
@@ -9573,9 +9574,9 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sonnet-4-6">Claude CLI: Sonnet 4.6</option>
           <option value="claude-opus-4-6">Claude CLI: Opus 4.6</option>
           <option value="claude-haiku-4-5-20251001">Claude CLI: Haiku 4.5</option>
-          <option value="claude-sdk:claude-sonnet-4-6">Claude SDK: Sonnet 4.6</option>
-          <option value="claude-sdk:claude-opus-4-6">Claude SDK: Opus 4.6</option>
-          <option value="claude-sdk:claude-haiku-4-5-20251001">Claude SDK: Haiku 4.5</option>
+          <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
+          <option value="claude-sdk:claude-opus-4-6">Claude API: Opus 4.6</option>
+          <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
           <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI: GPT-5.1 Codex Mini</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
@@ -9702,9 +9703,9 @@ function formatSchedulerModel(model){
     'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
     'claude-opus-4-6':'Claude CLI: Opus 4.6',
     'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5',
-    'claude-sdk:claude-sonnet-4-6':'Claude SDK: Sonnet 4.6',
-    'claude-sdk:claude-opus-4-6':'Claude SDK: Opus 4.6',
-    'claude-sdk:claude-haiku-4-5-20251001':'Claude SDK: Haiku 4.5',
+    'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
+    'claude-sdk:claude-opus-4-6':'Claude API: Opus 4.6',
+    'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
     'codex-cli:gpt-5.1-codex-mini':'Codex CLI: GPT-5.1 Codex Mini',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',

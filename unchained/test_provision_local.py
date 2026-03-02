@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual test: provision Gemini key for protostatis via local Chrome profile.
+"""Manual test: provision Gemini key via local Chrome profile.
 
 Usage:
     uv run test_provision_local.py [--profile EMAIL] [--reset]
