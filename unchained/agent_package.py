@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.11"
+VERSION = "0.3.12"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -240,8 +240,88 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 DAEMON=false
-if [[ "${1:-}" == "--daemon" || "${1:-}" == "-d" ]]; then
-  DAEMON=true
+ENABLE_AUTOSTART=false
+DISABLE_AUTOSTART=false
+for arg in "$@"; do
+  case "$arg" in
+    --daemon|-d) DAEMON=true ;;
+    --enable-autostart) ENABLE_AUTOSTART=true ;;
+    --disable-autostart) DISABLE_AUTOSTART=true ;;
+  esac
+done
+
+AUTOSTART_LABEL="com.unchained.agent"
+AUTOSTART_PLIST="$HOME/Library/LaunchAgents/$AUTOSTART_LABEL.plist"
+AGENT_DIR="$(pwd)"
+SCRIPT_PATH="$AGENT_DIR/start.sh"
+OS_NAME="$(uname -s 2>/dev/null || echo unknown)"
+
+install_autostart() {
+  if [[ "$OS_NAME" != "Darwin" ]]; then
+    echo "Autostart setup skipped: unsupported OS ($OS_NAME)."
+    return 0
+  fi
+  if ! command -v launchctl >/dev/null 2>&1; then
+    echo "Autostart setup skipped: launchctl not found."
+    return 0
+  fi
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$AUTOSTART_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$AUTOSTART_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$SCRIPT_PATH</string>
+    <string>--daemon</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>WorkingDirectory</key>
+  <string>$AGENT_DIR</string>
+  <key>StandardOutPath</key>
+  <string>$AGENT_DIR/autostart.log</string>
+  <key>StandardErrorPath</key>
+  <string>$AGENT_DIR/autostart.log</string>
+</dict>
+</plist>
+PLIST
+  launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
+  launchctl enable "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  echo "Autostart enabled: $AUTOSTART_LABEL"
+  echo "LaunchAgent: $AUTOSTART_PLIST"
+}
+
+disable_autostart() {
+  if [[ "$OS_NAME" != "Darwin" ]]; then
+    echo "Autostart disable skipped: unsupported OS ($OS_NAME)."
+    return 0
+  fi
+  if ! command -v launchctl >/dev/null 2>&1; then
+    echo "Autostart disable skipped: launchctl not found."
+    return 0
+  fi
+  launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  launchctl disable "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  rm -f "$AUTOSTART_PLIST"
+  echo "Autostart disabled: $AUTOSTART_LABEL"
+}
+
+if $DISABLE_AUTOSTART; then
+  disable_autostart
+  exit 0
+fi
+
+if $ENABLE_AUTOSTART && ! $DAEMON; then
+  install_autostart
+  exit 0
 fi
 
 # Load config
@@ -300,28 +380,54 @@ if $DAEMON; then
     exit 1
   fi
 
+  if $ENABLE_AUTOSTART; then
+    install_autostart
+  fi
+
   echo "Starting in daemon mode..."
   echo "Log file: $LOGFILE"
 
   # Launch both processes in a subshell, redirect to log
   (
-    echo "[$(date)] Starting Chrome bridge..."
-    python unchained/chrome_bridge.py start \
-      --relay "wss://$UNCHAINED_RELAY_HOST/tunnel" &
-    BRIDGE_PID=$!
+    bridge_loop() {
+      while true; do
+        echo "[$(date)] Starting Chrome bridge..."
+        # set +e prevents daemon crash when bridge exits non-zero.
+        set +e
+        python unchained/chrome_bridge.py start \
+          --relay "wss://$UNCHAINED_RELAY_HOST/tunnel"
+        BRIDGE_EXIT_CODE=$?
+        set -e
+        echo "[$(date)] Chrome bridge exited (code $BRIDGE_EXIT_CODE). Restarting in 5s..."
+        sleep 5
+      done
+    }
 
+    cleanup() {
+      if [ -n "${BRIDGE_SUP_PID:-}" ]; then
+        kill "$BRIDGE_SUP_PID" 2>/dev/null || true
+      fi
+      pkill -f "chrome_bridge.py start" 2>/dev/null || true
+    }
+
+    trap "cleanup; exit" INT TERM
+
+    bridge_loop &
+    BRIDGE_SUP_PID=$!
     sleep 2
 
     echo "[$(date)] Starting chat agent..."
-    trap "kill $BRIDGE_PID 2>/dev/null; exit" INT TERM
     # caffeinate -i prevents macOS App Nap from suspending the agent
     AGENT_CMD=(env PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py)
     if command -v caffeinate &>/dev/null; then
       AGENT_CMD=(caffeinate -i -- "${AGENT_CMD[@]}")
     fi
     while true; do
+      # set +e prevents daemon crash when agent exits non-zero.
+      set +e
       "${AGENT_CMD[@]}"
       EXIT_CODE=$?
+      set -e
       echo "[$(date)] Agent exited (code $EXIT_CODE). Restarting in 5s..."
       sleep 5
     done
@@ -559,6 +665,8 @@ echo ""
 echo "To start the agent:"
 echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
 echo "  ./start.sh --daemon   # background (close terminal safely)"
+echo "  ./start.sh --enable-autostart   # start daemon on reboot/login (macOS)"
+echo "  ./start.sh --disable-autostart  # remove reboot/login autostart"
 echo "  ./stop.sh             # stop background agent"
 echo ""
 if [ -t 0 ]; then
@@ -625,6 +733,7 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 3. Opens Chrome with remote debugging enabled
 4. Connects Chrome to the Unchained relay server
 5. Starts the chat agent (waits for messages from the web UI)
+6. Optional: enable reboot/login autostart via `./start.sh --enable-autostart` (macOS)
 
 ## Requirements
 
