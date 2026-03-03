@@ -3653,8 +3653,10 @@ body{
 }
 #topbar .left{display:flex;align-items:center;gap:12px}
 #topbar .agent{font-family:var(--mono);font-size:14px;color:var(--accent)}
+#topbar .status-stack{display:flex;flex-direction:column;gap:2px}
 #topbar .status{font-size:11px;color:var(--muted)}
 #topbar .status.online{color:#4caf50}
+#topbar .status.warn{color:#fbbf24}
 #topbar .nav{display:flex;gap:8px}
 #topbar .nav a{
   color:var(--muted);text-decoration:none;font-size:12px;
@@ -3881,7 +3883,10 @@ body{
   <div id="topbar">
     <div class="left">
       <span class="agent" id="agentlabel"></span>
-      <span class="status" id="agentstatus">connecting...</span>
+      <div class="status-stack">
+        <span class="status" id="agentstatus">chat agent offline</span>
+        <span class="status" id="bridgestatus">browser bridge offline</span>
+      </div>
     </div>
     <div class="nav">
       <a href="#" onclick="doNewChat();return false">New Chat</a>
@@ -4024,17 +4029,43 @@ function onModelChange(model) {
   localStorage.setItem('unchained_gemini_model', model);
 }
 
-function updateAgentStatusUI(connected) {
-  const el = document.getElementById('agentstatus');
+function updateStatusPill(el, text, mode) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateAgentStatusUI(data) {
+  const chatEl = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
-  if (connected) {
-    el.textContent = 'connected';
-    el.className = 'status online';
-    if (banner) banner.style.display = 'none';
-  } else {
-    el.textContent = 'connecting...';
-    el.className = 'status';
-    if (banner) banner.style.display = 'flex';
+  const bannerMsg = document.getElementById('banner-msg');
+  const bannerCurl = document.getElementById('banner-curl');
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) updateStatusPill(chatEl, 'chat agent online', 'online');
+  else if (mismatch) updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
+  else updateStatusPill(chatEl, 'chat agent offline', '');
+
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'browser bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'browser bridge offline', '');
+
+  if (bannerMsg) bannerMsg.textContent = 'Local chat agent is offline on this machine.';
+  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+
+  if (banner) {
+    if (chatConnected && bridgeConnected) {
+      banner.style.display = 'none';
+    } else {
+      if (chatConnected && !bridgeConnected && bannerMsg) {
+        bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
+      } else if (mismatch && bannerMsg) {
+        bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+      }
+      banner.style.display = 'flex';
+    }
   }
 }
 
@@ -4114,7 +4145,11 @@ async function checkAgentStatus() {
     const r = await fetch('/web/chat/status?gemini=1');
     if (r.ok) {
       const data = await r.json();
-      updateAgentStatusUI(data.gemini_connected || false);
+      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });
       if (data.gemini_agent_id && !_userName) {
         document.getElementById('agentlabel').textContent = data.gemini_agent_id;
       }
@@ -4690,7 +4725,18 @@ CHAT_CLAUDE_SDK_HTML = (
         "fetch('/web/chat/status?gemini=1')",
         "fetch('/web/chat/status?claude_sdk=1')",
     )
-    .replace("updateAgentStatusUI(data.gemini_connected || false);", "updateAgentStatusUI(data.claude_sdk_connected || false);")
+    .replace(
+        """      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+        """      updateAgentStatusUI({
+        chat_connected: data.claude_sdk_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+    )
     .replace("if (data.gemini_agent_id) {", "if (data.claude_sdk_agent_id) {")
     .replace(
         "document.getElementById('agentlabel').textContent = data.gemini_agent_id;",
@@ -4762,7 +4808,18 @@ CHAT_CODEX_HTML = (
         "fetch('/web/chat/status?gemini=1')",
         "fetch('/web/chat/status?codex=1&model=' + encodeURIComponent(currentModel()))",
     )
-    .replace("updateAgentStatusUI(data.gemini_connected || false);", "updateAgentStatusUI(data.codex_connected || false);")
+    .replace(
+        """      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+        """      updateAgentStatusUI({
+        chat_connected: data.codex_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+    )
     .replace("if (data.gemini_agent_id) {", "if (data.codex_agent_id) {")
     .replace("document.getElementById('agentlabel').textContent = data.gemini_agent_id;", "document.getElementById('agentlabel').textContent = data.codex_agent_id;")
     .replace(

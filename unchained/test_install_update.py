@@ -409,6 +409,9 @@ def test_install_page_prefers_native_installer():
 def test_gemini_chat_has_install_banner():
     """Verify legacy Gemini/Codex/Claude chat template exposes install banner when disconnected."""
     from web import CHAT_GEMINI_HTML
+    assert 'id="agentstatus"' in CHAT_GEMINI_HTML, "legacy chat agent status pill missing"
+    assert 'id="bridgestatus"' in CHAT_GEMINI_HTML, "legacy chat bridge status pill missing"
+    assert "browser bridge offline" in CHAT_GEMINI_HTML, "legacy chat bridge offline label missing"
     assert 'id="download-banner"' in CHAT_GEMINI_HTML, "legacy chat install banner missing"
     assert "Install (curl)" in CHAT_GEMINI_HTML, "legacy chat curl install option missing"
     assert "Download ZIP" in CHAT_GEMINI_HTML, "legacy chat ZIP install option missing"
