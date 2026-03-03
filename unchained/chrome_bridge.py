@@ -869,6 +869,24 @@ def _is_agent_running() -> bool:
         # same PID (always PID 1 in Docker). This is us, not a duplicate agent.
         _remove_pid()
         return False
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            # ERROR_ACCESS_DENIED still means a process with that PID exists.
+            if ctypes.get_last_error() == 5:
+                return True
+            _remove_pid()
+            return False
+        except Exception:
+            _remove_pid()
+            return False
+
     try:
         os.kill(pid, 0)  # signal 0 = check existence
         return True
@@ -1060,6 +1078,20 @@ def cmd_stop():
         print(f"[agent] sent SIGTERM to PID {pid}")
     except ProcessLookupError:
         print("[agent] process not found")
+    except OSError:
+        if platform.system() == "Windows":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                print(f"[agent] requested termination for PID {pid} via taskkill")
+            except Exception:
+                print("[agent] failed to stop process")
+        else:
+            print("[agent] failed to stop process")
     _remove_pid()
 
 
