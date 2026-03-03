@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.14"
+VERSION = "0.3.15"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -557,12 +557,12 @@ fi
 
 
 _START_PS1 = r"""#Requires -Version 5.1
-$ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
-
 param(
   [switch]$Daemon
 )
+
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
 
 function Load-DotEnv([string]$Path) {
   foreach ($line in Get-Content -Path $Path) {
