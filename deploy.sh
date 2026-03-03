@@ -83,6 +83,16 @@ echo "==> Uploading Python modules..."
     unchained/benchmark/intermediate_goal.py \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
 
+# Upload native installer assets
+echo "==> Uploading installer assets..."
+"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/installers"
+"${SCP_CMD[@]}" \
+    unchained/installers/README.md \
+    unchained/installers/DEVELOPER_ID_NOTARIZATION.md \
+    unchained/installers/build_mac_installer.sh \
+    unchained/installers/unchained-installer-mac.pkg \
+    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/installers/"
+
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then
