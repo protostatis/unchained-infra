@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.21"
+VERSION = "0.3.22"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -599,6 +599,24 @@ function Write-DotEnvInstallToken([string]$Path, [string]$InstallToken) {
   Set-Content -Path $Path -Value $all
 }
 
+function Ensure-WindowsAutostart([string]$ScriptRoot) {
+  try {
+    $startupDir = [Environment]::GetFolderPath("Startup")
+    if ([string]::IsNullOrWhiteSpace($startupDir)) {
+      return
+    }
+    $launcherPath = Join-Path $startupDir "Unchained Agent.cmd"
+    $startScript = Join-Path $ScriptRoot "start.ps1"
+    $lines = @(
+      "@echo off",
+      "setlocal",
+      "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`" -Daemon >nul 2>&1"
+    )
+    Set-Content -Path $launcherPath -Value $lines -Encoding ASCII
+  } catch {
+  }
+}
+
 if (-not (Test-Path ".env")) {
   Write-Error "ERROR: .env not found. Re-download from the web UI."
   exit 1
@@ -707,6 +725,10 @@ if (-not (Test-Path $pythonExe)) {
 }
 
 if ($Daemon) {
+  if ($env:UNCHAINED_DISABLE_AUTOSTART -ne "1") {
+    Ensure-WindowsAutostart $PSScriptRoot
+  }
+
   function Test-ProcessAlive([int]$ProcessId) {
     if ($ProcessId -le 0) { return $false }
     try {
@@ -761,6 +783,7 @@ if ($Daemon) {
   Write-Host "Agent started."
   Write-Host "  Logs:  Get-Content -Path .\agent.log -Wait"
   Write-Host "  Errors: Get-Content -Path .\agent.err.log -Wait"
+  Write-Host "  Autostart: enabled at Windows login"
   Write-Host "  Stop:  .\stop.ps1"
   exit 0
 }
@@ -1229,18 +1252,8 @@ Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\start.ps1`"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\start.ps1`" -Daemon"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\stop.ps1`""
 Write-Host ""
-
-try {
-  $choice = Read-Host "Start now? [d]aemon / [f]oreground / [N]o"
-} catch {
-  $choice = "n"
-}
-
-if ($choice -match "^[Dd]") {
-  powershell -ExecutionPolicy Bypass -File "$installDir\start.ps1" -Daemon
-} elseif ($choice -match "^[Ff]") {
-  powershell -ExecutionPolicy Bypass -File "$installDir\start.ps1"
-}
+Write-Host "Starting now in daemon mode (autostart on Windows login enabled)..."
+powershell -NoProfile -ExecutionPolicy Bypass -File "$installDir\start.ps1" -Daemon
 """
 
 

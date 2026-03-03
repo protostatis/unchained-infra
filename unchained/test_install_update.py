@@ -70,6 +70,8 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1
         assert "/install/claim/" in start_ps1
+        assert "GetFolderPath(\"Startup\")" in start_ps1
+        assert "Autostart: enabled at Windows login" in start_ps1
         # .env still there
         assert "unchained-agent/.env" in names
         env = zf.read("unchained-agent/.env").decode()
