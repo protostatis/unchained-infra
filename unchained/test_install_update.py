@@ -404,6 +404,9 @@ def test_install_page_prefers_native_installer():
     assert "native installer binary" in INSTALL_ONBOARD_HTML, "native installer copy missing"
     assert "native_available" in INSTALL_ONBOARD_HTML, "native installer availability check missing"
     assert "/web/download-agent?install_token=" in INSTALL_ONBOARD_HTML, "zip fallback redirect missing"
+    assert 'id="install-agentstatus"' in INSTALL_ONBOARD_HTML, "install chat status pill missing"
+    assert 'id="install-bridgestatus"' in INSTALL_ONBOARD_HTML, "install bridge status pill missing"
+    assert "/web/chat/status" in INSTALL_ONBOARD_HTML, "install status poll endpoint missing"
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
 
 

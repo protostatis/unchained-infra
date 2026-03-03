@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -646,19 +646,22 @@ if ($Daemon) {
     exit 1
   }
   $bridgeLog = Join-Path (Get-Location) "bridge.log"
+  $bridgeErrLog = Join-Path (Get-Location) "bridge.err.log"
   $agentLog = Join-Path (Get-Location) "agent.log"
+  $agentErrLog = Join-Path (Get-Location) "agent.err.log"
 
   Write-Host "Starting in daemon mode..."
   $bridgeProc = Start-Process -FilePath $pythonExe `
     -ArgumentList @("unchained/chrome_bridge.py", "start", "--relay", "wss://$($env:UNCHAINED_RELAY_HOST)/tunnel") `
-    -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeLog -PassThru
+    -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErrLog -PassThru
   Start-Sleep -Seconds 2
   $agentProc = Start-Process -FilePath $pythonExe `
     -ArgumentList @("unchained/chat_agent_cli.py") `
-    -RedirectStandardOutput $agentLog -RedirectStandardError $agentLog -PassThru
+    -RedirectStandardOutput $agentLog -RedirectStandardError $agentErrLog -PassThru
   @{ bridge_pid = $bridgeProc.Id; agent_pid = $agentProc.Id } | ConvertTo-Json | Set-Content $pidPath
   Write-Host "Agent started."
   Write-Host "  Logs:  Get-Content -Path .\agent.log -Wait"
+  Write-Host "  Errors: Get-Content -Path .\agent.err.log -Wait"
   Write-Host "  Stop:  .\stop.ps1"
   exit 0
 }

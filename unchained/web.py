@@ -7799,6 +7799,8 @@ h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
   display:inline-flex;align-items:center;border:1px solid #334155;border-radius:999px;
   padding:4px 10px;font-size:12px;color:#c6d0dc;background:#0d1218;
 }
+.pill.online{color:#90edba;border-color:#2f6f39;background:#112219}
+.pill.warn{color:#f2d18a;border-color:#7a6326;background:#1d1607}
 .safe{margin:14px 0 4px;padding-left:18px;color:#cbd5e1}
 .safe li{margin:6px 0}
 .agree{
@@ -7818,6 +7820,7 @@ h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
   white-space:pre-wrap;word-break:break-word;font-size:12px;
 }
 .note{margin-top:10px;color:#9aa6b3;font-size:12px}
+.note.warn{color:#f9c56e}
 .status{margin-top:10px;font-size:13px;color:#cde0f5}
 .warn{color:#f9c56e}
 a{color:#93d5ff}
@@ -7850,6 +7853,11 @@ a{color:#93d5ff}
         <span class="pill">Detected OS: <strong id="os-label" style="margin-left:6px">macOS</strong></span>
         <span class="pill">Signed Installer Flow</span>
       </div>
+      <div class="row" style="margin-top:10px">
+        <span class="pill" id="install-agentstatus">chat agent offline</span>
+        <span class="pill" id="install-bridgestatus">browser bridge offline</span>
+      </div>
+      <div class="note" id="install-runtime-status">Checking local agent status...</div>
 
       <ul class="safe">
         <li>Installer download is issued from your authenticated account session.</li>
@@ -7875,6 +7883,7 @@ a{color:#93d5ff}
 
 <script>
 let _installOs = 'mac';
+let _installStatusTimer = null;
 
 function _detectInstallOs() {
   const src = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
@@ -7893,6 +7902,62 @@ function _setStatus(msg, warn) {
   const el = document.getElementById('install-status');
   el.textContent = msg;
   el.className = warn ? 'status warn' : 'status';
+}
+
+function _setRuntimeStatus(msg, warn) {
+  const el = document.getElementById('install-runtime-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = warn ? 'note warn' : 'note';
+}
+
+function _setInstallPill(id, text, mode) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'pill' + (mode ? ' ' + mode : '');
+}
+
+function updateInstallAgentStatusUI(data) {
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) _setInstallPill('install-agentstatus', 'chat agent online', 'online');
+  else if (mismatch) _setInstallPill('install-agentstatus', 'chat agent mismatch', 'warn');
+  else _setInstallPill('install-agentstatus', 'chat agent offline', '');
+
+  if (bridgeConnected) _setInstallPill('install-bridgestatus', 'browser bridge online', 'online');
+  else _setInstallPill('install-bridgestatus', 'browser bridge offline', '');
+
+  if (chatConnected && bridgeConnected) {
+    _setRuntimeStatus('Agent and browser bridge are online on this machine.', false);
+    return;
+  }
+  if (chatConnected && !bridgeConnected) {
+    _setRuntimeStatus('Chat agent is online, but browser bridge is offline on this machine.', true);
+    return;
+  }
+  if (!chatConnected && bridgeConnected) {
+    _setRuntimeStatus('Browser bridge is online, but chat agent is offline on this machine.', true);
+    return;
+  }
+  if (mismatch) {
+    _setRuntimeStatus('A different machine currently owns the active chat agent for this account.', true);
+    return;
+  }
+  _setRuntimeStatus('Local chat agent and browser bridge are offline on this machine.', true);
+}
+
+async function checkInstallAgentStatus() {
+  try {
+    const r = await fetch('/web/chat/status');
+    if (!r.ok) return;
+    const data = await r.json();
+    updateInstallAgentStatusUI(data);
+  } catch(e) {
+    _setRuntimeStatus(`Could not check local status: ${e.message}`, true);
+  }
 }
 
 async function startInstall() {
@@ -7953,6 +8018,8 @@ async function initInstallPage() {
     }
     document.getElementById('ready-panel').style.display = 'block';
     refreshInstallButton();
+    await checkInstallAgentStatus();
+    if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);
   } catch (e) {
     document.getElementById('auth-panel').style.display = 'block';
     _setStatus(`Auth check failed: ${e.message}`, true);

@@ -9,8 +9,15 @@ if ! command -v makensis >/dev/null 2>&1; then
   echo "ERROR: makensis is required. Install with: brew install nsis" >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "ERROR: python3 is required." >&2
+PYTHON_BIN=""
+for cand in /opt/homebrew/bin/python3.13 python3.13 python3; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PYTHON_BIN="$cand"
+    break
+  fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+  echo "ERROR: a working Python 3 interpreter is required." >&2
   exit 1
 fi
 
@@ -24,7 +31,7 @@ mkdir -p "$PAYLOAD_DIR"
 mkdir -p "$(dirname "$OUT_EXE")"
 rm -f "$OUT_EXE"
 
-PYTHONPATH="$UNCHAINED_DIR" python3 - "$PAYLOAD_DIR" "$NSI_FILE" "$OUT_EXE" <<'PY'
+PYTHONPATH="$UNCHAINED_DIR" "$PYTHON_BIN" - "$PAYLOAD_DIR" "$NSI_FILE" "$OUT_EXE" <<'PY'
 from __future__ import annotations
 
 import io
