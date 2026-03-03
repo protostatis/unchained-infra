@@ -6120,9 +6120,9 @@ body{
       <span id="banner-msg">Your local chat agent is offline.</span>
       <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
     </div>
-    <a href="/install" id="banner-connect">Install Agent</a>
     <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="banner-zip">Advanced ZIP</a>
+    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
   <!-- Install modal -->
@@ -6346,7 +6346,7 @@ function updateAgentStatusUI(data) {
   const codexCliSupported = data.codex_cli_supported !== false;
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
-  if (bannerConnect) bannerConnect.textContent = 'Install Agent';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
   if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
   if (bannerZip) bannerZip.style.display = '';
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
@@ -6374,7 +6374,7 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
-    if (bannerConnect) bannerConnect.textContent = 'Reinstall Agent';
+    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
     if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
     if (banner) banner.style.display = 'flex';
   } else {
@@ -7692,7 +7692,7 @@ a{color:#93d5ff}
 
       <div class="row" style="margin-top:14px">
         <button class="btn btn-primary" id="install-btn" onclick="startInstall()" disabled>Download Installer</button>
-        <a class="btn btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-agent">Advanced ZIP</a>
+        <a class="btn btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-agent">Download ZIP</a>
       </div>
 
       <div class="status" id="install-status"></div>
@@ -7762,7 +7762,7 @@ async function initInstallPage() {
   else label.textContent = 'Unsupported';
 
   if (_installOs === 'other') {
-    _setStatus('Native one-click installer is currently available for macOS and Windows. Use Advanced ZIP for other OSes.', true);
+    _setStatus('Native one-click installer is currently available for macOS and Windows. Use Download ZIP for other OSes.', true);
   }
 
   try {
@@ -9177,9 +9177,9 @@ body{
       <span id="setup-banner-msg">Your local chat agent is offline.</span>
       <span class="detail" id="setup-banner-detail">Start the installer to enable chat and browser control.</span>
     </div>
-    <a href="/install" id="setup-banner-connect">Install Agent</a>
     <a href="#" onclick="showSetupInstallCmd();return false" id="setup-banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="setup-banner-zip">Advanced ZIP</a>
+    <a href="/web/download-agent" id="setup-banner-zip">Download ZIP</a>
+    <a href="/install" id="setup-banner-connect">Download Agent Installer</a>
   </div>
 
   <div id="setup-install-modal">
@@ -9400,7 +9400,7 @@ function updateSetupAgentStatusUI(data) {
   if (!banner) return;
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Start the full local agent package to enable chat and browser control.';
-  if (bannerConnect) bannerConnect.textContent = 'Install Agent';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
   if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
 
   if (chatConnected && bridgeConnected) {
@@ -9416,7 +9416,7 @@ function updateSetupAgentStatusUI(data) {
   if (mismatch) {
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Reinstall only if this machine should own the active chat agent.';
-    if (bannerConnect) bannerConnect.textContent = 'Reinstall Agent';
+    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
     if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
     banner.style.display = 'flex';
     return;

@@ -333,11 +333,13 @@ def test_chat_html_has_install_modal():
     assert "showInstallCmd" in CHAT_HTML, "showInstallCmd JS missing"
     assert "copyInstallCmd" in CHAT_HTML, "copyInstallCmd JS missing"
     assert "closeInstallModal" in CHAT_HTML, "closeInstallModal JS missing"
-    assert "Install Agent" in CHAT_HTML, "install button missing"
+    assert "Download Agent Installer" in CHAT_HTML, "installer download button missing"
     assert "Install (curl)" in CHAT_HTML, "curl install option missing"
     assert "Install Agent (curl)" in CHAT_HTML, "curl modal title missing"
     assert "Copy Command" in CHAT_HTML, "copy command button missing"
-    assert "Advanced ZIP" in CHAT_HTML, "advanced ZIP link missing"
+    assert "Download ZIP" in CHAT_HTML, "download ZIP link missing"
+    assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-zip"'), "curl action should come before ZIP"
+    assert CHAT_HTML.index('id="banner-zip"') < CHAT_HTML.index('id="banner-connect"'), "installer action should come after ZIP"
     print(f"  CHAT_HTML has install modal + buttons")
 
 
@@ -348,6 +350,10 @@ def test_setup_html_has_status_and_install_banner():
     assert 'id="setup-bridgestatus"' in SETUP_HTML, "setup bridge status pill missing"
     assert 'id="setup-download-banner"' in SETUP_HTML, "setup install banner missing"
     assert 'id="setup-banner-connect"' in SETUP_HTML, "setup install route link missing"
+    assert "Download Agent Installer" in SETUP_HTML, "setup installer label missing"
+    assert "Download ZIP" in SETUP_HTML, "setup ZIP label missing"
+    assert SETUP_HTML.index('id="setup-banner-curl"') < SETUP_HTML.index('id="setup-banner-zip"'), "setup curl action should come before ZIP"
+    assert SETUP_HTML.index('id="setup-banner-zip"') < SETUP_HTML.index('id="setup-banner-connect"'), "setup installer action should come after ZIP"
     assert "showSetupInstallCmd" in SETUP_HTML, "setup curl modal open function missing"
     assert "copySetupInstallCmd" in SETUP_HTML, "setup curl copy function missing"
     print("  SETUP_HTML has status pills + installer banner")
