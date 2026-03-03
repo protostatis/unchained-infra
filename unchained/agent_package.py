@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.19"
+VERSION = "0.3.20"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -588,11 +588,77 @@ function Write-DotEnvApiKey([string]$Path, [string]$ApiKey) {
   Set-Content -Path $Path -Value $all
 }
 
+function Write-DotEnvInstallToken([string]$Path, [string]$InstallToken) {
+  $existing = @()
+  if (Test-Path $Path) {
+    $existing = Get-Content -Path $Path | Where-Object {
+      $_ -notmatch '^UNCHAINED_INSTALL_TOKEN='
+    }
+  }
+  $all = @($existing + "UNCHAINED_INSTALL_TOKEN=$InstallToken")
+  Set-Content -Path $Path -Value $all
+}
+
 if (-not (Test-Path ".env")) {
   Write-Error "ERROR: .env not found. Re-download from the web UI."
   exit 1
 }
 Load-DotEnv ".env"
+
+# If no API key and no install token are configured, run browser-based claim flow.
+if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_KEY) -and [string]::IsNullOrWhiteSpace($env:UNCHAINED_INSTALL_TOKEN)) {
+  $apiUrl = if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_URL)) { "https://api.unchainedsky.com" } else { $env:UNCHAINED_API_URL }
+  $claimId = [Guid]::NewGuid().ToString("N").ToLowerInvariant()
+  $claimSecret = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+  $startPayload = @{ claim_id = $claimId; claim_secret = $claimSecret } | ConvertTo-Json -Compress
+
+  try {
+    Invoke-RestMethod -Method Post -Uri "$apiUrl/web/install/claim/start" -ContentType "application/json" -Body $startPayload | Out-Null
+  } catch {
+    Write-Error "ERROR: could not initialize installer auth claim."
+    exit 1
+  }
+
+  $claimUrl = "$apiUrl/install/claim/$claimId"
+  Write-Host "Authorize this installation in your browser:"
+  Write-Host "  $claimUrl"
+  try {
+    Start-Process $claimUrl | Out-Null
+  } catch {
+  }
+  Write-Host "Waiting for approval..."
+
+  $installToken = ""
+  for ($i = 0; $i -lt 150; $i++) {
+    Start-Sleep -Seconds 2
+    $pollPayload = @{ claim_id = $claimId; claim_secret = $claimSecret } | ConvertTo-Json -Compress
+    $poll = $null
+    try {
+      $poll = Invoke-RestMethod -Method Post -Uri "$apiUrl/web/install/claim/poll" -ContentType "application/json" -Body $pollPayload
+    } catch {
+      continue
+    }
+    $status = [string]$poll.status
+    if ($status -eq "approved") {
+      $installToken = [string]$poll.install_token
+      if (-not [string]::IsNullOrWhiteSpace($installToken)) {
+        break
+      }
+    }
+    if ($status -eq "expired") {
+      Write-Error "ERROR: installer authorization expired."
+      exit 1
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($installToken)) {
+    Write-Error "ERROR: timed out waiting for installer authorization."
+    exit 1
+  }
+
+  Write-DotEnvInstallToken ".env" $installToken
+  $env:UNCHAINED_INSTALL_TOKEN = $installToken
+}
 
 if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_KEY) -and -not [string]::IsNullOrWhiteSpace($env:UNCHAINED_INSTALL_TOKEN)) {
   $apiUrl = if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_URL)) { "https://api.unchainedsky.com" } else { $env:UNCHAINED_API_URL }

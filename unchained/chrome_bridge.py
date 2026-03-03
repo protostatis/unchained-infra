@@ -1021,10 +1021,11 @@ def cmd_start(config: dict):
     atexit.register(_on_exit)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
-    try:
-        signal.signal(signal.SIGHUP, _shutdown)
-    except (OSError, ValueError):
-        pass  # SIGHUP not available on Windows
+    if hasattr(signal, "SIGHUP"):
+        try:
+            signal.signal(signal.SIGHUP, _shutdown)
+        except (OSError, ValueError):
+            pass  # SIGHUP may not be available/allowed in this environment
 
     try:
         loop.run_until_complete(agent.start())
