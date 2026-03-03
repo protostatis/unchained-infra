@@ -15,7 +15,15 @@ Build mac DMG wrapper (recommended user-facing artifact):
 
 - `./installers/build_mac_dmg.sh`
 
-This generates `installers/unchained-installer-mac.dmg` from the `.pkg`.
+This generates a drag-install DMG with:
+
+- `Unchained Installer.app`
+- `Applications` shortcut
+
+User flow is Finder-native:
+
+1. Drag `Unchained Installer.app` to Applications.
+2. Open the app once to bootstrap the local agent.
 
 For production trust/signing:
 

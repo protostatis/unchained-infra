@@ -152,10 +152,8 @@ cp "$SIGNED_PKG" "installers/unchained-installer-mac.pkg"
 Optional DMG wrapper (recommended):
 
 ```bash
-# Build a DMG that contains the signed pkg.
-./installers/build_mac_dmg.sh \
-  "installers/unchained-installer-mac.pkg" \
-  "installers/unchained-installer-mac.dmg"
+# Build drag-install DMG (contains Unchained Installer.app + Applications shortcut).
+./installers/build_mac_dmg.sh "installers/unchained-installer-mac.dmg"
 
 # Sign the DMG with Developer ID Application cert.
 APP_CERT="Developer ID Application: <Your Company, Inc.> (<TEAMID>)"
