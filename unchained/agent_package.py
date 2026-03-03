@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.23"
+VERSION = "0.3.24"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -723,8 +723,41 @@ if (-not (Test-Path $pythonExe)) {
   Write-Error "ERROR: Missing virtualenv Python: $pythonExe"
   exit 1
 }
-$pythonwExe = ".\.venv\Scripts\pythonw.exe"
-$daemonPythonExe = if (Test-Path $pythonwExe) { $pythonwExe } else { $pythonExe }
+
+function Resolve-DaemonPythonExe([string]$VenvPythonExe, $BasePythonCommand) {
+  $venvDir = Split-Path -Parent $VenvPythonExe
+  $venvPythonw = Join-Path $venvDir "pythonw.exe"
+  if (Test-Path $venvPythonw) {
+    return $venvPythonw
+  }
+
+  $baseSource = ""
+  try {
+    $baseSource = [string]$BasePythonCommand.Source
+  } catch {
+    $baseSource = ""
+  }
+  if (-not [string]::IsNullOrWhiteSpace($baseSource)) {
+    $baseDir = Split-Path -Parent $baseSource
+    $basePythonw = Join-Path $baseDir "pythonw.exe"
+    if (Test-Path $basePythonw) {
+      try {
+        Copy-Item -Path $basePythonw -Destination $venvPythonw -Force
+      } catch {
+      }
+      if (Test-Path $venvPythonw) {
+        return $venvPythonw
+      }
+    }
+  }
+
+  return $VenvPythonExe
+}
+
+$daemonPythonExe = Resolve-DaemonPythonExe $pythonExe $pythonCmd
+if ($daemonPythonExe -eq $pythonExe) {
+  Write-Host "Warning: pythonw.exe unavailable; daemon processes may still appear as python.exe."
+}
 
 if ($Daemon) {
   if ($env:UNCHAINED_DISABLE_AUTOSTART -ne "1") {
