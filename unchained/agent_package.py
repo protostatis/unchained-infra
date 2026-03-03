@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.17"
+VERSION = "0.3.18"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -641,10 +641,10 @@ if (-not (Test-Path $pythonExe)) {
 }
 
 if ($Daemon) {
-  function Test-PidAlive([int]$Pid) {
-    if ($Pid -le 0) { return $false }
+  function Test-ProcessAlive([int]$ProcessId) {
+    if ($ProcessId -le 0) { return $false }
     try {
-      Get-Process -Id $Pid -ErrorAction Stop | Out-Null
+      Get-Process -Id $ProcessId -ErrorAction Stop | Out-Null
       return $true
     } catch {
       return $false
@@ -667,8 +667,8 @@ if ($Daemon) {
       try { $bridgePid = [int]$pidState.bridge_pid } catch {}
     }
 
-    $agentAlive = Test-PidAlive $agentPid
-    $bridgeAlive = Test-PidAlive $bridgePid
+    $agentAlive = Test-ProcessAlive $agentPid
+    $bridgeAlive = Test-ProcessAlive $bridgePid
     if ($agentAlive -or $bridgeAlive) {
       Write-Host "Agent is already running."
       Write-Host "  Stop:  .\stop.ps1"
@@ -735,11 +735,11 @@ try {
 
 if ($p) {
   foreach ($field in @("agent_pid", "bridge_pid")) {
-    $pid = [int]($p.$field)
-    if ($pid -gt 0) {
+    $procId = [int]($p.$field)
+    if ($procId -gt 0) {
       try {
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-        Write-Host "Stopped $field ($pid)."
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        Write-Host "Stopped $field ($procId)."
       } catch {
       }
     }
