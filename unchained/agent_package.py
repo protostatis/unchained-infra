@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.13"
+VERSION = "0.3.14"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -330,6 +330,68 @@ if [ ! -f .env ]; then
 fi
 set -a; source .env; set +a
 
+# If no API key and no install token are configured, run browser-based claim flow.
+if [ -z "${UNCHAINED_API_KEY:-}" ] && [ -z "${UNCHAINED_INSTALL_TOKEN:-}" ]; then
+  API_URL="${UNCHAINED_API_URL:-https://api.unchainedsky.com}"
+  CLAIM_ID=$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)
+  CLAIM_SECRET=$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)
+  START_PAYLOAD=$(CLAIM_ID="$CLAIM_ID" CLAIM_SECRET="$CLAIM_SECRET" python3 - <<'PY'
+import json, os
+print(json.dumps({"claim_id": os.environ["CLAIM_ID"], "claim_secret": os.environ["CLAIM_SECRET"]}))
+PY
+)
+  curl -sf \
+    -H "Content-Type: application/json" \
+    -d "$START_PAYLOAD" \
+    "$API_URL/web/install/claim/start" >/dev/null || {
+      echo "ERROR: could not initialize installer auth claim."; exit 1;
+    }
+  CLAIM_URL="$API_URL/install/claim/$CLAIM_ID"
+  echo "Authorize this installation in your browser:"
+  echo "  $CLAIM_URL"
+  if command -v open >/dev/null 2>&1; then
+    open "$CLAIM_URL" >/dev/null 2>&1 || true
+  fi
+  echo "Waiting for approval..."
+  INSTALL_TOKEN=""
+  for _ in $(seq 1 150); do
+    POLL_PAYLOAD=$(CLAIM_ID="$CLAIM_ID" CLAIM_SECRET="$CLAIM_SECRET" python3 - <<'PY'
+import json, os
+print(json.dumps({"claim_id": os.environ["CLAIM_ID"], "claim_secret": os.environ["CLAIM_SECRET"]}))
+PY
+)
+    POLL_RESP=$(curl -sf \
+      -H "Content-Type: application/json" \
+      -d "$POLL_PAYLOAD" \
+      "$API_URL/web/install/claim/poll" 2>/dev/null || true)
+    STATUS=$(printf '%s' "$POLL_RESP" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("status","") if sys.stdin.readable() else ""))' 2>/dev/null || true)
+    if [ "$STATUS" = "approved" ]; then
+      INSTALL_TOKEN=$(printf '%s' "$POLL_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("install_token",""))' 2>/dev/null || true)
+      break
+    fi
+    if [ "$STATUS" = "expired" ]; then
+      break
+    fi
+    sleep 2
+  done
+  if [ -z "$INSTALL_TOKEN" ]; then
+    echo "ERROR: installer approval timed out. Re-run ./start.sh and approve in browser."
+    exit 1
+  fi
+  grep -v '^UNCHAINED_INSTALL_TOKEN=' .env > .env.tmp || true
+  printf 'UNCHAINED_INSTALL_TOKEN=%s\n' "$INSTALL_TOKEN" >> .env.tmp
+  mv .env.tmp .env
+  export UNCHAINED_INSTALL_TOKEN="$INSTALL_TOKEN"
+fi
+
 # Exchange the short-lived install token for the real API key on first run.
 if [ -z "${UNCHAINED_API_KEY:-}" ] && [ -n "${UNCHAINED_INSTALL_TOKEN:-}" ]; then
   API_URL="${UNCHAINED_API_URL:-https://api.unchainedsky.com}"
@@ -494,6 +556,180 @@ fi
 """
 
 
+_START_PS1 = r"""#Requires -Version 5.1
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+param(
+  [switch]$Daemon
+)
+
+function Load-DotEnv([string]$Path) {
+  foreach ($line in Get-Content -Path $Path) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) {
+      continue
+    }
+    $parts = $line -split "=", 2
+    if ($parts.Count -eq 2) {
+      [Environment]::SetEnvironmentVariable($parts[0], $parts[1], "Process")
+    }
+  }
+}
+
+function Write-DotEnvApiKey([string]$Path, [string]$ApiKey) {
+  $existing = @()
+  if (Test-Path $Path) {
+    $existing = Get-Content -Path $Path | Where-Object {
+      $_ -notmatch '^UNCHAINED_API_KEY=' -and $_ -notmatch '^UNCHAINED_INSTALL_TOKEN='
+    }
+  }
+  $all = @($existing + "UNCHAINED_API_KEY=$ApiKey")
+  Set-Content -Path $Path -Value $all
+}
+
+if (-not (Test-Path ".env")) {
+  Write-Error "ERROR: .env not found. Re-download from the web UI."
+  exit 1
+}
+Load-DotEnv ".env"
+
+if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_KEY) -and -not [string]::IsNullOrWhiteSpace($env:UNCHAINED_INSTALL_TOKEN)) {
+  $apiUrl = if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_URL)) { "https://api.unchainedsky.com" } else { $env:UNCHAINED_API_URL }
+  Write-Host "Fetching agent credentials..."
+  try {
+    $payload = @{ token = $env:UNCHAINED_INSTALL_TOKEN } | ConvertTo-Json -Compress
+    $resp = Invoke-RestMethod -Method Post -Uri "$apiUrl/web/install/bootstrap" -ContentType "application/json" -Body $payload
+  } catch {
+    Write-Error "ERROR: install token exchange failed."
+    exit 1
+  }
+  $newKey = [string]$resp.api_key
+  if ([string]::IsNullOrWhiteSpace($newKey)) {
+    $err = [string]$resp.error
+    if ([string]::IsNullOrWhiteSpace($err)) {
+      $err = "Install token exchange failed."
+    }
+    Write-Error "ERROR: $err"
+    exit 1
+  }
+  Write-DotEnvApiKey ".env" $newKey
+  $env:UNCHAINED_API_KEY = $newKey
+  Remove-Item Env:UNCHAINED_INSTALL_TOKEN -ErrorAction SilentlyContinue
+}
+
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCmd) {
+  $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
+}
+if (-not $pythonCmd) {
+  Write-Error "ERROR: Python 3.9+ is required."
+  exit 1
+}
+
+if (-not (Test-Path ".venv")) {
+  Write-Host "Setting up Python environment..."
+  & $pythonCmd.Source -m venv .venv
+  & ".\.venv\Scripts\python.exe" -m pip install -q --upgrade pip
+  & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+}
+
+$pythonExe = ".\.venv\Scripts\python.exe"
+if (-not (Test-Path $pythonExe)) {
+  Write-Error "ERROR: Missing virtualenv Python: $pythonExe"
+  exit 1
+}
+
+if ($Daemon) {
+  $pidPath = Join-Path (Get-Location) ".agent.pid.json"
+  if (Test-Path $pidPath) {
+    Write-Error "Agent is already running (found $pidPath). Stop it first: .\stop.ps1"
+    exit 1
+  }
+  $bridgeLog = Join-Path (Get-Location) "bridge.log"
+  $agentLog = Join-Path (Get-Location) "agent.log"
+
+  Write-Host "Starting in daemon mode..."
+  $bridgeProc = Start-Process -FilePath $pythonExe `
+    -ArgumentList @("unchained/chrome_bridge.py", "start", "--relay", "wss://$($env:UNCHAINED_RELAY_HOST)/tunnel") `
+    -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeLog -PassThru
+  Start-Sleep -Seconds 2
+  $agentProc = Start-Process -FilePath $pythonExe `
+    -ArgumentList @("unchained/chat_agent_cli.py") `
+    -RedirectStandardOutput $agentLog -RedirectStandardError $agentLog -PassThru
+  @{ bridge_pid = $bridgeProc.Id; agent_pid = $agentProc.Id } | ConvertTo-Json | Set-Content $pidPath
+  Write-Host "Agent started."
+  Write-Host "  Logs:  Get-Content -Path .\agent.log -Wait"
+  Write-Host "  Stop:  .\stop.ps1"
+  exit 0
+}
+
+Write-Host "Starting Chrome bridge..."
+$bridgeProc = Start-Process -FilePath $pythonExe `
+  -ArgumentList @("unchained/chrome_bridge.py", "start", "--relay", "wss://$($env:UNCHAINED_RELAY_HOST)/tunnel") `
+  -PassThru -NoNewWindow
+
+Start-Sleep -Seconds 2
+Write-Host "Starting chat agent..."
+try {
+  $env:PYTHONUNBUFFERED = "1"
+  & $pythonExe "unchained/chat_agent_cli.py"
+} finally {
+  if ($bridgeProc -and -not $bridgeProc.HasExited) {
+    Stop-Process -Id $bridgeProc.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+"""
+
+
+_STOP_PS1 = r"""#Requires -Version 5.1
+$ErrorActionPreference = "Continue"
+Set-Location $PSScriptRoot
+
+$pidPath = Join-Path (Get-Location) ".agent.pid.json"
+if (-not (Test-Path $pidPath)) {
+  Write-Host "No agent PID file found. Is the agent running in daemon mode?"
+  exit 0
+}
+
+try {
+  $p = Get-Content $pidPath -Raw | ConvertFrom-Json
+} catch {
+  $p = $null
+}
+
+if ($p) {
+  foreach ($field in @("agent_pid", "bridge_pid")) {
+    $pid = [int]($p.$field)
+    if ($pid -gt 0) {
+      try {
+        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        Write-Host "Stopped $field ($pid)."
+      } catch {
+      }
+    }
+  }
+}
+
+Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
+Write-Host "Agent stopped."
+"""
+
+
+_START_BAT = r"""@echo off
+powershell -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
+"""
+
+
+_STOP_BAT = r"""@echo off
+powershell -ExecutionPolicy Bypass -File "%~dp0stop.ps1" %*
+"""
+
+
+_UPDATE_BAT = r"""@echo off
+powershell -ExecutionPolicy Bypass -File "%~dp0update.ps1" %*
+"""
+
+
 _UPDATE_SH = r"""#!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -572,6 +808,111 @@ fi
 
 echo ""
 echo "Updated to $REMOTE_VERSION. Restart required: ./start.sh"
+"""
+
+
+_UPDATE_PS1 = r"""#Requires -Version 5.1
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+function Load-DotEnv([string]$Path) {
+  foreach ($line in Get-Content -Path $Path) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) {
+      continue
+    }
+    $parts = $line -split "=", 2
+    if ($parts.Count -eq 2) {
+      [Environment]::SetEnvironmentVariable($parts[0], $parts[1], "Process")
+    }
+  }
+}
+
+if (-not (Test-Path ".env")) {
+  Write-Error "ERROR: .env not found. Re-download from the web UI."
+  exit 1
+}
+Load-DotEnv ".env"
+
+if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_KEY)) {
+  Write-Error "ERROR: UNCHAINED_API_KEY missing in .env."
+  exit 1
+}
+
+$apiUrl = if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_URL)) { "https://api.unchainedsky.com" } else { $env:UNCHAINED_API_URL }
+$localVersion = "unknown"
+if (Test-Path "version.txt") {
+  $localVersion = (Get-Content "version.txt" -Raw).Trim()
+}
+
+Write-Host "Current version: $localVersion"
+Write-Host "Checking for updates..."
+
+$headers = @{ Authorization = "Bearer $($env:UNCHAINED_API_KEY)" }
+try {
+  $versionResp = Invoke-RestMethod -Method Get -Uri "$apiUrl/web/agent/version" -Headers $headers
+} catch {
+  Write-Error "ERROR: Cannot reach update server. Check your internet connection."
+  exit 1
+}
+
+$remoteVersion = [string]$versionResp.version
+if ([string]::IsNullOrWhiteSpace($remoteVersion)) {
+  Write-Error "ERROR: Invalid server response."
+  exit 1
+}
+
+if ($localVersion -eq $remoteVersion) {
+  Write-Host "Already up to date ($localVersion)."
+  exit 0
+}
+
+Write-Host "Update available: $localVersion -> $remoteVersion"
+Write-Host "Downloading update..."
+
+$tmpDir = Join-Path $env:TEMP ("unchained-update-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmpDir | Out-Null
+$zipPath = Join-Path $tmpDir "update.zip"
+
+$oldReqs = ""
+if (Test-Path "requirements.txt") {
+  $oldReqs = Get-Content "requirements.txt" -Raw
+}
+
+try {
+  Invoke-WebRequest -UseBasicParsing -Uri "$apiUrl/web/agent/files" -Headers $headers -OutFile $zipPath
+  Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
+  $srcRoot = Join-Path $tmpDir "unchained-agent"
+
+  New-Item -ItemType Directory -Path ".\unchained" -Force | Out-Null
+  Copy-Item -Path (Join-Path $srcRoot "unchained\*.py") -Destination ".\unchained" -Force -ErrorAction SilentlyContinue
+  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat")) {
+    $src = Join-Path $srcRoot $name
+    if (Test-Path $src) {
+      Copy-Item -Path $src -Destination ".\" -Force
+    }
+  }
+
+  if (-not (Test-Path ".\scheduled_jobs.json")) {
+    $jobs = Join-Path $srcRoot "scheduled_jobs.json"
+    if (Test-Path $jobs) {
+      Copy-Item -Path $jobs -Destination ".\" -Force
+    }
+  }
+} finally {
+  Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$newReqs = ""
+if (Test-Path "requirements.txt") {
+  $newReqs = Get-Content "requirements.txt" -Raw
+}
+if ($oldReqs -ne $newReqs -and (Test-Path ".\.venv\Scripts\python.exe")) {
+  Write-Host "Dependencies changed — reinstalling..."
+  & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+}
+
+Write-Host ""
+Write-Host "Updated to $remoteVersion. Restart required: .\start.ps1"
 """
 
 
@@ -685,6 +1026,132 @@ elif [[ $REPLY =~ ^[Ff]$ ]]; then
   cd "$INSTALL_DIR" && ./start.sh
 fi
 """
+
+
+_WINDOWS_INSTALLER_TEMPLATE = r"""#Requires -Version 5.1
+$ErrorActionPreference = "Stop"
+
+Write-Host "=== Unchained Agent Installer (Windows) ==="
+Write-Host ""
+
+$installDir = Join-Path $HOME "unchained-agent"
+$installToken = "__INSTALL_TOKEN__"
+$baseUrl = "__BASE_URL__"
+$relayHost = "__RELAY_HOST__"
+
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCmd) {
+  $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
+}
+if (-not $pythonCmd) {
+  Write-Error "ERROR: python/python3 is required. Install Python 3.9+ first."
+  exit 1
+}
+
+if (Test-Path $installDir) {
+  Write-Host "Existing installation found at $installDir"
+  if (Test-Path (Join-Path $installDir ".env")) {
+    Copy-Item (Join-Path $installDir ".env") (Join-Path $installDir ".env.bak") -Force -ErrorAction SilentlyContinue
+  }
+}
+New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+
+$envBody = @(
+  "UNCHAINED_API_KEY="
+  "UNCHAINED_INSTALL_TOKEN=$installToken"
+  "UNCHAINED_SERVER=wss://$relayHost/chat/ws"
+  "UNCHAINED_RELAY_HOST=$relayHost"
+  "UNCHAINED_RELAY_PORT=443"
+  "UNCHAINED_API_URL=https://$relayHost"
+  "CODEX_MAX_RUNTIME_S=300"
+)
+Set-Content -Path (Join-Path $installDir ".env") -Value $envBody
+
+Write-Host "Install token configured."
+Write-Host "Downloading agent package..."
+
+$tmpZip = Join-Path $env:TEMP ("unchained-agent-" + [guid]::NewGuid().ToString("N") + ".zip")
+try {
+  Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/web/download-agent?install_token=$installToken" -OutFile $tmpZip
+  if (-not (Test-Path $tmpZip) -or ((Get-Item $tmpZip).Length -eq 0)) {
+    Write-Error "ERROR: Failed to download agent package."
+    exit 1
+  }
+
+  Expand-Archive -Path $tmpZip -DestinationPath $installDir -Force
+  $nested = Join-Path $installDir "unchained-agent"
+  if (Test-Path $nested) {
+    Copy-Item -Path (Join-Path $nested "*") -Destination $installDir -Recurse -Force
+    if (Test-Path (Join-Path $nested ".env")) {
+      Copy-Item (Join-Path $nested ".env") (Join-Path $installDir ".env") -Force
+    }
+    Remove-Item $nested -Recurse -Force
+  }
+} finally {
+  Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+}
+
+# Re-write .env to ensure installer token is retained.
+Set-Content -Path (Join-Path $installDir ".env") -Value $envBody
+
+Push-Location $installDir
+try {
+  Write-Host "[1/3] Creating Python environment..."
+  & $pythonCmd.Source -m venv .venv
+  Write-Host "[2/3] Upgrading pip..."
+  & ".\.venv\Scripts\python.exe" -m pip install -q --upgrade pip
+  Write-Host "[3/3] Installing dependencies..."
+  & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+} finally {
+  Pop-Location
+}
+
+Write-Host ""
+Write-Host "=== Installation complete ==="
+Write-Host "Location: $installDir"
+Write-Host ""
+Write-Host "To start the agent:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\start.ps1`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\start.ps1`" -Daemon"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$installDir\stop.ps1`""
+Write-Host ""
+
+try {
+  $choice = Read-Host "Start now? [d]aemon / [f]oreground / [N]o"
+} catch {
+  $choice = "n"
+}
+
+if ($choice -match "^[Dd]") {
+  powershell -ExecutionPolicy Bypass -File "$installDir\start.ps1" -Daemon
+} elseif ($choice -match "^[Ff]") {
+  powershell -ExecutionPolicy Bypass -File "$installDir\start.ps1"
+}
+"""
+
+
+def _generate_windows_install_script(install_token: str, relay_host: str, base_url: str) -> str:
+    """Generate a PowerShell installer script for Windows."""
+    script = _WINDOWS_INSTALLER_TEMPLATE
+    script = script.replace("__INSTALL_TOKEN__", install_token)
+    script = script.replace("__RELAY_HOST__", relay_host)
+    script = script.replace("__BASE_URL__", base_url)
+    return script
+
+
+def generate_platform_installer_script(
+    platform: str,
+    install_token: str,
+    relay_host: str,
+    base_url: str,
+) -> str:
+    """Generate an OS-specific installer script."""
+    normalized = (platform or "").strip().lower()
+    if normalized in {"mac", "macos", "darwin", "osx"}:
+        return _generate_install_script(install_token, relay_host, base_url)
+    if normalized in {"windows", "win", "win32"}:
+        return _generate_windows_install_script(install_token, relay_host, base_url)
+    raise ValueError(f"Unsupported installer platform: {platform}")
 
 
 def _patch_chat_agent_cli(source: str) -> str:
@@ -857,6 +1324,14 @@ def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> b
         info.external_attr = 0o755 << 16
         zf.writestr(info, _STOP_SH)
 
+        # Windows scripts
+        zf.writestr("unchained-agent/start.ps1", _START_PS1)
+        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
+        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/start.bat", _START_BAT)
+        zf.writestr("unchained-agent/stop.bat", _STOP_BAT)
+        zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
+
         # requirements.txt
         zf.writestr("unchained-agent/requirements.txt", _REQUIREMENTS)
 
@@ -890,6 +1365,8 @@ def build_update_zip() -> bytes:
         info = zipfile.ZipInfo("unchained-agent/update.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _UPDATE_SH)
+        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
 
         # CLAUDE.md
         claude_md_path = os.path.join(src_dir, "CLAUDE.md")
