@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.22"
+VERSION = "0.3.23"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -723,6 +723,8 @@ if (-not (Test-Path $pythonExe)) {
   Write-Error "ERROR: Missing virtualenv Python: $pythonExe"
   exit 1
 }
+$pythonwExe = ".\.venv\Scripts\pythonw.exe"
+$daemonPythonExe = if (Test-Path $pythonwExe) { $pythonwExe } else { $pythonExe }
 
 if ($Daemon) {
   if ($env:UNCHAINED_DISABLE_AUTOSTART -ne "1") {
@@ -772,13 +774,13 @@ if ($Daemon) {
   $agentErrLog = Join-Path (Get-Location) "agent.err.log"
 
   Write-Host "Starting in daemon mode..."
-  $bridgeProc = Start-Process -FilePath $pythonExe `
+  $bridgeProc = Start-Process -FilePath $daemonPythonExe `
     -ArgumentList @("unchained/chrome_bridge.py", "start", "--relay", "wss://$($env:UNCHAINED_RELAY_HOST)/tunnel") `
-    -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErrLog -PassThru
+    -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErrLog -PassThru -WindowStyle Hidden
   Start-Sleep -Seconds 2
-  $agentProc = Start-Process -FilePath $pythonExe `
+  $agentProc = Start-Process -FilePath $daemonPythonExe `
     -ArgumentList @("unchained/chat_agent_cli.py") `
-    -RedirectStandardOutput $agentLog -RedirectStandardError $agentErrLog -PassThru
+    -RedirectStandardOutput $agentLog -RedirectStandardError $agentErrLog -PassThru -WindowStyle Hidden
   @{ bridge_pid = $bridgeProc.Id; agent_pid = $agentProc.Id } | ConvertTo-Json | Set-Content $pidPath
   Write-Host "Agent started."
   Write-Host "  Logs:  Get-Content -Path .\agent.log -Wait"
