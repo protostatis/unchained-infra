@@ -25,6 +25,18 @@ User flow is Finder-native:
 1. Drag `Unchained Installer.app` to Applications.
 2. Open the app once to bootstrap the local agent.
 
+Build Windows installer executable:
+
+- `./installers/build_windows_installer.sh`
+
+This generates:
+
+- `installers/unchained-installer-windows.exe`
+
+Prerequisite:
+
+- `makensis` (NSIS compiler), e.g. `brew install nsis`
+
 For production trust/signing:
 
 - See `installers/DEVELOPER_ID_NOTARIZATION.md` for Developer ID signing + notarization.

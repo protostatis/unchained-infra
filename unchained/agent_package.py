@@ -716,7 +716,19 @@ Write-Host "Agent stopped."
 
 
 _START_BAT = r"""@echo off
-powershell -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
+setlocal
+if "%~1"=="" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" -Daemon
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
+)
+set "EC=%ERRORLEVEL%"
+if not "%EC%"=="0" (
+  echo.
+  echo Agent start failed. Review the error above, then press any key to close.
+  pause >nul
+)
+exit /b %EC%
 """
 
 
