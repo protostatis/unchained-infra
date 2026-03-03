@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from pathlib import Path
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -359,6 +360,43 @@ def test_setup_html_has_status_and_install_banner():
     print("  SETUP_HTML has status pills + installer banner")
 
 
+def test_native_installer_path_prefers_new_formats():
+    """Verify native installer lookup prefers dmg/msi and falls back to pkg/exe."""
+    import web as web_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mac_pkg = root / "unchained-installer-mac.pkg"
+        mac_dmg = root / "unchained-installer-mac.dmg"
+        win_exe = root / "unchained-installer-windows.exe"
+        win_msi = root / "unchained-installer-windows.msi"
+        mac_pkg.write_bytes(b"pkg")
+        win_exe.write_bytes(b"exe")
+
+        old_root = web_mod._INSTALLER_ASSETS_DIR
+        old_mac = list(web_mod._MAC_INSTALLER_FILES)
+        old_windows = list(web_mod._WINDOWS_INSTALLER_FILES)
+        try:
+            web_mod._INSTALLER_ASSETS_DIR = root
+            web_mod._MAC_INSTALLER_FILES = ["unchained-installer-mac.dmg", "unchained-installer-mac.pkg"]
+            web_mod._WINDOWS_INSTALLER_FILES = ["unchained-installer-windows.msi", "unchained-installer-windows.exe"]
+
+            # Falls back to pkg/exe when dmg/msi are missing.
+            assert web_mod._native_installer_path("mac").name == mac_pkg.name
+            assert web_mod._native_installer_path("windows").name == win_exe.name
+
+            # Prefers dmg/msi when both are present.
+            mac_dmg.write_bytes(b"dmg")
+            win_msi.write_bytes(b"msi")
+            assert web_mod._native_installer_path("mac").name == mac_dmg.name
+            assert web_mod._native_installer_path("windows").name == win_msi.name
+        finally:
+            web_mod._INSTALLER_ASSETS_DIR = old_root
+            web_mod._MAC_INSTALLER_FILES = old_mac
+            web_mod._WINDOWS_INSTALLER_FILES = old_windows
+    print("  Native installer lookup prefers dmg/msi with pkg/exe fallback")
+
+
 def test_install_page_prefers_native_installer():
     """Verify /install onboarding page no longer shows script fallback as primary UX."""
     from web import INSTALL_ONBOARD_HTML
@@ -474,6 +512,7 @@ if __name__ == "__main__":
         ("web: routes registered", test_web_routes_registered),
         ("web: CHAT_HTML has install modal", test_chat_html_has_install_modal),
         ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
+        ("web: native installer lookup prefers dmg/msi", test_native_installer_path_prefers_new_formats),
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),

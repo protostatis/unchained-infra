@@ -10,7 +10,10 @@ The unsigned output is:
 
 - `installers/unchained-installer-mac.pkg`
 
-After following this guide, replace that file with the stapled notarized package so `/web/download-installer?os=mac` serves a trusted installer.
+After following this guide, publish:
+
+- `installers/unchained-installer-mac.pkg` (required, signed/notarized)
+- `installers/unchained-installer-mac.dmg` (optional but recommended wrapper for user-friendly download UX)
 
 ---
 
@@ -140,13 +143,33 @@ Expected: accepted result with Developer ID / notarization context.
 
 ## 8) Publish to Unchained Installer Asset Path
 
-Replace served installer artifact:
+Publish package artifact:
 
 ```bash
 cp "$SIGNED_PKG" "installers/unchained-installer-mac.pkg"
 ```
 
-`/web/download-installer?os=mac` will now serve the signed+notarized package.
+Optional DMG wrapper (recommended):
+
+```bash
+# Build a DMG that contains the signed pkg.
+./installers/build_mac_dmg.sh \
+  "installers/unchained-installer-mac.pkg" \
+  "installers/unchained-installer-mac.dmg"
+
+# Sign the DMG with Developer ID Application cert.
+APP_CERT="Developer ID Application: <Your Company, Inc.> (<TEAMID>)"
+codesign --force --timestamp --sign "$APP_CERT" "installers/unchained-installer-mac.dmg"
+
+# Notarize + staple the DMG.
+xcrun notarytool submit "installers/unchained-installer-mac.dmg" \
+  --keychain-profile "unchained-notary" \
+  --wait
+xcrun stapler staple "installers/unchained-installer-mac.dmg"
+xcrun stapler validate "installers/unchained-installer-mac.dmg"
+```
+
+`/web/download-installer?os=mac` prefers `.dmg` first, then falls back to `.pkg`.
 
 ---
 
@@ -159,7 +182,8 @@ cp "$SIGNED_PKG" "installers/unchained-installer-mac.pkg"
   2. productsign
   3. notarytool submit --wait
   4. stapler staple/validate
-  5. publish final pkg
+  5. build/sign/notarize/staple dmg (optional, recommended)
+  6. publish final pkg + dmg
 
 ---
 

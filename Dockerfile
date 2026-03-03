@@ -43,7 +43,7 @@ COPY unchained/pyproject.toml .
 COPY unchained/CLAUDE.md .
 COPY unchained/scheduled_jobs.example.json .
 COPY unchained/favicon.svg .
-COPY unchained/installers/unchained-installer-mac.pkg installers/unchained-installer-mac.pkg
+COPY unchained/installers/ installers/
 
 # Install all dependencies
 RUN pip install --no-cache-dir \

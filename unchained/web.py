@@ -228,9 +228,30 @@ _INSTALLER_ASSETS_DIR = Path(
         str(Path(os.path.dirname(os.path.abspath(__file__))) / "installers"),
     )
 )
-_MAC_INSTALLER_FILE = os.environ.get("UNCHAINED_MAC_INSTALLER_FILE", "unchained-installer-mac.pkg")
-_WINDOWS_INSTALLER_FILE = os.environ.get(
-    "UNCHAINED_WINDOWS_INSTALLER_FILE", "unchained-installer-windows.exe"
+_DEFAULT_MAC_INSTALLER_FILES = ("unchained-installer-mac.dmg", "unchained-installer-mac.pkg")
+_DEFAULT_WINDOWS_INSTALLER_FILES = ("unchained-installer-windows.msi", "unchained-installer-windows.exe")
+
+
+def _parse_installer_filename_list(raw: str, default_files: tuple[str, ...]) -> list[str]:
+    out = [part.strip() for part in (raw or "").split(",") if part.strip()]
+    if out:
+        return out
+    return list(default_files)
+
+
+_MAC_INSTALLER_FILES = _parse_installer_filename_list(
+    os.environ.get("UNCHAINED_MAC_INSTALLER_FILES", "").strip(),
+    (
+        os.environ.get("UNCHAINED_MAC_INSTALLER_FILE", "").strip() or _DEFAULT_MAC_INSTALLER_FILES[0],
+        _DEFAULT_MAC_INSTALLER_FILES[1],
+    ),
+)
+_WINDOWS_INSTALLER_FILES = _parse_installer_filename_list(
+    os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILES", "").strip(),
+    (
+        os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILE", "").strip() or _DEFAULT_WINDOWS_INSTALLER_FILES[0],
+        _DEFAULT_WINDOWS_INSTALLER_FILES[1],
+    ),
 )
 _ALLOW_SCRIPT_INSTALLER_FALLBACK = (
     os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -291,25 +312,39 @@ def _normalize_installer_platform(platform: str) -> str:
     return ""
 
 
-def _native_installer_path(platform: str) -> Path | None:
+def _native_installer_candidates(platform: str) -> list[str]:
     p = _normalize_installer_platform(platform)
     if p == "mac":
-        name = _MAC_INSTALLER_FILE
+        files = _MAC_INSTALLER_FILES
     elif p == "windows":
-        name = _WINDOWS_INSTALLER_FILE
+        files = _WINDOWS_INSTALLER_FILES
     else:
-        return None
-    if not name:
+        return []
+    ordered: list[str] = []
+    seen = set()
+    for name in files:
+        if not name or name in seen:
+            continue
+        ordered.append(name)
+        seen.add(name)
+    return ordered
+
+
+def _native_installer_path(platform: str) -> Path | None:
+    p = _normalize_installer_platform(platform)
+    candidates = _native_installer_candidates(p)
+    if not candidates:
         return None
     root = _INSTALLER_ASSETS_DIR.resolve()
-    candidate = (root / name).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    if not candidate.is_file():
-        return None
-    return candidate
+    for name in candidates:
+        candidate = (root / name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _cleanup_install_claims(now: float | None = None):
@@ -7142,12 +7177,13 @@ async def handle_download_installer(request: web.Request) -> web.Response:
         )
 
     if not _ALLOW_SCRIPT_INSTALLER_FALLBACK:
-        expected = _MAC_INSTALLER_FILE if platform == "mac" else _WINDOWS_INSTALLER_FILE
+        expected_assets = _native_installer_candidates(platform)
         return web.json_response(
             {
                 "error": "Native installer is not configured for this OS.",
                 "os": platform,
-                "expected_asset": expected,
+                "expected_asset": expected_assets[0] if expected_assets else None,
+                "expected_assets": expected_assets,
                 "assets_dir": str(_INSTALLER_ASSETS_DIR),
             },
             status=503,
@@ -7679,7 +7715,7 @@ a{color:#93d5ff}
 
       <ul class="safe">
         <li>Installer download is issued from your authenticated account session.</li>
-        <li>Downloads a native installer binary for your OS (.pkg or .exe).</li>
+        <li>Downloads a native installer binary for your OS (.dmg/.pkg or .msi/.exe).</li>
         <li>Fallback shell installers are disabled in the one-click flow.</li>
       </ul>
 
