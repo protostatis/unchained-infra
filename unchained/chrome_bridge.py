@@ -65,9 +65,53 @@ def _chrome_user_data_dir():
         p = os.path.expanduser("~/Library/Application Support/Google/Chrome")
     elif s == "Linux":
         p = os.path.expanduser("~/.config/google-chrome")
+    elif s == "Windows":
+        local = os.environ.get("LOCALAPPDATA", "")
+        p = os.path.join(local, "Google", "Chrome", "User Data") if local else ""
     else:
         return None
     return p if os.path.isdir(p) else None
+
+
+def _find_chrome_binary() -> str | None:
+    """Find a local Chromium-based browser binary suitable for CDP."""
+    candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ]
+    if platform.system() == "Windows":
+        for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(env_name, "").strip()
+            if not base:
+                continue
+            candidates.extend([
+                os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(base, "Chromium", "Application", "chrome.exe"),
+                os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+            ])
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    for cmd in (
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium-browser",
+        "chromium",
+        "chrome",
+        "chrome.exe",
+        "msedge",
+        "msedge.exe",
+    ):
+        found = shutil.which(cmd)
+        if found:
+            return found
+    return None
 
 
 def _list_chrome_profiles():
@@ -484,27 +528,13 @@ class Agent:
             prov_port = s.getsockname()[1]
 
         # Find Chrome binary
-        chrome_paths = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/chromium",
-        ]
-        chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
-        if not chrome_bin:
-            for candidate in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
-                found = shutil.which(candidate)
-                if found:
-                    chrome_bin = found
-                    break
+        chrome_bin = _find_chrome_binary()
         if not chrome_bin:
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
                 "status": 500,
-                "body": {"error": "Chrome binary not found"},
+                "body": {"error": "Chrome/Chromium binary not found"},
             }))
             shutil.rmtree(temp_dir, ignore_errors=True)
             return
@@ -869,28 +899,12 @@ def _ensure_chrome(
         return False
 
     print(f"[agent] Chrome not running, launching (profile={profile}, port={port})...")
-    chrome_paths = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/chromium",
-    ]
-    chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
+    chrome_bin = _find_chrome_binary()
     if not chrome_bin:
-        for candidate in (
-            "google-chrome",
-            "google-chrome-stable",
-            "chromium-browser",
-            "chromium",
-        ):
-            found = shutil.which(candidate)
-            if found:
-                chrome_bin = found
-                break
-    if not chrome_bin:
-        print("[agent] no Chrome/Chromium binary found in PATH")
+        if platform.system() == "Windows":
+            print("[agent] no Chrome/Chromium/Edge binary found (checked standard install paths and PATH)")
+        else:
+            print("[agent] no Chrome/Chromium binary found in PATH")
         return False
 
     profile_dir = os.path.join(DATA_DIR, f"chrome_{profile}")
