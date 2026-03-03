@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.16"
+VERSION = "0.3.17"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -438,8 +438,9 @@ if $DAEMON; then
 
   # Check if already running
   if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "Agent is already running (PID $(cat "$PIDFILE")). Stop it first: ./stop.sh"
-    exit 1
+    echo "Agent is already running (PID $(cat "$PIDFILE"))."
+    echo "Stop: ./stop.sh"
+    exit 0
   fi
 
   if $ENABLE_AUTOSTART; then
@@ -640,10 +641,42 @@ if (-not (Test-Path $pythonExe)) {
 }
 
 if ($Daemon) {
+  function Test-PidAlive([int]$Pid) {
+    if ($Pid -le 0) { return $false }
+    try {
+      Get-Process -Id $Pid -ErrorAction Stop | Out-Null
+      return $true
+    } catch {
+      return $false
+    }
+  }
+
   $pidPath = Join-Path (Get-Location) ".agent.pid.json"
   if (Test-Path $pidPath) {
-    Write-Error "Agent is already running (found $pidPath). Stop it first: .\stop.ps1"
-    exit 1
+    $pidState = $null
+    try {
+      $pidState = Get-Content $pidPath -Raw | ConvertFrom-Json
+    } catch {
+      $pidState = $null
+    }
+
+    $agentPid = 0
+    $bridgePid = 0
+    if ($pidState) {
+      try { $agentPid = [int]$pidState.agent_pid } catch {}
+      try { $bridgePid = [int]$pidState.bridge_pid } catch {}
+    }
+
+    $agentAlive = Test-PidAlive $agentPid
+    $bridgeAlive = Test-PidAlive $bridgePid
+    if ($agentAlive -or $bridgeAlive) {
+      Write-Host "Agent is already running."
+      Write-Host "  Stop:  .\stop.ps1"
+      exit 0
+    }
+
+    # Stale or invalid pid file from a previous crash/startup.
+    Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
   }
   $bridgeLog = Join-Path (Get-Location) "bridge.log"
   $bridgeErrLog = Join-Path (Get-Location) "bridge.err.log"
