@@ -403,6 +403,7 @@ def test_install_page_prefers_native_installer():
     assert "Copy Fallback Command" not in INSTALL_ONBOARD_HTML, "fallback command button should be removed"
     assert "native installer binary" in INSTALL_ONBOARD_HTML, "native installer copy missing"
     assert "native_available" in INSTALL_ONBOARD_HTML, "native installer availability check missing"
+    assert "/web/download-agent?install_token=" in INSTALL_ONBOARD_HTML, "zip fallback redirect missing"
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
 
 

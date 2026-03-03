@@ -7915,7 +7915,12 @@ async function startInstall() {
     const osNativeReady = _installOs === 'windows' ? native.windows : native.mac;
 
     if (!osNativeReady) {
-      throw new Error('Native installer is not configured yet for this OS. Contact support to publish the signed installer artifact.');
+      const zipUrl = data.token
+        ? `/web/download-agent?install_token=${encodeURIComponent(data.token)}`
+        : '/web/download-agent';
+      _setStatus('Native installer is not available yet for this OS. Downloading ZIP package instead.', true);
+      window.location.href = zipUrl;
+      return;
     }
     if (!downloadUrl) throw new Error('Installer URL missing from server response.');
     _setStatus('Download started. Open the file from your Downloads folder when ready.');
