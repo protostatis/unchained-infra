@@ -3794,6 +3794,19 @@ body{
 }
 #nokey-banner a:hover{background:var(--accent);color:#fff}
 
+/* === Installer banner === */
+#download-banner{
+  display:none;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:#2b1f28;border-bottom:1px solid #553040;
+  font-size:13px;color:#f1c7d6;flex-shrink:0;
+}
+#download-banner a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border:1px solid var(--accent);padding:4px 12px;border-radius:6px;
+  background:transparent;
+}
+#download-banner a:hover{background:var(--accent);color:#fff}
+
 /* === Input === */
 #inputbar{
   display:flex;gap:8px;
@@ -3887,6 +3900,28 @@ body{
   <div id="nokey-banner">
     <span>No Gemini API key provisioned.</span>
     <a href="/setup">Provision Key</a>
+  </div>
+
+  <div id="download-banner" style="display:none">
+    <span id="banner-msg">Local chat agent is offline on this machine.</span>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
+    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
+  </div>
+
+  <div id="install-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid #444;border-radius:12px;padding:24px;max-width:520px;width:90%;position:relative">
+      <button onclick="closeInstallModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent (curl)</h3>
+      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">Run this command in your terminal:</p>
+      <div style="background:var(--bg);border:1px solid #333;border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative">
+        <code id="install-cmd" style="color:var(--text)">Loading command...</code>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button onclick="copyInstallCmd()" style="background:#2f3140;border:1px solid #4a4d60;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer" id="copy-btn">Copy Command</button>
+      </div>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.9+ and curl.</p>
+    </div>
   </div>
 
   <div id="chat">
@@ -3991,13 +4026,59 @@ function onModelChange(model) {
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
+  const banner = document.getElementById('download-banner');
   if (connected) {
     el.textContent = 'connected';
     el.className = 'status online';
+    if (banner) banner.style.display = 'none';
   } else {
     el.textContent = 'connecting...';
     el.className = 'status';
+    if (banner) banner.style.display = 'flex';
   }
+}
+
+async function showBannerInstall() {
+  await showInstallCmd();
+}
+
+function _normalizeLocalUrl(raw) {
+  const s = String(raw || '');
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocalHost) return s.replace(/^https:\/\//i, 'http://');
+  return s;
+}
+
+async function showInstallCmd() {
+  document.getElementById('install-modal-title').textContent = 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('copy-btn').textContent = 'Copy Command';
+  const modal = document.getElementById('install-modal');
+  modal.style.display = 'flex';
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    const data = await r.json();
+    const command = _normalizeLocalUrl(data.curl_command || '');
+    document.getElementById('install-cmd').textContent = command || 'No install command available.';
+  } catch(e) {
+    document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+  }
+}
+
+function copyInstallCmd() {
+  const cmd = document.getElementById('install-cmd').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Command', 2000);
+  });
+}
+
+function closeInstallModal() {
+  document.getElementById('install-modal').style.display = 'none';
 }
 
 function showMain() {

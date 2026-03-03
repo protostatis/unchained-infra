@@ -406,6 +406,17 @@ def test_install_page_prefers_native_installer():
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
 
 
+def test_gemini_chat_has_install_banner():
+    """Verify legacy Gemini/Codex/Claude chat template exposes install banner when disconnected."""
+    from web import CHAT_GEMINI_HTML
+    assert 'id="download-banner"' in CHAT_GEMINI_HTML, "legacy chat install banner missing"
+    assert "Install (curl)" in CHAT_GEMINI_HTML, "legacy chat curl install option missing"
+    assert "Download ZIP" in CHAT_GEMINI_HTML, "legacy chat ZIP install option missing"
+    assert "Download Agent Installer" in CHAT_GEMINI_HTML, "legacy chat native installer option missing"
+    assert "showBannerInstall" in CHAT_GEMINI_HTML, "legacy chat install modal function missing"
+    print("  CHAT_GEMINI_HTML has installer banner + curl modal")
+
+
 # ── Model selector tests ─────────────────────────────────────────────
 
 def test_chat_html_has_model_dropdown():
@@ -514,6 +525,7 @@ if __name__ == "__main__":
         ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
         ("web: native installer lookup prefers dmg/msi", test_native_installer_path_prefers_new_formats),
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
+        ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
