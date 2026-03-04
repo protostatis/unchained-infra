@@ -114,7 +114,9 @@ def test_generate_install_script():
     assert "uc_live_abc123" not in script, "Long-lived API key should not be embedded"
     assert "inst_bootstrap_123" in script, "Install token missing"
     assert "api.unchainedsky.com" in script, "relay host not embedded"
-    assert "/web/download-agent?install_token=" in script, "download URL not in script"
+    assert "/web/download-agent" in script, "download URL not in script"
+    assert "X-Install-Token" in script, "install token header missing"
+    assert "download-agent?install_token=" not in script, "install token should not be passed in URL query"
     assert "python3 -m venv" in script, "venv setup not in script"
     assert "Start now?" in script or "start now?" in script.lower(), "start prompt missing"
     print(f"  Install script: {len(script)} chars")
@@ -130,7 +132,9 @@ def test_generate_windows_install_script():
     assert "#Requires -Version" in script
     assert "inst_bootstrap_123" in script, "Install token missing"
     assert "api.unchainedsky.com" in script, "relay host not embedded"
-    assert "/web/download-agent?install_token=" in script, "download URL not in script"
+    assert "/web/download-agent" in script, "download URL not in script"
+    assert "X-Install-Token" in script, "install token header missing"
+    assert "download-agent?install_token=" not in script, "install token should not be passed in URL query"
     assert "Invoke-WebRequest" in script
     assert "start.ps1" in script
     print(f"  Windows install script: {len(script)} chars")
@@ -303,12 +307,15 @@ def test_web_routes_registered():
         assert ("POST", "/web/install-token") in routes, "install-token route not registered"
         assert ("POST", "/web/install/bootstrap") in routes, "install bootstrap route not registered"
         assert ("GET", "/install") in routes, "install page route not registered"
+        assert ("GET", "/install/script") in routes, "header-based install script route not registered"
         assert ("GET", "/install/{token}") in routes, "install script route not registered"
+        assert ("GET", "/install/windows/script") in routes, "header-based windows install script route not registered"
         assert ("GET", "/install/windows/{token}") in routes, "windows install script route not registered"
         assert ("GET", "/install/claim/{claim_id}") in routes, "install claim page route not registered"
         assert ("POST", "/web/install/claim/start") in routes, "install claim start route not registered"
         assert ("POST", "/web/install/claim/poll") in routes, "install claim poll route not registered"
         assert ("POST", "/web/install/claim/approve") in routes, "install claim approve route not registered"
+        assert ("GET", "/trial/script") in routes, "header-based trial script route not registered"
         assert ("GET", "/web/download-installer") in routes, "download-installer route not registered"
         assert ("GET", "/web/agent/version") in routes, "agent version route not registered"
         assert ("GET", "/web/agent/files") in routes, "agent files route not registered"
@@ -321,12 +328,15 @@ def test_web_routes_registered():
         assert "/web/install-token" in source, "install-token route not registered"
         assert "/web/install/bootstrap" in source, "install bootstrap route not registered"
         assert "/install" in source, "install page route not registered"
+        assert "/install/script" in source, "header-based install script route not registered"
         assert "/install/{token}" in source, "install script route not registered"
+        assert "/install/windows/script" in source, "header-based windows install script route not registered"
         assert "/install/windows/{token}" in source, "windows install script route not registered"
         assert "/install/claim/{claim_id}" in source, "install claim page route not registered"
         assert "/web/install/claim/start" in source, "install claim start route not registered"
         assert "/web/install/claim/poll" in source, "install claim poll route not registered"
         assert "/web/install/claim/approve" in source, "install claim approve route not registered"
+        assert "/trial/script" in source, "header-based trial script route not registered"
         assert "/web/download-installer" in source, "download-installer route not registered"
         assert "/web/agent/version" in source, "agent version route not registered"
         assert "/web/agent/files" in source, "agent files route not registered"
@@ -442,11 +452,60 @@ def test_install_page_prefers_native_installer():
     assert "Copy Fallback Command" not in INSTALL_ONBOARD_HTML, "fallback command button should be removed"
     assert "native installer binary" in INSTALL_ONBOARD_HTML, "native installer copy missing"
     assert "native_available" in INSTALL_ONBOARD_HTML, "native installer availability check missing"
-    assert "/web/download-agent?install_token=" in INSTALL_ONBOARD_HTML, "zip fallback redirect missing"
+    assert "data.zip_url || '/web/download-agent'" in INSTALL_ONBOARD_HTML, "zip fallback redirect missing"
     assert 'id="install-agentstatus"' in INSTALL_ONBOARD_HTML, "install chat status pill missing"
     assert 'id="install-bridgestatus"' in INSTALL_ONBOARD_HTML, "install bridge status pill missing"
     assert "/web/chat/status" in INSTALL_ONBOARD_HTML, "install status poll endpoint missing"
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
+
+
+def test_install_token_handler_uses_header_transport():
+    """Verify install-token response uses header-based script links (no tokenized URL query)."""
+    import inspect
+    from web import handle_install_token
+
+    source = inspect.getsource(handle_install_token)
+    assert "/install/script" in source, "header-based install script endpoint missing"
+    assert "/install/windows/script" in source, "header-based Windows install script endpoint missing"
+    assert "X-Install-Token" in source, "install token header missing"
+    assert "install_token=" not in source, "install token should not be embedded in URL query"
+    assert '"token": token' not in source, "raw install token should not be returned in JSON payload"
+    print("  install-token endpoint uses header transport without URL query token leakage")
+
+
+def test_claim_start_has_rate_limit_and_capacity_guards():
+    """Verify claim-start endpoint guards against unbounded unauthenticated growth."""
+    import inspect
+    from web import handle_install_claim_start
+
+    source = inspect.getsource(handle_install_claim_start)
+    assert "_INSTALL_CLAIM_MAX_PENDING" in source, "pending-claim cap missing"
+    assert "_INSTALL_CLAIM_START_MAX_PER_IP" in source, "per-IP rate limit missing"
+    assert "_cleanup_install_claim_start_hits" in source, "claim-start hit cleanup missing"
+    assert "status=429" in source, "rate-limit response missing"
+    print("  claim-start endpoint has capacity and per-IP rate-limit guards")
+
+
+def test_public_base_url_ignores_untrusted_host_header():
+    """Verify non-local Host header does not override configured public base URL."""
+    import web as web_mod
+
+    class _Req:
+        def __init__(self, host: str, forwarded_host: str = ""):
+            self.host = host
+            self.headers = {}
+            if forwarded_host:
+                self.headers["X-Forwarded-Host"] = forwarded_host
+
+    trusted_local = _Req("localhost:8080")
+    assert web_mod._public_base_url(trusted_local).startswith("http://localhost"), "localhost should stay local"
+
+    spoofed = _Req("evil.example.com")
+    assert web_mod._public_base_url(spoofed) == web_mod._PUBLIC_BASE_URL, "non-local host should use configured base URL"
+
+    spoofed_forwarded = _Req("api.unchainedsky.com", forwarded_host="attacker.test")
+    assert web_mod._public_base_url(spoofed_forwarded) == web_mod._PUBLIC_BASE_URL, "untrusted forwarded host should be ignored"
+    print("  public base URL is anchored to config for non-local hosts")
 
 
 def test_gemini_chat_has_install_banner():
@@ -573,6 +632,9 @@ if __name__ == "__main__":
         ("web: download-installer error omits assets_dir", test_download_installer_error_does_not_leak_assets_dir),
         ("installers: dmg launcher preserves existing env", test_mac_dmg_launcher_preserves_existing_env),
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
+        ("web: install-token uses header transport", test_install_token_handler_uses_header_transport),
+        ("web: claim-start has rate/capacity guards", test_claim_start_has_rate_limit_and_capacity_guards),
+        ("web: public base URL ignores untrusted host header", test_public_base_url_ignores_untrusted_host_header),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),

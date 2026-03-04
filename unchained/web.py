@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -257,8 +258,13 @@ _ALLOW_SCRIPT_INSTALLER_FALLBACK = (
     os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
 )
 _INSTALL_CLAIM_TTL = int(os.environ.get("UNCHAINED_INSTALL_CLAIM_TTL", "600"))
+_INSTALL_CLAIM_MAX_PENDING = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_MAX_PENDING", "4096")))
+_INSTALL_CLAIM_START_WINDOW = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_START_WINDOW", "60")))
+_INSTALL_CLAIM_START_MAX_PER_IP = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_START_MAX_PER_IP", "30")))
+_PUBLIC_BASE_URL = (os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "https://api.unchainedsky.com").strip() or "https://api.unchainedsky.com").rstrip("/")
 _install_claims: dict[str, dict] = {}  # claim_id -> {secret, expires_at, install_token?}
 _install_claims_lock = threading.Lock()
+_install_claim_start_hits: dict[str, list[float]] = {}  # source_ip -> recent claim timestamps
 
 
 def _parse_relay() -> tuple[str, int]:
@@ -367,8 +373,89 @@ def _cleanup_install_claims(now: float | None = None):
         _install_claims.pop(claim_id, None)
 
 
+def _cleanup_install_claim_start_hits(now: float | None = None):
+    ts = now or time.time()
+    cutoff = ts - _INSTALL_CLAIM_START_WINDOW
+    for source, hits in list(_install_claim_start_hits.items()):
+        keep = [t for t in hits if t >= cutoff]
+        if keep:
+            _install_claim_start_hits[source] = keep
+        else:
+            _install_claim_start_hits.pop(source, None)
+
+
 def _is_valid_claim_id(claim_id: str) -> bool:
     return bool(re.fullmatch(r"[a-f0-9]{32}", claim_id or ""))
+
+
+def _request_source_ip(request: web.Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        source = forwarded.split(",")[0].strip()
+        if source:
+            return source
+    return (request.remote or "unknown").strip() or "unknown"
+
+
+def _host_from_request(request: web.Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-Host", "").strip()
+    if forwarded:
+        candidate = forwarded.split(",")[0].strip()
+        if candidate:
+            return candidate
+    return (request.host or "").strip()
+
+
+def _hostname_from_host(candidate: str) -> str:
+    raw = (candidate or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(f"//{raw}")
+    except Exception:
+        return ""
+    return (parsed.hostname or "").strip().lower()
+
+
+def _is_local_hostname(hostname: str) -> bool:
+    host = (hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host.endswith(".local")
+    return ip.is_loopback or ip.is_private
+
+
+def _public_base_url(request: web.Request) -> str:
+    requested_host = _host_from_request(request)
+    requested_hostname = _hostname_from_host(requested_host)
+    if not GOOGLE_CLIENT_ID and requested_host and _is_local_hostname(requested_hostname):
+        return f"http://{requested_host}"
+    return _PUBLIC_BASE_URL
+
+
+def _public_relay_url(request: web.Request) -> str:
+    parsed = urlparse(_public_base_url(request))
+    host = parsed.hostname or "api.unchainedsky.com"
+    if parsed.scheme == "http":
+        return f"ws://{host}:8765/tunnel"
+    return f"wss://{parsed.netloc}/tunnel"
+
+
+def _request_install_token(request: web.Request) -> str:
+    header_token = request.headers.get("X-Install-Token", "").strip()
+    if header_token:
+        return header_token
+    auth_header = request.headers.get("Authorization", "").strip()
+    if auth_header.lower().startswith("bearer "):
+        bearer = auth_header[7:].strip()
+        if bearer:
+            return bearer
+    return request.query.get("install_token", "").strip()
 
 
 _SCHEDULER_DEFAULT_JOBS = {
@@ -7275,7 +7362,7 @@ CHAT_HTML = CLAUDE_CHAT_HTML.replace(
 
 async def handle_download_agent(request: web.Request) -> web.Response:
     """GET /web/download-agent — download agent ZIP package."""
-    install_token = request.query.get("install_token", "").strip()
+    install_token = _request_install_token(request)
     if install_token:
         token_info = _auth.validate_install_token(install_token, consume=False)
         if not token_info:
@@ -7306,7 +7393,7 @@ async def handle_download_installer(request: web.Request) -> web.Response:
     if not platform:
         return web.json_response({"error": "Unsupported os. Use mac or windows"}, status=400)
 
-    install_token = request.query.get("install_token", "").strip()
+    install_token = _request_install_token(request)
     auth_info = None
     if install_token:
         token_info = _auth.validate_install_token(install_token, consume=False)
@@ -7342,8 +7429,7 @@ async def handle_download_installer(request: web.Request) -> web.Response:
         install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
     from agent_package import generate_platform_installer_script
 
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
+    base_url = _public_base_url(request)
     script = generate_platform_installer_script(
         platform=platform,
         install_token=install_token,
@@ -7361,30 +7447,31 @@ async def handle_install_token(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
     token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
-    curl_command = f"curl -sSL {base_url}/install/{token} | bash"
+    base_url = _public_base_url(request)
+    curl_command = f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/install/script" | bash'
     powershell_command = (
         "powershell -ExecutionPolicy Bypass -Command "
-        f"\"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing "
-        f"'{base_url}/install/windows/{token}').Content)\""
+        f"\"$h=@{{'X-Install-Token'='{token}'}}; "
+        f"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Headers $h "
+        f"'{base_url}/install/windows/script').Content)\""
     )
     mac_native = _native_installer_path("mac") is not None
     windows_native = _native_installer_path("windows") is not None
     return web.json_response({
         "curl_command": curl_command,
         "powershell_command": powershell_command,
-        "mac_installer_url": f"{base_url}/web/download-installer?os=mac&install_token={token}",
-        "windows_installer_url": f"{base_url}/web/download-installer?os=windows&install_token={token}",
+        "mac_installer_url": f"{base_url}/web/download-installer?os=mac",
+        "windows_installer_url": f"{base_url}/web/download-installer?os=windows",
+        "zip_url": f"{base_url}/web/download-agent",
         "native_available": {"mac": mac_native, "windows": windows_native},
-        "token": token,
         "expires_in": 900,
     })
 
 
 async def handle_install_script(request: web.Request) -> web.Response:
-    """GET /install/{token} — serve personalized bash install script."""
-    token = request.match_info["token"]
+    """GET /install/script or /install/{token} — serve personalized bash install script."""
+    token = _request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
     token_info = _auth.validate_install_token(token, consume=False)
     if not token_info:
         # Return a bash-friendly error message
@@ -7395,8 +7482,7 @@ async def handle_install_script(request: web.Request) -> web.Response:
         )
 
     from agent_package import _generate_install_script
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
+    base_url = _public_base_url(request)
     script = _generate_install_script(
         install_token=token,
         relay_host="api.unchainedsky.com",
@@ -7406,8 +7492,9 @@ async def handle_install_script(request: web.Request) -> web.Response:
 
 
 async def handle_install_script_windows(request: web.Request) -> web.Response:
-    """GET /install/windows/{token} — serve personalized PowerShell install script."""
-    token = request.match_info["token"]
+    """GET /install/windows/script or /install/windows/{token} — serve PowerShell install script."""
+    token = _request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
     token_info = _auth.validate_install_token(token, consume=False)
     if not token_info:
         return web.Response(
@@ -7417,8 +7504,7 @@ async def handle_install_script_windows(request: web.Request) -> web.Response:
 
     from agent_package import _generate_windows_install_script
 
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
+    base_url = _public_base_url(request)
     script = _generate_windows_install_script(
         install_token=token,
         relay_host="api.unchainedsky.com",
@@ -7450,8 +7536,17 @@ async def handle_install_claim_start(request: web.Request) -> web.Response:
         return web.json_response({"error": "claim_secret too short"}, status=400)
 
     now = time.time()
+    source = _request_source_ip(request)
     with _install_claims_lock:
         _cleanup_install_claims(now)
+        _cleanup_install_claim_start_hits(now)
+        if len(_install_claims) >= _INSTALL_CLAIM_MAX_PENDING:
+            return web.json_response({"error": "Too many pending install claims. Retry shortly."}, status=503)
+        hits = _install_claim_start_hits.get(source, [])
+        if len(hits) >= _INSTALL_CLAIM_START_MAX_PER_IP:
+            return web.json_response({"error": "Too many claim attempts. Retry shortly."}, status=429)
+        hits.append(now)
+        _install_claim_start_hits[source] = hits
         existing = _install_claims.get(claim_id)
         if existing and not hmac.compare_digest(existing.get("secret", ""), claim_secret):
             return web.json_response({"error": "claim_id already exists"}, status=409)
@@ -7555,25 +7650,24 @@ async def handle_trial_token(request: web.Request) -> web.Response:
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
     token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
+    base_url = _public_base_url(request)
     return web.json_response({
-        "curl_command": f"curl -sSL {base_url}/trial/{token} | bash",
-        "token": token,
+        "curl_command": f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/trial/script" | bash',
     })
 
 
 async def handle_trial_script(request: web.Request) -> web.Response:
-    """GET /trial/{token} — serve minimal bash script that connects Chrome to the relay."""
-    token = request.match_info["token"]
+    """GET /trial/script or /trial/{token} — serve minimal bash trial connector script."""
+    token = _request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
     token_info = _auth.validate_install_token(token, consume=False)
     if not token_info:
         return web.Response(
             text='echo "ERROR: Link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
             content_type="text/plain",
         )
-    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
-    base_url = f"{scheme}://{request.host}"
+    base_url = _public_base_url(request)
+    relay_url = _public_relay_url(request)
     script = f"""#!/bin/bash
 # Unchained Trial — Browser Connector
 # Connects your Chrome to the Unchained AI agent
@@ -7581,7 +7675,7 @@ async def handle_trial_script(request: web.Request) -> web.Response:
 set -e
 
 INSTALL_TOKEN="{token}"
-RELAY="{"ws://" + request.host.split(":")[0] + ":8765/tunnel" if scheme == "http" else "wss://" + request.host + "/tunnel"}"
+RELAY="{relay_url}"
 DIR="$HOME/.unchained"
 BRIDGE="$DIR/chrome_bridge.py"
 BOOTSTRAP_URL="{base_url}/web/install/bootstrap"
@@ -7989,9 +8083,7 @@ async function startInstall() {
     const osNativeReady = _installOs === 'windows' ? native.windows : native.mac;
 
     if (!osNativeReady) {
-      const zipUrl = data.token
-        ? `/web/download-agent?install_token=${encodeURIComponent(data.token)}`
-        : '/web/download-agent';
+      const zipUrl = data.zip_url || '/web/download-agent';
       _setStatus('Native installer is not available yet for this OS. Downloading ZIP package instead.', true);
       window.location.href = zipUrl;
       return;
@@ -11729,11 +11821,14 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/web/install/claim/poll", handle_install_claim_poll),
     ("POST", "/web/install/claim/approve", handle_install_claim_approve),
     ("POST", "/web/install/bootstrap", handle_install_bootstrap),
+    ("GET", "/install/script", handle_install_script),
+    ("GET", "/install/windows/script", handle_install_script_windows),
     ("GET", "/install/{token}", handle_install_script),
     ("GET", "/install/windows/{token}", handle_install_script_windows),
     ("GET", "/install/claim/{claim_id}", handle_install_claim_page),
     ("GET", "/trial/connector", handle_trial_connector),
     ("POST", "/trial/token", handle_trial_token),
+    ("GET", "/trial/script", handle_trial_script),
     ("GET", "/trial/{token}", handle_trial_script),
     ("GET", "/web/agent/version", handle_agent_version),
     ("GET", "/web/agent/files", handle_agent_files),

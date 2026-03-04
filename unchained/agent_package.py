@@ -1168,7 +1168,8 @@ echo "Downloading agent package..."
 TMPFILE=$(mktemp)
 trap "rm -f $TMPFILE" EXIT
 HTTP_CODE=$(curl -sf -w '%{{http_code}}' \\
-  "$BASE_URL/web/download-agent?install_token=$INSTALL_TOKEN" -o "$TMPFILE")
+  -H "X-Install-Token: $INSTALL_TOKEN" \\
+  "$BASE_URL/web/download-agent" -o "$TMPFILE")
 if [ "$HTTP_CODE" != "200" ] || [ ! -s "$TMPFILE" ]; then
   echo "ERROR: Failed to download agent package (HTTP $HTTP_CODE)."; exit 1
 fi
@@ -1278,7 +1279,8 @@ Write-Host "Downloading agent package..."
 
 $tmpZip = Join-Path $env:TEMP ("unchained-agent-" + [guid]::NewGuid().ToString("N") + ".zip")
 try {
-  Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/web/download-agent?install_token=$installToken" -OutFile $tmpZip
+  $headers = @{ "X-Install-Token" = $installToken }
+  Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri "$baseUrl/web/download-agent" -OutFile $tmpZip
   if (-not (Test-Path $tmpZip) -or ((Get-Item $tmpZip).Length -eq 0)) {
     Write-Error "ERROR: Failed to download agent package."
     exit 1
