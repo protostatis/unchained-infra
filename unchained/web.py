@@ -336,15 +336,25 @@ def _native_installer_path(platform: str) -> Path | None:
     if not candidates:
         return None
     root = _INSTALLER_ASSETS_DIR.resolve()
-    for name in candidates:
+    existing: list[tuple[Path, int, int]] = []
+    for idx, name in enumerate(candidates):
         candidate = (root / name).resolve()
         try:
             candidate.relative_to(root)
         except ValueError:
             continue
         if candidate.is_file():
-            return candidate
-    return None
+            try:
+                mtime_ns = candidate.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            existing.append((candidate, mtime_ns, idx))
+    if not existing:
+        return None
+    # Prefer the freshest artifact to avoid stale .msi/.dmg shadowing newly built .exe/.pkg.
+    # Tie-break by configured candidate order.
+    existing.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+    return existing[0][0]
 
 
 def _cleanup_install_claims(now: float | None = None):
@@ -7322,7 +7332,6 @@ async def handle_download_installer(request: web.Request) -> web.Response:
                 "os": platform,
                 "expected_asset": expected_assets[0] if expected_assets else None,
                 "expected_assets": expected_assets,
-                "assets_dir": str(_INSTALLER_ASSETS_DIR),
             },
             status=503,
         )

@@ -366,8 +366,8 @@ def test_setup_html_has_status_and_install_banner():
     print("  SETUP_HTML has status pills + installer banner")
 
 
-def test_native_installer_path_prefers_new_formats():
-    """Verify native installer lookup prefers dmg/msi and falls back to pkg/exe."""
+def test_native_installer_path_prefers_freshest_artifact():
+    """Verify native installer lookup chooses newest artifact to avoid stale-file shadowing."""
     import web as web_mod
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -391,16 +391,49 @@ def test_native_installer_path_prefers_new_formats():
             assert web_mod._native_installer_path("mac").name == mac_pkg.name
             assert web_mod._native_installer_path("windows").name == win_exe.name
 
-            # Prefers dmg/msi when both are present.
+            # When both are present, choose the freshest file.
             mac_dmg.write_bytes(b"dmg")
             win_msi.write_bytes(b"msi")
+            now = time.time()
+            # Make dmg/msi stale vs pkg/exe.
+            os.utime(mac_dmg, (now - 120, now - 120))
+            os.utime(mac_pkg, (now - 10, now - 10))
+            os.utime(win_msi, (now - 120, now - 120))
+            os.utime(win_exe, (now - 10, now - 10))
+            assert web_mod._native_installer_path("mac").name == mac_pkg.name
+            assert web_mod._native_installer_path("windows").name == win_exe.name
+
+            # Make dmg/msi newest and verify they win.
+            os.utime(mac_dmg, (now + 5, now + 5))
+            os.utime(win_msi, (now + 5, now + 5))
             assert web_mod._native_installer_path("mac").name == mac_dmg.name
             assert web_mod._native_installer_path("windows").name == win_msi.name
         finally:
             web_mod._INSTALLER_ASSETS_DIR = old_root
             web_mod._MAC_INSTALLER_FILES = old_mac
             web_mod._WINDOWS_INSTALLER_FILES = old_windows
-    print("  Native installer lookup prefers dmg/msi with pkg/exe fallback")
+    print("  Native installer lookup prefers freshest artifact with pkg/exe fallback")
+
+
+def test_download_installer_error_does_not_leak_assets_dir():
+    """Verify /web/download-installer errors do not expose server filesystem paths."""
+    import inspect
+    from web import handle_download_installer
+
+    source = inspect.getsource(handle_download_installer)
+    assert "assets_dir" not in source, "install error should not leak installer assets dir"
+    print("  download-installer error response omits assets_dir")
+
+
+def test_mac_dmg_launcher_preserves_existing_env():
+    """Verify DMG launcher script preserves existing local .env credentials."""
+    script_path = Path(__file__).resolve().parent / "installers" / "build_mac_dmg.sh"
+    src = script_path.read_text(encoding="utf-8")
+    assert 'ENV_BACKUP="$DEST/.env.preinstall.$$"' in src
+    assert 'if [ -f "$DEST/.env" ]; then' in src
+    assert 'cp "$DEST/.env" "$ENV_BACKUP"' in src
+    assert 'mv -f "$ENV_BACKUP" "$DEST/.env"' in src
+    print("  DMG launcher preserves existing .env")
 
 
 def test_install_page_prefers_native_installer():
@@ -536,7 +569,9 @@ if __name__ == "__main__":
         ("web: routes registered", test_web_routes_registered),
         ("web: CHAT_HTML has install modal", test_chat_html_has_install_modal),
         ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
-        ("web: native installer lookup prefers dmg/msi", test_native_installer_path_prefers_new_formats),
+        ("web: native installer lookup prefers freshest artifact", test_native_installer_path_prefers_freshest_artifact),
+        ("web: download-installer error omits assets_dir", test_download_installer_error_does_not_leak_assets_dir),
+        ("installers: dmg launcher preserves existing env", test_mac_dmg_launcher_preserves_existing_env),
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),

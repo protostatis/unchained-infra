@@ -109,9 +109,16 @@ set -euo pipefail
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE_DIR="$APP_ROOT/Resources/agent-template"
 DEST="$HOME/unchained-agent"
+ENV_BACKUP="$DEST/.env.preinstall.$$"
 
 mkdir -p "$DEST"
+if [ -f "$DEST/.env" ]; then
+  cp "$DEST/.env" "$ENV_BACKUP"
+fi
 cp -R "$TEMPLATE_DIR"/. "$DEST"/
+if [ -f "$ENV_BACKUP" ]; then
+  mv -f "$ENV_BACKUP" "$DEST/.env"
+fi
 chmod +x "$DEST/start.sh" "$DEST/stop.sh" "$DEST/update.sh" 2>/dev/null || true
 
 if command -v osascript >/dev/null 2>&1; then
