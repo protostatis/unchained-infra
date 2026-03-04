@@ -459,6 +459,26 @@ def test_install_page_prefers_native_installer():
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
 
 
+def test_landing_and_case_study_contact_email_injected():
+    """Verify public pages use configurable CONTACT_EMAIL instead of hardcoded mailbox."""
+    import inspect
+    from web import (
+        CASE_STUDY_ZILLOW_HTML,
+        LANDING_HTML,
+        handle_case_study_zillow,
+        handle_index,
+    )
+
+    assert "mailto:__CONTACT_EMAIL__" in LANDING_HTML, "landing page contact placeholder missing"
+    assert "mailto:__CONTACT_EMAIL__" in CASE_STUDY_ZILLOW_HTML, "case study contact placeholder missing"
+
+    index_src = inspect.getsource(handle_index)
+    case_src = inspect.getsource(handle_case_study_zillow)
+    assert 'replace("__CONTACT_EMAIL__", CONTACT_EMAIL)' in index_src, "landing handler must inject CONTACT_EMAIL"
+    assert 'replace("__CONTACT_EMAIL__", CONTACT_EMAIL)' in case_src, "case-study handler must inject CONTACT_EMAIL"
+    print("  Public pages inject CONTACT_EMAIL for footer contact link")
+
+
 def test_install_token_handler_uses_header_transport():
     """Verify install-token response uses header-based script links (no tokenized URL query)."""
     import inspect
@@ -643,6 +663,7 @@ if __name__ == "__main__":
         ("web: download-installer error omits assets_dir", test_download_installer_error_does_not_leak_assets_dir),
         ("installers: dmg launcher preserves existing env", test_mac_dmg_launcher_preserves_existing_env),
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
+        ("web: landing/case-study contact email injection", test_landing_and_case_study_contact_email_injected),
         ("web: install-token uses header transport", test_install_token_handler_uses_header_transport),
         ("web: claim-start has rate/capacity guards", test_claim_start_has_rate_limit_and_capacity_guards),
         ("web: public base URL ignores untrusted host header", test_public_base_url_ignores_untrusted_host_header),

@@ -91,6 +91,10 @@ ADMIN_EMAILS = [
     for e in os.environ.get("ADMIN_EMAILS", "").split(",")
     if e.strip()
 ]
+CONTACT_EMAIL = (
+    os.environ.get("CONTACT_EMAIL", "").strip()
+    or (ADMIN_EMAILS[0] if ADMIN_EMAILS else "hello@unchainedsky.com")
+)
 if not TRIAL_AGENT_KEY:
     log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
 if not TRIAL_AGENT_ID:
@@ -1593,7 +1597,7 @@ body::before{
     <a href="/trial">Free Tier</a>
     <a href="/setup">API Setup</a>
     <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
-    <a href="mailto:hello@unchainedsky.com">Contact</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
 </div>
@@ -2128,7 +2132,7 @@ a:hover{text-decoration:underline}
     <a href="/">Home</a>
     <a href="/demo">Demo</a>
     <a href="/trial">Free Tier</a>
-    <a href="mailto:hello@unchainedsky.com">Contact</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
 </div>
@@ -8198,7 +8202,9 @@ async def handle_chat_claude_page(request: web.Request) -> web.Response:
 
 async def handle_case_study_zillow(request: web.Request) -> web.Response:
     """Serve the Zillow rental relisting case study page (public, no auth)."""
-    return web.Response(text=CASE_STUDY_ZILLOW_HTML, content_type="text/html")
+    del request
+    html = CASE_STUDY_ZILLOW_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_demo_page(request: web.Request) -> web.Response:
@@ -8991,7 +8997,9 @@ async def handle_favicon(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    return web.Response(text=LANDING_HTML, content_type="text/html")
+    del request
+    html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_test(request: web.Request) -> web.Response:
