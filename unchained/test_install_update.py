@@ -290,6 +290,29 @@ def test_openrouter_token_usage_tracking():
         os.unlink(db_path)
 
 
+def test_approve_user_keeps_existing_api_key():
+    from auth import Auth
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        auth = Auth(db_path=db_path)
+        pending = auth.create_pending_user("pending-trial@example.com", "Pending Trial", "", user_type="trial")
+        existing_key = auth.create_key(pending["user_id"])
+        with auth._conn() as conn:
+            conn.execute("UPDATE users SET api_key = ? WHERE email = ?", (existing_key, "pending-trial@example.com"))
+
+        approved = auth.approve_user("pending-trial@example.com")
+        assert approved is not None, "approve_user should return user"
+        assert approved["status"] == "approved", "user should be approved"
+        assert approved["api_key"] == existing_key, "approve_user should retain existing API key"
+        with auth._conn() as conn:
+            row = conn.execute("SELECT status, api_key FROM users WHERE email = ?", ("pending-trial@example.com",)).fetchone()
+        assert row == ("approved", existing_key), f"DB row mismatch after approve: {row}"
+        print("  approve_user keeps existing API key when present")
+    finally:
+        os.unlink(db_path)
+
+
 # ── chat_agent_cli.py version check tests ───────────────────────────
 
 def test_parse_version():
@@ -668,6 +691,22 @@ def test_handle_chat_msg_forwards_model():
     print(f"  handle_chat_msg extracts and forwards model")
 
 
+def test_google_auth_trial_pending_has_chat_access():
+    """Verify trial/demo sign-ins stay pending but can access chat flows."""
+    import inspect
+    from web import handle_google_auth
+    source = inspect.getsource(handle_google_auth)
+    assert "_auth.create_pending_user(email, name, picture, user_type=\"trial\")" in source, \
+        "New trial/demo sign-ins should be created with pending status"
+    assert "_auth.create_key(user[\"user_id\"])" in source, \
+        "Pending trial/demo users should receive an API key for trial/demo chat access"
+    assert "\"review_pending\": True" in source, \
+        "Trial/demo auth response should indicate review is still pending"
+    assert "\"pending\": True" in source, \
+        "Non-trial pending users should still receive pending response"
+    print("  Trial/demo sign-ins are pending but can access trial/demo chat")
+
+
 def test_handle_chat_msg_openrouter_budget_force_logic():
     """Verify OpenRouter requests enforce per-user budget and forward user_id for metering."""
     import inspect
@@ -793,6 +832,7 @@ if __name__ == "__main__":
         ("auth: cleanup_expired_tokens", test_cleanup_expired_tokens),
         ("auth: openrouter budget tracking", test_openrouter_budget_tracking),
         ("auth: openrouter token usage tracking", test_openrouter_token_usage_tracking),
+        ("auth: approve_user keeps existing API key", test_approve_user_keeps_existing_api_key),
         ("chat_agent_cli: _parse_version", test_parse_version),
         ("web: new handlers importable", test_web_imports),
         ("web: routes registered", test_web_routes_registered),
@@ -813,6 +853,7 @@ if __name__ == "__main__":
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
+        ("auth: trial/demo pending users can access trial/demo chat", test_google_auth_trial_pending_has_chat_access),
         ("web: handle_chat_msg openrouter budget force logic", test_handle_chat_msg_openrouter_budget_force_logic),
         ("web: handle_chat_ws tracks openrouter usage", test_handle_chat_ws_tracks_openrouter_usage),
         ("openrouter agent: emits usage event", test_openrouter_agent_emits_usage_event),

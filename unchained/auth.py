@@ -273,12 +273,18 @@ class Auth:
                 "api_key": None, "status": "pending", "user_type": user_type}
 
     def approve_user(self, email: str) -> dict | None:
-        """Approve a pending user: set status='approved' and create an API key."""
+        """Approve a pending user by setting status='approved'.
+
+        If the user already has an API key (for example, pending trial/demo
+        access), keep that key. Otherwise create one.
+        """
         email = email.lower()
         user = self.find_user_by_email(email)
         if not user:
             return None
-        api_key = self.create_key(user["user_id"])
+        api_key = user.get("api_key")
+        if not api_key:
+            api_key = self.create_key(user["user_id"])
         with self._conn() as conn:
             conn.execute(
                 "UPDATE users SET status = 'approved', api_key = ? WHERE email = ?",

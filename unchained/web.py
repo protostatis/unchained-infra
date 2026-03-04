@@ -9357,6 +9357,42 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             return resp
 
         if status == "pending":
+            # Trial/demo users can access trial flows while account review is pending.
+            if source == "trial":
+                api_key = existing.get("api_key")
+                if not api_key:
+                    api_key = _auth.create_key(existing["user_id"])
+                now = time.time()
+                with _auth._conn() as conn:
+                    conn.execute(
+                        "UPDATE users SET api_key = COALESCE(api_key, ?), user_type = 'trial', "
+                        "last_login_at = ?, name = ?, picture = ? WHERE email = ?",
+                        (
+                            api_key,
+                            now,
+                            name or existing.get("name", ""),
+                            picture or existing.get("picture", ""),
+                            email,
+                        ),
+                    )
+                agent_id = f"claude-{_key_hash(api_key)}"
+                session_token = create_session_token(existing["user_id"], email)
+                resp = web.json_response({
+                    "ok": True, "email": email, "name": name,
+                    "picture": picture, "agent_id": agent_id,
+                    "user_type": "trial",
+                    "demo_prompt_count": _auth.get_demo_count(email),
+                    "demo_unlimited": False,
+                    "review_pending": True,
+                    "is_admin": email.lower() in ADMIN_EMAILS,
+                })
+                resp.set_cookie(
+                    "uc_session", session_token,
+                    max_age=JWT_EXPIRY_HOURS * 3600,
+                    httponly=True, secure=True, samesite="Lax", path="/",
+                )
+                return resp
+
             return web.json_response({
                 "pending": True,
                 "message": "Your sign-up request is still being reviewed. We'll notify you by email once approved.",
@@ -9365,14 +9401,16 @@ async def handle_google_auth(request: web.Request) -> web.Response:
         if status == "rejected":
             return web.json_response({"error": "Your sign-up request was not approved."}, status=403)
 
-    # Free-tier (demo/trial) users are auto-approved; SDK/CLI users require manual approval.
+    # Trial/demo sign-ups remain pending for admin review but can use free-tier chat immediately.
     if source == "trial":
-        user = _auth.get_or_create_user(email, name, picture)
-        api_key = user["api_key"]
-        agent_id = f"claude-{_key_hash(api_key)}"
-        # Set user_type to 'trial'
+        user = _auth.create_pending_user(email, name, picture, user_type="trial")
+        api_key = _auth.create_key(user["user_id"])
         with _auth._conn() as conn:
-            conn.execute("UPDATE users SET user_type = ? WHERE email = ?", ("trial", email))
+            conn.execute(
+                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
+                (api_key, email),
+            )
+        agent_id = f"claude-{_key_hash(api_key)}"
         session_token = create_session_token(user["user_id"], email)
         resp = web.json_response({
             "ok": True, "email": email, "name": name,
@@ -9380,6 +9418,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "user_type": "trial",
             "demo_prompt_count": _auth.get_demo_count(email),
             "demo_unlimited": False,
+            "review_pending": True,
             "is_admin": email.lower() in ADMIN_EMAILS,
         })
         resp.set_cookie(
@@ -9387,17 +9426,25 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             max_age=JWT_EXPIRY_HOURS * 3600,
             httponly=True, secure=True, samesite="Lax", path="/",
         )
-        # Notify admin (info only, no approval needed)
+
+        send_email(
+            email,
+            "Unchained — Trial access enabled (account review pending)",
+            f"<p>Hi {name or email},</p>"
+            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
+            "<p>We'll notify you once your full account is approved.</p>"
+            "<p>— The Unchained Team</p>",
+        )
         for admin in ADMIN_EMAILS:
             send_email(
                 admin,
-                f"New free-tier sign-up: {email}",
-                f"<p>New auto-approved free-tier user: <b>{name}</b> ({email}).</p>"
-                f"<p>Source: <b>trial</b></p>",
+                f"New trial sign-up (pending review): {email}",
+                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
+                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
             )
         return resp
 
-    # SDK/CLI users — create as pending, require manual approval
+    # Non-trial sign-ups require manual admin approval before chat access.
     user = _auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = create_session_token(user["user_id"], email)
 
