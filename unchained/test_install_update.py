@@ -481,6 +481,17 @@ def test_chat_html_has_model_dropdown():
     print(f"  Model dropdown: 3 options, Sonnet default")
 
 
+def test_trial_chat_has_admin_custom_openrouter_model():
+    """Verify trial chat supports an admin-only custom OpenRouter model input."""
+    from web import TRIAL_CHAT_HTML
+    assert 'id="modelsel-custom-option"' in TRIAL_CHAT_HTML, "Admin custom model option missing"
+    assert 'id="model-custom-input"' in TRIAL_CHAT_HTML, "Custom model input missing"
+    assert "__custom_openrouter__" in TRIAL_CHAT_HTML, "Custom model sentinel missing"
+    assert "qwen/qwen3.5-flash-02-23" in TRIAL_CHAT_HTML, "Custom model example missing"
+    assert "function onCustomModelInput(value)" in TRIAL_CHAT_HTML, "Custom model input handler missing"
+    print("  Trial chat has admin custom OpenRouter model input")
+
+
 def test_chat_html_sends_model_in_fetch():
     """Verify doSend() includes model in the POST body."""
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
@@ -575,6 +586,7 @@ if __name__ == "__main__":
         ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
+        ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
         ("sdk: uses per-message model", test_sdk_agent_uses_per_message_model),

@@ -2804,8 +2804,16 @@ body{
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
       <option value="arcee-ai/trinity-large-preview:free">Trinity &mdash; Fast</option>
-      <option value="upstage/solar-pro-3:free">Solar &mdash; Detailed</option>
+      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Fast</option>
+      <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
+  </div>
+  <div id="model-custom-row" style="display:none;padding:4px 16px 0">
+    <input id="model-custom-input"
+           type="text"
+           placeholder="Paste OpenRouter model, e.g. qwen/qwen3.5-flash-02-23"
+           oninput="onCustomModelInput(this.value)"
+           style="width:100%;height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;font-family:var(--mono)">
   </div>
   <div id="upgrade-banner">
     Want better models? Claude, Gemini, and Codex are available with your own API key. <a href="/setup">Set up now &rarr;</a>
@@ -2908,7 +2916,44 @@ async function backToLogin() {
 }
 
 function currentModel() {
-  return document.getElementById('modelsel').value;
+  const selected = document.getElementById('modelsel').value;
+  if (selected === '__custom_openrouter__') {
+    const custom = (document.getElementById('model-custom-input')?.value || '').trim();
+    if (custom) return custom;
+    return _defaultTrialModel();
+  }
+  return selected;
+}
+
+function _defaultTrialModel() {
+  const sel = document.getElementById('modelsel');
+  if (!sel) return '';
+  for (const opt of sel.options) {
+    if (opt.value !== '__custom_openrouter__') return opt.value;
+  }
+  return '';
+}
+
+function _modelOptionExists(value) {
+  return !!document.querySelector('#modelsel option[value="' + CSS.escape(value) + '"]');
+}
+
+function _isOpenRouterModelId(value) {
+  return (value || '').includes('/');
+}
+
+function _syncCustomModelUi() {
+  const sel = document.getElementById('modelsel');
+  const customOption = document.getElementById('modelsel-custom-option');
+  const customRow = document.getElementById('model-custom-row');
+  if (!sel) return;
+  if (customOption) customOption.style.display = _isAdmin ? '' : 'none';
+  if (!_isAdmin && sel.value === '__custom_openrouter__') {
+    sel.value = _defaultTrialModel();
+  }
+  if (customRow) {
+    customRow.style.display = (_isAdmin && sel.value === '__custom_openrouter__') ? 'block' : 'none';
+  }
 }
 
 function _sessionStoreKey() {
@@ -2928,9 +2973,20 @@ function _persistSessionId(sid) {
 }
 
 function onModelChange(model) {
-  localStorage.setItem('unchained_model', model);
+  _syncCustomModelUi();
+  if (model === '__custom_openrouter__') {
+    const custom = (document.getElementById('model-custom-input')?.value || '').trim();
+    if (custom) localStorage.setItem('unchained_model', custom);
+  } else {
+    localStorage.setItem('unchained_model', model);
+  }
   // Refresh model-scoped agent status immediately on selector change.
   checkAgentStatus();
+}
+
+function onCustomModelInput(value) {
+  const model = (value || '').trim();
+  if (model) localStorage.setItem('unchained_model', model);
 }
 
 let lastAgentConnected = false;
@@ -2953,14 +3009,19 @@ function showMain() {
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
   try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
+  _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
-  const saved = localStorage.getItem('unchained_model');
-  if (fromQuery && document.querySelector('#modelsel option[value="' + CSS.escape(fromQuery) + '"]')) {
-    document.getElementById('modelsel').value = fromQuery;
-  } else if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-    document.getElementById('modelsel').value = saved;
+  const saved = (localStorage.getItem('unchained_model') || '').trim();
+  const requestedModel = fromQuery || saved;
+  if (_isAdmin && requestedModel && _isOpenRouterModelId(requestedModel) && !_modelOptionExists(requestedModel)) {
+    document.getElementById('modelsel').value = '__custom_openrouter__';
+    const customInput = document.getElementById('model-custom-input');
+    if (customInput) customInput.value = requestedModel;
+  } else if (requestedModel && _modelOptionExists(requestedModel)) {
+    document.getElementById('modelsel').value = requestedModel;
   }
+  _syncCustomModelUi();
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
   checkAgentStatus();
@@ -3417,6 +3478,11 @@ async function doSend() {
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
+  const model = currentModel();
+  if (_isAdmin && document.getElementById('modelsel').value === '__custom_openrouter__' && !_isOpenRouterModelId(model)) {
+    alert('Enter a valid OpenRouter model ID like qwen/qwen3.5-flash-02-23');
+    return;
+  }
   input.value = '';
   input.style.height = 'auto';
 
@@ -3441,7 +3507,7 @@ async function doSend() {
         message: msg,
         agent_id: agentId,
         session_id: sessionId,
-        model: currentModel(),
+        model: model,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -7644,7 +7710,7 @@ echo "  Your browser is connected!"
 echo "  An Unchained Chrome window will open — that's where the agent browses."
 echo "  Screenshots of each page will appear in the chat so you can see what's happening."
 echo ""
-echo "  Open https://unchainedsky.com/chat, pick Trinity or Solar Pro 3, and start chatting."
+echo "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
 echo ""
 echo "  Stop:  python3 ~/.unchained/chrome_bridge.py stop"
 echo "  Logs:  tail -f ~/.unchained/connector.log"
@@ -10645,7 +10711,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
-          <option value="upstage/solar-pro-3:free">OpenRouter: Solar Detailed</option>
+          <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
           <option value="__custom__">Custom model ID</option>
         </select>
         <span class="hint">Leave on default to use your normal local Claude CLI agent. Choose Custom for any raw model ID.</span>
@@ -10774,7 +10840,7 @@ function formatSchedulerModel(model){
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
-    'upstage/solar-pro-3:free':'OpenRouter: Solar Detailed'
+    'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash'
   };
   return labels[value]||value;
 }
