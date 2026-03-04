@@ -1151,20 +1151,30 @@ def _authenticate(request: web.Request) -> dict | None:
     return None
 
 
-def _is_pending_trial_user(auth_info: dict | None) -> bool:
+def _is_pending_user(auth_info: dict | None) -> bool:
     if not auth_info:
         return False
-    return auth_info.get("status") == "pending" and auth_info.get("user_type") == "trial"
+    return auth_info.get("status") == "pending"
 
 
-def _pending_trial_limited_response() -> web.Response:
+def _is_pending_trial_user(auth_info: dict | None) -> bool:
+    """Backward-compatible helper for legacy call sites."""
+    return _is_pending_user(auth_info) and auth_info.get("user_type") == "trial"
+
+
+def _pending_limited_response() -> web.Response:
     return web.json_response(
         {
-            "error": "pending_trial_limited",
+            "error": "pending_account_limited",
             "message": "Account review is pending. Use /trial or /demo for now.",
         },
         status=403,
     )
+
+
+def _pending_trial_limited_response() -> web.Response:
+    """Backward-compatible helper for legacy call sites."""
+    return _pending_limited_response()
 
 
 # ---------------------------------------------------------------------------
@@ -2882,6 +2892,18 @@ body{
   color:var(--muted);font-size:14px;cursor:pointer;line-height:1;
 }
 #upgrade-banner .dismiss:hover{color:var(--text)}
+#claude-request-banner{
+  display:none;margin:0 16px 6px;padding:10px 14px;border-radius:10px;
+  border:1px solid rgba(56,189,248,0.35);background:rgba(56,189,248,0.08);
+  color:#bae6fd;font-size:13px;line-height:1.45;align-items:center;gap:12px;justify-content:space-between;
+}
+#claude-request-text{flex:1}
+#claude-request-btn{
+  border:none;background:#0ea5e9;color:#04111a;padding:7px 12px;border-radius:8px;
+  font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;
+}
+#claude-request-btn:hover{opacity:0.92}
+#claude-request-btn[disabled]{opacity:0.55;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -2948,6 +2970,10 @@ body{
   </div>
 
   <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.</div>
+  <div id="claude-request-banner">
+    <span id="claude-request-text"></span>
+    <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
+  </div>
 
   <div id="agent-bar">
     <span id="agent-action"></span>
@@ -3023,6 +3049,8 @@ let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
 let _openrouterUsage = null;
+let _accountStatus = 'approved';
+let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
 
 function _nextAfterLogin() {
@@ -3042,6 +3070,15 @@ function _redirectAfterLoginIfNeeded() {
   return true;
 }
 
+function _applyAuthState(data) {
+  _isAdmin = !!data.is_admin;
+  _userName = data.name || '';
+  _userPicture = data.picture || '';
+  _openrouterUsage = data.openrouter_usage || null;
+  _accountStatus = data.status || (data.pending ? 'pending' : 'approved');
+  _claudeAccessRequested = !!data.claude_access_requested;
+}
+
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
   errEl.textContent = '';
@@ -3052,11 +3089,10 @@ async function handleGoogleCredential(response) {
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
+    _applyAuthState(data);
     if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
-    _isAdmin = !!data.is_admin;
-    _openrouterUsage = data.openrouter_usage || null;
     if (_redirectAfterLoginIfNeeded()) return;
     showMain();
   } catch(e) { errEl.textContent = e.message; }
@@ -3066,7 +3102,8 @@ async function checkSession() {
   try {
     const r = await fetch('/auth/me');
     const data = await r.json();
-    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; _openrouterUsage = data.openrouter_usage || null; showMain(); return; }
+    _applyAuthState(data);
+    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
     if (data.pending) { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
@@ -3078,7 +3115,8 @@ async function checkApproval() {
   try {
     const r = await fetch('/auth/me');
     const data = await r.json();
-    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; _openrouterUsage = data.openrouter_usage || null; showMain(); return; }
+    _applyAuthState(data);
+    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
     if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
@@ -3088,9 +3126,58 @@ async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';
+  _accountStatus = 'approved';
+  _claudeAccessRequested = false;
   document.getElementById('login').style.display = 'flex';
   document.getElementById('main').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
+}
+
+function renderClaudeRequestBanner() {
+  const banner = document.getElementById('claude-request-banner');
+  const text = document.getElementById('claude-request-text');
+  const btn = document.getElementById('claude-request-btn');
+  if (!banner || !text || !btn) return;
+  if (_accountStatus !== 'pending') {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = 'flex';
+  if (_claudeAccessRequested) {
+    text.textContent = 'Claude access request submitted. An admin will review and unlock all routes after approval.';
+    btn.style.display = 'none';
+    return;
+  }
+  text.textContent = 'Need full access to /local and /setup? Request Claude access and we will route it for admin approval.';
+  btn.style.display = 'inline-flex';
+  btn.disabled = false;
+  btn.textContent = 'Request Claude Access';
+}
+
+async function requestClaudeAccess() {
+  const text = document.getElementById('claude-request-text');
+  const btn = document.getElementById('claude-request-btn');
+  if (!text || !btn || _claudeAccessRequested) return;
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  try {
+    const r = await fetch('/auth/request-claude-access', {method: 'POST'});
+    const data = await r.json();
+    if (!r.ok) {
+      text.textContent = data.error || 'Could not submit request right now.';
+      btn.disabled = false;
+      btn.textContent = prev;
+      return;
+    }
+    _accountStatus = data.status || _accountStatus;
+    _claudeAccessRequested = !!data.claude_access_requested;
+    renderClaudeRequestBanner();
+  } catch (e) {
+    text.textContent = 'Could not submit request right now.';
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
 }
 
 function showPending() {
@@ -3101,6 +3188,8 @@ function showPending() {
 
 async function backToLogin() {
   await fetch('/auth/logout', {method: 'POST'});
+  _accountStatus = 'approved';
+  _claudeAccessRequested = false;
   document.getElementById('pending').style.display = 'none';
   document.getElementById('login').style.display = 'flex';
 }
@@ -3280,6 +3369,7 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
+  renderClaudeRequestBanner();
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
   try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
@@ -8426,7 +8516,7 @@ async def handle_trial_page(request: web.Request) -> web.Response:
 async def handle_chat_gemini_page(request: web.Request) -> web.Response:
     """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
     auth_info = _authenticate(request)
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(CHAT_GEMINI_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -8435,7 +8525,7 @@ async def handle_chat_gemini_page(request: web.Request) -> web.Response:
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
     """Serve the Codex chat HTML page (per-user provisioned key)."""
     auth_info = _authenticate(request)
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     html = CHAT_CODEX_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -8444,7 +8534,7 @@ async def handle_chat_codex_page(request: web.Request) -> web.Response:
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
     """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
     auth_info = _authenticate(request)
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     html = CHAT_CLAUDE_SDK_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -8466,7 +8556,7 @@ async def handle_demo_page(request: web.Request) -> web.Response:
 async def handle_local_page(request: web.Request) -> web.Response:
     """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
     auth_info = _authenticate(request)
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(CLAUDE_CHAT_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -8627,7 +8717,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
-    if _is_pending_trial_user(auth_info) and not model:
+    if _is_pending_user(auth_info) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     _trace(
         "chat.msg.in",
@@ -8649,8 +8739,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = _is_codex_sdk_model(model)
     is_codex_cli = _is_codex_cli_model(model)
     is_openrouter = _is_openrouter_model(model)
-    if _is_pending_trial_user(auth_info) and not is_openrouter:
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and not is_openrouter:
+        return _pending_limited_response()
     openrouter_forced_model = ""
     openrouter_forced_from_model = ""
     openrouter_forced_notice = ""
@@ -8979,8 +9069,8 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         connected = bridge_connected
 
     model_hint = request.query.get("model", "")
-    if _is_pending_trial_user(auth_info) and model_hint and not _is_openrouter_model(model_hint):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and model_hint and not _is_openrouter_model(model_hint):
+        return _pending_limited_response()
     wants_gemini = request.query.get("gemini") == "1"
     wants_codex = (
         request.query.get("codex") == "1"
@@ -9177,10 +9267,10 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
-    if _is_pending_trial_user(auth_info) and not model:
+    if _is_pending_user(auth_info) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_limited_response()
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
 
@@ -9218,10 +9308,10 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
-    if _is_pending_trial_user(auth_info) and not model:
+    if _is_pending_user(auth_info) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_limited_response()
     requested_session_id = body.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
@@ -9255,10 +9345,10 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = request.query.get("model", "")
-    if _is_pending_trial_user(auth_info) and not model:
+    if _is_pending_user(auth_info) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_limited_response()
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
@@ -9305,10 +9395,10 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     slot = body.get("slot", 1)
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
-    if _is_pending_trial_user(auth_info) and not model:
+    if _is_pending_user(auth_info) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_limited_response()
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
         # Trial mode does not support multi-slot switching.
@@ -9397,8 +9487,10 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 "ok": True, "email": email, "name": name,
                 "picture": picture, "agent_id": agent_id,
                 "user_type": existing.get("user_type", "claude"),
+                "status": "approved",
                 "demo_prompt_count": _auth.get_demo_count(email),
                 "demo_unlimited": _is_demo_unlimited(existing),
+                "claude_access_requested": False,
                 "is_admin": email.lower() in ADMIN_EMAILS,
             })
             resp.set_cookie(
@@ -9417,7 +9509,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 now = time.time()
                 with _auth._conn() as conn:
                     conn.execute(
-                        "UPDATE users SET api_key = COALESCE(api_key, ?), user_type = 'trial', "
+                        "UPDATE users SET api_key = COALESCE(api_key, ?), "
                         "last_login_at = ?, name = ?, picture = ? WHERE email = ?",
                         (
                             api_key,
@@ -9427,15 +9519,19 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                             email,
                         ),
                     )
+                refreshed = _auth.find_user_by_email(email) or existing
+                pending_user_type = refreshed.get("user_type", "trial")
                 agent_id = f"claude-{_key_hash(api_key)}"
                 session_token = create_session_token(existing["user_id"], email)
                 resp = web.json_response({
                     "ok": True, "email": email, "name": name,
                     "picture": picture, "agent_id": agent_id,
-                    "user_type": "trial",
+                    "user_type": pending_user_type,
+                    "status": "pending",
                     "demo_prompt_count": _auth.get_demo_count(email),
                     "demo_unlimited": False,
                     "review_pending": True,
+                    "claude_access_requested": pending_user_type == "claude",
                     "is_admin": email.lower() in ADMIN_EMAILS,
                 })
                 resp.set_cookie(
@@ -9445,8 +9541,12 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 )
                 return resp
 
+            pending_user_type = existing.get("user_type", "claude")
             return web.json_response({
                 "pending": True,
+                "status": "pending",
+                "user_type": pending_user_type,
+                "claude_access_requested": pending_user_type == "claude",
                 "message": "Your sign-up request is still being reviewed. We'll notify you by email once approved.",
             })
 
@@ -9468,9 +9568,11 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "ok": True, "email": email, "name": name,
             "picture": picture, "agent_id": agent_id,
             "user_type": "trial",
+            "status": "pending",
             "demo_prompt_count": _auth.get_demo_count(email),
             "demo_unlimited": False,
             "review_pending": True,
+            "claude_access_requested": False,
             "is_admin": email.lower() in ADMIN_EMAILS,
         })
         resp.set_cookie(
@@ -9534,6 +9636,71 @@ async def handle_google_auth(request: web.Request) -> web.Response:
     return resp
 
 
+async def handle_request_claude_access(request: web.Request) -> web.Response:
+    """POST /auth/request-claude-access — request full Claude access for pending account."""
+    auth_info = _authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    email = str(auth_info.get("email", "")).strip().lower()
+    if not email:
+        return web.json_response({"error": "Missing account email"}, status=400)
+
+    user = _auth.find_user_by_email(email)
+    if not user:
+        return web.json_response({"error": "User not found"}, status=404)
+
+    status = user.get("status", "approved")
+    user_type = user.get("user_type", "claude")
+    if status == "approved":
+        return web.json_response({
+            "ok": True,
+            "status": "approved",
+            "user_type": user_type,
+            "claude_access_requested": user_type == "claude",
+            "already_approved": True,
+        })
+    if status == "rejected":
+        return web.json_response(
+            {"error": "Your sign-up request was not approved."},
+            status=403,
+        )
+
+    already_requested = user_type == "claude"
+    if not already_requested:
+        with _auth._conn() as conn:
+            conn.execute(
+                "UPDATE users SET user_type = 'claude', last_login_at = ? "
+                "WHERE email = ? AND status = 'pending'",
+                (time.time(), email),
+            )
+
+        send_email(
+            email,
+            "Unchained — Claude access request received",
+            f"<p>Hi {user.get('name') or email},</p>"
+            "<p>We received your request for full Claude access.</p>"
+            "<p>Your account is still pending review. You can continue using Trial while you wait.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+        for admin in ADMIN_EMAILS:
+            send_email(
+                admin,
+                f"Claude access request (pending): {email}",
+                f"<p>User requested full Claude access: <b>{user.get('name') or email}</b> ({email}).</p>"
+                "<p>Status: <b>pending review</b>.</p>",
+            )
+
+    return web.json_response({
+        "ok": True,
+        "status": "pending",
+        "user_type": "claude",
+        "claude_access_requested": True,
+        "already_requested": already_requested,
+        "message": "Request submitted. You can keep using Trial while your Claude access request is reviewed.",
+    })
+
+
 async def handle_logout(request: web.Request) -> web.Response:
     """POST /auth/logout — clear session cookie."""
     resp = web.json_response({"ok": True})
@@ -9579,14 +9746,20 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     if auth_info is not None:
         email = auth_info.get("email", "")
         user = _auth.find_user_by_email(email)
+        status = user.get("status", auth_info.get("status", "approved")) if user else auth_info.get("status", "approved")
+        user_type = user.get("user_type", auth_info.get("user_type", "claude")) if user else auth_info.get("user_type", "claude")
         openrouter_usage = {}
-        if user and user.get("user_type") == "trial":
+        if user and (user_type == "trial" or status == "pending"):
             openrouter_usage = _openrouter_budget_state_for_user(user["user_id"])
         return web.json_response({
             "authenticated": True,
             "email": email,
             "agent_id": auth_info.get("agent_id", ""),
-            "user_type": user.get("user_type", "claude") if user else "claude",
+            "user_type": user_type,
+            "status": status,
+            "pending": status == "pending",
+            "review_pending": status == "pending",
+            "claude_access_requested": status == "pending" and user_type == "claude",
             "demo_prompt_count": _auth.get_demo_count(email) if email else 0,
             "demo_unlimited": _is_demo_unlimited(user) if user else False,
             "openrouter_usage": openrouter_usage,
@@ -9601,11 +9774,18 @@ async def handle_auth_me(request: web.Request) -> web.Response:
         session = verify_session_token(session_cookie)
         if session:
             status = _auth.get_user_status(session["email"])
+            user = _auth.find_user_by_email(session["email"])
+            user_type = user.get("user_type", "claude") if user else "claude"
             if status == "pending":
-                return web.json_response({"authenticated": False, "pending": True})
+                return web.json_response({
+                    "authenticated": False,
+                    "pending": True,
+                    "status": "pending",
+                    "user_type": user_type,
+                    "claude_access_requested": user_type == "claude",
+                })
             if status == "approved":
                 # User was just approved — re-check (they now have an api_key)
-                user = _auth.find_user_by_email(session["email"])
                 if user and user.get("api_key"):
                     api_key = user["api_key"]
                     agent_id = f"claude-{_key_hash(api_key)}"
@@ -9614,6 +9794,13 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                         "email": session["email"],
                         "agent_id": agent_id,
                         "user_type": user.get("user_type", "claude"),
+                        "status": "approved",
+                        "pending": False,
+                        "review_pending": False,
+                        "claude_access_requested": False,
+                        "is_admin": session["email"].lower() in ADMIN_EMAILS,
+                        "name": user.get("name", ""),
+                        "picture": user.get("picture", ""),
                     })
 
     return web.json_response({"authenticated": False}, status=401)
@@ -11678,7 +11865,7 @@ document.addEventListener('keydown',e=>{
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
     auth_info = _authenticate(request)
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(SETUP_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -11695,7 +11882,7 @@ async def handle_scheduler_page(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         raise web.HTTPFound("/app")
-    if _is_pending_trial_user(auth_info):
+    if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
     return web.Response(text=SCHEDULER_HTML, content_type="text/html")
 
@@ -11805,8 +11992,8 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     import signup_agent
     profiles = signup_agent.list_chrome_profiles()
@@ -11895,8 +12082,8 @@ async def handle_provision_start(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     # Per-user rate limit
     user_id = auth_info["user_id"]
@@ -11992,8 +12179,8 @@ async def handle_provision_status(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     import signup_agent
 
@@ -12017,8 +12204,8 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     user_id = auth_info["user_id"]
     pending = _pending_provision.pop(user_id, None)
@@ -12048,8 +12235,8 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     try:
         body = await request.json()
@@ -12088,8 +12275,8 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_trial_user(auth_info):
-        return _pending_trial_limited_response()
+    if _is_pending_user(auth_info):
+        return _pending_limited_response()
 
     try:
         body = await request.json()
@@ -12257,6 +12444,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/", handle_index),
     ("GET", "/test", handle_test),
     ("POST", "/auth/google", handle_google_auth),
+    ("POST", "/auth/request-claude-access", handle_request_claude_access),
     ("POST", "/auth/logout", handle_logout),
     ("GET", "/auth/me", handle_auth_me),
     ("POST", "/web/cmd", handle_cmd),

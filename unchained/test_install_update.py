@@ -383,6 +383,7 @@ def test_web_routes_registered():
             if r.method in {"GET", "POST"}
         }
         assert ("POST", "/web/install-token") in routes, "install-token route not registered"
+        assert ("POST", "/auth/request-claude-access") in routes, "request-claude-access route not registered"
         assert ("POST", "/web/install/bootstrap") in routes, "install bootstrap route not registered"
         assert ("GET", "/install") in routes, "install page route not registered"
         assert ("GET", "/install/script") in routes, "header-based install script route not registered"
@@ -404,6 +405,7 @@ def test_web_routes_registered():
 
         source = inspect.getsource(web_main)
         assert "/web/install-token" in source, "install-token route not registered"
+        assert "/auth/request-claude-access" in source, "request-claude-access route not registered"
         assert "/web/install/bootstrap" in source, "install bootstrap route not registered"
         assert "/install" in source, "install page route not registered"
         assert "/install/script" in source, "header-based install script route not registered"
@@ -671,6 +673,16 @@ def test_trial_chat_has_admin_custom_openrouter_model():
     print("  Trial chat has admin custom OpenRouter model input")
 
 
+def test_trial_chat_has_claude_access_request_flow():
+    """Verify trial chat exposes a CTA to request Claude access while pending."""
+    from web import TRIAL_CHAT_HTML
+    assert 'id="claude-request-banner"' in TRIAL_CHAT_HTML, "Claude request banner missing"
+    assert "function requestClaudeAccess()" in TRIAL_CHAT_HTML, "requestClaudeAccess handler missing"
+    assert "/auth/request-claude-access" in TRIAL_CHAT_HTML, "Claude access request endpoint missing from UI"
+    assert "claude_access_requested" in TRIAL_CHAT_HTML, "UI should read claude_access_requested auth state"
+    print("  Trial chat includes pending Claude-access request flow")
+
+
 def test_chat_html_sends_model_in_fetch():
     """Verify doSend() includes model in the POST body."""
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
@@ -717,17 +729,17 @@ def test_pending_trial_restricted_from_local_and_provision_routes():
     sched_src = inspect.getsource(web_mod.handle_scheduler_page)
     prov_start_src = inspect.getsource(web_mod.handle_provision_start)
 
-    assert "_is_pending_trial_user(auth_info)" in local_src, \
+    assert "_is_pending_user(auth_info)" in local_src, \
         "local page should gate pending trial users"
     assert 'web.HTTPFound("/trial")' in local_src, \
         "local page should redirect pending trial users to /trial"
-    assert "_is_pending_trial_user(auth_info)" in setup_src, \
+    assert "_is_pending_user(auth_info)" in setup_src, \
         "setup page should gate pending trial users"
-    assert "_is_pending_trial_user(auth_info)" in sched_src, \
+    assert "_is_pending_user(auth_info)" in sched_src, \
         "scheduler page should gate pending trial users"
-    assert "_is_pending_trial_user(auth_info)" in prov_start_src, \
+    assert "_is_pending_user(auth_info)" in prov_start_src, \
         "provision start should gate pending trial users"
-    assert "_pending_trial_limited_response()" in prov_start_src, \
+    assert "_pending_limited_response()" in prov_start_src, \
         "provision start should return pending-trial limited error response"
     print("  Pending trial users are gated from local/provision routes")
 
@@ -738,9 +750,9 @@ def test_handle_chat_msg_blocks_pending_trial_non_openrouter():
     from web import handle_chat_msg
 
     source = inspect.getsource(handle_chat_msg)
-    assert "_is_pending_trial_user(auth_info) and not is_openrouter" in source, \
+    assert "_is_pending_user(auth_info) and not is_openrouter" in source, \
         "chat endpoint should block pending trial users from non-OpenRouter models"
-    assert "_pending_trial_limited_response()" in source, \
+    assert "_pending_limited_response()" in source, \
         "chat endpoint should return pending-trial limited response"
     print("  chat endpoint restricts pending trial users to OpenRouter lane")
 
@@ -889,6 +901,7 @@ if __name__ == "__main__":
         ("web: ADMIN_HTML shows OpenRouter spend column", test_admin_page_shows_openrouter_spend_column),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
+        ("web: TRIAL_CHAT_HTML has Claude access request flow", test_trial_chat_has_claude_access_request_flow),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
         ("auth: trial/demo pending users can access trial/demo chat", test_google_auth_trial_pending_has_chat_access),
