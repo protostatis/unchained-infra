@@ -1442,7 +1442,12 @@ def _run():
         sys.exit(128 + signum)
 
     atexit.register(_on_exit)
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    sigs = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        sigs.append(signal.SIGHUP)
+    if hasattr(signal, "SIGBREAK"):
+        sigs.append(signal.SIGBREAK)
+    for sig in sigs:
         signal.signal(sig, _on_signal)
 
     try:

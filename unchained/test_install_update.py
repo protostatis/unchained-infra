@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from pathlib import Path
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -52,8 +53,25 @@ def test_build_agent_zip_contains_version_and_update():
         assert "#!/bin/bash" in update_sh
         assert "/web/agent/version" in update_sh
         assert "/web/agent/files" in update_sh
+        # windows scripts
+        assert "unchained-agent/start.ps1" in names, "start.ps1 missing"
+        assert "unchained-agent/stop.ps1" in names, "stop.ps1 missing"
+        assert "unchained-agent/update.ps1" in names, "update.ps1 missing"
+        update_ps1 = zf.read("unchained-agent/update.ps1").decode()
+        assert "/web/agent/version" in update_ps1
+        assert "/web/agent/files" in update_ps1
         # start.sh still there
         assert "unchained-agent/start.sh" in names
+        start_sh = zf.read("unchained-agent/start.sh").decode()
+        assert "/web/install/claim/start" in start_sh
+        assert "/web/install/claim/poll" in start_sh
+        assert "/install/claim/" in start_sh
+        start_ps1 = zf.read("unchained-agent/start.ps1").decode()
+        assert "/web/install/claim/start" in start_ps1
+        assert "/web/install/claim/poll" in start_ps1
+        assert "/install/claim/" in start_ps1
+        assert "GetFolderPath(\"Startup\")" in start_ps1
+        assert "Autostart: enabled at Windows login" in start_ps1
         # .env still there
         assert "unchained-agent/.env" in names
         env = zf.read("unchained-agent/.env").decode()
@@ -74,6 +92,7 @@ def test_build_update_zip_no_env_no_start():
         assert "unchained-agent/version.txt" in names
         assert "unchained-agent/requirements.txt" in names
         assert "unchained-agent/update.sh" in names
+        assert "unchained-agent/update.ps1" in names
         assert "unchained-agent/unchained/cdp_tool.py" in names
         # Should NOT have .env or start.sh
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
@@ -99,6 +118,22 @@ def test_generate_install_script():
     assert "python3 -m venv" in script, "venv setup not in script"
     assert "Start now?" in script or "start now?" in script.lower(), "start prompt missing"
     print(f"  Install script: {len(script)} chars")
+
+
+def test_generate_windows_install_script():
+    from agent_package import _generate_windows_install_script
+    script = _generate_windows_install_script(
+        install_token="inst_bootstrap_123",
+        relay_host="api.unchainedsky.com",
+        base_url="https://api.unchainedsky.com",
+    )
+    assert "#Requires -Version" in script
+    assert "inst_bootstrap_123" in script, "Install token missing"
+    assert "api.unchainedsky.com" in script, "relay host not embedded"
+    assert "/web/download-agent?install_token=" in script, "download URL not in script"
+    assert "Invoke-WebRequest" in script
+    assert "start.ps1" in script
+    print(f"  Windows install script: {len(script)} chars")
 
 
 # ── auth.py install token tests ─────────────────────────────────────
@@ -229,12 +264,26 @@ def test_web_imports():
         handle_install_token,
         handle_install_bootstrap,
         handle_install_script,
+        handle_install_script_windows,
+        handle_install_claim_page,
+        handle_install_claim_start,
+        handle_install_claim_poll,
+        handle_install_claim_approve,
+        handle_install_page,
+        handle_download_installer,
         handle_agent_version,
         handle_agent_files,
     )
     assert callable(handle_install_token)
     assert callable(handle_install_bootstrap)
     assert callable(handle_install_script)
+    assert callable(handle_install_script_windows)
+    assert callable(handle_install_claim_page)
+    assert callable(handle_install_claim_start)
+    assert callable(handle_install_claim_poll)
+    assert callable(handle_install_claim_approve)
+    assert callable(handle_install_page)
+    assert callable(handle_download_installer)
     assert callable(handle_agent_version)
     assert callable(handle_agent_files)
     print("  All install/update handlers importable")
@@ -253,7 +302,14 @@ def test_web_routes_registered():
         }
         assert ("POST", "/web/install-token") in routes, "install-token route not registered"
         assert ("POST", "/web/install/bootstrap") in routes, "install bootstrap route not registered"
+        assert ("GET", "/install") in routes, "install page route not registered"
         assert ("GET", "/install/{token}") in routes, "install script route not registered"
+        assert ("GET", "/install/windows/{token}") in routes, "windows install script route not registered"
+        assert ("GET", "/install/claim/{claim_id}") in routes, "install claim page route not registered"
+        assert ("POST", "/web/install/claim/start") in routes, "install claim start route not registered"
+        assert ("POST", "/web/install/claim/poll") in routes, "install claim poll route not registered"
+        assert ("POST", "/web/install/claim/approve") in routes, "install claim approve route not registered"
+        assert ("GET", "/web/download-installer") in routes, "download-installer route not registered"
         assert ("GET", "/web/agent/version") in routes, "agent version route not registered"
         assert ("GET", "/web/agent/files") in routes, "agent files route not registered"
     else:
@@ -264,7 +320,14 @@ def test_web_routes_registered():
         source = inspect.getsource(web_main)
         assert "/web/install-token" in source, "install-token route not registered"
         assert "/web/install/bootstrap" in source, "install bootstrap route not registered"
+        assert "/install" in source, "install page route not registered"
         assert "/install/{token}" in source, "install script route not registered"
+        assert "/install/windows/{token}" in source, "windows install script route not registered"
+        assert "/install/claim/{claim_id}" in source, "install claim page route not registered"
+        assert "/web/install/claim/start" in source, "install claim start route not registered"
+        assert "/web/install/claim/poll" in source, "install claim poll route not registered"
+        assert "/web/install/claim/approve" in source, "install claim approve route not registered"
+        assert "/web/download-installer" in source, "download-installer route not registered"
         assert "/web/agent/version" in source, "agent version route not registered"
         assert "/web/agent/files" in source, "agent files route not registered"
     print("  All install/update routes registered")
@@ -277,9 +340,127 @@ def test_chat_html_has_install_modal():
     assert "showInstallCmd" in CHAT_HTML, "showInstallCmd JS missing"
     assert "copyInstallCmd" in CHAT_HTML, "copyInstallCmd JS missing"
     assert "closeInstallModal" in CHAT_HTML, "closeInstallModal JS missing"
-    assert "Install (curl)" in CHAT_HTML, "curl install button missing"
-    assert "Download ZIP" in CHAT_HTML, "ZIP download link missing"
+    assert "Download Agent Installer" in CHAT_HTML, "installer download button missing"
+    assert "Install (curl)" in CHAT_HTML, "curl install option missing"
+    assert "Install Agent (curl)" in CHAT_HTML, "curl modal title missing"
+    assert "Copy Command" in CHAT_HTML, "copy command button missing"
+    assert "Download ZIP" in CHAT_HTML, "download ZIP link missing"
+    assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-zip"'), "curl action should come before ZIP"
+    assert CHAT_HTML.index('id="banner-zip"') < CHAT_HTML.index('id="banner-connect"'), "installer action should come after ZIP"
     print(f"  CHAT_HTML has install modal + buttons")
+
+
+def test_setup_html_has_status_and_install_banner():
+    """Verify setup route preserves agent status pills and install banner."""
+    from web import SETUP_HTML
+    assert 'id="setup-agentstatus"' in SETUP_HTML, "setup chat status pill missing"
+    assert 'id="setup-bridgestatus"' in SETUP_HTML, "setup bridge status pill missing"
+    assert 'id="setup-download-banner"' in SETUP_HTML, "setup install banner missing"
+    assert 'id="setup-banner-connect"' in SETUP_HTML, "setup install route link missing"
+    assert "Download Agent Installer" in SETUP_HTML, "setup installer label missing"
+    assert "Download ZIP" in SETUP_HTML, "setup ZIP label missing"
+    assert SETUP_HTML.index('id="setup-banner-curl"') < SETUP_HTML.index('id="setup-banner-zip"'), "setup curl action should come before ZIP"
+    assert SETUP_HTML.index('id="setup-banner-zip"') < SETUP_HTML.index('id="setup-banner-connect"'), "setup installer action should come after ZIP"
+    assert "showSetupInstallCmd" in SETUP_HTML, "setup curl modal open function missing"
+    assert "copySetupInstallCmd" in SETUP_HTML, "setup curl copy function missing"
+    print("  SETUP_HTML has status pills + installer banner")
+
+
+def test_native_installer_path_prefers_freshest_artifact():
+    """Verify native installer lookup chooses newest artifact to avoid stale-file shadowing."""
+    import web as web_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mac_pkg = root / "unchained-installer-mac.pkg"
+        mac_dmg = root / "unchained-installer-mac.dmg"
+        win_exe = root / "unchained-installer-windows.exe"
+        win_msi = root / "unchained-installer-windows.msi"
+        mac_pkg.write_bytes(b"pkg")
+        win_exe.write_bytes(b"exe")
+
+        old_root = web_mod._INSTALLER_ASSETS_DIR
+        old_mac = list(web_mod._MAC_INSTALLER_FILES)
+        old_windows = list(web_mod._WINDOWS_INSTALLER_FILES)
+        try:
+            web_mod._INSTALLER_ASSETS_DIR = root
+            web_mod._MAC_INSTALLER_FILES = ["unchained-installer-mac.dmg", "unchained-installer-mac.pkg"]
+            web_mod._WINDOWS_INSTALLER_FILES = ["unchained-installer-windows.msi", "unchained-installer-windows.exe"]
+
+            # Falls back to pkg/exe when dmg/msi are missing.
+            assert web_mod._native_installer_path("mac").name == mac_pkg.name
+            assert web_mod._native_installer_path("windows").name == win_exe.name
+
+            # When both are present, choose the freshest file.
+            mac_dmg.write_bytes(b"dmg")
+            win_msi.write_bytes(b"msi")
+            now = time.time()
+            # Make dmg/msi stale vs pkg/exe.
+            os.utime(mac_dmg, (now - 120, now - 120))
+            os.utime(mac_pkg, (now - 10, now - 10))
+            os.utime(win_msi, (now - 120, now - 120))
+            os.utime(win_exe, (now - 10, now - 10))
+            assert web_mod._native_installer_path("mac").name == mac_pkg.name
+            assert web_mod._native_installer_path("windows").name == win_exe.name
+
+            # Make dmg/msi newest and verify they win.
+            os.utime(mac_dmg, (now + 5, now + 5))
+            os.utime(win_msi, (now + 5, now + 5))
+            assert web_mod._native_installer_path("mac").name == mac_dmg.name
+            assert web_mod._native_installer_path("windows").name == win_msi.name
+        finally:
+            web_mod._INSTALLER_ASSETS_DIR = old_root
+            web_mod._MAC_INSTALLER_FILES = old_mac
+            web_mod._WINDOWS_INSTALLER_FILES = old_windows
+    print("  Native installer lookup prefers freshest artifact with pkg/exe fallback")
+
+
+def test_download_installer_error_does_not_leak_assets_dir():
+    """Verify /web/download-installer errors do not expose server filesystem paths."""
+    import inspect
+    from web import handle_download_installer
+
+    source = inspect.getsource(handle_download_installer)
+    assert "assets_dir" not in source, "install error should not leak installer assets dir"
+    print("  download-installer error response omits assets_dir")
+
+
+def test_mac_dmg_launcher_preserves_existing_env():
+    """Verify DMG launcher script preserves existing local .env credentials."""
+    script_path = Path(__file__).resolve().parent / "installers" / "build_mac_dmg.sh"
+    src = script_path.read_text(encoding="utf-8")
+    assert 'ENV_BACKUP="$DEST/.env.preinstall.$$"' in src
+    assert 'if [ -f "$DEST/.env" ]; then' in src
+    assert 'cp "$DEST/.env" "$ENV_BACKUP"' in src
+    assert 'mv -f "$ENV_BACKUP" "$DEST/.env"' in src
+    print("  DMG launcher preserves existing .env")
+
+
+def test_install_page_prefers_native_installer():
+    """Verify /install onboarding page no longer shows script fallback as primary UX."""
+    from web import INSTALL_ONBOARD_HTML
+    assert "Copy Fallback Command" not in INSTALL_ONBOARD_HTML, "fallback command button should be removed"
+    assert "native installer binary" in INSTALL_ONBOARD_HTML, "native installer copy missing"
+    assert "native_available" in INSTALL_ONBOARD_HTML, "native installer availability check missing"
+    assert "/web/download-agent?install_token=" in INSTALL_ONBOARD_HTML, "zip fallback redirect missing"
+    assert 'id="install-agentstatus"' in INSTALL_ONBOARD_HTML, "install chat status pill missing"
+    assert 'id="install-bridgestatus"' in INSTALL_ONBOARD_HTML, "install bridge status pill missing"
+    assert "/web/chat/status" in INSTALL_ONBOARD_HTML, "install status poll endpoint missing"
+    print("  INSTALL_ONBOARD_HTML prefers native installer flow")
+
+
+def test_gemini_chat_has_install_banner():
+    """Verify legacy Gemini/Codex/Claude chat template exposes install banner when disconnected."""
+    from web import CHAT_GEMINI_HTML
+    assert 'id="agentstatus"' in CHAT_GEMINI_HTML, "legacy chat agent status pill missing"
+    assert 'id="bridgestatus"' in CHAT_GEMINI_HTML, "legacy chat bridge status pill missing"
+    assert "browser bridge offline" in CHAT_GEMINI_HTML, "legacy chat bridge offline label missing"
+    assert 'id="download-banner"' in CHAT_GEMINI_HTML, "legacy chat install banner missing"
+    assert "Install (curl)" in CHAT_GEMINI_HTML, "legacy chat curl install option missing"
+    assert "Download ZIP" in CHAT_GEMINI_HTML, "legacy chat ZIP install option missing"
+    assert "Download Agent Installer" in CHAT_GEMINI_HTML, "legacy chat native installer option missing"
+    assert "showBannerInstall" in CHAT_GEMINI_HTML, "legacy chat install modal function missing"
+    print("  CHAT_GEMINI_HTML has installer banner + curl modal")
 
 
 # ── Model selector tests ─────────────────────────────────────────────
@@ -377,6 +558,7 @@ if __name__ == "__main__":
         ("agent_package: build_agent_zip has version.txt + update.sh", test_build_agent_zip_contains_version_and_update),
         ("agent_package: build_update_zip (no .env, no start.sh)", test_build_update_zip_no_env_no_start),
         ("agent_package: _generate_install_script", test_generate_install_script),
+        ("agent_package: _generate_windows_install_script", test_generate_windows_install_script),
         ("auth: create_install_token", test_create_install_token),
         ("auth: validate_install_token (valid + used)", test_validate_install_token),
         ("auth: validate expired token", test_validate_expired_token),
@@ -386,6 +568,12 @@ if __name__ == "__main__":
         ("web: new handlers importable", test_web_imports),
         ("web: routes registered", test_web_routes_registered),
         ("web: CHAT_HTML has install modal", test_chat_html_has_install_modal),
+        ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
+        ("web: native installer lookup prefers freshest artifact", test_native_installer_path_prefers_freshest_artifact),
+        ("web: download-installer error omits assets_dir", test_download_installer_error_does_not_leak_assets_dir),
+        ("installers: dmg launcher preserves existing env", test_mac_dmg_launcher_preserves_existing_env),
+        ("web: INSTALL_ONBOARD_HTML native-only flow", test_install_page_prefers_native_installer),
+        ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),

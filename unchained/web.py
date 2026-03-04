@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 import uuid
 from email.mime.text import MIMEText
 from urllib.parse import quote, urlparse
@@ -221,6 +222,43 @@ _PROVISION_COOLDOWN_SECS = 30
 
 # Scheduler UI storage (per-user jobs + state snapshots).
 _SCHEDULER_STORE_DIR = Path(os.environ.get("UNCHAINED_SCHEDULER_DIR", "/data/scheduler_jobs"))
+_INSTALLER_ASSETS_DIR = Path(
+    os.environ.get(
+        "UNCHAINED_INSTALLER_ASSETS_DIR",
+        str(Path(os.path.dirname(os.path.abspath(__file__))) / "installers"),
+    )
+)
+_DEFAULT_MAC_INSTALLER_FILES = ("unchained-installer-mac.dmg", "unchained-installer-mac.pkg")
+_DEFAULT_WINDOWS_INSTALLER_FILES = ("unchained-installer-windows.msi", "unchained-installer-windows.exe")
+
+
+def _parse_installer_filename_list(raw: str, default_files: tuple[str, ...]) -> list[str]:
+    out = [part.strip() for part in (raw or "").split(",") if part.strip()]
+    if out:
+        return out
+    return list(default_files)
+
+
+_MAC_INSTALLER_FILES = _parse_installer_filename_list(
+    os.environ.get("UNCHAINED_MAC_INSTALLER_FILES", "").strip(),
+    (
+        os.environ.get("UNCHAINED_MAC_INSTALLER_FILE", "").strip() or _DEFAULT_MAC_INSTALLER_FILES[0],
+        _DEFAULT_MAC_INSTALLER_FILES[1],
+    ),
+)
+_WINDOWS_INSTALLER_FILES = _parse_installer_filename_list(
+    os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILES", "").strip(),
+    (
+        os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILE", "").strip() or _DEFAULT_WINDOWS_INSTALLER_FILES[0],
+        _DEFAULT_WINDOWS_INSTALLER_FILES[1],
+    ),
+)
+_ALLOW_SCRIPT_INSTALLER_FALLBACK = (
+    os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
+_INSTALL_CLAIM_TTL = int(os.environ.get("UNCHAINED_INSTALL_CLAIM_TTL", "600"))
+_install_claims: dict[str, dict] = {}  # claim_id -> {secret, expires_at, install_token?}
+_install_claims_lock = threading.Lock()
 
 
 def _parse_relay() -> tuple[str, int]:
@@ -263,6 +301,74 @@ def _scheduler_jobs_path(user_id: str) -> Path:
 
 def _scheduler_state_path(user_id: str) -> Path:
     return _SCHEDULER_STORE_DIR / f"{_scheduler_slug(user_id)}.state.json"
+
+
+def _normalize_installer_platform(platform: str) -> str:
+    p = (platform or "").strip().lower()
+    if p in {"mac", "macos", "darwin", "osx"}:
+        return "mac"
+    if p in {"windows", "win", "win32"}:
+        return "windows"
+    return ""
+
+
+def _native_installer_candidates(platform: str) -> list[str]:
+    p = _normalize_installer_platform(platform)
+    if p == "mac":
+        files = _MAC_INSTALLER_FILES
+    elif p == "windows":
+        files = _WINDOWS_INSTALLER_FILES
+    else:
+        return []
+    ordered: list[str] = []
+    seen = set()
+    for name in files:
+        if not name or name in seen:
+            continue
+        ordered.append(name)
+        seen.add(name)
+    return ordered
+
+
+def _native_installer_path(platform: str) -> Path | None:
+    p = _normalize_installer_platform(platform)
+    candidates = _native_installer_candidates(p)
+    if not candidates:
+        return None
+    root = _INSTALLER_ASSETS_DIR.resolve()
+    existing: list[tuple[Path, int, int]] = []
+    for idx, name in enumerate(candidates):
+        candidate = (root / name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            try:
+                mtime_ns = candidate.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            existing.append((candidate, mtime_ns, idx))
+    if not existing:
+        return None
+    # Prefer the freshest artifact to avoid stale .msi/.dmg shadowing newly built .exe/.pkg.
+    # Tie-break by configured candidate order.
+    existing.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+    return existing[0][0]
+
+
+def _cleanup_install_claims(now: float | None = None):
+    ts = now or time.time()
+    stale = []
+    for claim_id, info in _install_claims.items():
+        if info.get("expires_at", 0) <= ts:
+            stale.append(claim_id)
+    for claim_id in stale:
+        _install_claims.pop(claim_id, None)
+
+
+def _is_valid_claim_id(claim_id: str) -> bool:
+    return bool(re.fullmatch(r"[a-f0-9]{32}", claim_id or ""))
 
 
 _SCHEDULER_DEFAULT_JOBS = {
@@ -2722,6 +2828,23 @@ let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
 
+function _nextAfterLogin() {
+  const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
+  if (!raw) return '';
+  if (!raw.startsWith('/')) return '';
+  if (raw.startsWith('//')) return '';
+  if (raw.includes('://')) return '';
+  return raw;
+}
+
+function _redirectAfterLoginIfNeeded() {
+  const next = _nextAfterLogin();
+  if (!next) return false;
+  if (next === window.location.pathname) return false;
+  window.location.href = next;
+  return true;
+}
+
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
   errEl.textContent = '';
@@ -2736,6 +2859,7 @@ async function handleGoogleCredential(response) {
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     _isAdmin = !!data.is_admin;
+    if (_redirectAfterLoginIfNeeded()) return;
     showMain();
   } catch(e) { errEl.textContent = e.message; }
 }
@@ -3539,8 +3663,10 @@ body{
 }
 #topbar .left{display:flex;align-items:center;gap:12px}
 #topbar .agent{font-family:var(--mono);font-size:14px;color:var(--accent)}
+#topbar .status-stack{display:flex;flex-direction:column;gap:2px}
 #topbar .status{font-size:11px;color:var(--muted)}
 #topbar .status.online{color:#4caf50}
+#topbar .status.warn{color:#fbbf24}
 #topbar .nav{display:flex;gap:8px}
 #topbar .nav a{
   color:var(--muted);text-decoration:none;font-size:12px;
@@ -3680,6 +3806,19 @@ body{
 }
 #nokey-banner a:hover{background:var(--accent);color:#fff}
 
+/* === Installer banner === */
+#download-banner{
+  display:none;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:#2b1f28;border-bottom:1px solid #553040;
+  font-size:13px;color:#f1c7d6;flex-shrink:0;
+}
+#download-banner a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border:1px solid var(--accent);padding:4px 12px;border-radius:6px;
+  background:transparent;
+}
+#download-banner a:hover{background:var(--accent);color:#fff}
+
 /* === Input === */
 #inputbar{
   display:flex;gap:8px;
@@ -3754,7 +3893,10 @@ body{
   <div id="topbar">
     <div class="left">
       <span class="agent" id="agentlabel"></span>
-      <span class="status" id="agentstatus">connecting...</span>
+      <div class="status-stack">
+        <span class="status" id="agentstatus">chat agent offline</span>
+        <span class="status" id="bridgestatus">browser bridge offline</span>
+      </div>
     </div>
     <div class="nav">
       <a href="#" onclick="doNewChat();return false">New Chat</a>
@@ -3773,6 +3915,28 @@ body{
   <div id="nokey-banner">
     <span>No Gemini API key provisioned.</span>
     <a href="/setup">Provision Key</a>
+  </div>
+
+  <div id="download-banner" style="display:none">
+    <span id="banner-msg">Local chat agent is offline on this machine.</span>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
+    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
+  </div>
+
+  <div id="install-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid #444;border-radius:12px;padding:24px;max-width:520px;width:90%;position:relative">
+      <button onclick="closeInstallModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent (curl)</h3>
+      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">Run this command in your terminal:</p>
+      <div style="background:var(--bg);border:1px solid #333;border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative">
+        <code id="install-cmd" style="color:var(--text)">Loading command...</code>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button onclick="copyInstallCmd()" style="background:#2f3140;border:1px solid #4a4d60;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer" id="copy-btn">Copy Command</button>
+      </div>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.9+ and curl.</p>
+    </div>
   </div>
 
   <div id="chat">
@@ -3875,15 +4039,87 @@ function onModelChange(model) {
   localStorage.setItem('unchained_gemini_model', model);
 }
 
-function updateAgentStatusUI(connected) {
-  const el = document.getElementById('agentstatus');
-  if (connected) {
-    el.textContent = 'connected';
-    el.className = 'status online';
-  } else {
-    el.textContent = 'connecting...';
-    el.className = 'status';
+function updateStatusPill(el, text, mode) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateAgentStatusUI(data) {
+  const chatEl = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
+  const banner = document.getElementById('download-banner');
+  const bannerMsg = document.getElementById('banner-msg');
+  const bannerCurl = document.getElementById('banner-curl');
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) updateStatusPill(chatEl, 'chat agent online', 'online');
+  else if (mismatch) updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
+  else updateStatusPill(chatEl, 'chat agent offline', '');
+
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'browser bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'browser bridge offline', '');
+
+  if (bannerMsg) bannerMsg.textContent = 'Local chat agent is offline on this machine.';
+  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+
+  if (banner) {
+    if (chatConnected && bridgeConnected) {
+      banner.style.display = 'none';
+    } else {
+      if (chatConnected && !bridgeConnected && bannerMsg) {
+        bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
+      } else if (mismatch && bannerMsg) {
+        bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+      }
+      banner.style.display = 'flex';
+    }
   }
+}
+
+async function showBannerInstall() {
+  await showInstallCmd();
+}
+
+function _normalizeLocalUrl(raw) {
+  const s = String(raw || '');
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocalHost) return s.replace(/^https:\/\//i, 'http://');
+  return s;
+}
+
+async function showInstallCmd() {
+  document.getElementById('install-modal-title').textContent = 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('copy-btn').textContent = 'Copy Command';
+  const modal = document.getElementById('install-modal');
+  modal.style.display = 'flex';
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    const data = await r.json();
+    const command = _normalizeLocalUrl(data.curl_command || '');
+    document.getElementById('install-cmd').textContent = command || 'No install command available.';
+  } catch(e) {
+    document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+  }
+}
+
+function copyInstallCmd() {
+  const cmd = document.getElementById('install-cmd').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Command', 2000);
+  });
+}
+
+function closeInstallModal() {
+  document.getElementById('install-modal').style.display = 'none';
 }
 
 function showMain() {
@@ -3919,7 +4155,11 @@ async function checkAgentStatus() {
     const r = await fetch('/web/chat/status?gemini=1');
     if (r.ok) {
       const data = await r.json();
-      updateAgentStatusUI(data.gemini_connected || false);
+      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });
       if (data.gemini_agent_id && !_userName) {
         document.getElementById('agentlabel').textContent = data.gemini_agent_id;
       }
@@ -4495,7 +4735,18 @@ CHAT_CLAUDE_SDK_HTML = (
         "fetch('/web/chat/status?gemini=1')",
         "fetch('/web/chat/status?claude_sdk=1')",
     )
-    .replace("updateAgentStatusUI(data.gemini_connected || false);", "updateAgentStatusUI(data.claude_sdk_connected || false);")
+    .replace(
+        """      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+        """      updateAgentStatusUI({
+        chat_connected: data.claude_sdk_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+    )
     .replace("if (data.gemini_agent_id) {", "if (data.claude_sdk_agent_id) {")
     .replace(
         "document.getElementById('agentlabel').textContent = data.gemini_agent_id;",
@@ -4567,7 +4818,18 @@ CHAT_CODEX_HTML = (
         "fetch('/web/chat/status?gemini=1')",
         "fetch('/web/chat/status?codex=1&model=' + encodeURIComponent(currentModel()))",
     )
-    .replace("updateAgentStatusUI(data.gemini_connected || false);", "updateAgentStatusUI(data.codex_connected || false);")
+    .replace(
+        """      updateAgentStatusUI({
+        chat_connected: data.gemini_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+        """      updateAgentStatusUI({
+        chat_connected: data.codex_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+    )
     .replace("if (data.gemini_agent_id) {", "if (data.codex_agent_id) {")
     .replace("document.getElementById('agentlabel').textContent = data.gemini_agent_id;", "document.getElementById('agentlabel').textContent = data.codex_agent_id;")
     .replace(
@@ -5992,6 +6254,7 @@ body{
        data-logo_alignment="center"
        data-width="320"></div>
   <div id="loginerr"></div>
+  <button id="dev-login-btn" onclick="devLogin()" style="display:none;width:320px;height:44px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:10px">Dev Login</button>
   <a href="/trial" style="color:#888;font-size:12px;margin-top:4px;text-decoration:none">Just want to try it free? Use the trial &rarr;</a>
 </div>
 
@@ -6040,21 +6303,24 @@ body{
       <span id="banner-msg">Your local chat agent is offline.</span>
       <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
     </div>
-    <a href="#" onclick="showBannerInstall();return false" id="banner-connect">Install (curl)</a>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
     <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
   <!-- Install modal -->
   <div id="install-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
     <div style="background:var(--surface);border:1px solid #444;border-radius:12px;padding:24px;max-width:520px;width:90%;position:relative">
       <button onclick="closeInstallModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
-      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent</h3>
-      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:16px">Installs a lightweight Python agent (~2MB) that connects your Chrome browser. Run in your terminal:</p>
+      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent (curl)</h3>
+      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">Run this command in your terminal:</p>
       <div style="background:var(--bg);border:1px solid #333;border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative">
-        <code id="install-cmd" style="color:var(--text)">Loading...</code>
-        <button onclick="copyInstallCmd()" style="position:absolute;top:8px;right:8px;background:var(--accent);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer" id="copy-btn">Copy</button>
+        <code id="install-cmd" style="color:var(--text)">Loading command...</code>
       </div>
-      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Link expires in 15 minutes. Requires Python 3.9+ and curl.</p>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button onclick="copyInstallCmd()" style="background:#2f3140;border:1px solid #4a4d60;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer" id="copy-btn">Copy Command</button>
+      </div>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.9+ and curl.</p>
     </div>
   </div>
 
@@ -6094,6 +6360,31 @@ let _cancelCtrl = null;
 let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
+const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
+const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+function _nextAfterLogin() {
+  const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
+  if (!raw) return '';
+  if (!raw.startsWith('/')) return '';
+  if (raw.startsWith('//')) return '';
+  if (raw.includes('://')) return '';
+  return raw;
+}
+
+function _redirectAfterLoginIfNeeded() {
+  const next = _nextAfterLogin();
+  if (!next) return false;
+  if (next === window.location.pathname) return false;
+  window.location.href = next;
+  return true;
+}
+
+function maybeShowDevLogin() {
+  if (hasGoogleOAuth || !isLocalDevHost) return;
+  const btn = document.getElementById('dev-login-btn');
+  if (btn) btn.style.display = 'block';
+}
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -6109,8 +6400,28 @@ async function handleGoogleCredential(response) {
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     _isAdmin = !!data.is_admin;
+    if (_redirectAfterLoginIfNeeded()) return;
     showMain();
   } catch(e) { errEl.textContent = e.message; }
+}
+
+async function devLogin() {
+  const errEl = document.getElementById('loginerr');
+  errEl.textContent = '';
+  try {
+    const r = await fetch('/auth/dev', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: 'dev@localhost', name: 'Dev User'}),
+    });
+    const data = await r.json();
+    if (!r.ok) { errEl.textContent = data.error || 'Dev login failed'; return; }
+    agentId = data.agent_id || '';
+    if (_redirectAfterLoginIfNeeded()) return;
+    showMain();
+  } catch(e) {
+    errEl.textContent = e.message;
+  }
 }
 
 async function checkSession() {
@@ -6118,7 +6429,9 @@ async function checkSession() {
     const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) {
-      agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; showMain(); return;
+      agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || '';
+      if (_redirectAfterLoginIfNeeded()) return;
+      showMain(); return;
     }
     if (data.pending) { showPending(); return; }
   } catch(e) {}
@@ -6131,7 +6444,11 @@ async function checkApproval() {
   try {
     const r = await fetch('/auth/me');
     const data = await r.json();
-    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; showMain(); return; }
+    if (data.authenticated) {
+      agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || '';
+      if (_redirectAfterLoginIfNeeded()) return;
+      showMain(); return;
+    }
     if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
@@ -6202,6 +6519,7 @@ function updateAgentStatusUI(data) {
   const bannerMsg = document.getElementById('banner-msg');
   const bannerDetail = document.getElementById('banner-detail');
   const bannerConnect = document.getElementById('banner-connect');
+  const bannerCurl = document.getElementById('banner-curl');
   const bannerZip = document.getElementById('banner-zip');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
@@ -6211,7 +6529,8 @@ function updateAgentStatusUI(data) {
   const codexCliSupported = data.codex_cli_supported !== false;
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
-  if (bannerConnect) bannerConnect.textContent = 'Install (curl)';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
   if (bannerZip) bannerZip.style.display = '';
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
@@ -6238,7 +6557,8 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
-    if (bannerConnect) bannerConnect.textContent = 'Reinstall (curl)';
+    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+    if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
     if (banner) banner.style.display = 'flex';
   } else {
     if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
@@ -6405,6 +6725,7 @@ async function doNewChat() {
   await loadSlots();
 }
 
+maybeShowDevLogin();
 checkSession();
 function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -6893,18 +7214,27 @@ async function showBannerInstall() {
   await showInstallCmd();
 }
 
+function _normalizeLocalUrl(raw) {
+  const s = String(raw || '');
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocalHost) return s.replace(/^https:\/\//i, 'http://');
+  return s;
+}
+
 async function showInstallCmd() {
-  document.getElementById('install-modal-title').textContent = 'Install Agent';
-  document.getElementById('install-modal-desc').textContent = 'Installs a lightweight Python agent (~2MB) that connects your Chrome browser. Run in your terminal:';
-  document.getElementById('install-modal-note').textContent = 'Link expires in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('install-modal-title').textContent = 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('copy-btn').textContent = 'Copy Command';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
-  document.getElementById('install-cmd').textContent = 'Generating install link...';
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
   try {
     const r = await fetch('/web/install-token', {method: 'POST'});
     if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    document.getElementById('install-cmd').textContent = data.curl_command;
+    const command = _normalizeLocalUrl(data.curl_command || '');
+    document.getElementById('install-cmd').textContent = command || 'No install command available.';
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
   }
@@ -6915,7 +7245,7 @@ function copyInstallCmd() {
   navigator.clipboard.writeText(cmd).then(() => {
     const btn = document.getElementById('copy-btn');
     btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 2000);
+    setTimeout(() => btn.textContent = 'Copy Command', 2000);
   });
 }
 
@@ -6969,17 +7299,84 @@ async def handle_download_agent(request: web.Request) -> web.Response:
     )
 
 
+async def handle_download_installer(request: web.Request) -> web.Response:
+    """GET /web/download-installer — download native installer binary."""
+    platform_raw = request.query.get("os", "mac")
+    platform = _normalize_installer_platform(platform_raw)
+    if not platform:
+        return web.json_response({"error": "Unsupported os. Use mac or windows"}, status=400)
+
+    install_token = request.query.get("install_token", "").strip()
+    auth_info = None
+    if install_token:
+        token_info = _auth.validate_install_token(install_token, consume=False)
+        if not token_info:
+            return web.json_response({"error": "Invalid or expired install token"}, status=401)
+    else:
+        auth_info = _authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+
+    native_path = _native_installer_path(platform)
+    if native_path:
+        return web.FileResponse(
+            path=native_path,
+            headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
+        )
+
+    if not _ALLOW_SCRIPT_INSTALLER_FALLBACK:
+        expected_assets = _native_installer_candidates(platform)
+        return web.json_response(
+            {
+                "error": "Native installer is not configured for this OS.",
+                "os": platform,
+                "expected_asset": expected_assets[0] if expected_assets else None,
+                "expected_assets": expected_assets,
+            },
+            status=503,
+        )
+
+    # Optional compatibility fallback: return shell/PowerShell script installers
+    # if native artifacts are not available and fallback is explicitly enabled.
+    if not install_token:
+        install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
+    from agent_package import generate_platform_installer_script
+
+    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
+    base_url = f"{scheme}://{request.host}"
+    script = generate_platform_installer_script(
+        platform=platform,
+        install_token=install_token,
+        relay_host="api.unchainedsky.com",
+        base_url=base_url,
+    )
+    filename = "unchained-installer-windows.ps1" if platform == "windows" else "unchained-installer-mac.sh"
+    return web.Response(text=script, content_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
 async def handle_install_token(request: web.Request) -> web.Response:
-    """POST /web/install-token — create a short-lived install token for curl|bash."""
+    """POST /web/install-token — create a short-lived install token for installers."""
     auth_info = _authenticate(request)
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
     token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    base_url = f"https://{request.host}"
+    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
+    base_url = f"{scheme}://{request.host}"
     curl_command = f"curl -sSL {base_url}/install/{token} | bash"
+    powershell_command = (
+        "powershell -ExecutionPolicy Bypass -Command "
+        f"\"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing "
+        f"'{base_url}/install/windows/{token}').Content)\""
+    )
+    mac_native = _native_installer_path("mac") is not None
+    windows_native = _native_installer_path("windows") is not None
     return web.json_response({
         "curl_command": curl_command,
+        "powershell_command": powershell_command,
+        "mac_installer_url": f"{base_url}/web/download-installer?os=mac&install_token={token}",
+        "windows_installer_url": f"{base_url}/web/download-installer?os=windows&install_token={token}",
+        "native_available": {"mac": mac_native, "windows": windows_native},
         "token": token,
         "expires_in": 900,
     })
@@ -6998,12 +7395,129 @@ async def handle_install_script(request: web.Request) -> web.Response:
         )
 
     from agent_package import _generate_install_script
+    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
+    base_url = f"{scheme}://{request.host}"
     script = _generate_install_script(
         install_token=token,
         relay_host="api.unchainedsky.com",
-        base_url=f"https://{request.host}",
+        base_url=base_url,
     )
     return web.Response(text=script, content_type="text/plain")
+
+
+async def handle_install_script_windows(request: web.Request) -> web.Response:
+    """GET /install/windows/{token} — serve personalized PowerShell install script."""
+    token = request.match_info["token"]
+    token_info = _auth.validate_install_token(token, consume=False)
+    if not token_info:
+        return web.Response(
+            text='Write-Error "Install link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
+            content_type="text/plain",
+        )
+
+    from agent_package import _generate_windows_install_script
+
+    scheme = "http" if request.host.startswith(("localhost", "127.0.0.1", "192.168.")) else "https"
+    base_url = f"{scheme}://{request.host}"
+    script = _generate_windows_install_script(
+        install_token=token,
+        relay_host="api.unchainedsky.com",
+        base_url=base_url,
+    )
+    return web.Response(text=script, content_type="text/plain")
+
+
+async def handle_install_claim_page(request: web.Request) -> web.Response:
+    """GET /install/claim/{claim_id} — approval page opened by native installer."""
+    claim_id = str(request.match_info.get("claim_id", "")).strip().lower()
+    if not _is_valid_claim_id(claim_id):
+        return web.Response(text="Invalid install claim id.", status=400)
+    html = INSTALL_CLAIM_HTML.replace("__CLAIM_ID__", claim_id)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_install_claim_start(request: web.Request) -> web.Response:
+    """POST /web/install/claim/start — create a pending claim for native installer auth."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    claim_secret = str(body.get("claim_secret", "")).strip()
+    if not _is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+    if len(claim_secret) < 24:
+        return web.json_response({"error": "claim_secret too short"}, status=400)
+
+    now = time.time()
+    with _install_claims_lock:
+        _cleanup_install_claims(now)
+        existing = _install_claims.get(claim_id)
+        if existing and not hmac.compare_digest(existing.get("secret", ""), claim_secret):
+            return web.json_response({"error": "claim_id already exists"}, status=409)
+        _install_claims[claim_id] = {
+            "secret": claim_secret,
+            "created_at": now,
+            "expires_at": now + _INSTALL_CLAIM_TTL,
+            "install_token": "",
+        }
+    return web.json_response({"status": "pending", "claim_id": claim_id, "expires_in": _INSTALL_CLAIM_TTL})
+
+
+async def handle_install_claim_approve(request: web.Request) -> web.Response:
+    """POST /web/install/claim/approve — approve a pending installer claim (auth required)."""
+    auth_info = _authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    if not _is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+
+    now = time.time()
+    with _install_claims_lock:
+        _cleanup_install_claims(now)
+        claim = _install_claims.get(claim_id)
+        if not claim:
+            return web.json_response({"error": "Claim expired or not found"}, status=404)
+        token = claim.get("install_token") or _auth.create_install_token(auth_info["user_id"], auth_info["key"])
+        claim["install_token"] = token
+        claim["approved_at"] = now
+        claim["approved_user_id"] = auth_info["user_id"]
+        claim["expires_at"] = min(claim.get("expires_at", now + _INSTALL_CLAIM_TTL), now + _INSTALL_CLAIM_TTL)
+    return web.json_response({"status": "approved"})
+
+
+async def handle_install_claim_poll(request: web.Request) -> web.Response:
+    """POST /web/install/claim/poll — poll claim status and retrieve install token once approved."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    claim_secret = str(body.get("claim_secret", "")).strip()
+    if not _is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+    if not claim_secret:
+        return web.json_response({"error": "claim_secret required"}, status=400)
+
+    now = time.time()
+    with _install_claims_lock:
+        _cleanup_install_claims(now)
+        claim = _install_claims.get(claim_id)
+        if not claim:
+            return web.json_response({"status": "expired"}, status=404)
+        if not hmac.compare_digest(claim.get("secret", ""), claim_secret):
+            return web.json_response({"error": "Invalid claim secret"}, status=401)
+        install_token = str(claim.get("install_token", "")).strip()
+        if install_token:
+            _install_claims.pop(claim_id, None)
+            return web.json_response({"status": "approved", "install_token": install_token})
+        expires_at = float(claim.get("expires_at", now))
+    return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
 
 
 async def handle_install_bootstrap(request: web.Request) -> web.Response:
@@ -7162,6 +7676,375 @@ async def handle_agent_files(request: web.Request) -> web.Response:
         content_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=unchained-update.zip"},
     )
+
+
+INSTALL_CLAIM_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize Installer</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{--bg:#0b0d10;--surface:#13171d;--line:#2a313b;--text:#e8edf3;--muted:#a7b0bc;--ok:#23c483;--warn:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.shell{max-width:680px;margin:0 auto;padding:36px 18px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px}
+h1{margin:0 0 8px;font-size:28px}
+.sub{color:var(--muted);font-size:15px;line-height:1.5}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:16px}
+.btn{border:none;border-radius:9px;padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none}
+.btn-primary{background:linear-gradient(135deg,#23c483,#18a96f);color:#052117}
+.btn-ghost{background:transparent;color:#d0daea;border:1px solid #39465a}
+#state{margin-top:12px;font-size:13px}
+#state.ok{color:var(--ok)}
+#state.warn{color:var(--warn)}
+#approve-panel{display:none}
+#signin-panel{display:none}
+</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <h1>Authorize This Installer</h1>
+      <div class="sub">Approve this device to continue setup. The installer will fetch a short-lived token and exchange it for your API key locally.</div>
+      <div id="signin-panel" class="row">
+        <a class="btn btn-primary" id="signin-link" href="/local">Sign In To Continue</a>
+      </div>
+      <div id="approve-panel">
+        <div class="row">
+          <button class="btn btn-primary" id="approve-btn" onclick="approveInstall()">Approve Device</button>
+          <a class="btn btn-ghost" href="/install">Open Installer Page</a>
+        </div>
+      </div>
+      <div id="state"></div>
+    </div>
+  </div>
+<script>
+const CLAIM_ID = "__CLAIM_ID__";
+
+function setState(msg, mode) {
+  const el = document.getElementById('state');
+  el.textContent = msg || '';
+  el.className = mode || '';
+}
+
+async function approveInstall() {
+  const btn = document.getElementById('approve-btn');
+  btn.disabled = true;
+  btn.textContent = 'Approving...';
+  try {
+    const r = await fetch('/web/install/claim/approve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({claim_id: CLAIM_ID}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    setState('Approved. Return to the installer window; setup will continue automatically.', 'ok');
+    btn.textContent = 'Approved';
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Approve Device';
+    setState(`Approval failed: ${e.message}`, 'warn');
+  }
+}
+
+async function initClaimPage() {
+  const signInLink = document.getElementById('signin-link');
+  signInLink.href = '/local?next=' + encodeURIComponent('/install/claim/' + CLAIM_ID);
+  try {
+    const r = await fetch('/auth/me');
+    const data = await r.json();
+    if (!r.ok || !data.authenticated) {
+      document.getElementById('signin-panel').style.display = 'flex';
+      setState('Sign in to approve this installer.', 'warn');
+      return;
+    }
+    document.getElementById('approve-panel').style.display = 'block';
+    setState('Signed in. Click "Approve Device" to continue.', '');
+  } catch (e) {
+    document.getElementById('signin-panel').style.display = 'flex';
+    setState(`Could not verify session: ${e.message}`, 'warn');
+  }
+}
+
+initClaimPage();
+</script>
+</body>
+</html>
+"""
+
+
+INSTALL_ONBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Unchained</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{
+  --bg:#0b0d10;--surface:#13171d;--line:#2a313b;--text:#e8edf3;--muted:#a7b0bc;
+  --accent:#23c483;--accent-2:#0ea5e9;--warn:#f59e0b;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:radial-gradient(1200px 700px at 70% -10%, #1d2c3a 0%, var(--bg) 60%);
+  color:var(--text);font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.shell{max-width:860px;margin:0 auto;padding:40px 18px 80px}
+.hero{margin-bottom:18px}
+.kicker{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent-2)}
+h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
+.sub{color:var(--muted);font-size:16px;line-height:1.6;max-width:720px}
+.card{
+  margin-top:20px;background:rgba(19,23,29,0.95);border:1px solid var(--line);
+  border-radius:14px;padding:20px;
+}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pill{
+  display:inline-flex;align-items:center;border:1px solid #334155;border-radius:999px;
+  padding:4px 10px;font-size:12px;color:#c6d0dc;background:#0d1218;
+}
+.pill.online{color:#90edba;border-color:#2f6f39;background:#112219}
+.pill.warn{color:#f2d18a;border-color:#7a6326;background:#1d1607}
+.safe{margin:14px 0 4px;padding-left:18px;color:#cbd5e1}
+.safe li{margin:6px 0}
+.agree{
+  margin-top:12px;border:1px solid #32404f;background:#0e141b;border-radius:10px;padding:12px;
+  font-size:14px;color:#dbe7f3
+}
+.agree input{vertical-align:middle;transform:translateY(-1px)}
+.btn{
+  border:none;border-radius:10px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer;
+}
+.btn-primary{background:linear-gradient(135deg,#23c483,#18a96f);color:#062217}
+.btn-primary:disabled{opacity:0.45;cursor:not-allowed}
+.btn-ghost{background:transparent;color:#c8d4e1;border:1px solid #3a4759}
+.cmd{
+  margin-top:12px;padding:10px 12px;border:1px solid #2f3b4a;border-radius:8px;
+  background:#0b1118;color:#c8f7df;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space:pre-wrap;word-break:break-word;font-size:12px;
+}
+.note{margin-top:10px;color:#9aa6b3;font-size:12px}
+.note.warn{color:#f9c56e}
+.status{margin-top:10px;font-size:13px;color:#cde0f5}
+.warn{color:#f9c56e}
+a{color:#93d5ff}
+#auth-panel{display:none}
+#ready-panel{display:none}
+@media (max-width:680px){
+  h1{font-size:30px}
+  .shell{padding-top:30px}
+}
+</style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div class="kicker">Secure Installer</div>
+      <h1>Install Unchained</h1>
+      <div class="sub">One guided download from this website. No terminal required for normal onboarding.</div>
+    </div>
+
+    <div class="card" id="auth-panel">
+      <div style="font-size:18px;font-weight:600;margin-bottom:6px">Sign in first</div>
+      <div class="sub" style="font-size:14px">You need to be signed in before downloading your personalized installer.</div>
+      <div class="row" style="margin-top:12px">
+        <a class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center" href="/local?next=%2Finstall">Sign In</a>
+      </div>
+    </div>
+
+    <div class="card" id="ready-panel">
+      <div class="row">
+        <span class="pill">Detected OS: <strong id="os-label" style="margin-left:6px">macOS</strong></span>
+        <span class="pill">Signed Installer Flow</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="pill" id="install-agentstatus">chat agent offline</span>
+        <span class="pill" id="install-bridgestatus">browser bridge offline</span>
+      </div>
+      <div class="note" id="install-runtime-status">Checking local agent status...</div>
+
+      <ul class="safe">
+        <li>Installer download is issued from your authenticated account session.</li>
+        <li>Downloads a native installer binary for your OS (.dmg/.pkg or .msi/.exe).</li>
+        <li>Fallback shell installers are disabled in the one-click flow.</li>
+      </ul>
+
+      <div class="agree">
+        <label>
+          <input type="checkbox" id="agree-box" onchange="refreshInstallButton()">
+          I agree to install the local Unchained agent on this device and allow it to automate my browser sessions.
+        </label>
+      </div>
+
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary" id="install-btn" onclick="startInstall()" disabled>Download Installer</button>
+        <a class="btn btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-agent">Download ZIP</a>
+      </div>
+
+      <div class="status" id="install-status"></div>
+    </div>
+  </div>
+
+<script>
+let _installOs = 'mac';
+let _installStatusTimer = null;
+
+function _detectInstallOs() {
+  const src = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+  if (src.includes('win')) return 'windows';
+  if (src.includes('mac')) return 'mac';
+  return 'other';
+}
+
+function refreshInstallButton() {
+  const cb = document.getElementById('agree-box');
+  const btn = document.getElementById('install-btn');
+  btn.disabled = !cb.checked || _installOs === 'other';
+}
+
+function _setStatus(msg, warn) {
+  const el = document.getElementById('install-status');
+  el.textContent = msg;
+  el.className = warn ? 'status warn' : 'status';
+}
+
+function _setRuntimeStatus(msg, warn) {
+  const el = document.getElementById('install-runtime-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = warn ? 'note warn' : 'note';
+}
+
+function _setInstallPill(id, text, mode) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'pill' + (mode ? ' ' + mode : '');
+}
+
+function updateInstallAgentStatusUI(data) {
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) _setInstallPill('install-agentstatus', 'chat agent online', 'online');
+  else if (mismatch) _setInstallPill('install-agentstatus', 'chat agent mismatch', 'warn');
+  else _setInstallPill('install-agentstatus', 'chat agent offline', '');
+
+  if (bridgeConnected) _setInstallPill('install-bridgestatus', 'browser bridge online', 'online');
+  else _setInstallPill('install-bridgestatus', 'browser bridge offline', '');
+
+  if (chatConnected && bridgeConnected) {
+    _setRuntimeStatus('Agent and browser bridge are online on this machine.', false);
+    return;
+  }
+  if (chatConnected && !bridgeConnected) {
+    _setRuntimeStatus('Chat agent is online, but browser bridge is offline on this machine.', true);
+    return;
+  }
+  if (!chatConnected && bridgeConnected) {
+    _setRuntimeStatus('Browser bridge is online, but chat agent is offline on this machine.', true);
+    return;
+  }
+  if (mismatch) {
+    _setRuntimeStatus('A different machine currently owns the active chat agent for this account.', true);
+    return;
+  }
+  _setRuntimeStatus('Local chat agent and browser bridge are offline on this machine.', true);
+}
+
+async function checkInstallAgentStatus() {
+  try {
+    const r = await fetch('/web/chat/status');
+    if (!r.ok) return;
+    const data = await r.json();
+    updateInstallAgentStatusUI(data);
+  } catch(e) {
+    _setRuntimeStatus(`Could not check local status: ${e.message}`, true);
+  }
+}
+
+async function startInstall() {
+  const btn = document.getElementById('install-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Preparing installer...';
+  _setStatus('');
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (r.status === 401) {
+      window.location.href = '/local?next=%2Finstall';
+      return;
+    }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+    const downloadUrl = _installOs === 'windows' ? data.windows_installer_url : data.mac_installer_url;
+    const native = data.native_available || {};
+    const osNativeReady = _installOs === 'windows' ? native.windows : native.mac;
+
+    if (!osNativeReady) {
+      const zipUrl = data.token
+        ? `/web/download-agent?install_token=${encodeURIComponent(data.token)}`
+        : '/web/download-agent';
+      _setStatus('Native installer is not available yet for this OS. Downloading ZIP package instead.', true);
+      window.location.href = zipUrl;
+      return;
+    }
+    if (!downloadUrl) throw new Error('Installer URL missing from server response.');
+    _setStatus('Download started. Open the file from your Downloads folder when ready.');
+    window.location.href = downloadUrl;
+  } catch (e) {
+    _setStatus(`Install failed: ${e.message}`, true);
+  } finally {
+    btn.textContent = _installOs === 'windows' ? 'Download Installer for Windows' : 'Download Installer for macOS';
+    refreshInstallButton();
+  }
+}
+
+async function initInstallPage() {
+  _installOs = _detectInstallOs();
+  const label = document.getElementById('os-label');
+  if (_installOs === 'windows') label.textContent = 'Windows';
+  else if (_installOs === 'mac') label.textContent = 'macOS';
+  else label.textContent = 'Unsupported';
+
+  if (_installOs === 'other') {
+    _setStatus('Native one-click installer is currently available for macOS and Windows. Use Download ZIP for other OSes.', true);
+  }
+
+  try {
+    const r = await fetch('/auth/me');
+    const data = await r.json();
+    if (!r.ok || !data.authenticated) {
+      document.getElementById('auth-panel').style.display = 'block';
+      return;
+    }
+    document.getElementById('ready-panel').style.display = 'block';
+    refreshInstallButton();
+    await checkInstallAgentStatus();
+    if (!_installStatusTimer) _installStatusTimer = setInterval(checkInstallAgentStatus, 5000);
+  } catch (e) {
+    document.getElementById('auth-panel').style.display = 'block';
+    _setStatus(`Auth check failed: ${e.message}`, true);
+  }
+}
+
+initInstallPage();
+</script>
+</body>
+</html>
+"""
+
+
+async def handle_install_page(request: web.Request) -> web.Response:
+    """Serve the one-click installer onboarding page."""
+    return web.Response(text=INSTALL_ONBOARD_HTML, content_type="text/html")
 
 
 async def handle_trial_page(request: web.Request) -> web.Response:
@@ -8301,6 +9184,7 @@ body{
   padding:8px 16px;padding-top:max(8px,env(safe-area-inset-top));
   background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
 }
+#topbar .left{display:flex;align-items:center;gap:12px}
 #topbar .title{font-family:var(--mono);font-size:15px;color:var(--accent);font-weight:600;letter-spacing:0.5px}
 #topbar .nav{display:flex;gap:8px;align-items:center}
 #topbar .nav a{
@@ -8308,6 +9192,24 @@ body{
   border:1px solid #555;padding:4px 10px;border-radius:6px;
 }
 #topbar .nav a:hover{border-color:var(--accent);color:var(--accent)}
+.status-stack{display:flex;flex-direction:column;line-height:1.2;gap:2px}
+.status{font-size:11px;color:var(--muted)}
+.status.online{color:var(--green)}
+.status.warn{color:var(--yellow)}
+
+/* Setup install banner */
+#setup-download-banner{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:8px 16px;background:#2a1a1a;border-bottom:1px solid #444;
+  font-size:12px;color:var(--muted);flex-shrink:0;flex-wrap:wrap;
+}
+#setup-download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+#setup-download-banner .detail{font-size:11px;color:#9aa0aa}
+#setup-download-banner a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border:1px solid var(--accent);padding:4px 10px;border-radius:6px;
+}
+#setup-download-banner a:hover{background:var(--accent);color:#fff}
 
 /* === Content === */
 .content{max-width:600px;margin:0 auto;padding:24px 16px}
@@ -8429,6 +9331,26 @@ body{
 
 /* Consent denied message */
 .consent-denied{text-align:center;padding:40px 20px;color:var(--muted);font-size:14px}
+
+/* Install modal */
+#setup-install-modal{
+  display:none;position:fixed;inset:0;z-index:110;background:rgba(0,0,0,0.7);
+  align-items:center;justify-content:center;padding:20px;
+}
+#setup-install-modal .card{
+  background:var(--surface);border:1px solid #444;border-radius:12px;
+  padding:20px;max-width:560px;width:92%;position:relative;
+}
+#setup-install-modal h3{color:var(--accent);margin-bottom:8px;font-size:16px}
+#setup-install-modal p{color:var(--muted);font-size:12px;line-height:1.5}
+#setup-install-modal .cmd{
+  background:#0d0d1a;border:1px solid #333;border-radius:8px;padding:10px;
+  font-family:var(--mono);font-size:12px;word-break:break-all;margin-top:10px;color:var(--text);
+}
+#setup-install-modal .x{
+  position:absolute;top:10px;right:12px;background:none;border:none;color:var(--muted);
+  font-size:18px;cursor:pointer;
+}
 </style>
 </head>
 <body>
@@ -8491,11 +9413,39 @@ body{
 <!-- Main -->
 <div id="main">
   <div id="topbar">
-    <span class="title">Setup</span>
+    <div class="left">
+      <span class="title">Setup</span>
+      <div class="status-stack">
+        <span class="status" id="setup-agentstatus">chat agent offline</span>
+        <span class="status" id="setup-bridgestatus">browser bridge offline</span>
+      </div>
+    </div>
     <div class="nav">
       <a href="/local">Chat</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doLogout();return false">Logout</a>
+    </div>
+  </div>
+
+  <div id="setup-download-banner" style="display:none">
+    <div class="copy">
+      <span id="setup-banner-msg">Your local chat agent is offline.</span>
+      <span class="detail" id="setup-banner-detail">Start the installer to enable chat and browser control.</span>
+    </div>
+    <a href="#" onclick="showSetupInstallCmd();return false" id="setup-banner-curl">Install (curl)</a>
+    <a href="/web/download-agent" id="setup-banner-zip">Download ZIP</a>
+    <a href="/install" id="setup-banner-connect">Download Agent Installer</a>
+  </div>
+
+  <div id="setup-install-modal">
+    <div class="card">
+      <button class="x" onclick="closeSetupInstallModal()">&times;</button>
+      <h3>Install Agent (curl)</h3>
+      <p>Run this command in your terminal:</p>
+      <div class="cmd" id="setup-install-curl-cmd">Generating install command...</div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="copy-btn" onclick="copySetupInstallCmd(this)">Copy</button>
+      </div>
     </div>
   </div>
 
@@ -8667,6 +9617,71 @@ let selectedProvider = 'gemini';
 let agentConnected = false;
 let statusPollTimer = null;
 
+function _normalizeLocalUrl(raw) {
+  const s = String(raw || '');
+  const h = (window.location.hostname || '').toLowerCase();
+  if (h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.')) {
+    return s.replace(/^https:\/\//i, 'http://');
+  }
+  return s;
+}
+
+function updateSetupStatusPill(el, text, mode) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateSetupAgentStatusUI(data) {
+  const chatEl = document.getElementById('setup-agentstatus');
+  const bridgeEl = document.getElementById('setup-bridgestatus');
+  const banner = document.getElementById('setup-download-banner');
+  const bannerMsg = document.getElementById('setup-banner-msg');
+  const bannerDetail = document.getElementById('setup-banner-detail');
+  const bannerConnect = document.getElementById('setup-banner-connect');
+  const bannerCurl = document.getElementById('setup-banner-curl');
+
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (bridgeConnected) updateSetupStatusPill(bridgeEl, 'browser bridge online', 'online');
+  else updateSetupStatusPill(bridgeEl, 'browser bridge offline', '');
+
+  if (chatConnected) updateSetupStatusPill(chatEl, 'chat agent online', 'online');
+  else if (mismatch) updateSetupStatusPill(chatEl, 'chat agent mismatch', 'warn');
+  else updateSetupStatusPill(chatEl, 'chat agent offline', '');
+
+  if (!banner) return;
+  if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
+  if (bannerDetail) bannerDetail.textContent = 'Start the full local agent package to enable chat and browser control.';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
+
+  if (chatConnected && bridgeConnected) {
+    banner.style.display = 'none';
+    return;
+  }
+  if (chatConnected && !bridgeConnected) {
+    if (bannerMsg) bannerMsg.textContent = 'Your browser bridge is offline.';
+    if (bannerDetail) bannerDetail.textContent = 'Chat is connected, but setup profile detection on this machine still needs the browser bridge.';
+    banner.style.display = 'flex';
+    return;
+  }
+  if (mismatch) {
+    if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+    if (bannerDetail) bannerDetail.textContent = 'Reinstall only if this machine should own the active chat agent.';
+    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+    if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
+    banner.style.display = 'flex';
+    return;
+  }
+  if (bridgeConnected && bannerDetail) {
+    bannerDetail.textContent = 'Browser bridge is online, so setup profile detection can still work on this machine.';
+  }
+  banner.style.display = 'flex';
+}
+
 function providerLabel(provider) {
   if (provider === 'claude-sdk') return 'Claude API';
   if (provider === 'codex-sdk') return 'Codex API';
@@ -8730,7 +9745,7 @@ async function init() {
     document.getElementById('local-mode-hint').style.display = 'block';
     document.getElementById('manual-key-section').style.display = 'none';
     updateProvisionUiTexts();
-    await Promise.all([loadProfiles(), loadProvisionStatus()]);
+    await Promise.all([loadProfiles(), checkAgentStatus(), loadProvisionStatus()]);
   } else {
     document.getElementById('step-profiles').style.display = 'none';
     document.getElementById('step-connect').style.display = 'block';
@@ -8739,8 +9754,8 @@ async function init() {
     document.getElementById('manual-key-section').style.display = 'block';
     updateProvisionUiTexts();
     await Promise.all([loadInstallCmd(), checkAgentStatus(), loadProvisionStatus()]);
-    if (!statusPollTimer) statusPollTimer = setInterval(checkAgentStatus, 5000);
   }
+  if (!statusPollTimer) statusPollTimer = setInterval(checkAgentStatus, 5000);
 }
 
 /* --- Connect step (production) --- */
@@ -8757,22 +9772,69 @@ async function loadInstallCmd() {
   }
 }
 
+async function showSetupInstallCmd() {
+  const modal = document.getElementById('setup-install-modal');
+  const cmdEl = document.getElementById('setup-install-curl-cmd');
+  modal.style.display = 'flex';
+  cmdEl.textContent = 'Generating install command...';
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      cmdEl.textContent = 'Error: ' + (err.error || 'Failed to generate install command');
+      return;
+    }
+    const data = await r.json();
+    cmdEl.textContent = _normalizeLocalUrl(data.curl_command || '') || 'No install command available.';
+  } catch(e) {
+    cmdEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+function closeSetupInstallModal() {
+  document.getElementById('setup-install-modal').style.display = 'none';
+}
+
+function copySetupInstallCmd(btn) {
+  const cmd = document.getElementById('setup-install-curl-cmd').textContent || '';
+  const done = () => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 2000);
+  };
+  navigator.clipboard.writeText(cmd).then(done).catch(() => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = cmd;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch(e) {}
+  });
+}
+
 let profilesLoaded = false;
 async function checkAgentStatus() {
   try {
     const r = await fetch('/web/chat/status');
     if (!r.ok) return;
     const data = await r.json();
+    updateSetupAgentStatusUI(data);
     const wasConnected = agentConnected;
     agentConnected = data.connected;
     const dot = document.getElementById('agent-dot');
     const label = document.getElementById('agent-label');
     if (agentConnected) {
-      dot.classList.add('online');
-      label.classList.add('online');
-      label.textContent = 'Agent Online';
+      if (dot) dot.classList.add('online');
+      if (label) {
+        label.classList.add('online');
+        label.textContent = 'Agent Online';
+      }
       // Once agent connects, load profiles from user's machine via relay
-      if (!profilesLoaded) {
+      if (!isLocal && !profilesLoaded) {
         profilesLoaded = true;
         document.getElementById('step-profiles').style.display = 'block';
         document.getElementById('profile-step-title').textContent = 'Step 2: Choose Chrome Profile';
@@ -8784,9 +9846,11 @@ async function checkAgentStatus() {
         selectedProvider === 'codex-cli' ? false : (selectedProfile === undefined)
       );
     } else {
-      dot.classList.remove('online');
-      label.classList.remove('online');
-      label.textContent = 'Agent Offline';
+      if (dot) dot.classList.remove('online');
+      if (label) {
+        label.classList.remove('online');
+        label.textContent = 'Agent Offline';
+      }
       if (!isLocal && selectedProvider !== 'codex-cli') {
         document.getElementById('provision-btn').disabled = true;
       }
@@ -10648,6 +11712,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/demo", handle_demo_page),
     ("GET", "/case-study/zillow-rental", handle_case_study_zillow),
     ("GET", "/local", handle_local_page),
+    ("GET", "/install", handle_install_page),
     ("GET", "/app", handle_claude_page),
     ("GET", "/chat/ws", handle_chat_ws),
     ("POST", "/web/chat", handle_chat_msg),
@@ -10658,9 +11723,15 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/web/chat/slots", handle_chat_slots),
     ("POST", "/web/chat/switch", handle_chat_switch),
     ("GET", "/web/download-agent", handle_download_agent),
+    ("GET", "/web/download-installer", handle_download_installer),
     ("POST", "/web/install-token", handle_install_token),
+    ("POST", "/web/install/claim/start", handle_install_claim_start),
+    ("POST", "/web/install/claim/poll", handle_install_claim_poll),
+    ("POST", "/web/install/claim/approve", handle_install_claim_approve),
     ("POST", "/web/install/bootstrap", handle_install_bootstrap),
     ("GET", "/install/{token}", handle_install_script),
+    ("GET", "/install/windows/{token}", handle_install_script_windows),
+    ("GET", "/install/claim/{claim_id}", handle_install_claim_page),
     ("GET", "/trial/connector", handle_trial_connector),
     ("POST", "/trial/token", handle_trial_token),
     ("GET", "/trial/{token}", handle_trial_script),
