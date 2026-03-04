@@ -522,6 +522,17 @@ def test_gemini_chat_has_install_banner():
     print("  CHAT_GEMINI_HTML has installer banner + curl modal")
 
 
+def test_trial_chat_has_bridge_status_pill():
+    """Verify trial chat template shows separate chat+bridge status and status updater uses both flags."""
+    from web import TRIAL_CHAT_HTML
+    assert 'id="agentstatus"' in TRIAL_CHAT_HTML, "trial chat agent status pill missing"
+    assert 'id="bridgestatus"' in TRIAL_CHAT_HTML, "trial chat bridge status pill missing"
+    assert "chat_connected" in TRIAL_CHAT_HTML, "trial status updater missing chat_connected handling"
+    assert "bridge_connected" in TRIAL_CHAT_HTML, "trial status updater missing bridge_connected handling"
+    assert "fetch('/web/chat/status?model='" in TRIAL_CHAT_HTML, "trial status polling endpoint missing"
+    print("  TRIAL_CHAT_HTML has chat+bridge status pills")
+
+
 # ── Model selector tests ─────────────────────────────────────────────
 
 def test_chat_html_has_model_dropdown():
@@ -636,6 +647,7 @@ if __name__ == "__main__":
         ("web: claim-start has rate/capacity guards", test_claim_start_has_rate_limit_and_capacity_guards),
         ("web: public base URL ignores untrusted host header", test_public_base_url_ignores_untrusted_host_header),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
+        ("web: TRIAL_CHAT_HTML has bridge status", test_trial_chat_has_bridge_status_pill),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),

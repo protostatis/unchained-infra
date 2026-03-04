@@ -2836,7 +2836,10 @@ body{
   <div id="topbar">
     <div class="left">
       <span class="agent" id="agentlabel"></span>
-      <span class="status online" id="agentstatus">trial agent</span>
+      <div class="status-stack">
+        <span class="status" id="agentstatus">chat agent offline</span>
+        <span class="status" id="bridgestatus">browser bridge offline</span>
+      </div>
     </div>
     <div class="nav">
       <a href="/">Home</a>
@@ -3023,14 +3026,44 @@ function onModelChange(model) {
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
 
-function updateAgentStatusUI(connected, codexCliSupported = true) {
+function updateStatusPill(el, text, mode) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateAgentStatusUI(data) {
   const el = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
   const bannerMsg = document.getElementById('banner-msg');
-  el.textContent = 'trial agent';
-  el.className = 'status online';
+  const bannerConnect = document.getElementById('banner-connect');
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) updateStatusPill(el, 'chat agent online', 'online');
+  else if (mismatch) updateStatusPill(el, 'chat agent mismatch', 'warn');
+  else updateStatusPill(el, 'chat agent offline', '');
+
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'browser bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'browser bridge offline', '');
+
   if (bannerMsg) bannerMsg.textContent = 'Connect your browser to browse.';
-  if (banner) banner.style.display = connected ? 'none' : 'flex';
+  if (bannerConnect) bannerConnect.textContent = mismatch ? 'Reconnect (curl)' : 'Connect (curl)';
+
+  if (banner) {
+    if (chatConnected && bridgeConnected) {
+      banner.style.display = 'none';
+    } else {
+      if (chatConnected && !bridgeConnected && bannerMsg) {
+        bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
+      } else if (mismatch && bannerMsg) {
+        bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+      }
+      banner.style.display = 'flex';
+    }
+  }
 }
 
 function showMain() {
@@ -3061,7 +3094,7 @@ async function checkAgentStatus() {
     if (r.ok) {
       const data = await r.json();
       lastAgentConnected = data.connected;
-      updateAgentStatusUI(data.connected);
+      updateAgentStatusUI(data);
     }
   } catch(e) {}
 }
