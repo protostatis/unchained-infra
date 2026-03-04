@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.24"
+VERSION = "0.3.25"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -764,14 +764,32 @@ if ($Daemon) {
     Ensure-WindowsAutostart $PSScriptRoot
   }
 
-  function Test-ProcessAlive([int]$ProcessId) {
+  function Test-UnchainedProcess([int]$ProcessId, [string[]]$Needles) {
     if ($ProcessId -le 0) { return $false }
     try {
       Get-Process -Id $ProcessId -ErrorAction Stop | Out-Null
-      return $true
     } catch {
       return $false
     }
+
+    $cmd = ""
+    try {
+      $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+      $cmd = [string]$proc.CommandLine
+    } catch {
+      $cmd = ""
+    }
+    if ([string]::IsNullOrWhiteSpace($cmd)) {
+      return $false
+    }
+
+    foreach ($needle in $Needles) {
+      if ([string]::IsNullOrWhiteSpace($needle)) { continue }
+      if ($cmd -notlike "*$needle*") {
+        return $false
+      }
+    }
+    return $true
   }
 
   $pidPath = Join-Path (Get-Location) ".agent.pid.json"
@@ -790,8 +808,8 @@ if ($Daemon) {
       try { $bridgePid = [int]$pidState.bridge_pid } catch {}
     }
 
-    $agentAlive = Test-ProcessAlive $agentPid
-    $bridgeAlive = Test-ProcessAlive $bridgePid
+    $agentAlive = Test-UnchainedProcess $agentPid @("chat_agent_cli.py")
+    $bridgeAlive = Test-UnchainedProcess $bridgePid @("chrome_bridge.py", "start")
     if ($agentAlive -or $bridgeAlive) {
       Write-Host "Agent is already running."
       Write-Host "  Stop:  .\stop.ps1"
@@ -845,6 +863,16 @@ _STOP_PS1 = r"""#Requires -Version 5.1
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 
+function Get-ProcessCommandLine([int]$ProcessId) {
+  if ($ProcessId -le 0) { return "" }
+  try {
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    return [string]$proc.CommandLine
+  } catch {
+    return ""
+  }
+}
+
 $pidPath = Join-Path (Get-Location) ".agent.pid.json"
 if (-not (Test-Path $pidPath)) {
   Write-Host "No agent PID file found. Is the agent running in daemon mode?"
@@ -861,6 +889,12 @@ if ($p) {
   foreach ($field in @("agent_pid", "bridge_pid")) {
     $procId = [int]($p.$field)
     if ($procId -gt 0) {
+      $cmd = Get-ProcessCommandLine $procId
+      $expected = if ($field -eq "bridge_pid") { "chrome_bridge.py" } else { "chat_agent_cli.py" }
+      if ([string]::IsNullOrWhiteSpace($cmd) -or $cmd -notlike "*$expected*") {
+        Write-Host "Skipping $field ($procId): PID does not match expected Unchained process."
+        continue
+      }
       try {
         Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         Write-Host "Stopped $field ($procId)."

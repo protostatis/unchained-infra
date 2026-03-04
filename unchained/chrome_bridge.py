@@ -859,6 +859,49 @@ def _remove_pid():
         pass
 
 
+def _process_cmdline(pid: int) -> str:
+    """Return command line for pid, or empty string when unavailable."""
+    if pid <= 0:
+        return ""
+
+    if platform.system() == "Windows":
+        # WMI gives us command-line contents so we can reject reused stale PIDs.
+        ps_cmd = (
+            f'$p = Get-CimInstance Win32_Process -Filter "ProcessId = {pid}" '
+            " -ErrorAction SilentlyContinue; "
+            'if ($p) { [string]$p.CommandLine }'
+        )
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
+            )
+            return out.strip()
+        except Exception:
+            return ""
+
+    proc_cmdline = f"/proc/{pid}/cmdline"
+    if os.path.exists(proc_cmdline):
+        try:
+            raw = open(proc_cmdline, "rb").read().replace(b"\x00", b" ").strip()
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
 def _is_agent_running() -> bool:
     """Check if agent process is still alive."""
     pid = _read_pid()
@@ -869,30 +912,16 @@ def _is_agent_running() -> bool:
         # same PID (always PID 1 in Docker). This is us, not a duplicate agent.
         _remove_pid()
         return False
-    if platform.system() == "Windows":
-        try:
-            import ctypes
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if handle:
-                kernel32.CloseHandle(handle)
-                return True
-            # ERROR_ACCESS_DENIED still means a process with that PID exists.
-            if ctypes.get_last_error() == 5:
-                return True
-            _remove_pid()
-            return False
-        except Exception:
-            _remove_pid()
-            return False
 
-    try:
-        os.kill(pid, 0)  # signal 0 = check existence
-        return True
-    except ProcessLookupError:
+    cmdline = _process_cmdline(pid)
+    if not cmdline:
         _remove_pid()
         return False
+    if "chrome_bridge.py" not in cmdline:
+        # PID got recycled by an unrelated process; treat as stale.
+        _remove_pid()
+        return False
+    return True
 
 
 def _ensure_chrome(
