@@ -107,6 +107,35 @@ _DEMO_PROMPT_LIMIT = 4
 _FREE_DAILY_TURN_LIMIT = 25    # ~25 turns covers 10-20 min of real browsing
 _FREE_WINDOW_TURN_LIMIT = 5    # per 5-min window cap (prevents rapid-fire)
 _FREE_WINDOW_SECONDS = 300     # 5-minute window
+_OPENROUTER_TRIAL_BUDGET_USD = max(
+    0.0,
+    float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
+)
+_OPENROUTER_TRIAL_DEFAULT_MODEL = (
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3-flash-preview").strip()
+    or "google/gemini-3-flash-preview"
+)
+_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
+    m.strip()
+    for m in os.environ.get(
+        "OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS",
+        "arcee-ai/trinity-large-preview:free,stepfun/step-3.5-flash:free",
+    ).split(",")
+    if m.strip()
+)
+if not _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS:
+    _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = (
+        "arcee-ai/trinity-large-preview:free",
+        "stepfun/step-3.5-flash:free",
+    )
+_OPENROUTER_TRIAL_FALLBACK_MODEL = (
+    os.environ.get("OPENROUTER_TRIAL_FALLBACK_MODEL", _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS[0]).strip()
+    or _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS[0]
+)
+if _OPENROUTER_TRIAL_FALLBACK_MODEL not in _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS:
+    _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = (
+        (_OPENROUTER_TRIAL_FALLBACK_MODEL,) + _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS
+    )
 
 
 def _is_demo_unlimited(user: dict | None) -> bool:
@@ -525,6 +554,51 @@ def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
 
 def _is_openrouter_model(model: str) -> bool:
     return "/" in (model or "")
+
+
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _coerce_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _openrouter_budget_state_for_user(user_id: str) -> dict:
+    return _auth.get_or_init_openrouter_budget(
+        user_id,
+        min_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
+        max_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
+    )
+
+
+def _track_openrouter_usage_for_user(
+    user_id: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+    cost_usd: float,
+) -> dict:
+    return _auth.add_openrouter_usage(
+        user_id=user_id,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cost_usd=cost_usd,
+        min_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
+        max_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
+    )
+
+
+def _is_openrouter_post_cap_allowed_model(model: str) -> bool:
+    m = (model or "").strip()
+    return m in _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS
 
 
 def _is_codex_sdk_model(model: str) -> bool:
@@ -2897,8 +2971,9 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
+      <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview &mdash; Default</option>
       <option value="arcee-ai/trinity-large-preview:free">Trinity &mdash; Fast</option>
-      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Fast</option>
+      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Balanced</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
   </div>
@@ -2929,6 +3004,8 @@ let _cancelCtrl = null;
 let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
+let _openrouterUsage = null;
+let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
 
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
@@ -2961,6 +3038,7 @@ async function handleGoogleCredential(response) {
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     _isAdmin = !!data.is_admin;
+    _openrouterUsage = data.openrouter_usage || null;
     if (_redirectAfterLoginIfNeeded()) return;
     showMain();
   } catch(e) { errEl.textContent = e.message; }
@@ -2970,7 +3048,7 @@ async function checkSession() {
   try {
     const r = await fetch('/auth/me');
     const data = await r.json();
-    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; showMain(); return; }
+    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; _openrouterUsage = data.openrouter_usage || null; showMain(); return; }
     if (data.pending) { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
@@ -2982,7 +3060,7 @@ async function checkApproval() {
   try {
     const r = await fetch('/auth/me');
     const data = await r.json();
-    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; showMain(); return; }
+    if (data.authenticated) { agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || ''; _openrouterUsage = data.openrouter_usage || null; showMain(); return; }
     if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
@@ -3022,6 +3100,11 @@ function currentModel() {
 function _defaultTrialModel() {
   const sel = document.getElementById('modelsel');
   if (!sel) return '';
+  if (_openrouterUsage && _openrouterUsage.capped) {
+    for (const model of _POST_CAP_ALLOWED_MODELS) {
+      if (_modelOptionExists(model)) return model;
+    }
+  }
   for (const opt of sel.options) {
     if (opt.value !== '__custom_openrouter__') return opt.value;
   }
@@ -3036,17 +3119,56 @@ function _isOpenRouterModelId(value) {
   return (value || '').includes('/');
 }
 
+function _isPostCapAllowedModel(value) {
+  return _POST_CAP_ALLOWED_MODELS.includes((value || '').trim());
+}
+
+function _applyOpenRouterCapUi() {
+  const sel = document.getElementById('modelsel');
+  if (!sel) return;
+  const notice = document.getElementById('model-notice');
+  const capped = !!(_openrouterUsage && _openrouterUsage.capped);
+  for (const opt of Array.from(sel.options)) {
+    const v = opt.value;
+    if (v === '__custom_openrouter__') continue;
+    if (!capped) {
+      opt.disabled = false;
+      opt.style.display = '';
+      continue;
+    }
+    const allowed = _isPostCapAllowedModel(v);
+    opt.disabled = !allowed;
+    opt.style.display = allowed ? '' : 'none';
+  }
+  if (capped) {
+    const current = currentModel();
+    if (!_isPostCapAllowedModel(current)) {
+      const forced = _defaultTrialModel();
+      if (_modelOptionExists(forced)) {
+        sel.value = forced;
+        localStorage.setItem('unchained_model', forced);
+      }
+    }
+    if (notice) {
+      notice.innerHTML = '<strong>Trial budget reached</strong> &mdash; available models are Trinity and StepFun.';
+    }
+  } else if (notice) {
+    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.';
+  }
+}
+
 function _syncCustomModelUi() {
   const sel = document.getElementById('modelsel');
   const customOption = document.getElementById('modelsel-custom-option');
   const customRow = document.getElementById('model-custom-row');
   if (!sel) return;
-  if (customOption) customOption.style.display = _isAdmin ? '' : 'none';
-  if (!_isAdmin && sel.value === '__custom_openrouter__') {
+  const capped = !!(_openrouterUsage && _openrouterUsage.capped);
+  if (customOption) customOption.style.display = (_isAdmin && !capped) ? '' : 'none';
+  if ((!_isAdmin || capped) && sel.value === '__custom_openrouter__') {
     sel.value = _defaultTrialModel();
   }
   if (customRow) {
-    customRow.style.display = (_isAdmin && sel.value === '__custom_openrouter__') ? 'block' : 'none';
+    customRow.style.display = (_isAdmin && !capped && sel.value === '__custom_openrouter__') ? 'block' : 'none';
   }
 }
 
@@ -3067,6 +3189,16 @@ function _persistSessionId(sid) {
 }
 
 function onModelChange(model) {
+  if (_openrouterUsage && _openrouterUsage.capped && !_isPostCapAllowedModel(model)) {
+    const forced = _defaultTrialModel();
+    if (_modelOptionExists(forced)) {
+      document.getElementById('modelsel').value = forced;
+      localStorage.setItem('unchained_model', forced);
+    }
+    _syncCustomModelUi();
+    checkAgentStatus();
+    return;
+  }
   _syncCustomModelUi();
   if (model === '__custom_openrouter__') {
     const custom = (document.getElementById('model-custom-input')?.value || '').trim();
@@ -3145,6 +3277,7 @@ function showMain() {
   } else if (requestedModel && _modelOptionExists(requestedModel)) {
     document.getElementById('modelsel').value = requestedModel;
   }
+  _applyOpenRouterCapUi();
   _syncCustomModelUi();
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
@@ -3696,6 +3829,25 @@ async function doSend() {
             }
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
+          } else if (evt.type === 'model_forced') {
+            if (Array.isArray(evt.allowed_models) && evt.allowed_models.length > 0) {
+              _POST_CAP_ALLOWED_MODELS = evt.allowed_models
+                .map(v => (v || '').trim())
+                .filter(Boolean);
+            }
+            if (evt.budget && typeof evt.budget === 'object') {
+              _openrouterUsage = evt.budget;
+            } else if (!_openrouterUsage) {
+              _openrouterUsage = { capped: true };
+            } else {
+              _openrouterUsage.capped = true;
+            }
+            if (evt.model && _modelOptionExists(evt.model)) {
+              document.getElementById('modelsel').value = evt.model;
+              localStorage.setItem('unchained_model', evt.model);
+            }
+            _applyOpenRouterCapUi();
+            _syncCustomModelUi();
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
@@ -5507,7 +5659,7 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return 'arcee-ai/trinity-large-preview:free';
+  return _forcedDemoModel || 'google/gemini-3-flash-preview';
 }
 
 function _sessionStoreKey() {
@@ -5527,6 +5679,7 @@ function _persistSessionId(sid) {
 }
 
 let lastAgentConnected = false;
+let _forcedDemoModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
@@ -6115,6 +6268,10 @@ async function doSend() {
             }
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
+          } else if (evt.type === 'model_forced') {
+            if (evt.model) {
+              _forcedDemoModel = evt.model;
+            }
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
@@ -8348,6 +8505,49 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
 
                 msg_type = data.get("type", "")
 
+                # Trial OpenRouter accounting events are internal-only.
+                if msg_type == "openrouter_usage":
+                    try:
+                        usage_user_id = str(data.get("user_id", "")).strip()
+                        usage_sid = str(data.get("session_id", "")).strip()
+                        usage_model = str(data.get("model", "")).strip()
+                        prompt_tokens = max(0, _coerce_int(data.get("prompt_tokens"), 0))
+                        completion_tokens = max(0, _coerce_int(data.get("completion_tokens"), 0))
+                        total_tokens = max(0, _coerce_int(data.get("total_tokens"), 0))
+                        if total_tokens <= 0:
+                            total_tokens = prompt_tokens + completion_tokens
+                        direct_cost = _coerce_float(data.get("cost_usd"), 0.0)
+                        estimated_cost = _coerce_float(data.get("estimated_cost_usd"), 0.0)
+                        usage_cost = max(0.0, direct_cost if direct_cost > 0 else estimated_cost)
+                        if usage_user_id and (usage_cost > 0 or total_tokens > 0):
+                            budget_state = _track_openrouter_usage_for_user(
+                                usage_user_id,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                total_tokens=total_tokens,
+                                cost_usd=usage_cost,
+                            )
+                            _trace(
+                                "openrouter.usage",
+                                user_id=usage_user_id,
+                                session_id=usage_sid,
+                                model=usage_model or "-",
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                total_tokens=total_tokens,
+                                cost_usd=f"{usage_cost:.9f}",
+                                estimated_cost_usd=f"{estimated_cost:.9f}",
+                                spend_usd=f"{_coerce_float(budget_state.get('spent_usd'), 0.0):.6f}",
+                                budget_usd=f"{_coerce_float(budget_state.get('budget_usd'), 0.0):.6f}",
+                                remaining_usd=f"{_coerce_float(budget_state.get('remaining_usd'), 0.0):.6f}",
+                                usage_events=_coerce_int(budget_state.get("usage_events"), 0),
+                                total_user_tokens=_coerce_int(budget_state.get("total_tokens"), 0),
+                                capped=int(bool(budget_state.get("capped"))),
+                            )
+                    except Exception as e:
+                        log.warning("[chat] failed to track OpenRouter usage: %s", e)
+                    continue
+
                 # Route agent request responses
                 req_id = data.get("req_id", "")
                 if req_id and msg_type in ("history_response", "new_chat_ok",
@@ -8417,6 +8617,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = _is_codex_sdk_model(model)
     is_codex_cli = _is_codex_cli_model(model)
     is_openrouter = _is_openrouter_model(model)
+    openrouter_forced_model = ""
+    openrouter_forced_from_model = ""
+    openrouter_forced_notice = ""
+    openrouter_budget_state: dict | None = None
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
 
     # Validate session belongs to this user.  Session IDs are
@@ -8517,6 +8721,22 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 {"error": "Trial agent is not configured. Please try a Claude model."},
                 status=503,
             )
+        user_id = auth_info.get("user_id", "")
+        requested_model = (model or _OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
+        model = requested_model
+        if user_id:
+            openrouter_budget_state = _openrouter_budget_state_for_user(user_id)
+            if openrouter_budget_state.get("capped") and not _is_openrouter_post_cap_allowed_model(requested_model):
+                model = _OPENROUTER_TRIAL_FALLBACK_MODEL
+                openrouter_forced_model = model
+                openrouter_forced_from_model = requested_model
+                openrouter_forced_notice = (
+                    "Trial model budget reached "
+                    f"(${openrouter_budget_state.get('spent_usd', 0):.2f}/"
+                    f"${openrouter_budget_state.get('budget_usd', 0):.2f}). "
+                    "Switched to a free model for continued access. "
+                    "After the $1 cap, available models are Trinity and StepFun."
+                )
         ws = _chat_agents.get(TRIAL_AGENT_ID)
         if ws is None or ws.closed:
             return web.json_response(
@@ -8582,6 +8802,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         }
         if model:
             ws_msg["model"] = model
+        if is_openrouter and auth_info.get("user_id"):
+            ws_msg["user_id"] = auth_info["user_id"]
         if is_gemini:
             _gemini_last_active[chat_agent_id] = time.time()
         elif is_claude_sdk:
@@ -8631,6 +8853,20 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         },
     )
     await resp.prepare(request)
+    if openrouter_forced_model:
+        forced_evt = {
+            "type": "model_forced",
+            "reason": "openrouter_budget_limit",
+            "model": openrouter_forced_model,
+            "allowed_models": list(_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS),
+        }
+        if openrouter_forced_from_model:
+            forced_evt["requested_model"] = openrouter_forced_from_model
+        if openrouter_budget_state:
+            forced_evt["budget"] = openrouter_budget_state
+        await resp.write(f"data: {json.dumps(forced_evt)}\n\n".encode())
+    if openrouter_forced_notice:
+        await resp.write(f"data: {json.dumps({'type': 'text', 'data': openrouter_forced_notice})}\n\n".encode())
 
     stream_completed = False
     try:
@@ -9244,6 +9480,9 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     if auth_info is not None:
         email = auth_info.get("email", "")
         user = _auth.find_user_by_email(email)
+        openrouter_usage = {}
+        if user and user.get("user_type") == "trial":
+            openrouter_usage = _openrouter_budget_state_for_user(user["user_id"])
         return web.json_response({
             "authenticated": True,
             "email": email,
@@ -9251,6 +9490,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
             "user_type": user.get("user_type", "claude") if user else "claude",
             "demo_prompt_count": _auth.get_demo_count(email) if email else 0,
             "demo_unlimited": _is_demo_unlimited(user) if user else False,
+            "openrouter_usage": openrouter_usage,
             "is_admin": email.lower() in ADMIN_EMAILS,
             "name": user.get("name", "") if user else "",
             "picture": user.get("picture", "") if user else "",
@@ -10463,7 +10703,7 @@ tbody td{padding:10px 12px;vertical-align:middle}
   <div id="error-msg" style="display:none"></div>
   <table id="users-table" style="display:none">
     <thead><tr>
-      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>Actions</th>
+      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>OR Spend</th><th>OR Remaining</th><th>Actions</th>
     </tr></thead>
     <tbody id="users-body"></tbody>
   </table>
@@ -10540,6 +10780,15 @@ function renderTable() {
     const avatarHtml = u.picture
       ? '<img class="avatar" src="' + esc(u.picture) + '" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">'
       : '<span class="avatar-placeholder">' + esc((u.name||u.email||'?')[0].toUpperCase()) + '</span>';
+    const spendUsd = Number(u.openrouter_spend_usd || 0);
+    const budgetUsd = Number(u.openrouter_budget_usd || 0);
+    const spendLabel = budgetUsd > 0
+      ? ('$' + spendUsd.toFixed(4) + ' / $' + budgetUsd.toFixed(2))
+      : ('$' + spendUsd.toFixed(4));
+    const remainingUsd = Math.max(0, budgetUsd - spendUsd);
+    const remainingLabel = budgetUsd > 0
+      ? ('$' + remainingUsd.toFixed(4))
+      : '—';
     const canApprove = u.status !== 'approved';
     const canReject = u.status !== 'rejected';
     const approveBtn = canApprove
@@ -10556,6 +10805,8 @@ function renderTable() {
       '<td><span class="' + pillCls + '">' + pillLabel + '</span></td>' +
       '<td class="ts">' + fmtTs(u.created_at) + '</td>' +
       '<td class="ts">' + fmtTs(u.last_login_at) + '</td>' +
+      '<td class="ts">' + spendLabel + '</td>' +
+      '<td class="ts">' + remainingLabel + '</td>' +
       '<td><div class="actions">' + approveBtn + rejectBtn + '</div></td>' +
       '</tr>';
   }).join('');

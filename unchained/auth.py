@@ -100,6 +100,21 @@ class Auth:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
+            # Migration: add OpenRouter trial usage budget columns
+            for col_def in (
+                "openrouter_spend_usd REAL DEFAULT 0",
+                "openrouter_budget_usd REAL",
+                "openrouter_budget_assigned_at REAL",
+                "openrouter_prompt_tokens INTEGER DEFAULT 0",
+                "openrouter_completion_tokens INTEGER DEFAULT 0",
+                "openrouter_total_tokens INTEGER DEFAULT 0",
+                "openrouter_usage_events INTEGER DEFAULT 0",
+                "openrouter_last_usage_at REAL",
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
@@ -297,12 +312,22 @@ class Auth:
         """Return all users ordered by created_at desc."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT user_id, email, name, picture, created_at, status, last_login_at, user_type "
+                "SELECT user_id, email, name, picture, created_at, status, last_login_at, user_type, "
+                "openrouter_spend_usd, openrouter_budget_usd, "
+                "openrouter_prompt_tokens, openrouter_completion_tokens, openrouter_total_tokens, "
+                "openrouter_usage_events, openrouter_last_usage_at "
                 "FROM users ORDER BY created_at DESC",
             ).fetchall()
         return [{"user_id": r[0], "email": r[1], "name": r[2], "picture": r[3],
                  "created_at": r[4], "status": r[5] or "approved", "last_login_at": r[6],
-                 "user_type": r[7] or "claude"} for r in rows]
+                 "user_type": r[7] or "claude",
+                 "openrouter_spend_usd": float(r[8] or 0.0),
+                 "openrouter_budget_usd": (float(r[9]) if r[9] is not None else None),
+                 "openrouter_prompt_tokens": int(r[10] or 0),
+                 "openrouter_completion_tokens": int(r[11] or 0),
+                 "openrouter_total_tokens": int(r[12] or 0),
+                 "openrouter_usage_events": int(r[13] or 0),
+                 "openrouter_last_usage_at": r[14]} for r in rows]
 
     def get_user_status(self, email: str) -> str | None:
         """Return user status ('pending', 'approved', 'rejected') or None if not found."""
@@ -452,6 +477,173 @@ class Auth:
             return {
                 "daily_remaining": max(0, daily_limit - daily_used),
                 "window_remaining": max(0, window_limit - win_used),
+            }
+
+    # --- OpenRouter trial spend/budget ---
+
+    @staticmethod
+    def _derive_openrouter_budget(user_id: str, min_usd: float, max_usd: float) -> float:
+        """Deterministically pick a per-user budget in [min_usd, max_usd]."""
+        lo = max(0.0, float(min_usd))
+        hi = max(lo, float(max_usd))
+        if hi <= lo:
+            return round(lo, 6)
+        h = hashlib.sha256(user_id.encode("utf-8")).digest()
+        frac = int.from_bytes(h[:8], "big") / float(2**64 - 1)
+        return round(lo + (hi - lo) * frac, 6)
+
+    def get_or_init_openrouter_budget(
+        self,
+        user_id: str,
+        min_budget_usd: float = 1.0,
+        max_budget_usd: float = 1.0,
+    ) -> dict:
+        """Return user's OpenRouter budget state and initialize budget on first use."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT openrouter_spend_usd, openrouter_budget_usd, "
+                "openrouter_prompt_tokens, openrouter_completion_tokens, openrouter_total_tokens, "
+                "openrouter_usage_events, openrouter_last_usage_at "
+                "FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "spent_usd": 0.0,
+                    "budget_usd": 0.0,
+                    "remaining_usd": 0.0,
+                    "capped": True,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "usage_events": 0,
+                    "last_usage_at": None,
+                }
+
+            spent = max(0.0, float(row[0] or 0.0))
+            budget = row[1]
+            prompt_tokens = max(0, int(row[2] or 0))
+            completion_tokens = max(0, int(row[3] or 0))
+            total_tokens = max(0, int(row[4] or 0))
+            usage_events = max(0, int(row[5] or 0))
+            last_usage_at = row[6]
+            if budget is None or float(budget) <= 0:
+                budget = self._derive_openrouter_budget(user_id, min_budget_usd, max_budget_usd)
+                now = time.time()
+                conn.execute(
+                    "UPDATE users SET openrouter_budget_usd = ?, openrouter_budget_assigned_at = COALESCE(openrouter_budget_assigned_at, ?) "
+                    "WHERE user_id = ?",
+                    (budget, now, user_id),
+                )
+            budget_f = max(0.0, float(budget))
+            remaining = max(0.0, budget_f - spent)
+            return {
+                "spent_usd": round(spent, 6),
+                "budget_usd": round(budget_f, 6),
+                "remaining_usd": round(remaining, 6),
+                "capped": spent >= budget_f if budget_f > 0 else True,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "usage_events": usage_events,
+                "last_usage_at": last_usage_at,
+            }
+
+    def add_openrouter_spend(
+        self,
+        user_id: str,
+        cost_usd: float,
+        min_budget_usd: float = 1.0,
+        max_budget_usd: float = 1.0,
+    ) -> dict:
+        """Increment user's tracked OpenRouter spend and return budget state."""
+        return self.add_openrouter_usage(
+            user_id=user_id,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            cost_usd=cost_usd,
+            min_budget_usd=min_budget_usd,
+            max_budget_usd=max_budget_usd,
+        )
+
+    def add_openrouter_usage(
+        self,
+        user_id: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+        min_budget_usd: float = 1.0,
+        max_budget_usd: float = 1.0,
+    ) -> dict:
+        """Increment user's OpenRouter spend + token counters and return budget state."""
+        delta = max(0.0, float(cost_usd or 0.0))
+        delta_prompt = max(0, int(prompt_tokens or 0))
+        delta_completion = max(0, int(completion_tokens or 0))
+        delta_total = max(0, int(total_tokens or 0))
+        if delta_total <= 0:
+            delta_total = delta_prompt + delta_completion
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT openrouter_spend_usd, openrouter_budget_usd, "
+                "openrouter_prompt_tokens, openrouter_completion_tokens, openrouter_total_tokens, "
+                "openrouter_usage_events "
+                "FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "spent_usd": 0.0,
+                    "budget_usd": 0.0,
+                    "remaining_usd": 0.0,
+                    "capped": True,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "usage_events": 0,
+                    "last_usage_at": None,
+                }
+
+            spent = max(0.0, float(row[0] or 0.0))
+            budget = row[1]
+            prompt_total = max(0, int(row[2] or 0))
+            completion_total = max(0, int(row[3] or 0))
+            token_total = max(0, int(row[4] or 0))
+            usage_events = max(0, int(row[5] or 0))
+            if budget is None or float(budget) <= 0:
+                budget = self._derive_openrouter_budget(user_id, min_budget_usd, max_budget_usd)
+                now = time.time()
+                conn.execute(
+                    "UPDATE users SET openrouter_budget_usd = ?, openrouter_budget_assigned_at = COALESCE(openrouter_budget_assigned_at, ?) "
+                    "WHERE user_id = ?",
+                    (budget, now, user_id),
+                )
+            spent += delta
+            prompt_total += delta_prompt
+            completion_total += delta_completion
+            token_total += delta_total
+            usage_events += 1
+            now = time.time()
+            conn.execute(
+                "UPDATE users SET openrouter_spend_usd = ?, "
+                "openrouter_prompt_tokens = ?, openrouter_completion_tokens = ?, openrouter_total_tokens = ?, "
+                "openrouter_usage_events = ?, openrouter_last_usage_at = ? "
+                "WHERE user_id = ?",
+                (spent, prompt_total, completion_total, token_total, usage_events, now, user_id),
+            )
+            budget_f = max(0.0, float(budget))
+            remaining = max(0.0, budget_f - spent)
+            return {
+                "spent_usd": round(spent, 6),
+                "budget_usd": round(budget_f, 6),
+                "remaining_usd": round(remaining, 6),
+                "capped": spent >= budget_f if budget_f > 0 else True,
+                "prompt_tokens": prompt_total,
+                "completion_tokens": completion_total,
+                "total_tokens": token_total,
+                "usage_events": usage_events,
+                "last_usage_at": now,
             }
 
 

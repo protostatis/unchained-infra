@@ -494,6 +494,72 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return max(1, total_chars // 4)
 
 
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _coerce_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _extract_openrouter_usage(payload: dict) -> dict:
+    usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+
+    prompt_tokens = _coerce_int(
+        usage.get("prompt_tokens", usage.get("input_tokens", 0)),
+        0,
+    )
+    completion_tokens = _coerce_int(
+        usage.get("completion_tokens", usage.get("output_tokens", 0)),
+        0,
+    )
+    total_tokens = _coerce_int(
+        usage.get("total_tokens", prompt_tokens + completion_tokens),
+        prompt_tokens + completion_tokens,
+    )
+
+    cost_usd = 0.0
+    for candidate in (
+        usage.get("cost"),
+        usage.get("cost_usd"),
+        usage.get("total_cost"),
+        usage.get("total_cost_usd"),
+        payload.get("cost"),
+        payload.get("cost_usd"),
+        payload.get("total_cost"),
+        payload.get("total_cost_usd"),
+    ):
+        value = _coerce_float(candidate, 0.0)
+        if value > 0:
+            cost_usd = value
+            break
+
+    est_cost_per_1k = max(
+        0.0,
+        _coerce_float(os.environ.get("OPENROUTER_EST_COST_PER_1K_TOKENS", "0"), 0.0),
+    )
+    estimated_cost_usd = 0.0
+    if cost_usd <= 0 and est_cost_per_1k > 0 and total_tokens > 0:
+        estimated_cost_usd = (total_tokens / 1000.0) * est_cost_per_1k
+
+    return {
+        "openrouter_id": str(payload.get("id", "")),
+        "prompt_tokens": max(0, prompt_tokens),
+        "completion_tokens": max(0, completion_tokens),
+        "total_tokens": max(0, total_tokens),
+        "cost_usd": round(max(0.0, cost_usd), 9),
+        "estimated_cost_usd": round(max(0.0, estimated_cost_usd), 9),
+    }
+
+
 def _looks_like_internal_tool_payload(text: str) -> bool:
     """Detect accidental user-visible tool-call payloads."""
     raw = (text or "").strip()
@@ -786,11 +852,32 @@ class TrialAgent:
         except Exception as e:
             print(f"Send error: {e}")
 
+    async def _emit_openrouter_usage_event(
+        self,
+        session_id: str,
+        user_id: str,
+        model: str,
+        payload: dict,
+    ):
+        if not session_id or not user_id:
+            return
+        usage = _extract_openrouter_usage(payload)
+        await self._send(
+            session_id,
+            {
+                "type": "openrouter_usage",
+                "user_id": user_id,
+                "model": model,
+                **usage,
+            },
+        )
+
     async def _handle_message(self, msg: dict):
         session_id = msg["session_id"]
         # agent_id from the message routes to the right user's Chrome
         agent_id = msg.get("agent_id", self.agent_id)
         session_tab_id = msg.get("tab_id")  # per-session tab isolation
+        user_id = str(msg.get("user_id", "")).strip()
         user_text = msg["message"]
 
         # Use model from message if provided (allows front-end model selector)
@@ -828,7 +915,12 @@ class TrialAgent:
                     try:
                         final_resp = await asyncio.wait_for(
                             self._call_openrouter(
-                                client, messages, model, tool_choice="none"
+                                client,
+                                messages,
+                                model,
+                                tool_choice="none",
+                                session_id=session_id,
+                                user_id=user_id,
                             ),
                             timeout=FORCE_FINAL_TIMEOUT,
                         )
@@ -885,6 +977,8 @@ class TrialAgent:
                             messages,
                             model,
                             tool_choice=next_tool_choice,
+                            session_id=session_id,
+                            user_id=user_id,
                         )
                     except httpx.HTTPStatusError as e:
                         if e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
@@ -893,7 +987,13 @@ class TrialAgent:
                             messages = [system] + messages[-(TRIM_ON_ERROR):]
                             self.sessions[session_id] = messages
                             print(f"[{session_id}] 400 on turn {turn} — trimmed to {len(messages)} msgs, retrying")
-                            response = await self._call_openrouter(client, messages, model)
+                            response = await self._call_openrouter(
+                                client,
+                                messages,
+                                model,
+                                session_id=session_id,
+                                user_id=user_id,
+                            )
                         else:
                             raise
                     choice = response["choices"][0]
@@ -1206,8 +1306,15 @@ class TrialAgent:
             self._save_session(session_id, messages)
             await self._send(session_id, {"type": "done"})
 
-    async def _call_openrouter(self, client: httpx.AsyncClient, messages: list,
-                              model: str = "", tool_choice: str = "auto") -> dict:
+    async def _call_openrouter(
+        self,
+        client: httpx.AsyncClient,
+        messages: list,
+        model: str = "",
+        tool_choice: str = "auto",
+        session_id: str = "",
+        user_id: str = "",
+    ) -> dict:
         body: dict = {
             "model": model or self.model,
             "messages": messages,
@@ -1259,6 +1366,31 @@ class TrialAgent:
                         break
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
+        usage = _extract_openrouter_usage(data)
+        usage_log = (
+            f"model={body.get('model', self.model)} "
+            f"prompt_tokens={usage.get('prompt_tokens', 0)} "
+            f"completion_tokens={usage.get('completion_tokens', 0)} "
+            f"total_tokens={usage.get('total_tokens', 0)} "
+            f"cost_usd={float(usage.get('cost_usd', 0.0)):.9f} "
+            f"estimated_cost_usd={float(usage.get('estimated_cost_usd', 0.0)):.9f}"
+        )
+        if session_id:
+            print(f"[{session_id}] OpenRouter usage: {usage_log}")
+        else:
+            print(f"[openrouter] usage: {usage_log}")
+        try:
+            await self._emit_openrouter_usage_event(
+                session_id=session_id,
+                user_id=user_id,
+                model=body.get("model", self.model),
+                payload=data,
+            )
+        except Exception as e:
+            if session_id:
+                print(f"[{session_id}] Failed to emit OpenRouter usage event: {e}")
+            else:
+                print(f"[openrouter] Failed to emit usage event: {e}")
         return data
 
     async def _execute_tool(self, agent_id: str, name: str, args: dict, tab_id: str | None = None) -> str:

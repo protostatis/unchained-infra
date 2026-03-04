@@ -235,6 +235,61 @@ def test_cleanup_expired_tokens():
         os.unlink(db_path)
 
 
+def test_openrouter_budget_tracking():
+    from auth import Auth
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        auth = Auth(db_path=db_path)
+        user = auth.get_or_create_user("openrouter-budget-test@example.com", "Budget Test", "")
+        user_id = user["user_id"]
+
+        state = auth.get_or_init_openrouter_budget(user_id, min_budget_usd=1.0, max_budget_usd=1.0)
+        assert state["budget_usd"] == 1.0, f"Budget should be fixed at $1: {state}"
+        assert state["spent_usd"] == 0.0, f"Initial spend should be zero: {state}"
+        assert not state["capped"], f"New user should not be capped: {state}"
+
+        state2 = auth.add_openrouter_spend(user_id, 0.4, min_budget_usd=1.0, max_budget_usd=1.0)
+        assert 0.39 <= state2["spent_usd"] <= 0.41, f"Spend should increase by ~0.4: {state2}"
+        assert not state2["capped"], f"Should not be capped yet: {state2}"
+
+        state3 = auth.add_openrouter_spend(user_id, 0.7, min_budget_usd=1.0, max_budget_usd=1.0)
+        assert state3["spent_usd"] >= 1.0, f"Spend should pass cap: {state3}"
+        assert state3["capped"], f"User should be capped at $1: {state3}"
+        assert state3["remaining_usd"] == 0.0, f"Remaining should clamp to zero: {state3}"
+        print("  OpenRouter budget cap at $1 works")
+    finally:
+        os.unlink(db_path)
+
+
+def test_openrouter_token_usage_tracking():
+    from auth import Auth
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        auth = Auth(db_path=db_path)
+        user = auth.get_or_create_user("token-usage-test@example.com", "Token Usage", "")
+        user_id = user["user_id"]
+
+        state = auth.add_openrouter_usage(
+            user_id=user_id,
+            prompt_tokens=120,
+            completion_tokens=45,
+            total_tokens=165,
+            cost_usd=0.01234,
+            min_budget_usd=1.0,
+            max_budget_usd=1.0,
+        )
+        assert state["prompt_tokens"] >= 120, f"Prompt tokens not tracked: {state}"
+        assert state["completion_tokens"] >= 45, f"Completion tokens not tracked: {state}"
+        assert state["total_tokens"] >= 165, f"Total tokens not tracked: {state}"
+        assert state["usage_events"] >= 1, f"Usage event counter should increment: {state}"
+        assert state["spent_usd"] >= 0.01234, f"Spend should reflect usage cost: {state}"
+        print("  OpenRouter token usage counters increment correctly")
+    finally:
+        os.unlink(db_path)
+
+
 # ── chat_agent_cli.py version check tests ───────────────────────────
 
 def test_parse_version():
@@ -553,6 +608,17 @@ def test_trial_chat_has_bridge_status_pill():
     print("  TRIAL_CHAT_HTML has chat+bridge status pills")
 
 
+def test_admin_page_shows_openrouter_spend_column():
+    """Verify admin UI renders an OpenRouter spend column."""
+    from web import ADMIN_HTML
+    assert "OR Spend" in ADMIN_HTML, "admin table missing OpenRouter spend column"
+    assert "OR Remaining" in ADMIN_HTML, "admin table missing OpenRouter remaining column"
+    assert "openrouter_spend_usd" in ADMIN_HTML, "admin UI should read OpenRouter spend field"
+    assert "openrouter_budget_usd" in ADMIN_HTML, "admin UI should read OpenRouter budget field"
+    assert "remainingUsd" in ADMIN_HTML, "admin UI should compute remaining OpenRouter budget"
+    print("  ADMIN_HTML shows OpenRouter spend + remaining columns")
+
+
 # ── Model selector tests ─────────────────────────────────────────────
 
 def test_chat_html_has_model_dropdown():
@@ -600,6 +666,66 @@ def test_handle_chat_msg_forwards_model():
     assert 'body.get("model"' in source, "handle_chat_msg should extract model from body"
     assert '"model"' in source, "handle_chat_msg should forward model in ws message"
     print(f"  handle_chat_msg extracts and forwards model")
+
+
+def test_handle_chat_msg_openrouter_budget_force_logic():
+    """Verify OpenRouter requests enforce per-user budget and forward user_id for metering."""
+    import inspect
+    from web import handle_chat_msg
+    source = inspect.getsource(handle_chat_msg)
+    assert "_openrouter_budget_state_for_user" in source, "handle_chat_msg should load OpenRouter budget state"
+    assert "_is_openrouter_post_cap_allowed_model(requested_model)" in source, \
+        "handle_chat_msg should only force fallback for disallowed post-cap models"
+    assert "_OPENROUTER_TRIAL_FALLBACK_MODEL" in source, "handle_chat_msg should apply fallback model when capped"
+    assert 'if is_openrouter and auth_info.get("user_id")' in source, "OpenRouter ws payload should include user_id"
+    assert '"model_forced"' in source, "forced model SSE event should be emitted"
+    print("  handle_chat_msg enforces OpenRouter budget + emits forced-model event")
+
+
+def test_handle_chat_ws_tracks_openrouter_usage():
+    """Verify OpenRouter usage events are consumed server-side to update budget spend."""
+    import inspect
+    from web import handle_chat_ws
+    source = inspect.getsource(handle_chat_ws)
+    assert 'msg_type == "openrouter_usage"' in source, "chat ws handler should consume openrouter_usage events"
+    assert "_track_openrouter_usage_for_user" in source, "chat ws handler should persist OpenRouter usage counters"
+    assert 'openrouter.usage' in source, "chat ws handler should emit usage trace logs"
+    print("  handle_chat_ws consumes openrouter_usage and tracks spend")
+
+
+def test_openrouter_agent_emits_usage_event():
+    """Verify trial OpenRouter agent emits usage/cost events with user_id context."""
+    source_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_agent_openrouter.py")
+    with open(source_path) as f:
+        source = f.read()
+    assert "_extract_openrouter_usage" in source, "usage parser should exist in OpenRouter agent"
+    assert '"type": "openrouter_usage"' in source, "OpenRouter agent should emit openrouter_usage event"
+    assert ('msg.get("user_id"' in source or "msg.get('user_id'" in source), \
+        "OpenRouter agent should read user_id from inbound WS message"
+    assert "OpenRouter usage:" in source, "OpenRouter agent should log per-request token/cost usage"
+    print("  OpenRouter trial agent emits usage event with user context")
+
+
+def test_trial_chat_handles_model_forced_event():
+    """Verify trial chat frontend handles model_forced SSE events."""
+    from web import TRIAL_CHAT_HTML
+    assert "evt.type === 'model_forced'" in TRIAL_CHAT_HTML, "trial chat should handle model_forced event"
+    assert "_syncCustomModelUi()" in TRIAL_CHAT_HTML, "trial chat should refresh model UI after forced switch"
+    print("  trial chat UI handles model_forced SSE")
+
+
+def test_trial_and_demo_openrouter_default_models_and_cap_options():
+    """Verify trial+demo default to Gemini and cap keeps only Trinity/StepFun models."""
+    from web import TRIAL_CHAT_HTML, HEADLESS_DEMO_HTML
+    assert 'value="google/gemini-3-flash-preview"' in TRIAL_CHAT_HTML, \
+        "trial model selector should default to Gemini 3 Flash Preview"
+    assert "_POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free']" in TRIAL_CHAT_HTML, \
+        "trial cap model allowlist should be Trinity + StepFun"
+    assert "return _forcedDemoModel || 'google/gemini-3-flash-preview';" in HEADLESS_DEMO_HTML, \
+        "demo currentModel should default to Gemini 3 Flash Preview"
+    assert "evt.type === 'model_forced'" in HEADLESS_DEMO_HTML, \
+        "demo UI should handle server-forced model fallback events"
+    print("  trial+demo defaults and post-cap model constraints are in place")
 
 
 def test_sdk_agent_uses_per_message_model():
@@ -665,6 +791,8 @@ if __name__ == "__main__":
         ("auth: validate expired token", test_validate_expired_token),
         ("auth: validate bogus token", test_validate_bogus_token),
         ("auth: cleanup_expired_tokens", test_cleanup_expired_tokens),
+        ("auth: openrouter budget tracking", test_openrouter_budget_tracking),
+        ("auth: openrouter token usage tracking", test_openrouter_token_usage_tracking),
         ("chat_agent_cli: _parse_version", test_parse_version),
         ("web: new handlers importable", test_web_imports),
         ("web: routes registered", test_web_routes_registered),
@@ -680,10 +808,16 @@ if __name__ == "__main__":
         ("web: public base URL ignores untrusted host header", test_public_base_url_ignores_untrusted_host_header),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
         ("web: TRIAL_CHAT_HTML has bridge status", test_trial_chat_has_bridge_status_pill),
+        ("web: ADMIN_HTML shows OpenRouter spend column", test_admin_page_shows_openrouter_spend_column),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
+        ("web: handle_chat_msg openrouter budget force logic", test_handle_chat_msg_openrouter_budget_force_logic),
+        ("web: handle_chat_ws tracks openrouter usage", test_handle_chat_ws_tracks_openrouter_usage),
+        ("openrouter agent: emits usage event", test_openrouter_agent_emits_usage_event),
+        ("web ui: trial handles model_forced event", test_trial_chat_handles_model_forced_event),
+        ("web ui: trial+demo openrouter defaults and post-cap models", test_trial_and_demo_openrouter_default_models_and_cap_options),
         ("sdk: uses per-message model", test_sdk_agent_uses_per_message_model),
         ("cli: model ID to CLI name map", test_cli_agent_model_map),
         ("cli: main loop forwards model", test_cli_agent_forwards_model_from_ws),
