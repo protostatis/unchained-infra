@@ -1119,7 +1119,7 @@ def verify_session_token(token: str) -> dict | None:
 def _authenticate(request: web.Request) -> dict | None:
     """Authenticate via session cookie OR Bearer token.
 
-    Returns {user_id, key, agent_id, email} or None.
+    Returns {user_id, key, agent_id, email, status, user_type} or None.
     """
     # 1. Session cookie (web UI)
     session_cookie = request.cookies.get("uc_session")
@@ -1133,7 +1133,9 @@ def _authenticate(request: web.Request) -> dict | None:
                 agent_id = f"claude-{key_hash}"
                 return {"user_id": session["user_id"], "key": api_key,
                         "agent_id": agent_id, "key_hash": key_hash,
-                        "email": session["email"]}
+                        "email": session["email"],
+                        "status": user.get("status", "approved"),
+                        "user_type": user.get("user_type", "claude")}
 
     # 2. Bearer token (local scripts, API clients)
     auth_header = request.headers.get("Authorization", "")
@@ -1147,6 +1149,22 @@ def _authenticate(request: web.Request) -> dict | None:
                     "agent_id": agent_id, "key_hash": key_hash}
 
     return None
+
+
+def _is_pending_trial_user(auth_info: dict | None) -> bool:
+    if not auth_info:
+        return False
+    return auth_info.get("status") == "pending" and auth_info.get("user_type") == "trial"
+
+
+def _pending_trial_limited_response() -> web.Response:
+    return web.json_response(
+        {
+            "error": "pending_trial_limited",
+            "message": "Account review is pending. Use /trial or /demo for now.",
+        },
+        status=403,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -8407,18 +8425,27 @@ async def handle_trial_page(request: web.Request) -> web.Response:
 
 async def handle_chat_gemini_page(request: web.Request) -> web.Response:
     """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
+    auth_info = _authenticate(request)
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     html = inject_google_client_id(CHAT_GEMINI_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
     """Serve the Codex chat HTML page (per-user provisioned key)."""
+    auth_info = _authenticate(request)
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     html = CHAT_CODEX_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
     """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
+    auth_info = _authenticate(request)
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     html = CHAT_CLAUDE_SDK_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
@@ -8438,6 +8465,9 @@ async def handle_demo_page(request: web.Request) -> web.Response:
 
 async def handle_local_page(request: web.Request) -> web.Response:
     """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
+    auth_info = _authenticate(request)
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     html = inject_google_client_id(CLAUDE_CHAT_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
@@ -8597,6 +8627,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
+    if _is_pending_trial_user(auth_info) and not model:
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     _trace(
         "chat.msg.in",
         req_id=req_id,
@@ -8617,6 +8649,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = _is_codex_sdk_model(model)
     is_codex_cli = _is_codex_cli_model(model)
     is_openrouter = _is_openrouter_model(model)
+    if _is_pending_trial_user(auth_info) and not is_openrouter:
+        return _pending_trial_limited_response()
     openrouter_forced_model = ""
     openrouter_forced_from_model = ""
     openrouter_forced_notice = ""
@@ -8945,6 +8979,8 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         connected = bridge_connected
 
     model_hint = request.query.get("model", "")
+    if _is_pending_trial_user(auth_info) and model_hint and not _is_openrouter_model(model_hint):
+        return _pending_trial_limited_response()
     wants_gemini = request.query.get("gemini") == "1"
     wants_codex = (
         request.query.get("codex") == "1"
@@ -9141,6 +9177,10 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
+    if _is_pending_trial_user(auth_info) and not model:
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
+    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_trial_limited_response()
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
 
@@ -9178,6 +9218,10 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
+    if _is_pending_trial_user(auth_info) and not model:
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
+    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_trial_limited_response()
     requested_session_id = body.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
@@ -9211,6 +9255,10 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
 
     model = request.query.get("model", "")
+    if _is_pending_trial_user(auth_info) and not model:
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
+    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_trial_limited_response()
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
@@ -9257,6 +9305,10 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     slot = body.get("slot", 1)
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
+    if _is_pending_trial_user(auth_info) and not model:
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
+    if _is_pending_trial_user(auth_info) and not _is_openrouter_model(model):
+        return _pending_trial_limited_response()
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
         # Trial mode does not support multi-slot switching.
@@ -11625,6 +11677,9 @@ document.addEventListener('keydown',e=>{
 
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
+    auth_info = _authenticate(request)
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     html = inject_google_client_id(SETUP_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
@@ -11637,8 +11692,11 @@ async def handle_admin_page(request: web.Request) -> web.Response:
 
 async def handle_scheduler_page(request: web.Request) -> web.Response:
     """GET /scheduler — authenticated scheduler editor UI."""
-    if _authenticate(request) is None:
+    auth_info = _authenticate(request)
+    if auth_info is None:
         raise web.HTTPFound("/app")
+    if _is_pending_trial_user(auth_info):
+        raise web.HTTPFound("/trial")
     return web.Response(text=SCHEDULER_HTML, content_type="text/html")
 
 
@@ -11747,6 +11805,8 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     import signup_agent
     profiles = signup_agent.list_chrome_profiles()
@@ -11835,6 +11895,8 @@ async def handle_provision_start(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     # Per-user rate limit
     user_id = auth_info["user_id"]
@@ -11930,6 +11992,8 @@ async def handle_provision_status(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     import signup_agent
 
@@ -11953,6 +12017,8 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     user_id = auth_info["user_id"]
     pending = _pending_provision.pop(user_id, None)
@@ -11982,6 +12048,8 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     try:
         body = await request.json()
@@ -12020,6 +12088,8 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
+    if _is_pending_trial_user(auth_info):
+        return _pending_trial_limited_response()
 
     try:
         body = await request.json()

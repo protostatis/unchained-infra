@@ -707,6 +707,44 @@ def test_google_auth_trial_pending_has_chat_access():
     print("  Trial/demo sign-ins are pending but can access trial/demo chat")
 
 
+def test_pending_trial_restricted_from_local_and_provision_routes():
+    """Verify pending trial users are gated away from full-access routes."""
+    import inspect
+    import web as web_mod
+
+    local_src = inspect.getsource(web_mod.handle_local_page)
+    setup_src = inspect.getsource(web_mod.handle_setup_page)
+    sched_src = inspect.getsource(web_mod.handle_scheduler_page)
+    prov_start_src = inspect.getsource(web_mod.handle_provision_start)
+
+    assert "_is_pending_trial_user(auth_info)" in local_src, \
+        "local page should gate pending trial users"
+    assert 'web.HTTPFound("/trial")' in local_src, \
+        "local page should redirect pending trial users to /trial"
+    assert "_is_pending_trial_user(auth_info)" in setup_src, \
+        "setup page should gate pending trial users"
+    assert "_is_pending_trial_user(auth_info)" in sched_src, \
+        "scheduler page should gate pending trial users"
+    assert "_is_pending_trial_user(auth_info)" in prov_start_src, \
+        "provision start should gate pending trial users"
+    assert "_pending_trial_limited_response()" in prov_start_src, \
+        "provision start should return pending-trial limited error response"
+    print("  Pending trial users are gated from local/provision routes")
+
+
+def test_handle_chat_msg_blocks_pending_trial_non_openrouter():
+    """Verify pending trial users are limited to OpenRouter model lane in chat endpoint."""
+    import inspect
+    from web import handle_chat_msg
+
+    source = inspect.getsource(handle_chat_msg)
+    assert "_is_pending_trial_user(auth_info) and not is_openrouter" in source, \
+        "chat endpoint should block pending trial users from non-OpenRouter models"
+    assert "_pending_trial_limited_response()" in source, \
+        "chat endpoint should return pending-trial limited response"
+    print("  chat endpoint restricts pending trial users to OpenRouter lane")
+
+
 def test_handle_chat_msg_openrouter_budget_force_logic():
     """Verify OpenRouter requests enforce per-user budget and forward user_id for metering."""
     import inspect
@@ -854,6 +892,8 @@ if __name__ == "__main__":
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
         ("auth: trial/demo pending users can access trial/demo chat", test_google_auth_trial_pending_has_chat_access),
+        ("auth: pending trial gated from local/provision routes", test_pending_trial_restricted_from_local_and_provision_routes),
+        ("web: pending trial blocked from non-openrouter chat", test_handle_chat_msg_blocks_pending_trial_non_openrouter),
         ("web: handle_chat_msg openrouter budget force logic", test_handle_chat_msg_openrouter_budget_force_logic),
         ("web: handle_chat_ws tracks openrouter usage", test_handle_chat_ws_tracks_openrouter_usage),
         ("openrouter agent: emits usage event", test_openrouter_agent_emits_usage_event),
