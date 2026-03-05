@@ -198,6 +198,60 @@ def _cookie_secure(request: web.Request) -> bool:
     return request.scheme == "https"
 
 
+def _cookie_domain(request: web.Request) -> str | None:
+    """Share auth cookies across unchainedsky.com subdomains in production."""
+    forwarded_host = request.headers.get("X-Forwarded-Host", "")
+    host = (forwarded_host.split(",")[0].strip() if forwarded_host else (request.host or "")).lower()
+    host = host.split(":", 1)[0]
+    if host == "unchainedsky.com" or host.endswith(".unchainedsky.com"):
+        return ".unchainedsky.com"
+    return None
+
+
+def _set_session_cookie(resp: web.Response, token: str, request: web.Request):
+    kwargs = {
+        "max_age": JWT_EXPIRY_HOURS * 3600,
+        "httponly": True,
+        "secure": _cookie_secure(request),
+        "samesite": "Lax",
+        "path": "/",
+    }
+    domain = _cookie_domain(request)
+    if domain:
+        kwargs["domain"] = domain
+    resp.set_cookie("uc_session", token, **kwargs)
+
+
+def _clear_session_cookie(resp: web.Response, request: web.Request):
+    resp.del_cookie("uc_session", path="/")
+    domain = _cookie_domain(request)
+    if domain:
+        resp.del_cookie("uc_session", path="/", domain=domain)
+
+
+def _session_cookie_candidates(request: web.Request) -> list[str]:
+    """Return all uc_session cookie candidates (handles duplicate cookie names)."""
+    tokens: list[str] = []
+    cookie_header = request.headers.get("Cookie", "")
+    if cookie_header:
+        for part in cookie_header.split(";"):
+            kv = part.strip()
+            if not kv or "=" not in kv:
+                continue
+            name, value = kv.split("=", 1)
+            if name.strip() != "uc_session":
+                continue
+            token = value.strip()
+            if len(token) >= 2 and token[0] == token[-1] == '"':
+                token = token[1:-1]
+            if token and token not in tokens:
+                tokens.append(token)
+    parsed = request.cookies.get("uc_session")
+    if parsed and parsed not in tokens:
+        tokens.append(parsed)
+    return tokens
+
+
 # Cache for Google's JWKS public keys
 _google_jwks = None
 _google_jwks_expiry: float = 0
@@ -463,11 +517,21 @@ def _is_local_hostname(hostname: str) -> bool:
     return ip.is_loopback or ip.is_private
 
 
+def _is_public_unchained_hostname(hostname: str) -> bool:
+    host = (hostname or "").strip().lower()
+    return host == "unchainedsky.com" or host.endswith(".unchainedsky.com")
+
+
 def _public_base_url(request: web.Request) -> str:
     requested_host = _host_from_request(request)
     requested_hostname = _hostname_from_host(requested_host)
-    if not GOOGLE_CLIENT_ID and requested_host and _is_local_hostname(requested_hostname):
-        return f"http://{requested_host}"
+    if requested_host and requested_hostname:
+        if _is_local_hostname(requested_hostname):
+            if not GOOGLE_CLIENT_ID:
+                return f"http://{requested_host}"
+        elif _is_public_unchained_hostname(requested_hostname):
+            scheme = "https" if _cookie_secure(request) else "http"
+            return f"{scheme}://{requested_host}"
     return _PUBLIC_BASE_URL
 
 
@@ -1111,7 +1175,11 @@ def verify_session_token(token: str) -> dict | None:
     """Verify a session JWT. Returns {user_id, email} or None."""
     try:
         p = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return {"user_id": p["user_id"], "email": p["email"]}
+        return {
+            "user_id": p["user_id"],
+            "email": p["email"],
+            "iat": int(p.get("iat", 0)),
+        }
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
@@ -1122,20 +1190,25 @@ def _authenticate(request: web.Request) -> dict | None:
     Returns {user_id, key, agent_id, email, status, user_type} or None.
     """
     # 1. Session cookie (web UI)
-    session_cookie = request.cookies.get("uc_session")
-    if session_cookie:
-        session = verify_session_token(session_cookie)
+    sessions: list[dict] = []
+    for token in _session_cookie_candidates(request):
+        session = verify_session_token(token)
         if session:
-            user = _auth.find_user_by_email(session["email"])
-            if user and user.get("api_key"):
-                api_key = user["api_key"]
-                key_hash = _key_hash(api_key)
-                agent_id = f"claude-{key_hash}"
-                return {"user_id": session["user_id"], "key": api_key,
-                        "agent_id": agent_id, "key_hash": key_hash,
-                        "email": session["email"],
-                        "status": user.get("status", "approved"),
-                        "user_type": user.get("user_type", "claude")}
+            sessions.append(session)
+    sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
+    for session in sessions:
+        user = _auth.find_user_by_email(session["email"])
+        if user and user.get("api_key"):
+            api_key = user["api_key"]
+            key_hash = _key_hash(api_key)
+            agent_id = f"claude-{key_hash}"
+            return {
+                "user_id": session["user_id"], "key": api_key,
+                "agent_id": agent_id, "key_hash": key_hash,
+                "email": session["email"],
+                "status": user.get("status", "approved"),
+                "user_type": user.get("user_type", "claude"),
+            }
 
     # 2. Bearer token (local scripts, API clients)
     auth_header = request.headers.get("Authorization", "")
@@ -2904,6 +2977,16 @@ body{
 }
 #claude-request-btn:hover{opacity:0.92}
 #claude-request-btn[disabled]{opacity:0.55;cursor:not-allowed}
+@media (max-width:680px){
+  #topbar .status{
+    border:none;
+    padding:0;
+    border-radius:0;
+    background:transparent;
+  }
+  #topbar .status.online,
+  #topbar .status.warn{border-color:transparent}
+}
 </style>
 </head>
 <body>
@@ -2955,8 +3038,8 @@ body{
     <div class="left">
       <span class="agent" id="agentlabel"></span>
       <div class="status-stack">
-        <span class="status" id="agentstatus">chat agent offline</span>
-        <span class="status" id="bridgestatus">browser bridge offline</span>
+        <span class="status" id="agentstatus">agent offline</span>
+        <span class="status" id="bridgestatus">bridge offline</span>
       </div>
     </div>
     <div class="nav">
@@ -2975,6 +3058,12 @@ body{
     <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
   </div>
 
+  <div id="slotbar">
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+  </div>
+
   <div id="agent-bar">
     <span id="agent-action"></span>
     <span id="nav-trail"></span>
@@ -2983,7 +3072,8 @@ body{
 
   <div id="download-banner" style="display:none">
     <span id="banner-msg">Connect your browser to browse.</span>
-    <a href="#" onclick="showBannerInstall();return false" id="banner-connect">Connect (curl)</a>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
   <!-- Install modal -->
@@ -3295,6 +3385,96 @@ function _persistSessionId(sid) {
   }
 }
 
+let activeSlot = 1;
+
+function _slotLabel(n) {
+  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+}
+
+function _slotStateKey() {
+  return _sessionStoreKey() + '_slots_v1';
+}
+
+function _newSessionId() {
+  return 's-' + agentId + '-' + Date.now().toString(36);
+}
+
+function _loadSlotState() {
+  let state = {active_slot: 1, slots: {}};
+  try {
+    const raw = localStorage.getItem(_slotStateKey()) || '';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        state = parsed;
+      }
+    }
+  } catch(e) {}
+
+  const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const normalized = {};
+  for (let i = 1; i <= 3; i++) {
+    const sid = String(slots[String(i)] || '').trim();
+    normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+  }
+  let active = Number(state && state.active_slot);
+  if (active !== 1 && active !== 2 && active !== 3) active = 1;
+  return {active_slot: active, slots: normalized};
+}
+
+function _saveSlotState(state) {
+  try {
+    localStorage.setItem(_slotStateKey(), JSON.stringify(state));
+  } catch(e) {}
+}
+
+function _ensureSlotState() {
+  const state = _loadSlotState();
+  const restored = _restoreSessionId();
+  if (!state.slots['1']) state.slots['1'] = restored || _newSessionId();
+  for (let i = 1; i <= 3; i++) {
+    if (!state.slots[String(i)]) state.slots[String(i)] = _newSessionId();
+  }
+  if (!state.slots[String(state.active_slot)]) state.active_slot = 1;
+  _saveSlotState(state);
+  return state;
+}
+
+function _setActiveSlotSession(sid) {
+  if (!sid || !sid.startsWith('s-' + agentId + '-')) return;
+  const state = _loadSlotState();
+  state.slots[String(activeSlot)] = sid;
+  state.active_slot = activeSlot;
+  _saveSlotState(state);
+}
+
+function _syncSlotButtons() {
+  const state = _loadSlotState();
+  activeSlot = state.active_slot;
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (!btn) continue;
+    btn.className = '';
+    btn.textContent = _slotLabel(i);
+    if (i === activeSlot) btn.classList.add('active');
+  }
+}
+
+async function switchSlot(n) {
+  if (n === activeSlot) return;
+  if (sending) return;
+  const state = _loadSlotState();
+  state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
+  if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
+  _saveSlotState(state);
+  activeSlot = state.active_slot;
+  sessionId = state.slots[String(activeSlot)];
+  _persistSessionId(sessionId);
+  _syncSlotButtons();
+  document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  await loadHistory();
+}
+
 function onModelChange(model) {
   if (_openrouterUsage && _openrouterUsage.capped && !_isPostCapAllowedModel(model)) {
     const forced = _defaultTrialModel();
@@ -3336,20 +3516,22 @@ function updateAgentStatusUI(data) {
   const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
   const bannerMsg = document.getElementById('banner-msg');
+  const bannerCurl = document.getElementById('banner-curl');
   const bannerConnect = document.getElementById('banner-connect');
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
 
-  if (chatConnected) updateStatusPill(el, 'chat agent online', 'online');
-  else if (mismatch) updateStatusPill(el, 'chat agent mismatch', 'warn');
-  else updateStatusPill(el, 'chat agent offline', '');
+  if (chatConnected) updateStatusPill(el, 'agent online', 'online');
+  else if (mismatch) updateStatusPill(el, 'agent mismatch', 'warn');
+  else updateStatusPill(el, 'agent offline', '');
 
-  if (bridgeConnected) updateStatusPill(bridgeEl, 'browser bridge online', 'online');
-  else updateStatusPill(bridgeEl, 'browser bridge offline', '');
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'bridge offline', '');
 
   if (bannerMsg) bannerMsg.textContent = 'Connect your browser to browse.';
-  if (bannerConnect) bannerConnect.textContent = mismatch ? 'Reconnect (curl)' : 'Connect (curl)';
+  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
     if (chatConnected && bridgeConnected) {
@@ -3387,8 +3569,12 @@ function showMain() {
   }
   _applyOpenRouterCapUi();
   _syncCustomModelUi();
-  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
+  const slotState = _ensureSlotState();
+  activeSlot = slotState.active_slot;
+  sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
   _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
@@ -3406,6 +3592,7 @@ async function checkAgentStatus() {
 }
 
 async function loadHistory() {
+  _syncSlotButtons();
   try {
     const qs = new URLSearchParams({
       model: currentModel(),
@@ -3414,9 +3601,12 @@ async function loadHistory() {
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
     const data = await r.json();
+    const chatEl = document.getElementById('chat');
+    if (chatEl) chatEl.innerHTML = '';
     if (data.session_id) {
       sessionId = data.session_id;
       _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);
     }
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
@@ -3467,9 +3657,11 @@ async function doNewChat() {
       if (data.session_id) {
         sessionId = data.session_id;
         _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
       }
     }
   } catch(e) {}
+  _syncSlotButtons();
 }
 
 checkSession();
@@ -4344,8 +4536,8 @@ body{
     <div class="left">
       <span class="agent" id="agentlabel"></span>
       <div class="status-stack">
-        <span class="status" id="agentstatus">chat agent offline</span>
-        <span class="status" id="bridgestatus">browser bridge offline</span>
+        <span class="status" id="agentstatus">agent offline</span>
+        <span class="status" id="bridgestatus">bridge offline</span>
       </div>
     </div>
     <div class="nav">
@@ -4370,7 +4562,6 @@ body{
   <div id="download-banner" style="display:none">
     <span id="banner-msg">Local chat agent is offline on this machine.</span>
     <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
     <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
@@ -4505,12 +4696,12 @@ function updateAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
 
-  if (chatConnected) updateStatusPill(chatEl, 'chat agent online', 'online');
-  else if (mismatch) updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
-  else updateStatusPill(chatEl, 'chat agent offline', '');
+  if (chatConnected) updateStatusPill(chatEl, 'agent online', 'online');
+  else if (mismatch) updateStatusPill(chatEl, 'agent mismatch', 'warn');
+  else updateStatusPill(chatEl, 'agent offline', '');
 
-  if (bridgeConnected) updateStatusPill(bridgeEl, 'browser bridge online', 'online');
-  else updateStatusPill(bridgeEl, 'browser bridge offline', '');
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'bridge offline', '');
 
   if (bannerMsg) bannerMsg.textContent = 'Local chat agent is offline on this machine.';
   if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
@@ -5306,7 +5497,314 @@ CHAT_CODEX_HTML = (
         "if (!codexProvisioned && !currentModel().startsWith('codex-cli:')) {",
     )
     .replace("No Gemini API key provisioned. Visit /setup to get one.", "No Codex key provisioned. Visit /setup to get one.")
+    .replace(
+        "/* === Model selector === */",
+        """/* === Slot bar === */
+#slotbar{
+  display:flex;gap:6px;padding:4px 16px;
+  background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
+}
+#slotbar button{
+  flex:1;height:32px;border:1px solid #444;border-radius:6px;
+  background:transparent;color:var(--muted);font-size:12px;
+  font-family:var(--mono);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:border-color 0.15s,color 0.15s;
+}
+#slotbar button:hover{border-color:var(--accent);color:var(--text)}
+#slotbar button:active{transform:scale(0.95)}
+#slotbar button.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+#slotbar button.empty{color:#555;font-style:italic}
+#slotbar button.empty.active{color:var(--accent);font-style:normal}
+#slotbar.locked button{pointer-events:none;opacity:0.4}
+#slotbar.locked button.active{opacity:0.7}
+
+/* === Model selector === */""",
+    )
+    .replace(
+        '  <div id="agent-bar">',
+        """  <div id="slotbar">
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+  </div>
+
+  <div id="agent-bar">""",
+    )
+    .replace(
+        """function currentModel() {
+  return document.getElementById('modelsel').value;
+}""",
+        """function currentModel() {
+  return document.getElementById('modelsel').value;
+}
+
+let activeSlot = 1;
+
+async function loadSlots() {
+  try {
+    const qs = new URLSearchParams({
+      model: currentModel(),
+      session_id: sessionId,
+    });
+    const r = await fetch('/web/chat/slots?' + qs.toString());
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.session_id) {
+      sessionId = data.session_id;
+      _persistSessionId(sessionId);
+    }
+    activeSlot = data.active_slot || 1;
+    for (const s of (data.slots || [])) {
+      const btn = document.getElementById('slot' + s.slot);
+      if (!btn) continue;
+      btn.className = '';
+      if (s.slot === activeSlot) btn.classList.add('active');
+      if (s.empty) {
+        btn.classList.add('empty');
+        btn.textContent = (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+      } else {
+        btn.textContent = s.preview || (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+      }
+    }
+  } catch(e) {}
+}
+
+async function switchSlot(n) {
+  if (n === activeSlot) return;
+  if (sending) return;
+  activeSlot = n;
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (btn) btn.classList.toggle('active', i === n);
+  }
+  document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  try {
+    await fetch('/web/chat/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        slot: n,
+        model: currentModel(),
+        session_id: sessionId,
+      }),
+    });
+  } catch(e) {}
+  document.getElementById('chat').innerHTML = '';
+  await loadHistory();
+}""",
+    )
+    .replace(
+        "async function loadHistory() {\n  try {",
+        "async function loadHistory() {\n  await loadSlots();\n  try {",
+    )
+    .replace(
+        "  } catch(e) {}\n}\n\ncheckSession();",
+        "  } catch(e) {}\n  await loadSlots();\n}\n\ncheckSession();",
+    )
+    .replace(
+        "  document.getElementById('cancelbtn').style.display = 'block';",
+        """  document.getElementById('cancelbtn').style.display = 'block';
+  const slotbar = document.getElementById('slotbar');
+  if (slotbar) slotbar.classList.add('locked');""",
+    )
+    .replace(
+        """    document.getElementById('cancelbtn').style.display = 'none';
+    document.getElementById('agent-bar').classList.remove('active');""",
+        """    document.getElementById('cancelbtn').style.display = 'none';
+    const slotbar2 = document.getElementById('slotbar');
+    if (slotbar2) slotbar2.classList.remove('locked');
+    document.getElementById('agent-bar').classList.remove('active');""",
+    )
 )
+
+
+def _inject_client_slots_ui(html: str) -> str:
+    """Inject 3 local conversation slots for API-backed chat pages."""
+    return (
+        html
+        .replace(
+            "/* === Model selector === */",
+            """/* === Slot bar === */
+#slotbar{
+  display:flex;gap:6px;padding:4px 16px;
+  background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
+}
+#slotbar button{
+  flex:1;height:32px;border:1px solid #444;border-radius:6px;
+  background:transparent;color:var(--muted);font-size:12px;
+  font-family:var(--mono);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:border-color 0.15s,color 0.15s;
+}
+#slotbar button:hover{border-color:var(--accent);color:var(--text)}
+#slotbar button:active{transform:scale(0.95)}
+#slotbar button.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+#slotbar button.empty{color:#555;font-style:italic}
+#slotbar button.empty.active{color:var(--accent);font-style:normal}
+#slotbar.locked button{pointer-events:none;opacity:0.4}
+#slotbar.locked button.active{opacity:0.7}
+
+/* === Model selector === */""",
+        )
+        .replace(
+            '  <div id="agent-bar">',
+            """  <div id="slotbar">
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+  </div>
+
+  <div id="agent-bar">""",
+        )
+        .replace(
+            """function _persistSessionId(sid) {
+  if (sid && sid.startsWith('s-' + agentId)) {
+    localStorage.setItem(_sessionStoreKey(), sid);
+  }
+}""",
+            """function _persistSessionId(sid) {
+  if (sid && sid.startsWith('s-' + agentId)) {
+    localStorage.setItem(_sessionStoreKey(), sid);
+  }
+}
+
+let activeSlot = 1;
+
+function _slotLabel(n) {
+  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+}
+
+function _slotStateKey() {
+  return _sessionStoreKey() + '_slots_v1';
+}
+
+function _newSessionId() {
+  return 's-' + agentId + '-' + Date.now().toString(36);
+}
+
+function _loadSlotState() {
+  let state = {active_slot: 1, slots: {}};
+  try {
+    const raw = localStorage.getItem(_slotStateKey()) || '';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') state = parsed;
+    }
+  } catch(e) {}
+  const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const normalized = {};
+  for (let i = 1; i <= 3; i++) {
+    const sid = String(slots[String(i)] || '').trim();
+    normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+  }
+  let active = Number(state && state.active_slot);
+  if (active !== 1 && active !== 2 && active !== 3) active = 1;
+  return {active_slot: active, slots: normalized};
+}
+
+function _saveSlotState(state) {
+  try { localStorage.setItem(_slotStateKey(), JSON.stringify(state)); } catch(e) {}
+}
+
+function _ensureSlotState() {
+  const state = _loadSlotState();
+  const restored = _restoreSessionId();
+  if (!state.slots['1']) state.slots['1'] = restored || _newSessionId();
+  for (let i = 1; i <= 3; i++) {
+    if (!state.slots[String(i)]) state.slots[String(i)] = _newSessionId();
+  }
+  if (!state.slots[String(state.active_slot)]) state.active_slot = 1;
+  _saveSlotState(state);
+  return state;
+}
+
+function _setActiveSlotSession(sid) {
+  if (!sid || !sid.startsWith('s-' + agentId + '-')) return;
+  const state = _loadSlotState();
+  state.slots[String(activeSlot)] = sid;
+  state.active_slot = activeSlot;
+  _saveSlotState(state);
+}
+
+function _syncSlotButtons() {
+  const state = _loadSlotState();
+  activeSlot = state.active_slot;
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (!btn) continue;
+    btn.className = '';
+    btn.textContent = _slotLabel(i);
+    if (i === activeSlot) btn.classList.add('active');
+  }
+}
+
+async function switchSlot(n) {
+  if (n === activeSlot) return;
+  if (sending) return;
+  const state = _loadSlotState();
+  state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
+  if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
+  _saveSlotState(state);
+  activeSlot = state.active_slot;
+  sessionId = state.slots[String(activeSlot)];
+  _persistSessionId(sessionId);
+  _syncSlotButtons();
+  document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  await loadHistory();
+}""",
+        )
+        .replace(
+            "  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));\n  _persistSessionId(sessionId);",
+            """  const slotState = _ensureSlotState();
+  activeSlot = slotState.active_slot;
+  sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
+  _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();""",
+        )
+        .replace(
+            "async function loadHistory() {\n  try {",
+            "async function loadHistory() {\n  _syncSlotButtons();\n  try {",
+        )
+        .replace(
+            """    const data = await r.json();
+    if (data.session_id) {""",
+            """    const data = await r.json();
+    const chatEl = document.getElementById('chat');
+    if (chatEl) chatEl.innerHTML = '';
+    if (data.session_id) {""",
+        )
+        .replace(
+            """      sessionId = data.session_id;
+      _persistSessionId(sessionId);""",
+            """      sessionId = data.session_id;
+      _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);""",
+        )
+        .replace(
+            "  } catch(e) {}\n}\n\ncheckSession();",
+            "  } catch(e) {}\n  _syncSlotButtons();\n}\n\ncheckSession();",
+        )
+        .replace(
+            "  document.getElementById('cancelbtn').style.display = 'block';",
+            """  document.getElementById('cancelbtn').style.display = 'block';
+  const slotbar = document.getElementById('slotbar');
+  if (slotbar) slotbar.classList.add('locked');""",
+        )
+        .replace(
+            """    document.getElementById('cancelbtn').style.display = 'none';
+    document.getElementById('agent-bar').classList.remove('active');""",
+            """    document.getElementById('cancelbtn').style.display = 'none';
+    const slotbar2 = document.getElementById('slotbar');
+    if (slotbar2) slotbar2.classList.remove('locked');
+    document.getElementById('agent-bar').classList.remove('active');""",
+        )
+    )
+
+
+CHAT_GEMINI_HTML = _inject_client_slots_ui(CHAT_GEMINI_HTML)
+CHAT_CLAUDE_SDK_HTML = _inject_client_slots_ui(CHAT_CLAUDE_SDK_HTML)
 
 # ---------------------------------------------------------------------------
 # HTML — headless demo chat page (no setup, no downloads, headless Chrome)
@@ -6728,8 +7226,8 @@ body{
     <div class="left">
       <span class="agent" id="agentlabel"></span>
       <div class="status-stack">
-        <span class="status" id="agentstatus">chat agent offline</span>
-        <span class="status" id="bridgestatus">browser bridge offline</span>
+        <span class="status" id="agentstatus">agent offline</span>
+        <span class="status" id="bridgestatus">bridge offline</span>
       </div>
     </div>
     <div class="nav">
@@ -6742,9 +7240,9 @@ body{
   </div>
 
   <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Slot 1</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Slot 2</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Slot 3</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
   </div>
 
   <div id="agent-bar">
@@ -6759,7 +7257,6 @@ body{
       <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
     </div>
     <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
     <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
@@ -6975,7 +7472,6 @@ function updateAgentStatusUI(data) {
   const bannerDetail = document.getElementById('banner-detail');
   const bannerConnect = document.getElementById('banner-connect');
   const bannerCurl = document.getElementById('banner-curl');
-  const bannerZip = document.getElementById('banner-zip');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
   const chatConnected = !!data.chat_connected;
@@ -6986,21 +7482,20 @@ function updateAgentStatusUI(data) {
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
   if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
-  if (bannerZip) bannerZip.style.display = '';
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
     bannerMsg.textContent = 'Codex CLI requires an updated local chat agent package.';
   }
 
   if (bridgeConnected) {
-    updateStatusPill(bridgeEl, 'browser bridge online', 'online');
+    updateStatusPill(bridgeEl, 'bridge online', 'online');
   } else {
-    updateStatusPill(bridgeEl, 'browser bridge offline', '');
+    updateStatusPill(bridgeEl, 'bridge offline', '');
   }
 
   if (chatConnected) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
-    else updateStatusPill(chatEl, 'chat agent online', 'online');
+    else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
       if (banner) banner.style.display = 'none';
     } else {
@@ -7009,7 +7504,7 @@ function updateAgentStatusUI(data) {
       if (banner) banner.style.display = 'flex';
     }
   } else if (mismatch) {
-    updateStatusPill(chatEl, 'chat agent mismatch', 'warn');
+    updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
     if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
@@ -7018,11 +7513,11 @@ function updateAgentStatusUI(data) {
   } else {
     if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
     else if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
-    else updateStatusPill(chatEl, 'chat agent offline', '');
+    else updateStatusPill(chatEl, 'agent offline', '');
     if (bridgeConnected) {
       if (bannerDetail) bannerDetail.textContent = 'Browser bridge is online, so setup and browser control can still work on this machine.';
     } else if (bannerDetail) {
-      bannerDetail.textContent = 'Start the full local agent package to bring both browser bridge and chat agent online.';
+      bannerDetail.textContent = 'Start the full local agent package to bring both browser bridge and agent online.';
     }
     if (banner) banner.style.display = 'flex';
   }
@@ -7079,9 +7574,9 @@ async function loadSlots() {
       if (s.slot === activeSlot) btn.classList.add('active');
       if (s.empty) {
         btn.classList.add('empty');
-        btn.textContent = 'Slot ' + s.slot;
+        btn.textContent = (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
       } else {
-        btn.textContent = s.preview || ('Chat ' + s.slot);
+        btn.textContent = s.preview || (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
       }
     }
   } catch(e) {}
@@ -8300,6 +8795,14 @@ a{color:#93d5ff}
 @media (max-width:680px){
   h1{font-size:30px}
   .shell{padding-top:30px}
+  .pill{
+    border:none;
+    padding:0;
+    border-radius:0;
+    background:transparent;
+  }
+  .pill.online,
+  .pill.warn{border-color:transparent;background:transparent}
 }
 </style>
 </head>
@@ -8325,8 +8828,8 @@ a{color:#93d5ff}
         <span class="pill">Signed Installer Flow</span>
       </div>
       <div class="row" style="margin-top:10px">
-        <span class="pill" id="install-agentstatus">chat agent offline</span>
-        <span class="pill" id="install-bridgestatus">browser bridge offline</span>
+        <span class="pill" id="install-agentstatus">agent offline</span>
+        <span class="pill" id="install-bridgestatus">bridge offline</span>
       </div>
       <div class="note" id="install-runtime-status">Checking local agent status...</div>
 
@@ -8394,12 +8897,12 @@ function updateInstallAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
 
-  if (chatConnected) _setInstallPill('install-agentstatus', 'chat agent online', 'online');
-  else if (mismatch) _setInstallPill('install-agentstatus', 'chat agent mismatch', 'warn');
-  else _setInstallPill('install-agentstatus', 'chat agent offline', '');
+  if (chatConnected) _setInstallPill('install-agentstatus', 'agent online', 'online');
+  else if (mismatch) _setInstallPill('install-agentstatus', 'agent mismatch', 'warn');
+  else _setInstallPill('install-agentstatus', 'agent offline', '');
 
-  if (bridgeConnected) _setInstallPill('install-bridgestatus', 'browser bridge online', 'online');
-  else _setInstallPill('install-bridgestatus', 'browser bridge offline', '');
+  if (bridgeConnected) _setInstallPill('install-bridgestatus', 'bridge online', 'online');
+  else _setInstallPill('install-bridgestatus', 'bridge offline', '');
 
   if (chatConnected && bridgeConnected) {
     _setRuntimeStatus('Agent and browser bridge are online on this machine.', false);
@@ -9493,11 +9996,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 "claude_access_requested": False,
                 "is_admin": email.lower() in ADMIN_EMAILS,
             })
-            resp.set_cookie(
-                "uc_session", session_token,
-                max_age=JWT_EXPIRY_HOURS * 3600,
-                httponly=True, secure=True, samesite="Lax", path="/",
-            )
+            _set_session_cookie(resp, session_token, request)
             return resp
 
         if status == "pending":
@@ -9534,11 +10033,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                     "claude_access_requested": pending_user_type == "claude",
                     "is_admin": email.lower() in ADMIN_EMAILS,
                 })
-                resp.set_cookie(
-                    "uc_session", session_token,
-                    max_age=JWT_EXPIRY_HOURS * 3600,
-                    httponly=True, secure=True, samesite="Lax", path="/",
-                )
+                _set_session_cookie(resp, session_token, request)
                 return resp
 
             pending_user_type = existing.get("user_type", "claude")
@@ -9575,11 +10070,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "claude_access_requested": False,
             "is_admin": email.lower() in ADMIN_EMAILS,
         })
-        resp.set_cookie(
-            "uc_session", session_token,
-            max_age=JWT_EXPIRY_HOURS * 3600,
-            httponly=True, secure=True, samesite="Lax", path="/",
-        )
+        _set_session_cookie(resp, session_token, request)
 
         send_email(
             email,
@@ -9628,11 +10119,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
         "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
     })
     # Set session cookie so /auth/me can identify pending users
-    resp.set_cookie(
-        "uc_session", session_token,
-        max_age=JWT_EXPIRY_HOURS * 3600,
-        httponly=True, secure=True, samesite="Lax", path="/",
-    )
+    _set_session_cookie(resp, session_token, request)
     return resp
 
 
@@ -9704,7 +10191,7 @@ async def handle_request_claude_access(request: web.Request) -> web.Response:
 async def handle_logout(request: web.Request) -> web.Response:
     """POST /auth/logout — clear session cookie."""
     resp = web.json_response({"ok": True})
-    resp.del_cookie("uc_session", path="/")
+    _clear_session_cookie(resp, request)
     return resp
 
 
@@ -9727,15 +10214,7 @@ async def handle_dev_auth(request: web.Request) -> web.Response:
     agent_id = f"claude-{_key_hash(user['api_key'])}"
 
     resp = web.json_response({"ok": True, "agent_id": agent_id, "email": email})
-    resp.set_cookie(
-        "uc_session",
-        token,
-        path="/",
-        httponly=True,
-        secure=_cookie_secure(request),
-        samesite="Lax",
-        max_age=JWT_EXPIRY_HOURS * 3600,
-    )
+    _set_session_cookie(resp, token, request)
     return resp
 
 
@@ -9768,40 +10247,43 @@ async def handle_auth_me(request: web.Request) -> web.Response:
             "picture": user.get("picture", "") if user else "",
         })
 
-    # Check if there's a valid session cookie for a pending user
-    session_cookie = request.cookies.get("uc_session")
-    if session_cookie:
-        session = verify_session_token(session_cookie)
+    # Check for valid session cookies for pending users (also handles duplicate cookie names).
+    sessions: list[dict] = []
+    for token in _session_cookie_candidates(request):
+        session = verify_session_token(token)
         if session:
-            status = _auth.get_user_status(session["email"])
-            user = _auth.find_user_by_email(session["email"])
-            user_type = user.get("user_type", "claude") if user else "claude"
-            if status == "pending":
+            sessions.append(session)
+    sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
+    for session in sessions:
+        status = _auth.get_user_status(session["email"])
+        user = _auth.find_user_by_email(session["email"])
+        user_type = user.get("user_type", "claude") if user else "claude"
+        if status == "pending":
+            return web.json_response({
+                "authenticated": False,
+                "pending": True,
+                "status": "pending",
+                "user_type": user_type,
+                "claude_access_requested": user_type == "claude",
+            })
+        if status == "approved":
+            # User was just approved — re-check (they now have an api_key)
+            if user and user.get("api_key"):
+                api_key = user["api_key"]
+                agent_id = f"claude-{_key_hash(api_key)}"
                 return web.json_response({
-                    "authenticated": False,
-                    "pending": True,
-                    "status": "pending",
-                    "user_type": user_type,
-                    "claude_access_requested": user_type == "claude",
+                    "authenticated": True,
+                    "email": session["email"],
+                    "agent_id": agent_id,
+                    "user_type": user.get("user_type", "claude"),
+                    "status": "approved",
+                    "pending": False,
+                    "review_pending": False,
+                    "claude_access_requested": False,
+                    "is_admin": session["email"].lower() in ADMIN_EMAILS,
+                    "name": user.get("name", ""),
+                    "picture": user.get("picture", ""),
                 })
-            if status == "approved":
-                # User was just approved — re-check (they now have an api_key)
-                if user and user.get("api_key"):
-                    api_key = user["api_key"]
-                    agent_id = f"claude-{_key_hash(api_key)}"
-                    return web.json_response({
-                        "authenticated": True,
-                        "email": session["email"],
-                        "agent_id": agent_id,
-                        "user_type": user.get("user_type", "claude"),
-                        "status": "approved",
-                        "pending": False,
-                        "review_pending": False,
-                        "claude_access_requested": False,
-                        "is_admin": session["email"].lower() in ADMIN_EMAILS,
-                        "name": user.get("name", ""),
-                        "picture": user.get("picture", ""),
-                    })
 
     return web.json_response({"authenticated": False}, status=401)
 
@@ -10141,8 +10623,8 @@ body{
     <div class="left">
       <span class="title">Setup</span>
       <div class="status-stack">
-        <span class="status" id="setup-agentstatus">chat agent offline</span>
-        <span class="status" id="setup-bridgestatus">browser bridge offline</span>
+        <span class="status" id="setup-agentstatus">agent offline</span>
+        <span class="status" id="setup-bridgestatus">bridge offline</span>
       </div>
     </div>
     <div class="nav">
@@ -10158,7 +10640,6 @@ body{
       <span class="detail" id="setup-banner-detail">Start the installer to enable chat and browser control.</span>
     </div>
     <a href="#" onclick="showSetupInstallCmd();return false" id="setup-banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="setup-banner-zip">Download ZIP</a>
     <a href="/install" id="setup-banner-connect">Download Agent Installer</a>
   </div>
 
@@ -10370,12 +10851,12 @@ function updateSetupAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
 
-  if (bridgeConnected) updateSetupStatusPill(bridgeEl, 'browser bridge online', 'online');
-  else updateSetupStatusPill(bridgeEl, 'browser bridge offline', '');
+  if (bridgeConnected) updateSetupStatusPill(bridgeEl, 'bridge online', 'online');
+  else updateSetupStatusPill(bridgeEl, 'bridge offline', '');
 
-  if (chatConnected) updateSetupStatusPill(chatEl, 'chat agent online', 'online');
-  else if (mismatch) updateSetupStatusPill(chatEl, 'chat agent mismatch', 'warn');
-  else updateSetupStatusPill(chatEl, 'chat agent offline', '');
+  if (chatConnected) updateSetupStatusPill(chatEl, 'agent online', 'online');
+  else if (mismatch) updateSetupStatusPill(chatEl, 'agent mismatch', 'warn');
+  else updateSetupStatusPill(chatEl, 'agent offline', '');
 
   if (!banner) return;
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
