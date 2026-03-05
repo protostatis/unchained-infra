@@ -36,6 +36,7 @@ COPY unchained/signup_agent.py .
 COPY unchained/nudge.py .
 COPY unchained/reflex.py .
 COPY unchained/scheduled_tasks.py .
+COPY unchained/web_app/ web_app/
 COPY unchained/benchmark/__init__.py benchmark/__init__.py
 COPY unchained/benchmark/progress_critic.py benchmark/progress_critic.py
 COPY unchained/benchmark/intermediate_goal.py benchmark/intermediate_goal.py

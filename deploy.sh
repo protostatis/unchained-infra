@@ -12,6 +12,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
+PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
+PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
+
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"
 REMOTE_DIR="/home/$EC2_USER/unchained"
@@ -29,6 +34,38 @@ if [[ "${1:-}" == "--build" ]]; then
 fi
 
 echo "==> Deploying to $EC2_HOST"
+
+# Auto-install private core overlay when available.
+if [[ -x "$INSTALL_PRIVATE_CORE_SCRIPT" && -d "$PRIVATE_CORE_SRC" ]]; then
+    echo "==> Installing private core overlay..."
+    "$INSTALL_PRIVATE_CORE_SCRIPT" "$PRIVATE_CORE_SRC" "$PRIVATE_CORE_DST"
+else
+    echo "==> Private core auto-install skipped (set PRIVATE_CORE_SRC if needed)."
+fi
+
+# Prevent shipping public stubs to production by mistake.
+if grep -q "Run install_private_core.sh to overlay it." unchained/private_core_server.py 2>/dev/null; then
+    echo "ERROR: private core stubs detected in unchained/private_core_server.py" >&2
+    echo "Auto-install looked for private core at: $PRIVATE_CORE_SRC" >&2
+    echo "Set PRIVATE_CORE_SRC or run ./tools/install_private_core.sh before deploy." >&2
+    exit 1
+fi
+
+for f in \
+    unchained/cdp.py \
+    unchained/ddm.py \
+    unchained/intel.py \
+    unchained/private_core_engine.py \
+    unchained/private_core_contracts.py \
+    unchained/benchmark/progress_critic.py \
+    unchained/benchmark/intermediate_goal.py
+do
+    if grep -q "Public stub for proprietary" "$f" 2>/dev/null; then
+        echo "ERROR: private core stub detected in $f" >&2
+        echo "Run ./tools/install_private_core.sh before deploy." >&2
+        exit 1
+    fi
+done
 
 # Upload top-level files
 echo "==> Uploading config files..."
@@ -83,6 +120,13 @@ echo "==> Uploading Python modules..."
     unchained/benchmark/intermediate_goal.py \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
 
+# Upload modular web_app package extracted from web.py
+echo "==> Uploading web_app package..."
+"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/web_app/handlers"
+"${SCP_CMD[@]}" -r \
+    unchained/web_app/* \
+    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/web_app/"
+
 # Upload native installer assets
 echo "==> Uploading installer assets..."
 "${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/installers"
@@ -103,6 +147,11 @@ else
     "${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose up -d --build"
 fi
 
+# Refresh Caddy after upstream containers are recreated.
+# This avoids stale/no-such-host upstream resolution windows after deploys.
+echo "==> Restarting Caddy reverse proxy..."
+"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml restart caddy"
+
 # Show status
 echo ""
 echo "==> Container status:"
@@ -114,10 +163,14 @@ echo "==> Relay logs (last 5):"
 
 # Restore any overlaid files back to their committed state
 echo ""
-echo "==> Cleaning working tree..."
-git -C "$(dirname "$0")" checkout -- unchained/ 2>/dev/null \
-    && echo "    Working tree restored." \
-    || echo "    (skipped — not in a git repo or no changes)"
+if [[ "${DEPLOY_RESTORE_WORKTREE:-0}" == "1" ]]; then
+    echo "==> Cleaning working tree..."
+    git -C "$SCRIPT_DIR" checkout -- unchained/ 2>/dev/null \
+        && echo "    Working tree restored." \
+        || echo "    (skipped — not in a git repo or no changes)"
+else
+    echo "==> Keeping local worktree (set DEPLOY_RESTORE_WORKTREE=1 to restore stubs)."
+fi
 
 echo ""
 echo "==> Deploy complete!"
