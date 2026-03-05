@@ -151,6 +151,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("let _authFlowEpoch = 0;", trial)
         self.assertIn("let _authBusy = false;", trial)
         self.assertIn("if (_authBusy || _isStaleAuthFlow(flowEpoch)) return;", trial)
+        self.assertEqual(
+            trial.count("let activeSlot = 1;"),
+            1,
+            "TRIAL_CHAT_HTML should not duplicate slot runtime declarations",
+        )
 
 
 class TestWebCoreResolverContracts(unittest.TestCase):
