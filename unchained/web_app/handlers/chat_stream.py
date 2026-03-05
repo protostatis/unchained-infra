@@ -193,6 +193,20 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     elif not _session_owned(session_id):
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
 
+    core._track_event(
+        request,
+        "chat_message_send",
+        session_id=session_id,
+        route="/web/chat",
+        route_intended=body.get("route_intended", request.path),
+        route_effective=body.get("route_effective", request.path),
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        meta={"model": model or "", "headless": bool(body.get("headless", False))},
+        status_code=200,
+    )
+
     if is_gemini:
         import signup_agent
 

@@ -15,6 +15,8 @@ async def handle_download_agent(request: web.Request) -> web.Response:
     """GET /web/download-agent — download agent ZIP package."""
     core = _core()
     install_token = core._request_install_token(request)
+    auth_info = None
+    token_info = None
     if install_token:
         token_info = core._auth.validate_install_token(install_token, consume=False)
         if not token_info:
@@ -31,6 +33,21 @@ async def handle_download_agent(request: web.Request) -> web.Response:
         api_key="",
         relay_host="api.unchainedsky.com",
         install_token=install_token,
+    )
+    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+    user_type = auth_info.get("user_type", "") if auth_info else ""
+    core._track_event(
+        request,
+        "agent_zip_download_start",
+        route="/web/download-agent",
+        route_intended="/install",
+        route_effective="/web/download-agent",
+        cta_id="download_agent_zip",
+        user_id=user_id,
+        user_type=user_type,
+        source="web",
+        status_code=200,
+        meta={"channel": "install_token" if token_info else "session"},
     )
     return web.Response(
         body=zip_bytes,
@@ -49,6 +66,7 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     install_token = core._request_install_token(request)
     auth_info = None
+    token_info = None
     if install_token:
         token_info = core._auth.validate_install_token(install_token, consume=False)
         if not token_info:
@@ -60,6 +78,26 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     native_path = core._native_installer_path(platform)
     if native_path:
+        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+        user_type = auth_info.get("user_type", "") if auth_info else ""
+        core._track_event(
+            request,
+            "installer_download_start",
+            route="/web/download-installer",
+            route_intended="/install",
+            route_effective="/web/download-installer",
+            cta_id=f"download_installer_{platform}",
+            user_id=user_id,
+            user_type=user_type,
+            source="web",
+            status_code=200,
+            meta={
+                "platform": platform,
+                "artifact": "native",
+                "filename": native_path.name,
+                "channel": "install_token" if token_info else "session",
+            },
+        )
         return web.FileResponse(
             path=native_path,
             headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
@@ -67,6 +105,20 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     if not core._ALLOW_SCRIPT_INSTALLER_FALLBACK:
         expected_assets = core._native_installer_candidates(platform)
+        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+        core._track_event(
+            request,
+            "installer_download_fail",
+            route="/web/download-installer",
+            route_intended="/install",
+            route_effective="/web/download-installer",
+            cta_id=f"download_installer_{platform}",
+            error_code="native_installer_missing",
+            user_id=user_id,
+            source="web",
+            status_code=503,
+            meta={"platform": platform, "expected_assets": expected_assets},
+        )
         return web.json_response(
             {
                 "error": "Native installer is not configured for this OS.",
@@ -95,6 +147,26 @@ async def handle_download_installer(request: web.Request) -> web.Response:
         if platform == "windows"
         else "unchained-installer-mac.sh"
     )
+    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+    user_type = auth_info.get("user_type", "") if auth_info else ""
+    core._track_event(
+        request,
+        "installer_download_start",
+        route="/web/download-installer",
+        route_intended="/install",
+        route_effective="/web/download-installer",
+        cta_id=f"download_installer_{platform}",
+        user_id=user_id,
+        user_type=user_type,
+        source="web",
+        status_code=200,
+        meta={
+            "platform": platform,
+            "artifact": "script_fallback",
+            "filename": filename,
+            "channel": "install_token" if token_info else "session",
+        },
+    )
     return web.Response(
         text=script,
         content_type="text/plain",
@@ -120,6 +192,19 @@ async def handle_install_token(request: web.Request) -> web.Response:
     )
     mac_native = core._native_installer_path("mac") is not None
     windows_native = core._native_installer_path("windows") is not None
+    core._track_event(
+        request,
+        "install_token_issued",
+        route="/web/install-token",
+        route_intended="/install",
+        route_effective="/web/install-token",
+        cta_id="install_token",
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"native_available": {"mac": mac_native, "windows": windows_native}},
+    )
     return web.json_response(
         {
             "curl_command": curl_command,
@@ -228,6 +313,17 @@ async def handle_install_claim_start(request: web.Request) -> web.Response:
             "expires_at": now + core._INSTALL_CLAIM_TTL,
             "install_token": "",
         }
+    core._track_event(
+        request,
+        "install_claim_start",
+        route="/web/install/claim/start",
+        route_intended="/install",
+        route_effective="/web/install/claim/start",
+        cta_id="install_claim_start",
+        source="web",
+        status_code=200,
+        meta={"claim_id_prefix": claim_id[:6]},
+    )
     return web.json_response(
         {"status": "pending", "claim_id": claim_id, "expires_in": core._INSTALL_CLAIM_TTL}
     )
@@ -263,6 +359,19 @@ async def handle_install_claim_approve(request: web.Request) -> web.Response:
             claim.get("expires_at", now + core._INSTALL_CLAIM_TTL),
             now + core._INSTALL_CLAIM_TTL,
         )
+    core._track_event(
+        request,
+        "install_claim_approve",
+        route="/web/install/claim/approve",
+        route_intended="/install",
+        route_effective="/web/install/claim/approve",
+        cta_id="install_claim_approve",
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"claim_id_prefix": claim_id[:6]},
+    )
     return web.json_response({"status": "approved"})
 
 
@@ -291,6 +400,17 @@ async def handle_install_claim_poll(request: web.Request) -> web.Response:
         install_token = str(claim.get("install_token", "")).strip()
         if install_token:
             core._install_claims.pop(claim_id, None)
+            core._track_event(
+                request,
+                "install_claim_poll_approved",
+                route="/web/install/claim/poll",
+                route_intended="/install",
+                route_effective="/web/install/claim/poll",
+                cta_id="install_claim_poll",
+                source="web",
+                status_code=200,
+                meta={"claim_id_prefix": claim_id[:6]},
+            )
             return web.json_response({"status": "approved", "install_token": install_token})
         expires_at = float(claim.get("expires_at", now))
     return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
@@ -302,16 +422,56 @@ async def handle_install_bootstrap(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
+        core._track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="invalid_json_body",
+            source="web",
+            status_code=400,
+        )
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     token = str(body.get("token", "")).strip()
     if not token:
+        core._track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="missing_token",
+            source="web",
+            status_code=400,
+        )
         return web.json_response({"error": "token required"}, status=400)
 
     token_info = core._auth.validate_install_token(token, consume=True)
     if not token_info:
+        core._track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="invalid_or_expired_token",
+            source="web",
+            status_code=401,
+        )
         return web.json_response({"error": "Invalid or expired install token"}, status=401)
 
+    core._track_event(
+        request,
+        "install_bootstrap_success",
+        route="/web/install/bootstrap",
+        route_intended="/install",
+        route_effective="/web/install/bootstrap",
+        user_id=token_info.get("user_id", ""),
+        source="web",
+        status_code=200,
+    )
     return web.json_response({"api_key": token_info["api_key"]})
 
 

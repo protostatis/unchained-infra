@@ -126,6 +126,19 @@ async def handle_provision_start(request: web.Request) -> web.Response:
     last = core._provision_cooldowns.get(user_id, 0)
     if time.time() - last < core._PROVISION_COOLDOWN_SECS:
         remaining = int(core._PROVISION_COOLDOWN_SECS - (time.time() - last))
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="cooldown_active",
+            status_code=429,
+            meta={"remaining_s": remaining},
+        )
         return web.json_response(
             {"error": f"Please wait {remaining}s before starting another provision."},
             status=429,
@@ -138,11 +151,36 @@ async def handle_provision_start(request: web.Request) -> web.Response:
 
     provider = body.get("provider", "").strip().lower()
     if not provider:
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="provider_required",
+            status_code=400,
+        )
         return web.json_response({"error": "provider required"}, status=400)
 
     import signup_agent
 
     if provider not in signup_agent.list_providers():
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="unknown_provider",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response(
             {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
             status=400,
@@ -156,9 +194,47 @@ async def handle_provision_start(request: web.Request) -> web.Response:
 
         chrome_dir = _sa._chrome_user_data_dir()
         if not chrome_dir:
+            core._track_event(
+                request,
+                "provision_fail",
+                route="/web/provision/start",
+                route_intended="/setup",
+                route_effective="/web/provision/start",
+                user_id=user_id,
+                user_type=auth_info.get("user_type", ""),
+                source="web",
+                error_code="chrome_data_dir_missing",
+                status_code=400,
+            )
             return web.json_response({"error": "Chrome user data directory not found"}, status=400)
         if not core.provision_helpers.is_profile_path_within(profile_path, chrome_dir):
+            core._track_event(
+                request,
+                "provision_fail",
+                route="/web/provision/start",
+                route_intended="/setup",
+                route_effective="/web/provision/start",
+                user_id=user_id,
+                user_type=auth_info.get("user_type", ""),
+                source="web",
+                error_code="invalid_profile_path",
+                status_code=403,
+            )
             return web.json_response({"error": "Invalid profile path"}, status=403)
+
+    core._track_event(
+        request,
+        "provision_start",
+        route="/web/provision/start",
+        route_intended="/setup",
+        route_effective="/web/provision/start",
+        cta_id=f"provision_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider, "use_relay": bool(use_relay)},
+    )
 
     core._provision_cooldowns[user_id] = time.time()
 
@@ -206,6 +282,30 @@ async def handle_provision_start(request: web.Request) -> web.Response:
             if chat_url:
                 resp["chat_url"] = chat_url
 
+    event_name = "provision_fail"
+    if result.status in (signup_agent.ProvisionStatus.SUCCESS, signup_agent.ProvisionStatus.ALREADY_EXISTS):
+        event_name = "provision_success"
+    core._track_event(
+        request,
+        event_name,
+        route="/web/provision/start",
+        route_intended="/setup",
+        route_effective="/web/provision/start",
+        cta_id=f"provision_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        error_code="" if event_name == "provision_success" else result.status.value,
+        latency_ms=int(result.duration_ms or 0),
+        meta={
+            "provider": provider,
+            "status": result.status.value,
+            "duration_ms": int(result.duration_ms or 0),
+            "use_relay": bool(use_relay),
+            "has_key": bool(result.api_key),
+        },
+    )
     return web.json_response(resp)
 
 
@@ -245,12 +345,39 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     user_id = auth_info["user_id"]
     pending = core._pending_provision.pop(user_id, None)
     if not pending:
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/confirm",
+            route_intended="/setup",
+            route_effective="/web/provision/confirm",
+            cta_id="provision_confirm",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="no_pending_key",
+            status_code=400,
+        )
         return web.json_response(
             {"error": "No pending key to confirm (expired or already stored)"}, status=400
         )
 
     provider, api_key, ts = pending
     if time.time() - ts > core._PENDING_PROVISION_TTL:
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/confirm",
+            route_intended="/setup",
+            route_effective="/web/provision/confirm",
+            cta_id=f"provision_confirm_{provider}",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="pending_key_expired",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response({"error": "Pending key expired. Please provision again."}, status=400)
 
     import signup_agent
@@ -264,6 +391,19 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     if chat_url:
         resp["chat_url"] = chat_url
 
+    core._track_event(
+        request,
+        "provision_confirm",
+        route="/web/provision/confirm",
+        route_intended="/setup",
+        route_effective="/web/provision/confirm",
+        cta_id=f"provision_confirm_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider},
+    )
     return web.json_response(resp)
 
 
@@ -284,14 +424,55 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     provider = body.get("provider", "").strip().lower()
     api_key = body.get("api_key", "").strip()
     if not provider or not api_key:
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id="provision_manual_save",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="provider_or_key_missing",
+            status_code=400,
+        )
         return web.json_response({"error": "provider and api_key required"}, status=400)
     key_error = core.provision_helpers.validate_manual_api_key(api_key)
     if key_error:
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id=f"provision_manual_{provider}",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="manual_key_invalid",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response({"error": key_error}, status=400)
 
     import signup_agent
 
     if provider not in signup_agent.list_providers():
+        core._track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id=f"provision_manual_{provider}",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="unknown_provider",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response(
             {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
             status=400,
@@ -306,6 +487,19 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     if chat_url:
         resp["chat_url"] = chat_url
 
+    core._track_event(
+        request,
+        "provision_manual_save",
+        route="/web/provision/save-manual",
+        route_intended="/setup",
+        route_effective="/web/provision/save-manual",
+        cta_id=f"provision_manual_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider},
+    )
     return web.json_response(resp)
 
 
@@ -333,5 +527,19 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
     revoked = signup_agent.revoke_provider_key(user_id, provider)
 
     core._terminate_provider_agent(provider, auth_info["key_hash"])
+
+    core._track_event(
+        request,
+        "provision_revoke",
+        route="/web/provision/revoke",
+        route_intended="/setup",
+        route_effective="/web/provision/revoke",
+        cta_id=f"provision_revoke_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider, "revoked": bool(revoked)},
+    )
 
     return web.json_response({"revoked": revoked, "provider": provider})
