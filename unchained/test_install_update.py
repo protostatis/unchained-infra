@@ -72,6 +72,10 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/install/claim/" in start_ps1
         assert "GetFolderPath(\"Startup\")" in start_ps1
         assert "Autostart: enabled at Windows login" in start_ps1
+        assert "Install-PythonRuntime" in start_ps1
+        assert "python.org/ftp/python/" in start_ps1
+        assert '$venvDir = Join-Path $PSScriptRoot ".venv"' in start_ps1
+        assert '$pythonPrefixArgs += $pythonInfo.Prefix' in start_ps1
         # .env still there
         assert "unchained-agent/.env" in names
         env = zf.read("unchained-agent/.env").decode()
@@ -137,6 +141,10 @@ def test_generate_windows_install_script():
     assert "download-agent?install_token=" not in script, "install token should not be passed in URL query"
     assert "Invoke-WebRequest" in script
     assert "start.ps1" in script
+    assert "Install-PythonRuntime" in script
+    assert "python.org/ftp/python/" in script
+    assert '$venvDir = Join-Path $installDir ".venv"' in script
+    assert '$pythonPrefixArgs += $pythonInfo.Prefix' in script
     print(f"  Windows install script: {len(script)} chars")
 
 
@@ -673,6 +681,29 @@ def test_trial_chat_has_admin_custom_openrouter_model():
     print("  Trial chat has admin custom OpenRouter model input")
 
 
+def test_codex_chat_has_three_slot_ui():
+    """Verify Codex chat page includes the same 3-slot controls as local CLI chat."""
+    from web import CHAT_CODEX_HTML
+    assert 'id="slotbar"' in CHAT_CODEX_HTML, "Codex chat should include slot bar"
+    assert "switchSlot(1)" in CHAT_CODEX_HTML and "switchSlot(2)" in CHAT_CODEX_HTML and "switchSlot(3)" in CHAT_CODEX_HTML, \
+        "Codex chat should expose 3 switchSlot buttons"
+    assert "/web/chat/slots" in CHAT_CODEX_HTML, "Codex chat should load slot state from backend"
+    assert "/web/chat/switch" in CHAT_CODEX_HTML, "Codex chat should switch slot through backend"
+    print("  Codex chat includes 3-slot UI + backend slot calls")
+
+
+def test_chat_agent_codex_supports_slot_protocol():
+    """Verify server-side Codex agent supports get_slots/switch_slot/new_chat semantics."""
+    source_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_agent_codex.py")
+    with open(source_path) as f:
+        source = f.read()
+    assert "SLOT_COUNT = 3" in source, "Codex agent should define 3-slot support"
+    assert 'elif msg.get("type") == "switch_slot"' in source, "Codex agent should handle switch_slot requests"
+    assert 'elif msg.get("type") == "get_slots"' in source, "Codex agent should handle get_slots requests"
+    assert "_get_slots_info" in source, "Codex agent should compute slot previews/state"
+    print("  Codex agent supports 3-slot chat protocol")
+
+
 def test_trial_chat_has_claude_access_request_flow():
     """Verify trial chat exposes a CTA to request Claude access while pending."""
     from web import TRIAL_CHAT_HTML
@@ -901,6 +932,8 @@ if __name__ == "__main__":
         ("web: ADMIN_HTML shows OpenRouter spend column", test_admin_page_shows_openrouter_spend_column),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
+        ("web: CHAT_CODEX_HTML has 3-slot UI", test_codex_chat_has_three_slot_ui),
+        ("codex agent: supports slot protocol", test_chat_agent_codex_supports_slot_protocol),
         ("web: TRIAL_CHAT_HTML has Claude access request flow", test_trial_chat_has_claude_access_request_flow),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
