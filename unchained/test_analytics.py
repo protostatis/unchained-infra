@@ -7,6 +7,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from analytics import AnalyticsStore
 
@@ -154,6 +155,70 @@ class TestAnalyticsStore(unittest.TestCase):
             store.track("page_view", request=req, route="/trial", now=now - (86400.0 * 200))
             deleted = store.cleanup_old_events(keep_days=90)
             self.assertEqual(deleted, 1)
+
+
+class _FakeRequest:
+    def __init__(self, body, path="/web/analytics/event"):
+        self._body = body
+        self.path = path
+        self.remote = "10.0.0.99"
+        self.headers = {}
+        self.query = {}
+
+    async def json(self):
+        return self._body
+
+
+class TestAnalyticsHandlers(unittest.IsolatedAsyncioTestCase):
+    async def test_event_ingest_is_rate_limited(self):
+        from web_app.handlers import analytics as analytics_handlers
+
+        class _Core:
+            def _analytics_ingest_allow(self, request, units=1):
+                del request, units
+                return False, 9
+
+            def _coerce_analytics_event_payload(self, raw, request):
+                del raw, request
+                return None, "should_not_reach"
+
+        with patch.object(analytics_handlers, "_core", return_value=_Core()):
+            resp = await analytics_handlers.handle_analytics_event(
+                _FakeRequest({"event": "page_view"})
+            )
+        self.assertEqual(resp.status, 429)
+        self.assertEqual(resp.headers.get("Retry-After"), "9")
+
+    async def test_batch_ingest_uses_event_count_for_rate_units(self):
+        from web_app.handlers import analytics as analytics_handlers
+
+        seen: dict[str, int] = {}
+
+        class _Core:
+            def _analytics_ingest_allow(self, request, units=1):
+                del request
+                seen["units"] = int(units)
+                return False, 4
+
+            def _coerce_analytics_event_payload(self, raw, request):
+                del raw, request
+                return None, "should_not_reach"
+
+        with patch.object(analytics_handlers, "_core", return_value=_Core()):
+            resp = await analytics_handlers.handle_analytics_events(
+                _FakeRequest(
+                    {
+                        "events": [
+                            {"event": "page_view"},
+                            {"event": "gate_shown"},
+                            {"event": "cta_click"},
+                        ]
+                    },
+                    path="/web/analytics/events",
+                )
+            )
+        self.assertEqual(resp.status, 429)
+        self.assertEqual(seen.get("units"), 3)
 
 
 if __name__ == "__main__":

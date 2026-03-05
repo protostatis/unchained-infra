@@ -33,6 +33,7 @@ from aiohttp import web
 from analytics import AnalyticsStore
 from auth import Auth
 import provision_helpers
+from rate_limit import SlidingWindowRateLimiter
 from template_utils import inject_google_client_id
 from web_state import ChatRuntimeState
 from web_app.cmd_dispatch import (
@@ -62,8 +63,25 @@ from web_app.templates import (
 
 log = logging.getLogger(__name__)
 
+
+def _resolve_analytics_db_path(auth_db_path: str) -> str:
+    """Use a dedicated analytics DB by default to isolate auth DB contention."""
+    configured = os.environ.get("UNCHAINED_ANALYTICS_DB_PATH", "").strip()
+    if configured:
+        return configured
+    auth_path = Path(auth_db_path).expanduser()
+    return str(auth_path.with_name("analytics.db"))
+
+
 _auth = Auth()
-_analytics = AnalyticsStore(db_path=_auth.db_path)
+_analytics = AnalyticsStore(db_path=_resolve_analytics_db_path(_auth.db_path))
+_analytics_ingest_limiter = SlidingWindowRateLimiter()
+_ANALYTICS_INGEST_LIMIT = max(
+    1, int(os.environ.get("ANALYTICS_INGEST_LIMIT", "120"))
+)
+_ANALYTICS_INGEST_WINDOW_S = max(
+    1.0, float(os.environ.get("ANALYTICS_INGEST_WINDOW_S", "60"))
+)
 
 # Google OAuth config (from env)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -679,6 +697,22 @@ def _request_source_ip(request: web.Request) -> str:
         if source:
             return source
     return (request.remote or "unknown").strip() or "unknown"
+
+
+def _analytics_ingest_allow(request: web.Request, units: int = 1) -> tuple[bool, int]:
+    """Rate-limit public analytics ingest endpoints per source IP."""
+    units = max(1, int(units or 1))
+    key = f"analytics:{_request_source_ip(request)}"
+    retry_after = 0
+    for _ in range(units):
+        allowed, retry_after = _analytics_ingest_limiter.allow(
+            key,
+            _ANALYTICS_INGEST_LIMIT,
+            _ANALYTICS_INGEST_WINDOW_S,
+        )
+        if not allowed:
+            return False, retry_after
+    return True, 0
 
 
 def _host_from_request(request: web.Request) -> str:

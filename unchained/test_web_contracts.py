@@ -187,5 +187,19 @@ class TestWebCoreResolverContracts(unittest.TestCase):
             self.assertIs(get_core(), fake_web)
 
 
+class TestWebAnalyticsIsolationContracts(unittest.TestCase):
+    def test_analytics_db_isolated_from_auth_db_by_default(self):
+        configured = os.environ.get("UNCHAINED_ANALYTICS_DB_PATH", "").strip()
+        if configured:
+            self.skipTest("explicit analytics DB path configured via env")
+        auth_db = os.path.abspath(web._auth.db_path)
+        analytics_db = os.path.abspath(web._analytics.db_path)
+        self.assertNotEqual(
+            auth_db,
+            analytics_db,
+            "analytics writes should not use the auth/session SQLite file",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

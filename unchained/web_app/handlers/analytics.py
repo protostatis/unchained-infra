@@ -21,6 +21,13 @@ async def handle_analytics_event(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
+    allowed, retry_after = core._analytics_ingest_allow(request, units=1)
+    if not allowed:
+        return web.json_response(
+            {"error": "Rate limit exceeded", "retry_after": retry_after},
+            status=429,
+            headers={"Retry-After": str(retry_after)},
+        )
     payload, error = core._coerce_analytics_event_payload(body, request)
     if error:
         return web.json_response({"error": error}, status=400)
@@ -62,6 +69,13 @@ async def handle_analytics_events(request: web.Request) -> web.Response:
         return web.json_response({"error": "events must be an array"}, status=400)
     if len(events) > 100:
         return web.json_response({"error": "events length max is 100"}, status=400)
+    allowed, retry_after = core._analytics_ingest_allow(request, units=max(1, len(events)))
+    if not allowed:
+        return web.json_response(
+            {"error": "Rate limit exceeded", "retry_after": retry_after},
+            status=429,
+            headers={"Retry-After": str(retry_after)},
+        )
 
     accepted = 0
     rejected = 0
