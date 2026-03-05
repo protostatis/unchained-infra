@@ -1890,6 +1890,22 @@ let _openrouterUsage = null;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
+let _authFlowEpoch = 0;
+let _authBusy = false;
+
+function _beginAuthFlow() {
+  _authFlowEpoch += 1;
+  _authBusy = true;
+  return _authFlowEpoch;
+}
+
+function _endAuthFlow(epoch) {
+  if (epoch === _authFlowEpoch) _authBusy = false;
+}
+
+function _isStaleAuthFlow(epoch) {
+  return epoch !== _authFlowEpoch;
+}
 
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
@@ -1920,6 +1936,7 @@ function _applyAuthState(data) {
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
   errEl.textContent = '';
+  const flowEpoch = _beginAuthFlow();
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
@@ -1928,6 +1945,7 @@ async function handleGoogleCredential(response) {
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
+    if (_isStaleAuthFlow(flowEpoch)) return;
     _applyAuthState(data);
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     // Confirm the cookie-backed session is readable before leaving login UI.
@@ -1938,6 +1956,7 @@ async function handleGoogleCredential(response) {
           cache: 'no-store',
         });
         const me = await meResp.json();
+        if (_isStaleAuthFlow(flowEpoch)) return;
         _applyAuthState(me);
         if (me.authenticated) {
           agentId = me.agent_id || data.agent_id || '';
@@ -1964,31 +1983,39 @@ async function handleGoogleCredential(response) {
     }
     errEl.textContent = 'Sign-in succeeded, but session was not established. Refresh and try again.';
   } catch(e) { errEl.textContent = e.message; }
+  finally { _endAuthFlow(flowEpoch); }
 }
 
 async function checkSession() {
+  if (_authBusy) return;
+  const flowEpoch = _authFlowEpoch;
   try {
     const r = await fetch('/auth/me', {
       credentials: 'include',
       cache: 'no-store',
     });
     const data = await r.json();
+    if (_authBusy || _isStaleAuthFlow(flowEpoch)) return;
     _applyAuthState(data);
     if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
     if (data.pending || data.status === 'pending') { showPending(); return; }
   } catch(e) {}
+  if (_authBusy || _isStaleAuthFlow(flowEpoch)) return;
   document.getElementById('login').style.display = 'flex';
 }
 
 async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
+  if (_authBusy) return;
+  const flowEpoch = _authFlowEpoch;
   try {
     const r = await fetch('/auth/me', {
       credentials: 'include',
       cache: 'no-store',
     });
     const data = await r.json();
+    if (_authBusy || _isStaleAuthFlow(flowEpoch)) return;
     _applyAuthState(data);
     if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
     if (data.pending || data.status === 'pending') {
@@ -2000,6 +2027,8 @@ async function checkApproval() {
 }
 
 async function doDisconnect() {
+  _authFlowEpoch += 1;
+  _authBusy = false;
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';

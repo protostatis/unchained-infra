@@ -148,6 +148,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn("if (data.pending || data.status === 'pending')", trial)
         self.assertIn("Sign-in succeeded, but session was not established.", trial)
+        self.assertIn("let _authFlowEpoch = 0;", trial)
+        self.assertIn("let _authBusy = false;", trial)
+        self.assertIn("if (_authBusy || _isStaleAuthFlow(flowEpoch)) return;", trial)
 
 
 class TestWebCoreResolverContracts(unittest.TestCase):
