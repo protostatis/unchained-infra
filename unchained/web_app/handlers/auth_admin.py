@@ -14,18 +14,43 @@ async def handle_google_auth(request: web.Request) -> web.Response:
     """POST /auth/google — verify Google ID token, create session."""
     core = _core()
     body = await request.json()
+    source = str(body.get("source", "claude")).strip().lower() or "claude"
+    if source not in {"trial", "claude"}:
+        source = "claude"
+    core._track_event(
+        request,
+        "auth_google_attempt",
+        source=source,
+        meta={"source": source},
+        status_code=200,
+    )
     id_token = body.get("credential", "")
     if not id_token:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_credential",
+            meta={"source": source, "reason": "missing_credential"},
+            status_code=400,
+        )
         return web.json_response({"error": "Missing credential"}, status=400)
 
     payload = await core.verify_google_token(id_token)
     if payload is None:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="invalid_google_token",
+            meta={"source": source, "reason": "invalid_google_token"},
+            status_code=401,
+        )
         return web.json_response({"error": "Invalid Google token"}, status=401)
 
     email = payload.get("email", "").lower()
     name = payload.get("name", "")
     picture = payload.get("picture", "")
-    source = body.get("source", "claude")
     user_type = "trial" if source == "trial" else "claude"
 
     existing = core._auth.find_user_by_email(email)
@@ -54,6 +79,15 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 }
             )
             core._set_session_cookie(resp, session_token, request)
+            core._track_event(
+                request,
+                "auth_google_success",
+                user_id=user["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                meta={"source": source, "status": "approved", "existing": True},
+                status_code=200,
+            )
             return resp
 
         if status == "pending":
@@ -95,9 +129,27 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                     }
                 )
                 core._set_session_cookie(resp, session_token, request)
+                core._track_event(
+                    request,
+                    "auth_google_success",
+                    user_id=existing["user_id"],
+                    user_type=pending_user_type,
+                    source=source,
+                    meta={"source": source, "status": "pending", "existing": True},
+                    status_code=200,
+                )
                 return resp
 
             pending_user_type = existing.get("user_type", "claude")
+            core._track_event(
+                request,
+                "auth_google_pending",
+                user_id=existing["user_id"],
+                user_type=pending_user_type,
+                source=source,
+                meta={"source": source, "status": "pending", "existing": True},
+                status_code=200,
+            )
             return web.json_response(
                 {
                     "pending": True,
@@ -109,6 +161,16 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             )
 
         if status == "rejected":
+            core._track_event(
+                request,
+                "auth_google_fail",
+                user_id=existing["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                error_code="rejected",
+                meta={"source": source, "reason": "rejected"},
+                status_code=403,
+            )
             return web.json_response(
                 {"error": "Your sign-up request was not approved."}, status=403
             )
@@ -140,6 +202,24 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             }
         )
         core._set_session_cookie(resp, session_token, request)
+        core._track_event(
+            request,
+            "signup_created",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending"},
+            status_code=200,
+        )
+        core._track_event(
+            request,
+            "auth_google_success",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending", "new_user": True},
+            status_code=200,
+        )
 
         core.send_email(
             email,
@@ -187,6 +267,24 @@ async def handle_google_auth(request: web.Request) -> web.Response:
         }
     )
     core._set_session_cookie(resp, session_token, request)
+    core._track_event(
+        request,
+        "signup_created",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending"},
+        status_code=200,
+    )
+    core._track_event(
+        request,
+        "auth_google_pending",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending", "new_user": True},
+        status_code=200,
+    )
     return resp
 
 
@@ -446,8 +544,10 @@ async def handle_admin_users(request: web.Request) -> web.Response:
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
     core = _core()
+    core._track_page_view(request)
     auth_info = core._authenticate(request)
     if core._is_pending_user(auth_info):
+        core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
     html = core.inject_google_client_id(core.SETUP_HTML, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -456,19 +556,24 @@ async def handle_setup_page(request: web.Request) -> web.Response:
 async def handle_admin_page(request: web.Request) -> web.Response:
     """GET /admin — serve the admin UI."""
     core = _core()
-    del request
-    return web.Response(text=core.ADMIN_HTML, content_type="text/html")
+    core._track_page_view(request)
+    html = core.inject_google_client_id(core.ADMIN_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_scheduler_page(request: web.Request) -> web.Response:
     """GET /scheduler — authenticated scheduler editor UI."""
     core = _core()
+    core._track_page_view(request)
     auth_info = core._authenticate(request)
     if auth_info is None:
+        core._track_redirect(request, "/app", reason="scheduler_requires_auth")
         raise web.HTTPFound("/app")
     if core._is_pending_user(auth_info):
+        core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    return web.Response(text=core.SCHEDULER_HTML, content_type="text/html")
+    html = core.inject_google_client_id(core.SCHEDULER_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_scheduler_jobs(request: web.Request) -> web.Response:

@@ -30,6 +30,7 @@ import httpx
 import jwt
 from aiohttp import web
 
+from analytics import AnalyticsStore
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
@@ -62,6 +63,7 @@ from web_app.templates import (
 log = logging.getLogger(__name__)
 
 _auth = Auth()
+_analytics = AnalyticsStore(db_path=_auth.db_path)
 
 # Google OAuth config (from env)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -211,6 +213,178 @@ def _trace(event: str, **fields):
         parts.append(f"{k}={v}")
     suffix = " " + " ".join(parts) if parts else ""
     log.info("[trace] %s%s", event, suffix)
+
+
+_ANALYTICS_PAGE_VIEW_ROUTES = {
+    "/",
+    "/case-study/zillow-rental",
+    "/trial",
+    "/local",
+    "/setup",
+    "/install",
+    "/demo",
+    "/chat-gemini",
+    "/chat-codex",
+    "/chat-claude",
+    "/app",
+    "/scheduler",
+    "/admin",
+}
+_ANALYTICS_INLINE_GSI_ROUTES = {
+    "/trial",
+    "/local",
+    "/setup",
+    "/demo",
+    "/chat-gemini",
+    "/chat-codex",
+    "/chat-claude",
+}
+_ANALYTICS_LINK_GATE_ROUTES = {
+    "/install",
+}
+_analytics_last_cleanup_ts = 0.0
+
+
+def _analytics_maybe_cleanup():
+    global _analytics_last_cleanup_ts
+    now = time.time()
+    if now - _analytics_last_cleanup_ts < 3600:
+        return
+    _analytics_last_cleanup_ts = now
+    try:
+        _analytics.cleanup_old_events()
+    except Exception as e:
+        log.warning("[analytics] cleanup failed: %s", e)
+
+
+def _track_event(
+    request: web.Request,
+    event: str,
+    *,
+    event_id: str = "",
+    session_id: str = "",
+    page_view_id: str = "",
+    route: str = "",
+    route_intended: str = "",
+    route_effective: str = "",
+    gate_type: str = "",
+    cta_id: str = "",
+    error_code: str = "",
+    user_id: str = "",
+    user_type: str = "",
+    source: str = "",
+    status_code: int = 0,
+    latency_ms: int = 0,
+    meta: dict | None = None,
+    dedupe_ttl_s: float = 0.0,
+):
+    try:
+        _analytics_maybe_cleanup()
+        return _analytics.track(
+            event,
+            request=request,
+            event_id=event_id,
+            session_id=session_id,
+            page_view_id=page_view_id,
+            route=route,
+            route_intended=route_intended,
+            route_effective=route_effective,
+            gate_type=gate_type,
+            cta_id=cta_id,
+            error_code=error_code,
+            user_id=user_id,
+            user_type=user_type,
+            source=source,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            meta=meta,
+            dedupe_ttl_s=dedupe_ttl_s,
+        )
+    except Exception as e:
+        log.warning("[analytics] event=%s failed: %s", event, e)
+        return False
+
+
+def _track_page_view(request: web.Request):
+    route = request.path
+    if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
+        return
+    gate_type = ""
+    if route in _ANALYTICS_INLINE_GSI_ROUTES:
+        gate_type = "inline_gsi"
+    elif route in _ANALYTICS_LINK_GATE_ROUTES:
+        gate_type = "link_signin"
+    _track_event(
+        request,
+        "page_view",
+        route=route,
+        route_intended=route,
+        route_effective=route,
+        gate_type=gate_type,
+        source="web",
+        status_code=200,
+        dedupe_ttl_s=5.0,
+    )
+
+
+def _track_redirect(
+    request: web.Request,
+    location: str,
+    *,
+    reason: str = "",
+    auth_info: dict | None = None,
+):
+    _track_event(
+        request,
+        "route_redirect",
+        route=request.path,
+        route_intended=request.path,
+        route_effective=location,
+        gate_type="inline_gsi" if location in _ANALYTICS_INLINE_GSI_ROUTES else "",
+        user_id=(auth_info or {}).get("user_id", ""),
+        user_type=(auth_info or {}).get("user_type", ""),
+        source="web",
+        status_code=302,
+        meta={"to": location, "reason": reason or "redirect"},
+        dedupe_ttl_s=0.5,
+    )
+
+
+def _coerce_analytics_event_payload(raw: dict, request: web.Request) -> tuple[dict | None, str]:
+    if not isinstance(raw, dict):
+        return None, "event payload must be a JSON object"
+    event = str(raw.get("event", "")).strip()
+    if not event:
+        return None, "event required"
+    meta = raw.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    route = str(raw.get("route", "")).strip() or request.path
+    route_intended = str(raw.get("route_intended", "")).strip() or route
+    route_effective = str(raw.get("route_effective", "")).strip() or route
+    source = str(raw.get("source", "web")).strip() or "web"
+    gate_type = str(raw.get("gate_type", meta.get("gate_type", ""))).strip()
+    cta_id = str(raw.get("cta_id", meta.get("cta_id", ""))).strip()
+    error_code = str(raw.get("error_code", meta.get("reason", ""))).strip()
+    try:
+        latency_ms = max(0, int(raw.get("latency_ms", meta.get("latency_ms", 0)) or 0))
+    except Exception:
+        latency_ms = 0
+    return {
+        "event": event,
+        "event_id": str(raw.get("event_id", meta.get("event_id", ""))).strip(),
+        "session_id": str(raw.get("session_id", meta.get("session_id", ""))).strip(),
+        "page_view_id": str(raw.get("page_view_id", meta.get("page_view_id", ""))).strip(),
+        "route": route,
+        "route_intended": route_intended,
+        "route_effective": route_effective,
+        "gate_type": gate_type,
+        "cta_id": cta_id,
+        "error_code": error_code,
+        "source": source,
+        "latency_ms": latency_ms,
+        "meta": meta,
+    }, ""
 
 
 def _cookie_secure(request: web.Request) -> bool:
@@ -966,14 +1140,16 @@ async def handle_favicon(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
+    _track_page_view(request)
     html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    html = inject_google_client_id(html, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_test(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if not auth_info:
+        _track_redirect(request, "/", reason="test_requires_auth")
         raise web.HTTPFound("/")  # redirect to landing page
     html = inject_google_client_id(HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
