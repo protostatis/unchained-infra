@@ -5618,7 +5618,6 @@ async function switchSlot(n) {
     )
 )
 
-
 def _inject_client_slots_ui(html: str) -> str:
     """Inject 3 local conversation slots for API-backed chat pages."""
     return (
@@ -5803,8 +5802,10 @@ async function switchSlot(n) {
     )
 
 
+TRIAL_CHAT_HTML = _inject_client_slots_ui(TRIAL_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_client_slots_ui(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _inject_client_slots_ui(CHAT_CLAUDE_SDK_HTML)
+CHAT_CODEX_HTML = _inject_client_slots_ui(CHAT_CODEX_HTML)
 
 # ---------------------------------------------------------------------------
 # HTML — headless demo chat page (no setup, no downloads, headless Chrome)
