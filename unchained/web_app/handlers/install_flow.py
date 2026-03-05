@@ -1,0 +1,436 @@
+"""Installer and trial onboarding handlers extracted from web.py."""
+
+from __future__ import annotations
+
+from aiohttp import web
+
+
+def _core():
+    import web as core
+
+    return core
+
+
+async def handle_download_agent(request: web.Request) -> web.Response:
+    """GET /web/download-agent — download agent ZIP package."""
+    core = _core()
+    install_token = core._request_install_token(request)
+    if install_token:
+        token_info = core._auth.validate_install_token(install_token, consume=False)
+        if not token_info:
+            return web.json_response({"error": "Invalid or expired install token"}, status=401)
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        install_token = core._auth.create_install_token(auth_info["user_id"], auth_info["key"])
+
+    from agent_package import build_agent_zip
+
+    zip_bytes = build_agent_zip(
+        api_key="",
+        relay_host="api.unchainedsky.com",
+        install_token=install_token,
+    )
+    return web.Response(
+        body=zip_bytes,
+        content_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=unchained-agent.zip"},
+    )
+
+
+async def handle_download_installer(request: web.Request) -> web.Response:
+    """GET /web/download-installer — download native installer binary."""
+    core = _core()
+    platform_raw = request.query.get("os", "mac")
+    platform = core._normalize_installer_platform(platform_raw)
+    if not platform:
+        return web.json_response({"error": "Unsupported os. Use mac or windows"}, status=400)
+
+    install_token = core._request_install_token(request)
+    auth_info = None
+    if install_token:
+        token_info = core._auth.validate_install_token(install_token, consume=False)
+        if not token_info:
+            return web.json_response({"error": "Invalid or expired install token"}, status=401)
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+
+    native_path = core._native_installer_path(platform)
+    if native_path:
+        return web.FileResponse(
+            path=native_path,
+            headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
+        )
+
+    if not core._ALLOW_SCRIPT_INSTALLER_FALLBACK:
+        expected_assets = core._native_installer_candidates(platform)
+        return web.json_response(
+            {
+                "error": "Native installer is not configured for this OS.",
+                "os": platform,
+                "expected_asset": expected_assets[0] if expected_assets else None,
+                "expected_assets": expected_assets,
+            },
+            status=503,
+        )
+
+    # Optional compatibility fallback: return shell/PowerShell script installers
+    # if native artifacts are not available and fallback is explicitly enabled.
+    if not install_token:
+        install_token = core._auth.create_install_token(auth_info["user_id"], auth_info["key"])
+    from agent_package import generate_platform_installer_script
+
+    base_url = core._public_base_url(request)
+    script = generate_platform_installer_script(
+        platform=platform,
+        install_token=install_token,
+        relay_host="api.unchainedsky.com",
+        base_url=base_url,
+    )
+    filename = (
+        "unchained-installer-windows.ps1"
+        if platform == "windows"
+        else "unchained-installer-mac.sh"
+    )
+    return web.Response(
+        text=script,
+        content_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+async def handle_install_token(request: web.Request) -> web.Response:
+    """POST /web/install-token — create a short-lived install token for installers."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    token = core._auth.create_install_token(auth_info["user_id"], auth_info["key"])
+    base_url = core._public_base_url(request)
+    curl_command = f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/install/script" | bash'
+    powershell_command = (
+        "powershell -ExecutionPolicy Bypass -Command "
+        f"\"$h=@{{'X-Install-Token'='{token}'}}; "
+        f"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Headers $h "
+        f"'{base_url}/install/windows/script').Content)\""
+    )
+    mac_native = core._native_installer_path("mac") is not None
+    windows_native = core._native_installer_path("windows") is not None
+    return web.json_response(
+        {
+            "curl_command": curl_command,
+            "powershell_command": powershell_command,
+            "mac_installer_url": f"{base_url}/web/download-installer?os=mac",
+            "windows_installer_url": f"{base_url}/web/download-installer?os=windows",
+            "zip_url": f"{base_url}/web/download-agent",
+            "native_available": {"mac": mac_native, "windows": windows_native},
+            "expires_in": 900,
+        }
+    )
+
+
+async def handle_install_script(request: web.Request) -> web.Response:
+    """GET /install/script or /install/{token} — serve personalized bash install script."""
+    core = _core()
+    token = core._request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
+    token_info = core._auth.validate_install_token(token, consume=False)
+    if not token_info:
+        # Return a bash-friendly error message
+        return web.Response(
+            text='echo "ERROR: Install link expired or already used. '
+            'Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
+            content_type="text/plain",
+        )
+
+    from agent_package import _generate_install_script
+
+    base_url = core._public_base_url(request)
+    script = _generate_install_script(
+        install_token=token,
+        relay_host="api.unchainedsky.com",
+        base_url=base_url,
+    )
+    return web.Response(text=script, content_type="text/plain")
+
+
+async def handle_install_script_windows(request: web.Request) -> web.Response:
+    """GET /install/windows/script or /install/windows/{token} — PowerShell script."""
+    core = _core()
+    token = core._request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
+    token_info = core._auth.validate_install_token(token, consume=False)
+    if not token_info:
+        return web.Response(
+            text='Write-Error "Install link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
+            content_type="text/plain",
+        )
+
+    from agent_package import _generate_windows_install_script
+
+    base_url = core._public_base_url(request)
+    script = _generate_windows_install_script(
+        install_token=token,
+        relay_host="api.unchainedsky.com",
+        base_url=base_url,
+    )
+    return web.Response(text=script, content_type="text/plain")
+
+
+async def handle_install_claim_page(request: web.Request) -> web.Response:
+    """GET /install/claim/{claim_id} — approval page opened by native installer."""
+    core = _core()
+    claim_id = str(request.match_info.get("claim_id", "")).strip().lower()
+    if not core._is_valid_claim_id(claim_id):
+        return web.Response(text="Invalid install claim id.", status=400)
+    html = core.INSTALL_CLAIM_HTML.replace("__CLAIM_ID__", claim_id)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_install_claim_start(request: web.Request) -> web.Response:
+    """POST /web/install/claim/start — create a pending claim for installer auth."""
+    core = _core()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    claim_secret = str(body.get("claim_secret", "")).strip()
+    if not core._is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+    if len(claim_secret) < 24:
+        return web.json_response({"error": "claim_secret too short"}, status=400)
+
+    now = core.time.time()
+    source = core._request_source_ip(request)
+    with core._install_claims_lock:
+        core._cleanup_install_claims(now)
+        core._cleanup_install_claim_start_hits(now)
+        if len(core._install_claims) >= core._INSTALL_CLAIM_MAX_PENDING:
+            return web.json_response(
+                {"error": "Too many pending install claims. Retry shortly."}, status=503
+            )
+        hits = core._install_claim_start_hits.get(source, [])
+        if len(hits) >= core._INSTALL_CLAIM_START_MAX_PER_IP:
+            return web.json_response({"error": "Too many claim attempts. Retry shortly."}, status=429)
+        hits.append(now)
+        core._install_claim_start_hits[source] = hits
+        existing = core._install_claims.get(claim_id)
+        if existing and not core.hmac.compare_digest(existing.get("secret", ""), claim_secret):
+            return web.json_response({"error": "claim_id already exists"}, status=409)
+        core._install_claims[claim_id] = {
+            "secret": claim_secret,
+            "created_at": now,
+            "expires_at": now + core._INSTALL_CLAIM_TTL,
+            "install_token": "",
+        }
+    return web.json_response(
+        {"status": "pending", "claim_id": claim_id, "expires_in": core._INSTALL_CLAIM_TTL}
+    )
+
+
+async def handle_install_claim_approve(request: web.Request) -> web.Response:
+    """POST /web/install/claim/approve — approve pending installer claim."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    if not core._is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+
+    now = core.time.time()
+    with core._install_claims_lock:
+        core._cleanup_install_claims(now)
+        claim = core._install_claims.get(claim_id)
+        if not claim:
+            return web.json_response({"error": "Claim expired or not found"}, status=404)
+        token = claim.get("install_token") or core._auth.create_install_token(
+            auth_info["user_id"], auth_info["key"]
+        )
+        claim["install_token"] = token
+        claim["approved_at"] = now
+        claim["approved_user_id"] = auth_info["user_id"]
+        claim["expires_at"] = min(
+            claim.get("expires_at", now + core._INSTALL_CLAIM_TTL),
+            now + core._INSTALL_CLAIM_TTL,
+        )
+    return web.json_response({"status": "approved"})
+
+
+async def handle_install_claim_poll(request: web.Request) -> web.Response:
+    """POST /web/install/claim/poll — poll claim status and retrieve token."""
+    core = _core()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    claim_id = str(body.get("claim_id", "")).strip().lower()
+    claim_secret = str(body.get("claim_secret", "")).strip()
+    if not core._is_valid_claim_id(claim_id):
+        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
+    if not claim_secret:
+        return web.json_response({"error": "claim_secret required"}, status=400)
+
+    now = core.time.time()
+    with core._install_claims_lock:
+        core._cleanup_install_claims(now)
+        claim = core._install_claims.get(claim_id)
+        if not claim:
+            return web.json_response({"status": "expired"}, status=404)
+        if not core.hmac.compare_digest(claim.get("secret", ""), claim_secret):
+            return web.json_response({"error": "Invalid claim secret"}, status=401)
+        install_token = str(claim.get("install_token", "")).strip()
+        if install_token:
+            core._install_claims.pop(claim_id, None)
+            return web.json_response({"status": "approved", "install_token": install_token})
+        expires_at = float(claim.get("expires_at", now))
+    return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
+
+
+async def handle_install_bootstrap(request: web.Request) -> web.Response:
+    """POST /web/install/bootstrap — exchange short-lived install token for API key."""
+    core = _core()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    token = str(body.get("token", "")).strip()
+    if not token:
+        return web.json_response({"error": "token required"}, status=400)
+
+    token_info = core._auth.validate_install_token(token, consume=True)
+    if not token_info:
+        return web.json_response({"error": "Invalid or expired install token"}, status=401)
+
+    return web.json_response({"api_key": token_info["api_key"]})
+
+
+async def handle_trial_connector(request: web.Request) -> web.Response:
+    """GET /trial/connector — serve chrome_bridge.py for trial users."""
+    core = _core()
+    bridge_path = core.os.path.join(
+        core.os.path.dirname(core.os.path.abspath(core.__file__)), "chrome_bridge.py"
+    )
+    try:
+        with open(bridge_path, "rb") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return web.Response(text="# chrome_bridge.py not found\n", content_type="text/plain")
+    return web.Response(body=content, content_type="text/plain")
+
+
+async def handle_trial_token(request: web.Request) -> web.Response:
+    """POST /trial/token — create a short-lived trial connector install token."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    token = core._auth.create_install_token(auth_info["user_id"], auth_info["key"])
+    base_url = core._public_base_url(request)
+    return web.json_response(
+        {
+            "curl_command": f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/trial/script" | bash',
+        }
+    )
+
+
+async def handle_trial_script(request: web.Request) -> web.Response:
+    """GET /trial/script or /trial/{token} — serve minimal bash trial connector script."""
+    core = _core()
+    token = core._request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
+    token_info = core._auth.validate_install_token(token, consume=False)
+    if not token_info:
+        return web.Response(
+            text='echo "ERROR: Link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
+            content_type="text/plain",
+        )
+    base_url = core._public_base_url(request)
+    relay_url = core._public_relay_url(request)
+    script = f"""#!/bin/bash
+# Unchained Trial — Browser Connector
+# Connects your Chrome to the Unchained AI agent
+# Only requires: Python 3 and curl
+set -e
+
+INSTALL_TOKEN="{token}"
+RELAY="{relay_url}"
+DIR="$HOME/.unchained"
+BRIDGE="$DIR/chrome_bridge.py"
+BOOTSTRAP_URL="{base_url}/web/install/bootstrap"
+
+echo ""
+echo "  Unchained — Connecting your browser..."
+echo ""
+
+# Check Python 3
+if ! command -v python3 &>/dev/null; then
+  echo "  Error: Python 3 not found. Install from https://python.org"
+  exit 1
+fi
+
+# Stop any existing connector
+if [ -f "$DIR/.agent_pid" ]; then
+  OLD_PID=$(cat "$DIR/.agent_pid" 2>/dev/null)
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "  Stopping previous connector..."
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+# Install websockets (the only dependency)
+if ! python3 -c "import websockets" 2>/dev/null; then
+  echo "  Installing websockets..."
+  python3 -m pip install -q websockets
+fi
+
+# Download the connector
+mkdir -p "$DIR"
+echo "  Downloading connector..."
+curl -sSL "{base_url}/trial/connector" -o "$BRIDGE"
+
+# Exchange the short-lived install token for the real API key.
+PAYLOAD=$(TOKEN="$INSTALL_TOKEN" python3 - <<'PY'
+import json, os
+print(json.dumps({{"token": os.environ["TOKEN"]}}))
+PY
+)
+BOOTSTRAP=$(curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" "$BOOTSTRAP_URL") || {{
+  echo "  Error: install token exchange failed"
+  exit 1
+}}
+API_KEY=$(printf '%s' "$BOOTSTRAP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))' 2>/dev/null || true)
+if [ -z "$API_KEY" ]; then
+  echo "  Error: invalid install token response"
+  exit 1
+fi
+
+# Launch Chrome + connector in background
+echo "  Starting..."
+UNCHAINED_API_KEY="$API_KEY" nohup python3 "$BRIDGE" start --relay "$RELAY" \\
+  > "$DIR/connector.log" 2>&1 &
+sleep 4
+
+echo ""
+echo "  Your browser is connected!"
+echo "  An Unchained Chrome window will open — that's where the agent browses."
+echo "  Screenshots of each page will appear in the chat so you can see what's happening."
+echo ""
+echo "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
+echo ""
+echo "  Stop:  python3 ~/.unchained/chrome_bridge.py stop"
+echo "  Logs:  tail -f ~/.unchained/connector.log"
+echo ""
+"""
+    return web.Response(text=script, content_type="text/plain")

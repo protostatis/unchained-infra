@@ -35,13 +35,13 @@ from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
 from web_state import ChatRuntimeState
-from web_cmd import (
+from web_app.cmd_dispatch import (
     CmdInputError,
     UnknownCmdActionError,
     is_chrome_unavailable_error,
     run_cmd_action,
 )
-from web_routes import ROUTE_SPECS, register_route_specs
+from web_app.routes import ROUTE_SPECS, register_route_specs
 
 log = logging.getLogger(__name__)
 
@@ -8231,393 +8231,6 @@ CHAT_HTML = CLAUDE_CHAT_HTML.replace(
 # Chat WebSocket bridge + SSE endpoint
 # ---------------------------------------------------------------------------
 
-async def handle_download_agent(request: web.Request) -> web.Response:
-    """GET /web/download-agent — download agent ZIP package."""
-    install_token = _request_install_token(request)
-    if install_token:
-        token_info = _auth.validate_install_token(install_token, consume=False)
-        if not token_info:
-            return web.json_response({"error": "Invalid or expired install token"}, status=401)
-    else:
-        auth_info = _authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-
-    from agent_package import build_agent_zip
-    zip_bytes = build_agent_zip(
-        api_key="",
-        relay_host="api.unchainedsky.com",
-        install_token=install_token,
-    )
-    return web.Response(
-        body=zip_bytes,
-        content_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=unchained-agent.zip"},
-    )
-
-
-async def handle_download_installer(request: web.Request) -> web.Response:
-    """GET /web/download-installer — download native installer binary."""
-    platform_raw = request.query.get("os", "mac")
-    platform = _normalize_installer_platform(platform_raw)
-    if not platform:
-        return web.json_response({"error": "Unsupported os. Use mac or windows"}, status=400)
-
-    install_token = _request_install_token(request)
-    auth_info = None
-    if install_token:
-        token_info = _auth.validate_install_token(install_token, consume=False)
-        if not token_info:
-            return web.json_response({"error": "Invalid or expired install token"}, status=401)
-    else:
-        auth_info = _authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
-
-    native_path = _native_installer_path(platform)
-    if native_path:
-        return web.FileResponse(
-            path=native_path,
-            headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
-        )
-
-    if not _ALLOW_SCRIPT_INSTALLER_FALLBACK:
-        expected_assets = _native_installer_candidates(platform)
-        return web.json_response(
-            {
-                "error": "Native installer is not configured for this OS.",
-                "os": platform,
-                "expected_asset": expected_assets[0] if expected_assets else None,
-                "expected_assets": expected_assets,
-            },
-            status=503,
-        )
-
-    # Optional compatibility fallback: return shell/PowerShell script installers
-    # if native artifacts are not available and fallback is explicitly enabled.
-    if not install_token:
-        install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    from agent_package import generate_platform_installer_script
-
-    base_url = _public_base_url(request)
-    script = generate_platform_installer_script(
-        platform=platform,
-        install_token=install_token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    filename = "unchained-installer-windows.ps1" if platform == "windows" else "unchained-installer-mac.sh"
-    return web.Response(text=script, content_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
-
-
-async def handle_install_token(request: web.Request) -> web.Response:
-    """POST /web/install-token — create a short-lived install token for installers."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    base_url = _public_base_url(request)
-    curl_command = f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/install/script" | bash'
-    powershell_command = (
-        "powershell -ExecutionPolicy Bypass -Command "
-        f"\"$h=@{{'X-Install-Token'='{token}'}}; "
-        f"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Headers $h "
-        f"'{base_url}/install/windows/script').Content)\""
-    )
-    mac_native = _native_installer_path("mac") is not None
-    windows_native = _native_installer_path("windows") is not None
-    return web.json_response({
-        "curl_command": curl_command,
-        "powershell_command": powershell_command,
-        "mac_installer_url": f"{base_url}/web/download-installer?os=mac",
-        "windows_installer_url": f"{base_url}/web/download-installer?os=windows",
-        "zip_url": f"{base_url}/web/download-agent",
-        "native_available": {"mac": mac_native, "windows": windows_native},
-        "expires_in": 900,
-    })
-
-
-async def handle_install_script(request: web.Request) -> web.Response:
-    """GET /install/script or /install/{token} — serve personalized bash install script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        # Return a bash-friendly error message
-        return web.Response(
-            text='echo "ERROR: Install link expired or already used. '
-                 'Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-
-    from agent_package import _generate_install_script
-    base_url = _public_base_url(request)
-    script = _generate_install_script(
-        install_token=token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    return web.Response(text=script, content_type="text/plain")
-
-
-async def handle_install_script_windows(request: web.Request) -> web.Response:
-    """GET /install/windows/script or /install/windows/{token} — serve PowerShell install script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        return web.Response(
-            text='Write-Error "Install link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-
-    from agent_package import _generate_windows_install_script
-
-    base_url = _public_base_url(request)
-    script = _generate_windows_install_script(
-        install_token=token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    return web.Response(text=script, content_type="text/plain")
-
-
-async def handle_install_claim_page(request: web.Request) -> web.Response:
-    """GET /install/claim/{claim_id} — approval page opened by native installer."""
-    claim_id = str(request.match_info.get("claim_id", "")).strip().lower()
-    if not _is_valid_claim_id(claim_id):
-        return web.Response(text="Invalid install claim id.", status=400)
-    html = INSTALL_CLAIM_HTML.replace("__CLAIM_ID__", claim_id)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_install_claim_start(request: web.Request) -> web.Response:
-    """POST /web/install/claim/start — create a pending claim for native installer auth."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    claim_secret = str(body.get("claim_secret", "")).strip()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-    if len(claim_secret) < 24:
-        return web.json_response({"error": "claim_secret too short"}, status=400)
-
-    now = time.time()
-    source = _request_source_ip(request)
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        _cleanup_install_claim_start_hits(now)
-        if len(_install_claims) >= _INSTALL_CLAIM_MAX_PENDING:
-            return web.json_response({"error": "Too many pending install claims. Retry shortly."}, status=503)
-        hits = _install_claim_start_hits.get(source, [])
-        if len(hits) >= _INSTALL_CLAIM_START_MAX_PER_IP:
-            return web.json_response({"error": "Too many claim attempts. Retry shortly."}, status=429)
-        hits.append(now)
-        _install_claim_start_hits[source] = hits
-        existing = _install_claims.get(claim_id)
-        if existing and not hmac.compare_digest(existing.get("secret", ""), claim_secret):
-            return web.json_response({"error": "claim_id already exists"}, status=409)
-        _install_claims[claim_id] = {
-            "secret": claim_secret,
-            "created_at": now,
-            "expires_at": now + _INSTALL_CLAIM_TTL,
-            "install_token": "",
-        }
-    return web.json_response({"status": "pending", "claim_id": claim_id, "expires_in": _INSTALL_CLAIM_TTL})
-
-
-async def handle_install_claim_approve(request: web.Request) -> web.Response:
-    """POST /web/install/claim/approve — approve a pending installer claim (auth required)."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-
-    now = time.time()
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        claim = _install_claims.get(claim_id)
-        if not claim:
-            return web.json_response({"error": "Claim expired or not found"}, status=404)
-        token = claim.get("install_token") or _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-        claim["install_token"] = token
-        claim["approved_at"] = now
-        claim["approved_user_id"] = auth_info["user_id"]
-        claim["expires_at"] = min(claim.get("expires_at", now + _INSTALL_CLAIM_TTL), now + _INSTALL_CLAIM_TTL)
-    return web.json_response({"status": "approved"})
-
-
-async def handle_install_claim_poll(request: web.Request) -> web.Response:
-    """POST /web/install/claim/poll — poll claim status and retrieve install token once approved."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    claim_secret = str(body.get("claim_secret", "")).strip()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-    if not claim_secret:
-        return web.json_response({"error": "claim_secret required"}, status=400)
-
-    now = time.time()
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        claim = _install_claims.get(claim_id)
-        if not claim:
-            return web.json_response({"status": "expired"}, status=404)
-        if not hmac.compare_digest(claim.get("secret", ""), claim_secret):
-            return web.json_response({"error": "Invalid claim secret"}, status=401)
-        install_token = str(claim.get("install_token", "")).strip()
-        if install_token:
-            _install_claims.pop(claim_id, None)
-            return web.json_response({"status": "approved", "install_token": install_token})
-        expires_at = float(claim.get("expires_at", now))
-    return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
-
-
-async def handle_install_bootstrap(request: web.Request) -> web.Response:
-    """POST /web/install/bootstrap — exchange a short-lived install token for an API key."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    token = str(body.get("token", "")).strip()
-    if not token:
-        return web.json_response({"error": "token required"}, status=400)
-
-    token_info = _auth.validate_install_token(token, consume=True)
-    if not token_info:
-        return web.json_response({"error": "Invalid or expired install token"}, status=401)
-
-    return web.json_response({"api_key": token_info["api_key"]})
-
-
-async def handle_trial_connector(request: web.Request) -> web.Response:
-    """GET /trial/connector — serve chrome_bridge.py for trial users (no auth required)."""
-    bridge_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_bridge.py")
-    try:
-        with open(bridge_path, "rb") as f:
-            content = f.read()
-    except FileNotFoundError:
-        return web.Response(text="# chrome_bridge.py not found\n", content_type="text/plain")
-    return web.Response(body=content, content_type="text/plain")
-
-
-async def handle_trial_token(request: web.Request) -> web.Response:
-    """POST /trial/token — create a short-lived trial connector install token."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    base_url = _public_base_url(request)
-    return web.json_response({
-        "curl_command": f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/trial/script" | bash',
-    })
-
-
-async def handle_trial_script(request: web.Request) -> web.Response:
-    """GET /trial/script or /trial/{token} — serve minimal bash trial connector script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        return web.Response(
-            text='echo "ERROR: Link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-    base_url = _public_base_url(request)
-    relay_url = _public_relay_url(request)
-    script = f"""#!/bin/bash
-# Unchained Trial — Browser Connector
-# Connects your Chrome to the Unchained AI agent
-# Only requires: Python 3 and curl
-set -e
-
-INSTALL_TOKEN="{token}"
-RELAY="{relay_url}"
-DIR="$HOME/.unchained"
-BRIDGE="$DIR/chrome_bridge.py"
-BOOTSTRAP_URL="{base_url}/web/install/bootstrap"
-
-echo ""
-echo "  Unchained — Connecting your browser..."
-echo ""
-
-# Check Python 3
-if ! command -v python3 &>/dev/null; then
-  echo "  Error: Python 3 not found. Install from https://python.org"
-  exit 1
-fi
-
-# Stop any existing connector
-if [ -f "$DIR/.agent_pid" ]; then
-  OLD_PID=$(cat "$DIR/.agent_pid" 2>/dev/null)
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "  Stopping previous connector..."
-    kill "$OLD_PID" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-# Install websockets (the only dependency)
-if ! python3 -c "import websockets" 2>/dev/null; then
-  echo "  Installing websockets..."
-  python3 -m pip install -q websockets
-fi
-
-# Download the connector
-mkdir -p "$DIR"
-echo "  Downloading connector..."
-curl -sSL "{base_url}/trial/connector" -o "$BRIDGE"
-
-# Exchange the short-lived install token for the real API key.
-PAYLOAD=$(TOKEN="$INSTALL_TOKEN" python3 - <<'PY'
-import json, os
-print(json.dumps({{"token": os.environ["TOKEN"]}}))
-PY
-)
-BOOTSTRAP=$(curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" "$BOOTSTRAP_URL") || {{
-  echo "  Error: install token exchange failed"
-  exit 1
-}}
-API_KEY=$(printf '%s' "$BOOTSTRAP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))' 2>/dev/null || true)
-if [ -z "$API_KEY" ]; then
-  echo "  Error: invalid install token response"
-  exit 1
-fi
-
-# Launch Chrome + connector in background
-echo "  Starting..."
-UNCHAINED_API_KEY="$API_KEY" nohup python3 "$BRIDGE" start --relay "$RELAY" \\
-  > "$DIR/connector.log" 2>&1 &
-sleep 4
-
-echo ""
-echo "  Your browser is connected!"
-echo "  An Unchained Chrome window will open — that's where the agent browses."
-echo "  Screenshots of each page will appear in the chat so you can see what's happening."
-echo ""
-echo "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
-echo ""
-echo "  Stop:  python3 ~/.unchained/chrome_bridge.py stop"
-echo "  Logs:  tail -f ~/.unchained/connector.log"
-echo ""
-"""
-    return web.Response(text=script, content_type="text/plain")
-
-
 async def handle_agent_version(request: web.Request) -> web.Response:
     """GET /web/agent/version — return current agent version info."""
     auth_info = _authenticate(request)
@@ -9011,76 +8624,6 @@ initInstallPage();
 </body>
 </html>
 """
-
-
-async def handle_install_page(request: web.Request) -> web.Response:
-    """Serve the one-click installer onboarding page."""
-    return web.Response(text=INSTALL_ONBOARD_HTML, content_type="text/html")
-
-
-async def handle_trial_page(request: web.Request) -> web.Response:
-    """Serve the trial chat HTML page (OpenRouter models)."""
-    html = inject_google_client_id(TRIAL_CHAT_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_gemini_page(request: web.Request) -> web.Response:
-    """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CHAT_GEMINI_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_codex_page(request: web.Request) -> web.Response:
-    """Serve the Codex chat HTML page (per-user provisioned key)."""
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    html = CHAT_CODEX_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_claude_page(request: web.Request) -> web.Response:
-    """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    html = CHAT_CLAUDE_SDK_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_case_study_zillow(request: web.Request) -> web.Response:
-    """Serve the Zillow rental relisting case study page (public, no auth)."""
-    del request
-    html = CASE_STUDY_ZILLOW_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_demo_page(request: web.Request) -> web.Response:
-    """Serve the headless demo chat HTML page."""
-    html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_local_page(request: web.Request) -> web.Response:
-    """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CLAUDE_CHAT_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_claude_page(request: web.Request) -> web.Response:
-    """Redirect /app to /local for backward compatibility."""
-    raise web.HTTPFound("/local")
-
-
-async def handle_chat_redirect(request: web.Request) -> web.Response:
-    """Redirect /chat to /local for backward compatibility."""
-    raise web.HTTPFound("/local")
 
 
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
@@ -9563,208 +9106,30 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
 
 async def handle_chat_status(request: web.Request) -> web.Response:
     """GET /web/chat/status — check if user's agent is connected."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    bridge_agent_id = auth_info.get("agent_id", "")
-    agent_id = bridge_agent_id
-    ws = _chat_agents.get(agent_id)
-    chat_connected = ws is not None and not ws.closed
-    connected = chat_connected
-    chat_only = request.query.get("chat_only") == "1"
-    bridge_connected = False
-    if bridge_agent_id:
-        bridge_connected = await _check_relay_agent(bridge_agent_id)
-    # If not connected via chat WebSocket, check if agent is on the relay
-    if not connected and agent_id and not chat_only:
-        connected = bridge_connected
+    from web_app.handlers import chat_flow
 
-    model_hint = request.query.get("model", "")
-    if _is_pending_user(auth_info) and model_hint and not _is_openrouter_model(model_hint):
-        return _pending_limited_response()
-    wants_gemini = request.query.get("gemini") == "1"
-    wants_codex = (
-        request.query.get("codex") == "1"
-        or _is_codex_cli_model(model_hint)
-        or _is_codex_sdk_model(model_hint)
-    )
-    wants_claude_sdk = _is_claude_sdk_model(model_hint) or request.query.get("claude_sdk") == "1"
-
-    # Lazy-spawn Gemini agent if user has a provisioned key and ?gemini=1 hint
-    gemini_connected = False
-    if wants_gemini:
-        gemini_id = f"gemini-{auth_info['key_hash']}"
-        proc = _gemini_procs.get(gemini_id)
-        if not proc or proc.poll() is not None:
-            import signup_agent
-            user_id = auth_info.get("user_id", "")
-            gemini_key = signup_agent.get_provider_key(user_id, "gemini") if user_id else None
-            if gemini_key:
-                _spawn_gemini_agent(user_id, auth_info["key"], gemini_key)
-        # Check if the Gemini agent's WS is connected
-        gws = _chat_agents.get(gemini_id)
-        gemini_connected = gws is not None and not gws.closed
-
-    codex_connected = False
-    codex_agent_id = ""
-    codex_cli_supported = True
-    if wants_codex:
-        import signup_agent
-
-        user_id = auth_info.get("user_id", "")
-        key_hash = auth_info["key_hash"]
-
-        sdk_key = signup_agent.get_provider_key(user_id, "codex-sdk") if user_id else None
-        cli_key = signup_agent.get_provider_key(user_id, "codex-cli") if user_id else None
-        prefer_cli = _is_codex_cli_model(model_hint)
-
-        if prefer_cli:
-            # Codex CLI runs on local CLI agent; no provider key required.
-            codex_agent_id = auth_info.get("agent_id", "")
-            cws = _chat_agents.get(codex_agent_id)
-            codex_chat_connected = cws is not None and not cws.closed
-            codex_connected = codex_chat_connected
-            if not codex_connected and codex_agent_id and not chat_only:
-                codex_connected = await _check_relay_agent(codex_agent_id)
-            caps = _chat_agent_caps.get(codex_agent_id, {})
-            codex_cli_supported = bool(caps.get("codex_cli"))
-            if codex_connected and not codex_cli_supported:
-                codex_connected = False
-        else:
-            # Server-side Codex lane is always codex-sdk process; allow codex-cli key as
-            # backward-compatible credential fallback.
-            codex_key = sdk_key or cli_key
-            if codex_key:
-                codex_agent_id = f"codexsdk-{key_hash}"
-                proc = _codex_sdk_procs.get(codex_agent_id)
-                if not proc or proc.poll() is not None:
-                    _spawn_codex_sdk_agent(user_id, auth_info["key"], codex_key)
-
-        if codex_agent_id and not prefer_cli:
-            cws = _chat_agents.get(codex_agent_id)
-            codex_connected = cws is not None and not cws.closed
-        if prefer_cli:
-            chat_connected = codex_chat_connected
-            connected = codex_connected
-            agent_id = codex_agent_id
-
-    claude_sdk_connected = False
-    claude_sdk_agent_id = ""
-    if wants_claude_sdk:
-        import signup_agent
-
-        user_id = auth_info.get("user_id", "")
-        key_hash = auth_info["key_hash"]
-        claude_key = signup_agent.get_provider_key(user_id, "claude-sdk") if user_id else None
-        if claude_key:
-            claude_sdk_agent_id = f"claudesdk-{key_hash}"
-            proc = _claude_sdk_procs.get(claude_sdk_agent_id)
-            if not proc or proc.poll() is not None:
-                _spawn_claude_sdk_agent(user_id, auth_info["key"], claude_key)
-            cws = _chat_agents.get(claude_sdk_agent_id)
-            claude_sdk_connected = cws is not None and not cws.closed
-
-            # Make base status reflect the currently selected model lane.
-            chat_connected = claude_sdk_connected
-            connected = claude_sdk_connected
-            agent_id = claude_sdk_agent_id
-
-    # Detect agent ID mismatch: user's expected agent isn't connected but
-    # another agent belonging to the same user IS connected (different profile/key).
-    mismatch_agent = ""
-    if not chat_connected and agent_id:
-        user_id = auth_info.get("user_id", "")
-        if user_id:
-            for other_id, other_uid in _chat_agent_users.items():
-                if other_uid == user_id and other_id != agent_id:
-                    other_ws = _chat_agents.get(other_id)
-                    if other_ws and not other_ws.closed:
-                        mismatch_agent = other_id
-                        break
-
-    resp = {"connected": connected, "agent_id": agent_id}
-    resp["chat_connected"] = chat_connected
-    resp["chat_agent_id"] = agent_id
-    resp["bridge_connected"] = bridge_connected
-    resp["bridge_agent_id"] = bridge_agent_id
-    if mismatch_agent:
-        resp["mismatch"] = True
-        resp["mismatch_agent_id"] = mismatch_agent
-    if wants_gemini:
-        resp["gemini_agent_id"] = f"gemini-{auth_info['key_hash']}"
-        resp["gemini_connected"] = gemini_connected
-    if wants_codex:
-        resp["codex_agent_id"] = codex_agent_id
-        resp["codex_connected"] = codex_connected
-        if _is_codex_cli_model(model_hint):
-            resp["codex_cli_supported"] = codex_cli_supported
-    if wants_claude_sdk:
-        resp["claude_sdk_agent_id"] = claude_sdk_agent_id
-        resp["claude_sdk_connected"] = claude_sdk_connected
-    return web.json_response(resp)
+    return await chat_flow.handle_chat_status(request)
 
 
 async def _check_relay_agent(agent_id: str) -> bool:
     """Quick check if an agent is connected to the relay via HTTP API."""
-    relay_host, relay_port = _parse_relay()
-    scheme = "https" if relay_port == 443 else "http"
-    if relay_port in (443, 80):
-        url = f"{scheme}://{relay_host}/api/agents"
-    else:
-        url = f"{scheme}://{relay_host}:{relay_port}/api/agents"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=3, headers=_relay_auth_headers())
-            if resp.is_success:
-                agents = resp.json()
-                return any(a.get("agent_id") == agent_id for a in agents)
-    except Exception:
-        pass
-    # Fallback: try WS connect
-    import websockets
-    try:
-        async with websockets.connect(
-            _relay_cdp_url(agent_id, "auto"),
-            open_timeout=3,
-            additional_headers=_relay_auth_headers() or None,
-        ) as ws:
-            await ws.close()
-            return True
-    except Exception:
-        return False
+    from web_app.handlers import chat_flow
+
+    return await chat_flow.check_relay_agent(agent_id)
 
 
 def _resolve_chat_agent_id(auth_info: dict, model: str) -> str:
     """Return the chat agent_id for the given model + authenticated user."""
-    h = auth_info["key_hash"]
-    if model and model.startswith("gemini"):
-        return f"gemini-{h}"
-    if _is_claude_sdk_model(model):
-        return f"claudesdk-{h}"
-    if _is_codex_sdk_model(model):
-        return f"codexsdk-{h}"
-    if _is_codex_cli_model(model):
-        # Codex CLI runs on the user's local CLI agent, same lane as Claude CLI.
-        return auth_info["agent_id"]
-    return auth_info["agent_id"]  # claude-{hash}
+    from web_app.handlers import chat_flow
+
+    return chat_flow.resolve_chat_agent_id(auth_info, model)
 
 
 async def _agent_request(agent_id: str, msg: dict, timeout: float = 10) -> dict | None:
     """Send a request to the agent WS and wait for a response."""
-    ws = _chat_agents.get(agent_id)
-    if ws is None or ws.closed:
-        return None
-    req_id = uuid.uuid4().hex[:8]
-    msg["req_id"] = req_id
-    q: asyncio.Queue = asyncio.Queue()
-    _agent_req_queues[req_id] = q
-    try:
-        await ws.send_json(msg)
-        return await asyncio.wait_for(q.get(), timeout=timeout)
-    except (asyncio.TimeoutError, Exception):
-        return None
-    finally:
-        _agent_req_queues.pop(req_id, None)
+    from web_app.handlers import chat_flow
+
+    return await chat_flow.agent_request(agent_id, msg, timeout)
 
 
 async def handle_chat_history(request: web.Request) -> web.Response:
@@ -9773,151 +9138,30 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     For trial users (local agent offline), reads the session file written by
     chat_agent_openrouter.py from the shared relay_data volume.
     """
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    agent_id = auth_info.get("agent_id", "")
-    model = request.query.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    requested_session_id = request.query.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
+    from web_app.handlers import chat_flow
 
-    # OpenRouter trial mode: always read from trial session file keyed by active session_id.
-    if _is_openrouter_model(model):
-        session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-        msgs, found = _read_trial_history(session_id)
-        payload = {"messages": msgs, "trial": True, "session_id": session_id}
-        if not found:
-            payload["offline"] = True
-        return web.json_response(payload)
-
-    # Claude/Gemini mode: ask the appropriate agent first.
-    resp = await _agent_request(chat_agent_id, {"type": "get_history", "session_id": requested_session_id})
-    if resp is not None:
-        return web.json_response({"messages": resp.get("messages", [])})
-
-    # Local agent offline — optional fallback to a trial session if one exists.
-    session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-    msgs, found = _read_trial_history(session_id)
-    if found:
-        return web.json_response({"messages": msgs, "trial": True, "session_id": session_id})
-    return web.json_response({"messages": [], "offline": True})
+    return await chat_flow.handle_chat_history(request)
 
 
 async def handle_chat_new(request: web.Request) -> web.Response:
     """POST /web/chat/new — proxy to agent to advance to next slot."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    agent_id = auth_info.get("agent_id", "")
+    from web_app.handlers import chat_flow
 
-    model = body.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    requested_session_id = body.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        # "New chat" in trial mode means: clear current session file and mint a new session ID.
-        old_session = _resolve_trial_session_id(agent_id, requested_session_id)
-        _delete_trial_session(old_session)
-        # Close the tab for the old session (if any)
-        await _close_session_tab(old_session)
-        new_session = f"s-{agent_id}-{int(time.time() * 1000):x}"
-        return web.json_response({
-            "ok": True,
-            "active_slot": 1,
-            "trial": True,
-            "session_id": new_session,
-        })
-
-    resp = await _agent_request(chat_agent_id, {"type": "new_chat"})
-    if resp is None:
-        return web.json_response({"error": "Agent not connected"}, status=503)
-    result = {"ok": True, "active_slot": resp.get("active_slot", 1)}
-    if resp.get("session_id"):
-        result["session_id"] = resp["session_id"]
-    return web.json_response(result)
+    return await chat_flow.handle_chat_new(request)
 
 
 async def handle_chat_slots(request: web.Request) -> web.Response:
     """GET /web/chat/slots — get slot info from agent."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    agent_id = auth_info.get("agent_id", "")
+    from web_app.handlers import chat_flow
 
-    model = request.query.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    requested_session_id = request.query.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-        msgs, _ = _read_trial_history(session_id)
-        preview = ""
-        for m in msgs:
-            if m.get("role") == "user":
-                preview = m.get("content", "")[:40]
-                break
-        return web.json_response({
-            "active_slot": 1,
-            "slots": [
-                {"slot": 1, "empty": len(msgs) == 0, "preview": preview},
-                {"slot": 2, "empty": True, "preview": ""},
-                {"slot": 3, "empty": True, "preview": ""},
-            ],
-            "trial": True,
-            "session_id": session_id,
-        })
-
-    resp = await _agent_request(chat_agent_id, {"type": "get_slots"})
-    if resp is None:
-        return web.json_response({"active_slot": 1, "slots": [
-            {"slot": 1, "empty": True, "preview": ""},
-            {"slot": 2, "empty": True, "preview": ""},
-            {"slot": 3, "empty": True, "preview": ""},
-        ], "offline": True})
-    return web.json_response({
-        "active_slot": resp.get("active_slot", 1),
-        "slots": resp.get("slots", []),
-    })
+    return await chat_flow.handle_chat_slots(request)
 
 
 async def handle_chat_switch(request: web.Request) -> web.Response:
     """POST /web/chat/switch — switch active slot."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    slot = body.get("slot", 1)
-    agent_id = auth_info.get("agent_id", "")
-    model = body.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        # Trial mode does not support multi-slot switching.
-        return web.json_response({"ok": True, "active_slot": 1, "trial": True})
-    resp = await _agent_request(chat_agent_id, {"type": "switch_slot", "slot": slot})
-    if resp is None:
-        return web.json_response({"error": "Agent not connected"}, status=503)
-    return web.json_response({"ok": True, "active_slot": resp.get("active_slot", slot)})
+    from web_app.handlers import chat_flow
+
+    return await chat_flow.handle_chat_switch(request)
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import unittest
 
@@ -25,13 +26,19 @@ class TestWebRouteSpecs(unittest.TestCase):
         not_callable: list[str] = []
 
         for _method, _path, handler_name in ROUTE_SPECS:
-            handler = getattr(web, handler_name, None)
+            handler = None
+            if ":" in handler_name:
+                module_name, func_name = handler_name.split(":", 1)
+                module = importlib.import_module(module_name)
+                handler = getattr(module, func_name, None)
+            else:
+                handler = getattr(web, handler_name, None)
             if handler is None:
                 missing.append(handler_name)
             elif not callable(handler):
                 not_callable.append(handler_name)
 
-        self.assertEqual(missing, [], f"missing handlers in web.py: {sorted(set(missing))}")
+        self.assertEqual(missing, [], f"missing handlers in route specs: {sorted(set(missing))}")
         self.assertEqual(not_callable, [], f"non-callable handlers: {sorted(set(not_callable))}")
 
     def test_register_route_specs_supports_module_qualified_handlers(self):
