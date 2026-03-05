@@ -5310,6 +5310,195 @@ CHAT_CODEX_HTML = (
     .replace("No Gemini API key provisioned. Visit /setup to get one.", "No Codex key provisioned. Visit /setup to get one.")
 )
 
+def _inject_client_slots_ui(html: str) -> str:
+    """Inject 3 local conversation slots for API-backed chat pages."""
+    return (
+        html
+        .replace(
+            "/* === Model selector === */",
+            """/* === Slot bar === */
+#slotbar{
+  display:flex;gap:6px;padding:4px 16px;
+  background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
+}
+#slotbar button{
+  flex:1;height:32px;border:1px solid #444;border-radius:6px;
+  background:transparent;color:var(--muted);font-size:12px;
+  font-family:var(--mono);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:border-color 0.15s,color 0.15s;
+}
+#slotbar button:hover{border-color:var(--accent);color:var(--text)}
+#slotbar button:active{transform:scale(0.95)}
+#slotbar button.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+#slotbar button.empty{color:#555;font-style:italic}
+#slotbar button.empty.active{color:var(--accent);font-style:normal}
+#slotbar.locked button{pointer-events:none;opacity:0.4}
+#slotbar.locked button.active{opacity:0.7}
+
+/* === Model selector === */""",
+        )
+        .replace(
+            '  <div id="agent-bar">',
+            """  <div id="slotbar">
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+  </div>
+
+  <div id="agent-bar">""",
+        )
+        .replace(
+            """function _persistSessionId(sid) {
+  if (sid && sid.startsWith('s-' + agentId)) {
+    localStorage.setItem(_sessionStoreKey(), sid);
+  }
+}""",
+            """function _persistSessionId(sid) {
+  if (sid && sid.startsWith('s-' + agentId)) {
+    localStorage.setItem(_sessionStoreKey(), sid);
+  }
+}
+
+let activeSlot = 1;
+
+function _slotLabel(n) {
+  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+}
+
+function _slotStateKey() {
+  return _sessionStoreKey() + '_slots_v1';
+}
+
+function _newSessionId() {
+  return 's-' + agentId + '-' + Date.now().toString(36);
+}
+
+function _loadSlotState() {
+  let state = {active_slot: 1, slots: {}};
+  try {
+    const raw = localStorage.getItem(_slotStateKey()) || '';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') state = parsed;
+    }
+  } catch(e) {}
+  const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const normalized = {};
+  for (let i = 1; i <= 3; i++) {
+    const sid = String(slots[String(i)] || '').trim();
+    normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+  }
+  let active = Number(state && state.active_slot);
+  if (active !== 1 && active !== 2 && active !== 3) active = 1;
+  return {active_slot: active, slots: normalized};
+}
+
+function _saveSlotState(state) {
+  try { localStorage.setItem(_slotStateKey(), JSON.stringify(state)); } catch(e) {}
+}
+
+function _ensureSlotState() {
+  const state = _loadSlotState();
+  const restored = _restoreSessionId();
+  if (!state.slots['1']) state.slots['1'] = restored || _newSessionId();
+  for (let i = 1; i <= 3; i++) {
+    if (!state.slots[String(i)]) state.slots[String(i)] = _newSessionId();
+  }
+  if (!state.slots[String(state.active_slot)]) state.active_slot = 1;
+  _saveSlotState(state);
+  return state;
+}
+
+function _setActiveSlotSession(sid) {
+  if (!sid || !sid.startsWith('s-' + agentId + '-')) return;
+  const state = _loadSlotState();
+  state.slots[String(activeSlot)] = sid;
+  state.active_slot = activeSlot;
+  _saveSlotState(state);
+}
+
+function _syncSlotButtons() {
+  const state = _loadSlotState();
+  activeSlot = state.active_slot;
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (!btn) continue;
+    btn.className = '';
+    btn.textContent = _slotLabel(i);
+    if (i === activeSlot) btn.classList.add('active');
+  }
+}
+
+async function switchSlot(n) {
+  if (n === activeSlot) return;
+  if (sending) return;
+  const state = _loadSlotState();
+  state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
+  if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
+  _saveSlotState(state);
+  activeSlot = state.active_slot;
+  sessionId = state.slots[String(activeSlot)];
+  _persistSessionId(sessionId);
+  _syncSlotButtons();
+  document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  await loadHistory();
+}""",
+        )
+        .replace(
+            "  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));\n  _persistSessionId(sessionId);",
+            """  const slotState = _ensureSlotState();
+  activeSlot = slotState.active_slot;
+  sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
+  _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();""",
+        )
+        .replace(
+            "async function loadHistory() {\n  try {",
+            "async function loadHistory() {\n  _syncSlotButtons();\n  try {",
+        )
+        .replace(
+            """    const data = await r.json();
+    if (data.session_id) {""",
+            """    const data = await r.json();
+    const chatEl = document.getElementById('chat');
+    if (chatEl) chatEl.innerHTML = '';
+    if (data.session_id) {""",
+        )
+        .replace(
+            """      sessionId = data.session_id;
+      _persistSessionId(sessionId);""",
+            """      sessionId = data.session_id;
+      _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);""",
+        )
+        .replace(
+            "  } catch(e) {}\n}\n\ncheckSession();",
+            "  } catch(e) {}\n  _syncSlotButtons();\n}\n\ncheckSession();",
+        )
+        .replace(
+            "  document.getElementById('cancelbtn').style.display = 'block';",
+            """  document.getElementById('cancelbtn').style.display = 'block';
+  const slotbar = document.getElementById('slotbar');
+  if (slotbar) slotbar.classList.add('locked');""",
+        )
+        .replace(
+            """    document.getElementById('cancelbtn').style.display = 'none';
+    document.getElementById('agent-bar').classList.remove('active');""",
+            """    document.getElementById('cancelbtn').style.display = 'none';
+    const slotbar2 = document.getElementById('slotbar');
+    if (slotbar2) slotbar2.classList.remove('locked');
+    document.getElementById('agent-bar').classList.remove('active');""",
+        )
+    )
+
+
+TRIAL_CHAT_HTML = _inject_client_slots_ui(TRIAL_CHAT_HTML)
+CHAT_GEMINI_HTML = _inject_client_slots_ui(CHAT_GEMINI_HTML)
+CHAT_CLAUDE_SDK_HTML = _inject_client_slots_ui(CHAT_CLAUDE_SDK_HTML)
+CHAT_CODEX_HTML = _inject_client_slots_ui(CHAT_CODEX_HTML)
+
 # ---------------------------------------------------------------------------
 # HTML — headless demo chat page (no setup, no downloads, headless Chrome)
 # ---------------------------------------------------------------------------
