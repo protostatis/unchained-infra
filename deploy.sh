@@ -83,6 +83,18 @@ echo "==> Uploading Python modules..."
     unchained/benchmark/intermediate_goal.py \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
 
+# Upload native installer assets
+echo "==> Uploading installer assets..."
+"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/installers"
+shopt -s nullglob
+INSTALLER_FILES=(unchained/installers/*)
+shopt -u nullglob
+if [[ "${#INSTALLER_FILES[@]}" -gt 0 ]]; then
+    "${SCP_CMD[@]}" \
+        "${INSTALLER_FILES[@]}" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/installers/"
+fi
+
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then

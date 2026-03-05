@@ -65,9 +65,53 @@ def _chrome_user_data_dir():
         p = os.path.expanduser("~/Library/Application Support/Google/Chrome")
     elif s == "Linux":
         p = os.path.expanduser("~/.config/google-chrome")
+    elif s == "Windows":
+        local = os.environ.get("LOCALAPPDATA", "")
+        p = os.path.join(local, "Google", "Chrome", "User Data") if local else ""
     else:
         return None
     return p if os.path.isdir(p) else None
+
+
+def _find_chrome_binary() -> str | None:
+    """Find a local Chromium-based browser binary suitable for CDP."""
+    candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ]
+    if platform.system() == "Windows":
+        for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(env_name, "").strip()
+            if not base:
+                continue
+            candidates.extend([
+                os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(base, "Chromium", "Application", "chrome.exe"),
+                os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+            ])
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    for cmd in (
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium-browser",
+        "chromium",
+        "chrome",
+        "chrome.exe",
+        "msedge",
+        "msedge.exe",
+    ):
+        found = shutil.which(cmd)
+        if found:
+            return found
+    return None
 
 
 def _list_chrome_profiles():
@@ -484,27 +528,13 @@ class Agent:
             prov_port = s.getsockname()[1]
 
         # Find Chrome binary
-        chrome_paths = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/chromium",
-        ]
-        chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
-        if not chrome_bin:
-            for candidate in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
-                found = shutil.which(candidate)
-                if found:
-                    chrome_bin = found
-                    break
+        chrome_bin = _find_chrome_binary()
         if not chrome_bin:
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
                 "status": 500,
-                "body": {"error": "Chrome binary not found"},
+                "body": {"error": "Chrome/Chromium binary not found"},
             }))
             shutil.rmtree(temp_dir, ignore_errors=True)
             return
@@ -829,6 +859,49 @@ def _remove_pid():
         pass
 
 
+def _process_cmdline(pid: int) -> str:
+    """Return command line for pid, or empty string when unavailable."""
+    if pid <= 0:
+        return ""
+
+    if platform.system() == "Windows":
+        # WMI gives us command-line contents so we can reject reused stale PIDs.
+        ps_cmd = (
+            f'$p = Get-CimInstance Win32_Process -Filter "ProcessId = {pid}" '
+            " -ErrorAction SilentlyContinue; "
+            'if ($p) { [string]$p.CommandLine }'
+        )
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
+            )
+            return out.strip()
+        except Exception:
+            return ""
+
+    proc_cmdline = f"/proc/{pid}/cmdline"
+    if os.path.exists(proc_cmdline):
+        try:
+            raw = open(proc_cmdline, "rb").read().replace(b"\x00", b" ").strip()
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
 def _is_agent_running() -> bool:
     """Check if agent process is still alive."""
     pid = _read_pid()
@@ -839,12 +912,16 @@ def _is_agent_running() -> bool:
         # same PID (always PID 1 in Docker). This is us, not a duplicate agent.
         _remove_pid()
         return False
-    try:
-        os.kill(pid, 0)  # signal 0 = check existence
-        return True
-    except ProcessLookupError:
+
+    cmdline = _process_cmdline(pid)
+    if not cmdline:
         _remove_pid()
         return False
+    if "chrome_bridge.py" not in cmdline:
+        # PID got recycled by an unrelated process; treat as stale.
+        _remove_pid()
+        return False
+    return True
 
 
 def _ensure_chrome(
@@ -869,28 +946,12 @@ def _ensure_chrome(
         return False
 
     print(f"[agent] Chrome not running, launching (profile={profile}, port={port})...")
-    chrome_paths = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/chromium",
-    ]
-    chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
+    chrome_bin = _find_chrome_binary()
     if not chrome_bin:
-        for candidate in (
-            "google-chrome",
-            "google-chrome-stable",
-            "chromium-browser",
-            "chromium",
-        ):
-            found = shutil.which(candidate)
-            if found:
-                chrome_bin = found
-                break
-    if not chrome_bin:
-        print("[agent] no Chrome/Chromium binary found in PATH")
+        if platform.system() == "Windows":
+            print("[agent] no Chrome/Chromium/Edge binary found (checked standard install paths and PATH)")
+        else:
+            print("[agent] no Chrome/Chromium binary found in PATH")
         return False
 
     profile_dir = os.path.join(DATA_DIR, f"chrome_{profile}")
@@ -1007,10 +1068,11 @@ def cmd_start(config: dict):
     atexit.register(_on_exit)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
-    try:
-        signal.signal(signal.SIGHUP, _shutdown)
-    except (OSError, ValueError):
-        pass  # SIGHUP not available on Windows
+    if hasattr(signal, "SIGHUP"):
+        try:
+            signal.signal(signal.SIGHUP, _shutdown)
+        except (OSError, ValueError):
+            pass  # SIGHUP may not be available/allowed in this environment
 
     try:
         loop.run_until_complete(agent.start())
@@ -1045,6 +1107,20 @@ def cmd_stop():
         print(f"[agent] sent SIGTERM to PID {pid}")
     except ProcessLookupError:
         print("[agent] process not found")
+    except OSError:
+        if platform.system() == "Windows":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                print(f"[agent] requested termination for PID {pid} via taskkill")
+            except Exception:
+                print("[agent] failed to stop process")
+        else:
+            print("[agent] failed to stop process")
     _remove_pid()
 
 
