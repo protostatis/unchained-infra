@@ -130,6 +130,23 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_trial_auth_session_handshake_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn(
+            "fetch('/auth/google', {\n      method: 'POST',\n      credentials: 'include',",
+            trial,
+        )
+        self.assertIn(
+            "const meResp = await fetch('/auth/me', {\n          credentials: 'include',\n          cache: 'no-store',",
+            trial,
+        )
+        self.assertIn(
+            "const r = await fetch('/auth/me', {\n      credentials: 'include',\n      cache: 'no-store',",
+            trial,
+        )
+        self.assertIn("if (data.pending || data.status === 'pending')", trial)
+        self.assertIn("Sign-in succeeded, but session was not established.", trial)
+
 
 if __name__ == "__main__":
     unittest.main()

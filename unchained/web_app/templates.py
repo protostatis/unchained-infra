@@ -1923,26 +1923,59 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
+      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
     _applyAuthState(data);
-    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
-    agentId = data.agent_id;
-    if (_redirectAfterLoginIfNeeded()) return;
-    showMain();
+    // Confirm the cookie-backed session is readable before leaving login UI.
+    for (let i = 0; i < 5; i++) {
+      try {
+        const meResp = await fetch('/auth/me', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const me = await meResp.json();
+        _applyAuthState(me);
+        if (me.authenticated) {
+          agentId = me.agent_id || data.agent_id || '';
+          if (_redirectAfterLoginIfNeeded()) return;
+          showMain();
+          return;
+        }
+        if (me.pending || me.status === 'pending') {
+          showPending();
+          return;
+        }
+      } catch (e) {}
+      await new Promise(resolve => setTimeout(resolve, 150 * (i + 1)));
+    }
+    if (data.pending || data.status === 'pending' || data.review_pending) {
+      showPending();
+      return;
+    }
+    if (data.agent_id) {
+      agentId = data.agent_id;
+      if (_redirectAfterLoginIfNeeded()) return;
+      showMain();
+      return;
+    }
+    errEl.textContent = 'Sign-in succeeded, but session was not established. Refresh and try again.';
   } catch(e) { errEl.textContent = e.message; }
 }
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me');
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
     const data = await r.json();
     _applyAuthState(data);
-    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
-    if (data.pending) { showPending(); return; }
+    if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
+    if (data.pending || data.status === 'pending') { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
 }
@@ -1951,11 +1984,17 @@ async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
   try {
-    const r = await fetch('/auth/me');
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
     const data = await r.json();
     _applyAuthState(data);
-    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
-    if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
+    if (data.pending || data.status === 'pending') {
+      msg.textContent = 'Still under review. Check back soon!';
+      return;
+    }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
