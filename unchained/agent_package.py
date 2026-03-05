@@ -702,43 +702,143 @@ if ([string]::IsNullOrWhiteSpace($env:UNCHAINED_API_KEY) -and -not [string]::IsN
   Remove-Item Env:UNCHAINED_INSTALL_TOKEN -ErrorAction SilentlyContinue
 }
 
-$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pythonCmd) {
-  $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
+function Test-PythonCommand([string]$Source, [string[]]$Prefix) {
+  if ([string]::IsNullOrWhiteSpace($Source)) { return $false }
+  $args = @()
+  if ($Prefix) { $args += $Prefix }
+  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  try {
+    & $Source @args *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
 }
-if (-not $pythonCmd) {
-  Write-Error "ERROR: Python 3.9+ is required."
+
+function Find-PythonCommand() {
+  $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCmd) {
+    $pySource = [string]$pyCmd.Source
+    if (Test-PythonCommand $pySource @("-3")) {
+      return @{ Source = $pySource; Prefix = @("-3") }
+    }
+  }
+
+  foreach ($name in @("python", "python3")) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $cmd) { continue }
+    $source = [string]$cmd.Source
+    if ([string]::IsNullOrWhiteSpace($source)) { continue }
+    # Skip Microsoft Store alias shim; it often prints "Python was not found..."
+    if ($source -like "*WindowsApps*") { continue }
+    if (Test-PythonCommand $source @()) {
+      return @{ Source = $source; Prefix = @() }
+    }
+  }
+
+  return $null
+}
+
+function Install-PythonRuntime() {
+  $pythonVersion = "3.13.2"
+  $installerName = "python-$pythonVersion-amd64.exe"
+  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
+  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
+
+  Write-Host "Python 3.9+ not found. Installing Python runtime..."
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
+    $installArgs = @(
+      "/quiet",
+      "InstallAllUsers=0",
+      "Include_test=0",
+      "Include_doc=0",
+      "Include_dev=0",
+      "Include_pip=1",
+      "Include_launcher=1",
+      "InstallLauncherAllUsers=0",
+      "PrependPath=1",
+      "SimpleInstall=1"
+    )
+    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
+    if (-not $proc -or $proc.ExitCode -ne 0) {
+      return $false
+    }
+    # Refresh PATH from registry for this process.
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+    return $true
+  } catch {
+    return $false
+  } finally {
+    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Resolve-PythonCommand() {
+  $found = Find-PythonCommand
+  if ($null -ne $found) {
+    return $found
+  }
+
+  if (-not (Install-PythonRuntime)) {
+    Write-Error "ERROR: Python 3.9+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+    exit 1
+  }
+
+  $found = Find-PythonCommand
+  if ($null -ne $found) {
+    return $found
+  }
+
+  Write-Error "ERROR: Python 3.9+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
   exit 1
 }
 
-if (-not (Test-Path ".venv")) {
+$pythonInfo = Resolve-PythonCommand
+$pythonCmd = [string]$pythonInfo.Source
+$pythonPrefixArgs = @()
+if ($pythonInfo.Prefix) {
+  $pythonPrefixArgs += $pythonInfo.Prefix
+}
+$venvDir = Join-Path $PSScriptRoot ".venv"
+$pythonExe = Join-Path $venvDir "Scripts\python.exe"
+$requirementsFile = Join-Path $PSScriptRoot "requirements.txt"
+
+if (-not (Test-Path $venvDir)) {
   Write-Host "Setting up Python environment..."
-  & $pythonCmd.Source -m venv .venv
-  & ".\.venv\Scripts\python.exe" -m pip install -q --upgrade pip
-  & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+  & $pythonCmd @($pythonPrefixArgs + @("-m", "venv", $venvDir))
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) {
+    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.9+ from python.org is installed (not Microsoft Store alias)."
+    exit 1
+  }
+  & $pythonExe -m pip install -q --upgrade pip
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to upgrade pip in .venv."
+    exit 1
+  }
+  & $pythonExe -m pip install -q -r $requirementsFile
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to install Python dependencies."
+    exit 1
+  }
 }
 
-$pythonExe = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $pythonExe)) {
   Write-Error "ERROR: Missing virtualenv Python: $pythonExe"
   exit 1
 }
 
-function Resolve-DaemonPythonExe([string]$VenvPythonExe, $BasePythonCommand) {
+function Resolve-DaemonPythonExe([string]$VenvPythonExe, [string]$BasePythonSource) {
   $venvDir = Split-Path -Parent $VenvPythonExe
   $venvPythonw = Join-Path $venvDir "pythonw.exe"
   if (Test-Path $venvPythonw) {
     return $venvPythonw
   }
 
-  $baseSource = ""
-  try {
-    $baseSource = [string]$BasePythonCommand.Source
-  } catch {
-    $baseSource = ""
-  }
-  if (-not [string]::IsNullOrWhiteSpace($baseSource)) {
-    $baseDir = Split-Path -Parent $baseSource
+  if (-not [string]::IsNullOrWhiteSpace($BasePythonSource)) {
+    $baseDir = Split-Path -Parent $BasePythonSource
     $basePythonw = Join-Path $baseDir "pythonw.exe"
     if (Test-Path $basePythonw) {
       try {
@@ -1246,14 +1346,109 @@ $installToken = "__INSTALL_TOKEN__"
 $baseUrl = "__BASE_URL__"
 $relayHost = "__RELAY_HOST__"
 
-$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pythonCmd) {
-  $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
+function Test-PythonCommand([string]$Source, [string[]]$Prefix) {
+  if ([string]::IsNullOrWhiteSpace($Source)) { return $false }
+  $args = @()
+  if ($Prefix) { $args += $Prefix }
+  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  try {
+    & $Source @args *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
 }
-if (-not $pythonCmd) {
-  Write-Error "ERROR: python/python3 is required. Install Python 3.9+ first."
+
+function Find-PythonCommand() {
+  $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCmd) {
+    $pySource = [string]$pyCmd.Source
+    if (Test-PythonCommand $pySource @("-3")) {
+      return @{ Source = $pySource; Prefix = @("-3") }
+    }
+  }
+
+  foreach ($name in @("python", "python3")) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $cmd) { continue }
+    $source = [string]$cmd.Source
+    if ([string]::IsNullOrWhiteSpace($source)) { continue }
+    # Skip Microsoft Store alias shim; it often prints "Python was not found..."
+    if ($source -like "*WindowsApps*") { continue }
+    if (Test-PythonCommand $source @()) {
+      return @{ Source = $source; Prefix = @() }
+    }
+  }
+
+  return $null
+}
+
+function Install-PythonRuntime() {
+  $pythonVersion = "3.13.2"
+  $installerName = "python-$pythonVersion-amd64.exe"
+  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
+  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
+
+  Write-Host "Python 3.9+ not found. Installing Python runtime..."
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
+    $installArgs = @(
+      "/quiet",
+      "InstallAllUsers=0",
+      "Include_test=0",
+      "Include_doc=0",
+      "Include_dev=0",
+      "Include_pip=1",
+      "Include_launcher=1",
+      "InstallLauncherAllUsers=0",
+      "PrependPath=1",
+      "SimpleInstall=1"
+    )
+    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
+    if (-not $proc -or $proc.ExitCode -ne 0) {
+      return $false
+    }
+    # Refresh PATH from registry for this process.
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+    return $true
+  } catch {
+    return $false
+  } finally {
+    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Resolve-PythonCommand() {
+  $found = Find-PythonCommand
+  if ($null -ne $found) {
+    return $found
+  }
+
+  if (-not (Install-PythonRuntime)) {
+    Write-Error "ERROR: Python 3.9+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+    exit 1
+  }
+
+  $found = Find-PythonCommand
+  if ($null -ne $found) {
+    return $found
+  }
+
+  Write-Error "ERROR: Python 3.9+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
   exit 1
 }
+
+$pythonInfo = Resolve-PythonCommand
+$pythonCmd = [string]$pythonInfo.Source
+$pythonPrefixArgs = @()
+if ($pythonInfo.Prefix) {
+  $pythonPrefixArgs += $pythonInfo.Prefix
+}
+$venvDir = Join-Path $installDir ".venv"
+$pythonExe = Join-Path $venvDir "Scripts\python.exe"
+$requirementsFile = Join-Path $installDir "requirements.txt"
 
 if (Test-Path $installDir) {
   Write-Host "Existing installation found at $installDir"
@@ -1305,11 +1500,23 @@ Set-Content -Path (Join-Path $installDir ".env") -Value $envBody
 Push-Location $installDir
 try {
   Write-Host "[1/3] Creating Python environment..."
-  & $pythonCmd.Source -m venv .venv
+  & $pythonCmd @($pythonPrefixArgs + @("-m", "venv", $venvDir))
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) {
+    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.9+ from python.org is installed (not Microsoft Store alias)."
+    exit 1
+  }
   Write-Host "[2/3] Upgrading pip..."
-  & ".\.venv\Scripts\python.exe" -m pip install -q --upgrade pip
+  & $pythonExe -m pip install -q --upgrade pip
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to upgrade pip in .venv."
+    exit 1
+  }
   Write-Host "[3/3] Installing dependencies..."
-  & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+  & $pythonExe -m pip install -q -r $requirementsFile
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to install Python dependencies."
+    exit 1
+  }
 } finally {
   Pop-Location
 }
