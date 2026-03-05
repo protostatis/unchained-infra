@@ -31,6 +31,7 @@ import httpx
 import jwt
 from aiohttp import web
 
+from analytics import AnalyticsStore
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
@@ -39,6 +40,7 @@ from web_state import ChatRuntimeState
 log = logging.getLogger(__name__)
 
 _auth = Auth()
+_analytics = AnalyticsStore(db_path=_auth.db_path)
 
 # Google OAuth config (from env)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -188,6 +190,76 @@ def _trace(event: str, **fields):
         parts.append(f"{k}={v}")
     suffix = " " + " ".join(parts) if parts else ""
     log.info("[trace] %s%s", event, suffix)
+
+
+_ANALYTICS_PAGE_VIEW_ROUTES = {
+    "/",
+    "/trial",
+    "/local",
+    "/setup",
+    "/install",
+    "/demo",
+    "/chat-gemini",
+    "/chat-codex",
+    "/chat-claude",
+    "/app",
+}
+_analytics_last_cleanup_ts = 0.0
+
+
+def _analytics_maybe_cleanup():
+    global _analytics_last_cleanup_ts
+    now = time.time()
+    if now - _analytics_last_cleanup_ts < 3600:
+        return
+    _analytics_last_cleanup_ts = now
+    try:
+        _analytics.cleanup_old_events()
+    except Exception as e:
+        log.warning("[analytics] cleanup failed: %s", e)
+
+
+def _track_event(
+    request: web.Request,
+    event: str,
+    *,
+    route: str = "",
+    user_id: str = "",
+    user_type: str = "",
+    source: str = "",
+    status_code: int = 0,
+    meta: dict | None = None,
+    dedupe_ttl_s: float = 0.0,
+):
+    try:
+        _analytics_maybe_cleanup()
+        _analytics.track(
+            event,
+            request=request,
+            route=route,
+            user_id=user_id,
+            user_type=user_type,
+            source=source,
+            status_code=status_code,
+            meta=meta,
+            dedupe_ttl_s=dedupe_ttl_s,
+        )
+    except Exception as e:
+        log.warning("[analytics] event=%s failed: %s", event, e)
+
+
+def _track_page_view(request: web.Request):
+    route = request.path
+    if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
+        return
+    _track_event(
+        request,
+        "page_view",
+        route=route,
+        source="web",
+        status_code=200,
+        dedupe_ttl_s=5.0,
+    )
 
 
 def _cookie_secure(request: web.Request) -> bool:
@@ -9008,17 +9080,20 @@ initInstallPage();
 
 async def handle_install_page(request: web.Request) -> web.Response:
     """Serve the one-click installer onboarding page."""
+    _track_page_view(request)
     return web.Response(text=INSTALL_ONBOARD_HTML, content_type="text/html")
 
 
 async def handle_trial_page(request: web.Request) -> web.Response:
     """Serve the trial chat HTML page (OpenRouter models)."""
+    _track_page_view(request)
     html = inject_google_client_id(TRIAL_CHAT_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_gemini_page(request: web.Request) -> web.Response:
     """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
@@ -9028,19 +9103,21 @@ async def handle_chat_gemini_page(request: web.Request) -> web.Response:
 
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
     """Serve the Codex chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
-    html = CHAT_CODEX_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    html = inject_google_client_id(CHAT_CODEX_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
     """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
-    html = CHAT_CLAUDE_SDK_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    html = inject_google_client_id(CHAT_CLAUDE_SDK_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
@@ -9053,12 +9130,14 @@ async def handle_case_study_zillow(request: web.Request) -> web.Response:
 
 async def handle_demo_page(request: web.Request) -> web.Response:
     """Serve the headless demo chat HTML page."""
+    _track_page_view(request)
     html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_local_page(request: web.Request) -> web.Response:
     """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
@@ -9068,6 +9147,7 @@ async def handle_local_page(request: web.Request) -> web.Response:
 
 async def handle_claude_page(request: web.Request) -> web.Response:
     """Redirect /app to /local for backward compatibility."""
+    _track_page_view(request)
     raise web.HTTPFound("/local")
 
 
@@ -9236,6 +9316,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "message required"}, status=400)
     if not agent_id:
         return web.json_response({"error": "agent_id required"}, status=400)
+    _track_event(
+        request,
+        "chat_message_send",
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        meta={"model": model or "", "headless": bool(body.get("headless", False))},
+        status_code=200,
+    )
 
     # Resolve which chat agent handles this model (must happen before session ID generation)
     is_gemini = model and model.startswith("gemini")
@@ -9945,7 +10034,7 @@ async def handle_favicon(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
+    _track_page_view(request)
     html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
     return web.Response(text=html, content_type="text/html")
 
@@ -9961,18 +10050,41 @@ async def handle_test(request: web.Request) -> web.Response:
 async def handle_google_auth(request: web.Request) -> web.Response:
     """POST /auth/google — verify Google ID token, create session."""
     body = await request.json()
+    source = str(body.get("source", "claude")).strip().lower() or "claude"
+    if source not in {"trial", "claude"}:
+        source = "claude"
+    _track_event(
+        request,
+        "auth_google_attempt",
+        source=source,
+        meta={"source": source},
+        status_code=200,
+    )
     id_token = body.get("credential", "")
     if not id_token:
+        _track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            meta={"source": source, "reason": "missing_credential"},
+            status_code=400,
+        )
         return web.json_response({"error": "Missing credential"}, status=400)
 
     payload = await verify_google_token(id_token)
     if payload is None:
+        _track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            meta={"source": source, "reason": "invalid_google_token"},
+            status_code=401,
+        )
         return web.json_response({"error": "Invalid Google token"}, status=401)
 
     email = payload.get("email", "").lower()
     name = payload.get("name", "")
     picture = payload.get("picture", "")
-    source = body.get("source", "claude")
     user_type = "trial" if source == "trial" else "claude"
 
     existing = _auth.find_user_by_email(email)
@@ -9998,6 +10110,15 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 "is_admin": email.lower() in ADMIN_EMAILS,
             })
             _set_session_cookie(resp, session_token, request)
+            _track_event(
+                request,
+                "auth_google_success",
+                user_id=user["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                meta={"source": source, "status": "approved", "existing": True},
+                status_code=200,
+            )
             return resp
 
         if status == "pending":
@@ -10035,9 +10156,27 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                     "is_admin": email.lower() in ADMIN_EMAILS,
                 })
                 _set_session_cookie(resp, session_token, request)
+                _track_event(
+                    request,
+                    "auth_google_success",
+                    user_id=existing["user_id"],
+                    user_type=pending_user_type,
+                    source=source,
+                    meta={"source": source, "status": "pending", "existing": True},
+                    status_code=200,
+                )
                 return resp
 
             pending_user_type = existing.get("user_type", "claude")
+            _track_event(
+                request,
+                "auth_google_pending",
+                user_id=existing["user_id"],
+                user_type=pending_user_type,
+                source=source,
+                meta={"source": source, "status": "pending", "existing": True},
+                status_code=200,
+            )
             return web.json_response({
                 "pending": True,
                 "status": "pending",
@@ -10047,6 +10186,15 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             })
 
         if status == "rejected":
+            _track_event(
+                request,
+                "auth_google_fail",
+                user_id=existing["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                meta={"source": source, "reason": "rejected"},
+                status_code=403,
+            )
             return web.json_response({"error": "Your sign-up request was not approved."}, status=403)
 
     # Trial/demo sign-ups remain pending for admin review but can use free-tier chat immediately.
@@ -10072,6 +10220,24 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "is_admin": email.lower() in ADMIN_EMAILS,
         })
         _set_session_cookie(resp, session_token, request)
+        _track_event(
+            request,
+            "signup_created",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending"},
+            status_code=200,
+        )
+        _track_event(
+            request,
+            "auth_google_success",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending", "new_user": True},
+            status_code=200,
+        )
 
         send_email(
             email,
@@ -10121,6 +10287,24 @@ async def handle_google_auth(request: web.Request) -> web.Response:
     })
     # Set session cookie so /auth/me can identify pending users
     _set_session_cookie(resp, session_token, request)
+    _track_event(
+        request,
+        "signup_created",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending"},
+        status_code=200,
+    )
+    _track_event(
+        request,
+        "auth_google_pending",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending", "new_user": True},
+        status_code=200,
+    )
     return resp
 
 
@@ -10289,6 +10473,34 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     return web.json_response({"authenticated": False}, status=401)
 
 
+async def handle_analytics_event(request: web.Request) -> web.Response:
+    """POST /web/analytics/event — lightweight unauthenticated client events."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Body must be a JSON object"}, status=400)
+    event = str(body.get("event", "")).strip()
+    if not event:
+        return web.json_response({"error": "event required"}, status=400)
+    route = str(body.get("route", "")).strip()
+    source = str(body.get("source", "web")).strip() or "web"
+    meta = body.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    _track_event(
+        request,
+        event,
+        route=route,
+        source=source,
+        meta=meta,
+        status_code=204,
+        dedupe_ttl_s=2.0,
+    )
+    return web.json_response({"ok": True})
+
+
 def _is_admin(request: web.Request) -> dict | None:
     """Authenticate and check if user is an admin. Returns auth_info or None."""
     auth_info = _authenticate(request)
@@ -10351,6 +10563,23 @@ async def handle_admin_users(request: web.Request) -> web.Response:
         return web.json_response({"error": "Admin access required"}, status=403)
     users = _auth.list_all_users()
     return web.json_response({"users": users})
+
+
+async def handle_admin_analytics_funnel(request: web.Request) -> web.Response:
+    """GET /admin/analytics/funnel — login/auth funnel metrics."""
+    if not _is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+    raw_days = str(request.query.get("days", "7")).strip() or "7"
+    try:
+        days = max(1, min(90, int(raw_days)))
+    except ValueError:
+        return web.json_response({"error": "days must be an integer"}, status=400)
+    try:
+        payload = _analytics.login_funnel(days=days)
+    except Exception as e:
+        log.warning("[analytics] funnel query failed: %s", e)
+        return web.json_response({"error": "Failed to build funnel"}, status=500)
+    return web.json_response(payload)
 
 
 SETUP_HTML = r"""<!DOCTYPE html>
@@ -12346,6 +12575,7 @@ document.addEventListener('keydown',e=>{
 
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
         raise web.HTTPFound("/trial")
@@ -12929,6 +13159,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/auth/request-claude-access", handle_request_claude_access),
     ("POST", "/auth/logout", handle_logout),
     ("GET", "/auth/me", handle_auth_me),
+    ("POST", "/web/analytics/event", handle_analytics_event),
     ("POST", "/web/cmd", handle_cmd),
     ("GET", "/setup", handle_setup_page),
     ("GET", "/scheduler", handle_scheduler_page),
@@ -12938,6 +13169,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/web/scheduler/preview", handle_scheduler_preview),
     ("GET", "/admin", handle_admin_page),
     ("GET", "/admin/users", handle_admin_users),
+    ("GET", "/admin/analytics/funnel", handle_admin_analytics_funnel),
     ("GET", "/admin/pending", handle_admin_pending),
     ("POST", "/admin/approve", handle_admin_approve),
     ("POST", "/admin/reject", handle_admin_reject),
