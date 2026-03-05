@@ -35,6 +35,13 @@ from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
 from web_state import ChatRuntimeState
+from web_cmd import (
+    CmdInputError,
+    UnknownCmdActionError,
+    is_chrome_unavailable_error,
+    run_cmd_action,
+)
+from web_routes import ROUTE_SPECS, register_route_specs
 
 log = logging.getLogger(__name__)
 
@@ -12786,88 +12793,16 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
 # /web/cmd — Direct CDP command dispatch
 # ---------------------------------------------------------------------------
 
-class _CmdInputError(ValueError):
-    pass
-
-
-async def _cmd_ddm(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = body.get("flags", ["--llm-2pass", "--cols", "60"])
-    result = await cloud_tools.run_ddm(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_text(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = ["--text"]
-    find = body.get("find")
-    if find:
-        flags.extend(["--find", find])
-    result = await cloud_tools.run_ddm(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_navigate(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    url = body.get("url")
-    if not url:
-        raise _CmdInputError("url required")
-    result = await cloud_tools.navigate(agent_id, tab_id, url, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_screenshot(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    _ = body
-    result = await cloud_tools.screenshot(agent_id, tab_id, relay_host, relay_port)
-    return {"type": "image", "data": result}
-
-
-async def _cmd_js(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    expression = body.get("expression")
-    if not expression:
-        raise _CmdInputError("expression required")
-    result = await cloud_tools.run_js(agent_id, tab_id, expression, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_click(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    x = body.get("x")
-    y = body.get("y")
-    if x is None or y is None:
-        raise _CmdInputError("x and y required")
-    result = await cloud_tools.click(agent_id, tab_id, int(x), int(y), relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_type(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    text = body.get("text")
-    if not text:
-        raise _CmdInputError("text required")
-    result = await cloud_tools.type_text(agent_id, tab_id, text, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_intel(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = body.get("flags", ["--probe"])
-    result = await cloud_tools.run_intel(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-_CMD_ACTIONS = {
-    "ddm": _cmd_ddm,
-    "text": _cmd_text,
-    "navigate": _cmd_navigate,
-    "screenshot": _cmd_screenshot,
-    "js": _cmd_js,
-    "click": _cmd_click,
-    "type": _cmd_type,
-    "intel": _cmd_intel,
-}
-
-
 async def handle_cmd(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
     req_id = _request_id(request)
     action = body.get("action")
     agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
@@ -12891,23 +12826,29 @@ async def handle_cmd(request: web.Request) -> web.Response:
     import cloud_tools
 
     try:
-        runner = _CMD_ACTIONS.get(action)
-        if runner is None:
-            _trace("cmd.unknown", req_id=req_id, action=action or "-", agent_id=agent_id)
-            return web.json_response(
-                {"error": f"Unknown action: {action}"}, status=400,
-            )
-        payload = await runner(body, agent_id, tab_id, relay_host, relay_port, cloud_tools)
+        payload = await run_cmd_action(
+            action=action,
+            body=body,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            cloud_tools=cloud_tools,
+        )
         _trace("cmd.ok", req_id=req_id, action=action, agent_id=agent_id, tab_id=tab_id)
         return web.json_response(payload)
 
-    except _CmdInputError as e:
+    except UnknownCmdActionError:
+        _trace("cmd.unknown", req_id=req_id, action=action or "-", agent_id=agent_id)
+        return web.json_response(
+            {"error": f"Unknown action: {action}"}, status=400,
+        )
+
+    except CmdInputError as e:
         return web.json_response({"error": str(e)}, status=400)
 
     except Exception as e:
-        err = str(e).lower()
-        if any(k in err for k in ("connect", "refused", "timed out", "not connected",
-                                   "no close frame", "ws_error", "1006")):
+        if is_chrome_unavailable_error(e):
             _trace("cmd.chrome_unavailable", req_id=req_id, action=action or "-", agent_id=agent_id)
             return web.json_response(
                 {"error": "Chrome is not open. Please click Chrome in your dock or re-run start.sh."},
@@ -12921,81 +12862,14 @@ async def handle_cmd(request: web.Request) -> web.Response:
 # Server
 # ---------------------------------------------------------------------------
 
-_ROUTES: list[tuple[str, str, object]] = [
-    ("GET", "/favicon.svg", handle_favicon),
-    ("GET", "/", handle_index),
-    ("GET", "/test", handle_test),
-    ("POST", "/auth/google", handle_google_auth),
-    ("POST", "/auth/request-claude-access", handle_request_claude_access),
-    ("POST", "/auth/logout", handle_logout),
-    ("GET", "/auth/me", handle_auth_me),
-    ("POST", "/web/cmd", handle_cmd),
-    ("GET", "/setup", handle_setup_page),
-    ("GET", "/scheduler", handle_scheduler_page),
-    ("GET", "/web/scheduler/jobs", handle_scheduler_jobs),
-    ("POST", "/web/scheduler/jobs", handle_scheduler_jobs),
-    ("GET", "/web/scheduler/history", handle_scheduler_history),
-    ("POST", "/web/scheduler/preview", handle_scheduler_preview),
-    ("GET", "/admin", handle_admin_page),
-    ("GET", "/admin/users", handle_admin_users),
-    ("GET", "/admin/pending", handle_admin_pending),
-    ("POST", "/admin/approve", handle_admin_approve),
-    ("POST", "/admin/reject", handle_admin_reject),
-    ("GET", "/chat", handle_chat_redirect),
-    ("GET", "/trial", handle_trial_page),
-    ("GET", "/chat-gemini", handle_chat_gemini_page),
-    ("GET", "/chat-codex", handle_chat_codex_page),
-    ("GET", "/chat-claude", handle_chat_claude_page),
-    ("GET", "/demo", handle_demo_page),
-    ("GET", "/case-study/zillow-rental", handle_case_study_zillow),
-    ("GET", "/local", handle_local_page),
-    ("GET", "/install", handle_install_page),
-    ("GET", "/app", handle_claude_page),
-    ("GET", "/chat/ws", handle_chat_ws),
-    ("POST", "/web/chat", handle_chat_msg),
-    ("POST", "/web/chat/cancel", handle_chat_cancel),
-    ("GET", "/web/chat/status", handle_chat_status),
-    ("GET", "/web/chat/history", handle_chat_history),
-    ("POST", "/web/chat/new", handle_chat_new),
-    ("GET", "/web/chat/slots", handle_chat_slots),
-    ("POST", "/web/chat/switch", handle_chat_switch),
-    ("GET", "/web/download-agent", handle_download_agent),
-    ("GET", "/web/download-installer", handle_download_installer),
-    ("POST", "/web/install-token", handle_install_token),
-    ("POST", "/web/install/claim/start", handle_install_claim_start),
-    ("POST", "/web/install/claim/poll", handle_install_claim_poll),
-    ("POST", "/web/install/claim/approve", handle_install_claim_approve),
-    ("POST", "/web/install/bootstrap", handle_install_bootstrap),
-    ("GET", "/install/script", handle_install_script),
-    ("GET", "/install/windows/script", handle_install_script_windows),
-    ("GET", "/install/{token}", handle_install_script),
-    ("GET", "/install/windows/{token}", handle_install_script_windows),
-    ("GET", "/install/claim/{claim_id}", handle_install_claim_page),
-    ("GET", "/trial/connector", handle_trial_connector),
-    ("POST", "/trial/token", handle_trial_token),
-    ("GET", "/trial/script", handle_trial_script),
-    ("GET", "/trial/{token}", handle_trial_script),
-    ("GET", "/web/agent/version", handle_agent_version),
-    ("GET", "/web/agent/files", handle_agent_files),
-    ("GET", "/web/provision/profiles", handle_provision_profiles),
-    ("POST", "/web/provision/start", handle_provision_start),
-    ("GET", "/web/provision/status", handle_provision_status),
-    ("POST", "/web/provision/confirm", handle_provision_confirm),
-    ("POST", "/web/provision/save-manual", handle_provision_save_manual),
-    ("POST", "/web/provision/revoke", handle_provision_revoke),
-]
-
-
 def _register_routes(app: web.Application):
-    for method, path, handler in _ROUTES:
-        if method == "GET":
-            app.router.add_get(path, handler)
-        elif method == "POST":
-            app.router.add_post(path, handler)
-        else:
-            raise ValueError(f"Unsupported route method: {method}")
-    if not GOOGLE_CLIENT_ID:
-        app.router.add_post("/auth/dev", handle_dev_auth)
+    register_route_specs(
+        app,
+        ROUTE_SPECS,
+        globals(),
+        include_dev_auth=not GOOGLE_CLIENT_ID,
+        dev_auth_handler=handle_dev_auth,
+    )
 
 
 async def _on_startup(app_: web.Application):
