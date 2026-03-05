@@ -6,6 +6,8 @@ These tests protect public routes and exported template contracts while
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -146,6 +148,35 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn("if (data.pending || data.status === 'pending')", trial)
         self.assertIn("Sign-in succeeded, but session was not established.", trial)
+
+
+class TestWebCoreResolverContracts(unittest.TestCase):
+    """Ensure extracted modules bind to the active web runtime module."""
+
+    def test_get_core_prefers_web_py_main_module(self):
+        from web_app.core import get_core
+
+        fake_main = ModuleType("__main__")
+        fake_main.__file__ = "/tmp/web.py"
+        fake_main._auth = object()
+        fake_main.create_session_token = lambda *_args, **_kwargs: ""
+
+        with patch.dict(sys.modules, {"__main__": fake_main}, clear=False):
+            self.assertIs(get_core(), fake_main)
+
+    def test_get_core_falls_back_to_loaded_web_module(self):
+        from web_app.core import get_core
+
+        fake_main = ModuleType("__main__")
+        fake_main.__file__ = "/tmp/not_web.py"
+        fake_web = ModuleType("web")
+
+        with patch.dict(
+            sys.modules,
+            {"__main__": fake_main, "web": fake_web},
+            clear=False,
+        ):
+            self.assertIs(get_core(), fake_web)
 
 
 if __name__ == "__main__":

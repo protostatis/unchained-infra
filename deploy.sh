@@ -161,15 +161,38 @@ echo ""
 echo "==> Relay logs (last 5):"
 "${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml logs relay --tail 5"
 
-# Restore any overlaid files back to their committed state
+# Restore overlaid private-core files back to committed/public state.
 echo ""
-if [[ "${DEPLOY_RESTORE_WORKTREE:-0}" == "1" ]]; then
-    echo "==> Cleaning working tree..."
-    git -C "$SCRIPT_DIR" checkout -- unchained/ 2>/dev/null \
-        && echo "    Working tree restored." \
-        || echo "    (skipped — not in a git repo or no changes)"
+if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" == "1" ]]; then
+    echo "==> Restoring private-core overlay files..."
+    OVERLAY_FILES=(
+        "unchained/cdp.py"
+        "unchained/ddm.py"
+        "unchained/intel.py"
+        "unchained/private_core_engine.py"
+        "unchained/private_core_server.py"
+        "unchained/private_core_contracts.py"
+        "unchained/CLAUDE.md"
+        "unchained/LABEL_RESOLUTION.md"
+        "unchained/benchmark/progress_critic.py"
+        "unchained/benchmark/intermediate_goal.py"
+    )
+    if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        for rel in "${OVERLAY_FILES[@]}"; do
+            if git -C "$SCRIPT_DIR" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+                git -C "$SCRIPT_DIR" restore --source=HEAD -- "$rel" >/dev/null 2>&1 \
+                    || git -C "$SCRIPT_DIR" checkout -- "$rel" >/dev/null 2>&1 \
+                    || true
+            else
+                rm -f "$SCRIPT_DIR/$rel"
+            fi
+        done
+        echo "    Private-core overlay files restored."
+    else
+        echo "    (skipped — not in a git repo)"
+    fi
 else
-    echo "==> Keeping local worktree (set DEPLOY_RESTORE_WORKTREE=1 to restore stubs)."
+    echo "==> Keeping overlaid private-core files (set DEPLOY_RESTORE_WORKTREE=1 to auto-restore)."
 fi
 
 echo ""

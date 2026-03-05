@@ -9,10 +9,7 @@ import httpx
 from aiohttp import web
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 async def check_relay_agent(agent_id: str) -> bool:

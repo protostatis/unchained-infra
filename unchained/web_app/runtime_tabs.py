@@ -7,10 +7,7 @@ import os
 import time
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 def session_cdp_url(agent_id: str) -> str:

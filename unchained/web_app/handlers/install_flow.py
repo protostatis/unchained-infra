@@ -5,10 +5,7 @@ from __future__ import annotations
 from aiohttp import web
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 async def handle_download_agent(request: web.Request) -> web.Response:

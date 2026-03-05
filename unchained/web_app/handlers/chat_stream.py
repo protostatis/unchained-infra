@@ -11,10 +11,7 @@ import uuid
 from aiohttp import web
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:

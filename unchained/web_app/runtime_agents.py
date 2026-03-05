@@ -10,10 +10,7 @@ import tempfile
 import time
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 def spawn_gemini_agent(user_id: str, api_key: str, gemini_key: str):
