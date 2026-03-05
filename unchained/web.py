@@ -6744,9 +6744,9 @@ body{
   </div>
 
   <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Slot 1</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Slot 2</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Slot 3</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
   </div>
 
   <div id="agent-bar">
@@ -7078,9 +7078,9 @@ async function loadSlots() {
       if (s.slot === activeSlot) btn.classList.add('active');
       if (s.empty) {
         btn.classList.add('empty');
-        btn.textContent = 'Slot ' + s.slot;
+        btn.textContent = (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
       } else {
-        btn.textContent = s.preview || ('Chat ' + s.slot);
+        btn.textContent = s.preview || (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
       }
     }
   } catch(e) {}
