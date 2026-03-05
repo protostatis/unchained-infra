@@ -2983,7 +2983,8 @@ body{
 
   <div id="download-banner" style="display:none">
     <span id="banner-msg">Connect your browser to browse.</span>
-    <a href="#" onclick="showBannerInstall();return false" id="banner-connect">Connect (curl)</a>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
   <!-- Install modal -->
@@ -3336,6 +3337,7 @@ function updateAgentStatusUI(data) {
   const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
   const bannerMsg = document.getElementById('banner-msg');
+  const bannerCurl = document.getElementById('banner-curl');
   const bannerConnect = document.getElementById('banner-connect');
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
@@ -3349,7 +3351,8 @@ function updateAgentStatusUI(data) {
   else updateStatusPill(bridgeEl, 'browser bridge offline', '');
 
   if (bannerMsg) bannerMsg.textContent = 'Connect your browser to browse.';
-  if (bannerConnect) bannerConnect.textContent = mismatch ? 'Reconnect (curl)' : 'Connect (curl)';
+  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
     if (chatConnected && bridgeConnected) {
@@ -4370,7 +4373,6 @@ body{
   <div id="download-banner" style="display:none">
     <span id="banner-msg">Local chat agent is offline on this machine.</span>
     <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
     <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
@@ -6759,7 +6761,6 @@ body{
       <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
     </div>
     <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="banner-zip">Download ZIP</a>
     <a href="/install" id="banner-connect">Download Agent Installer</a>
   </div>
 
@@ -6975,7 +6976,6 @@ function updateAgentStatusUI(data) {
   const bannerDetail = document.getElementById('banner-detail');
   const bannerConnect = document.getElementById('banner-connect');
   const bannerCurl = document.getElementById('banner-curl');
-  const bannerZip = document.getElementById('banner-zip');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
   const chatConnected = !!data.chat_connected;
@@ -6986,7 +6986,6 @@ function updateAgentStatusUI(data) {
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
   if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
-  if (bannerZip) bannerZip.style.display = '';
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
     bannerMsg.textContent = 'Codex CLI requires an updated local chat agent package.';
@@ -10158,7 +10157,6 @@ body{
       <span class="detail" id="setup-banner-detail">Start the installer to enable chat and browser control.</span>
     </div>
     <a href="#" onclick="showSetupInstallCmd();return false" id="setup-banner-curl">Install (curl)</a>
-    <a href="/web/download-agent" id="setup-banner-zip">Download ZIP</a>
     <a href="/install" id="setup-banner-connect">Download Agent Installer</a>
   </div>
 
