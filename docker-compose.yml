@@ -71,7 +71,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "web.py", "--host", "0.0.0.0"]
+    command: ["python", "-m", "web", "--host", "0.0.0.0"]
     expose:
       - "8080"
     volumes:

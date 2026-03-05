@@ -72,7 +72,7 @@ JWT_SECRET="$JWT_SECRET" \
 WEB_PORT="$WEB_PORT" \
 RELAY_URL="ws://127.0.0.1:$RELAY_PORT/tunnel" \
 RELAY_INTERNAL_URL="ws://127.0.0.1:$RELAY_PORT" \
-    uv run python web.py --port "$WEB_PORT" > "$PIDDIR/web.log" 2>&1 &
+    uv run python -m web --port "$WEB_PORT" > "$PIDDIR/web.log" 2>&1 &
 echo $! > "$PIDDIR/web.pid"
 sleep 2
 

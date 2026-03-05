@@ -6,6 +6,8 @@ These tests protect public routes and exported template contracts while
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -52,10 +54,13 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/auth/google"),
             ("POST", "/auth/logout"),
             ("GET", "/auth/me"),
+            ("POST", "/web/analytics/event"),
+            ("POST", "/web/analytics/events"),
             ("POST", "/web/cmd"),
             ("GET", "/setup"),
             ("GET", "/admin"),
             ("GET", "/admin/users"),
+            ("GET", "/admin/analytics/funnel"),
             ("GET", "/admin/pending"),
             ("POST", "/admin/approve"),
             ("POST", "/admin/reject"),
@@ -129,6 +134,71 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('id="f-model"', web.SCHEDULER_HTML)
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
+
+    def test_trial_auth_session_handshake_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn(
+            "fetch('/auth/google', {\n      method: 'POST',\n      credentials: 'include',",
+            trial,
+        )
+        self.assertIn(
+            "const meResp = await fetch('/auth/me', {\n          credentials: 'include',\n          cache: 'no-store',",
+            trial,
+        )
+        self.assertIn(
+            "const r = await fetch('/auth/me', {\n      credentials: 'include',\n      cache: 'no-store',",
+            trial,
+        )
+        self.assertIn("if (data.pending || data.status === 'pending')", trial)
+        self.assertIn("Sign-in succeeded, but session was not established.", trial)
+        self.assertEqual(
+            trial.count("let activeSlot = 1;"),
+            1,
+            "TRIAL_CHAT_HTML should not duplicate slot runtime declarations",
+        )
+
+
+class TestWebCoreResolverContracts(unittest.TestCase):
+    """Ensure extracted modules bind to the active web runtime module."""
+
+    def test_get_core_prefers_web_py_main_module(self):
+        from web_app.core import get_core
+
+        fake_main = ModuleType("__main__")
+        fake_main.__file__ = "/tmp/web.py"
+        fake_main._auth = object()
+        fake_main.create_session_token = lambda *_args, **_kwargs: ""
+
+        with patch.dict(sys.modules, {"__main__": fake_main}, clear=False):
+            self.assertIs(get_core(), fake_main)
+
+    def test_get_core_falls_back_to_loaded_web_module(self):
+        from web_app.core import get_core
+
+        fake_main = ModuleType("__main__")
+        fake_main.__file__ = "/tmp/not_web.py"
+        fake_web = ModuleType("web")
+
+        with patch.dict(
+            sys.modules,
+            {"__main__": fake_main, "web": fake_web},
+            clear=False,
+        ):
+            self.assertIs(get_core(), fake_web)
+
+
+class TestWebAnalyticsIsolationContracts(unittest.TestCase):
+    def test_analytics_db_isolated_from_auth_db_by_default(self):
+        configured = os.environ.get("UNCHAINED_ANALYTICS_DB_PATH", "").strip()
+        if configured:
+            self.skipTest("explicit analytics DB path configured via env")
+        auth_db = os.path.abspath(web._auth.db_path)
+        analytics_db = os.path.abspath(web._analytics.db_path)
+        self.assertNotEqual(
+            auth_db,
+            analytics_db,
+            "analytics writes should not use the auth/session SQLite file",
+        )
 
 
 if __name__ == "__main__":
