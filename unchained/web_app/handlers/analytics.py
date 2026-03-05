@@ -5,10 +5,7 @@ from __future__ import annotations
 from aiohttp import web
 
 
-def _core():
-    import web as core
-
-    return core
+from web_app.core import get_core as _core
 
 
 def _is_admin(request: web.Request) -> bool:
@@ -113,4 +110,3 @@ async def handle_admin_analytics_funnel(request: web.Request) -> web.Response:
         core.log.warning("[analytics] funnel query failed: %s", e)
         return web.json_response({"error": "Failed to build funnel"}, status=500)
     return web.json_response(payload)
-

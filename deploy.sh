@@ -82,6 +82,7 @@ echo "==> Uploading Python modules..."
     unchained/relay.py \
     unchained/rate_limit.py \
     unchained/auth.py \
+    unchained/analytics.py \
     unchained/cloud_tools.py \
     unchained/private_core_client.py \
     unchained/private_core_contracts.py \
