@@ -9211,397 +9211,72 @@ async def handle_test(request: web.Request) -> web.Response:
 
 async def handle_google_auth(request: web.Request) -> web.Response:
     """POST /auth/google — verify Google ID token, create session."""
-    body = await request.json()
-    id_token = body.get("credential", "")
-    if not id_token:
-        return web.json_response({"error": "Missing credential"}, status=400)
+    from web_app.handlers import auth_admin
 
-    payload = await verify_google_token(id_token)
-    if payload is None:
-        return web.json_response({"error": "Invalid Google token"}, status=401)
-
-    email = payload.get("email", "").lower()
-    name = payload.get("name", "")
-    picture = payload.get("picture", "")
-    source = body.get("source", "claude")
-    user_type = "trial" if source == "trial" else "claude"
-
-    existing = _auth.find_user_by_email(email)
-
-    if existing:
-        status = existing.get("status", "approved")
-
-        if status == "approved":
-            # Normal flow — approved user
-            # Update last login + profile
-            user = _auth.get_or_create_user(email, name, picture)
-            api_key = user["api_key"]
-            agent_id = f"claude-{_key_hash(api_key)}"
-            session_token = create_session_token(user["user_id"], email)
-            resp = web.json_response({
-                "ok": True, "email": email, "name": name,
-                "picture": picture, "agent_id": agent_id,
-                "user_type": existing.get("user_type", "claude"),
-                "status": "approved",
-                "demo_prompt_count": _auth.get_demo_count(email),
-                "demo_unlimited": _is_demo_unlimited(existing),
-                "claude_access_requested": False,
-                "is_admin": email.lower() in ADMIN_EMAILS,
-            })
-            _set_session_cookie(resp, session_token, request)
-            return resp
-
-        if status == "pending":
-            # Trial/demo users can access trial flows while account review is pending.
-            if source == "trial":
-                api_key = existing.get("api_key")
-                if not api_key:
-                    api_key = _auth.create_key(existing["user_id"])
-                now = time.time()
-                with _auth._conn() as conn:
-                    conn.execute(
-                        "UPDATE users SET api_key = COALESCE(api_key, ?), "
-                        "last_login_at = ?, name = ?, picture = ? WHERE email = ?",
-                        (
-                            api_key,
-                            now,
-                            name or existing.get("name", ""),
-                            picture or existing.get("picture", ""),
-                            email,
-                        ),
-                    )
-                refreshed = _auth.find_user_by_email(email) or existing
-                pending_user_type = refreshed.get("user_type", "trial")
-                agent_id = f"claude-{_key_hash(api_key)}"
-                session_token = create_session_token(existing["user_id"], email)
-                resp = web.json_response({
-                    "ok": True, "email": email, "name": name,
-                    "picture": picture, "agent_id": agent_id,
-                    "user_type": pending_user_type,
-                    "status": "pending",
-                    "demo_prompt_count": _auth.get_demo_count(email),
-                    "demo_unlimited": False,
-                    "review_pending": True,
-                    "claude_access_requested": pending_user_type == "claude",
-                    "is_admin": email.lower() in ADMIN_EMAILS,
-                })
-                _set_session_cookie(resp, session_token, request)
-                return resp
-
-            pending_user_type = existing.get("user_type", "claude")
-            return web.json_response({
-                "pending": True,
-                "status": "pending",
-                "user_type": pending_user_type,
-                "claude_access_requested": pending_user_type == "claude",
-                "message": "Your sign-up request is still being reviewed. We'll notify you by email once approved.",
-            })
-
-        if status == "rejected":
-            return web.json_response({"error": "Your sign-up request was not approved."}, status=403)
-
-    # Trial/demo sign-ups remain pending for admin review but can use free-tier chat immediately.
-    if source == "trial":
-        user = _auth.create_pending_user(email, name, picture, user_type="trial")
-        api_key = _auth.create_key(user["user_id"])
-        with _auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
-                (api_key, email),
-            )
-        agent_id = f"claude-{_key_hash(api_key)}"
-        session_token = create_session_token(user["user_id"], email)
-        resp = web.json_response({
-            "ok": True, "email": email, "name": name,
-            "picture": picture, "agent_id": agent_id,
-            "user_type": "trial",
-            "status": "pending",
-            "demo_prompt_count": _auth.get_demo_count(email),
-            "demo_unlimited": False,
-            "review_pending": True,
-            "claude_access_requested": False,
-            "is_admin": email.lower() in ADMIN_EMAILS,
-        })
-        _set_session_cookie(resp, session_token, request)
-
-        send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
-        )
-        for admin in ADMIN_EMAILS:
-            send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
-        return resp
-
-    # Non-trial sign-ups require manual admin approval before chat access.
-    user = _auth.create_pending_user(email, name, picture, user_type=user_type)
-    session_token = create_session_token(user["user_id"], email)
-
-    # Email user: sign-up received
-    send_email(
-        email,
-        "Unchained \u2014 Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>\u2014 The Unchained Team</p>",
-    )
-
-    # Email admin(s): new sign-up
-    for admin in ADMIN_EMAILS:
-        send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
-
-    resp = web.json_response({
-        "pending": True,
-        "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
-    })
-    # Set session cookie so /auth/me can identify pending users
-    _set_session_cookie(resp, session_token, request)
-    return resp
+    return await auth_admin.handle_google_auth(request)
 
 
 async def handle_request_claude_access(request: web.Request) -> web.Response:
     """POST /auth/request-claude-access — request full Claude access for pending account."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    from web_app.handlers import auth_admin
 
-    email = str(auth_info.get("email", "")).strip().lower()
-    if not email:
-        return web.json_response({"error": "Missing account email"}, status=400)
-
-    user = _auth.find_user_by_email(email)
-    if not user:
-        return web.json_response({"error": "User not found"}, status=404)
-
-    status = user.get("status", "approved")
-    user_type = user.get("user_type", "claude")
-    if status == "approved":
-        return web.json_response({
-            "ok": True,
-            "status": "approved",
-            "user_type": user_type,
-            "claude_access_requested": user_type == "claude",
-            "already_approved": True,
-        })
-    if status == "rejected":
-        return web.json_response(
-            {"error": "Your sign-up request was not approved."},
-            status=403,
-        )
-
-    already_requested = user_type == "claude"
-    if not already_requested:
-        with _auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET user_type = 'claude', last_login_at = ? "
-                "WHERE email = ? AND status = 'pending'",
-                (time.time(), email),
-            )
-
-        send_email(
-            email,
-            "Unchained — Claude access request received",
-            f"<p>Hi {user.get('name') or email},</p>"
-            "<p>We received your request for full Claude access.</p>"
-            "<p>Your account is still pending review. You can continue using Trial while you wait.</p>"
-            "<p>— The Unchained Team</p>",
-        )
-        for admin in ADMIN_EMAILS:
-            send_email(
-                admin,
-                f"Claude access request (pending): {email}",
-                f"<p>User requested full Claude access: <b>{user.get('name') or email}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b>.</p>",
-            )
-
-    return web.json_response({
-        "ok": True,
-        "status": "pending",
-        "user_type": "claude",
-        "claude_access_requested": True,
-        "already_requested": already_requested,
-        "message": "Request submitted. You can keep using Trial while your Claude access request is reviewed.",
-    })
+    return await auth_admin.handle_request_claude_access(request)
 
 
 async def handle_logout(request: web.Request) -> web.Response:
     """POST /auth/logout — clear session cookie."""
-    resp = web.json_response({"ok": True})
-    _clear_session_cookie(resp, request)
-    return resp
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_logout(request)
 
 
 async def handle_dev_auth(request: web.Request) -> web.Response:
     """POST /auth/dev — local dev login (no Google). Only available when GOOGLE_CLIENT_ID is unset."""
-    if GOOGLE_CLIENT_ID:
-        return web.json_response({"error": "Dev auth disabled (Google OAuth configured)"}, status=403)
+    from web_app.handlers import auth_admin
 
-    body = await request.json()
-    email = body.get("email", "dev@localhost").strip().lower()
-    name = body.get("name", "Dev User")
-
-    user = _auth.get_or_create_user(email, name, "")
-    # Ensure user is approved (auto-approve for dev)
-    with _auth._conn() as conn:
-        conn.execute("UPDATE users SET status = 'approved' WHERE email = ?", (email,))
-
-    user = _auth.find_user_by_email(email)
-    token = create_session_token(user["user_id"], email)
-    agent_id = f"claude-{_key_hash(user['api_key'])}"
-
-    resp = web.json_response({"ok": True, "agent_id": agent_id, "email": email})
-    _set_session_cookie(resp, token, request)
-    return resp
+    return await auth_admin.handle_dev_auth(request)
 
 
 async def handle_auth_me(request: web.Request) -> web.Response:
     """GET /auth/me — return current user info if session is valid."""
-    # First try normal auth (approved users with api_key)
-    auth_info = _authenticate(request)
-    if auth_info is not None:
-        email = auth_info.get("email", "")
-        user = _auth.find_user_by_email(email)
-        status = user.get("status", auth_info.get("status", "approved")) if user else auth_info.get("status", "approved")
-        user_type = user.get("user_type", auth_info.get("user_type", "claude")) if user else auth_info.get("user_type", "claude")
-        openrouter_usage = {}
-        if user and (user_type == "trial" or status == "pending"):
-            openrouter_usage = _openrouter_budget_state_for_user(user["user_id"])
-        return web.json_response({
-            "authenticated": True,
-            "email": email,
-            "agent_id": auth_info.get("agent_id", ""),
-            "user_type": user_type,
-            "status": status,
-            "pending": status == "pending",
-            "review_pending": status == "pending",
-            "claude_access_requested": status == "pending" and user_type == "claude",
-            "demo_prompt_count": _auth.get_demo_count(email) if email else 0,
-            "demo_unlimited": _is_demo_unlimited(user) if user else False,
-            "openrouter_usage": openrouter_usage,
-            "is_admin": email.lower() in ADMIN_EMAILS,
-            "name": user.get("name", "") if user else "",
-            "picture": user.get("picture", "") if user else "",
-        })
+    from web_app.handlers import auth_admin
 
-    # Check for valid session cookies for pending users (also handles duplicate cookie names).
-    sessions: list[dict] = []
-    for token in _session_cookie_candidates(request):
-        session = verify_session_token(token)
-        if session:
-            sessions.append(session)
-    sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
-    for session in sessions:
-        status = _auth.get_user_status(session["email"])
-        user = _auth.find_user_by_email(session["email"])
-        user_type = user.get("user_type", "claude") if user else "claude"
-        if status == "pending":
-            return web.json_response({
-                "authenticated": False,
-                "pending": True,
-                "status": "pending",
-                "user_type": user_type,
-                "claude_access_requested": user_type == "claude",
-            })
-        if status == "approved":
-            # User was just approved — re-check (they now have an api_key)
-            if user and user.get("api_key"):
-                api_key = user["api_key"]
-                agent_id = f"claude-{_key_hash(api_key)}"
-                return web.json_response({
-                    "authenticated": True,
-                    "email": session["email"],
-                    "agent_id": agent_id,
-                    "user_type": user.get("user_type", "claude"),
-                    "status": "approved",
-                    "pending": False,
-                    "review_pending": False,
-                    "claude_access_requested": False,
-                    "is_admin": session["email"].lower() in ADMIN_EMAILS,
-                    "name": user.get("name", ""),
-                    "picture": user.get("picture", ""),
-                })
-
-    return web.json_response({"authenticated": False}, status=401)
+    return await auth_admin.handle_auth_me(request)
 
 
 def _is_admin(request: web.Request) -> dict | None:
     """Authenticate and check if user is an admin. Returns auth_info or None."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return None
-    email = auth_info.get("email", "")
-    if email not in ADMIN_EMAILS:
-        return None
-    return auth_info
+    from web_app.handlers import auth_admin
+
+    return auth_admin.is_admin(request)
 
 
 async def handle_admin_pending(request: web.Request) -> web.Response:
     """GET /admin/pending — list all pending sign-up requests."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    pending = _auth.list_pending_users()
-    return web.json_response({"pending": pending})
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_admin_pending(request)
 
 
 async def handle_admin_approve(request: web.Request) -> web.Response:
     """POST /admin/approve — approve a pending user."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    body = await request.json()
-    email = body.get("email", "").strip().lower()
-    if not email:
-        return web.json_response({"error": "email required"}, status=400)
-    user = _auth.approve_user(email)
-    if not user:
-        return web.json_response({"error": f"User {email} not found"}, status=404)
+    from web_app.handlers import auth_admin
 
-    # Notify user of approval
-    send_email(
-        email,
-        "Unchained \u2014 You're in!",
-        f"<p>Hi {user.get('name') or email},</p>"
-        "<p>Your account has been approved! "
-        'Visit <a href="https://api.unchainedsky.com/chat">unchainedsky.com/chat</a> to get started.</p>'
-        "<p>\u2014 The Unchained Team</p>",
-    )
-    return web.json_response({"ok": True, "user": user})
+    return await auth_admin.handle_admin_approve(request)
 
 
 async def handle_admin_reject(request: web.Request) -> web.Response:
     """POST /admin/reject — reject a pending user."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    body = await request.json()
-    email = body.get("email", "").strip().lower()
-    if not email:
-        return web.json_response({"error": "email required"}, status=400)
-    if _auth.reject_user(email):
-        return web.json_response({"ok": True})
-    return web.json_response({"error": f"User {email} not found"}, status=404)
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_admin_reject(request)
 
 
 async def handle_admin_users(request: web.Request) -> web.Response:
     """GET /admin/users — list all users with their status."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    users = _auth.list_all_users()
-    return web.json_response({"users": users})
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_admin_users(request)
 
 
 SETUP_HTML = r"""<!DOCTYPE html>
@@ -11597,123 +11272,44 @@ document.addEventListener('keydown',e=>{
 
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(SETUP_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_setup_page(request)
 
 
 async def handle_admin_page(request: web.Request) -> web.Response:
     """GET /admin — serve the admin UI."""
-    # Allow the page to load; client-side will hit /admin/users which enforces auth
-    return web.Response(text=ADMIN_HTML, content_type="text/html")
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_admin_page(request)
 
 
 async def handle_scheduler_page(request: web.Request) -> web.Response:
     """GET /scheduler — authenticated scheduler editor UI."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        raise web.HTTPFound("/app")
-    if _is_pending_user(auth_info):
-        raise web.HTTPFound("/trial")
-    return web.Response(text=SCHEDULER_HTML, content_type="text/html")
+    from web_app.handlers import auth_admin
+
+    return await auth_admin.handle_scheduler_page(request)
 
 
 async def handle_scheduler_jobs(request: web.Request) -> web.Response:
     """GET/POST /web/scheduler/jobs — per-user scheduler config."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
+    from web_app.handlers import auth_admin
 
-    import scheduled_tasks as st
-
-    if request.method == "GET":
-        payload = _scheduler_read_jobs_payload(user_id)
-        try:
-            jobs = st.parse_jobs_payload(payload)
-            preview = _scheduler_preview_rows(user_id, jobs)
-            return web.json_response({"jobs": st.jobs_to_payload(jobs)["jobs"], "preview": preview})
-        except Exception:
-            return web.json_response({"jobs": [], "preview": []})
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
-
-    try:
-        jobs = st.parse_jobs_payload(body)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-    if len(jobs) > 200:
-        return web.json_response({"error": "Too many jobs (max 200)"}, status=400)
-
-    canonical = st.jobs_to_payload(jobs)
-    _scheduler_write_jobs_payload(user_id, canonical)
-    preview = _scheduler_preview_rows(user_id, jobs)
-    return web.json_response({"ok": True, "jobs": canonical["jobs"], "preview": preview})
+    return await auth_admin.handle_scheduler_jobs(request)
 
 
 async def handle_scheduler_preview(request: web.Request) -> web.Response:
     """POST /web/scheduler/preview — preview next run times for job payload."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
+    from web_app.handlers import auth_admin
 
-    import scheduled_tasks as st
-
-    try:
-        body = await request.json() if request.can_read_body else {}
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if body is None:
-        body = {}
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
-
-    payload = body if isinstance(body.get("jobs"), list) else _scheduler_read_jobs_payload(user_id)
-    try:
-        jobs = st.parse_jobs_payload(payload)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-    preview = _scheduler_preview_rows(user_id, jobs)
-    return web.json_response({"preview": preview, "server_time": int(time.time())})
+    return await auth_admin.handle_scheduler_preview(request)
 
 
 async def handle_scheduler_history(request: web.Request) -> web.Response:
     """GET /web/scheduler/history — recent persisted run records for one job."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
-    job_id = str(request.query.get("job_id", "") or "").strip()
-    if not job_id:
-        return web.json_response({"error": "job_id required"}, status=400)
+    from web_app.handlers import auth_admin
 
-    try:
-        limit = int(request.query.get("limit", "20") or "20")
-    except ValueError:
-        return web.json_response({"error": "limit must be an integer"}, status=400)
-    limit = max(1, min(limit, 50))
-
-    import scheduled_tasks as st
-
-    try:
-        jobs = st.parse_jobs_payload(_scheduler_read_jobs_payload(user_id))
-    except Exception:
-        jobs = []
-    if job_id not in {job.id for job in jobs}:
-        return web.json_response({"error": "job not found"}, status=404)
-
-    records = st.load_run_history(_scheduler_state_path(user_id), job_id, limit=limit)
-    return web.json_response({"records": records, "job_id": job_id})
+    return await auth_admin.handle_scheduler_history(request)
 
 
 # ---------------------------------------------------------------------------
@@ -11722,315 +11318,55 @@ async def handle_scheduler_history(request: web.Request) -> web.Response:
 
 async def handle_provision_profiles(request: web.Request) -> web.Response:
     """GET /web/provision/profiles — list Chrome profiles with Google sign-in."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    import signup_agent
-    profiles = signup_agent.list_chrome_profiles()
-
-    # If no local profiles found, try querying through the relay (user's bridge).
-    if not profiles:
-        agent_id = auth_info.get("agent_id", "")
-        if agent_id:
-            relay_host, relay_port = _parse_relay()
-            profiles = await provision_helpers.fetch_relay_profiles(
-                agent_id=agent_id,
-                relay_host=relay_host,
-                relay_port=relay_port,
-                headers=_relay_auth_headers(),
-            )
-
-    return web.json_response({"profiles": profiles})
+    return await provision.handle_provision_profiles(request)
 
 def _spawn_provider_agent(provider: str, user_id: str, unchained_key: str, provider_key: str) -> str | None:
     """Spawn provider-specific chat agent and return destination chat URL."""
-    if provider == "gemini":
-        _spawn_gemini_agent(user_id, unchained_key, provider_key)
-        return "/chat-gemini"
-    if provider == "claude-sdk":
-        _spawn_claude_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-claude"
-    if provider == "codex-sdk":
-        _spawn_codex_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-codex"
-    if provider == "codex-cli":
-        # Codex CLI lane is local and does not need provider provisioning.
-        return "/chat-codex?model=codex-cli:gpt-5.1-codex-mini"
-    return None
+    from web_app.handlers import provision
+
+    return provision.spawn_provider_agent(provider, user_id, unchained_key, provider_key)
 
 
 def _terminate_provider_agent(provider: str, key_hash: str):
     """Terminate a running provider agent process after key revoke."""
-    if provider == "gemini":
-        agent_id = f"gemini-{key_hash}"
-        proc = _gemini_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Gemini agent {agent_id}")
-        fh = _gemini_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _gemini_last_active.pop(agent_id, None)
-        return
+    from web_app.handlers import provision
 
-    if provider == "codex-sdk":
-        agent_id = f"codexsdk-{key_hash}"
-        proc = _codex_sdk_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Codex SDK agent {agent_id}")
-        fh = _codex_sdk_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _codex_sdk_last_active.pop(agent_id, None)
-        return
-
-    if provider == "claude-sdk":
-        agent_id = f"claudesdk-{key_hash}"
-        proc = _claude_sdk_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Claude SDK agent {agent_id}")
-        fh = _claude_sdk_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _claude_sdk_last_active.pop(agent_id, None)
-        return
-
-    if provider == "codex-cli":
-        agent_id = f"codexcli-{key_hash}"
-        proc = _codex_cli_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Codex CLI agent {agent_id}")
-        fh = _codex_cli_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _codex_cli_last_active.pop(agent_id, None)
+    provision.terminate_provider_agent(provider, key_hash)
 async def handle_provision_start(request: web.Request) -> web.Response:
     """POST /web/provision/start — trigger API key provisioning for a provider."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    # Per-user rate limit
-    user_id = auth_info["user_id"]
-    last = _provision_cooldowns.get(user_id, 0)
-    if time.time() - last < _PROVISION_COOLDOWN_SECS:
-        remaining = int(_PROVISION_COOLDOWN_SECS - (time.time() - last))
-        return web.json_response(
-            {"error": f"Please wait {remaining}s before starting another provision."},
-            status=429,
-        )
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    if not provider:
-        return web.json_response({"error": "provider required"}, status=400)
-
-    import signup_agent
-    if provider not in signup_agent.list_providers():
-        return web.json_response(
-            {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
-            status=400,
-        )
-
-    profile_path = body.get("profile_path")
-    use_relay = body.get("use_relay", False)
-
-    # Validate profile_path is under the known Chrome user data directory (local mode only;
-    # in relay mode, the bridge validates the path on the user's machine).
-    if profile_path and not use_relay:
-        import signup_agent as _sa
-        chrome_dir = _sa._chrome_user_data_dir()
-        if not chrome_dir:
-            return web.json_response({"error": "Chrome user data directory not found"}, status=400)
-        if not provision_helpers.is_profile_path_within(profile_path, chrome_dir):
-            return web.json_response({"error": "Invalid profile path"}, status=403)
-
-    # Record cooldown timestamp
-    _provision_cooldowns[user_id] = time.time()
-
-    if use_relay:
-        agent_id = auth_info.get("agent_id")
-        if not agent_id:
-            return web.json_response({"error": "No agent_id resolved for relay provisioning"}, status=400)
-        relay_host, relay_port = _parse_relay()
-        result = await signup_agent.provision_key(
-            provider_name=provider,
-            agent_id=agent_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            user_id=user_id,
-            store_key=False,
-            profile_path=profile_path or "",
-        )
-    else:
-        result = await signup_agent.provision_key_local(
-            provider_name=provider,
-            user_id=user_id,
-            profile_path=profile_path,
-            store_key=False,
-        )
-
-    resp = {
-        "status": result.status.value,
-        "provider": result.provider,
-        "message": result.message,
-        "duration_ms": result.duration_ms,
-        "has_key": result.api_key is not None,
-    }
-
-    # On fresh success, stash key for user confirmation instead of storing immediately
-    if result.api_key and result.status == signup_agent.ProvisionStatus.SUCCESS:
-        _pending_provision[user_id] = (provider, result.api_key, time.time())
-        key = result.api_key
-        resp["key_preview"] = key[:8] + "..." + key[-4:] if len(key) > 12 else key[:4] + "..."
-
-    # Already-exists: key is already stored, spawn provider agent and link to chat
-    if result.status == signup_agent.ProvisionStatus.ALREADY_EXISTS:
-        existing_key = result.api_key or signup_agent.get_provider_key(user_id, provider)
-        if existing_key:
-            chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], existing_key)
-            if chat_url:
-                resp["chat_url"] = chat_url
-
-    return web.json_response(resp)
+    return await provision.handle_provision_start(request)
 
 
 async def handle_provision_status(request: web.Request) -> web.Response:
     """GET /web/provision/status — check which providers have keys."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    import signup_agent
-
-    user_id = auth_info["user_id"]
-    providers = []
-    # codex-cli is local-only and does not require/stash provider keys.
-    # Keep backend compatibility for legacy keys, but hide it from provisioning state.
-    visible_providers = [n for n in signup_agent.list_providers() if n != "codex-cli"]
-    for name in visible_providers:
-        entry = {"name": name, "provisioned": signup_agent.has_provider_key(user_id, name)}
-        if entry["provisioned"]:
-            key = signup_agent.get_provider_key(user_id, name)
-            entry["key_preview"] = key[:10] + "..." if key else ""
-        providers.append(entry)
-
-    return web.json_response({"providers": providers})
+    return await provision.handle_provision_status(request)
 
 
 async def handle_provision_confirm(request: web.Request) -> web.Response:
     """POST /web/provision/confirm — user confirms storing the provisioned key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    user_id = auth_info["user_id"]
-    pending = _pending_provision.pop(user_id, None)
-    if not pending:
-        return web.json_response({"error": "No pending key to confirm (expired or already stored)"}, status=400)
-
-    provider, api_key, ts = pending
-    if time.time() - ts > _PENDING_PROVISION_TTL:
-        return web.json_response({"error": "Pending key expired. Please provision again."}, status=400)
-
-    import signup_agent
-    signup_agent.store_provider_key(user_id, provider, api_key)
-    log.info("[provision] User %s confirmed %s key storage", user_id, provider)
-
-    resp = {"status": "success", "provider": provider, "message": f"{provider} key stored."}
-
-    # Spawn provider agent after confirmed storage
-    chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], api_key)
-    if chat_url:
-        resp["chat_url"] = chat_url
-
-    return web.json_response(resp)
+    return await provision.handle_provision_confirm(request)
 
 
 async def handle_provision_save_manual(request: web.Request) -> web.Response:
     """POST /web/provision/save-manual — store a manually pasted API key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    api_key = body.get("api_key", "").strip()
-    if not provider or not api_key:
-        return web.json_response({"error": "provider and api_key required"}, status=400)
-    key_error = provision_helpers.validate_manual_api_key(api_key)
-    if key_error:
-        return web.json_response({"error": key_error}, status=400)
-
-    import signup_agent
-    if provider not in signup_agent.list_providers():
-        return web.json_response(
-            {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
-            status=400,
-        )
-
-    user_id = auth_info["user_id"]
-    signup_agent.store_provider_key(user_id, provider, api_key)
-    log.info("[provision] User %s manually saved %s key", user_id, provider)
-
-    resp = {"status": "success", "provider": provider, "message": f"{provider} key saved."}
-    chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], api_key)
-    if chat_url:
-        resp["chat_url"] = chat_url
-
-    return web.json_response(resp)
+    return await provision.handle_provision_save_manual(request)
 
 
 async def handle_provision_revoke(request: web.Request) -> web.Response:
     """POST /web/provision/revoke — revoke a provisioned key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
+    from web_app.handlers import provision
 
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    if not provider:
-        return web.json_response({"error": "provider required"}, status=400)
-
-    import signup_agent
-
-    user_id = auth_info["user_id"]
-    revoked = signup_agent.revoke_provider_key(user_id, provider)
-
-    _terminate_provider_agent(provider, auth_info["key_hash"])
-
-    return web.json_response({
-        "revoked": revoked,
-        "provider": provider,
-    })
+    return await provision.handle_provision_revoke(request)
 
 
 # ---------------------------------------------------------------------------
