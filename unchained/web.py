@@ -42,6 +42,10 @@ from web_cmd import (
     is_chrome_unavailable_error,
     run_cmd_action,
 )
+from web_app.handlers.auth_admin import (
+    handle_facebook_callback as _handle_facebook_callback,
+    handle_facebook_start as _handle_facebook_start,
+)
 
 log = logging.getLogger(__name__)
 
@@ -14176,6 +14180,8 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/", handle_index),
     ("GET", "/test", handle_test),
     ("POST", "/auth/google", handle_google_auth),
+    ("GET", "/auth/facebook/start", _handle_facebook_start),
+    ("GET", "/auth/facebook/callback", _handle_facebook_callback),
     ("POST", "/auth/request-claude-access", handle_request_claude_access),
     ("POST", "/auth/logout", handle_logout),
     ("GET", "/auth/me", handle_auth_me),

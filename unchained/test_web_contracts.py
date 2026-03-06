@@ -52,6 +52,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/"),
             ("GET", "/test"),
             ("POST", "/auth/google"),
+            ("GET", "/auth/facebook/start"),
+            ("GET", "/auth/facebook/callback"),
             ("POST", "/auth/logout"),
             ("GET", "/auth/me"),
             ("POST", "/web/analytics/event"),
