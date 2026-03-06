@@ -98,6 +98,13 @@ MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
+LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
+AUTO_LIVE_PREVIEW = os.environ.get("AUTO_LIVE_PREVIEW", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 # Nudge constants are imported from nudge.py
 
 # Local CLI defaults
@@ -786,6 +793,44 @@ class TrialAgent:
         else:
             print(f"[{session_id}] Intervention screenshot unavailable: {_truncate(screenshot, 120)}")
 
+    async def _emit_live_preview(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        tab_id: str | None = None,
+        note: str = "Page loaded",
+    ):
+        """Capture and stream a screenshot to refresh the First Look live panel."""
+        if not AUTO_LIVE_PREVIEW:
+            return
+        try:
+            screenshot = await asyncio.wait_for(
+                self._execute_tool(agent_id, "screenshot", {}, tab_id=tab_id),
+                timeout=LIVE_PREVIEW_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            print(f"[{session_id}] Live preview timed out after {LIVE_PREVIEW_TIMEOUT}s")
+            return
+        except Exception as e:
+            print(f"[{session_id}] Live preview capture failed: {e}")
+            return
+
+        if not isinstance(screenshot, str):
+            screenshot = str(screenshot)
+        if not _is_base64_png_blob(screenshot):
+            print(f"[{session_id}] Live preview skipped (non-image payload)")
+            return
+
+        await self._send(
+            session_id,
+            {
+                "type": "live_preview",
+                "data": screenshot,
+                "note": note,
+            },
+        )
+
     async def connect(self):
         url = f"{self.server}/chat/ws"
         print(f"Connecting to {url} ...")
@@ -1194,6 +1239,24 @@ class TrialAgent:
                             "is_screenshot": is_screenshot,
                             "visible": is_screenshot and bool(show_user),
                         })
+
+                        tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
+                        if name == "navigate" and not tool_failed:
+                            await self._emit_live_preview(
+                                session_id,
+                                agent_id,
+                                tab_id=session_tab_id,
+                                note="Page loaded",
+                            )
+                        elif is_screenshot and bool(show_user):
+                            await self._send(
+                                session_id,
+                                {
+                                    "type": "live_preview",
+                                    "data": result,
+                                    "note": "Screenshot captured",
+                                },
+                            )
 
                         ns.live_tool_log.append(
                             {

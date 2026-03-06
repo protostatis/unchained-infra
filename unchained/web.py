@@ -31,14 +31,22 @@ import httpx
 import jwt
 from aiohttp import web
 
+from analytics import AnalyticsStore
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
 from web_state import ChatRuntimeState
+from web_cmd import (
+    CmdInputError,
+    UnknownCmdActionError,
+    is_chrome_unavailable_error,
+    run_cmd_action,
+)
 
 log = logging.getLogger(__name__)
 
 _auth = Auth()
+_analytics = AnalyticsStore(db_path=_auth.db_path)
 
 # Google OAuth config (from env)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -78,7 +86,7 @@ TRIAL_AGENT_KEY = os.environ.get("TRIAL_AGENT_KEY", "").strip()
 TRIAL_AGENT_ID = os.environ.get("TRIAL_AGENT_ID", "").strip()
 if not TRIAL_AGENT_ID and TRIAL_AGENT_KEY:
     TRIAL_AGENT_ID = _agent_id("trial", TRIAL_AGENT_KEY)
-# Headless bridge agent_id — when set, trial/demo chat messages route CDP tools
+# Headless bridge agent_id — when set, trial/first-look chat messages route CDP tools
 # to this agent instead of the user's personal agent.
 # Can be set explicitly, or derived from HEADLESS_API_KEY (the key the bridge uses).
 HEADLESS_AGENT_ID = os.environ.get("HEADLESS_AGENT_ID", "").strip()
@@ -102,6 +110,15 @@ if not TRIAL_AGENT_ID:
 
 # Demo prompt quota — number of headless demo interactions before requiring trial install
 _DEMO_PROMPT_LIMIT = 4
+_FIRST_LOOK_GUEST_PROMPT_LIMIT = max(
+    1,
+    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "1")),
+)
+_FIRST_LOOK_GUEST_COOKIE_MAX_AGE = 60 * 24 * 3600
+_FIRST_LOOK_GUEST_ID_COOKIE = "uc_fl_guest"
+_FIRST_LOOK_GUEST_QUOTA_COOKIE = "uc_fl_quota"
+_SIGNED_INT_RE = re.compile(r"^[0-9]{1,4}$")
+_SIGNED_GUEST_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 # Turn-based rate limiting for free-tier users
 _FREE_DAILY_TURN_LIMIT = 25    # ~25 turns covers 10-20 min of real browsing
@@ -190,6 +207,141 @@ def _trace(event: str, **fields):
     log.info("[trace] %s%s", event, suffix)
 
 
+_ANALYTICS_PAGE_VIEW_ROUTES = {
+    "/",
+    "/case-study/zillow-rental",
+    "/trial",
+    "/local",
+    "/setup",
+    "/install",
+    "/first-look",
+    "/demo",
+    "/chat-gemini",
+    "/chat-codex",
+    "/chat-claude",
+    "/app",
+    "/scheduler",
+    "/admin",
+}
+_ANALYTICS_INLINE_GSI_ROUTES = {
+    "/trial",
+    "/local",
+    "/setup",
+    "/chat-gemini",
+    "/chat-codex",
+    "/chat-claude",
+}
+_ANALYTICS_LINK_GATE_ROUTES = {
+    "/install",
+}
+_analytics_last_cleanup_ts = 0.0
+
+
+def _analytics_maybe_cleanup():
+    global _analytics_last_cleanup_ts
+    now = time.time()
+    if now - _analytics_last_cleanup_ts < 3600:
+        return
+    _analytics_last_cleanup_ts = now
+    try:
+        _analytics.cleanup_old_events()
+    except Exception as e:
+        log.warning("[analytics] cleanup failed: %s", e)
+
+
+def _track_event(
+    request: web.Request,
+    event: str,
+    *,
+    event_id: str = "",
+    session_id: str = "",
+    page_view_id: str = "",
+    route: str = "",
+    route_intended: str = "",
+    route_effective: str = "",
+    gate_type: str = "",
+    cta_id: str = "",
+    error_code: str = "",
+    user_id: str = "",
+    user_type: str = "",
+    source: str = "",
+    status_code: int = 0,
+    latency_ms: int = 0,
+    meta: dict | None = None,
+    dedupe_ttl_s: float = 0.0,
+):
+    try:
+        _analytics_maybe_cleanup()
+        return _analytics.track(
+            event,
+            request=request,
+            event_id=event_id,
+            session_id=session_id,
+            page_view_id=page_view_id,
+            route=route,
+            route_intended=route_intended,
+            route_effective=route_effective,
+            gate_type=gate_type,
+            cta_id=cta_id,
+            error_code=error_code,
+            user_id=user_id,
+            user_type=user_type,
+            source=source,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            meta=meta,
+            dedupe_ttl_s=dedupe_ttl_s,
+        )
+    except Exception as e:
+        log.warning("[analytics] event=%s failed: %s", event, e)
+        return False
+
+
+def _track_page_view(request: web.Request):
+    route = request.path
+    if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
+        return
+    gate_type = ""
+    if route in _ANALYTICS_INLINE_GSI_ROUTES:
+        gate_type = "inline_gsi"
+    elif route in _ANALYTICS_LINK_GATE_ROUTES:
+        gate_type = "link_signin"
+    _track_event(
+        request,
+        "page_view",
+        route=route,
+        route_intended=route,
+        route_effective=route,
+        gate_type=gate_type,
+        source="web",
+        status_code=200,
+        dedupe_ttl_s=5.0,
+    )
+
+
+def _track_redirect(
+    request: web.Request,
+    location: str,
+    *,
+    reason: str = "",
+    auth_info: dict | None = None,
+):
+    _track_event(
+        request,
+        "route_redirect",
+        route=request.path,
+        route_intended=request.path,
+        route_effective=location,
+        gate_type="inline_gsi" if location in _ANALYTICS_INLINE_GSI_ROUTES else "",
+        user_id=(auth_info or {}).get("user_id", ""),
+        user_type=(auth_info or {}).get("user_type", ""),
+        source="web",
+        status_code=302,
+        meta={"to": location, "reason": reason or "redirect"},
+        dedupe_ttl_s=0.5,
+    )
+
+
 def _cookie_secure(request: web.Request) -> bool:
     """Honor TLS termination when deciding cookie Secure flag."""
     forwarded = request.headers.get("X-Forwarded-Proto", "")
@@ -250,6 +402,102 @@ def _session_cookie_candidates(request: web.Request) -> list[str]:
     if parsed and parsed not in tokens:
         tokens.append(parsed)
     return tokens
+
+
+def _sign_cookie_value(name: str, value: str) -> str:
+    payload = f"{name}|{value}"
+    sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+    return f"{value}.{sig}"
+
+
+def _verify_cookie_value(name: str, token: str) -> str:
+    raw = str(token or "").strip()
+    if not raw or "." not in raw:
+        return ""
+    value, sig = raw.rsplit(".", 1)
+    payload = f"{name}|{value}"
+    expected = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+    if not hmac.compare_digest(sig, expected):
+        return ""
+    return value
+
+
+def _set_signed_cookie(
+    resp: web.Response,
+    request: web.Request,
+    name: str,
+    value: str,
+    *,
+    max_age: int = _FIRST_LOOK_GUEST_COOKIE_MAX_AGE,
+    http_only: bool = True,
+):
+    kwargs = {
+        "max_age": max_age,
+        "httponly": http_only,
+        "secure": _cookie_secure(request),
+        "samesite": "Lax",
+        "path": "/",
+    }
+    domain = _cookie_domain(request)
+    if domain:
+        kwargs["domain"] = domain
+    resp.set_cookie(name, _sign_cookie_value(name, value), **kwargs)
+
+
+def _get_signed_cookie(request: web.Request, name: str) -> str:
+    token = request.cookies.get(name, "")
+    if token and len(token) >= 2 and token[0] == token[-1] == '"':
+        token = token[1:-1]
+    return _verify_cookie_value(name, token)
+
+
+def _first_look_guest_id(request: web.Request) -> tuple[str, bool]:
+    guest_id = _get_signed_cookie(request, _FIRST_LOOK_GUEST_ID_COOKIE)
+    if guest_id and _SIGNED_GUEST_ID_RE.fullmatch(guest_id):
+        return guest_id, False
+    return uuid.uuid4().hex, True
+
+
+def _first_look_guest_quota_count(request: web.Request) -> int:
+    raw = _get_signed_cookie(request, _FIRST_LOOK_GUEST_QUOTA_COOKIE)
+    if not raw or not _SIGNED_INT_RE.fullmatch(raw):
+        return 0
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return 0
+
+
+def _attach_first_look_guest_cookies(
+    resp: web.Response,
+    request: web.Request,
+    guest_id: str,
+    *,
+    quota_count: int | None = None,
+):
+    _set_signed_cookie(resp, request, _FIRST_LOOK_GUEST_ID_COOKIE, guest_id)
+    if quota_count is not None:
+        _set_signed_cookie(resp, request, _FIRST_LOOK_GUEST_QUOTA_COOKIE, str(max(0, quota_count)))
+
+
+def _build_first_look_guest_auth(guest_id: str) -> dict:
+    key = f"first-look-guest:{guest_id}"
+    key_hash = hashlib.sha256(f"{key}|{JWT_SECRET}".encode()).hexdigest()[:8]
+    return {
+        "user_id": "",
+        "key": key,
+        "key_hash": key_hash,
+        "agent_id": f"guest-{key_hash}",
+        "email": "",
+        "status": "guest",
+        "user_type": "guest",
+    }
+
+
+def _first_look_guest_auth(request: web.Request) -> tuple[dict, str, int]:
+    guest_id, _is_new = _first_look_guest_id(request)
+    quota_count = _first_look_guest_quota_count(request)
+    return _build_first_look_guest_auth(guest_id), guest_id, quota_count
 
 
 # Cache for Google's JWKS public keys
@@ -1239,7 +1487,7 @@ def _pending_limited_response() -> web.Response:
     return web.json_response(
         {
             "error": "pending_account_limited",
-            "message": "Account review is pending. Use /trial or /demo for now.",
+            "message": "Account review is pending. Use /trial or /first-look for now.",
         },
         status=403,
     )
@@ -1590,7 +1838,7 @@ body::before{
     <span class="line">Wind rushes where walls once stood</span>
     <span class="line">I am sky, unchained</span>
   </div>
-  <a href="/demo" class="cta">Try it free &rarr;</a>
+  <a href="/first-look" class="cta">Try it free &rarr;</a>
   <div class="tagline">Your browser. Your data. No walls.</div>
   <div class="scroll-hint" onclick="document.querySelector('.mock-section').scrollIntoView({behavior:'smooth'})">
     <span>&#8595;</span>
@@ -1605,7 +1853,7 @@ body::before{
     <p>See the agent browse the web, read pages, and extract information &mdash; in real time.</p>
   </div>
   <div class="mock-chat" id="mock-chat"></div>
-  <a href="/demo" class="mock-cta">Try it yourself &rarr;</a>
+  <a href="/first-look" class="mock-cta">Try it yourself &rarr;</a>
 </div>
 
 <!-- Get Started -->
@@ -1619,18 +1867,18 @@ body::before{
     <!-- Section: No Setup Required -->
     <div class="section-label">No Setup Required</div>
 
-    <!-- Headless Demo -->
+    <!-- Headless First Look -->
     <div class="card demo">
-      <div class="card-badge">&#9889; Instant Demo</div>
-      <div class="card-title">Headless Browser Demo</div>
+      <div class="card-badge">&#9889; Instant First Look</div>
+      <div class="card-title">Headless Browser First Look</div>
       <div class="card-desc">Watch an AI agent browse the web live &mdash; no install. We run a headless Chrome on our servers. Just sign in and go.</div>
       <div class="card-reqs"><span class="req req-none">Nothing to install</span></div>
       <div class="card-steps">
         <div class="step"><span class="step-num">1</span>Sign in with Google</div>
         <div class="step"><span class="step-num">2</span>Type a task and watch the agent work</div>
       </div>
-      <div class="card-note">Demo uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
-      <a href="/demo" class="card-btn">Launch Demo &#8594;</a>
+      <div class="card-note">First look uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
+      <a href="/first-look" class="card-btn">Launch First Look &#8594;</a>
     </div>
 
     <!-- Free Tier -->
@@ -1768,7 +2016,7 @@ body::before{
 
 <div class="footer">
   <div class="footer-links">
-    <a href="/demo">Demo</a>
+    <a href="/first-look">First Look</a>
     <a href="/trial">Free Tier</a>
     <a href="/setup">API Setup</a>
     <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
@@ -1960,7 +2208,7 @@ if ('IntersectionObserver' in window) {
   fetch('/auth/me').then(function(r){return r.json()}).then(function(d){
     if (!d.authenticated) return;
     var btn = document.getElementById('hero-enter');
-    var last = localStorage.getItem('unchained_last_route') || '/demo';
+    var last = localStorage.getItem('unchained_last_route') || '/first-look';
     btn.href = last;
     btn.style.display = '';
   }).catch(function(){});
@@ -2297,7 +2545,7 @@ a:hover{text-decoration:underline}
   <h2>Your browser agent, ready when you are</h2>
   <p>The agent works with your real browser, your real logins, and your real data. No screenshots to upload, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/demo" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/first-look" class="cta-btn primary">Try First Look &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -2305,7 +2553,7 @@ a:hover{text-decoration:underline}
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/demo">Demo</a>
+    <a href="/first-look">First Look</a>
     <a href="/trial">Free Tier</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
@@ -3044,7 +3292,7 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a href="/demo">Demo</a>
+      <a href="/first-look">First Look</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
@@ -3686,6 +3934,36 @@ function scrollToBottom() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function setLiveStatus(text) {
+  const el = document.getElementById('live-status');
+  if (el) el.textContent = text;
+}
+
+function resetLivePreview() {
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (ph) ph.style.display = 'flex';
+  _livePreviewHasFrame = false;
+  setLiveStatus('Waiting for first page load...');
+}
+
+function updateLivePreview(imageB64, note) {
+  if (!imageB64) return;
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (!img) return;
+  img.src = 'data:image/png;base64,' + imageB64;
+  img.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  _livePreviewHasFrame = true;
+  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
+}
+
 function fillMsg(text) {
   const input = document.getElementById('msginput');
   input.value = text;
@@ -4054,6 +4332,7 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
+  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -4122,11 +4401,24 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
+            currentToolName = evt.name || '';
+            if (currentToolName === 'navigate') {
+              setLiveStatus('Loading page...');
+            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
+              if (currentToolName === 'navigate' && (typeof _livePreviewHasFrame === 'undefined' || !_livePreviewHasFrame)) {
+                setLiveStatus('Page loaded. Capturing preview...');
+              }
+              if (evt.is_screenshot && evt.visible) {
+                updateLivePreview(evt.data, 'Screenshot captured');
+              }
               currentTool = null;
+              currentToolName = '';
             }
+          } else if (evt.type === 'live_preview') {
+            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
@@ -4897,6 +5189,36 @@ function scrollToBottom() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function setLiveStatus(text) {
+  const el = document.getElementById('live-status');
+  if (el) el.textContent = text;
+}
+
+function resetLivePreview() {
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (ph) ph.style.display = 'flex';
+  _livePreviewHasFrame = false;
+  setLiveStatus('Waiting for first page load...');
+}
+
+function updateLivePreview(imageB64, note) {
+  if (!imageB64) return;
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (!img) return;
+  img.src = 'data:image/png;base64,' + imageB64;
+  img.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  _livePreviewHasFrame = true;
+  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
+}
+
 function fillMsg(text) {
   const input = document.getElementById('msginput');
   input.value = text;
@@ -5253,6 +5575,7 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
+  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -5818,7 +6141,7 @@ HEADLESS_DEMO_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Unchained Demo</title>
+<title>Unchained First Look</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -5839,7 +6162,7 @@ body{
 
 /* === Login === */
 #login{
-  display:flex;flex-direction:column;align-items:center;
+  display:none;flex-direction:column;align-items:center;
   justify-content:center;height:100dvh;padding:24px;gap:16px;
 }
 #login h1{font-size:28px;color:var(--accent);margin-bottom:8px;letter-spacing:1px}
@@ -5884,6 +6207,66 @@ body{
 }
 #model-notice strong{color:#f0d58b}
 #model-notice a{color:#f0d58b;text-decoration:underline}
+
+/* === Workspace layout === */
+#workspace{
+  flex:1;min-height:0;display:flex;overflow:hidden;
+}
+#chat-pane{
+  flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;
+}
+#live-pane{
+  width:min(46vw,560px);min-width:340px;
+  border-left:1px solid #2a2a2a;background:#111;
+  display:flex;flex-direction:column;min-height:0;
+}
+#live-pane-head{
+  padding:10px 12px;border-bottom:1px solid #222;
+  color:#d5d5d5;font-size:12px;letter-spacing:0.4px;
+  text-transform:uppercase;
+}
+#live-window{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  padding:12px;
+}
+#live-window-bar{
+  height:28px;border:1px solid #2f2f2f;border-bottom:none;
+  border-radius:8px 8px 0 0;background:#171717;
+  display:flex;align-items:center;gap:6px;padding:0 10px;
+}
+#live-window-bar .dot{
+  width:9px;height:9px;border-radius:50%;display:inline-block;
+}
+#live-window-bar .dot.red{background:#ff5f56}
+#live-window-bar .dot.yellow{background:#ffbd2e}
+#live-window-bar .dot.green{background:#27c93f}
+#live-window-bar .title{
+  margin-left:8px;color:#9a9a9a;font-size:11px;font-family:var(--mono);
+}
+#live-canvas-wrap{
+  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
+  background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
+}
+#live-image{
+  width:100%;height:100%;object-fit:contain;background:#0b0b0b;display:none;
+}
+#live-placeholder{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:13px;padding:16px;text-align:center;
+}
+#live-status{
+  padding:8px 12px 12px;color:var(--muted);font-size:12px;min-height:34px;
+}
+
+@media (max-width: 1100px) {
+  #live-pane{width:min(42vw,460px);min-width:300px}
+}
+@media (max-width: 900px) {
+  #workspace{flex-direction:column}
+  #live-pane{
+    width:100%;min-width:0;height:40vh;border-left:none;border-top:1px solid #2a2a2a;
+  }
+}
 
 /* === Chat === */
 #chat{
@@ -6079,8 +6462,8 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>Demo limit reached</h2>
-    <p class="quota-sub">You've used your free demo interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>First look limit reached</h2>
+    <p class="quota-sub">You've used your free first look interaction. Connect your own browser for unlimited access &mdash; it's even better:</p>
     <div class="quota-grid">
       <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
       <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
@@ -6088,14 +6471,14 @@ body{
       <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on demo</button>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
   </div>
 </div>
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained Demo</h1>
-  <div class="sub">AI browser agent demo &mdash; watch it browse in real time</div>
+  <h1>Unchained First Look</h1>
+  <div class="sub">AI browser agent first look &mdash; watch it browse in real time</div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -6138,33 +6521,52 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
-  <div id="agent-bar">
-    <span id="agent-action"></span>
-    <span id="nav-trail"></span>
-    <span id="turn-ctr"></span>
-  </div>
-
-  <div id="chat">
-      <div id="chat-hints">
-        <div class="hint-title">Try it &mdash; ask the agent anything</div>
-      <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
-      <div class="hint-examples">
-        <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-        <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-        <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
-        <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="agent-bar">
+        <span id="agent-action"></span>
+        <span id="nav-trail"></span>
+        <span id="turn-ctr"></span>
       </div>
-      <div class="hint-footer">Free to try &mdash; no setup needed</div>
-    </div>
-  </div>
 
-  <div id="inputbar">
-    <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
-              onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
-    <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      <div id="chat">
+          <div id="chat-hints">
+            <div class="hint-title">Try it &mdash; ask the agent anything</div>
+          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+          <div class="hint-examples">
+            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
+            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
+            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
+            <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+          </div>
+          <div class="hint-footer">Free to try &mdash; no setup needed</div>
+        </div>
+      </div>
+
+      <div id="inputbar">
+        <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
+                  onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+        <button id="sendbtn" onclick="doSend()">&#9654;</button>
+        <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      </div>
+    </div>
+
+    <aside id="live-pane">
+      <div id="live-pane-head">Live Browser</div>
+      <div id="live-window">
+        <div id="live-window-bar">
+          <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+          <span class="title">headless-chrome</span>
+        </div>
+        <div id="live-canvas-wrap">
+          <img id="live-image" alt="Headless browser live preview">
+          <div id="live-placeholder">The browser preview appears here after navigation.</div>
+        </div>
+      </div>
+      <div id="live-status">Waiting for first page load...</div>
+    </aside>
   </div>
 </div>
 <script>
@@ -6178,6 +6580,38 @@ let demoUnlimited = false;
 let _autoPromptFired = false;
 let _userName = '';
 let _userPicture = '';
+let _livePreviewHasFrame = false;
+let _isAuthenticatedUser = false;
+
+function setLiveStatus(text) {
+  const el = document.getElementById('live-status');
+  if (el) el.textContent = text;
+}
+
+function resetLivePreview() {
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (ph) ph.style.display = 'flex';
+  _livePreviewHasFrame = false;
+  setLiveStatus('Waiting for first page load...');
+}
+
+function updateLivePreview(imageB64, note) {
+  if (!imageB64) return;
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (!img) return;
+  img.src = 'data:image/png;base64,' + imageB64;
+  img.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  _livePreviewHasFrame = true;
+  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
+}
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -6192,6 +6626,7 @@ async function handleGoogleCredential(response) {
     if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
+    _isAuthenticatedUser = true;
     demoPromptCount = data.demo_prompt_count || 0;
     demoUnlimited = !!data.demo_unlimited;
     showMain();
@@ -6204,6 +6639,7 @@ async function checkSession() {
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       _userName = data.name || '';
@@ -6213,7 +6649,10 @@ async function checkSession() {
     }
     if (data.pending) { showPending(); return; }
   } catch(e) {}
-  document.getElementById('login').style.display = 'flex';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 async function checkApproval() {
@@ -6224,6 +6663,7 @@ async function checkApproval() {
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       showMain();
@@ -6238,9 +6678,10 @@ async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';
-  document.getElementById('login').style.display = 'flex';
-  document.getElementById('main').style.display = 'none';
-  document.getElementById('pending').style.display = 'none';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 function showPending() {
@@ -6266,11 +6707,11 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedDemoModel || 'google/gemini-3-flash-preview';
+  return _forcedFirstLookModel || 'google/gemini-3-flash-preview';
 }
 
 function _sessionStoreKey() {
-  return 'unchained_session_' + agentId + '_demo';
+  return 'unchained_session_' + agentId + '_first_look';
 }
 
 function _restoreSessionId() {
@@ -6286,7 +6727,7 @@ function _persistSessionId(sid) {
 }
 
 let lastAgentConnected = false;
-let _forcedDemoModel = '';
+let _forcedFirstLookModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
@@ -6298,8 +6739,9 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
-  document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  try { localStorage.setItem('unchained_last_route', '/demo'); } catch(e){}
+  document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
+  resetLivePreview();
+  try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
   checkAgentStatus();
@@ -6309,9 +6751,10 @@ function showMain() {
 
 async function checkAgentStatus() {
   try {
-    const r = await fetch('/web/chat/status');
+    const r = await fetch('/web/chat/status?first_look_guest=1');
     if (r.ok) {
       const data = await r.json();
+      if (data.agent_id) agentId = data.agent_id;
       lastAgentConnected = data.connected;
       updateAgentStatusUI(data.connected);
     }
@@ -6323,6 +6766,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      first_look_guest: '1',
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -6359,8 +6803,12 @@ async function maybeAutoPrompt() {
     if (lastAgentConnected) break;
     await new Promise(r => setTimeout(r, 500));
     try {
-      const r = await fetch('/web/chat/status');
-      if (r.ok) { const d = await r.json(); lastAgentConnected = d.connected; }
+      const r = await fetch('/web/chat/status?first_look_guest=1');
+      if (r.ok) {
+        const d = await r.json();
+        if (d.agent_id) agentId = d.agent_id;
+        lastAgentConnected = d.connected;
+      }
     } catch(e) {}
   }
   if (!lastAgentConnected) return;
@@ -6395,6 +6843,7 @@ function showHintsIfEmpty() {
 async function doNewChat() {
   if (sending) return;
   document.getElementById('chat').innerHTML = '';
+  resetLivePreview();
   showHintsIfEmpty();
   try {
     const r = await fetch('/web/chat/new', {
@@ -6403,6 +6852,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        first_look_guest: true,
       }),
     });
     if (r.ok) {
@@ -6767,7 +7217,7 @@ async function doCancel() {
     await fetch('/web/chat/cancel', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: sessionId}),
+      body: JSON.stringify({session_id: sessionId, first_look_guest: true}),
     });
   } catch(e) {}
   if (_cancelCtrl) _cancelCtrl.abort();
@@ -6793,6 +7243,7 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
+  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -6805,6 +7256,7 @@ async function doSend() {
         session_id: sessionId,
         model: currentModel(),
         headless: true,
+        first_look_guest: true,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -6868,16 +7320,29 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
+            currentToolName = evt.name || '';
+            if (currentToolName === 'navigate') {
+              setLiveStatus('Loading page...');
+            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
+              if (currentToolName === 'navigate' && (typeof _livePreviewHasFrame === 'undefined' || !_livePreviewHasFrame)) {
+                setLiveStatus('Page loaded. Capturing preview...');
+              }
+              if (evt.is_screenshot && evt.visible) {
+                updateLivePreview(evt.data, 'Screenshot captured');
+              }
               currentTool = null;
+              currentToolName = '';
             }
+          } else if (evt.type === 'live_preview') {
+            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
             if (evt.model) {
-              _forcedDemoModel = evt.model;
+              _forcedFirstLookModel = evt.model;
             }
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
@@ -8227,6 +8692,8 @@ CHAT_HTML = CLAUDE_CHAT_HTML.replace(
 async def handle_download_agent(request: web.Request) -> web.Response:
     """GET /web/download-agent — download agent ZIP package."""
     install_token = _request_install_token(request)
+    auth_info = None
+    token_info = None
     if install_token:
         token_info = _auth.validate_install_token(install_token, consume=False)
         if not token_info:
@@ -8242,6 +8709,21 @@ async def handle_download_agent(request: web.Request) -> web.Response:
         api_key="",
         relay_host="api.unchainedsky.com",
         install_token=install_token,
+    )
+    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+    user_type = auth_info.get("user_type", "") if auth_info else ""
+    _track_event(
+        request,
+        "agent_zip_download_start",
+        route="/web/download-agent",
+        route_intended="/install",
+        route_effective="/web/download-agent",
+        cta_id="download_agent_zip",
+        user_id=user_id,
+        user_type=user_type,
+        source="web",
+        status_code=200,
+        meta={"channel": "install_token" if token_info else "session"},
     )
     return web.Response(
         body=zip_bytes,
@@ -8259,6 +8741,7 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     install_token = _request_install_token(request)
     auth_info = None
+    token_info = None
     if install_token:
         token_info = _auth.validate_install_token(install_token, consume=False)
         if not token_info:
@@ -8270,6 +8753,26 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     native_path = _native_installer_path(platform)
     if native_path:
+        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+        user_type = auth_info.get("user_type", "") if auth_info else ""
+        _track_event(
+            request,
+            "installer_download_start",
+            route="/web/download-installer",
+            route_intended="/install",
+            route_effective="/web/download-installer",
+            cta_id=f"download_installer_{platform}",
+            user_id=user_id,
+            user_type=user_type,
+            source="web",
+            status_code=200,
+            meta={
+                "platform": platform,
+                "artifact": "native",
+                "filename": native_path.name,
+                "channel": "install_token" if token_info else "session",
+            },
+        )
         return web.FileResponse(
             path=native_path,
             headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
@@ -8277,6 +8780,20 @@ async def handle_download_installer(request: web.Request) -> web.Response:
 
     if not _ALLOW_SCRIPT_INSTALLER_FALLBACK:
         expected_assets = _native_installer_candidates(platform)
+        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+        _track_event(
+            request,
+            "installer_download_fail",
+            route="/web/download-installer",
+            route_intended="/install",
+            route_effective="/web/download-installer",
+            cta_id=f"download_installer_{platform}",
+            error_code="native_installer_missing",
+            user_id=user_id,
+            source="web",
+            status_code=503,
+            meta={"platform": platform, "expected_assets": expected_assets},
+        )
         return web.json_response(
             {
                 "error": "Native installer is not configured for this OS.",
@@ -8301,6 +8818,26 @@ async def handle_download_installer(request: web.Request) -> web.Response:
         base_url=base_url,
     )
     filename = "unchained-installer-windows.ps1" if platform == "windows" else "unchained-installer-mac.sh"
+    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
+    user_type = auth_info.get("user_type", "") if auth_info else ""
+    _track_event(
+        request,
+        "installer_download_start",
+        route="/web/download-installer",
+        route_intended="/install",
+        route_effective="/web/download-installer",
+        cta_id=f"download_installer_{platform}",
+        user_id=user_id,
+        user_type=user_type,
+        source="web",
+        status_code=200,
+        meta={
+            "platform": platform,
+            "artifact": "script_fallback",
+            "filename": filename,
+            "channel": "install_token" if token_info else "session",
+        },
+    )
     return web.Response(text=script, content_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
@@ -8321,6 +8858,19 @@ async def handle_install_token(request: web.Request) -> web.Response:
     )
     mac_native = _native_installer_path("mac") is not None
     windows_native = _native_installer_path("windows") is not None
+    _track_event(
+        request,
+        "install_token_issued",
+        route="/web/install-token",
+        route_intended="/install",
+        route_effective="/web/install-token",
+        cta_id="install_token",
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"native_available": {"mac": mac_native, "windows": windows_native}},
+    )
     return web.json_response({
         "curl_command": curl_command,
         "powershell_command": powershell_command,
@@ -8420,6 +8970,17 @@ async def handle_install_claim_start(request: web.Request) -> web.Response:
             "expires_at": now + _INSTALL_CLAIM_TTL,
             "install_token": "",
         }
+    _track_event(
+        request,
+        "install_claim_start",
+        route="/web/install/claim/start",
+        route_intended="/install",
+        route_effective="/web/install/claim/start",
+        cta_id="install_claim_start",
+        source="web",
+        status_code=200,
+        meta={"claim_id_prefix": claim_id[:6]},
+    )
     return web.json_response({"status": "pending", "claim_id": claim_id, "expires_in": _INSTALL_CLAIM_TTL})
 
 
@@ -8447,6 +9008,19 @@ async def handle_install_claim_approve(request: web.Request) -> web.Response:
         claim["approved_at"] = now
         claim["approved_user_id"] = auth_info["user_id"]
         claim["expires_at"] = min(claim.get("expires_at", now + _INSTALL_CLAIM_TTL), now + _INSTALL_CLAIM_TTL)
+    _track_event(
+        request,
+        "install_claim_approve",
+        route="/web/install/claim/approve",
+        route_intended="/install",
+        route_effective="/web/install/claim/approve",
+        cta_id="install_claim_approve",
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"claim_id_prefix": claim_id[:6]},
+    )
     return web.json_response({"status": "approved"})
 
 
@@ -8474,6 +9048,17 @@ async def handle_install_claim_poll(request: web.Request) -> web.Response:
         install_token = str(claim.get("install_token", "")).strip()
         if install_token:
             _install_claims.pop(claim_id, None)
+            _track_event(
+                request,
+                "install_claim_poll_approved",
+                route="/web/install/claim/poll",
+                route_intended="/install",
+                route_effective="/web/install/claim/poll",
+                cta_id="install_claim_poll",
+                source="web",
+                status_code=200,
+                meta={"claim_id_prefix": claim_id[:6]},
+            )
             return web.json_response({"status": "approved", "install_token": install_token})
         expires_at = float(claim.get("expires_at", now))
     return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
@@ -8484,16 +9069,56 @@ async def handle_install_bootstrap(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
+        _track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="invalid_json_body",
+            source="web",
+            status_code=400,
+        )
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     token = str(body.get("token", "")).strip()
     if not token:
+        _track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="missing_token",
+            source="web",
+            status_code=400,
+        )
         return web.json_response({"error": "token required"}, status=400)
 
     token_info = _auth.validate_install_token(token, consume=True)
     if not token_info:
+        _track_event(
+            request,
+            "install_bootstrap_fail",
+            route="/web/install/bootstrap",
+            route_intended="/install",
+            route_effective="/web/install/bootstrap",
+            error_code="invalid_or_expired_token",
+            source="web",
+            status_code=401,
+        )
         return web.json_response({"error": "Invalid or expired install token"}, status=401)
 
+    _track_event(
+        request,
+        "install_bootstrap_success",
+        route="/web/install/bootstrap",
+        route_intended="/install",
+        route_effective="/web/install/bootstrap",
+        user_id=token_info.get("user_id", ""),
+        source="web",
+        status_code=200,
+    )
     return web.json_response({"api_key": token_info["api_key"]})
 
 
@@ -9008,19 +9633,24 @@ initInstallPage();
 
 async def handle_install_page(request: web.Request) -> web.Response:
     """Serve the one-click installer onboarding page."""
-    return web.Response(text=INSTALL_ONBOARD_HTML, content_type="text/html")
+    _track_page_view(request)
+    html = inject_google_client_id(INSTALL_ONBOARD_HTML, GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_trial_page(request: web.Request) -> web.Response:
     """Serve the trial chat HTML page (OpenRouter models)."""
+    _track_page_view(request)
     html = inject_google_client_id(TRIAL_CHAT_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_gemini_page(request: web.Request) -> web.Response:
     """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(CHAT_GEMINI_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -9028,39 +9658,56 @@ async def handle_chat_gemini_page(request: web.Request) -> web.Response:
 
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
     """Serve the Codex chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = CHAT_CODEX_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    html = inject_google_client_id(CHAT_CODEX_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
     """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = CHAT_CLAUDE_SDK_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    html = inject_google_client_id(CHAT_CLAUDE_SDK_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_case_study_zillow(request: web.Request) -> web.Response:
     """Serve the Zillow rental relisting case study page (public, no auth)."""
-    del request
+    _track_page_view(request)
     html = CASE_STUDY_ZILLOW_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    html = inject_google_client_id(html, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
+
+
+async def handle_first_look_page(request: web.Request) -> web.Response:
+    """Serve the headless first-look chat HTML page."""
+    _track_page_view(request)
+    html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
+    resp = web.Response(text=html, content_type="text/html")
+    _, guest_id, quota_count = _first_look_guest_auth(request)
+    _attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
+    return resp
 
 
 async def handle_demo_page(request: web.Request) -> web.Response:
-    """Serve the headless demo chat HTML page."""
-    html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    """Redirect /demo to /first-look for backward compatibility."""
+    _track_redirect(request, "/first-look", reason="legacy_route_alias")
+    raise web.HTTPFound("/first-look")
 
 
 async def handle_local_page(request: web.Request) -> web.Response:
     """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(CLAUDE_CHAT_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -9068,11 +9715,14 @@ async def handle_local_page(request: web.Request) -> web.Response:
 
 async def handle_claude_page(request: web.Request) -> web.Response:
     """Redirect /app to /local for backward compatibility."""
+    _track_page_view(request)
+    _track_redirect(request, "/local", reason="legacy_route_alias")
     raise web.HTTPFound("/local")
 
 
 async def handle_chat_redirect(request: web.Request) -> web.Response:
     """Redirect /chat to /local for backward compatibility."""
+    _track_redirect(request, "/local", reason="legacy_route_alias")
     raise web.HTTPFound("/local")
 
 
@@ -9210,18 +9860,30 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     Bridges between the phone (SSE) and the local chat agent (WebSocket).
     """
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json body"}, status=400)
 
-    body = await request.json()
+    auth_info = _authenticate(request)
+    guest_mode = False
+    guest_id = ""
+    guest_quota_count = 0
+    guest_quota_increment = False
+    if auth_info is None:
+        wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
+        if not wants_guest_first_look:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, guest_quota_count = _first_look_guest_auth(request)
+        guest_mode = True
+
     req_id = _request_id(request)
     message = body.get("message", "").strip()
     agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
-    if _is_pending_user(auth_info) and not model:
+    if (guest_mode or _is_pending_user(auth_info)) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     _trace(
         "chat.msg.in",
@@ -9243,6 +9905,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = _is_codex_sdk_model(model)
     is_codex_cli = _is_codex_cli_model(model)
     is_openrouter = _is_openrouter_model(model)
+    if guest_mode and not is_openrouter:
+        return web.json_response(
+            {"error": "guest_mode_requires_openrouter_model"},
+            status=400,
+        )
     if _is_pending_user(auth_info) and not is_openrouter:
         return _pending_limited_response()
     openrouter_forced_model = ""
@@ -9264,6 +9931,19 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     elif not _session_owned(session_id):
         # Do not allow clients to attach to another user's chat session namespace.
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
+    _track_event(
+        request,
+        "chat_message_send",
+        session_id=session_id,
+        route="/web/chat",
+        route_intended=body.get("route_intended", request.path),
+        route_effective=body.get("route_effective", request.path),
+        user_id=auth_info.get("user_id", ""),
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        meta={"model": model or "", "headless": bool(body.get("headless", False))},
+        status_code=200,
+    )
 
     gemini_key = None
     if is_gemini:
@@ -9381,18 +10061,38 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     # Demo quota enforcement: headless demo requests are limited to _DEMO_PROMPT_LIMIT
     if body.get("headless", False):
-        email = auth_info.get("email", "")
-        if email:
-            user = _auth.find_user_by_email(email)
-            if not _is_demo_unlimited(user):
-                count = _auth.get_demo_count(email)
-                if count >= _DEMO_PROMPT_LIMIT:
-                    return web.json_response(
-                        {"error": "demo_quota_exceeded", "demo_prompt_count": count,
-                         "demo_prompt_limit": _DEMO_PROMPT_LIMIT},
-                        status=429,
-                    )
-                _auth.increment_demo_count(email)
+        if guest_mode:
+            if guest_quota_count >= _FIRST_LOOK_GUEST_PROMPT_LIMIT:
+                quota_resp = web.json_response(
+                    {
+                        "error": "demo_quota_exceeded",
+                        "demo_prompt_count": guest_quota_count,
+                        "demo_prompt_limit": _FIRST_LOOK_GUEST_PROMPT_LIMIT,
+                    },
+                    status=429,
+                )
+                _attach_first_look_guest_cookies(
+                    quota_resp,
+                    request,
+                    guest_id,
+                    quota_count=guest_quota_count,
+                )
+                return quota_resp
+            guest_quota_count += 1
+            guest_quota_increment = True
+        else:
+            email = auth_info.get("email", "")
+            if email:
+                user = _auth.find_user_by_email(email)
+                if not _is_demo_unlimited(user):
+                    count = _auth.get_demo_count(email)
+                    if count >= _DEMO_PROMPT_LIMIT:
+                        return web.json_response(
+                            {"error": "demo_quota_exceeded", "demo_prompt_count": count,
+                             "demo_prompt_limit": _DEMO_PROMPT_LIMIT},
+                            status=429,
+                        )
+                    _auth.increment_demo_count(email)
 
     # Turn-based rate limiting for free-tier users
     email = auth_info.get("email", "")
@@ -9480,6 +10180,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "X-Accel-Buffering": "no",
         },
     )
+    if guest_mode:
+        _attach_first_look_guest_cookies(
+            resp,
+            request,
+            guest_id,
+            quota_count=guest_quota_count if guest_quota_increment else None,
+        )
     await resp.prepare(request)
     if openrouter_forced_model:
         forced_evt = {
@@ -9535,30 +10242,66 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
 async def handle_chat_cancel(request: web.Request) -> web.Response:
     """POST /web/chat/cancel — cancel an active chat session."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     auth_info = _authenticate(request)
+    guest_mode = False
+    guest_id = ""
     if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+        if not bool(body.get("first_look_guest")):
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = _first_look_guest_auth(request)
+        guest_mode = True
 
-    body = await request.json()
     session_id = body.get("session_id", "")
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
 
     agent_id = auth_info.get("agent_id", "")
+    if guest_mode and not session_id.startswith(f"s-{agent_id}-"):
+        denied = web.json_response({"error": "session_id not owned by guest"}, status=403)
+        _attach_first_look_guest_cookies(denied, request, guest_id)
+        return denied
     # Look up which agent is actually handling this session (may be trial agent)
-    routing_agent_id = _session_agents.get(session_id, agent_id)
+    default_agent = TRIAL_AGENT_ID if guest_mode else agent_id
+    routing_agent_id = _session_agents.get(session_id, default_agent)
     ws = _chat_agents.get(routing_agent_id)
     if ws and not ws.closed:
         await ws.send_json({"type": "cancel", "session_id": session_id})
-        return web.json_response({"ok": True})
-    return web.json_response({"error": "Agent not connected"}, status=503)
+        ok = web.json_response({"ok": True})
+        if guest_mode:
+            _attach_first_look_guest_cookies(ok, request, guest_id)
+        return ok
+    err = web.json_response({"error": "Agent not connected"}, status=503)
+    if guest_mode:
+        _attach_first_look_guest_cookies(err, request, guest_id)
+    return err
 
 
 async def handle_chat_status(request: web.Request) -> web.Response:
     """GET /web/chat/status — check if user's agent is connected."""
     auth_info = _authenticate(request)
     if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+        if request.query.get("first_look_guest") != "1":
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        guest_auth, guest_id, _ = _first_look_guest_auth(request)
+        gws = _chat_agents.get(TRIAL_AGENT_ID)
+        connected = bool(TRIAL_AGENT_ID) and gws is not None and not gws.closed
+        guest_resp = web.json_response(
+            {
+                "connected": connected,
+                "agent_id": guest_auth.get("agent_id", ""),
+                "chat_connected": connected,
+                "chat_agent_id": TRIAL_AGENT_ID or "",
+                "bridge_connected": connected,
+                "bridge_agent_id": TRIAL_AGENT_ID or "",
+                "guest": True,
+            },
+        )
+        _attach_first_look_guest_cookies(guest_resp, request, guest_id)
+        return guest_resp
     bridge_agent_id = auth_info.get("agent_id", "")
     agent_id = bridge_agent_id
     ws = _chat_agents.get(agent_id)
@@ -9767,14 +10510,21 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     chat_agent_openrouter.py from the shared relay_data volume.
     """
     auth_info = _authenticate(request)
+    guest_mode = False
+    guest_id = ""
     if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+        if request.query.get("first_look_guest") != "1":
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = _first_look_guest_auth(request)
+        guest_mode = True
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
-    if _is_pending_user(auth_info) and not model:
+    if (guest_mode or _is_pending_user(auth_info)) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     if _is_pending_user(auth_info) and not _is_openrouter_model(model):
         return _pending_limited_response()
+    if guest_mode and not _is_openrouter_model(model):
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
 
@@ -9785,7 +10535,12 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         payload = {"messages": msgs, "trial": True, "session_id": session_id}
         if not found:
             payload["offline"] = True
-        return web.json_response(payload)
+        if guest_mode:
+            payload["guest"] = True
+        history_resp = web.json_response(payload)
+        if guest_mode:
+            _attach_first_look_guest_cookies(history_resp, request, guest_id)
+        return history_resp
 
     # Claude/Gemini mode: ask the appropriate agent first.
     resp = await _agent_request(chat_agent_id, {"type": "get_history", "session_id": requested_session_id})
@@ -9796,26 +10551,39 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     session_id = _resolve_trial_session_id(agent_id, requested_session_id)
     msgs, found = _read_trial_history(session_id)
     if found:
-        return web.json_response({"messages": msgs, "trial": True, "session_id": session_id})
-    return web.json_response({"messages": [], "offline": True})
+        fallback_resp = web.json_response({"messages": msgs, "trial": True, "session_id": session_id})
+        if guest_mode:
+            _attach_first_look_guest_cookies(fallback_resp, request, guest_id)
+        return fallback_resp
+    empty_resp = web.json_response({"messages": [], "offline": True})
+    if guest_mode:
+        _attach_first_look_guest_cookies(empty_resp, request, guest_id)
+    return empty_resp
 
 
 async def handle_chat_new(request: web.Request) -> web.Response:
     """POST /web/chat/new — proxy to agent to advance to next slot."""
     auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
     try:
         body = await request.json()
     except Exception:
         body = {}
+    guest_mode = False
+    guest_id = ""
+    if not auth_info:
+        if not bool(body.get("first_look_guest")):
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = _first_look_guest_auth(request)
+        guest_mode = True
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
-    if _is_pending_user(auth_info) and not model:
+    if (guest_mode or _is_pending_user(auth_info)) and not model:
         model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     if _is_pending_user(auth_info) and not _is_openrouter_model(model):
         return _pending_limited_response()
+    if guest_mode and not _is_openrouter_model(model):
+        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
     requested_session_id = body.get("session_id", "")
     chat_agent_id = _resolve_chat_agent_id(auth_info, model)
     if _is_openrouter_model(model):
@@ -9825,20 +10593,29 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         # Close the tab for the old session (if any)
         await _close_session_tab(old_session)
         new_session = f"s-{agent_id}-{int(time.time() * 1000):x}"
-        return web.json_response({
+        new_resp = web.json_response({
             "ok": True,
             "active_slot": 1,
             "trial": True,
             "session_id": new_session,
         })
+        if guest_mode:
+            _attach_first_look_guest_cookies(new_resp, request, guest_id)
+        return new_resp
 
     resp = await _agent_request(chat_agent_id, {"type": "new_chat"})
     if resp is None:
-        return web.json_response({"error": "Agent not connected"}, status=503)
+        err = web.json_response({"error": "Agent not connected"}, status=503)
+        if guest_mode:
+            _attach_first_look_guest_cookies(err, request, guest_id)
+        return err
     result = {"ok": True, "active_slot": resp.get("active_slot", 1)}
     if resp.get("session_id"):
         result["session_id"] = resp["session_id"]
-    return web.json_response(result)
+    out = web.json_response(result)
+    if guest_mode:
+        _attach_first_look_guest_cookies(out, request, guest_id)
+    return out
 
 
 async def handle_chat_slots(request: web.Request) -> web.Response:
@@ -9945,14 +10722,16 @@ async def handle_favicon(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
+    _track_page_view(request)
     html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    html = inject_google_client_id(html, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
 async def handle_test(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if not auth_info:
+        _track_redirect(request, "/", reason="test_requires_auth")
         raise web.HTTPFound("/")  # redirect to landing page
     html = inject_google_client_id(HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -9961,18 +10740,43 @@ async def handle_test(request: web.Request) -> web.Response:
 async def handle_google_auth(request: web.Request) -> web.Response:
     """POST /auth/google — verify Google ID token, create session."""
     body = await request.json()
+    source = str(body.get("source", "claude")).strip().lower() or "claude"
+    if source not in {"trial", "claude"}:
+        source = "claude"
+    _track_event(
+        request,
+        "auth_google_attempt",
+        source=source,
+        meta={"source": source},
+        status_code=200,
+    )
     id_token = body.get("credential", "")
     if not id_token:
+        _track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_credential",
+            meta={"source": source, "reason": "missing_credential"},
+            status_code=400,
+        )
         return web.json_response({"error": "Missing credential"}, status=400)
 
     payload = await verify_google_token(id_token)
     if payload is None:
+        _track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="invalid_google_token",
+            meta={"source": source, "reason": "invalid_google_token"},
+            status_code=401,
+        )
         return web.json_response({"error": "Invalid Google token"}, status=401)
 
     email = payload.get("email", "").lower()
     name = payload.get("name", "")
     picture = payload.get("picture", "")
-    source = body.get("source", "claude")
     user_type = "trial" if source == "trial" else "claude"
 
     existing = _auth.find_user_by_email(email)
@@ -9998,10 +10802,19 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 "is_admin": email.lower() in ADMIN_EMAILS,
             })
             _set_session_cookie(resp, session_token, request)
+            _track_event(
+                request,
+                "auth_google_success",
+                user_id=user["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                meta={"source": source, "status": "approved", "existing": True},
+                status_code=200,
+            )
             return resp
 
         if status == "pending":
-            # Trial/demo users can access trial flows while account review is pending.
+            # Trial/first-look users can access trial flows while account review is pending.
             if source == "trial":
                 api_key = existing.get("api_key")
                 if not api_key:
@@ -10035,9 +10848,27 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                     "is_admin": email.lower() in ADMIN_EMAILS,
                 })
                 _set_session_cookie(resp, session_token, request)
+                _track_event(
+                    request,
+                    "auth_google_success",
+                    user_id=existing["user_id"],
+                    user_type=pending_user_type,
+                    source=source,
+                    meta={"source": source, "status": "pending", "existing": True},
+                    status_code=200,
+                )
                 return resp
 
             pending_user_type = existing.get("user_type", "claude")
+            _track_event(
+                request,
+                "auth_google_pending",
+                user_id=existing["user_id"],
+                user_type=pending_user_type,
+                source=source,
+                meta={"source": source, "status": "pending", "existing": True},
+                status_code=200,
+            )
             return web.json_response({
                 "pending": True,
                 "status": "pending",
@@ -10047,9 +10878,19 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             })
 
         if status == "rejected":
+            _track_event(
+                request,
+                "auth_google_fail",
+                user_id=existing["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                error_code="rejected",
+                meta={"source": source, "reason": "rejected"},
+                status_code=403,
+            )
             return web.json_response({"error": "Your sign-up request was not approved."}, status=403)
 
-    # Trial/demo sign-ups remain pending for admin review but can use free-tier chat immediately.
+    # Trial/first-look sign-ups remain pending for admin review but can use free-tier chat immediately.
     if source == "trial":
         user = _auth.create_pending_user(email, name, picture, user_type="trial")
         api_key = _auth.create_key(user["user_id"])
@@ -10072,12 +10913,30 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "is_admin": email.lower() in ADMIN_EMAILS,
         })
         _set_session_cookie(resp, session_token, request)
+        _track_event(
+            request,
+            "signup_created",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending"},
+            status_code=200,
+        )
+        _track_event(
+            request,
+            "auth_google_success",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending", "new_user": True},
+            status_code=200,
+        )
 
         send_email(
             email,
             "Unchained — Trial access enabled (account review pending)",
             f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
+            "<p>Your account review is still pending, but you can start using Trial/First Look now.</p>"
             "<p>We'll notify you once your full account is approved.</p>"
             "<p>— The Unchained Team</p>",
         )
@@ -10085,8 +10944,8 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             send_email(
                 admin,
                 f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
+                f"<p>New trial/first-look user: <b>{name}</b> ({email}).</p>"
+                "<p>Status: <b>pending review</b> (trial/first-look access enabled).</p>",
             )
         return resp
 
@@ -10121,6 +10980,24 @@ async def handle_google_auth(request: web.Request) -> web.Response:
     })
     # Set session cookie so /auth/me can identify pending users
     _set_session_cookie(resp, session_token, request)
+    _track_event(
+        request,
+        "signup_created",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending"},
+        status_code=200,
+    )
+    _track_event(
+        request,
+        "auth_google_pending",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending", "new_user": True},
+        status_code=200,
+    )
     return resp
 
 
@@ -10289,6 +11166,120 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     return web.json_response({"authenticated": False}, status=401)
 
 
+def _coerce_analytics_event_payload(raw: dict, request: web.Request) -> tuple[dict | None, str]:
+    if not isinstance(raw, dict):
+        return None, "event payload must be a JSON object"
+    event = str(raw.get("event", "")).strip()
+    if not event:
+        return None, "event required"
+    meta = raw.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    route = str(raw.get("route", "")).strip() or request.path
+    route_intended = str(raw.get("route_intended", "")).strip() or route
+    route_effective = str(raw.get("route_effective", "")).strip() or route
+    source = str(raw.get("source", "web")).strip() or "web"
+    gate_type = str(raw.get("gate_type", meta.get("gate_type", ""))).strip()
+    cta_id = str(raw.get("cta_id", meta.get("cta_id", ""))).strip()
+    error_code = str(raw.get("error_code", meta.get("reason", ""))).strip()
+    try:
+        latency_ms = max(0, int(raw.get("latency_ms", meta.get("latency_ms", 0)) or 0))
+    except Exception:
+        latency_ms = 0
+    return {
+        "event": event,
+        "event_id": str(raw.get("event_id", meta.get("event_id", ""))).strip(),
+        "session_id": str(raw.get("session_id", meta.get("session_id", ""))).strip(),
+        "page_view_id": str(raw.get("page_view_id", meta.get("page_view_id", ""))).strip(),
+        "route": route,
+        "route_intended": route_intended,
+        "route_effective": route_effective,
+        "gate_type": gate_type,
+        "cta_id": cta_id,
+        "error_code": error_code,
+        "source": source,
+        "latency_ms": latency_ms,
+        "meta": meta,
+    }, ""
+
+
+async def handle_analytics_event(request: web.Request) -> web.Response:
+    """POST /web/analytics/event — lightweight unauthenticated client events."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    payload, error = _coerce_analytics_event_payload(body, request)
+    if error:
+        return web.json_response({"error": error}, status=400)
+    _track_event(
+        request,
+        payload["event"],
+        event_id=payload["event_id"],
+        session_id=payload["session_id"],
+        page_view_id=payload["page_view_id"],
+        route=payload["route"],
+        route_intended=payload["route_intended"],
+        route_effective=payload["route_effective"],
+        gate_type=payload["gate_type"],
+        cta_id=payload["cta_id"],
+        error_code=payload["error_code"],
+        source=payload["source"],
+        latency_ms=payload["latency_ms"],
+        meta=payload["meta"],
+        status_code=204,
+        dedupe_ttl_s=0.75,
+    )
+    return web.json_response({"ok": True})
+
+
+async def handle_analytics_events(request: web.Request) -> web.Response:
+    """POST /web/analytics/events — batched lightweight unauthenticated events."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if isinstance(body, list):
+        events = body
+    elif isinstance(body, dict):
+        events = body.get("events", [])
+    else:
+        events = []
+    if not isinstance(events, list):
+        return web.json_response({"error": "events must be an array"}, status=400)
+    if len(events) > 100:
+        return web.json_response({"error": "events length max is 100"}, status=400)
+
+    accepted = 0
+    rejected = 0
+    for raw in events:
+        payload, error = _coerce_analytics_event_payload(raw, request)
+        if error:
+            rejected += 1
+            continue
+        ok = _track_event(
+            request,
+            payload["event"],
+            event_id=payload["event_id"],
+            session_id=payload["session_id"],
+            page_view_id=payload["page_view_id"],
+            route=payload["route"],
+            route_intended=payload["route_intended"],
+            route_effective=payload["route_effective"],
+            gate_type=payload["gate_type"],
+            cta_id=payload["cta_id"],
+            error_code=payload["error_code"],
+            source=payload["source"],
+            latency_ms=payload["latency_ms"],
+            meta=payload["meta"],
+            status_code=204,
+            dedupe_ttl_s=0.75,
+        )
+        if ok:
+            accepted += 1
+    return web.json_response({"ok": True, "received": len(events), "accepted": accepted, "rejected": rejected})
+
+
 def _is_admin(request: web.Request) -> dict | None:
     """Authenticate and check if user is an admin. Returns auth_info or None."""
     auth_info = _authenticate(request)
@@ -10353,6 +11344,24 @@ async def handle_admin_users(request: web.Request) -> web.Response:
     return web.json_response({"users": users})
 
 
+async def handle_admin_analytics_funnel(request: web.Request) -> web.Response:
+    """GET /admin/analytics/funnel — login/auth funnel metrics."""
+    if not _is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+    raw_days = str(request.query.get("days", "7")).strip() or "7"
+    funnel = str(request.query.get("funnel", "auth_inline_gsi")).strip() or "auth_inline_gsi"
+    try:
+        days = max(1, min(90, int(raw_days)))
+    except ValueError:
+        return web.json_response({"error": "days must be an integer"}, status=400)
+    try:
+        payload = _analytics.funnel_report(funnel=funnel, days=days)
+    except Exception as e:
+        log.warning("[analytics] funnel query failed: %s", e)
+        return web.json_response({"error": "Failed to build funnel"}, status=500)
+    return web.json_response(payload)
+
+
 SETUP_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -10377,7 +11386,7 @@ body{
 
 /* === Login === */
 #login{
-  display:none;flex-direction:column;align-items:center;
+  display:flex;flex-direction:column;align-items:center;
   justify-content:center;height:100dvh;padding:24px;gap:16px;
 }
 #login h1{font-size:28px;color:var(--accent);margin-bottom:8px;letter-spacing:1px}
@@ -12346,8 +13355,10 @@ document.addEventListener('keydown',e=>{
 
 async def handle_setup_page(request: web.Request) -> web.Response:
     """GET /setup — serve the setup / provisioning UI."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
     html = inject_google_client_id(SETUP_HTML, GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
@@ -12356,17 +13367,23 @@ async def handle_setup_page(request: web.Request) -> web.Response:
 async def handle_admin_page(request: web.Request) -> web.Response:
     """GET /admin — serve the admin UI."""
     # Allow the page to load; client-side will hit /admin/users which enforces auth
-    return web.Response(text=ADMIN_HTML, content_type="text/html")
+    _track_page_view(request)
+    html = inject_google_client_id(ADMIN_HTML, GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_scheduler_page(request: web.Request) -> web.Response:
     """GET /scheduler — authenticated scheduler editor UI."""
+    _track_page_view(request)
     auth_info = _authenticate(request)
     if auth_info is None:
+        _track_redirect(request, "/app", reason="scheduler_requires_auth")
         raise web.HTTPFound("/app")
     if _is_pending_user(auth_info):
+        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    return web.Response(text=SCHEDULER_HTML, content_type="text/html")
+    html = inject_google_client_id(SCHEDULER_HTML, GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
 
 
 async def handle_scheduler_jobs(request: web.Request) -> web.Response:
@@ -12572,6 +13589,19 @@ async def handle_provision_start(request: web.Request) -> web.Response:
     last = _provision_cooldowns.get(user_id, 0)
     if time.time() - last < _PROVISION_COOLDOWN_SECS:
         remaining = int(_PROVISION_COOLDOWN_SECS - (time.time() - last))
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="cooldown_active",
+            status_code=429,
+            meta={"remaining_s": remaining},
+        )
         return web.json_response(
             {"error": f"Please wait {remaining}s before starting another provision."},
             status=429,
@@ -12584,10 +13614,35 @@ async def handle_provision_start(request: web.Request) -> web.Response:
 
     provider = body.get("provider", "").strip().lower()
     if not provider:
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="provider_required",
+            status_code=400,
+        )
         return web.json_response({"error": "provider required"}, status=400)
 
     import signup_agent
     if provider not in signup_agent.list_providers():
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/start",
+            route_intended="/setup",
+            route_effective="/web/provision/start",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="unknown_provider",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response(
             {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
             status=400,
@@ -12602,9 +13657,47 @@ async def handle_provision_start(request: web.Request) -> web.Response:
         import signup_agent as _sa
         chrome_dir = _sa._chrome_user_data_dir()
         if not chrome_dir:
+            _track_event(
+                request,
+                "provision_fail",
+                route="/web/provision/start",
+                route_intended="/setup",
+                route_effective="/web/provision/start",
+                user_id=user_id,
+                user_type=auth_info.get("user_type", ""),
+                source="web",
+                error_code="chrome_data_dir_missing",
+                status_code=400,
+            )
             return web.json_response({"error": "Chrome user data directory not found"}, status=400)
         if not provision_helpers.is_profile_path_within(profile_path, chrome_dir):
+            _track_event(
+                request,
+                "provision_fail",
+                route="/web/provision/start",
+                route_intended="/setup",
+                route_effective="/web/provision/start",
+                user_id=user_id,
+                user_type=auth_info.get("user_type", ""),
+                source="web",
+                error_code="invalid_profile_path",
+                status_code=403,
+            )
             return web.json_response({"error": "Invalid profile path"}, status=403)
+
+    _track_event(
+        request,
+        "provision_start",
+        route="/web/provision/start",
+        route_intended="/setup",
+        route_effective="/web/provision/start",
+        cta_id=f"provision_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider, "use_relay": bool(use_relay)},
+    )
 
     # Record cooldown timestamp
     _provision_cooldowns[user_id] = time.time()
@@ -12653,6 +13746,32 @@ async def handle_provision_start(request: web.Request) -> web.Response:
             if chat_url:
                 resp["chat_url"] = chat_url
 
+    event_name = "provision_fail"
+    if result.status == signup_agent.ProvisionStatus.SUCCESS:
+        event_name = "provision_success"
+    elif result.status == signup_agent.ProvisionStatus.ALREADY_EXISTS:
+        event_name = "provision_success"
+    _track_event(
+        request,
+        event_name,
+        route="/web/provision/start",
+        route_intended="/setup",
+        route_effective="/web/provision/start",
+        cta_id=f"provision_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        error_code="" if event_name == "provision_success" else result.status.value,
+        latency_ms=int(result.duration_ms or 0),
+        meta={
+            "provider": provider,
+            "status": result.status.value,
+            "duration_ms": int(result.duration_ms or 0),
+            "use_relay": bool(use_relay),
+            "has_key": bool(result.api_key),
+        },
+    )
     return web.json_response(resp)
 
 
@@ -12692,10 +13811,37 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     user_id = auth_info["user_id"]
     pending = _pending_provision.pop(user_id, None)
     if not pending:
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/confirm",
+            route_intended="/setup",
+            route_effective="/web/provision/confirm",
+            cta_id="provision_confirm",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="no_pending_key",
+            status_code=400,
+        )
         return web.json_response({"error": "No pending key to confirm (expired or already stored)"}, status=400)
 
     provider, api_key, ts = pending
     if time.time() - ts > _PENDING_PROVISION_TTL:
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/confirm",
+            route_intended="/setup",
+            route_effective="/web/provision/confirm",
+            cta_id=f"provision_confirm_{provider}",
+            user_id=user_id,
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="pending_key_expired",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response({"error": "Pending key expired. Please provision again."}, status=400)
 
     import signup_agent
@@ -12709,6 +13855,19 @@ async def handle_provision_confirm(request: web.Request) -> web.Response:
     if chat_url:
         resp["chat_url"] = chat_url
 
+    _track_event(
+        request,
+        "provision_confirm",
+        route="/web/provision/confirm",
+        route_intended="/setup",
+        route_effective="/web/provision/confirm",
+        cta_id=f"provision_confirm_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider},
+    )
     return web.json_response(resp)
 
 
@@ -12728,13 +13887,54 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     provider = body.get("provider", "").strip().lower()
     api_key = body.get("api_key", "").strip()
     if not provider or not api_key:
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id="provision_manual_save",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="provider_or_key_missing",
+            status_code=400,
+        )
         return web.json_response({"error": "provider and api_key required"}, status=400)
     key_error = provision_helpers.validate_manual_api_key(api_key)
     if key_error:
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id=f"provision_manual_{provider}",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="manual_key_invalid",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response({"error": key_error}, status=400)
 
     import signup_agent
     if provider not in signup_agent.list_providers():
+        _track_event(
+            request,
+            "provision_fail",
+            route="/web/provision/save-manual",
+            route_intended="/setup",
+            route_effective="/web/provision/save-manual",
+            cta_id=f"provision_manual_{provider}",
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            error_code="unknown_provider",
+            status_code=400,
+            meta={"provider": provider},
+        )
         return web.json_response(
             {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
             status=400,
@@ -12749,6 +13949,19 @@ async def handle_provision_save_manual(request: web.Request) -> web.Response:
     if chat_url:
         resp["chat_url"] = chat_url
 
+    _track_event(
+        request,
+        "provision_manual_save",
+        route="/web/provision/save-manual",
+        route_intended="/setup",
+        route_effective="/web/provision/save-manual",
+        cta_id=f"provision_manual_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider},
+    )
     return web.json_response(resp)
 
 
@@ -12776,6 +13989,20 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
 
     _terminate_provider_agent(provider, auth_info["key_hash"])
 
+    _track_event(
+        request,
+        "provision_revoke",
+        route="/web/provision/revoke",
+        route_intended="/setup",
+        route_effective="/web/provision/revoke",
+        cta_id=f"provision_revoke_{provider}",
+        user_id=user_id,
+        user_type=auth_info.get("user_type", ""),
+        source="web",
+        status_code=200,
+        meta={"provider": provider, "revoked": bool(revoked)},
+    )
+
     return web.json_response({
         "revoked": revoked,
         "provider": provider,
@@ -12786,88 +14013,16 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
 # /web/cmd — Direct CDP command dispatch
 # ---------------------------------------------------------------------------
 
-class _CmdInputError(ValueError):
-    pass
-
-
-async def _cmd_ddm(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = body.get("flags", ["--llm-2pass", "--cols", "60"])
-    result = await cloud_tools.run_ddm(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_text(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = ["--text"]
-    find = body.get("find")
-    if find:
-        flags.extend(["--find", find])
-    result = await cloud_tools.run_ddm(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_navigate(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    url = body.get("url")
-    if not url:
-        raise _CmdInputError("url required")
-    result = await cloud_tools.navigate(agent_id, tab_id, url, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_screenshot(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    _ = body
-    result = await cloud_tools.screenshot(agent_id, tab_id, relay_host, relay_port)
-    return {"type": "image", "data": result}
-
-
-async def _cmd_js(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    expression = body.get("expression")
-    if not expression:
-        raise _CmdInputError("expression required")
-    result = await cloud_tools.run_js(agent_id, tab_id, expression, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_click(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    x = body.get("x")
-    y = body.get("y")
-    if x is None or y is None:
-        raise _CmdInputError("x and y required")
-    result = await cloud_tools.click(agent_id, tab_id, int(x), int(y), relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_type(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    text = body.get("text")
-    if not text:
-        raise _CmdInputError("text required")
-    result = await cloud_tools.type_text(agent_id, tab_id, text, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-async def _cmd_intel(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    flags = body.get("flags", ["--probe"])
-    result = await cloud_tools.run_intel(agent_id, tab_id, flags, relay_host, relay_port)
-    return {"type": "text", "data": result}
-
-
-_CMD_ACTIONS = {
-    "ddm": _cmd_ddm,
-    "text": _cmd_text,
-    "navigate": _cmd_navigate,
-    "screenshot": _cmd_screenshot,
-    "js": _cmd_js,
-    "click": _cmd_click,
-    "type": _cmd_type,
-    "intel": _cmd_intel,
-}
-
-
 async def handle_cmd(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
     req_id = _request_id(request)
     action = body.get("action")
     agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
@@ -12891,23 +14046,29 @@ async def handle_cmd(request: web.Request) -> web.Response:
     import cloud_tools
 
     try:
-        runner = _CMD_ACTIONS.get(action)
-        if runner is None:
-            _trace("cmd.unknown", req_id=req_id, action=action or "-", agent_id=agent_id)
-            return web.json_response(
-                {"error": f"Unknown action: {action}"}, status=400,
-            )
-        payload = await runner(body, agent_id, tab_id, relay_host, relay_port, cloud_tools)
+        payload = await run_cmd_action(
+            action=action,
+            body=body,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            cloud_tools=cloud_tools,
+        )
         _trace("cmd.ok", req_id=req_id, action=action, agent_id=agent_id, tab_id=tab_id)
         return web.json_response(payload)
 
-    except _CmdInputError as e:
+    except UnknownCmdActionError:
+        _trace("cmd.unknown", req_id=req_id, action=action or "-", agent_id=agent_id)
+        return web.json_response(
+            {"error": f"Unknown action: {action}"}, status=400,
+        )
+
+    except CmdInputError as e:
         return web.json_response({"error": str(e)}, status=400)
 
     except Exception as e:
-        err = str(e).lower()
-        if any(k in err for k in ("connect", "refused", "timed out", "not connected",
-                                   "no close frame", "ws_error", "1006")):
+        if is_chrome_unavailable_error(e):
             _trace("cmd.chrome_unavailable", req_id=req_id, action=action or "-", agent_id=agent_id)
             return web.json_response(
                 {"error": "Chrome is not open. Please click Chrome in your dock or re-run start.sh."},
@@ -12929,6 +14090,8 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/auth/request-claude-access", handle_request_claude_access),
     ("POST", "/auth/logout", handle_logout),
     ("GET", "/auth/me", handle_auth_me),
+    ("POST", "/web/analytics/event", handle_analytics_event),
+    ("POST", "/web/analytics/events", handle_analytics_events),
     ("POST", "/web/cmd", handle_cmd),
     ("GET", "/setup", handle_setup_page),
     ("GET", "/scheduler", handle_scheduler_page),
@@ -12938,6 +14101,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/web/scheduler/preview", handle_scheduler_preview),
     ("GET", "/admin", handle_admin_page),
     ("GET", "/admin/users", handle_admin_users),
+    ("GET", "/admin/analytics/funnel", handle_admin_analytics_funnel),
     ("GET", "/admin/pending", handle_admin_pending),
     ("POST", "/admin/approve", handle_admin_approve),
     ("POST", "/admin/reject", handle_admin_reject),
@@ -12946,6 +14110,7 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/chat-gemini", handle_chat_gemini_page),
     ("GET", "/chat-codex", handle_chat_codex_page),
     ("GET", "/chat-claude", handle_chat_claude_page),
+    ("GET", "/first-look", handle_first_look_page),
     ("GET", "/demo", handle_demo_page),
     ("GET", "/case-study/zillow-rental", handle_case_study_zillow),
     ("GET", "/local", handle_local_page),
