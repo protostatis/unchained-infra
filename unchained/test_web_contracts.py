@@ -67,6 +67,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/chat"),
             ("GET", "/trial"),
             ("GET", "/chat-gemini"),
+            ("GET", "/first-look"),
             ("GET", "/demo"),
             ("GET", "/app"),
             ("GET", "/chat/ws"),

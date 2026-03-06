@@ -95,7 +95,9 @@ echo "==> Uploading Python modules..."
     unchained/ddm.py \
     unchained/intel.py \
     unchained/web.py \
+    unchained/web_cmd.py \
     unchained/web_state.py \
+    unchained/analytics.py \
     unchained/provision_helpers.py \
     unchained/template_utils.py \
     unchained/agent_package.py \
