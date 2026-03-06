@@ -5943,6 +5943,9 @@ async function switchSlot(n) {
 
 def _inject_client_slots_ui(html: str) -> str:
     """Inject 3 local conversation slots for API-backed chat pages."""
+    # Idempotency guard: some templates already include slot state logic.
+    if "let activeSlot = 1;" in html:
+        return html
     return (
         html
         .replace(
