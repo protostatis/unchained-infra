@@ -1,1516 +1,6 @@
-"""Web UI — mobile-first browser control panel for unchained agents.
+"""HTML template constants extracted from web.py."""
 
-Serves a single-page HTML app and a /web/cmd API that dispatches
-to cloud_tools functions. Designed for phone-based demo control.
-
-Usage:
-    python web.py --host 0.0.0.0
-"""
-
-import argparse
-import asyncio
-import hashlib
-import hmac
-import ipaddress
-import json
-import logging
-import os
-from pathlib import Path
-import re
-import smtplib
-import subprocess
-import sys
-import tempfile
-import time
-import threading
-import uuid
-from email.mime.text import MIMEText
-from urllib.parse import quote, urlparse
-
-import httpx
-import jwt
-from aiohttp import web
-
-from analytics import AnalyticsStore
-from auth import Auth
-import provision_helpers
-from template_utils import inject_google_client_id
-from web_state import ChatRuntimeState
-from web_cmd import (
-    CmdInputError,
-    UnknownCmdActionError,
-    is_chrome_unavailable_error,
-    run_cmd_action,
-)
-
-log = logging.getLogger(__name__)
-
-
-def _resolve_analytics_db_path(auth_db_path: str) -> str:
-    """Use a dedicated analytics DB by default to isolate auth DB contention."""
-    configured = os.environ.get("UNCHAINED_ANALYTICS_DB_PATH", "").strip()
-    if configured:
-        return configured
-    auth_path = Path(auth_db_path).expanduser()
-    return str(auth_path.with_name("analytics.db"))
-
-
-_auth = Auth()
-_analytics = AnalyticsStore(db_path=_resolve_analytics_db_path(_auth.db_path))
-
-# Google OAuth config (from env)
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
-if not JWT_SECRET:
-    raise RuntimeError(
-        "JWT_SECRET env var is required. Refusing to start with an insecure default."
-    )
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24 * 7  # 1 week
-ALLOWED_EMAILS = set(
-    e.strip().lower()
-    for e in os.environ.get("ALLOWED_EMAILS", "").split(",")
-    if e.strip()
-)
-
-# SMTP config for sign-up notifications
-SMTP_HOST = os.environ.get("SMTP_HOST", "")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASS = os.environ.get("SMTP_PASS", "")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "noreply@unchainedsky.com")
-
-# Trial agent: handles OpenRouter model requests (model IDs containing '/')
-# Uses a deployment-provided service key to bypass DB auth.
-def _key_hash(key: str) -> str:
-    """Return 8-char SHA256 hash of a key — stable user identifier."""
-    return hashlib.sha256(key.encode()).hexdigest()[:8]
-
-
-def _agent_id(prefix: str, key: str) -> str:
-    """Build a typed agent ID: ``{prefix}-{hash}``."""
-    return f"{prefix}-{_key_hash(key)}"
-
-
-TRIAL_AGENT_KEY = os.environ.get("TRIAL_AGENT_KEY", "").strip()
-TRIAL_AGENT_ID = os.environ.get("TRIAL_AGENT_ID", "").strip()
-if not TRIAL_AGENT_ID and TRIAL_AGENT_KEY:
-    TRIAL_AGENT_ID = _agent_id("trial", TRIAL_AGENT_KEY)
-# Headless bridge agent_id — when set, trial/first-look chat messages route CDP tools
-# to this agent instead of the user's personal agent.
-# Can be set explicitly, or derived from HEADLESS_API_KEY (the key the bridge uses).
-HEADLESS_AGENT_ID = os.environ.get("HEADLESS_AGENT_ID", "").strip()
-if not HEADLESS_AGENT_ID:
-    _headless_key = os.environ.get("HEADLESS_API_KEY", "").strip()
-    if _headless_key:
-        HEADLESS_AGENT_ID = _agent_id("headless", _headless_key)
-ADMIN_EMAILS = [
-    e.strip().lower()
-    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
-    if e.strip()
-]
-CONTACT_EMAIL = (
-    os.environ.get("CONTACT_EMAIL", "").strip()
-    or (ADMIN_EMAILS[0] if ADMIN_EMAILS else "hello@unchainedsky.com")
-)
-if not TRIAL_AGENT_KEY:
-    log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
-if not TRIAL_AGENT_ID:
-    log.warning("[chat] TRIAL_AGENT_ID unresolved; OpenRouter trial routing disabled.")
-
-# Demo prompt quota — number of headless demo interactions before requiring trial install
-_DEMO_PROMPT_LIMIT = 4
-_FIRST_LOOK_GUEST_PROMPT_LIMIT = max(
-    1,
-    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "2")),
-)
-_FIRST_LOOK_GUEST_COOKIE_MAX_AGE = 60 * 24 * 3600
-_FIRST_LOOK_GUEST_ID_COOKIE = "uc_fl_guest"
-_FIRST_LOOK_GUEST_QUOTA_COOKIE = "uc_fl_quota"
-_SIGNED_INT_RE = re.compile(r"^[0-9]{1,4}$")
-_SIGNED_GUEST_ID_RE = re.compile(r"^[a-f0-9]{32}$")
-
-# Turn-based rate limiting for free-tier users
-_FREE_DAILY_TURN_LIMIT = 25    # ~25 turns covers 10-20 min of real browsing
-_FREE_WINDOW_TURN_LIMIT = 5    # per 5-min window cap (prevents rapid-fire)
-_FREE_WINDOW_SECONDS = 300     # 5-minute window
-_OPENROUTER_TRIAL_BUDGET_USD = max(
-    0.0,
-    float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
-)
-_OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3-flash-preview").strip()
-    or "google/gemini-3-flash-preview"
-)
-_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
-    m.strip()
-    for m in os.environ.get(
-        "OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS",
-        "arcee-ai/trinity-large-preview:free,stepfun/step-3.5-flash:free",
-    ).split(",")
-    if m.strip()
-)
-if not _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS:
-    _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = (
-        "arcee-ai/trinity-large-preview:free",
-        "stepfun/step-3.5-flash:free",
-    )
-_OPENROUTER_TRIAL_FALLBACK_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_FALLBACK_MODEL", _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS[0]).strip()
-    or _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS[0]
-)
-if _OPENROUTER_TRIAL_FALLBACK_MODEL not in _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS:
-    _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = (
-        (_OPENROUTER_TRIAL_FALLBACK_MODEL,) + _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS
-    )
-
-
-def _is_demo_unlimited(user: dict | None) -> bool:
-    """Return True if user is approved with an API key (bypasses demo quota)."""
-    if not user:
-        return False
-    return user.get("status") == "approved" and bool(user.get("api_key"))
-
-
-def _is_rate_limited_user(user: dict | None) -> bool:
-    """Return True for free-tier demo/trial users (no approved API key)."""
-    if not user:
-        return True
-    # Approved users with API keys bypass rate limiting
-    if user.get("status") == "approved" and bool(user.get("api_key")):
-        return False
-    return True
-
-
-def send_email(to: str, subject: str, body_html: str):
-    """Send email via SMTP. Fails silently with a log if not configured."""
-    if not SMTP_HOST:
-        log.warning("[email] SMTP_HOST not configured, skipping email to %s: %s", to, subject)
-        return
-    try:
-        msg = MIMEText(body_html, "html")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            if SMTP_USER:
-                server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(FROM_EMAIL, [to], msg.as_string())
-        log.info("[email] Sent to %s: %s", to, subject)
-    except Exception as e:
-        log.error("[email] Failed to send to %s: %s", to, e)
-
-
-def _request_id(request: web.Request) -> str:
-    rid = request.headers.get("X-Request-ID", "").strip()
-    return rid or uuid.uuid4().hex[:12]
-
-
-def _trace(event: str, **fields):
-    parts = []
-    for k, v in fields.items():
-        if v is None or v == "":
-            continue
-        parts.append(f"{k}={v}")
-    suffix = " " + " ".join(parts) if parts else ""
-    log.info("[trace] %s%s", event, suffix)
-
-
-_ANALYTICS_PAGE_VIEW_ROUTES = {
-    "/",
-    "/case-study/zillow-rental",
-    "/trial",
-    "/local",
-    "/setup",
-    "/install",
-    "/first-look",
-    "/demo",
-    "/chat-gemini",
-    "/chat-codex",
-    "/chat-claude",
-    "/app",
-    "/scheduler",
-    "/admin",
-}
-_ANALYTICS_INLINE_GSI_ROUTES = {
-    "/trial",
-    "/local",
-    "/setup",
-    "/chat-gemini",
-    "/chat-codex",
-    "/chat-claude",
-}
-_ANALYTICS_LINK_GATE_ROUTES = {
-    "/install",
-}
-_analytics_last_cleanup_ts = 0.0
-
-
-def _analytics_maybe_cleanup():
-    global _analytics_last_cleanup_ts
-    now = time.time()
-    if now - _analytics_last_cleanup_ts < 3600:
-        return
-    _analytics_last_cleanup_ts = now
-    try:
-        _analytics.cleanup_old_events()
-    except Exception as e:
-        log.warning("[analytics] cleanup failed: %s", e)
-
-
-def _track_event(
-    request: web.Request,
-    event: str,
-    *,
-    event_id: str = "",
-    session_id: str = "",
-    page_view_id: str = "",
-    route: str = "",
-    route_intended: str = "",
-    route_effective: str = "",
-    gate_type: str = "",
-    cta_id: str = "",
-    error_code: str = "",
-    user_id: str = "",
-    user_type: str = "",
-    source: str = "",
-    status_code: int = 0,
-    latency_ms: int = 0,
-    meta: dict | None = None,
-    dedupe_ttl_s: float = 0.0,
-):
-    try:
-        _analytics_maybe_cleanup()
-        return _analytics.track(
-            event,
-            request=request,
-            event_id=event_id,
-            session_id=session_id,
-            page_view_id=page_view_id,
-            route=route,
-            route_intended=route_intended,
-            route_effective=route_effective,
-            gate_type=gate_type,
-            cta_id=cta_id,
-            error_code=error_code,
-            user_id=user_id,
-            user_type=user_type,
-            source=source,
-            status_code=status_code,
-            latency_ms=latency_ms,
-            meta=meta,
-            dedupe_ttl_s=dedupe_ttl_s,
-        )
-    except Exception as e:
-        log.warning("[analytics] event=%s failed: %s", event, e)
-        return False
-
-
-def _track_page_view(request: web.Request):
-    route = request.path
-    if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
-        return
-    gate_type = ""
-    if route in _ANALYTICS_INLINE_GSI_ROUTES:
-        gate_type = "inline_gsi"
-    elif route in _ANALYTICS_LINK_GATE_ROUTES:
-        gate_type = "link_signin"
-    _track_event(
-        request,
-        "page_view",
-        route=route,
-        route_intended=route,
-        route_effective=route,
-        gate_type=gate_type,
-        source="web",
-        status_code=200,
-        dedupe_ttl_s=5.0,
-    )
-
-
-def _track_redirect(
-    request: web.Request,
-    location: str,
-    *,
-    reason: str = "",
-    auth_info: dict | None = None,
-):
-    _track_event(
-        request,
-        "route_redirect",
-        route=request.path,
-        route_intended=request.path,
-        route_effective=location,
-        gate_type="inline_gsi" if location in _ANALYTICS_INLINE_GSI_ROUTES else "",
-        user_id=(auth_info or {}).get("user_id", ""),
-        user_type=(auth_info or {}).get("user_type", ""),
-        source="web",
-        status_code=302,
-        meta={"to": location, "reason": reason or "redirect"},
-        dedupe_ttl_s=0.5,
-    )
-
-
-def _cookie_secure(request: web.Request) -> bool:
-    """Honor TLS termination when deciding cookie Secure flag."""
-    forwarded = request.headers.get("X-Forwarded-Proto", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip().lower() == "https"
-    return request.scheme == "https"
-
-
-def _cookie_domain(request: web.Request) -> str | None:
-    """Share auth cookies across unchainedsky.com subdomains in production."""
-    forwarded_host = request.headers.get("X-Forwarded-Host", "")
-    host = (forwarded_host.split(",")[0].strip() if forwarded_host else (request.host or "")).lower()
-    host = host.split(":", 1)[0]
-    if host == "unchainedsky.com" or host.endswith(".unchainedsky.com"):
-        return ".unchainedsky.com"
-    return None
-
-
-def _set_session_cookie(resp: web.Response, token: str, request: web.Request):
-    kwargs = {
-        "max_age": JWT_EXPIRY_HOURS * 3600,
-        "httponly": True,
-        "secure": _cookie_secure(request),
-        "samesite": "Lax",
-        "path": "/",
-    }
-    domain = _cookie_domain(request)
-    if domain:
-        kwargs["domain"] = domain
-    resp.set_cookie("uc_session", token, **kwargs)
-
-
-def _clear_session_cookie(resp: web.Response, request: web.Request):
-    resp.del_cookie("uc_session", path="/")
-    domain = _cookie_domain(request)
-    if domain:
-        resp.del_cookie("uc_session", path="/", domain=domain)
-
-
-def _session_cookie_candidates(request: web.Request) -> list[str]:
-    """Return all uc_session cookie candidates (handles duplicate cookie names)."""
-    tokens: list[str] = []
-    cookie_header = request.headers.get("Cookie", "")
-    if cookie_header:
-        for part in cookie_header.split(";"):
-            kv = part.strip()
-            if not kv or "=" not in kv:
-                continue
-            name, value = kv.split("=", 1)
-            if name.strip() != "uc_session":
-                continue
-            token = value.strip()
-            if len(token) >= 2 and token[0] == token[-1] == '"':
-                token = token[1:-1]
-            if token and token not in tokens:
-                tokens.append(token)
-    parsed = request.cookies.get("uc_session")
-    if parsed and parsed not in tokens:
-        tokens.append(parsed)
-    return tokens
-
-
-def _sign_cookie_value(name: str, value: str) -> str:
-    payload = f"{name}|{value}"
-    sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
-    return f"{value}.{sig}"
-
-
-def _verify_cookie_value(name: str, token: str) -> str:
-    raw = str(token or "").strip()
-    if not raw or "." not in raw:
-        return ""
-    value, sig = raw.rsplit(".", 1)
-    payload = f"{name}|{value}"
-    expected = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
-    if not hmac.compare_digest(sig, expected):
-        return ""
-    return value
-
-
-def _set_signed_cookie(
-    resp: web.Response,
-    request: web.Request,
-    name: str,
-    value: str,
-    *,
-    max_age: int = _FIRST_LOOK_GUEST_COOKIE_MAX_AGE,
-    http_only: bool = True,
-):
-    kwargs = {
-        "max_age": max_age,
-        "httponly": http_only,
-        "secure": _cookie_secure(request),
-        "samesite": "Lax",
-        "path": "/",
-    }
-    domain = _cookie_domain(request)
-    if domain:
-        kwargs["domain"] = domain
-    resp.set_cookie(name, _sign_cookie_value(name, value), **kwargs)
-
-
-def _get_signed_cookie(request: web.Request, name: str) -> str:
-    token = request.cookies.get(name, "")
-    if token and len(token) >= 2 and token[0] == token[-1] == '"':
-        token = token[1:-1]
-    return _verify_cookie_value(name, token)
-
-
-def _first_look_guest_id(request: web.Request) -> tuple[str, bool]:
-    guest_id = _get_signed_cookie(request, _FIRST_LOOK_GUEST_ID_COOKIE)
-    if guest_id and _SIGNED_GUEST_ID_RE.fullmatch(guest_id):
-        return guest_id, False
-    return uuid.uuid4().hex, True
-
-
-def _first_look_guest_quota_count(request: web.Request) -> int:
-    raw = _get_signed_cookie(request, _FIRST_LOOK_GUEST_QUOTA_COOKIE)
-    if not raw or not _SIGNED_INT_RE.fullmatch(raw):
-        return 0
-    try:
-        return max(0, int(raw))
-    except Exception:
-        return 0
-
-
-def _attach_first_look_guest_cookies(
-    resp: web.Response,
-    request: web.Request,
-    guest_id: str,
-    *,
-    quota_count: int | None = None,
-):
-    _set_signed_cookie(resp, request, _FIRST_LOOK_GUEST_ID_COOKIE, guest_id)
-    if quota_count is not None:
-        _set_signed_cookie(resp, request, _FIRST_LOOK_GUEST_QUOTA_COOKIE, str(max(0, quota_count)))
-
-
-def _build_first_look_guest_auth(guest_id: str) -> dict:
-    key = f"first-look-guest:{guest_id}"
-    key_hash = hashlib.sha256(f"{key}|{JWT_SECRET}".encode()).hexdigest()[:8]
-    return {
-        "user_id": "",
-        "key": key,
-        "key_hash": key_hash,
-        "agent_id": f"guest-{key_hash}",
-        "email": "",
-        "status": "guest",
-        "user_type": "guest",
-    }
-
-
-def _first_look_guest_auth(request: web.Request) -> tuple[dict, str, int]:
-    guest_id, _is_new = _first_look_guest_id(request)
-    quota_count = _first_look_guest_quota_count(request)
-    return _build_first_look_guest_auth(guest_id), guest_id, quota_count
-
-
-# Cache for Google's JWKS public keys
-_google_jwks = None
-_google_jwks_expiry: float = 0
-
-# Chat/runtime state (incrementally extracted from web.py globals).
-_state = ChatRuntimeState()
-
-# Backward-compatible aliases used across the existing module body.
-_chat_agents = _state.chat_agents  # agent_id -> ws
-# Optional capabilities sent by local agents at WS auth time.
-# Example: {"codex_cli": true}
-_chat_agent_caps: dict[str, dict] = {}  # agent_id -> capabilities
-_chat_agent_users: dict[str, str] = {}  # agent_id -> user_id
-_response_queues = _state.response_queues  # session_id -> event queue
-_session_agents = _state.session_agents  # session_id -> agent_id that handled it
-_agent_req_queues = _state.agent_req_queues  # req_id -> one-shot response queue
-_session_tabs = _state.session_tabs  # session_id -> Chrome tab_id
-_session_last_active = _state.session_last_active  # session_id -> timestamp
-_session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
-_STALE_TAB_SECONDS = 30 * 60
-_stale_tab_task: asyncio.Task | None = None
-_tabs_pending_close = _state.tabs_pending_close  # tab_id -> (agent_id, retry_count)
-_MAX_CLOSE_RETRIES = 3
-_MAX_TABS_PER_AGENT = 10
-_gemini_procs = _state.gemini_procs  # agent_id -> subprocess
-_gemini_log_fhs = _state.gemini_log_fhs  # agent_id -> log file handle
-_gemini_last_active = _state.gemini_last_active  # agent_id -> last msg timestamp
-_gemini_spawn_lock = _state.gemini_spawn_lock  # prevents duplicate spawn race
-_GEMINI_IDLE_TIMEOUT = 600
-_gemini_cleanup_task: asyncio.Task | None = None
-
-# Per-user Codex agent process management (sdk + cli modes)
-_codex_sdk_procs: dict[str, subprocess.Popen] = {}   # agent_id → subprocess
-_codex_sdk_log_fhs: dict[str, object] = {}           # agent_id → log file handle
-_codex_sdk_last_active: dict[str, float] = {}        # agent_id → last msg timestamp
-_codex_cli_procs: dict[str, subprocess.Popen] = {}   # agent_id → subprocess
-_codex_cli_log_fhs: dict[str, object] = {}           # agent_id → log file handle
-_codex_cli_last_active: dict[str, float] = {}        # agent_id → last msg timestamp
-_codex_sdk_spawn_lock = __import__("threading").Lock()   # prevents duplicate spawn race
-_codex_cli_spawn_lock = __import__("threading").Lock()   # prevents duplicate spawn race
-_CODEX_IDLE_TIMEOUT = 600  # kill after 10 min idle
-
-# Per-user Claude SDK agent process management
-_claude_sdk_procs: dict[str, subprocess.Popen] = {}   # agent_id → subprocess
-_claude_sdk_log_fhs: dict[str, object] = {}           # agent_id → log file handle
-_claude_sdk_last_active: dict[str, float] = {}        # agent_id → last msg timestamp
-_claude_sdk_spawn_lock = __import__("threading").Lock()  # prevents duplicate spawn race
-_CLAUDE_SDK_IDLE_TIMEOUT = 600  # kill after 10 min idle
-
-# Pending provision keys awaiting user confirmation
-# user_id → (provider, api_key, timestamp)
-_pending_provision = _state.pending_provision  # user_id -> (provider, api_key, timestamp)
-_PENDING_PROVISION_TTL = 300
-_provision_cooldowns = _state.provision_cooldowns  # user_id -> last provision timestamp
-_PROVISION_COOLDOWN_SECS = 30
-
-# Scheduler UI storage (per-user jobs + state snapshots).
-_SCHEDULER_STORE_DIR = Path(os.environ.get("UNCHAINED_SCHEDULER_DIR", "/data/scheduler_jobs"))
-_INSTALLER_ASSETS_DIR = Path(
-    os.environ.get(
-        "UNCHAINED_INSTALLER_ASSETS_DIR",
-        str(Path(os.path.dirname(os.path.abspath(__file__))) / "installers"),
-    )
-)
-_DEFAULT_MAC_INSTALLER_FILES = ("unchained-installer-mac.dmg", "unchained-installer-mac.pkg")
-_DEFAULT_WINDOWS_INSTALLER_FILES = ("unchained-installer-windows.msi", "unchained-installer-windows.exe")
-
-
-def _parse_installer_filename_list(raw: str, default_files: tuple[str, ...]) -> list[str]:
-    out = [part.strip() for part in (raw or "").split(",") if part.strip()]
-    if out:
-        return out
-    return list(default_files)
-
-
-_MAC_INSTALLER_FILES = _parse_installer_filename_list(
-    os.environ.get("UNCHAINED_MAC_INSTALLER_FILES", "").strip(),
-    (
-        os.environ.get("UNCHAINED_MAC_INSTALLER_FILE", "").strip() or _DEFAULT_MAC_INSTALLER_FILES[0],
-        _DEFAULT_MAC_INSTALLER_FILES[1],
-    ),
-)
-_WINDOWS_INSTALLER_FILES = _parse_installer_filename_list(
-    os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILES", "").strip(),
-    (
-        os.environ.get("UNCHAINED_WINDOWS_INSTALLER_FILE", "").strip() or _DEFAULT_WINDOWS_INSTALLER_FILES[0],
-        _DEFAULT_WINDOWS_INSTALLER_FILES[1],
-    ),
-)
-_ALLOW_SCRIPT_INSTALLER_FALLBACK = (
-    os.environ.get("UNCHAINED_ALLOW_SCRIPT_INSTALLER", "0").strip().lower() in {"1", "true", "yes", "on"}
-)
-_INSTALL_CLAIM_TTL = int(os.environ.get("UNCHAINED_INSTALL_CLAIM_TTL", "600"))
-_INSTALL_CLAIM_MAX_PENDING = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_MAX_PENDING", "4096")))
-_INSTALL_CLAIM_START_WINDOW = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_START_WINDOW", "60")))
-_INSTALL_CLAIM_START_MAX_PER_IP = max(1, int(os.environ.get("UNCHAINED_INSTALL_CLAIM_START_MAX_PER_IP", "30")))
-_PUBLIC_BASE_URL = (os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "https://api.unchainedsky.com").strip() or "https://api.unchainedsky.com").rstrip("/")
-_install_claims: dict[str, dict] = {}  # claim_id -> {secret, expires_at, install_token?}
-_install_claims_lock = threading.Lock()
-_install_claim_start_hits: dict[str, list[float]] = {}  # source_ip -> recent claim timestamps
-
-
-def _parse_relay() -> tuple[str, int]:
-    """Parse RELAY_INTERNAL_URL into (host, port)."""
-    url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
-    parsed = urlparse(url)
-    return parsed.hostname or "relay", parsed.port or 8765
-
-
-def _relay_shared_token() -> str:
-    return (os.environ.get("RELAY_SHARED_TOKEN") or os.environ.get("PRIVATE_CORE_TOKEN", "")).strip()
-
-
-def _relay_auth_headers() -> dict[str, str]:
-    token = _relay_shared_token()
-    if not token:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _relay_cdp_url(agent_id: str, tab_id: str = "auto") -> str:
-    relay_host, relay_port = _parse_relay()
-    scheme = "wss" if relay_port == 443 else "ws"
-    port_part = "" if relay_port in (443, 80) else f":{relay_port}"
-    url = f"{scheme}://{relay_host}{port_part}/cdp/{agent_id}/{tab_id}"
-    token = _relay_shared_token()
-    if token:
-        url += f"?relay_token={quote(token, safe='')}"
-    return url
-
-
-def _scheduler_slug(user_id: str) -> str:
-    """Stable, path-safe scheduler namespace for one user."""
-    return hashlib.sha256(user_id.encode()).hexdigest()[:24]
-
-
-def _scheduler_jobs_path(user_id: str) -> Path:
-    return _SCHEDULER_STORE_DIR / f"{_scheduler_slug(user_id)}.jobs.json"
-
-
-def _scheduler_state_path(user_id: str) -> Path:
-    return _SCHEDULER_STORE_DIR / f"{_scheduler_slug(user_id)}.state.json"
-
-
-def _normalize_installer_platform(platform: str) -> str:
-    p = (platform or "").strip().lower()
-    if p in {"mac", "macos", "darwin", "osx"}:
-        return "mac"
-    if p in {"windows", "win", "win32"}:
-        return "windows"
-    return ""
-
-
-def _native_installer_candidates(platform: str) -> list[str]:
-    p = _normalize_installer_platform(platform)
-    if p == "mac":
-        files = _MAC_INSTALLER_FILES
-    elif p == "windows":
-        files = _WINDOWS_INSTALLER_FILES
-    else:
-        return []
-    ordered: list[str] = []
-    seen = set()
-    for name in files:
-        if not name or name in seen:
-            continue
-        ordered.append(name)
-        seen.add(name)
-    return ordered
-
-
-def _native_installer_path(platform: str) -> Path | None:
-    p = _normalize_installer_platform(platform)
-    candidates = _native_installer_candidates(p)
-    if not candidates:
-        return None
-    root = _INSTALLER_ASSETS_DIR.resolve()
-    existing: list[tuple[Path, int, int]] = []
-    for idx, name in enumerate(candidates):
-        candidate = (root / name).resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            continue
-        if candidate.is_file():
-            try:
-                mtime_ns = candidate.stat().st_mtime_ns
-            except OSError:
-                mtime_ns = 0
-            existing.append((candidate, mtime_ns, idx))
-    if not existing:
-        return None
-    # Prefer the freshest artifact to avoid stale .msi/.dmg shadowing newly built .exe/.pkg.
-    # Tie-break by configured candidate order.
-    existing.sort(key=lambda item: (item[1], -item[2]), reverse=True)
-    return existing[0][0]
-
-
-def _cleanup_install_claims(now: float | None = None):
-    ts = now or time.time()
-    stale = []
-    for claim_id, info in _install_claims.items():
-        if info.get("expires_at", 0) <= ts:
-            stale.append(claim_id)
-    for claim_id in stale:
-        _install_claims.pop(claim_id, None)
-
-
-def _cleanup_install_claim_start_hits(now: float | None = None):
-    ts = now or time.time()
-    cutoff = ts - _INSTALL_CLAIM_START_WINDOW
-    for source, hits in list(_install_claim_start_hits.items()):
-        keep = [t for t in hits if t >= cutoff]
-        if keep:
-            _install_claim_start_hits[source] = keep
-        else:
-            _install_claim_start_hits.pop(source, None)
-
-
-def _is_valid_claim_id(claim_id: str) -> bool:
-    return bool(re.fullmatch(r"[a-f0-9]{32}", claim_id or ""))
-
-
-def _request_source_ip(request: web.Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "").strip()
-    if forwarded:
-        source = forwarded.split(",")[0].strip()
-        if source:
-            return source
-    return (request.remote or "unknown").strip() or "unknown"
-
-
-def _host_from_request(request: web.Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-Host", "").strip()
-    if forwarded:
-        candidate = forwarded.split(",")[0].strip()
-        if candidate:
-            return candidate
-    return (request.host or "").strip()
-
-
-def _hostname_from_host(candidate: str) -> str:
-    raw = (candidate or "").strip()
-    if not raw:
-        return ""
-    try:
-        parsed = urlparse(f"//{raw}")
-    except Exception:
-        return ""
-    return (parsed.hostname or "").strip().lower()
-
-
-def _is_local_hostname(hostname: str) -> bool:
-    host = (hostname or "").strip().lower()
-    if not host:
-        return False
-    if host == "localhost":
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return host.endswith(".local")
-    return ip.is_loopback or ip.is_private
-
-
-def _is_public_unchained_hostname(hostname: str) -> bool:
-    host = (hostname or "").strip().lower()
-    return host == "unchainedsky.com" or host.endswith(".unchainedsky.com")
-
-
-def _public_base_url(request: web.Request) -> str:
-    requested_host = _host_from_request(request)
-    requested_hostname = _hostname_from_host(requested_host)
-    if requested_host and requested_hostname:
-        if _is_local_hostname(requested_hostname):
-            if not GOOGLE_CLIENT_ID:
-                return f"http://{requested_host}"
-        elif _is_public_unchained_hostname(requested_hostname):
-            scheme = "https" if _cookie_secure(request) else "http"
-            return f"{scheme}://{requested_host}"
-    return _PUBLIC_BASE_URL
-
-
-def _public_relay_url(request: web.Request) -> str:
-    parsed = urlparse(_public_base_url(request))
-    host = parsed.hostname or "api.unchainedsky.com"
-    if parsed.scheme == "http":
-        return f"ws://{host}:8765/tunnel"
-    return f"wss://{parsed.netloc}/tunnel"
-
-
-def _request_install_token(request: web.Request) -> str:
-    header_token = request.headers.get("X-Install-Token", "").strip()
-    if header_token:
-        return header_token
-    auth_header = request.headers.get("Authorization", "").strip()
-    if auth_header.lower().startswith("bearer "):
-        bearer = auth_header[7:].strip()
-        if bearer:
-            return bearer
-    return request.query.get("install_token", "").strip()
-
-
-_SCHEDULER_DEFAULT_JOBS = {
-    "jobs": [
-        {
-            "id": "daily-summary",
-            "prompt": "Open my dashboard and summarize anything important since yesterday.",
-            "schedule": {"daily_at": "14:00"},
-            "use_stable_session": True,
-            "timeout_seconds": 240,
-            "enabled": False,
-        },
-        {
-            "id": "quick-health-check",
-            "prompt": "Check if the status page shows incidents and report back.",
-            "schedule": {"every_minutes": 30},
-            "retry_seconds": 120,
-            "enabled": False,
-        },
-        {
-            "id": "one-time-export",
-            "prompt": "Export this week's report as CSV and confirm where it was downloaded.",
-            "schedule": {"at": "2026-03-01T18:00:00Z"},
-            "enabled": False,
-        },
-    ]
-}
-
-
-def _scheduler_read_jobs_payload(user_id: str) -> dict:
-    path = _scheduler_jobs_path(user_id)
-    if not path.exists():
-        return _SCHEDULER_DEFAULT_JOBS
-    try:
-        raw = json.loads(path.read_text())
-        return raw if isinstance(raw, dict) else {"jobs": []}
-    except Exception:
-        return {"jobs": []}
-
-
-def _scheduler_write_jobs_payload(user_id: str, payload: dict) -> None:
-    _SCHEDULER_STORE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _scheduler_jobs_path(user_id)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=str(_SCHEDULER_STORE_DIR)) as tmp:
-        json.dump(payload, tmp, indent=2, sort_keys=True)
-        tmp.write("\n")
-        tmp_name = tmp.name
-    os.replace(tmp_name, path)
-
-
-def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
-    import scheduled_tasks as st
-
-    state_path = _scheduler_state_path(user_id)
-    state = st.load_state(state_path)
-    preview = st.preview_jobs(jobs, state=state)
-    for row in preview:
-        last_output = st.latest_success_output(state_path, row["id"], limit=20)
-        if last_output:
-            row["last_output"] = last_output[:500]
-    return preview
-
-
-def _is_openrouter_model(model: str) -> bool:
-    return "/" in (model or "")
-
-
-def _coerce_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _coerce_int(value, default: int = 0) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-
-def _openrouter_budget_state_for_user(user_id: str) -> dict:
-    return _auth.get_or_init_openrouter_budget(
-        user_id,
-        min_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
-        max_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
-    )
-
-
-def _track_openrouter_usage_for_user(
-    user_id: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    total_tokens: int,
-    cost_usd: float,
-) -> dict:
-    return _auth.add_openrouter_usage(
-        user_id=user_id,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-        cost_usd=cost_usd,
-        min_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
-        max_budget_usd=_OPENROUTER_TRIAL_BUDGET_USD,
-    )
-
-
-def _is_openrouter_post_cap_allowed_model(model: str) -> bool:
-    m = (model or "").strip()
-    return m in _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS
-
-
-def _is_codex_sdk_model(model: str) -> bool:
-    return (model or "").startswith("codex-sdk:")
-
-
-def _is_codex_cli_model(model: str) -> bool:
-    return (model or "").startswith("codex-cli:")
-
-
-def _is_claude_sdk_model(model: str) -> bool:
-    return (model or "").startswith("claude-sdk:")
-
-
-def _session_cdp_url(agent_id: str) -> str:
-    """Build the CDP relay URL for any agent."""
-    return _relay_cdp_url(agent_id, "auto")
-
-
-async def _create_session_tab(session_id: str, agent_id: str) -> str:
-    """Create a new Chrome tab via CDP Target.createTarget through the relay."""
-    from cdp import CDP
-    cdp = CDP(_session_cdp_url(agent_id))
-    try:
-        await asyncio.wait_for(cdp.connect(), timeout=10)
-        result = await cdp.send("Target.createTarget", {"url": "about:blank"})
-        return result["targetId"]
-    finally:
-        if cdp.ws:
-            await cdp.ws.close()
-
-
-async def _close_session_tab(session_id: str):
-    """Close the Chrome tab via CDP Target.closeTarget.
-
-    On failure, queues the tab for retry instead of silently dropping it.
-    """
-    tab_id = _session_tabs.pop(session_id, None)
-    agent_id = _session_agent_map.pop(session_id, None)
-    _session_last_active.pop(session_id, None)
-    if not tab_id or not agent_id:
-        return
-    from cdp import CDP
-    try:
-        cdp = CDP(_session_cdp_url(agent_id))
-        await asyncio.wait_for(cdp.connect(), timeout=5)
-        await cdp.send("Target.closeTarget", {"targetId": tab_id})
-        if cdp.ws:
-            await cdp.ws.close()
-        print(f"[tabs] Closed tab {tab_id} for session {session_id}")
-    except Exception:
-        # Queue for retry instead of silently dropping
-        _tabs_pending_close[tab_id] = (agent_id, 0)
-
-
-async def _ensure_session_tab(session_id: str, agent_id: str) -> str | None:
-    """Create a per-session Chrome tab, enforcing _MAX_TABS_PER_AGENT.
-
-    Returns the new tab_id, or None if tab creation fails (caller falls
-    back to "auto").  When the agent is at capacity, evicts the oldest
-    session (by _session_last_active) to free a slot.
-    """
-    # Count current tabs for this agent
-    agent_tab_count = sum(
-        1 for aid in _session_agent_map.values() if aid == agent_id
-    )
-    # Evict oldest session if at capacity
-    if agent_tab_count >= _MAX_TABS_PER_AGENT:
-        # Find the oldest session for this agent
-        oldest_sid = None
-        oldest_ts = float("inf")
-        for sid, aid in list(_session_agent_map.items()):
-            if aid == agent_id:
-                ts = _session_last_active.get(sid, 0)
-                if ts < oldest_ts:
-                    oldest_ts = ts
-                    oldest_sid = sid
-        if oldest_sid:
-            log.info("[tabs] Evicting oldest session %s for agent %s (at %d tab limit)",
-                     oldest_sid, agent_id, _MAX_TABS_PER_AGENT)
-            await _close_session_tab(oldest_sid)
-
-    try:
-        tab_id = await _create_session_tab(session_id, agent_id)
-        _session_tabs[session_id] = tab_id
-        _session_agent_map[session_id] = agent_id
-        _session_last_active[session_id] = time.time()
-        log.info("[tabs] Created tab %s for session %s (agent %s)", tab_id, session_id, agent_id)
-        return tab_id
-    except Exception as e:
-        log.warning("[tabs] Failed to create tab for session %s: %s", session_id, e)
-        return None
-
-
-async def _stale_tab_cleanup_loop():
-    """Periodically close stale tabs, retry failed closes, reconcile headless."""
-    while True:
-        await asyncio.sleep(60)  # check every minute
-        now = time.time()
-
-        # Part 1: Close stale sessions
-        stale = [
-            sid for sid, ts in _session_last_active.items()
-            if now - ts > _STALE_TAB_SECONDS
-        ]
-        for sid in stale:
-            print(f"[tabs] Closing stale tab for session {sid}")
-            await _close_session_tab(sid)
-
-        # Part 2: Retry pending closes
-        for tab_id, (agent_id, retries) in list(_tabs_pending_close.items()):
-            if retries >= _MAX_CLOSE_RETRIES:
-                print(f"[tabs] Giving up on tab {tab_id} after {retries} retries")
-                del _tabs_pending_close[tab_id]
-                continue
-            try:
-                from cdp import CDP
-                cdp = CDP(_session_cdp_url(agent_id))
-                await asyncio.wait_for(cdp.connect(), timeout=5)
-                await cdp.send("Target.closeTarget", {"targetId": tab_id})
-                if cdp.ws:
-                    await cdp.ws.close()
-                del _tabs_pending_close[tab_id]
-                print(f"[tabs] Retry-closed tab {tab_id}")
-            except Exception:
-                _tabs_pending_close[tab_id] = (agent_id, retries + 1)
-
-        # Part 3: Reconcile headless agent (every cycle, lightweight)
-        hkey = os.environ.get("HEADLESS_API_KEY", "")
-        if not hkey:
-            continue
-        h_agent = _agent_id("headless", hkey)
-        try:
-            from cdp import CDP
-            cdp = CDP(_session_cdp_url(h_agent))
-            await asyncio.wait_for(cdp.connect(), timeout=10)
-            result = await cdp.send("Target.getTargets")
-            if cdp.ws:
-                await cdp.ws.close()
-            chrome_tabs = {
-                t["targetId"] for t in result.get("targetInfos", [])
-                if t.get("type") == "page"
-            }
-            tracked = set(_session_tabs.values()) | set(_tabs_pending_close.keys())
-            orphans = chrome_tabs - tracked
-            # Keep at least 1 tab (Chrome needs one)
-            if orphans and len(chrome_tabs) > 1:
-                for oid in list(orphans):
-                    if len(chrome_tabs) <= 1:
-                        break
-                    try:
-                        cdp2 = CDP(_session_cdp_url(h_agent))
-                        await asyncio.wait_for(cdp2.connect(), timeout=5)
-                        await cdp2.send("Target.closeTarget", {"targetId": oid})
-                        if cdp2.ws:
-                            await cdp2.ws.close()
-                        chrome_tabs.discard(oid)
-                        print(f"[tabs] Reconciled orphan tab {oid}")
-                    except Exception:
-                        pass
-        except Exception:
-            pass  # Reconciliation is best-effort
-
-
-def _spawn_gemini_agent(user_id: str, api_key: str, gemini_key: str):
-    """Spawn a per-user chat_agent_gemini.py subprocess if not already running."""
-    agent_id = _agent_id("gemini", api_key)
-
-    with _gemini_spawn_lock:
-        # Already running?
-        proc = _gemini_procs.get(agent_id)
-        if proc and proc.poll() is None:
-            _gemini_last_active[agent_id] = time.time()
-            return
-
-        # Build server URL — inside Docker use ws://web:8080, else ws://127.0.0.1:<port>
-        port = int(os.environ.get("WEB_PORT", "8080"))
-        if os.path.exists("/.dockerenv"):
-            server_url = f"ws://web:{port}"
-        else:
-            server_url = f"ws://127.0.0.1:{port}"
-
-        # Pass relay host/port so the agent can reach Chrome via CDP
-        # Pass secrets via env vars (not CLI args) to avoid exposure in ps aux
-        relay_host, relay_port = _parse_relay()
-        env = {
-            **os.environ,
-            "RELAY_HOST": relay_host,
-            "RELAY_PORT": str(relay_port),
-            "UNCHAINED_API_KEY": api_key,
-            "GEMINI_API_KEY": gemini_key,
-        }
-
-        script = os.path.join(os.path.dirname(__file__), "chat_agent_gemini.py")
-        log_path = os.path.join(tempfile.gettempdir(), f"gemini-{agent_id}.log")
-        _gemini_log_fh = open(log_path, "a")
-        proc = subprocess.Popen(
-            [sys.executable, script,
-             "--agent", agent_id,
-             "--server", server_url],
-            env=env,
-            stdout=_gemini_log_fh,
-            stderr=_gemini_log_fh,
-        )
-        _gemini_procs[agent_id] = proc
-        _gemini_log_fhs[agent_id] = _gemini_log_fh
-        _gemini_last_active[agent_id] = time.time()
-    log.info("[gemini] Spawned agent %s for user %s (pid %d)", agent_id, user_id, proc.pid)
-
-
-def _spawn_codex_agent(mode: str, user_id: str, api_key: str, codex_key: str):
-    """Spawn a per-user chat_agent_codex.py subprocess in sdk/cli mode."""
-    if mode == "codex-cli":
-        prefix = "codexcli"
-        procs = _codex_cli_procs
-        log_fhs = _codex_cli_log_fhs
-        last_active = _codex_cli_last_active
-        spawn_lock = _codex_cli_spawn_lock
-    else:
-        prefix = "codexsdk"
-        procs = _codex_sdk_procs
-        log_fhs = _codex_sdk_log_fhs
-        last_active = _codex_sdk_last_active
-        spawn_lock = _codex_sdk_spawn_lock
-
-    agent_id = _agent_id(prefix, api_key)
-    with spawn_lock:
-        proc = procs.get(agent_id)
-        if proc and proc.poll() is None:
-            last_active[agent_id] = time.time()
-            return
-
-        # Build server URL — inside Docker use ws://web:8080, else ws://127.0.0.1:<port>
-        port = int(os.environ.get("WEB_PORT", "8080"))
-        if os.path.exists("/.dockerenv"):
-            server_url = f"ws://web:{port}"
-        else:
-            server_url = f"ws://127.0.0.1:{port}"
-
-        relay_host, relay_port = _parse_relay()
-        env = {
-            **os.environ,
-            "RELAY_HOST": relay_host,
-            "RELAY_PORT": str(relay_port),
-            "UNCHAINED_API_KEY": api_key,
-            "CODEX_API_KEY": codex_key,
-            "OPENAI_API_KEY": codex_key,
-            "CODEX_MODE": mode,
-        }
-
-        script = os.path.join(os.path.dirname(__file__), "chat_agent_codex.py")
-        log_path = os.path.join(tempfile.gettempdir(), f"{agent_id}.log")
-        log_fh = open(log_path, "a")
-        proc = subprocess.Popen(
-            [sys.executable, script,
-             "--agent", agent_id,
-             "--server", server_url,
-             "--mode", mode],
-            env=env,
-            stdout=log_fh,
-            stderr=log_fh,
-        )
-        procs[agent_id] = proc
-        log_fhs[agent_id] = log_fh
-        last_active[agent_id] = time.time()
-    log.info("[%s] Spawned agent %s for user %s (pid %d)", prefix, agent_id, user_id, proc.pid)
-
-
-def _spawn_codex_sdk_agent(user_id: str, api_key: str, codex_key: str):
-    _spawn_codex_agent("codex-sdk", user_id, api_key, codex_key)
-
-
-def _spawn_codex_cli_agent(user_id: str, api_key: str, codex_key: str):
-    _spawn_codex_agent("codex-cli", user_id, api_key, codex_key)
-
-
-def _spawn_claude_sdk_agent(user_id: str, api_key: str, claude_key: str):
-    """Spawn a per-user chat_agent_sdk.py subprocess if not already running."""
-    agent_id = _agent_id("claudesdk", api_key)
-    with _claude_sdk_spawn_lock:
-        proc = _claude_sdk_procs.get(agent_id)
-        if proc and proc.poll() is None:
-            _claude_sdk_last_active[agent_id] = time.time()
-            return
-
-        # Build server URL — inside Docker use ws://web:8080, else ws://127.0.0.1:<port>
-        port = int(os.environ.get("WEB_PORT", "8080"))
-        if os.path.exists("/.dockerenv"):
-            server_url = f"ws://web:{port}"
-        else:
-            server_url = f"ws://127.0.0.1:{port}"
-
-        relay_host, relay_port = _parse_relay()
-        env = {
-            **os.environ,
-            "RELAY_HOST": relay_host,
-            "RELAY_PORT": str(relay_port),
-            "UNCHAINED_API_KEY": api_key,
-            "ANTHROPIC_API_KEY": claude_key,
-        }
-
-        script = os.path.join(os.path.dirname(__file__), "chat_agent_sdk.py")
-        log_path = os.path.join(tempfile.gettempdir(), f"{agent_id}.log")
-        log_fh = open(log_path, "a")
-        proc = subprocess.Popen(
-            [sys.executable, script,
-             "--agent", agent_id,
-             "--server", server_url],
-            env=env,
-            stdout=log_fh,
-            stderr=log_fh,
-        )
-        _claude_sdk_procs[agent_id] = proc
-        _claude_sdk_log_fhs[agent_id] = log_fh
-        _claude_sdk_last_active[agent_id] = time.time()
-    log.info("[claudesdk] Spawned agent %s for user %s (pid %d)", agent_id, user_id, proc.pid)
-
-
-async def _cleanup_idle_gemini_agents():
-    """Periodically terminate idle provider agents and expired pending provisions."""
-    while True:
-        await asyncio.sleep(60)
-        now = time.time()
-        def _reap_idle(label: str, timeout_s: int,
-                       procs: dict[str, subprocess.Popen],
-                       last_active: dict[str, float],
-                       log_fhs: dict[str, object]):
-            for aid in list(procs):
-                proc = procs[aid]
-                # Reap dead processes
-                if proc.poll() is not None:
-                    log.info("[%s] Agent %s exited (code %s), removing", label, aid, proc.returncode)
-                    procs.pop(aid, None)
-                    last_active.pop(aid, None)
-                    fh = log_fhs.pop(aid, None)
-                    if fh:
-                        fh.close()
-                    continue
-                # Kill idle processes
-                last = last_active.get(aid, 0)
-                if now - last > timeout_s:
-                    log.info("[%s] Agent %s idle for >%ds, terminating", label, aid, timeout_s)
-                    proc.terminate()
-                    procs.pop(aid, None)
-                    last_active.pop(aid, None)
-                    fh = log_fhs.pop(aid, None)
-                    if fh:
-                        fh.close()
-
-        _reap_idle("gemini", _GEMINI_IDLE_TIMEOUT, _gemini_procs, _gemini_last_active, _gemini_log_fhs)
-        _reap_idle("codexsdk", _CODEX_IDLE_TIMEOUT, _codex_sdk_procs, _codex_sdk_last_active, _codex_sdk_log_fhs)
-        _reap_idle("codexcli", _CODEX_IDLE_TIMEOUT, _codex_cli_procs, _codex_cli_last_active, _codex_cli_log_fhs)
-        _reap_idle("claudesdk", _CLAUDE_SDK_IDLE_TIMEOUT, _claude_sdk_procs, _claude_sdk_last_active, _claude_sdk_log_fhs)
-        # Clean up expired pending provisions
-        for uid in list(_pending_provision):
-            _, _, ts = _pending_provision[uid]
-            if now - ts > _PENDING_PROVISION_TTL:
-                log.info("[provision] Expired pending key for user %s", uid)
-                _pending_provision.pop(uid, None)
-        # Purge stale provision cooldown entries (older than 5 min)
-        for uid in list(_provision_cooldowns):
-            if now - _provision_cooldowns[uid] > 300:
-                _provision_cooldowns.pop(uid, None)
-        # Purge idle provision locks
-        try:
-            import signup_agent
-            signup_agent.cleanup_provision_locks()
-        except Exception:
-            pass
-
-
-def _resolve_trial_session_id(agent_id: str, requested: str) -> str:
-    """Allow only session IDs scoped to the authenticated agent."""
-    prefix = f"s-{agent_id}"
-    sid = (requested or "").strip()
-    if not sid:
-        return prefix
-    if sid.startswith(prefix):
-        return sid
-    log.warning("[chat] rejected cross-agent session_id=%s for agent=%s", sid, agent_id)
-    return prefix
-
-
-def _trial_session_path(session_id: str) -> str:
-    safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
-    return os.path.join("/data/sessions", f"{safe_id}.json")
-
-
-def _looks_like_tool_payload(text: str) -> bool:
-    """Detect raw tool-call JSON that should not be shown to users."""
-    s = (text or "").strip()
-    if not s:
-        return False
-    # {"name": "ddm", "arguments": {...}}
-    if re.search(
-        r'^\s*\{\s*"?name"?\s*:\s*[^,\n]+,\s*"?arguments"?\s*:\s*\{',
-        s, flags=re.IGNORECASE,
-    ):
-        return True
-    if "<tool_call" in s.lower() or "</tool_call>" in s.lower():
-        return True
-    return False
-
-
-def _strip_tool_payloads(text: str) -> str:
-    """Remove inline tool-call JSON from text, keep human-readable parts."""
-    cleaned = re.sub(
-        r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}',
-        "", text, flags=re.DOTALL,
-    )
-    cleaned = re.sub(r"(?is)<tool_call\b.*?</tool_call>", "", cleaned)
-    # Collapse whitespace left behind
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
-
-
-def _read_trial_history(session_id: str) -> tuple[list[dict], bool]:
-    """Read trial chat history from disk. Returns (messages, found)."""
-    session_path = _trial_session_path(session_id)
-    try:
-        with open(session_path) as f:
-            data = json.load(f)
-        raw = data.get("messages", [])
-        # Filter to visible chat messages only.
-        msgs: list[dict] = []
-        for m in raw:
-            role = m.get("role")
-            if role == "user":
-                msgs.append({"role": "user", "content": m.get("content", "")})
-            elif role == "assistant":
-                # Skip messages that are purely tool calls (no user-facing text)
-                if m.get("tool_calls") and not m.get("content"):
-                    continue
-                content = m.get("content") or ""
-                if not content:
-                    continue
-                # Strip leaked tool-call JSON from content
-                if _looks_like_tool_payload(content):
-                    content = _strip_tool_payloads(content)
-                if content:
-                    msgs.append({"role": "assistant", "content": content})
-        return msgs, True
-    except FileNotFoundError:
-        return [], False
-    except Exception as e:
-        log.warning("Failed to read trial session %s: %s", session_path, e)
-        return [], False
-
-
-def _delete_trial_session(session_id: str):
-    """Remove a persisted trial session file if it exists."""
-    session_path = _trial_session_path(session_id)
-    try:
-        os.remove(session_path)
-    except FileNotFoundError:
-        return
-    except Exception as e:
-        log.warning("Failed to delete trial session %s: %s", session_path, e)
-
-
-# ---------------------------------------------------------------------------
-# Google OAuth + Session helpers
-# ---------------------------------------------------------------------------
-
-async def _get_google_jwks():
-    """Fetch and cache Google's public keys for ID token verification."""
-    global _google_jwks, _google_jwks_expiry
-    now = time.time()
-    if _google_jwks and now < _google_jwks_expiry:
-        return _google_jwks
-    async with httpx.AsyncClient() as client:
-        resp = await client.get("https://www.googleapis.com/oauth2/v3/certs")
-        resp.raise_for_status()
-    _google_jwks = jwt.PyJWKSet.from_dict(resp.json())
-    _google_jwks_expiry = now + 3600
-    return _google_jwks
-
-
-async def verify_google_token(id_token: str) -> dict | None:
-    """Verify a Google ID token. Returns payload {email, name, picture} or None."""
-    try:
-        jwks = await _get_google_jwks()
-        header = jwt.get_unverified_header(id_token)
-        key = next(k for k in jwks.keys if k.key_id == header["kid"])
-        payload = jwt.decode(
-            id_token,
-            key=key,
-            algorithms=["RS256"],
-            audience=GOOGLE_CLIENT_ID,
-            options={"verify_iss": True},
-            issuer=["https://accounts.google.com", "accounts.google.com"],
-        )
-        return payload
-    except Exception as e:
-        print(f"[auth] Google token verification failed: {e}")
-        return None
-
-
-def create_session_token(user_id: str, email: str) -> str:
-    """Create a signed JWT session token."""
-    return jwt.encode(
-        {"user_id": user_id, "email": email,
-         "iat": int(time.time()),
-         "exp": int(time.time()) + JWT_EXPIRY_HOURS * 3600},
-        JWT_SECRET, algorithm=JWT_ALGORITHM,
-    )
-
-
-def verify_session_token(token: str) -> dict | None:
-    """Verify a session JWT. Returns {user_id, email} or None."""
-    try:
-        p = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return {
-            "user_id": p["user_id"],
-            "email": p["email"],
-            "iat": int(p.get("iat", 0)),
-        }
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-        return None
-
-
-def _authenticate(request: web.Request) -> dict | None:
-    """Authenticate via session cookie OR Bearer token.
-
-    Returns {user_id, key, agent_id, email, status, user_type} or None.
-    """
-    # 1. Session cookie (web UI)
-    sessions: list[dict] = []
-    for token in _session_cookie_candidates(request):
-        session = verify_session_token(token)
-        if session:
-            sessions.append(session)
-    sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
-    for session in sessions:
-        user = _auth.find_user_by_email(session["email"])
-        if user and user.get("api_key"):
-            api_key = user["api_key"]
-            key_hash = _key_hash(api_key)
-            agent_id = f"claude-{key_hash}"
-            return {
-                "user_id": session["user_id"], "key": api_key,
-                "agent_id": agent_id, "key_hash": key_hash,
-                "email": session["email"],
-                "status": user.get("status", "approved"),
-                "user_type": user.get("user_type", "claude"),
-            }
-
-    # 2. Bearer token (local scripts, API clients)
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        key = auth_header[7:]
-        info = _auth.validate_key(key)
-        if info:
-            key_hash = _key_hash(key)
-            agent_id = f"claude-{key_hash}"
-            return {"user_id": info["user_id"], "key": key,
-                    "agent_id": agent_id, "key_hash": key_hash}
-
-    return None
-
-
-def _is_pending_user(auth_info: dict | None) -> bool:
-    if not auth_info:
-        return False
-    return auth_info.get("status") == "pending"
-
-
-def _is_pending_trial_user(auth_info: dict | None) -> bool:
-    """Backward-compatible helper for legacy call sites."""
-    return _is_pending_user(auth_info) and auth_info.get("user_type") == "trial"
-
-
-def _pending_limited_response() -> web.Response:
-    return web.json_response(
-        {
-            "error": "pending_account_limited",
-            "message": "Account review is pending. Use /trial or /first-look for now.",
-        },
-        status=403,
-    )
-
-
-def _pending_trial_limited_response() -> web.Response:
-    """Backward-compatible helper for legacy call sites."""
-    return _pending_limited_response()
-
-
-# ---------------------------------------------------------------------------
-# Landing page
-# ---------------------------------------------------------------------------
+from __future__ import annotations
 
 LANDING_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -1848,7 +338,7 @@ body::before{
     <span class="line">Wind rushes where walls once stood</span>
     <span class="line">I am sky, unchained</span>
   </div>
-  <a href="/first-look" class="cta">Try it free &rarr;</a>
+  <a href="/demo" class="cta">Try it free &rarr;</a>
   <div class="tagline">Your browser. Your data. No walls.</div>
   <div class="scroll-hint" onclick="document.querySelector('.mock-section').scrollIntoView({behavior:'smooth'})">
     <span>&#8595;</span>
@@ -1863,7 +353,7 @@ body::before{
     <p>See the agent browse the web, read pages, and extract information &mdash; in real time.</p>
   </div>
   <div class="mock-chat" id="mock-chat"></div>
-  <a href="/first-look" class="mock-cta">Try it yourself &rarr;</a>
+  <a href="/demo" class="mock-cta">Try it yourself &rarr;</a>
 </div>
 
 <!-- Get Started -->
@@ -1877,18 +367,18 @@ body::before{
     <!-- Section: No Setup Required -->
     <div class="section-label">No Setup Required</div>
 
-    <!-- Headless First Look -->
+    <!-- Headless Demo -->
     <div class="card demo">
-      <div class="card-badge">&#9889; Instant First Look</div>
-      <div class="card-title">Headless Browser First Look</div>
+      <div class="card-badge">&#9889; Instant Demo</div>
+      <div class="card-title">Headless Browser Demo</div>
       <div class="card-desc">Watch an AI agent browse the web live &mdash; no install. We run a headless Chrome on our servers. Just sign in and go.</div>
       <div class="card-reqs"><span class="req req-none">Nothing to install</span></div>
       <div class="card-steps">
         <div class="step"><span class="step-num">1</span>Sign in with Google</div>
         <div class="step"><span class="step-num">2</span>Type a task and watch the agent work</div>
       </div>
-      <div class="card-note">First look uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
-      <a href="/first-look" class="card-btn">Launch First Look &#8594;</a>
+      <div class="card-note">Demo uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
+      <a href="/demo" class="card-btn">Launch Demo &#8594;</a>
     </div>
 
     <!-- Free Tier -->
@@ -2026,7 +516,7 @@ body::before{
 
 <div class="footer">
   <div class="footer-links">
-    <a href="/first-look">First Look</a>
+    <a href="/demo">Demo</a>
     <a href="/trial">Free Tier</a>
     <a href="/setup">API Setup</a>
     <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
@@ -2218,7 +708,7 @@ if ('IntersectionObserver' in window) {
   fetch('/auth/me').then(function(r){return r.json()}).then(function(d){
     if (!d.authenticated) return;
     var btn = document.getElementById('hero-enter');
-    var last = localStorage.getItem('unchained_last_route') || '/first-look';
+    var last = localStorage.getItem('unchained_last_route') || '/demo';
     btn.href = last;
     btn.style.display = '';
   }).catch(function(){});
@@ -2555,7 +1045,7 @@ a:hover{text-decoration:underline}
   <h2>Your browser agent, ready when you are</h2>
   <p>The agent works with your real browser, your real logins, and your real data. No screenshots to upload, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/first-look" class="cta-btn primary">Try First Look &rarr;</a>
+    <a href="/demo" class="cta-btn primary">Try the Demo &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -2563,7 +1053,7 @@ a:hover{text-decoration:underline}
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/first-look">First Look</a>
+    <a href="/demo">Demo</a>
     <a href="/trial">Free Tier</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
@@ -2767,12 +1257,11 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential}),
     });
     const data = await r.json();
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     showMain();
@@ -2781,13 +1270,10 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
 }
@@ -2796,13 +1282,10 @@ async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
-    if (data.pending || data.status === 'pending') { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
@@ -3309,7 +1792,7 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a href="/first-look">First Look</a>
+      <a href="/demo">Demo</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
@@ -3469,7 +1952,17 @@ async function handleGoogleCredential(response) {
       } catch (e) {}
       await new Promise(resolve => setTimeout(resolve, 150 * (i + 1)));
     }
-    errEl.textContent = 'Sign-in succeeded, but session was not established.';
+    if (data.pending || data.status === 'pending' || data.review_pending) {
+      showPending();
+      return;
+    }
+    if (data.agent_id) {
+      agentId = data.agent_id;
+      if (_redirectAfterLoginIfNeeded()) return;
+      showMain();
+      return;
+    }
+    errEl.textContent = 'Sign-in succeeded, but session was not established. Refresh and try again.';
   } catch(e) { errEl.textContent = e.message; }
 }
 
@@ -3481,7 +1974,7 @@ async function checkSession() {
     });
     const data = await r.json();
     _applyAuthState(data);
-    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
+    if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
     if (data.pending || data.status === 'pending') { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
@@ -3497,8 +1990,11 @@ async function checkApproval() {
     });
     const data = await r.json();
     _applyAuthState(data);
-    if (data.authenticated) { agentId = data.agent_id; showMain(); return; }
-    if (data.pending || data.status === 'pending') { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.authenticated) { agentId = data.agent_id || ''; showMain(); return; }
+    if (data.pending || data.status === 'pending') {
+      msg.textContent = 'Still under review. Check back soon!';
+      return;
+    }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
@@ -3977,36 +2473,6 @@ function scrollToBottom() {
   chat.scrollTop = chat.scrollHeight;
 }
 
-function setLiveStatus(text) {
-  const el = document.getElementById('live-status');
-  if (el) el.textContent = text;
-}
-
-function resetLivePreview() {
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (img) {
-    img.removeAttribute('src');
-    img.style.display = 'none';
-  }
-  if (ph) ph.style.display = 'flex';
-  _livePreviewHasFrame = false;
-  setLiveStatus('Waiting for first page load...');
-}
-
-function updateLivePreview(imageB64, note) {
-  if (!imageB64) return;
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (!img) return;
-  img.src = 'data:image/png;base64,' + imageB64;
-  img.style.display = 'block';
-  if (ph) ph.style.display = 'none';
-  _livePreviewHasFrame = true;
-  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
-}
-
 function fillMsg(text) {
   const input = document.getElementById('msginput');
   input.value = text;
@@ -4375,7 +2841,6 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
-  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -4444,24 +2909,11 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
-            currentToolName = evt.name || '';
-            if (currentToolName === 'navigate') {
-              setLiveStatus('Loading page...');
-            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
-              if (currentToolName === 'navigate' && (typeof _livePreviewHasFrame === 'undefined' || !_livePreviewHasFrame)) {
-                setLiveStatus('Page loaded. Capturing preview...');
-              }
-              if (evt.is_screenshot && evt.visible) {
-                updateLivePreview(evt.data, 'Screenshot captured');
-              }
               currentTool = null;
-              currentToolName = '';
             }
-          } else if (evt.type === 'live_preview') {
-            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
@@ -4957,12 +3409,11 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential, source: 'gemini'}),
     });
     const data = await r.json();
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     _userName = data.name || '';
@@ -4972,10 +3423,7 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) { agentId = data.agent_id; _userName = data.name || ''; showMain(); return; }
   } catch(e) {}
@@ -5234,36 +3682,6 @@ function handleKey(e) {
 function scrollToBottom() {
   const chat = document.getElementById('chat');
   chat.scrollTop = chat.scrollHeight;
-}
-
-function setLiveStatus(text) {
-  const el = document.getElementById('live-status');
-  if (el) el.textContent = text;
-}
-
-function resetLivePreview() {
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (img) {
-    img.removeAttribute('src');
-    img.style.display = 'none';
-  }
-  if (ph) ph.style.display = 'flex';
-  _livePreviewHasFrame = false;
-  setLiveStatus('Waiting for first page load...');
-}
-
-function updateLivePreview(imageB64, note) {
-  if (!imageB64) return;
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (!img) return;
-  img.src = 'data:image/png;base64,' + imageB64;
-  img.style.display = 'block';
-  if (ph) ph.style.display = 'none';
-  _livePreviewHasFrame = true;
-  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
 }
 
 function fillMsg(text) {
@@ -5622,7 +4040,6 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
-  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -5990,7 +4407,8 @@ async function switchSlot(n) {
 
 def _inject_client_slots_ui(html: str) -> str:
     """Inject 3 local conversation slots for API-backed chat pages."""
-    # Idempotency guard: some templates already include slot state logic.
+    # Idempotency guard: some pages (for example TRIAL_CHAT_HTML) may already
+    # contain the slot runtime. Re-injecting duplicates `let activeSlot`.
     if "let activeSlot = 1;" in html:
         return html
     return (
@@ -6191,7 +4609,7 @@ HEADLESS_DEMO_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Unchained First Look</title>
+<title>Unchained Demo</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -6212,7 +4630,7 @@ body{
 
 /* === Login === */
 #login{
-  display:none;flex-direction:column;align-items:center;
+  display:flex;flex-direction:column;align-items:center;
   justify-content:center;height:100dvh;padding:24px;gap:16px;
 }
 #login h1{font-size:28px;color:var(--accent);margin-bottom:8px;letter-spacing:1px}
@@ -6257,66 +4675,6 @@ body{
 }
 #model-notice strong{color:#f0d58b}
 #model-notice a{color:#f0d58b;text-decoration:underline}
-
-/* === Workspace layout === */
-#workspace{
-  flex:1;min-height:0;display:flex;overflow:hidden;
-}
-#chat-pane{
-  flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;
-}
-#live-pane{
-  flex:2 1 0;min-width:420px;width:auto;
-  border-left:1px solid #2a2a2a;background:#111;
-  display:flex;flex-direction:column;min-height:0;
-}
-#live-pane-head{
-  padding:10px 12px;border-bottom:1px solid #222;
-  color:#d5d5d5;font-size:12px;letter-spacing:0.4px;
-  text-transform:uppercase;
-}
-#live-window{
-  flex:1;display:flex;flex-direction:column;min-height:0;
-  padding:12px;
-}
-#live-window-bar{
-  height:28px;border:1px solid #2f2f2f;border-bottom:none;
-  border-radius:8px 8px 0 0;background:#171717;
-  display:flex;align-items:center;gap:6px;padding:0 10px;
-}
-#live-window-bar .dot{
-  width:9px;height:9px;border-radius:50%;display:inline-block;
-}
-#live-window-bar .dot.red{background:#ff5f56}
-#live-window-bar .dot.yellow{background:#ffbd2e}
-#live-window-bar .dot.green{background:#27c93f}
-#live-window-bar .title{
-  margin-left:8px;color:#9a9a9a;font-size:11px;font-family:var(--mono);
-}
-#live-canvas-wrap{
-  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
-  background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
-}
-#live-image{
-  width:100%;height:100%;object-fit:contain;background:#0b0b0b;display:none;
-}
-#live-placeholder{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  color:var(--muted);font-size:13px;padding:16px;text-align:center;
-}
-#live-status{
-  padding:8px 12px 12px;color:var(--muted);font-size:12px;min-height:34px;
-}
-
-@media (max-width: 1100px) {
-  #live-pane{min-width:320px}
-}
-@media (max-width: 900px) {
-  #workspace{flex-direction:column}
-  #live-pane{
-    width:100%;min-width:0;height:40vh;border-left:none;border-top:1px solid #2a2a2a;
-  }
-}
 
 /* === Chat === */
 #chat{
@@ -6512,8 +4870,8 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>First look limit reached</h2>
-    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>Demo limit reached</h2>
+    <p class="quota-sub">You've used your free demo interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
     <div class="quota-grid">
       <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
       <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
@@ -6521,14 +4879,14 @@ body{
       <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay on demo</button>
   </div>
 </div>
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained First Look</h1>
-  <div class="sub">AI browser agent first look &mdash; watch it browse in real time</div>
+  <h1>Unchained Demo</h1>
+  <div class="sub">AI browser agent demo &mdash; watch it browse in real time</div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -6571,52 +4929,33 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
-  <div id="workspace">
-    <div id="chat-pane">
-      <div id="agent-bar">
-        <span id="agent-action"></span>
-        <span id="nav-trail"></span>
-        <span id="turn-ctr"></span>
-      </div>
+  <div id="agent-bar">
+    <span id="agent-action"></span>
+    <span id="nav-trail"></span>
+    <span id="turn-ctr"></span>
+  </div>
 
-      <div id="chat">
-          <div id="chat-hints">
-            <div class="hint-title">Try it &mdash; ask the agent anything</div>
-          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
-          <div class="hint-examples">
-            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
-            <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
-          </div>
-          <div class="hint-footer">Free to try &mdash; no setup needed</div>
-        </div>
+  <div id="chat">
+      <div id="chat-hints">
+        <div class="hint-title">Try it &mdash; ask the agent anything</div>
+      <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+      <div class="hint-examples">
+        <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
+        <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
+        <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
+        <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
       </div>
-
-      <div id="inputbar">
-        <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
-                  onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-        <button id="sendbtn" onclick="doSend()">&#9654;</button>
-        <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
-      </div>
+      <div class="hint-footer">Free to try &mdash; no setup needed</div>
     </div>
+  </div>
 
-    <aside id="live-pane">
-      <div id="live-pane-head">Live Browser</div>
-      <div id="live-window">
-        <div id="live-window-bar">
-          <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
-          <span class="title">headless-chrome</span>
-        </div>
-        <div id="live-canvas-wrap">
-          <img id="live-image" alt="Headless browser live preview">
-          <div id="live-placeholder">The browser preview appears here after navigation.</div>
-        </div>
-      </div>
-      <div id="live-status">Waiting for first page load...</div>
-    </aside>
+  <div id="inputbar">
+    <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
+              onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+    <button id="sendbtn" onclick="doSend()">&#9654;</button>
+    <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
   </div>
 </div>
 <script>
@@ -6630,38 +4969,6 @@ let demoUnlimited = false;
 let _autoPromptFired = false;
 let _userName = '';
 let _userPicture = '';
-let _livePreviewHasFrame = false;
-let _isAuthenticatedUser = false;
-
-function setLiveStatus(text) {
-  const el = document.getElementById('live-status');
-  if (el) el.textContent = text;
-}
-
-function resetLivePreview() {
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (img) {
-    img.removeAttribute('src');
-    img.style.display = 'none';
-  }
-  if (ph) ph.style.display = 'flex';
-  _livePreviewHasFrame = false;
-  setLiveStatus('Waiting for first page load...');
-}
-
-function updateLivePreview(imageB64, note) {
-  if (!imageB64) return;
-  const img = document.getElementById('live-image');
-  const ph = document.getElementById('live-placeholder');
-  if (!img) return;
-  img.src = 'data:image/png;base64,' + imageB64;
-  img.style.display = 'block';
-  if (ph) ph.style.display = 'none';
-  _livePreviewHasFrame = true;
-  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  setLiveStatus((note || 'Live page refreshed') + ' • ' + stamp);
-}
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -6669,15 +4976,13 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
-    _isAuthenticatedUser = true;
     demoPromptCount = data.demo_prompt_count || 0;
     demoUnlimited = !!data.demo_unlimited;
     showMain();
@@ -6686,14 +4991,10 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
-      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       _userName = data.name || '';
@@ -6701,32 +5002,25 @@ async function checkSession() {
       showMain();
       return;
     }
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
   } catch(e) {}
-  _isAuthenticatedUser = false;
-  _userName = 'Guest';
-  _userPicture = '';
-  showMain();
+  document.getElementById('login').style.display = 'flex';
 }
 
 async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
-      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       showMain();
       return;
     }
-    if (data.pending || data.status === 'pending') { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
@@ -6735,10 +5029,9 @@ async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';
-  _isAuthenticatedUser = false;
-  _userName = 'Guest';
-  _userPicture = '';
-  showMain();
+  document.getElementById('login').style.display = 'flex';
+  document.getElementById('main').style.display = 'none';
+  document.getElementById('pending').style.display = 'none';
 }
 
 function showPending() {
@@ -6764,11 +5057,11 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedFirstLookModel || 'google/gemini-3-flash-preview';
+  return _forcedDemoModel || 'google/gemini-3-flash-preview';
 }
 
 function _sessionStoreKey() {
-  return 'unchained_session_' + agentId + '_first_look';
+  return 'unchained_session_' + agentId + '_demo';
 }
 
 function _restoreSessionId() {
@@ -6784,7 +5077,7 @@ function _persistSessionId(sid) {
 }
 
 let lastAgentConnected = false;
-let _forcedFirstLookModel = '';
+let _forcedDemoModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
@@ -6796,9 +5089,8 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
-  document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
-  resetLivePreview();
-  try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
+  document.getElementById('agentlabel').textContent = _userName || 'Unchained';
+  try { localStorage.setItem('unchained_last_route', '/demo'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
   checkAgentStatus();
@@ -6808,10 +5100,9 @@ function showMain() {
 
 async function checkAgentStatus() {
   try {
-    const r = await fetch('/web/chat/status?first_look_guest=1');
+    const r = await fetch('/web/chat/status');
     if (r.ok) {
       const data = await r.json();
-      if (data.agent_id) agentId = data.agent_id;
       lastAgentConnected = data.connected;
       updateAgentStatusUI(data.connected);
     }
@@ -6823,7 +5114,6 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
-      first_look_guest: '1',
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -6860,12 +5150,8 @@ async function maybeAutoPrompt() {
     if (lastAgentConnected) break;
     await new Promise(r => setTimeout(r, 500));
     try {
-      const r = await fetch('/web/chat/status?first_look_guest=1');
-      if (r.ok) {
-        const d = await r.json();
-        if (d.agent_id) agentId = d.agent_id;
-        lastAgentConnected = d.connected;
-      }
+      const r = await fetch('/web/chat/status');
+      if (r.ok) { const d = await r.json(); lastAgentConnected = d.connected; }
     } catch(e) {}
   }
   if (!lastAgentConnected) return;
@@ -6900,7 +5186,6 @@ function showHintsIfEmpty() {
 async function doNewChat() {
   if (sending) return;
   document.getElementById('chat').innerHTML = '';
-  resetLivePreview();
   showHintsIfEmpty();
   try {
     const r = await fetch('/web/chat/new', {
@@ -6909,7 +5194,6 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
-        first_look_guest: true,
       }),
     });
     if (r.ok) {
@@ -7274,7 +5558,7 @@ async function doCancel() {
     await fetch('/web/chat/cancel', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: sessionId, first_look_guest: true}),
+      body: JSON.stringify({session_id: sessionId}),
     });
   } catch(e) {}
   if (_cancelCtrl) _cancelCtrl.abort();
@@ -7300,7 +5584,6 @@ async function doSend() {
   const bubble = addAsstBubble();
 
   let currentTool = null;
-  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -7313,7 +5596,6 @@ async function doSend() {
         session_id: sessionId,
         model: currentModel(),
         headless: true,
-        first_look_guest: true,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -7377,29 +5659,16 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
-            currentToolName = evt.name || '';
-            if (currentToolName === 'navigate') {
-              setLiveStatus('Loading page...');
-            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
-              if (currentToolName === 'navigate' && (typeof _livePreviewHasFrame === 'undefined' || !_livePreviewHasFrame)) {
-                setLiveStatus('Page loaded. Capturing preview...');
-              }
-              if (evt.is_screenshot && evt.visible) {
-                updateLivePreview(evt.data, 'Screenshot captured');
-              }
               currentTool = null;
-              currentToolName = '';
             }
-          } else if (evt.type === 'live_preview') {
-            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
             if (evt.model) {
-              _forcedFirstLookModel = evt.model;
+              _forcedDemoModel = evt.model;
             }
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
@@ -7867,12 +6136,11 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential, source: 'claude'}),
     });
     const data = await r.json();
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
     _isAdmin = !!data.is_admin;
@@ -7902,17 +6170,14 @@ async function devLogin() {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || '';
       if (_redirectAfterLoginIfNeeded()) return;
       showMain(); return;
     }
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
 }
@@ -7921,17 +6186,14 @@ async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id; _isAdmin = !!data.is_admin; _userName = data.name || ''; _userPicture = data.picture || '';
       if (_redirectAfterLoginIfNeeded()) return;
       showMain(); return;
     }
-    if (data.pending || data.status === 'pending') { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
@@ -8753,578 +7015,6 @@ CHAT_HTML = CLAUDE_CHAT_HTML.replace(
 # Chat WebSocket bridge + SSE endpoint
 # ---------------------------------------------------------------------------
 
-async def handle_download_agent(request: web.Request) -> web.Response:
-    """GET /web/download-agent — download agent ZIP package."""
-    install_token = _request_install_token(request)
-    auth_info = None
-    token_info = None
-    if install_token:
-        token_info = _auth.validate_install_token(install_token, consume=False)
-        if not token_info:
-            return web.json_response({"error": "Invalid or expired install token"}, status=401)
-    else:
-        auth_info = _authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-
-    from agent_package import build_agent_zip
-    zip_bytes = build_agent_zip(
-        api_key="",
-        relay_host="api.unchainedsky.com",
-        install_token=install_token,
-    )
-    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-    user_type = auth_info.get("user_type", "") if auth_info else ""
-    _track_event(
-        request,
-        "agent_zip_download_start",
-        route="/web/download-agent",
-        route_intended="/install",
-        route_effective="/web/download-agent",
-        cta_id="download_agent_zip",
-        user_id=user_id,
-        user_type=user_type,
-        source="web",
-        status_code=200,
-        meta={"channel": "install_token" if token_info else "session"},
-    )
-    return web.Response(
-        body=zip_bytes,
-        content_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=unchained-agent.zip"},
-    )
-
-
-async def handle_download_installer(request: web.Request) -> web.Response:
-    """GET /web/download-installer — download native installer binary."""
-    platform_raw = request.query.get("os", "mac")
-    platform = _normalize_installer_platform(platform_raw)
-    if not platform:
-        return web.json_response({"error": "Unsupported os. Use mac or windows"}, status=400)
-
-    install_token = _request_install_token(request)
-    auth_info = None
-    token_info = None
-    if install_token:
-        token_info = _auth.validate_install_token(install_token, consume=False)
-        if not token_info:
-            return web.json_response({"error": "Invalid or expired install token"}, status=401)
-    else:
-        auth_info = _authenticate(request)
-        if not auth_info:
-            return web.json_response({"error": "Not authenticated"}, status=401)
-
-    native_path = _native_installer_path(platform)
-    if native_path:
-        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-        user_type = auth_info.get("user_type", "") if auth_info else ""
-        _track_event(
-            request,
-            "installer_download_start",
-            route="/web/download-installer",
-            route_intended="/install",
-            route_effective="/web/download-installer",
-            cta_id=f"download_installer_{platform}",
-            user_id=user_id,
-            user_type=user_type,
-            source="web",
-            status_code=200,
-            meta={
-                "platform": platform,
-                "artifact": "native",
-                "filename": native_path.name,
-                "channel": "install_token" if token_info else "session",
-            },
-        )
-        return web.FileResponse(
-            path=native_path,
-            headers={"Content-Disposition": f'attachment; filename="{native_path.name}"'},
-        )
-
-    if not _ALLOW_SCRIPT_INSTALLER_FALLBACK:
-        expected_assets = _native_installer_candidates(platform)
-        user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-        _track_event(
-            request,
-            "installer_download_fail",
-            route="/web/download-installer",
-            route_intended="/install",
-            route_effective="/web/download-installer",
-            cta_id=f"download_installer_{platform}",
-            error_code="native_installer_missing",
-            user_id=user_id,
-            source="web",
-            status_code=503,
-            meta={"platform": platform, "expected_assets": expected_assets},
-        )
-        return web.json_response(
-            {
-                "error": "Native installer is not configured for this OS.",
-                "os": platform,
-                "expected_asset": expected_assets[0] if expected_assets else None,
-                "expected_assets": expected_assets,
-            },
-            status=503,
-        )
-
-    # Optional compatibility fallback: return shell/PowerShell script installers
-    # if native artifacts are not available and fallback is explicitly enabled.
-    if not install_token:
-        install_token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    from agent_package import generate_platform_installer_script
-
-    base_url = _public_base_url(request)
-    script = generate_platform_installer_script(
-        platform=platform,
-        install_token=install_token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    filename = "unchained-installer-windows.ps1" if platform == "windows" else "unchained-installer-mac.sh"
-    user_id = token_info.get("user_id", "") if token_info else auth_info.get("user_id", "")
-    user_type = auth_info.get("user_type", "") if auth_info else ""
-    _track_event(
-        request,
-        "installer_download_start",
-        route="/web/download-installer",
-        route_intended="/install",
-        route_effective="/web/download-installer",
-        cta_id=f"download_installer_{platform}",
-        user_id=user_id,
-        user_type=user_type,
-        source="web",
-        status_code=200,
-        meta={
-            "platform": platform,
-            "artifact": "script_fallback",
-            "filename": filename,
-            "channel": "install_token" if token_info else "session",
-        },
-    )
-    return web.Response(text=script, content_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
-
-
-async def handle_install_token(request: web.Request) -> web.Response:
-    """POST /web/install-token — create a short-lived install token for installers."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    base_url = _public_base_url(request)
-    curl_command = f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/install/script" | bash'
-    powershell_command = (
-        "powershell -ExecutionPolicy Bypass -Command "
-        f"\"$h=@{{'X-Install-Token'='{token}'}}; "
-        f"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Headers $h "
-        f"'{base_url}/install/windows/script').Content)\""
-    )
-    mac_native = _native_installer_path("mac") is not None
-    windows_native = _native_installer_path("windows") is not None
-    _track_event(
-        request,
-        "install_token_issued",
-        route="/web/install-token",
-        route_intended="/install",
-        route_effective="/web/install-token",
-        cta_id="install_token",
-        user_id=auth_info.get("user_id", ""),
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"native_available": {"mac": mac_native, "windows": windows_native}},
-    )
-    return web.json_response({
-        "curl_command": curl_command,
-        "powershell_command": powershell_command,
-        "mac_installer_url": f"{base_url}/web/download-installer?os=mac",
-        "windows_installer_url": f"{base_url}/web/download-installer?os=windows",
-        "zip_url": f"{base_url}/web/download-agent",
-        "native_available": {"mac": mac_native, "windows": windows_native},
-        "expires_in": 900,
-    })
-
-
-async def handle_install_script(request: web.Request) -> web.Response:
-    """GET /install/script or /install/{token} — serve personalized bash install script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        # Return a bash-friendly error message
-        return web.Response(
-            text='echo "ERROR: Install link expired or already used. '
-                 'Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-
-    from agent_package import _generate_install_script
-    base_url = _public_base_url(request)
-    script = _generate_install_script(
-        install_token=token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    return web.Response(text=script, content_type="text/plain")
-
-
-async def handle_install_script_windows(request: web.Request) -> web.Response:
-    """GET /install/windows/script or /install/windows/{token} — serve PowerShell install script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        return web.Response(
-            text='Write-Error "Install link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-
-    from agent_package import _generate_windows_install_script
-
-    base_url = _public_base_url(request)
-    script = _generate_windows_install_script(
-        install_token=token,
-        relay_host="api.unchainedsky.com",
-        base_url=base_url,
-    )
-    return web.Response(text=script, content_type="text/plain")
-
-
-async def handle_install_claim_page(request: web.Request) -> web.Response:
-    """GET /install/claim/{claim_id} — approval page opened by native installer."""
-    claim_id = str(request.match_info.get("claim_id", "")).strip().lower()
-    if not _is_valid_claim_id(claim_id):
-        return web.Response(text="Invalid install claim id.", status=400)
-    html = INSTALL_CLAIM_HTML.replace("__CLAIM_ID__", claim_id)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_install_claim_start(request: web.Request) -> web.Response:
-    """POST /web/install/claim/start — create a pending claim for native installer auth."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    claim_secret = str(body.get("claim_secret", "")).strip()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-    if len(claim_secret) < 24:
-        return web.json_response({"error": "claim_secret too short"}, status=400)
-
-    now = time.time()
-    source = _request_source_ip(request)
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        _cleanup_install_claim_start_hits(now)
-        if len(_install_claims) >= _INSTALL_CLAIM_MAX_PENDING:
-            return web.json_response({"error": "Too many pending install claims. Retry shortly."}, status=503)
-        hits = _install_claim_start_hits.get(source, [])
-        if len(hits) >= _INSTALL_CLAIM_START_MAX_PER_IP:
-            return web.json_response({"error": "Too many claim attempts. Retry shortly."}, status=429)
-        hits.append(now)
-        _install_claim_start_hits[source] = hits
-        existing = _install_claims.get(claim_id)
-        if existing and not hmac.compare_digest(existing.get("secret", ""), claim_secret):
-            return web.json_response({"error": "claim_id already exists"}, status=409)
-        _install_claims[claim_id] = {
-            "secret": claim_secret,
-            "created_at": now,
-            "expires_at": now + _INSTALL_CLAIM_TTL,
-            "install_token": "",
-        }
-    _track_event(
-        request,
-        "install_claim_start",
-        route="/web/install/claim/start",
-        route_intended="/install",
-        route_effective="/web/install/claim/start",
-        cta_id="install_claim_start",
-        source="web",
-        status_code=200,
-        meta={"claim_id_prefix": claim_id[:6]},
-    )
-    return web.json_response({"status": "pending", "claim_id": claim_id, "expires_in": _INSTALL_CLAIM_TTL})
-
-
-async def handle_install_claim_approve(request: web.Request) -> web.Response:
-    """POST /web/install/claim/approve — approve a pending installer claim (auth required)."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-
-    now = time.time()
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        claim = _install_claims.get(claim_id)
-        if not claim:
-            return web.json_response({"error": "Claim expired or not found"}, status=404)
-        token = claim.get("install_token") or _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-        claim["install_token"] = token
-        claim["approved_at"] = now
-        claim["approved_user_id"] = auth_info["user_id"]
-        claim["expires_at"] = min(claim.get("expires_at", now + _INSTALL_CLAIM_TTL), now + _INSTALL_CLAIM_TTL)
-    _track_event(
-        request,
-        "install_claim_approve",
-        route="/web/install/claim/approve",
-        route_intended="/install",
-        route_effective="/web/install/claim/approve",
-        cta_id="install_claim_approve",
-        user_id=auth_info.get("user_id", ""),
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"claim_id_prefix": claim_id[:6]},
-    )
-    return web.json_response({"status": "approved"})
-
-
-async def handle_install_claim_poll(request: web.Request) -> web.Response:
-    """POST /web/install/claim/poll — poll claim status and retrieve install token once approved."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    claim_id = str(body.get("claim_id", "")).strip().lower()
-    claim_secret = str(body.get("claim_secret", "")).strip()
-    if not _is_valid_claim_id(claim_id):
-        return web.json_response({"error": "claim_id must be 32 hex chars"}, status=400)
-    if not claim_secret:
-        return web.json_response({"error": "claim_secret required"}, status=400)
-
-    now = time.time()
-    with _install_claims_lock:
-        _cleanup_install_claims(now)
-        claim = _install_claims.get(claim_id)
-        if not claim:
-            return web.json_response({"status": "expired"}, status=404)
-        if not hmac.compare_digest(claim.get("secret", ""), claim_secret):
-            return web.json_response({"error": "Invalid claim secret"}, status=401)
-        install_token = str(claim.get("install_token", "")).strip()
-        if install_token:
-            _install_claims.pop(claim_id, None)
-            _track_event(
-                request,
-                "install_claim_poll_approved",
-                route="/web/install/claim/poll",
-                route_intended="/install",
-                route_effective="/web/install/claim/poll",
-                cta_id="install_claim_poll",
-                source="web",
-                status_code=200,
-                meta={"claim_id_prefix": claim_id[:6]},
-            )
-            return web.json_response({"status": "approved", "install_token": install_token})
-        expires_at = float(claim.get("expires_at", now))
-    return web.json_response({"status": "pending", "expires_in": max(0, int(expires_at - now))})
-
-
-async def handle_install_bootstrap(request: web.Request) -> web.Response:
-    """POST /web/install/bootstrap — exchange a short-lived install token for an API key."""
-    try:
-        body = await request.json()
-    except Exception:
-        _track_event(
-            request,
-            "install_bootstrap_fail",
-            route="/web/install/bootstrap",
-            route_intended="/install",
-            route_effective="/web/install/bootstrap",
-            error_code="invalid_json_body",
-            source="web",
-            status_code=400,
-        )
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    token = str(body.get("token", "")).strip()
-    if not token:
-        _track_event(
-            request,
-            "install_bootstrap_fail",
-            route="/web/install/bootstrap",
-            route_intended="/install",
-            route_effective="/web/install/bootstrap",
-            error_code="missing_token",
-            source="web",
-            status_code=400,
-        )
-        return web.json_response({"error": "token required"}, status=400)
-
-    token_info = _auth.validate_install_token(token, consume=True)
-    if not token_info:
-        _track_event(
-            request,
-            "install_bootstrap_fail",
-            route="/web/install/bootstrap",
-            route_intended="/install",
-            route_effective="/web/install/bootstrap",
-            error_code="invalid_or_expired_token",
-            source="web",
-            status_code=401,
-        )
-        return web.json_response({"error": "Invalid or expired install token"}, status=401)
-
-    _track_event(
-        request,
-        "install_bootstrap_success",
-        route="/web/install/bootstrap",
-        route_intended="/install",
-        route_effective="/web/install/bootstrap",
-        user_id=token_info.get("user_id", ""),
-        source="web",
-        status_code=200,
-    )
-    return web.json_response({"api_key": token_info["api_key"]})
-
-
-async def handle_trial_connector(request: web.Request) -> web.Response:
-    """GET /trial/connector — serve chrome_bridge.py for trial users (no auth required)."""
-    bridge_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_bridge.py")
-    try:
-        with open(bridge_path, "rb") as f:
-            content = f.read()
-    except FileNotFoundError:
-        return web.Response(text="# chrome_bridge.py not found\n", content_type="text/plain")
-    return web.Response(body=content, content_type="text/plain")
-
-
-async def handle_trial_token(request: web.Request) -> web.Response:
-    """POST /trial/token — create a short-lived trial connector install token."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    token = _auth.create_install_token(auth_info["user_id"], auth_info["key"])
-    base_url = _public_base_url(request)
-    return web.json_response({
-        "curl_command": f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/trial/script" | bash',
-    })
-
-
-async def handle_trial_script(request: web.Request) -> web.Response:
-    """GET /trial/script or /trial/{token} — serve minimal bash trial connector script."""
-    token = _request_install_token(request) or request.match_info.get("token", "")
-    token = token.strip()
-    token_info = _auth.validate_install_token(token, consume=False)
-    if not token_info:
-        return web.Response(
-            text='echo "ERROR: Link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
-            content_type="text/plain",
-        )
-    base_url = _public_base_url(request)
-    relay_url = _public_relay_url(request)
-    script = f"""#!/bin/bash
-# Unchained Trial — Browser Connector
-# Connects your Chrome to the Unchained AI agent
-# Only requires: Python 3 and curl
-set -e
-
-INSTALL_TOKEN="{token}"
-RELAY="{relay_url}"
-DIR="$HOME/.unchained"
-BRIDGE="$DIR/chrome_bridge.py"
-BOOTSTRAP_URL="{base_url}/web/install/bootstrap"
-
-echo ""
-echo "  Unchained — Connecting your browser..."
-echo ""
-
-# Check Python 3
-if ! command -v python3 &>/dev/null; then
-  echo "  Error: Python 3 not found. Install from https://python.org"
-  exit 1
-fi
-
-# Stop any existing connector
-if [ -f "$DIR/.agent_pid" ]; then
-  OLD_PID=$(cat "$DIR/.agent_pid" 2>/dev/null)
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "  Stopping previous connector..."
-    kill "$OLD_PID" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-# Install websockets (the only dependency)
-if ! python3 -c "import websockets" 2>/dev/null; then
-  echo "  Installing websockets..."
-  python3 -m pip install -q websockets
-fi
-
-# Download the connector
-mkdir -p "$DIR"
-echo "  Downloading connector..."
-curl -sSL "{base_url}/trial/connector" -o "$BRIDGE"
-
-# Exchange the short-lived install token for the real API key.
-PAYLOAD=$(TOKEN="$INSTALL_TOKEN" python3 - <<'PY'
-import json, os
-print(json.dumps({{"token": os.environ["TOKEN"]}}))
-PY
-)
-BOOTSTRAP=$(curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" "$BOOTSTRAP_URL") || {{
-  echo "  Error: install token exchange failed"
-  exit 1
-}}
-API_KEY=$(printf '%s' "$BOOTSTRAP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))' 2>/dev/null || true)
-if [ -z "$API_KEY" ]; then
-  echo "  Error: invalid install token response"
-  exit 1
-fi
-
-# Launch Chrome + connector in background
-echo "  Starting..."
-UNCHAINED_API_KEY="$API_KEY" nohup python3 "$BRIDGE" start --relay "$RELAY" \\
-  > "$DIR/connector.log" 2>&1 &
-sleep 4
-
-echo ""
-echo "  Your browser is connected!"
-echo "  An Unchained Chrome window will open — that's where the agent browses."
-echo "  Screenshots of each page will appear in the chat so you can see what's happening."
-echo ""
-echo "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
-echo ""
-echo "  Stop:  python3 ~/.unchained/chrome_bridge.py stop"
-echo "  Logs:  tail -f ~/.unchained/connector.log"
-echo ""
-"""
-    return web.Response(text=script, content_type="text/plain")
-
-
-async def handle_agent_version(request: web.Request) -> web.Response:
-    """GET /web/agent/version — return current agent version info."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    from agent_package import VERSION, MIN_VERSION
-    return web.json_response({"version": VERSION, "min_version": MIN_VERSION})
-
-
-async def handle_agent_files(request: web.Request) -> web.Response:
-    """GET /web/agent/files — download code-only update ZIP."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    from agent_package import build_update_zip
-    zip_bytes = build_update_zip()
-    return web.Response(
-        body=zip_bytes,
-        content_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=unchained-update.zip"},
-    )
-
-
 INSTALL_CLAIM_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9402,10 +7092,7 @@ async function initClaimPage() {
   const signInLink = document.getElementById('signin-link');
   signInLink.href = '/local?next=' + encodeURIComponent('/install/claim/' + CLAIM_ID);
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (!r.ok || !data.authenticated) {
       document.getElementById('signin-panel').style.display = 'flex';
@@ -9675,10 +7362,7 @@ async function initInstallPage() {
   }
 
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (!r.ok || !data.authenticated) {
       document.getElementById('auth-panel').style.display = 'block';
@@ -9699,1748 +7383,6 @@ initInstallPage();
 </body>
 </html>
 """
-
-
-async def handle_install_page(request: web.Request) -> web.Response:
-    """Serve the one-click installer onboarding page."""
-    _track_page_view(request)
-    html = inject_google_client_id(INSTALL_ONBOARD_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_trial_page(request: web.Request) -> web.Response:
-    """Serve the trial chat HTML page (OpenRouter models)."""
-    _track_page_view(request)
-    html = inject_google_client_id(TRIAL_CHAT_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_gemini_page(request: web.Request) -> web.Response:
-    """Serve the Gemini SDK chat HTML page (per-user provisioned key)."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CHAT_GEMINI_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_codex_page(request: web.Request) -> web.Response:
-    """Serve the Codex chat HTML page (per-user provisioned key)."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CHAT_CODEX_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_chat_claude_page(request: web.Request) -> web.Response:
-    """Serve the Claude SDK chat HTML page (per-user provisioned key)."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CHAT_CLAUDE_SDK_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_case_study_zillow(request: web.Request) -> web.Response:
-    """Serve the Zillow rental relisting case study page (public, no auth)."""
-    _track_page_view(request)
-    html = CASE_STUDY_ZILLOW_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    html = inject_google_client_id(html, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_first_look_page(request: web.Request) -> web.Response:
-    """Serve the headless first-look chat HTML page."""
-    _track_page_view(request)
-    html = inject_google_client_id(HEADLESS_DEMO_HTML, GOOGLE_CLIENT_ID)
-    resp = web.Response(text=html, content_type="text/html")
-    _, guest_id, quota_count = _first_look_guest_auth(request)
-    _attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
-    return resp
-
-
-async def handle_demo_page(request: web.Request) -> web.Response:
-    """Redirect /demo to /first-look for backward compatibility."""
-    _track_redirect(request, "/first-look", reason="legacy_route_alias")
-    raise web.HTTPFound("/first-look")
-
-
-async def handle_local_page(request: web.Request) -> web.Response:
-    """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(CLAUDE_CHAT_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_claude_page(request: web.Request) -> web.Response:
-    """Redirect /app to /local for backward compatibility."""
-    _track_page_view(request)
-    _track_redirect(request, "/local", reason="legacy_route_alias")
-    raise web.HTTPFound("/local")
-
-
-async def handle_chat_redirect(request: web.Request) -> web.Response:
-    """Redirect /chat to /local for backward compatibility."""
-    _track_redirect(request, "/local", reason="legacy_route_alias")
-    raise web.HTTPFound("/local")
-
-
-async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
-    """WebSocket endpoint for the local chat agent.
-
-    The chat agent connects here, authenticates, then waits for messages
-    from the web server. Events from the agent are routed to the
-    appropriate SSE response queue.
-    """
-    ws = web.WebSocketResponse(heartbeat=30)
-    await ws.prepare(request)
-
-    # First message must be auth
-    try:
-        auth_msg = await asyncio.wait_for(ws.receive_json(), timeout=10)
-    except (asyncio.TimeoutError, TypeError):
-        await ws.close(code=4001, message=b"auth timeout")
-        return ws
-
-    key = auth_msg.get("key", "")
-    is_trial_agent = bool(TRIAL_AGENT_KEY) and hmac.compare_digest(key, TRIAL_AGENT_KEY)
-    # Trial-agent service key bypasses DB validation; all other keys must exist in DB.
-    if not is_trial_agent:
-        key_info = _auth.validate_key(key)
-        if not key_info:
-            await ws.send_json({"type": "error", "data": "invalid key"})
-            await ws.close(code=4003, message=b"invalid key")
-            return ws
-
-    if is_trial_agent and TRIAL_AGENT_ID:
-        agent_id = TRIAL_AGENT_ID
-    elif auth_msg.get("agent_id"):
-        agent_id = auth_msg["agent_id"]  # Trust agent-provided ID (key is validated)
-    else:
-        agent_id = f"claude-{_key_hash(key)}"
-    caps = auth_msg.get("capabilities", {})
-    if not isinstance(caps, dict):
-        caps = {}
-    await ws.send_json({"type": "auth_ok"})
-    _chat_agents[agent_id] = ws
-    _chat_agent_caps[agent_id] = caps
-    if not is_trial_agent and key_info:
-        _chat_agent_users[agent_id] = key_info.get("user_id", "")
-    print(f"[chat] Agent {agent_id} connected")
-
-    try:
-        async for msg in ws:
-            if msg.type == web.WSMsgType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    continue
-
-                msg_type = data.get("type", "")
-
-                # Trial OpenRouter accounting events are internal-only.
-                if msg_type == "openrouter_usage":
-                    try:
-                        usage_user_id = str(data.get("user_id", "")).strip()
-                        usage_sid = str(data.get("session_id", "")).strip()
-                        usage_model = str(data.get("model", "")).strip()
-                        prompt_tokens = max(0, _coerce_int(data.get("prompt_tokens"), 0))
-                        completion_tokens = max(0, _coerce_int(data.get("completion_tokens"), 0))
-                        total_tokens = max(0, _coerce_int(data.get("total_tokens"), 0))
-                        if total_tokens <= 0:
-                            total_tokens = prompt_tokens + completion_tokens
-                        direct_cost = _coerce_float(data.get("cost_usd"), 0.0)
-                        estimated_cost = _coerce_float(data.get("estimated_cost_usd"), 0.0)
-                        usage_cost = max(0.0, direct_cost if direct_cost > 0 else estimated_cost)
-                        if usage_user_id and (usage_cost > 0 or total_tokens > 0):
-                            budget_state = _track_openrouter_usage_for_user(
-                                usage_user_id,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                                total_tokens=total_tokens,
-                                cost_usd=usage_cost,
-                            )
-                            _trace(
-                                "openrouter.usage",
-                                user_id=usage_user_id,
-                                session_id=usage_sid,
-                                model=usage_model or "-",
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                                total_tokens=total_tokens,
-                                cost_usd=f"{usage_cost:.9f}",
-                                estimated_cost_usd=f"{estimated_cost:.9f}",
-                                spend_usd=f"{_coerce_float(budget_state.get('spent_usd'), 0.0):.6f}",
-                                budget_usd=f"{_coerce_float(budget_state.get('budget_usd'), 0.0):.6f}",
-                                remaining_usd=f"{_coerce_float(budget_state.get('remaining_usd'), 0.0):.6f}",
-                                usage_events=_coerce_int(budget_state.get("usage_events"), 0),
-                                total_user_tokens=_coerce_int(budget_state.get("total_tokens"), 0),
-                                capped=int(bool(budget_state.get("capped"))),
-                            )
-                    except Exception as e:
-                        log.warning("[chat] failed to track OpenRouter usage: %s", e)
-                    continue
-
-                # Route agent request responses
-                req_id = data.get("req_id", "")
-                if req_id and msg_type in ("history_response", "new_chat_ok",
-                                            "switch_slot_ok", "slots_response"):
-                    rq = _agent_req_queues.get(req_id)
-                    if rq:
-                        await rq.put(data)
-                    continue
-
-                # Route SSE stream events by session_id
-                sid = data.get("session_id", "")
-                q = _response_queues.get(sid)
-                if q:
-                    await q.put(data)
-            elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
-                break
-    finally:
-        if _chat_agents.get(agent_id) is ws:
-            del _chat_agents[agent_id]
-        _chat_agent_caps.pop(agent_id, None)
-        _chat_agent_users.pop(agent_id, None)
-        # Close all session tabs belonging to this agent
-        agent_sessions = [
-            sid for sid, aid in list(_session_agent_map.items())
-            if aid == agent_id
-        ]
-        for sid in agent_sessions:
-            asyncio.create_task(_close_session_tab(sid))
-        print(f"[chat] Agent {agent_id} disconnected, cleaning {len(agent_sessions)} session tabs")
-
-    return ws
-
-
-async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
-    """POST /web/chat — phone sends message, gets SSE stream back.
-
-    Bridges between the phone (SSE) and the local chat agent (WebSocket).
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "invalid json body"}, status=400)
-
-    auth_info = _authenticate(request)
-    guest_mode = False
-    guest_id = ""
-    guest_quota_count = 0
-    guest_quota_increment = False
-    if auth_info is None:
-        wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
-        if not wants_guest_first_look:
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        auth_info, guest_id, guest_quota_count = _first_look_guest_auth(request)
-        guest_mode = True
-    if guest_mode and not HEADLESS_AGENT_ID:
-        err = web.json_response({"error": "headless_bridge_not_configured"}, status=503)
-        _attach_first_look_guest_cookies(err, request, guest_id, quota_count=guest_quota_count)
-        return err
-
-    req_id = _request_id(request)
-    message = body.get("message", "").strip()
-    agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
-    key_hash = auth_info["key_hash"]
-    session_id = body.get("session_id", "")
-    model = body.get("model", "")
-    if (guest_mode or _is_pending_user(auth_info)) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    _trace(
-        "chat.msg.in",
-        req_id=req_id,
-        user_id=auth_info.get("user_id", ""),
-        agent_id=agent_id,
-        session_id=session_id or "-",
-        model=model or "-",
-    )
-
-    if not message:
-        return web.json_response({"error": "message required"}, status=400)
-    if not agent_id:
-        return web.json_response({"error": "agent_id required"}, status=400)
-
-    # Resolve which chat agent handles this model (must happen before session ID generation)
-    is_gemini = model and model.startswith("gemini")
-    is_claude_sdk = _is_claude_sdk_model(model)
-    is_codex_sdk = _is_codex_sdk_model(model)
-    is_codex_cli = _is_codex_cli_model(model)
-    is_openrouter = _is_openrouter_model(model)
-    if guest_mode and not is_openrouter:
-        return web.json_response(
-            {"error": "guest_mode_requires_openrouter_model"},
-            status=400,
-        )
-    if _is_pending_user(auth_info) and not is_openrouter:
-        return _pending_limited_response()
-    openrouter_forced_model = ""
-    openrouter_forced_from_model = ""
-    openrouter_forced_notice = ""
-    openrouter_budget_state: dict | None = None
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-
-    # Validate session belongs to this user.  Session IDs are
-    # "s-{type}-{key_hash}-{rand}", so the key_hash is the 3rd segment.
-    # Check structurally rather than via substring to avoid false matches.
-    def _session_owned(sid: str) -> bool:
-        parts = sid.split("-")
-        # s-claude-{hash}-xxx  or  s-gemini-{hash}-xxx  →  parts[2] == key_hash
-        return len(parts) >= 4 and parts[0] == "s" and parts[2] == key_hash
-
-    if not session_id:
-        session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
-    elif not _session_owned(session_id):
-        # Do not allow clients to attach to another user's chat session namespace.
-        session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
-    _track_event(
-        request,
-        "chat_message_send",
-        session_id=session_id,
-        route="/web/chat",
-        route_intended=body.get("route_intended", request.path),
-        route_effective=body.get("route_effective", request.path),
-        user_id=auth_info.get("user_id", ""),
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        meta={"model": model or "", "headless": bool(body.get("headless", False))},
-        status_code=200,
-    )
-
-    gemini_key = None
-    if is_gemini:
-        import signup_agent
-        gemini_key = signup_agent.get_provider_key(auth_info["user_id"], "gemini")
-        if not gemini_key:
-            return web.json_response(
-                {"error": "No Gemini API key. Visit /setup to provision one."},
-                status=400,
-            )
-        # Lazy spawn if not running
-        _spawn_gemini_agent(auth_info["user_id"], auth_info["key"], gemini_key)
-        ws = _chat_agents.get(chat_agent_id)
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Gemini API agent starting up. Try again in a few seconds."},
-                status=503,
-            )
-    elif is_claude_sdk:
-        import signup_agent
-        user_id = auth_info["user_id"]
-        claude_key = signup_agent.get_provider_key(user_id, "claude-sdk")
-        if not claude_key:
-            return web.json_response(
-                {"error": "No Claude API key. Visit /setup to provision one."},
-                status=400,
-            )
-        _spawn_claude_sdk_agent(user_id, auth_info["key"], claude_key)
-        # Wait for the agent subprocess to connect its WebSocket (up to ~10s)
-        ws = _chat_agents.get(chat_agent_id)
-        if ws is None or ws.closed:
-            for _wait in range(20):
-                await asyncio.sleep(0.5)
-                ws = _chat_agents.get(chat_agent_id)
-                if ws is not None and not ws.closed:
-                    break
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Claude API agent starting up. Try again in a few seconds."},
-                status=503,
-            )
-    elif is_codex_sdk:
-        import signup_agent
-
-        user_id = auth_info["user_id"]
-        primary = "codex-sdk"
-        fallback = "codex-cli"
-        codex_key = (
-            signup_agent.get_provider_key(user_id, primary)
-            or signup_agent.get_provider_key(user_id, fallback)
-        )
-        if not codex_key:
-            return web.json_response(
-                {"error": "No Codex key. Visit /setup to provision one."},
-                status=400,
-            )
-        _spawn_codex_sdk_agent(user_id, auth_info["key"], codex_key)
-        ws = _chat_agents.get(chat_agent_id)
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Codex agent starting up. Try again in a few seconds."},
-                status=503,
-            )
-    elif is_codex_cli:
-        # Codex CLI lane runs on the user's local agent (no provider provisioning required).
-        local_agent_id = auth_info["agent_id"]
-        ws = _chat_agents.get(local_agent_id)
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Codex CLI requires your local agent connection. Open /app and connect your agent."},
-                status=503,
-            )
-        caps = _chat_agent_caps.get(local_agent_id, {})
-        if not bool(caps.get("codex_cli")):
-            return web.json_response(
-                {"error": "Your local agent does not support Codex CLI yet. Please update/restart your local agent package and try again."},
-                status=426,
-            )
-    elif is_openrouter:
-        # Route OpenRouter models (contain '/') to the trial agent on EC2
-        if not TRIAL_AGENT_ID:
-            return web.json_response(
-                {"error": "Trial agent is not configured. Please try a Claude model."},
-                status=503,
-            )
-        user_id = auth_info.get("user_id", "")
-        requested_model = (model or _OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
-        model = requested_model
-        if user_id:
-            openrouter_budget_state = _openrouter_budget_state_for_user(user_id)
-            if openrouter_budget_state.get("capped") and not _is_openrouter_post_cap_allowed_model(requested_model):
-                model = _OPENROUTER_TRIAL_FALLBACK_MODEL
-                openrouter_forced_model = model
-                openrouter_forced_from_model = requested_model
-                openrouter_forced_notice = (
-                    "Trial model budget reached "
-                    f"(${openrouter_budget_state.get('spent_usd', 0):.2f}/"
-                    f"${openrouter_budget_state.get('budget_usd', 0):.2f}). "
-                    "Switched to a free model for continued access. "
-                    "After the $1 cap, available models are Trinity and StepFun."
-                )
-        ws = _chat_agents.get(TRIAL_AGENT_ID)
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Trial agent is not available. Please try a Claude model."},
-                status=503,
-            )
-    else:
-        ws = _chat_agents.get(agent_id)
-        if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Your agent is not connected. Download and run the agent package."},
-                status=503,
-            )
-
-    # Demo quota enforcement: headless demo requests are limited to _DEMO_PROMPT_LIMIT
-    if body.get("headless", False):
-        if guest_mode:
-            if guest_quota_count >= _FIRST_LOOK_GUEST_PROMPT_LIMIT:
-                quota_resp = web.json_response(
-                    {
-                        "error": "demo_quota_exceeded",
-                        "demo_prompt_count": guest_quota_count,
-                        "demo_prompt_limit": _FIRST_LOOK_GUEST_PROMPT_LIMIT,
-                    },
-                    status=429,
-                )
-                _attach_first_look_guest_cookies(
-                    quota_resp,
-                    request,
-                    guest_id,
-                    quota_count=guest_quota_count,
-                )
-                return quota_resp
-            guest_quota_count += 1
-            guest_quota_increment = True
-        else:
-            email = auth_info.get("email", "")
-            if email:
-                user = _auth.find_user_by_email(email)
-                if not _is_demo_unlimited(user):
-                    count = _auth.get_demo_count(email)
-                    if count >= _DEMO_PROMPT_LIMIT:
-                        return web.json_response(
-                            {"error": "demo_quota_exceeded", "demo_prompt_count": count,
-                             "demo_prompt_limit": _DEMO_PROMPT_LIMIT},
-                            status=429,
-                        )
-                    _auth.increment_demo_count(email)
-
-    # Turn-based rate limiting for free-tier users
-    email = auth_info.get("email", "")
-    if email:
-        user = _auth.find_user_by_email(email)
-        if _is_rate_limited_user(user):
-            result = _auth.check_and_consume_turn(
-                email, _FREE_DAILY_TURN_LIMIT, _FREE_WINDOW_TURN_LIMIT, _FREE_WINDOW_SECONDS,
-            )
-            if not result["allowed"]:
-                resp = {
-                    "error": "turn_rate_limit",
-                    "daily_remaining": result["daily_remaining"],
-                    "window_remaining": result["window_remaining"],
-                    "resets_in": result.get("resets_in", 0),
-                }
-                return web.json_response(resp, status=429)
-
-    # Create response queue for this session
-    q: asyncio.Queue = asyncio.Queue()
-    _response_queues[session_id] = q
-
-    # Forward message to chat agent
-    # Route CDP tools to the headless bridge only when the client explicitly
-    # requests headless mode (demo page).  Trial users who connected their
-    # own browser should use their own agent for CDP.
-    use_headless = body.get("headless", False) and HEADLESS_AGENT_ID
-    cdp_agent_id = HEADLESS_AGENT_ID if use_headless else agent_id
-    try:
-        ws_msg = {
-            "type": "user_message",
-            "session_id": session_id,
-            "agent_id": cdp_agent_id,
-            "message": message,
-        }
-        if model:
-            ws_msg["model"] = model
-        if is_openrouter and auth_info.get("user_id"):
-            ws_msg["user_id"] = auth_info["user_id"]
-        if is_gemini:
-            _gemini_last_active[chat_agent_id] = time.time()
-        elif is_claude_sdk:
-            _claude_sdk_last_active[chat_agent_id] = time.time()
-        elif is_codex_sdk:
-            _codex_sdk_last_active[chat_agent_id] = time.time()
-        elif is_codex_cli:
-            _session_last_active[session_id] = time.time()
-        # Per-session tab isolation for headless demo sessions.
-        # Reuse existing tab, or create a new one so concurrent demo users
-        # don't share a single Chrome tab.
-        tab_id = _session_tabs.get(session_id)
-        if not tab_id and use_headless:
-            tab_id = await _ensure_session_tab(session_id, cdp_agent_id)
-        if tab_id:
-            ws_msg["tab_id"] = tab_id
-        _session_last_active[session_id] = time.time()
-        await ws.send_json(ws_msg)
-        _trace(
-            "chat.msg.forwarded",
-            req_id=req_id,
-            session_id=session_id,
-            chat_agent_id=chat_agent_id,
-            cdp_agent_id=cdp_agent_id,
-        )
-    except Exception:
-        _trace(
-            "chat.msg.forward_error",
-            req_id=req_id,
-            session_id=session_id,
-            chat_agent_id=chat_agent_id,
-        )
-        _response_queues.pop(session_id, None)
-        return web.json_response({"error": "Failed to reach chat agent"}, status=502)
-
-    # Track which agent is handling this session (for cancel routing)
-    routing_agent_id = TRIAL_AGENT_ID if is_openrouter else chat_agent_id
-    _session_agents[session_id] = routing_agent_id
-
-    # Stream SSE response
-    resp = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-    if guest_mode:
-        _attach_first_look_guest_cookies(
-            resp,
-            request,
-            guest_id,
-            quota_count=guest_quota_count if guest_quota_increment else None,
-        )
-    await resp.prepare(request)
-    if openrouter_forced_model:
-        forced_evt = {
-            "type": "model_forced",
-            "reason": "openrouter_budget_limit",
-            "model": openrouter_forced_model,
-            "allowed_models": list(_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS),
-        }
-        if openrouter_forced_from_model:
-            forced_evt["requested_model"] = openrouter_forced_from_model
-        if openrouter_budget_state:
-            forced_evt["budget"] = openrouter_budget_state
-        await resp.write(f"data: {json.dumps(forced_evt)}\n\n".encode())
-    if openrouter_forced_notice:
-        await resp.write(f"data: {json.dumps({'type': 'text', 'data': openrouter_forced_notice})}\n\n".encode())
-
-    stream_completed = False
-    try:
-        while True:
-            try:
-                evt = await asyncio.wait_for(q.get(), timeout=15)
-            except asyncio.TimeoutError:
-                # Send SSE keepalive comment to prevent connection timeout
-                try:
-                    await resp.write(b": keepalive\n\n")
-                except (ConnectionResetError, Exception):
-                    break
-                continue
-
-            sse = f"data: {json.dumps(evt)}\n\n"
-            try:
-                await resp.write(sse.encode())
-            except (ConnectionResetError, Exception):
-                break
-
-            if evt.get("type") == "done" or evt.get("type") == "error":
-                stream_completed = True
-                break
-    finally:
-        _response_queues.pop(session_id, None)
-        _session_agents.pop(session_id, None)
-        if not stream_completed:
-            asyncio.create_task(_close_session_tab(session_id))
-        _trace(
-            "chat.msg.stream_end",
-            req_id=req_id,
-            session_id=session_id,
-            stream_completed=stream_completed,
-        )
-
-    return resp
-
-
-async def handle_chat_cancel(request: web.Request) -> web.Response:
-    """POST /web/chat/cancel — cancel an active chat session."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    auth_info = _authenticate(request)
-    guest_mode = False
-    guest_id = ""
-    if auth_info is None:
-        if not bool(body.get("first_look_guest")):
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        auth_info, guest_id, _ = _first_look_guest_auth(request)
-        guest_mode = True
-
-    session_id = body.get("session_id", "")
-    if not session_id:
-        return web.json_response({"error": "session_id required"}, status=400)
-
-    agent_id = auth_info.get("agent_id", "")
-    if guest_mode and not session_id.startswith(f"s-{agent_id}-"):
-        denied = web.json_response({"error": "session_id not owned by guest"}, status=403)
-        _attach_first_look_guest_cookies(denied, request, guest_id)
-        return denied
-    # Look up which agent is actually handling this session (may be trial agent)
-    default_agent = TRIAL_AGENT_ID if guest_mode else agent_id
-    routing_agent_id = _session_agents.get(session_id, default_agent)
-    ws = _chat_agents.get(routing_agent_id)
-    if ws and not ws.closed:
-        await ws.send_json({"type": "cancel", "session_id": session_id})
-        ok = web.json_response({"ok": True})
-        if guest_mode:
-            _attach_first_look_guest_cookies(ok, request, guest_id)
-        return ok
-    err = web.json_response({"error": "Agent not connected"}, status=503)
-    if guest_mode:
-        _attach_first_look_guest_cookies(err, request, guest_id)
-    return err
-
-
-async def handle_chat_status(request: web.Request) -> web.Response:
-    """GET /web/chat/status — check if user's agent is connected."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        if request.query.get("first_look_guest") != "1":
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        guest_auth, guest_id, _ = _first_look_guest_auth(request)
-        gws = _chat_agents.get(TRIAL_AGENT_ID)
-        chat_connected = bool(TRIAL_AGENT_ID) and gws is not None and not gws.closed
-        bridge_connected = False
-        if HEADLESS_AGENT_ID:
-            bridge_connected = await _check_relay_agent(HEADLESS_AGENT_ID)
-        connected = chat_connected and bridge_connected
-        guest_resp = web.json_response(
-            {
-                "connected": connected,
-                "agent_id": guest_auth.get("agent_id", ""),
-                "chat_connected": chat_connected,
-                "chat_agent_id": TRIAL_AGENT_ID or "",
-                "bridge_connected": bridge_connected,
-                "bridge_agent_id": HEADLESS_AGENT_ID or "",
-                "bridge_configured": bool(HEADLESS_AGENT_ID),
-                "guest": True,
-            },
-        )
-        _attach_first_look_guest_cookies(guest_resp, request, guest_id)
-        return guest_resp
-    bridge_agent_id = auth_info.get("agent_id", "")
-    agent_id = bridge_agent_id
-    ws = _chat_agents.get(agent_id)
-    chat_connected = ws is not None and not ws.closed
-    connected = chat_connected
-    chat_only = request.query.get("chat_only") == "1"
-    bridge_connected = False
-    if bridge_agent_id:
-        bridge_connected = await _check_relay_agent(bridge_agent_id)
-    # If not connected via chat WebSocket, check if agent is on the relay
-    if not connected and agent_id and not chat_only:
-        connected = bridge_connected
-
-    model_hint = request.query.get("model", "")
-    if _is_pending_user(auth_info) and model_hint and not _is_openrouter_model(model_hint):
-        return _pending_limited_response()
-    wants_gemini = request.query.get("gemini") == "1"
-    wants_codex = (
-        request.query.get("codex") == "1"
-        or _is_codex_cli_model(model_hint)
-        or _is_codex_sdk_model(model_hint)
-    )
-    wants_claude_sdk = _is_claude_sdk_model(model_hint) or request.query.get("claude_sdk") == "1"
-
-    # Lazy-spawn Gemini agent if user has a provisioned key and ?gemini=1 hint
-    gemini_connected = False
-    if wants_gemini:
-        gemini_id = f"gemini-{auth_info['key_hash']}"
-        proc = _gemini_procs.get(gemini_id)
-        if not proc or proc.poll() is not None:
-            import signup_agent
-            user_id = auth_info.get("user_id", "")
-            gemini_key = signup_agent.get_provider_key(user_id, "gemini") if user_id else None
-            if gemini_key:
-                _spawn_gemini_agent(user_id, auth_info["key"], gemini_key)
-        # Check if the Gemini agent's WS is connected
-        gws = _chat_agents.get(gemini_id)
-        gemini_connected = gws is not None and not gws.closed
-
-    codex_connected = False
-    codex_agent_id = ""
-    codex_cli_supported = True
-    if wants_codex:
-        import signup_agent
-
-        user_id = auth_info.get("user_id", "")
-        key_hash = auth_info["key_hash"]
-
-        sdk_key = signup_agent.get_provider_key(user_id, "codex-sdk") if user_id else None
-        cli_key = signup_agent.get_provider_key(user_id, "codex-cli") if user_id else None
-        prefer_cli = _is_codex_cli_model(model_hint)
-
-        if prefer_cli:
-            # Codex CLI runs on local CLI agent; no provider key required.
-            codex_agent_id = auth_info.get("agent_id", "")
-            cws = _chat_agents.get(codex_agent_id)
-            codex_chat_connected = cws is not None and not cws.closed
-            codex_connected = codex_chat_connected
-            if not codex_connected and codex_agent_id and not chat_only:
-                codex_connected = await _check_relay_agent(codex_agent_id)
-            caps = _chat_agent_caps.get(codex_agent_id, {})
-            codex_cli_supported = bool(caps.get("codex_cli"))
-            if codex_connected and not codex_cli_supported:
-                codex_connected = False
-        else:
-            # Server-side Codex lane is always codex-sdk process; allow codex-cli key as
-            # backward-compatible credential fallback.
-            codex_key = sdk_key or cli_key
-            if codex_key:
-                codex_agent_id = f"codexsdk-{key_hash}"
-                proc = _codex_sdk_procs.get(codex_agent_id)
-                if not proc or proc.poll() is not None:
-                    _spawn_codex_sdk_agent(user_id, auth_info["key"], codex_key)
-
-        if codex_agent_id and not prefer_cli:
-            cws = _chat_agents.get(codex_agent_id)
-            codex_connected = cws is not None and not cws.closed
-        if prefer_cli:
-            chat_connected = codex_chat_connected
-            connected = codex_connected
-            agent_id = codex_agent_id
-
-    claude_sdk_connected = False
-    claude_sdk_agent_id = ""
-    if wants_claude_sdk:
-        import signup_agent
-
-        user_id = auth_info.get("user_id", "")
-        key_hash = auth_info["key_hash"]
-        claude_key = signup_agent.get_provider_key(user_id, "claude-sdk") if user_id else None
-        if claude_key:
-            claude_sdk_agent_id = f"claudesdk-{key_hash}"
-            proc = _claude_sdk_procs.get(claude_sdk_agent_id)
-            if not proc or proc.poll() is not None:
-                _spawn_claude_sdk_agent(user_id, auth_info["key"], claude_key)
-            cws = _chat_agents.get(claude_sdk_agent_id)
-            claude_sdk_connected = cws is not None and not cws.closed
-
-            # Make base status reflect the currently selected model lane.
-            chat_connected = claude_sdk_connected
-            connected = claude_sdk_connected
-            agent_id = claude_sdk_agent_id
-
-    # Detect agent ID mismatch: user's expected agent isn't connected but
-    # another agent belonging to the same user IS connected (different profile/key).
-    mismatch_agent = ""
-    if not chat_connected and agent_id:
-        user_id = auth_info.get("user_id", "")
-        if user_id:
-            for other_id, other_uid in _chat_agent_users.items():
-                if other_uid == user_id and other_id != agent_id:
-                    other_ws = _chat_agents.get(other_id)
-                    if other_ws and not other_ws.closed:
-                        mismatch_agent = other_id
-                        break
-
-    resp = {"connected": connected, "agent_id": agent_id}
-    resp["chat_connected"] = chat_connected
-    resp["chat_agent_id"] = agent_id
-    resp["bridge_connected"] = bridge_connected
-    resp["bridge_agent_id"] = bridge_agent_id
-    if mismatch_agent:
-        resp["mismatch"] = True
-        resp["mismatch_agent_id"] = mismatch_agent
-    if wants_gemini:
-        resp["gemini_agent_id"] = f"gemini-{auth_info['key_hash']}"
-        resp["gemini_connected"] = gemini_connected
-    if wants_codex:
-        resp["codex_agent_id"] = codex_agent_id
-        resp["codex_connected"] = codex_connected
-        if _is_codex_cli_model(model_hint):
-            resp["codex_cli_supported"] = codex_cli_supported
-    if wants_claude_sdk:
-        resp["claude_sdk_agent_id"] = claude_sdk_agent_id
-        resp["claude_sdk_connected"] = claude_sdk_connected
-    return web.json_response(resp)
-
-
-async def _check_relay_agent(agent_id: str) -> bool:
-    """Quick check if an agent is connected to the relay via HTTP API."""
-    relay_host, relay_port = _parse_relay()
-    scheme = "https" if relay_port == 443 else "http"
-    if relay_port in (443, 80):
-        url = f"{scheme}://{relay_host}/api/agents"
-    else:
-        url = f"{scheme}://{relay_host}:{relay_port}/api/agents"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=3, headers=_relay_auth_headers())
-            if resp.is_success:
-                agents = resp.json()
-                return any(a.get("agent_id") == agent_id for a in agents)
-    except Exception:
-        pass
-    # Fallback: try WS connect
-    import websockets
-    try:
-        async with websockets.connect(
-            _relay_cdp_url(agent_id, "auto"),
-            open_timeout=3,
-            additional_headers=_relay_auth_headers() or None,
-        ) as ws:
-            await ws.close()
-            return True
-    except Exception:
-        return False
-
-
-def _resolve_chat_agent_id(auth_info: dict, model: str) -> str:
-    """Return the chat agent_id for the given model + authenticated user."""
-    h = auth_info["key_hash"]
-    if model and model.startswith("gemini"):
-        return f"gemini-{h}"
-    if _is_claude_sdk_model(model):
-        return f"claudesdk-{h}"
-    if _is_codex_sdk_model(model):
-        return f"codexsdk-{h}"
-    if _is_codex_cli_model(model):
-        # Codex CLI runs on the user's local CLI agent, same lane as Claude CLI.
-        return auth_info["agent_id"]
-    return auth_info["agent_id"]  # claude-{hash}
-
-
-async def _agent_request(agent_id: str, msg: dict, timeout: float = 10) -> dict | None:
-    """Send a request to the agent WS and wait for a response."""
-    ws = _chat_agents.get(agent_id)
-    if ws is None or ws.closed:
-        return None
-    req_id = uuid.uuid4().hex[:8]
-    msg["req_id"] = req_id
-    q: asyncio.Queue = asyncio.Queue()
-    _agent_req_queues[req_id] = q
-    try:
-        await ws.send_json(msg)
-        return await asyncio.wait_for(q.get(), timeout=timeout)
-    except (asyncio.TimeoutError, Exception):
-        return None
-    finally:
-        _agent_req_queues.pop(req_id, None)
-
-
-async def handle_chat_history(request: web.Request) -> web.Response:
-    """GET /web/chat/history — proxy to agent for local chat history.
-
-    For trial users (local agent offline), reads the session file written by
-    chat_agent_openrouter.py from the shared relay_data volume.
-    """
-    auth_info = _authenticate(request)
-    guest_mode = False
-    guest_id = ""
-    if not auth_info:
-        if request.query.get("first_look_guest") != "1":
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        auth_info, guest_id, _ = _first_look_guest_auth(request)
-        guest_mode = True
-    agent_id = auth_info.get("agent_id", "")
-    model = request.query.get("model", "")
-    if (guest_mode or _is_pending_user(auth_info)) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    if guest_mode and not _is_openrouter_model(model):
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    requested_session_id = request.query.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-
-    # OpenRouter trial mode: always read from trial session file keyed by active session_id.
-    if _is_openrouter_model(model):
-        session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-        msgs, found = _read_trial_history(session_id)
-        payload = {"messages": msgs, "trial": True, "session_id": session_id}
-        if not found:
-            payload["offline"] = True
-        if guest_mode:
-            payload["guest"] = True
-        history_resp = web.json_response(payload)
-        if guest_mode:
-            _attach_first_look_guest_cookies(history_resp, request, guest_id)
-        return history_resp
-
-    # Claude/Gemini mode: ask the appropriate agent first.
-    resp = await _agent_request(chat_agent_id, {"type": "get_history", "session_id": requested_session_id})
-    if resp is not None:
-        return web.json_response({"messages": resp.get("messages", [])})
-
-    # Local agent offline — optional fallback to a trial session if one exists.
-    session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-    msgs, found = _read_trial_history(session_id)
-    if found:
-        fallback_resp = web.json_response({"messages": msgs, "trial": True, "session_id": session_id})
-        if guest_mode:
-            _attach_first_look_guest_cookies(fallback_resp, request, guest_id)
-        return fallback_resp
-    empty_resp = web.json_response({"messages": [], "offline": True})
-    if guest_mode:
-        _attach_first_look_guest_cookies(empty_resp, request, guest_id)
-    return empty_resp
-
-
-async def handle_chat_new(request: web.Request) -> web.Response:
-    """POST /web/chat/new — proxy to agent to advance to next slot."""
-    auth_info = _authenticate(request)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    guest_mode = False
-    guest_id = ""
-    if not auth_info:
-        if not bool(body.get("first_look_guest")):
-            return web.json_response({"error": "Not authenticated"}, status=401)
-        auth_info, guest_id, _ = _first_look_guest_auth(request)
-        guest_mode = True
-    agent_id = auth_info.get("agent_id", "")
-
-    model = body.get("model", "")
-    if (guest_mode or _is_pending_user(auth_info)) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    if guest_mode and not _is_openrouter_model(model):
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    requested_session_id = body.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        # "New chat" in trial mode means: clear current session file and mint a new session ID.
-        old_session = _resolve_trial_session_id(agent_id, requested_session_id)
-        _delete_trial_session(old_session)
-        # Close the tab for the old session (if any)
-        await _close_session_tab(old_session)
-        new_session = f"s-{agent_id}-{int(time.time() * 1000):x}"
-        new_resp = web.json_response({
-            "ok": True,
-            "active_slot": 1,
-            "trial": True,
-            "session_id": new_session,
-        })
-        if guest_mode:
-            _attach_first_look_guest_cookies(new_resp, request, guest_id)
-        return new_resp
-
-    resp = await _agent_request(chat_agent_id, {"type": "new_chat"})
-    if resp is None:
-        err = web.json_response({"error": "Agent not connected"}, status=503)
-        if guest_mode:
-            _attach_first_look_guest_cookies(err, request, guest_id)
-        return err
-    result = {"ok": True, "active_slot": resp.get("active_slot", 1)}
-    if resp.get("session_id"):
-        result["session_id"] = resp["session_id"]
-    out = web.json_response(result)
-    if guest_mode:
-        _attach_first_look_guest_cookies(out, request, guest_id)
-    return out
-
-
-async def handle_chat_slots(request: web.Request) -> web.Response:
-    """GET /web/chat/slots — get slot info from agent."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    agent_id = auth_info.get("agent_id", "")
-
-    model = request.query.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    requested_session_id = request.query.get("session_id", "")
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        session_id = _resolve_trial_session_id(agent_id, requested_session_id)
-        msgs, _ = _read_trial_history(session_id)
-        preview = ""
-        for m in msgs:
-            if m.get("role") == "user":
-                preview = m.get("content", "")[:40]
-                break
-        return web.json_response({
-            "active_slot": 1,
-            "slots": [
-                {"slot": 1, "empty": len(msgs) == 0, "preview": preview},
-                {"slot": 2, "empty": True, "preview": ""},
-                {"slot": 3, "empty": True, "preview": ""},
-            ],
-            "trial": True,
-            "session_id": session_id,
-        })
-
-    resp = await _agent_request(chat_agent_id, {"type": "get_slots"})
-    if resp is None:
-        return web.json_response({"active_slot": 1, "slots": [
-            {"slot": 1, "empty": True, "preview": ""},
-            {"slot": 2, "empty": True, "preview": ""},
-            {"slot": 3, "empty": True, "preview": ""},
-        ], "offline": True})
-    return web.json_response({
-        "active_slot": resp.get("active_slot", 1),
-        "slots": resp.get("slots", []),
-    })
-
-
-async def handle_chat_switch(request: web.Request) -> web.Response:
-    """POST /web/chat/switch — switch active slot."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    slot = body.get("slot", 1)
-    agent_id = auth_info.get("agent_id", "")
-    model = body.get("model", "")
-    if _is_pending_user(auth_info) and not model:
-        model = _OPENROUTER_TRIAL_DEFAULT_MODEL
-    if _is_pending_user(auth_info) and not _is_openrouter_model(model):
-        return _pending_limited_response()
-    chat_agent_id = _resolve_chat_agent_id(auth_info, model)
-    if _is_openrouter_model(model):
-        # Trial mode does not support multi-slot switching.
-        return web.json_response({"ok": True, "active_slot": 1, "trial": True})
-    resp = await _agent_request(chat_agent_id, {"type": "switch_slot", "slot": slot})
-    if resp is None:
-        return web.json_response({"error": "Agent not connected"}, status=503)
-    return web.json_response({"ok": True, "active_slot": resp.get("active_slot", slot)})
-
-
-# ---------------------------------------------------------------------------
-# API handlers
-# ---------------------------------------------------------------------------
-
-_FAVICON_SVG = None
-
-
-def _load_favicon() -> str:
-    global _FAVICON_SVG
-    if _FAVICON_SVG is None:
-        favicon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "favicon.svg")
-        try:
-            with open(favicon_path) as f:
-                _FAVICON_SVG = f.read()
-        except FileNotFoundError:
-            _FAVICON_SVG = ""
-    return _FAVICON_SVG
-
-
-async def handle_favicon(request: web.Request) -> web.Response:
-    """GET /favicon.svg — serve the site icon."""
-    svg = _load_favicon()
-    if not svg:
-        return web.Response(status=404)
-    return web.Response(
-        text=svg,
-        content_type="image/svg+xml",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
-
-
-async def handle_index(request: web.Request) -> web.Response:
-    _track_page_view(request)
-    html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    html = inject_google_client_id(html, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_test(request: web.Request) -> web.Response:
-    auth_info = _authenticate(request)
-    if not auth_info:
-        _track_redirect(request, "/", reason="test_requires_auth")
-        raise web.HTTPFound("/")  # redirect to landing page
-    html = inject_google_client_id(HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_google_auth(request: web.Request) -> web.Response:
-    """POST /auth/google — verify Google ID token, create session."""
-    body = await request.json()
-    source = str(body.get("source", "claude")).strip().lower() or "claude"
-    if source not in {"trial", "claude"}:
-        source = "claude"
-    _track_event(
-        request,
-        "auth_google_attempt",
-        source=source,
-        meta={"source": source},
-        status_code=200,
-    )
-    id_token = body.get("credential", "")
-    if not id_token:
-        _track_event(
-            request,
-            "auth_google_fail",
-            source=source,
-            error_code="missing_credential",
-            meta={"source": source, "reason": "missing_credential"},
-            status_code=400,
-        )
-        return web.json_response({"error": "Missing credential"}, status=400)
-
-    payload = await verify_google_token(id_token)
-    if payload is None:
-        _track_event(
-            request,
-            "auth_google_fail",
-            source=source,
-            error_code="invalid_google_token",
-            meta={"source": source, "reason": "invalid_google_token"},
-            status_code=401,
-        )
-        return web.json_response({"error": "Invalid Google token"}, status=401)
-
-    email = payload.get("email", "").lower()
-    name = payload.get("name", "")
-    picture = payload.get("picture", "")
-    user_type = "trial" if source == "trial" else "claude"
-
-    existing = _auth.find_user_by_email(email)
-
-    if existing:
-        status = existing.get("status", "approved")
-
-        if status == "approved":
-            # Normal flow — approved user
-            # Update last login + profile
-            user = _auth.get_or_create_user(email, name, picture)
-            api_key = user["api_key"]
-            agent_id = f"claude-{_key_hash(api_key)}"
-            session_token = create_session_token(user["user_id"], email)
-            resp = web.json_response({
-                "ok": True, "email": email, "name": name,
-                "picture": picture, "agent_id": agent_id,
-                "user_type": existing.get("user_type", "claude"),
-                "status": "approved",
-                "demo_prompt_count": _auth.get_demo_count(email),
-                "demo_unlimited": _is_demo_unlimited(existing),
-                "claude_access_requested": False,
-                "is_admin": email.lower() in ADMIN_EMAILS,
-            })
-            _set_session_cookie(resp, session_token, request)
-            _track_event(
-                request,
-                "auth_google_success",
-                user_id=user["user_id"],
-                user_type=existing.get("user_type", "claude"),
-                source=source,
-                meta={"source": source, "status": "approved", "existing": True},
-                status_code=200,
-            )
-            return resp
-
-        if status == "pending":
-            # Trial/first-look users can access trial flows while account review is pending.
-            if source == "trial":
-                api_key = existing.get("api_key")
-                if not api_key:
-                    api_key = _auth.create_key(existing["user_id"])
-                now = time.time()
-                with _auth._conn() as conn:
-                    conn.execute(
-                        "UPDATE users SET api_key = COALESCE(api_key, ?), "
-                        "last_login_at = ?, name = ?, picture = ? WHERE email = ?",
-                        (
-                            api_key,
-                            now,
-                            name or existing.get("name", ""),
-                            picture or existing.get("picture", ""),
-                            email,
-                        ),
-                    )
-                refreshed = _auth.find_user_by_email(email) or existing
-                pending_user_type = refreshed.get("user_type", "trial")
-                agent_id = f"claude-{_key_hash(api_key)}"
-                session_token = create_session_token(existing["user_id"], email)
-                resp = web.json_response({
-                    "ok": True, "email": email, "name": name,
-                    "picture": picture, "agent_id": agent_id,
-                    "user_type": pending_user_type,
-                    "status": "pending",
-                    "demo_prompt_count": _auth.get_demo_count(email),
-                    "demo_unlimited": False,
-                    "review_pending": True,
-                    "claude_access_requested": pending_user_type == "claude",
-                    "is_admin": email.lower() in ADMIN_EMAILS,
-                })
-                _set_session_cookie(resp, session_token, request)
-                _track_event(
-                    request,
-                    "auth_google_success",
-                    user_id=existing["user_id"],
-                    user_type=pending_user_type,
-                    source=source,
-                    meta={"source": source, "status": "pending", "existing": True},
-                    status_code=200,
-                )
-                return resp
-
-            pending_user_type = existing.get("user_type", "claude")
-            _track_event(
-                request,
-                "auth_google_pending",
-                user_id=existing["user_id"],
-                user_type=pending_user_type,
-                source=source,
-                meta={"source": source, "status": "pending", "existing": True},
-                status_code=200,
-            )
-            return web.json_response({
-                "pending": True,
-                "status": "pending",
-                "user_type": pending_user_type,
-                "claude_access_requested": pending_user_type == "claude",
-                "message": "Your sign-up request is still being reviewed. We'll notify you by email once approved.",
-            })
-
-        if status == "rejected":
-            _track_event(
-                request,
-                "auth_google_fail",
-                user_id=existing["user_id"],
-                user_type=existing.get("user_type", "claude"),
-                source=source,
-                error_code="rejected",
-                meta={"source": source, "reason": "rejected"},
-                status_code=403,
-            )
-            return web.json_response({"error": "Your sign-up request was not approved."}, status=403)
-
-    # Trial/first-look sign-ups remain pending for admin review but can use free-tier chat immediately.
-    if source == "trial":
-        user = _auth.create_pending_user(email, name, picture, user_type="trial")
-        api_key = _auth.create_key(user["user_id"])
-        with _auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
-                (api_key, email),
-            )
-        agent_id = f"claude-{_key_hash(api_key)}"
-        session_token = create_session_token(user["user_id"], email)
-        resp = web.json_response({
-            "ok": True, "email": email, "name": name,
-            "picture": picture, "agent_id": agent_id,
-            "user_type": "trial",
-            "status": "pending",
-            "demo_prompt_count": _auth.get_demo_count(email),
-            "demo_unlimited": False,
-            "review_pending": True,
-            "claude_access_requested": False,
-            "is_admin": email.lower() in ADMIN_EMAILS,
-        })
-        _set_session_cookie(resp, session_token, request)
-        _track_event(
-            request,
-            "signup_created",
-            user_id=user["user_id"],
-            user_type="trial",
-            source=source,
-            meta={"source": source, "status": "pending"},
-            status_code=200,
-        )
-        _track_event(
-            request,
-            "auth_google_success",
-            user_id=user["user_id"],
-            user_type="trial",
-            source=source,
-            meta={"source": source, "status": "pending", "new_user": True},
-            status_code=200,
-        )
-
-        send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/First Look now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
-        )
-        for admin in ADMIN_EMAILS:
-            send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/first-look user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/first-look access enabled).</p>",
-            )
-        return resp
-
-    # Non-trial sign-ups require manual admin approval before chat access.
-    user = _auth.create_pending_user(email, name, picture, user_type=user_type)
-    session_token = create_session_token(user["user_id"], email)
-
-    # Email user: sign-up received
-    send_email(
-        email,
-        "Unchained \u2014 Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>\u2014 The Unchained Team</p>",
-    )
-
-    # Email admin(s): new sign-up
-    for admin in ADMIN_EMAILS:
-        send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
-
-    resp = web.json_response({
-        "pending": True,
-        "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
-    })
-    # Set session cookie so /auth/me can identify pending users
-    _set_session_cookie(resp, session_token, request)
-    _track_event(
-        request,
-        "signup_created",
-        user_id=user["user_id"],
-        user_type=user_type,
-        source=source,
-        meta={"source": source, "status": "pending"},
-        status_code=200,
-    )
-    _track_event(
-        request,
-        "auth_google_pending",
-        user_id=user["user_id"],
-        user_type=user_type,
-        source=source,
-        meta={"source": source, "status": "pending", "new_user": True},
-        status_code=200,
-    )
-    return resp
-
-
-async def handle_request_claude_access(request: web.Request) -> web.Response:
-    """POST /auth/request-claude-access — request full Claude access for pending account."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    email = str(auth_info.get("email", "")).strip().lower()
-    if not email:
-        return web.json_response({"error": "Missing account email"}, status=400)
-
-    user = _auth.find_user_by_email(email)
-    if not user:
-        return web.json_response({"error": "User not found"}, status=404)
-
-    status = user.get("status", "approved")
-    user_type = user.get("user_type", "claude")
-    if status == "approved":
-        return web.json_response({
-            "ok": True,
-            "status": "approved",
-            "user_type": user_type,
-            "claude_access_requested": user_type == "claude",
-            "already_approved": True,
-        })
-    if status == "rejected":
-        return web.json_response(
-            {"error": "Your sign-up request was not approved."},
-            status=403,
-        )
-
-    already_requested = user_type == "claude"
-    if not already_requested:
-        with _auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET user_type = 'claude', last_login_at = ? "
-                "WHERE email = ? AND status = 'pending'",
-                (time.time(), email),
-            )
-
-        send_email(
-            email,
-            "Unchained — Claude access request received",
-            f"<p>Hi {user.get('name') or email},</p>"
-            "<p>We received your request for full Claude access.</p>"
-            "<p>Your account is still pending review. You can continue using Trial while you wait.</p>"
-            "<p>— The Unchained Team</p>",
-        )
-        for admin in ADMIN_EMAILS:
-            send_email(
-                admin,
-                f"Claude access request (pending): {email}",
-                f"<p>User requested full Claude access: <b>{user.get('name') or email}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b>.</p>",
-            )
-
-    return web.json_response({
-        "ok": True,
-        "status": "pending",
-        "user_type": "claude",
-        "claude_access_requested": True,
-        "already_requested": already_requested,
-        "message": "Request submitted. You can keep using Trial while your Claude access request is reviewed.",
-    })
-
-
-async def handle_logout(request: web.Request) -> web.Response:
-    """POST /auth/logout — clear session cookie."""
-    resp = web.json_response({"ok": True})
-    _clear_session_cookie(resp, request)
-    return resp
-
-
-async def handle_dev_auth(request: web.Request) -> web.Response:
-    """POST /auth/dev — local dev login (no Google). Only available when GOOGLE_CLIENT_ID is unset."""
-    if GOOGLE_CLIENT_ID:
-        return web.json_response({"error": "Dev auth disabled (Google OAuth configured)"}, status=403)
-
-    body = await request.json()
-    email = body.get("email", "dev@localhost").strip().lower()
-    name = body.get("name", "Dev User")
-
-    user = _auth.get_or_create_user(email, name, "")
-    # Ensure user is approved (auto-approve for dev)
-    with _auth._conn() as conn:
-        conn.execute("UPDATE users SET status = 'approved' WHERE email = ?", (email,))
-
-    user = _auth.find_user_by_email(email)
-    token = create_session_token(user["user_id"], email)
-    agent_id = f"claude-{_key_hash(user['api_key'])}"
-
-    resp = web.json_response({"ok": True, "agent_id": agent_id, "email": email})
-    _set_session_cookie(resp, token, request)
-    return resp
-
-
-async def handle_auth_me(request: web.Request) -> web.Response:
-    """GET /auth/me — return current user info if session is valid."""
-    # First try normal auth (approved users with api_key)
-    auth_info = _authenticate(request)
-    if auth_info is not None:
-        email = auth_info.get("email", "")
-        user = _auth.find_user_by_email(email)
-        status = user.get("status", auth_info.get("status", "approved")) if user else auth_info.get("status", "approved")
-        user_type = user.get("user_type", auth_info.get("user_type", "claude")) if user else auth_info.get("user_type", "claude")
-        openrouter_usage = {}
-        if user and (user_type == "trial" or status == "pending"):
-            openrouter_usage = _openrouter_budget_state_for_user(user["user_id"])
-        return web.json_response({
-            "authenticated": True,
-            "email": email,
-            "agent_id": auth_info.get("agent_id", ""),
-            "user_type": user_type,
-            "status": status,
-            "pending": status == "pending",
-            "review_pending": status == "pending",
-            "claude_access_requested": status == "pending" and user_type == "claude",
-            "demo_prompt_count": _auth.get_demo_count(email) if email else 0,
-            "demo_unlimited": _is_demo_unlimited(user) if user else False,
-            "openrouter_usage": openrouter_usage,
-            "is_admin": email.lower() in ADMIN_EMAILS,
-            "name": user.get("name", "") if user else "",
-            "picture": user.get("picture", "") if user else "",
-        })
-
-    # Check for valid session cookies for pending users (also handles duplicate cookie names).
-    sessions: list[dict] = []
-    for token in _session_cookie_candidates(request):
-        session = verify_session_token(token)
-        if session:
-            sessions.append(session)
-    sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
-    for session in sessions:
-        status = _auth.get_user_status(session["email"])
-        user = _auth.find_user_by_email(session["email"])
-        user_type = user.get("user_type", "claude") if user else "claude"
-        if status == "pending":
-            return web.json_response({
-                "authenticated": False,
-                "pending": True,
-                "status": "pending",
-                "user_type": user_type,
-                "claude_access_requested": user_type == "claude",
-            })
-        if status == "approved":
-            # User was just approved — re-check (they now have an api_key)
-            if user and user.get("api_key"):
-                api_key = user["api_key"]
-                agent_id = f"claude-{_key_hash(api_key)}"
-                return web.json_response({
-                    "authenticated": True,
-                    "email": session["email"],
-                    "agent_id": agent_id,
-                    "user_type": user.get("user_type", "claude"),
-                    "status": "approved",
-                    "pending": False,
-                    "review_pending": False,
-                    "claude_access_requested": False,
-                    "is_admin": session["email"].lower() in ADMIN_EMAILS,
-                    "name": user.get("name", ""),
-                    "picture": user.get("picture", ""),
-                })
-
-    return web.json_response({"authenticated": False}, status=401)
-
-
-def _coerce_analytics_event_payload(raw: dict, request: web.Request) -> tuple[dict | None, str]:
-    if not isinstance(raw, dict):
-        return None, "event payload must be a JSON object"
-    event = str(raw.get("event", "")).strip()
-    if not event:
-        return None, "event required"
-    meta = raw.get("meta")
-    if not isinstance(meta, dict):
-        meta = {}
-    route = str(raw.get("route", "")).strip() or request.path
-    route_intended = str(raw.get("route_intended", "")).strip() or route
-    route_effective = str(raw.get("route_effective", "")).strip() or route
-    source = str(raw.get("source", "web")).strip() or "web"
-    gate_type = str(raw.get("gate_type", meta.get("gate_type", ""))).strip()
-    cta_id = str(raw.get("cta_id", meta.get("cta_id", ""))).strip()
-    error_code = str(raw.get("error_code", meta.get("reason", ""))).strip()
-    try:
-        latency_ms = max(0, int(raw.get("latency_ms", meta.get("latency_ms", 0)) or 0))
-    except Exception:
-        latency_ms = 0
-    return {
-        "event": event,
-        "event_id": str(raw.get("event_id", meta.get("event_id", ""))).strip(),
-        "session_id": str(raw.get("session_id", meta.get("session_id", ""))).strip(),
-        "page_view_id": str(raw.get("page_view_id", meta.get("page_view_id", ""))).strip(),
-        "route": route,
-        "route_intended": route_intended,
-        "route_effective": route_effective,
-        "gate_type": gate_type,
-        "cta_id": cta_id,
-        "error_code": error_code,
-        "source": source,
-        "latency_ms": latency_ms,
-        "meta": meta,
-    }, ""
-
-
-async def handle_analytics_event(request: web.Request) -> web.Response:
-    """POST /web/analytics/event — lightweight unauthenticated client events."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    payload, error = _coerce_analytics_event_payload(body, request)
-    if error:
-        return web.json_response({"error": error}, status=400)
-    _track_event(
-        request,
-        payload["event"],
-        event_id=payload["event_id"],
-        session_id=payload["session_id"],
-        page_view_id=payload["page_view_id"],
-        route=payload["route"],
-        route_intended=payload["route_intended"],
-        route_effective=payload["route_effective"],
-        gate_type=payload["gate_type"],
-        cta_id=payload["cta_id"],
-        error_code=payload["error_code"],
-        source=payload["source"],
-        latency_ms=payload["latency_ms"],
-        meta=payload["meta"],
-        status_code=204,
-        dedupe_ttl_s=0.75,
-    )
-    return web.json_response({"ok": True})
-
-
-async def handle_analytics_events(request: web.Request) -> web.Response:
-    """POST /web/analytics/events — batched lightweight unauthenticated events."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if isinstance(body, list):
-        events = body
-    elif isinstance(body, dict):
-        events = body.get("events", [])
-    else:
-        events = []
-    if not isinstance(events, list):
-        return web.json_response({"error": "events must be an array"}, status=400)
-    if len(events) > 100:
-        return web.json_response({"error": "events length max is 100"}, status=400)
-
-    accepted = 0
-    rejected = 0
-    for raw in events:
-        payload, error = _coerce_analytics_event_payload(raw, request)
-        if error:
-            rejected += 1
-            continue
-        ok = _track_event(
-            request,
-            payload["event"],
-            event_id=payload["event_id"],
-            session_id=payload["session_id"],
-            page_view_id=payload["page_view_id"],
-            route=payload["route"],
-            route_intended=payload["route_intended"],
-            route_effective=payload["route_effective"],
-            gate_type=payload["gate_type"],
-            cta_id=payload["cta_id"],
-            error_code=payload["error_code"],
-            source=payload["source"],
-            latency_ms=payload["latency_ms"],
-            meta=payload["meta"],
-            status_code=204,
-            dedupe_ttl_s=0.75,
-        )
-        if ok:
-            accepted += 1
-    return web.json_response({"ok": True, "received": len(events), "accepted": accepted, "rejected": rejected})
-
-
-def _is_admin(request: web.Request) -> dict | None:
-    """Authenticate and check if user is an admin. Returns auth_info or None."""
-    auth_info = _authenticate(request)
-    if not auth_info:
-        return None
-    email = auth_info.get("email", "")
-    if email not in ADMIN_EMAILS:
-        return None
-    return auth_info
-
-
-async def handle_admin_pending(request: web.Request) -> web.Response:
-    """GET /admin/pending — list all pending sign-up requests."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    pending = _auth.list_pending_users()
-    return web.json_response({"pending": pending})
-
-
-async def handle_admin_approve(request: web.Request) -> web.Response:
-    """POST /admin/approve — approve a pending user."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    body = await request.json()
-    email = body.get("email", "").strip().lower()
-    if not email:
-        return web.json_response({"error": "email required"}, status=400)
-    user = _auth.approve_user(email)
-    if not user:
-        return web.json_response({"error": f"User {email} not found"}, status=404)
-
-    # Notify user of approval
-    send_email(
-        email,
-        "Unchained \u2014 You're in!",
-        f"<p>Hi {user.get('name') or email},</p>"
-        "<p>Your account has been approved! "
-        'Visit <a href="https://api.unchainedsky.com/chat">unchainedsky.com/chat</a> to get started.</p>'
-        "<p>\u2014 The Unchained Team</p>",
-    )
-    return web.json_response({"ok": True, "user": user})
-
-
-async def handle_admin_reject(request: web.Request) -> web.Response:
-    """POST /admin/reject — reject a pending user."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    body = await request.json()
-    email = body.get("email", "").strip().lower()
-    if not email:
-        return web.json_response({"error": "email required"}, status=400)
-    if _auth.reject_user(email):
-        return web.json_response({"ok": True})
-    return web.json_response({"error": f"User {email} not found"}, status=404)
-
-
-async def handle_admin_users(request: web.Request) -> web.Response:
-    """GET /admin/users — list all users with their status."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    users = _auth.list_all_users()
-    return web.json_response({"users": users})
-
-
-async def handle_admin_analytics_funnel(request: web.Request) -> web.Response:
-    """GET /admin/analytics/funnel — login/auth funnel metrics."""
-    if not _is_admin(request):
-        return web.json_response({"error": "Admin access required"}, status=403)
-    raw_days = str(request.query.get("days", "7")).strip() or "7"
-    funnel = str(request.query.get("funnel", "auth_inline_gsi")).strip() or "auth_inline_gsi"
-    try:
-        days = max(1, min(90, int(raw_days)))
-    except ValueError:
-        return web.json_response({"error": "days must be an integer"}, status=400)
-    try:
-        payload = _analytics.funnel_report(funnel=funnel, days=days)
-    except Exception as e:
-        log.warning("[analytics] funnel query failed: %s", e)
-        return web.json_response({"error": "Failed to build funnel"}, status=500)
-    return web.json_response(payload)
-
-
 SETUP_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11465,7 +7407,7 @@ body{
 
 /* === Login === */
 #login{
-  display:flex;flex-direction:column;align-items:center;
+  display:none;flex-direction:column;align-items:center;
   justify-content:center;height:100dvh;padding:24px;gap:16px;
 }
 #login h1{font-size:28px;color:var(--accent);margin-bottom:8px;letter-spacing:1px}
@@ -11820,12 +7762,11 @@ async function handleGoogleCredential(response) {
   try {
     const r = await fetch('/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({credential: response.credential}),
     });
     const data = await r.json();
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     showMain();
   } catch(e) { errEl.textContent = e.message; }
@@ -11833,13 +7774,10 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) { showMain(); return; }
-    if (data.pending || data.status === 'pending') { showPending(); return; }
+    if (data.pending) { showPending(); return; }
   } catch(e) {}
   document.getElementById('login').style.display = 'flex';
 }
@@ -11848,13 +7786,10 @@ async function checkApproval() {
   const msg = document.getElementById('pendingmsg');
   msg.textContent = 'Checking...';
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.authenticated) { showMain(); return; }
-    if (data.pending || data.status === 'pending') { msg.textContent = 'Still under review. Check back soon!'; return; }
+    if (data.pending) { msg.textContent = 'Still under review. Check back soon!'; return; }
     msg.textContent = 'Still under review.';
   } catch(e) { msg.textContent = 'Could not check status.'; }
 }
@@ -12695,10 +8630,7 @@ async function loadUsers() {
 
 async function loadAdminEmail() {
   try {
-    const r = await fetch('/auth/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const r = await fetch('/auth/me');
     const data = await r.json();
     if (data.email) {
       _adminEmail = data.email;
@@ -13440,902 +9372,3 @@ document.addEventListener('keydown',e=>{
 </script>
 </body>
 </html>"""
-
-
-async def handle_setup_page(request: web.Request) -> web.Response:
-    """GET /setup — serve the setup / provisioning UI."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(SETUP_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_admin_page(request: web.Request) -> web.Response:
-    """GET /admin — serve the admin UI."""
-    # Allow the page to load; client-side will hit /admin/users which enforces auth
-    _track_page_view(request)
-    html = inject_google_client_id(ADMIN_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_scheduler_page(request: web.Request) -> web.Response:
-    """GET /scheduler — authenticated scheduler editor UI."""
-    _track_page_view(request)
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        _track_redirect(request, "/app", reason="scheduler_requires_auth")
-        raise web.HTTPFound("/app")
-    if _is_pending_user(auth_info):
-        _track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
-        raise web.HTTPFound("/trial")
-    html = inject_google_client_id(SCHEDULER_HTML, GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
-
-
-async def handle_scheduler_jobs(request: web.Request) -> web.Response:
-    """GET/POST /web/scheduler/jobs — per-user scheduler config."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
-
-    import scheduled_tasks as st
-
-    if request.method == "GET":
-        payload = _scheduler_read_jobs_payload(user_id)
-        try:
-            jobs = st.parse_jobs_payload(payload)
-            preview = _scheduler_preview_rows(user_id, jobs)
-            return web.json_response({"jobs": st.jobs_to_payload(jobs)["jobs"], "preview": preview})
-        except Exception:
-            return web.json_response({"jobs": [], "preview": []})
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
-
-    try:
-        jobs = st.parse_jobs_payload(body)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-    if len(jobs) > 200:
-        return web.json_response({"error": "Too many jobs (max 200)"}, status=400)
-
-    canonical = st.jobs_to_payload(jobs)
-    _scheduler_write_jobs_payload(user_id, canonical)
-    preview = _scheduler_preview_rows(user_id, jobs)
-    return web.json_response({"ok": True, "jobs": canonical["jobs"], "preview": preview})
-
-
-async def handle_scheduler_preview(request: web.Request) -> web.Response:
-    """POST /web/scheduler/preview — preview next run times for job payload."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
-
-    import scheduled_tasks as st
-
-    try:
-        body = await request.json() if request.can_read_body else {}
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if body is None:
-        body = {}
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
-
-    payload = body if isinstance(body.get("jobs"), list) else _scheduler_read_jobs_payload(user_id)
-    try:
-        jobs = st.parse_jobs_payload(payload)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-    preview = _scheduler_preview_rows(user_id, jobs)
-    return web.json_response({"preview": preview, "server_time": int(time.time())})
-
-
-async def handle_scheduler_history(request: web.Request) -> web.Response:
-    """GET /web/scheduler/history — recent persisted run records for one job."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    user_id = auth_info["user_id"]
-    job_id = str(request.query.get("job_id", "") or "").strip()
-    if not job_id:
-        return web.json_response({"error": "job_id required"}, status=400)
-
-    try:
-        limit = int(request.query.get("limit", "20") or "20")
-    except ValueError:
-        return web.json_response({"error": "limit must be an integer"}, status=400)
-    limit = max(1, min(limit, 50))
-
-    import scheduled_tasks as st
-
-    try:
-        jobs = st.parse_jobs_payload(_scheduler_read_jobs_payload(user_id))
-    except Exception:
-        jobs = []
-    if job_id not in {job.id for job in jobs}:
-        return web.json_response({"error": "job not found"}, status=404)
-
-    records = st.load_run_history(_scheduler_state_path(user_id), job_id, limit=limit)
-    return web.json_response({"records": records, "job_id": job_id})
-
-
-# ---------------------------------------------------------------------------
-# AI Provider Provisioning endpoints
-# ---------------------------------------------------------------------------
-
-async def handle_provision_profiles(request: web.Request) -> web.Response:
-    """GET /web/provision/profiles — list Chrome profiles with Google sign-in."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    import signup_agent
-    profiles = signup_agent.list_chrome_profiles()
-
-    # If no local profiles found, try querying through the relay (user's bridge).
-    if not profiles:
-        agent_id = auth_info.get("agent_id", "")
-        if agent_id:
-            relay_host, relay_port = _parse_relay()
-            profiles = await provision_helpers.fetch_relay_profiles(
-                agent_id=agent_id,
-                relay_host=relay_host,
-                relay_port=relay_port,
-                headers=_relay_auth_headers(),
-            )
-
-    return web.json_response({"profiles": profiles})
-
-def _spawn_provider_agent(provider: str, user_id: str, unchained_key: str, provider_key: str) -> str | None:
-    """Spawn provider-specific chat agent and return destination chat URL."""
-    if provider == "gemini":
-        _spawn_gemini_agent(user_id, unchained_key, provider_key)
-        return "/chat-gemini"
-    if provider == "claude-sdk":
-        _spawn_claude_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-claude"
-    if provider == "codex-sdk":
-        _spawn_codex_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-codex"
-    if provider == "codex-cli":
-        # Codex CLI lane is local and does not need provider provisioning.
-        return "/chat-codex?model=codex-cli:gpt-5.1-codex-mini"
-    return None
-
-
-def _terminate_provider_agent(provider: str, key_hash: str):
-    """Terminate a running provider agent process after key revoke."""
-    if provider == "gemini":
-        agent_id = f"gemini-{key_hash}"
-        proc = _gemini_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Gemini agent {agent_id}")
-        fh = _gemini_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _gemini_last_active.pop(agent_id, None)
-        return
-
-    if provider == "codex-sdk":
-        agent_id = f"codexsdk-{key_hash}"
-        proc = _codex_sdk_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Codex SDK agent {agent_id}")
-        fh = _codex_sdk_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _codex_sdk_last_active.pop(agent_id, None)
-        return
-
-    if provider == "claude-sdk":
-        agent_id = f"claudesdk-{key_hash}"
-        proc = _claude_sdk_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Claude SDK agent {agent_id}")
-        fh = _claude_sdk_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _claude_sdk_last_active.pop(agent_id, None)
-        return
-
-    if provider == "codex-cli":
-        agent_id = f"codexcli-{key_hash}"
-        proc = _codex_cli_procs.pop(agent_id, None)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            print(f"[revoke] Killed Codex CLI agent {agent_id}")
-        fh = _codex_cli_log_fhs.pop(agent_id, None)
-        if fh:
-            fh.close()
-        _codex_cli_last_active.pop(agent_id, None)
-async def handle_provision_start(request: web.Request) -> web.Response:
-    """POST /web/provision/start — trigger API key provisioning for a provider."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    # Per-user rate limit
-    user_id = auth_info["user_id"]
-    last = _provision_cooldowns.get(user_id, 0)
-    if time.time() - last < _PROVISION_COOLDOWN_SECS:
-        remaining = int(_PROVISION_COOLDOWN_SECS - (time.time() - last))
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/start",
-            route_intended="/setup",
-            route_effective="/web/provision/start",
-            user_id=user_id,
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="cooldown_active",
-            status_code=429,
-            meta={"remaining_s": remaining},
-        )
-        return web.json_response(
-            {"error": f"Please wait {remaining}s before starting another provision."},
-            status=429,
-        )
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    if not provider:
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/start",
-            route_intended="/setup",
-            route_effective="/web/provision/start",
-            user_id=user_id,
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="provider_required",
-            status_code=400,
-        )
-        return web.json_response({"error": "provider required"}, status=400)
-
-    import signup_agent
-    if provider not in signup_agent.list_providers():
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/start",
-            route_intended="/setup",
-            route_effective="/web/provision/start",
-            user_id=user_id,
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="unknown_provider",
-            status_code=400,
-            meta={"provider": provider},
-        )
-        return web.json_response(
-            {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
-            status=400,
-        )
-
-    profile_path = body.get("profile_path")
-    use_relay = body.get("use_relay", False)
-
-    # Validate profile_path is under the known Chrome user data directory (local mode only;
-    # in relay mode, the bridge validates the path on the user's machine).
-    if profile_path and not use_relay:
-        import signup_agent as _sa
-        chrome_dir = _sa._chrome_user_data_dir()
-        if not chrome_dir:
-            _track_event(
-                request,
-                "provision_fail",
-                route="/web/provision/start",
-                route_intended="/setup",
-                route_effective="/web/provision/start",
-                user_id=user_id,
-                user_type=auth_info.get("user_type", ""),
-                source="web",
-                error_code="chrome_data_dir_missing",
-                status_code=400,
-            )
-            return web.json_response({"error": "Chrome user data directory not found"}, status=400)
-        if not provision_helpers.is_profile_path_within(profile_path, chrome_dir):
-            _track_event(
-                request,
-                "provision_fail",
-                route="/web/provision/start",
-                route_intended="/setup",
-                route_effective="/web/provision/start",
-                user_id=user_id,
-                user_type=auth_info.get("user_type", ""),
-                source="web",
-                error_code="invalid_profile_path",
-                status_code=403,
-            )
-            return web.json_response({"error": "Invalid profile path"}, status=403)
-
-    _track_event(
-        request,
-        "provision_start",
-        route="/web/provision/start",
-        route_intended="/setup",
-        route_effective="/web/provision/start",
-        cta_id=f"provision_{provider}",
-        user_id=user_id,
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"provider": provider, "use_relay": bool(use_relay)},
-    )
-
-    # Record cooldown timestamp
-    _provision_cooldowns[user_id] = time.time()
-
-    if use_relay:
-        agent_id = auth_info.get("agent_id")
-        if not agent_id:
-            return web.json_response({"error": "No agent_id resolved for relay provisioning"}, status=400)
-        relay_host, relay_port = _parse_relay()
-        result = await signup_agent.provision_key(
-            provider_name=provider,
-            agent_id=agent_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            user_id=user_id,
-            store_key=False,
-            profile_path=profile_path or "",
-        )
-    else:
-        result = await signup_agent.provision_key_local(
-            provider_name=provider,
-            user_id=user_id,
-            profile_path=profile_path,
-            store_key=False,
-        )
-
-    resp = {
-        "status": result.status.value,
-        "provider": result.provider,
-        "message": result.message,
-        "duration_ms": result.duration_ms,
-        "has_key": result.api_key is not None,
-    }
-
-    # On fresh success, stash key for user confirmation instead of storing immediately
-    if result.api_key and result.status == signup_agent.ProvisionStatus.SUCCESS:
-        _pending_provision[user_id] = (provider, result.api_key, time.time())
-        key = result.api_key
-        resp["key_preview"] = key[:8] + "..." + key[-4:] if len(key) > 12 else key[:4] + "..."
-
-    # Already-exists: key is already stored, spawn provider agent and link to chat
-    if result.status == signup_agent.ProvisionStatus.ALREADY_EXISTS:
-        existing_key = result.api_key or signup_agent.get_provider_key(user_id, provider)
-        if existing_key:
-            chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], existing_key)
-            if chat_url:
-                resp["chat_url"] = chat_url
-
-    event_name = "provision_fail"
-    if result.status == signup_agent.ProvisionStatus.SUCCESS:
-        event_name = "provision_success"
-    elif result.status == signup_agent.ProvisionStatus.ALREADY_EXISTS:
-        event_name = "provision_success"
-    _track_event(
-        request,
-        event_name,
-        route="/web/provision/start",
-        route_intended="/setup",
-        route_effective="/web/provision/start",
-        cta_id=f"provision_{provider}",
-        user_id=user_id,
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        error_code="" if event_name == "provision_success" else result.status.value,
-        latency_ms=int(result.duration_ms or 0),
-        meta={
-            "provider": provider,
-            "status": result.status.value,
-            "duration_ms": int(result.duration_ms or 0),
-            "use_relay": bool(use_relay),
-            "has_key": bool(result.api_key),
-        },
-    )
-    return web.json_response(resp)
-
-
-async def handle_provision_status(request: web.Request) -> web.Response:
-    """GET /web/provision/status — check which providers have keys."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    import signup_agent
-
-    user_id = auth_info["user_id"]
-    providers = []
-    # codex-cli is local-only and does not require/stash provider keys.
-    # Keep backend compatibility for legacy keys, but hide it from provisioning state.
-    visible_providers = [n for n in signup_agent.list_providers() if n != "codex-cli"]
-    for name in visible_providers:
-        entry = {"name": name, "provisioned": signup_agent.has_provider_key(user_id, name)}
-        if entry["provisioned"]:
-            key = signup_agent.get_provider_key(user_id, name)
-            entry["key_preview"] = key[:10] + "..." if key else ""
-        providers.append(entry)
-
-    return web.json_response({"providers": providers})
-
-
-async def handle_provision_confirm(request: web.Request) -> web.Response:
-    """POST /web/provision/confirm — user confirms storing the provisioned key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    user_id = auth_info["user_id"]
-    pending = _pending_provision.pop(user_id, None)
-    if not pending:
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/confirm",
-            route_intended="/setup",
-            route_effective="/web/provision/confirm",
-            cta_id="provision_confirm",
-            user_id=user_id,
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="no_pending_key",
-            status_code=400,
-        )
-        return web.json_response({"error": "No pending key to confirm (expired or already stored)"}, status=400)
-
-    provider, api_key, ts = pending
-    if time.time() - ts > _PENDING_PROVISION_TTL:
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/confirm",
-            route_intended="/setup",
-            route_effective="/web/provision/confirm",
-            cta_id=f"provision_confirm_{provider}",
-            user_id=user_id,
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="pending_key_expired",
-            status_code=400,
-            meta={"provider": provider},
-        )
-        return web.json_response({"error": "Pending key expired. Please provision again."}, status=400)
-
-    import signup_agent
-    signup_agent.store_provider_key(user_id, provider, api_key)
-    log.info("[provision] User %s confirmed %s key storage", user_id, provider)
-
-    resp = {"status": "success", "provider": provider, "message": f"{provider} key stored."}
-
-    # Spawn provider agent after confirmed storage
-    chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], api_key)
-    if chat_url:
-        resp["chat_url"] = chat_url
-
-    _track_event(
-        request,
-        "provision_confirm",
-        route="/web/provision/confirm",
-        route_intended="/setup",
-        route_effective="/web/provision/confirm",
-        cta_id=f"provision_confirm_{provider}",
-        user_id=user_id,
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"provider": provider},
-    )
-    return web.json_response(resp)
-
-
-async def handle_provision_save_manual(request: web.Request) -> web.Response:
-    """POST /web/provision/save-manual — store a manually pasted API key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    api_key = body.get("api_key", "").strip()
-    if not provider or not api_key:
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/save-manual",
-            route_intended="/setup",
-            route_effective="/web/provision/save-manual",
-            cta_id="provision_manual_save",
-            user_id=auth_info.get("user_id", ""),
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="provider_or_key_missing",
-            status_code=400,
-        )
-        return web.json_response({"error": "provider and api_key required"}, status=400)
-    key_error = provision_helpers.validate_manual_api_key(api_key)
-    if key_error:
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/save-manual",
-            route_intended="/setup",
-            route_effective="/web/provision/save-manual",
-            cta_id=f"provision_manual_{provider}",
-            user_id=auth_info.get("user_id", ""),
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="manual_key_invalid",
-            status_code=400,
-            meta={"provider": provider},
-        )
-        return web.json_response({"error": key_error}, status=400)
-
-    import signup_agent
-    if provider not in signup_agent.list_providers():
-        _track_event(
-            request,
-            "provision_fail",
-            route="/web/provision/save-manual",
-            route_intended="/setup",
-            route_effective="/web/provision/save-manual",
-            cta_id=f"provision_manual_{provider}",
-            user_id=auth_info.get("user_id", ""),
-            user_type=auth_info.get("user_type", ""),
-            source="web",
-            error_code="unknown_provider",
-            status_code=400,
-            meta={"provider": provider},
-        )
-        return web.json_response(
-            {"error": f"Unknown provider: {provider}. Available: {signup_agent.list_providers()}"},
-            status=400,
-        )
-
-    user_id = auth_info["user_id"]
-    signup_agent.store_provider_key(user_id, provider, api_key)
-    log.info("[provision] User %s manually saved %s key", user_id, provider)
-
-    resp = {"status": "success", "provider": provider, "message": f"{provider} key saved."}
-    chat_url = _spawn_provider_agent(provider, user_id, auth_info["key"], api_key)
-    if chat_url:
-        resp["chat_url"] = chat_url
-
-    _track_event(
-        request,
-        "provision_manual_save",
-        route="/web/provision/save-manual",
-        route_intended="/setup",
-        route_effective="/web/provision/save-manual",
-        cta_id=f"provision_manual_{provider}",
-        user_id=user_id,
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"provider": provider},
-    )
-    return web.json_response(resp)
-
-
-async def handle_provision_revoke(request: web.Request) -> web.Response:
-    """POST /web/provision/revoke — revoke a provisioned key."""
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-    if _is_pending_user(auth_info):
-        return _pending_limited_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    provider = body.get("provider", "").strip().lower()
-    if not provider:
-        return web.json_response({"error": "provider required"}, status=400)
-
-    import signup_agent
-
-    user_id = auth_info["user_id"]
-    revoked = signup_agent.revoke_provider_key(user_id, provider)
-
-    _terminate_provider_agent(provider, auth_info["key_hash"])
-
-    _track_event(
-        request,
-        "provision_revoke",
-        route="/web/provision/revoke",
-        route_intended="/setup",
-        route_effective="/web/provision/revoke",
-        cta_id=f"provision_revoke_{provider}",
-        user_id=user_id,
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        status_code=200,
-        meta={"provider": provider, "revoked": bool(revoked)},
-    )
-
-    return web.json_response({
-        "revoked": revoked,
-        "provider": provider,
-    })
-
-
-# ---------------------------------------------------------------------------
-# /web/cmd — Direct CDP command dispatch
-# ---------------------------------------------------------------------------
-
-async def handle_cmd(request: web.Request) -> web.Response:
-    auth_info = _authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    req_id = _request_id(request)
-    action = body.get("action")
-    agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
-    tab_id = body.get("tab_id", "auto")
-    _trace(
-        "cmd.in",
-        req_id=req_id,
-        user_id=auth_info.get("user_id", ""),
-        agent_id=agent_id,
-        action=action or "-",
-        tab_id=tab_id,
-    )
-
-    if not action or not agent_id:
-        return web.json_response(
-            {"error": "action and agent_id required"}, status=400,
-        )
-
-    relay_host, relay_port = _parse_relay()
-
-    import cloud_tools
-
-    try:
-        payload = await run_cmd_action(
-            action=action,
-            body=body,
-            agent_id=agent_id,
-            tab_id=tab_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            cloud_tools=cloud_tools,
-        )
-        _trace("cmd.ok", req_id=req_id, action=action, agent_id=agent_id, tab_id=tab_id)
-        return web.json_response(payload)
-
-    except UnknownCmdActionError:
-        _trace("cmd.unknown", req_id=req_id, action=action or "-", agent_id=agent_id)
-        return web.json_response(
-            {"error": f"Unknown action: {action}"}, status=400,
-        )
-
-    except CmdInputError as e:
-        return web.json_response({"error": str(e)}, status=400)
-
-    except Exception as e:
-        if is_chrome_unavailable_error(e):
-            _trace("cmd.chrome_unavailable", req_id=req_id, action=action or "-", agent_id=agent_id)
-            return web.json_response(
-                {"error": "Chrome is not open. Please click Chrome in your dock or re-run start.sh."},
-                status=502,
-            )
-        _trace("cmd.error", req_id=req_id, action=action or "-", agent_id=agent_id, error=str(e)[:160])
-        return web.json_response({"error": str(e)}, status=500)
-
-
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
-
-_ROUTES: list[tuple[str, str, object]] = [
-    ("GET", "/favicon.svg", handle_favicon),
-    ("GET", "/", handle_index),
-    ("GET", "/test", handle_test),
-    ("POST", "/auth/google", handle_google_auth),
-    ("POST", "/auth/request-claude-access", handle_request_claude_access),
-    ("POST", "/auth/logout", handle_logout),
-    ("GET", "/auth/me", handle_auth_me),
-    ("POST", "/web/analytics/event", handle_analytics_event),
-    ("POST", "/web/analytics/events", handle_analytics_events),
-    ("POST", "/web/cmd", handle_cmd),
-    ("GET", "/setup", handle_setup_page),
-    ("GET", "/scheduler", handle_scheduler_page),
-    ("GET", "/web/scheduler/jobs", handle_scheduler_jobs),
-    ("POST", "/web/scheduler/jobs", handle_scheduler_jobs),
-    ("GET", "/web/scheduler/history", handle_scheduler_history),
-    ("POST", "/web/scheduler/preview", handle_scheduler_preview),
-    ("GET", "/admin", handle_admin_page),
-    ("GET", "/admin/users", handle_admin_users),
-    ("GET", "/admin/analytics/funnel", handle_admin_analytics_funnel),
-    ("GET", "/admin/pending", handle_admin_pending),
-    ("POST", "/admin/approve", handle_admin_approve),
-    ("POST", "/admin/reject", handle_admin_reject),
-    ("GET", "/chat", handle_chat_redirect),
-    ("GET", "/trial", handle_trial_page),
-    ("GET", "/chat-gemini", handle_chat_gemini_page),
-    ("GET", "/chat-codex", handle_chat_codex_page),
-    ("GET", "/chat-claude", handle_chat_claude_page),
-    ("GET", "/first-look", handle_first_look_page),
-    ("GET", "/demo", handle_demo_page),
-    ("GET", "/case-study/zillow-rental", handle_case_study_zillow),
-    ("GET", "/local", handle_local_page),
-    ("GET", "/install", handle_install_page),
-    ("GET", "/app", handle_claude_page),
-    ("GET", "/chat/ws", handle_chat_ws),
-    ("POST", "/web/chat", handle_chat_msg),
-    ("POST", "/web/chat/cancel", handle_chat_cancel),
-    ("GET", "/web/chat/status", handle_chat_status),
-    ("GET", "/web/chat/history", handle_chat_history),
-    ("POST", "/web/chat/new", handle_chat_new),
-    ("GET", "/web/chat/slots", handle_chat_slots),
-    ("POST", "/web/chat/switch", handle_chat_switch),
-    ("GET", "/web/download-agent", handle_download_agent),
-    ("GET", "/web/download-installer", handle_download_installer),
-    ("POST", "/web/install-token", handle_install_token),
-    ("POST", "/web/install/claim/start", handle_install_claim_start),
-    ("POST", "/web/install/claim/poll", handle_install_claim_poll),
-    ("POST", "/web/install/claim/approve", handle_install_claim_approve),
-    ("POST", "/web/install/bootstrap", handle_install_bootstrap),
-    ("GET", "/install/script", handle_install_script),
-    ("GET", "/install/windows/script", handle_install_script_windows),
-    ("GET", "/install/{token}", handle_install_script),
-    ("GET", "/install/windows/{token}", handle_install_script_windows),
-    ("GET", "/install/claim/{claim_id}", handle_install_claim_page),
-    ("GET", "/trial/connector", handle_trial_connector),
-    ("POST", "/trial/token", handle_trial_token),
-    ("GET", "/trial/script", handle_trial_script),
-    ("GET", "/trial/{token}", handle_trial_script),
-    ("GET", "/web/agent/version", handle_agent_version),
-    ("GET", "/web/agent/files", handle_agent_files),
-    ("GET", "/web/provision/profiles", handle_provision_profiles),
-    ("POST", "/web/provision/start", handle_provision_start),
-    ("GET", "/web/provision/status", handle_provision_status),
-    ("POST", "/web/provision/confirm", handle_provision_confirm),
-    ("POST", "/web/provision/save-manual", handle_provision_save_manual),
-    ("POST", "/web/provision/revoke", handle_provision_revoke),
-]
-
-
-def _register_routes(app: web.Application):
-    for method, path, handler in _ROUTES:
-        if method == "GET":
-            app.router.add_get(path, handler)
-        elif method == "POST":
-            app.router.add_post(path, handler)
-        else:
-            raise ValueError(f"Unsupported route method: {method}")
-    if not GOOGLE_CLIENT_ID:
-        app.router.add_post("/auth/dev", handle_dev_auth)
-
-
-async def _on_startup(app_: web.Application):
-    del app_
-    global _stale_tab_task, _gemini_cleanup_task
-    _state.stale_tab_task = asyncio.create_task(_stale_tab_cleanup_loop())
-    _state.gemini_cleanup_task = asyncio.create_task(_cleanup_idle_gemini_agents())
-    _stale_tab_task = _state.stale_tab_task
-    _gemini_cleanup_task = _state.gemini_cleanup_task
-
-
-async def _on_cleanup(app_: web.Application):
-    del app_
-    global _stale_tab_task, _gemini_cleanup_task
-    if _state.stale_tab_task:
-        _state.stale_tab_task.cancel()
-    if _state.gemini_cleanup_task:
-        _state.gemini_cleanup_task.cancel()
-    _state.stale_tab_task = None
-    _state.gemini_cleanup_task = None
-    _stale_tab_task = None
-    _gemini_cleanup_task = None
-    # Close persistent HTTP client for private-core.
-    try:
-        from private_core_client import get_private_core_client
-        await get_private_core_client().close()
-    except Exception:
-        pass
-    # Terminate all Gemini agent subprocesses.
-    for aid, proc in list(_gemini_procs.items()):
-        if proc.poll() is None:
-            proc.terminate()
-            log.info("[gemini] Terminated agent %s on shutdown", aid)
-    for aid, fh in list(_gemini_log_fhs.items()):
-        try:
-            fh.close()
-        except Exception:
-            pass
-    for aid, proc in list(_codex_sdk_procs.items()):
-        if proc.poll() is None:
-            proc.terminate()
-            log.info("[codexsdk] Terminated agent %s on shutdown", aid)
-    for aid, fh in list(_codex_sdk_log_fhs.items()):
-        try:
-            fh.close()
-        except Exception:
-            pass
-    for aid, proc in list(_codex_cli_procs.items()):
-        if proc.poll() is None:
-            proc.terminate()
-            log.info("[codexcli] Terminated agent %s on shutdown", aid)
-    for aid, fh in list(_codex_cli_log_fhs.items()):
-        try:
-            fh.close()
-        except Exception:
-            pass
-    for aid, proc in list(_claude_sdk_procs.items()):
-        if proc.poll() is None:
-            proc.terminate()
-            log.info("[claudesdk] Terminated agent %s on shutdown", aid)
-    for aid, fh in list(_claude_sdk_log_fhs.items()):
-        try:
-            fh.close()
-        except Exception:
-            pass
-
-
-def create_app() -> web.Application:
-    app = web.Application()
-    _register_routes(app)
-    app.on_startup.append(_on_startup)
-    app.on_cleanup.append(_on_cleanup)
-    return app
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Unchained Web UI")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8080)
-    args = parser.parse_args()
-
-    app = create_app()
-
-    print(f"Web UI listening on {args.host}:{args.port}")
-    web.run_app(app, host=args.host, port=args.port, print=None)
-
-
-if __name__ == "__main__":
-    main()
