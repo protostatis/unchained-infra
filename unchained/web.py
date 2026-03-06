@@ -112,7 +112,7 @@ if not TRIAL_AGENT_ID:
 _DEMO_PROMPT_LIMIT = 4
 _FIRST_LOOK_GUEST_PROMPT_LIMIT = max(
     1,
-    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "1")),
+    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "2")),
 )
 _FIRST_LOOK_GUEST_COOKIE_MAX_AGE = 60 * 24 * 3600
 _FIRST_LOOK_GUEST_ID_COOKIE = "uc_fl_guest"
@@ -6213,10 +6213,10 @@ body{
   flex:1;min-height:0;display:flex;overflow:hidden;
 }
 #chat-pane{
-  flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;
 }
 #live-pane{
-  width:min(46vw,560px);min-width:340px;
+  flex:2 1 0;min-width:420px;width:auto;
   border-left:1px solid #2a2a2a;background:#111;
   display:flex;flex-direction:column;min-height:0;
 }
@@ -6259,7 +6259,7 @@ body{
 }
 
 @media (max-width: 1100px) {
-  #live-pane{width:min(42vw,460px);min-width:300px}
+  #live-pane{min-width:320px}
 }
 @media (max-width: 900px) {
   #workspace{flex-direction:column}
@@ -6463,7 +6463,7 @@ body{
 <div id="quota-modal">
   <div class="quota-box">
     <h2>First look limit reached</h2>
-    <p class="quota-sub">You've used your free first look interaction. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
     <div class="quota-grid">
       <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
       <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
