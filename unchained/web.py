@@ -9876,6 +9876,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             return web.json_response({"error": "Not authenticated"}, status=401)
         auth_info, guest_id, guest_quota_count = _first_look_guest_auth(request)
         guest_mode = True
+    if guest_mode and not HEADLESS_AGENT_ID:
+        err = web.json_response({"error": "headless_bridge_not_configured"}, status=503)
+        _attach_first_look_guest_cookies(err, request, guest_id, quota_count=guest_quota_count)
+        return err
 
     req_id = _request_id(request)
     message = body.get("message", "").strip()
@@ -10288,15 +10292,20 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             return web.json_response({"error": "Not authenticated"}, status=401)
         guest_auth, guest_id, _ = _first_look_guest_auth(request)
         gws = _chat_agents.get(TRIAL_AGENT_ID)
-        connected = bool(TRIAL_AGENT_ID) and gws is not None and not gws.closed
+        chat_connected = bool(TRIAL_AGENT_ID) and gws is not None and not gws.closed
+        bridge_connected = False
+        if HEADLESS_AGENT_ID:
+            bridge_connected = await _check_relay_agent(HEADLESS_AGENT_ID)
+        connected = chat_connected and bridge_connected
         guest_resp = web.json_response(
             {
                 "connected": connected,
                 "agent_id": guest_auth.get("agent_id", ""),
-                "chat_connected": connected,
+                "chat_connected": chat_connected,
                 "chat_agent_id": TRIAL_AGENT_ID or "",
-                "bridge_connected": connected,
-                "bridge_agent_id": TRIAL_AGENT_ID or "",
+                "bridge_connected": bridge_connected,
+                "bridge_agent_id": HEADLESS_AGENT_ID or "",
+                "bridge_configured": bool(HEADLESS_AGENT_ID),
                 "guest": True,
             },
         )
