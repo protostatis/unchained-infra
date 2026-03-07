@@ -50,6 +50,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/"),
+            ("GET", "/mcp-guide"),
             ("GET", "/test"),
             ("GET", "/privacy"),
             ("GET", "/privacy-policy"),
