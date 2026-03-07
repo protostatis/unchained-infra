@@ -98,29 +98,6 @@ Then call tools with your `agent_id`, for example:
 - `js_eval` with `expression=document.title`
 - `ddm` with `flags=--text --find Slickdeals`
 
-## DDM-First Methodology
-
-Every browsing task follows this pipeline:
-
-1. Step 1: ORIENT — `navigate` and `click` already return DDM page layout in
-   their output. Read that. Do not call `ddm` separately after them. Only call
-   `ddm` separately after `type`, or for `--text`, `--at x,y`, `--find`, `--js`.
-2. Step 2: IDENTIFY — `ddm --at x,y` on targets from Step 1. It returns href,
-   class, text, and aria attributes for elements you want to interact with.
-3. Step 3: CLASSIFY — `intel --probe` on unknown SPAs. This fingerprints the
-   page and ranks extraction strategies. It reveals framework, data stores, and
-   shadow DOM.
-4. Step 4: ACT — Use coordinates from DDM to click, or navigate to URLs from
-   `--at`. For SPA widgets, use `js` with `.click()` on the element.
-5. Step 5: VERIFY — After `navigate` or `click`, check the `"=== Page Layout ==="`
-   section in their output. After `type` or other actions, run `ddm` to verify.
-6. Step 6: EXTRACT — Choose method based on page type:
-   - Simple text: `ddm --text --max 5000`
-   - Shadow DOM: `intel --extract` with `host_attrs`
-   - SPA with data store: `intel --stores` -> `intel --find-paths` -> `js`
-   - Structured data: `js` with `querySelectorAll`
-   - data-testid rich pages: `intel --extract` with `data_testid`
-
 ## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
 
 Use this subsection in your agent instruction file so tool behavior stays
@@ -131,10 +108,26 @@ consistent:
 
 - MCP endpoint: `https://api.unchainedsky.com/mcp`
 - Always include `agent_id` in tool calls.
-- On every new page, run `ddm` first for orientation.
-- On unknown SPAs, run `intel_probe` before extraction.
+
+#### DDM-First Methodology
+
+Every browsing task follows this pipeline:
+
+1. Step 1: ORIENT — `navigate` and `click` already return DDM page layout in their output. Read that. Do not call `ddm` separately after them. Only call `ddm` separately after `type`, or for `--text`, `--at x,y`, `--find`, `--js`.
+2. Step 2: IDENTIFY — `ddm --at x,y` on targets from Step 1. It returns href, class, text, and aria attributes for elements you want to interact with.
+3. Step 3: CLASSIFY — `intel --probe` on unknown SPAs. This fingerprints the page and ranks extraction strategies. It reveals framework, data stores, and shadow DOM.
+4. Step 4: ACT — Use coordinates from DDM to click, or navigate to URLs from `--at`. For SPA widgets, use `js` with `.click()` on the element.
+5. Step 5: VERIFY — After `navigate` or `click`, check the `"=== Page Layout ==="` section in their output. After `type` or other actions, run `ddm` to verify.
+6. Step 6: EXTRACT — Choose method based on page type:
+   - Simple text: `ddm --text --max 5000`
+   - Shadow DOM: `intel --extract` with `host_attrs`
+   - SPA with data store: `intel --stores` -> `intel --find-paths` -> `js`
+   - Structured data: `js` with `querySelectorAll`
+   - data-testid rich pages: `intel --extract` with `data_testid`
+
+#### Guardrails
+
 - Use `cdp_navigate`, `cdp_click`, `cdp_type` for actions.
-- After `cdp_navigate`/`cdp_click`, use returned layout first; call `ddm` again only if needed.
 - Use `js_eval` for deterministic reads (title, URLs, structured DOM data).
 - Use `cdp_screenshot` only for visual-only states (CAPTCHA, image verification).
 - If you get `Agent ... not connected`, stop and ask user to start/restart the local bridge.
