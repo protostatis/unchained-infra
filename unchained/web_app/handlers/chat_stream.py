@@ -193,18 +193,34 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
 async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     """POST /web/chat — phone sends message, gets SSE stream back."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json body"}, status=400)
 
-    body = await request.json()
+    auth_info = core._authenticate(request)
+    guest_mode = False
+    guest_id = ""
+    guest_quota_count = 0
+    guest_quota_increment = False
+    if auth_info is None:
+        wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
+        if not wants_guest_first_look:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, guest_quota_count = core._first_look_guest_auth(request)
+        guest_mode = True
+    if guest_mode and not core.HEADLESS_AGENT_ID:
+        err = web.json_response({"error": "headless_bridge_not_configured"}, status=503)
+        core._attach_first_look_guest_cookies(err, request, guest_id, quota_count=guest_quota_count)
+        return err
+
     req_id = core._request_id(request)
     message = body.get("message", "").strip()
     agent_id = auth_info.get("agent_id")
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
+    if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     core._trace(
         "chat.msg.in",
@@ -225,6 +241,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = core._is_codex_sdk_model(model)
     is_codex_cli = core._is_codex_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
+    if guest_mode and not is_openrouter:
+        return web.json_response(
+            {"error": "guest_mode_requires_openrouter_model"},
+            status=400,
+        )
     if core._is_pending_user(auth_info) and not is_openrouter:
         return core._pending_limited_response()
     openrouter_forced_model = ""
@@ -374,21 +395,38 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             )
 
     if body.get("headless", False):
-        email = auth_info.get("email", "")
-        if email:
-            user = core._auth.find_user_by_email(email)
-            if not core._is_demo_unlimited(user):
-                count = core._auth.get_demo_count(email)
-                if count >= core._DEMO_PROMPT_LIMIT:
-                    return web.json_response(
-                        {
-                            "error": "demo_quota_exceeded",
-                            "demo_prompt_count": count,
-                            "demo_prompt_limit": core._DEMO_PROMPT_LIMIT,
-                        },
-                        status=429,
-                    )
-                core._auth.increment_demo_count(email)
+        if guest_mode:
+            if guest_quota_count >= core._FIRST_LOOK_GUEST_PROMPT_LIMIT:
+                quota_resp = web.json_response(
+                    {
+                        "error": "demo_quota_exceeded",
+                        "demo_prompt_count": guest_quota_count,
+                        "demo_prompt_limit": core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+                    },
+                    status=429,
+                )
+                core._attach_first_look_guest_cookies(
+                    quota_resp, request, guest_id, quota_count=guest_quota_count,
+                )
+                return quota_resp
+            guest_quota_count += 1
+            guest_quota_increment = True
+        else:
+            email = auth_info.get("email", "")
+            if email:
+                user = core._auth.find_user_by_email(email)
+                if not core._is_demo_unlimited(user):
+                    count = core._auth.get_demo_count(email)
+                    if count >= core._DEMO_PROMPT_LIMIT:
+                        return web.json_response(
+                            {
+                                "error": "demo_quota_exceeded",
+                                "demo_prompt_count": count,
+                                "demo_prompt_limit": core._DEMO_PROMPT_LIMIT,
+                            },
+                            status=429,
+                        )
+                    core._auth.increment_demo_count(email)
 
     email = auth_info.get("email", "")
     if email:
@@ -492,6 +530,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "X-Accel-Buffering": "no",
         },
     )
+    if guest_mode:
+        core._attach_first_look_guest_cookies(
+            resp,
+            request,
+            guest_id,
+            quota_count=guest_quota_count if guest_quota_increment else None,
+        )
     await resp.prepare(request)
     if openrouter_forced_model:
         forced_evt = {
@@ -549,19 +594,37 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 async def handle_chat_cancel(request: web.Request) -> web.Response:
     """POST /web/chat/cancel — cancel an active chat session."""
     core = _core()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     auth_info = core._authenticate(request)
+    guest_mode = False
+    guest_id = ""
     if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    body = await request.json()
+        if not bool(body.get("first_look_guest")):
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = core._first_look_guest_auth(request)
+        guest_mode = True
     session_id = body.get("session_id", "")
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
 
     agent_id = auth_info.get("agent_id", "")
-    routing_agent_id = core._session_agents.get(session_id, agent_id)
+    if guest_mode and not session_id.startswith(f"s-{agent_id}-"):
+        denied = web.json_response({"error": "session_id not owned by guest"}, status=403)
+        core._attach_first_look_guest_cookies(denied, request, guest_id)
+        return denied
+    default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
+    routing_agent_id = core._session_agents.get(session_id, default_agent)
     ws = core._chat_agents.get(routing_agent_id)
     if ws and not ws.closed:
         await ws.send_json({"type": "cancel", "session_id": session_id})
-        return web.json_response({"ok": True})
-    return web.json_response({"error": "Agent not connected"}, status=503)
+        ok = web.json_response({"ok": True})
+        if guest_mode:
+            core._attach_first_look_guest_cookies(ok, request, guest_id)
+        return ok
+    err = web.json_response({"error": "Agent not connected"}, status=503)
+    if guest_mode:
+        core._attach_first_look_guest_cookies(err, request, guest_id)
+    return err

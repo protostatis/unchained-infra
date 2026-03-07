@@ -85,7 +85,29 @@ async def handle_chat_status(request: web.Request) -> web.Response:
     core = _core()
     auth_info = core._authenticate(request)
     if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+        if request.query.get("first_look_guest") != "1":
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        guest_auth, guest_id, _ = core._first_look_guest_auth(request)
+        gws = core._chat_agents.get(core.TRIAL_AGENT_ID)
+        chat_connected = bool(core.TRIAL_AGENT_ID) and gws is not None and not gws.closed
+        bridge_connected = False
+        if core.HEADLESS_AGENT_ID:
+            bridge_connected = await core._check_relay_agent(core.HEADLESS_AGENT_ID)
+        connected = chat_connected and bridge_connected
+        guest_resp = web.json_response(
+            {
+                "connected": connected,
+                "agent_id": guest_auth.get("agent_id", ""),
+                "chat_connected": chat_connected,
+                "chat_agent_id": core.TRIAL_AGENT_ID or "",
+                "bridge_connected": bridge_connected,
+                "bridge_agent_id": core.HEADLESS_AGENT_ID or "",
+                "bridge_configured": bool(core.HEADLESS_AGENT_ID),
+                "guest": True,
+            },
+        )
+        core._attach_first_look_guest_cookies(guest_resp, request, guest_id)
+        return guest_resp
     bridge_agent_id = auth_info.get("agent_id", "")
     agent_id = bridge_agent_id
     ws = core._chat_agents.get(agent_id)
@@ -220,14 +242,21 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     """GET /web/chat/history — proxy to agent for local chat history."""
     core = _core()
     auth_info = core._authenticate(request)
+    guest_mode = False
+    guest_id = ""
     if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+        if request.query.get("first_look_guest") != "1":
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = core._first_look_guest_auth(request)
+        guest_mode = True
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
+    if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
+    if guest_mode and not core._is_openrouter_model(model):
+        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
 
@@ -237,7 +266,12 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         payload = {"messages": msgs, "trial": True, "session_id": session_id}
         if not found:
             payload["offline"] = True
-        return web.json_response(payload)
+        if guest_mode:
+            payload["guest"] = True
+        history_resp = web.json_response(payload)
+        if guest_mode:
+            core._attach_first_look_guest_cookies(history_resp, request, guest_id)
+        return history_resp
 
     resp = await core._agent_request(
         chat_agent_id, {"type": "get_history", "session_id": requested_session_id}
@@ -255,13 +289,15 @@ async def handle_chat_history(request: web.Request) -> web.Response:
 async def handle_chat_new(request: web.Request) -> web.Response:
     """POST /web/chat/new — proxy to agent to advance to next slot."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
     try:
         body = await request.json()
     except Exception:
         body = {}
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        if not bool(body.get("first_look_guest")):
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, _, _ = core._first_look_guest_auth(request)
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")
