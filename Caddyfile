@@ -28,6 +28,9 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	}
 
 	# MCP server — Mode B users connect here
+	handle /mcp {
+		reverse_proxy mcp:8766
+	}
 	handle /mcp/* {
 		reverse_proxy mcp:8766
 	}
