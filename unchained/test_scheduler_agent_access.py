@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -340,6 +341,19 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["job"]["schedule"], {"daily_at": "10:00"})
         self.assertTrue(data["job"]["use_stable_session"])
         self.assertEqual(data["preview"]["next_run_at"], "2026-03-08T10:00:00Z")
+
+
+class TestCodexCliEnv(unittest.TestCase):
+    def test_unarmed_codex_turn_keeps_api_key_for_update_path(self):
+        source_path = Path(__file__).with_name("chat_agent_cli.py")
+        source = source_path.read_text()
+        start = source.index("async def handle_message_codex(")
+        end = source.index("output_file = os.path.join(", start)
+        snippet = source[start:end]
+
+        self.assertNotIn('env.pop("UNCHAINED_API_KEY", None)', snippet)
+        self.assertIn('env.pop("UNCHAINED_INSTALL_TOKEN", None)', snippet)
+        self.assertIn('env["UNCHAINED_CHAT_SESSION_ID"] = sid', snippet)
 
 
 if __name__ == "__main__":
