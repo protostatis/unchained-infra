@@ -21,6 +21,13 @@ logs/
 unchained/benchmark/results/*.jsonl
 unchained/bench_results_*.json
 
+# Installers / signing artifacts
+unchained/installers/*.pkg
+unchained/installers/*.dmg
+
+# Playwright CLI
+unchained/.playwright-cli/
+
 # Secrets
 .env
 .env.*
