@@ -99,6 +99,17 @@ def _github_oauth_config() -> tuple[str, str, str, str, str]:
     return client_id, client_secret, authorize_url, token_url, api_base
 
 
+def _github_callback_base_url(core, request: web.Request) -> str:
+    """Return deterministic callback base URL for GitHub OAuth."""
+    explicit = os.environ.get("GITHUB_CALLBACK_BASE_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    canonical = str(getattr(core, "_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if canonical:
+        return canonical
+    return str(core._public_base_url(request)).strip().rstrip("/")
+
+
 def _set_facebook_oauth_cookie(
     core,
     response: web.StreamResponse,
@@ -808,7 +819,7 @@ async def handle_github_start(request: web.Request) -> web.Response:
         raise web.HTTPFound(_append_query_params(next_path, auth_error="github_not_configured"))
 
     state = secrets.token_urlsafe(24)
-    redirect_uri = f"{core._public_base_url(request)}/auth/github/callback"
+    redirect_uri = f"{_github_callback_base_url(core, request)}/auth/github/callback"
     oauth_params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -901,7 +912,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
         )
         return _redirect(auth_error="github_exchange_failed")
 
-    redirect_uri = f"{core._public_base_url(request)}/auth/github/callback"
+    redirect_uri = f"{_github_callback_base_url(core, request)}/auth/github/callback"
     token_payload = {}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:

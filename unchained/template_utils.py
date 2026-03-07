@@ -414,14 +414,17 @@ def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     html = template_html.replace("__GOOGLE_CLIENT_ID__", google_client_id)
     facebook_app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
     facebook_app_secret = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
-    facebook_enabled = bool(facebook_app_id and facebook_app_secret)
+    facebook_ui_enabled = os.environ.get("FACEBOOK_LOGIN_UI_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    facebook_enabled = bool(facebook_app_id and facebook_app_secret and facebook_ui_enabled)
     github_client_id = os.environ.get("GITHUB_CLIENT_ID", "").strip()
     github_client_secret = os.environ.get("GITHUB_CLIENT_SECRET", "").strip()
     github_enabled = bool(github_client_id and github_client_secret)
     html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id if facebook_enabled else "")
     if (facebook_enabled or github_enabled) and "data-uc-facebook-login" not in html:
         fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
-            "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id)
+            "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id if facebook_enabled else "")
         ).replace("__UC_GITHUB_CLIENT_ID__", json.dumps(github_client_id if github_enabled else ""))
         html = _inject_before_body(html, fb_snippet)
     if "data-uc-analytics-client" in html:
