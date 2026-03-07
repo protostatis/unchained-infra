@@ -206,6 +206,10 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
         retry_seconds = int(item.get("retry_seconds", item.get("retry_after_seconds", 0)))
         if retry_seconds < 0:
             raise ValueError(f"job {job_id!r} retry_seconds must be >= 0")
+        headless = bool(item.get("headless", False))
+        profile_path = str(item.get("profile_path", "")).strip()
+        if headless and profile_path:
+            raise ValueError(f"job {job_id!r} profile_path is not supported in headless mode")
 
         jobs.append(
             ScheduledJob(
@@ -216,8 +220,8 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
                 model=str(item.get("model", "")),
                 session_id=str(item.get("session_id", "")),
                 use_stable_session=bool(item.get("use_stable_session", item.get("keep_session", False))),
-                headless=bool(item.get("headless", False)),
-                profile_path=str(item.get("profile_path", "")).strip(),
+                headless=headless,
+                profile_path=profile_path,
                 timeout_seconds=timeout_seconds,
                 retry_seconds=retry_seconds,
             )

@@ -206,6 +206,21 @@ class TestScheduledTasks(unittest.TestCase):
         self.assertTrue(rows[0]["is_due"])
         self.assertEqual(rows[0]["id"], "a")
 
+    def test_parse_rejects_headless_profile_path_combo(self):
+        payload = {
+            "jobs": [
+                {
+                    "id": "bad",
+                    "prompt": "p",
+                    "schedule": {"every_seconds": 60},
+                    "headless": True,
+                    "profile_path": "/tmp/chrome/Profile 9",
+                }
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "profile_path is not supported in headless mode"):
+            parse_jobs_payload(payload)
+
     def test_history_append_and_tail_read(self):
         with tempfile.TemporaryDirectory() as td:
             state_path = Path(td) / "sched.state.json"
