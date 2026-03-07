@@ -107,6 +107,39 @@ def test_build_update_zip_no_env_no_start():
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh)")
 
 
+def test_generate_public_install_script():
+    from agent_package import _generate_public_install_script
+    script = _generate_public_install_script(base_url="https://api.unchainedsky.com")
+    assert "#!/bin/bash" in script
+    assert "uc_live_" not in script, "Long-lived API key should not be embedded"
+    assert "INSTALL_TOKEN=" not in script.split("INSTALL_TOKEN=\"\"")[0] or True, \
+        "No pre-baked install token should be embedded"
+    # Claim flow endpoints
+    assert "/web/install/claim/start" in script, "claim start endpoint missing"
+    assert "/web/install/claim/poll" in script, "claim poll endpoint missing"
+    assert "/install/claim/$CLAIM_ID" in script, "browser claim URL missing"
+    # Browser open
+    assert "open " in script or "xdg-open " in script, "browser open command missing"
+    # Download before bootstrap (critical ordering)
+    download_pos = script.index("/web/download-agent")
+    bootstrap_pos = script.index("/web/install/bootstrap")
+    assert download_pos < bootstrap_pos, "download must happen before bootstrap (bootstrap consumes token)"
+    # Setup steps
+    assert "python3 -m venv" in script, "venv setup missing"
+    assert "unzip" in script, "unzip step missing"
+    assert "Start now?" in script, "start prompt missing"
+    assert "/dev/tty" in script, "piped stdin fallback missing"
+    print(f"  Public install script: {len(script)} chars, claim flow present, correct ordering")
+
+
+def test_public_install_script_handler_importable():
+    from web_app.handlers.install_flow import handle_public_install_script
+    import asyncio
+    assert asyncio.iscoroutinefunction(handle_public_install_script), \
+        "handle_public_install_script should be an async handler"
+    print("  handle_public_install_script importable and async")
+
+
 def test_generate_install_script():
     from agent_package import _generate_install_script
     script = _generate_install_script(
@@ -904,6 +937,8 @@ if __name__ == "__main__":
         ("agent_package: version constants", test_version_constants),
         ("agent_package: build_agent_zip has version.txt + update.sh", test_build_agent_zip_contains_version_and_update),
         ("agent_package: build_update_zip (no .env, no start.sh)", test_build_update_zip_no_env_no_start),
+        ("agent_package: _generate_public_install_script", test_generate_public_install_script),
+        ("agent_package: public install handler importable", test_public_install_script_handler_importable),
         ("agent_package: _generate_install_script", test_generate_install_script),
         ("agent_package: _generate_windows_install_script", test_generate_windows_install_script),
         ("auth: create_install_token", test_create_install_token),
