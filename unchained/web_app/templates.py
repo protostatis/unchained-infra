@@ -5015,8 +5015,8 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>Demo limit reached</h2>
-    <p class="quota-sub">You've used your free demo interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>First look limit reached</h2>
+    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
     <div class="quota-grid">
       <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
       <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
@@ -5024,14 +5024,14 @@ body{
       <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on demo</button>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
   </div>
 </div>
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained Demo</h1>
-  <div class="sub">AI browser agent demo &mdash; watch it browse in real time</div>
+  <h1>Unchained First Look</h1>
+  <div class="sub">AI browser agent first look &mdash; watch it browse in real time</div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -5074,7 +5074,7 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -5136,6 +5136,7 @@ let _autoPromptFired = false;
 let _userName = '';
 let _userPicture = '';
 let _livePreviewHasFrame = false;
+let _isAuthenticatedUser = false;
 
 function setLiveStatus(text) {
   const el = document.getElementById('live-status');
@@ -5177,9 +5178,10 @@ async function handleGoogleCredential(response) {
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
-    if (data.pending) { showPending(); return; }
+    if (data.pending || data.status === 'pending') { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
+    _isAuthenticatedUser = true;
     demoPromptCount = data.demo_prompt_count || 0;
     demoUnlimited = !!data.demo_unlimited;
     showMain();
@@ -5188,10 +5190,14 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me');
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       _userName = data.name || '';
@@ -5199,9 +5205,12 @@ async function checkSession() {
       showMain();
       return;
     }
-    if (data.pending) { showPending(); return; }
+    if (data.pending || data.status === 'pending') { showPending(); return; }
   } catch(e) {}
-  document.getElementById('login').style.display = 'flex';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 async function checkApproval() {
@@ -5226,9 +5235,10 @@ async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';
-  document.getElementById('login').style.display = 'flex';
-  document.getElementById('main').style.display = 'none';
-  document.getElementById('pending').style.display = 'none';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 function showPending() {
@@ -5254,11 +5264,11 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedDemoModel || 'google/gemini-3-flash-preview';
+  return _forcedFirstLookModel || 'google/gemini-3-flash-preview';
 }
 
 function _sessionStoreKey() {
-  return 'unchained_session_' + agentId + '_demo';
+  return 'unchained_session_' + agentId + '_first_look';
 }
 
 function _restoreSessionId() {
@@ -5274,7 +5284,7 @@ function _persistSessionId(sid) {
 }
 
 let lastAgentConnected = false;
-let _forcedDemoModel = '';
+let _forcedFirstLookModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
@@ -5286,8 +5296,9 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
-  document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  try { localStorage.setItem('unchained_last_route', '/demo'); } catch(e){}
+  document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
+  resetLivePreview();
+  try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
   checkAgentStatus();
@@ -5297,9 +5308,10 @@ function showMain() {
 
 async function checkAgentStatus() {
   try {
-    const r = await fetch('/web/chat/status');
+    const r = await fetch('/web/chat/status?first_look_guest=1');
     if (r.ok) {
       const data = await r.json();
+      if (data.agent_id) agentId = data.agent_id;
       lastAgentConnected = data.connected;
       updateAgentStatusUI(data.connected);
     }
@@ -5311,6 +5323,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      first_look_guest: '1',
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -5347,8 +5360,12 @@ async function maybeAutoPrompt() {
     if (lastAgentConnected) break;
     await new Promise(r => setTimeout(r, 500));
     try {
-      const r = await fetch('/web/chat/status');
-      if (r.ok) { const d = await r.json(); lastAgentConnected = d.connected; }
+      const r = await fetch('/web/chat/status?first_look_guest=1');
+      if (r.ok) {
+        const d = await r.json();
+        if (d.agent_id) agentId = d.agent_id;
+        lastAgentConnected = d.connected;
+      }
     } catch(e) {}
   }
   if (!lastAgentConnected) return;
@@ -5391,6 +5408,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        first_look_guest: true,
       }),
     });
     if (r.ok) {
@@ -5795,6 +5813,7 @@ async function doSend() {
         session_id: sessionId,
         model: currentModel(),
         headless: true,
+        first_look_guest: true,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -5880,7 +5899,7 @@ async function doSend() {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
             if (evt.model) {
-              _forcedDemoModel = evt.model;
+              _forcedFirstLookModel = evt.model;
             }
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');

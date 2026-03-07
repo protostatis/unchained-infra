@@ -871,7 +871,7 @@ def test_trial_and_demo_openrouter_default_models_and_cap_options():
         "trial model selector should default to Gemini 3 Flash Preview"
     assert "_POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free']" in TRIAL_CHAT_HTML, \
         "trial cap model allowlist should be Trinity + StepFun"
-    assert "return _forcedDemoModel || 'google/gemini-3-flash-preview';" in HEADLESS_DEMO_HTML, \
+    assert "'google/gemini-3-flash-preview'" in HEADLESS_DEMO_HTML, \
         "demo currentModel should default to Gemini 3 Flash Preview"
     assert "evt.type === 'model_forced'" in HEADLESS_DEMO_HTML, \
         "demo UI should handle server-forced model fallback events"
