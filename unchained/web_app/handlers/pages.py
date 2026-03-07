@@ -69,6 +69,83 @@ async def handle_case_study_zillow(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_privacy_page(request: web.Request) -> web.Response:
+    """Serve public privacy policy page (required for OAuth provider submissions)."""
+    core = _core()
+    core._track_page_view(request)
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Privacy Policy | Unchained</title>
+</head>
+<body style="margin:0;padding:32px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e6ecff;line-height:1.6">
+  <main style="max-width:880px;margin:0 auto">
+    <h1 style="margin:0 0 6px;font-size:32px">Privacy Policy</h1>
+    <p style="margin:0 0 20px;color:#a8b3cf">Last updated: March 6, 2026</p>
+    <p>Unchained provides browser automation and chat tooling. This policy describes how we collect, use, and protect information when you use our services.</p>
+    <h2>Information We Collect</h2>
+    <ul>
+      <li>Account information you provide during sign-in (name, email, avatar from Google/Facebook when authorized).</li>
+      <li>Session and usage data needed to operate chat, authentication, and rate limits.</li>
+      <li>Operational logs and analytics events for reliability, abuse prevention, and product improvement.</li>
+    </ul>
+    <h2>How We Use Information</h2>
+    <ul>
+      <li>Authenticate users and secure accounts.</li>
+      <li>Provide and improve product functionality.</li>
+      <li>Detect abuse, enforce limits, and maintain service reliability.</li>
+    </ul>
+    <h2>Data Sharing</h2>
+    <p>We do not sell personal data. We share data only with service providers required to run the platform (for example hosting, email delivery, and model providers), subject to contractual safeguards.</p>
+    <h2>Data Retention</h2>
+    <p>We retain account and operational data for as long as needed to provide the service, meet legal requirements, resolve disputes, and enforce agreements.</p>
+    <h2>Your Rights</h2>
+    <p>You can request account/data deletion via <a href="/data-deletion" style="color:#7dd3fc">/data-deletion</a>.</p>
+    <h2>Contact</h2>
+    <p>Questions about this policy: <a href="mailto:{core.CONTACT_EMAIL}" style="color:#7dd3fc">{core.CONTACT_EMAIL}</a></p>
+  </main>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_data_deletion_page(request: web.Request) -> web.Response:
+    """Serve public user-data deletion instructions page for OAuth compliance."""
+    core = _core()
+    core._track_page_view(request)
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>User Data Deletion | Unchained</title>
+</head>
+<body style="margin:0;padding:32px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e6ecff;line-height:1.6">
+  <main style="max-width:880px;margin:0 auto">
+    <h1 style="margin:0 0 6px;font-size:32px">User Data Deletion</h1>
+    <p style="margin:0 0 20px;color:#a8b3cf">Last updated: March 6, 2026</p>
+    <p>If you want your Unchained account and related personal data deleted, send a request from your account email to:</p>
+    <p><a href="mailto:{core.CONTACT_EMAIL}" style="color:#7dd3fc">{core.CONTACT_EMAIL}</a></p>
+    <h2>What to Include</h2>
+    <ul>
+      <li>Your account email address.</li>
+      <li>Subject line: <code>Data Deletion Request</code>.</li>
+    </ul>
+    <h2>What Happens Next</h2>
+    <ul>
+      <li>We verify account ownership.</li>
+      <li>We delete or anonymize eligible personal data from active systems.</li>
+      <li>We may retain limited records where required for legal/security obligations.</li>
+    </ul>
+    <p>For policy details, see <a href="/privacy" style="color:#7dd3fc">/privacy</a>.</p>
+  </main>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
 async def handle_demo_page(request: web.Request) -> web.Response:
     """Serve the headless demo chat HTML page."""
     core = _core()

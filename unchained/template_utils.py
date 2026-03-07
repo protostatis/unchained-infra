@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+
 
 _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 (function(){
@@ -269,12 +272,109 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 })();
 </script>"""
 
+_FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
+(function(){
+  var APP_ID = __UC_FACEBOOK_APP_ID__;
+  if(!APP_ID) return;
+
+  function inferSource(){
+    var p = window.location.pathname || '';
+    if(p === '/trial' || p === '/first-look' || p === '/demo' || p.indexOf('/trial/') === 0){
+      return 'trial';
+    }
+    return 'claude';
+  }
+
+  function currentNextPath(){
+    return (window.location.pathname || '/local') + (window.location.search || '');
+  }
+
+  function authErrorMessage(code){
+    if(code === 'facebook_email_required') return 'Facebook account email is required. Please share your email to continue.';
+    if(code === 'pending_review') return 'Your sign-up request is still being reviewed.';
+    if(code === 'rejected') return 'Your sign-up request was not approved.';
+    if(code === 'facebook_denied') return 'Facebook sign-in was canceled.';
+    if(code === 'facebook_state_invalid') return 'Facebook sign-in expired. Please try again.';
+    if(code === 'facebook_exchange_failed') return 'Facebook sign-in failed during token exchange.';
+    if(code === 'facebook_profile_failed') return 'Facebook sign-in failed while reading your profile.';
+    if(code === 'facebook_not_configured') return 'Facebook sign-in is not configured yet.';
+    return 'Facebook sign-in failed. Please try again.';
+  }
+
+  function renderQueryError(){
+    var errEl = document.getElementById('loginerr');
+    if(!errEl) return;
+    try{
+      var params = new URLSearchParams(window.location.search || '');
+      var code = String(params.get('auth_error') || '').trim();
+      if(!code) return;
+      errEl.textContent = authErrorMessage(code);
+      params.delete('auth_error');
+      var cleanQs = params.toString();
+      var cleanUrl = window.location.pathname + (cleanQs ? ('?' + cleanQs) : '') + (window.location.hash || '');
+      window.history.replaceState({}, document.title, cleanUrl);
+    }catch(_err){}
+  }
+
+  function insertFacebookButton(){
+    var login = document.getElementById('login');
+    if(!login) return;
+    if(document.getElementById('fb-login-btn')) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'fb-login-btn';
+    btn.textContent = 'Continue with Facebook';
+    btn.style.cssText = 'display:block;width:320px;height:44px;border:none;border-radius:8px;background:#1877f2;color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:10px';
+    btn.addEventListener('click', function(){
+      var source = inferSource();
+      var next = currentNextPath();
+      var url = '/auth/facebook/start?source=' + encodeURIComponent(source) + '&next=' + encodeURIComponent(next);
+      window.location.href = url;
+    });
+
+    var gsi = login.querySelector('.g_id_signin');
+    if(gsi && gsi.parentNode){
+      gsi.insertAdjacentElement('afterend', btn);
+      return;
+    }
+    var loginErr = login.querySelector('#loginerr');
+    if(loginErr && loginErr.parentNode){
+      loginErr.insertAdjacentElement('beforebegin', btn);
+      return;
+    }
+    login.appendChild(btn);
+  }
+
+  function init(){
+    insertFacebookButton();
+    renderQueryError();
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init, {once: true});
+  }else{
+    init();
+  }
+})();
+</script>"""
+
+
+def _inject_before_body(html: str, snippet: str) -> str:
+    if "</body>" in html:
+        return html.replace("</body>", snippet + "\n</body>")
+    return html + snippet
+
 
 def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     """Replace Google client placeholder and inject lightweight analytics client."""
     html = template_html.replace("__GOOGLE_CLIENT_ID__", google_client_id)
+    facebook_app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
+    html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id)
+    if facebook_app_id and "data-uc-facebook-login" not in html:
+        fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
+            "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id)
+        )
+        html = _inject_before_body(html, fb_snippet)
     if "data-uc-analytics-client" in html:
         return html
-    if "</body>" in html:
-        return html.replace("</body>", _ANALYTICS_CLIENT_SNIPPET + "\n</body>")
-    return html + _ANALYTICS_CLIENT_SNIPPET
+    return _inject_before_body(html, _ANALYTICS_CLIENT_SNIPPET)
