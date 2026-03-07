@@ -78,7 +78,7 @@ def _resolve_agent() -> str:
 
 @mcp.tool()
 async def ddm(flags: str = "--llm-2pass --cols 60",
-              tab_id: str = "auto") -> str:
+              tab_id: str = "auto", agent_id: str = "") -> str:
     """DOM Density Map — structural page layout + interactive elements.
 
     Returns ~500 tokens of page understanding. Use this FIRST on every page
@@ -97,7 +97,7 @@ async def ddm(flags: str = "--llm-2pass --cols 60",
 
 
 @mcp.tool()
-async def intel_probe(tab_id: str = "auto") -> str:
+async def intel_probe(tab_id: str = "auto", agent_id: str = "") -> str:
     """Page intelligence probe — DOM fingerprint + Bayesian strategy ranking.
 
     Returns ~100 tokens. Identifies the page framework (Nuxt/Next/React),
@@ -110,7 +110,7 @@ async def intel_probe(tab_id: str = "auto") -> str:
 
 @mcp.tool()
 async def intel_extract(tab_id: str = "auto",
-                        strategy: str = "") -> str:
+                        strategy: str = "", agent_id: str = "") -> str:
     """Extract structured data using auto-selected or forced strategy.
 
     Strategies: innerText, host_attrs, js_global, react_fiber,
@@ -126,7 +126,7 @@ async def intel_extract(tab_id: str = "auto",
 
 
 @mcp.tool()
-async def intel_stores(tab_id: str = "auto") -> str:
+async def intel_stores(tab_id: str = "auto", agent_id: str = "") -> str:
     """List all JavaScript data stores on the page (globals >10KB).
 
     Use on Nuxt/Next/YouTube sites to discover data before extraction.
@@ -138,7 +138,8 @@ async def intel_stores(tab_id: str = "auto") -> str:
 
 @mcp.tool()
 async def intel_shape(global_name: str,
-                      depth: int = 3, tab_id: str = "auto") -> str:
+                      depth: int = 3, tab_id: str = "auto",
+                      agent_id: str = "") -> str:
     """Map the shape of a JavaScript global object.
 
     Args:
@@ -154,7 +155,8 @@ async def intel_shape(global_name: str,
 
 @mcp.tool()
 async def intel_find_paths(global_name: str,
-                           pattern: str, tab_id: str = "auto") -> str:
+                           pattern: str, tab_id: str = "auto",
+                           agent_id: str = "") -> str:
     """Find paths to a key pattern inside a JavaScript global.
 
     Args:
@@ -170,7 +172,7 @@ async def intel_find_paths(global_name: str,
 
 @mcp.tool()
 async def cdp_navigate(url: str,
-                       tab_id: str = "auto") -> str:
+                       tab_id: str = "auto", agent_id: str = "") -> str:
     """Navigate the browser to a URL. Returns page title and final URL."""
     aid = _resolve_agent()
     return await cloud_tools.navigate(aid, tab_id, url)
@@ -178,7 +180,7 @@ async def cdp_navigate(url: str,
 
 @mcp.tool()
 async def cdp_click(x: int, y: int,
-                    tab_id: str = "auto") -> str:
+                    tab_id: str = "auto", agent_id: str = "") -> str:
     """Click at pixel coordinates. Get coordinates from DDM output."""
     aid = _resolve_agent()
     return await cloud_tools.click(aid, tab_id, x, y)
@@ -186,7 +188,7 @@ async def cdp_click(x: int, y: int,
 
 @mcp.tool()
 async def cdp_type(text: str,
-                   tab_id: str = "auto") -> str:
+                   tab_id: str = "auto", agent_id: str = "") -> str:
     """Type text into the currently focused element.
 
     Click on an input field first (using cdp_click) to give it focus,
@@ -198,7 +200,7 @@ async def cdp_type(text: str,
 
 @mcp.tool()
 async def js_eval(expression: str,
-                  tab_id: str = "auto") -> str:
+                  tab_id: str = "auto", agent_id: str = "") -> str:
     """Execute JavaScript on the page and return the result.
 
     Returns: JSON for objects/arrays, raw string for primitives.
@@ -210,7 +212,7 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
-async def cdp_screenshot(tab_id: str = "auto") -> str:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
     """Take a screenshot of the current page.
 
     Returns base64-encoded PNG. Use sparingly (~2100 tokens) — prefer

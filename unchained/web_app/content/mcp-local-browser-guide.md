@@ -48,15 +48,14 @@ cd ~/unchained-agent
 https://api.unchainedsky.com/mcp
 ```
 
-3. Get your connected `agent_id` (from same API key in `~/unchained-agent/.env`):
+3. That's it — `agent_id` is auto-detected from your API key. You can
+   verify connectivity with:
 
 ```bash
 API_KEY="$(grep '^UNCHAINED_API_KEY=' ~/unchained-agent/.env | cut -d= -f2-)"
 curl -sS https://api.unchainedsky.com/api/agents \
   -H "Authorization: Bearer $API_KEY"
 ```
-
-Use the returned `agent_id` in MCP tool calls.
 
 ## Manual Path: Start Bridge from Repo
 
@@ -73,7 +72,8 @@ Expected output includes:
 [agent] authenticated as claude-xxxxxxxx
 ```
 
-Save that `agent_id`.
+The `agent_id` is auto-detected from your API key — you do not need to save or
+pass it to MCP tools.
 
 ## (Optional) Verify Agent Connectivity
 
@@ -92,7 +92,7 @@ Example (Claude Code):
 claude --mcp-server https://api.unchainedsky.com/mcp
 ```
 
-Then call tools with your `agent_id`, for example:
+Then call tools directly — `agent_id` is auto-detected from your API key:
 
 - `cdp_navigate` with `url=https://slickdeals.net`
 - `js_eval` with `expression=document.title`
@@ -107,7 +107,7 @@ consistent:
 ### Unchained MCP Tool Use
 
 - MCP endpoint: `https://api.unchainedsky.com/mcp`
-- Always include `agent_id` in tool calls.
+- `agent_id` is auto-detected from your API key — you do not need to pass it.
 
 #### DDM-First Methodology
 
@@ -144,12 +144,13 @@ python - <<'PY'
 import json, urllib.request
 
 URL = "https://api.unchainedsky.com/mcp"
-AGENT = "claude-xxxxxxxx"
+API_KEY = "uc_live_..."   # your API key
 
 def post(payload, sid=None):
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {API_KEY}",
     }
     if sid:
         headers["mcp-session-id"] = sid
@@ -181,7 +182,7 @@ nav = {
     "method": "tools/call",
     "params": {
         "name": "cdp_navigate",
-        "arguments": {"agent_id": AGENT, "url": "https://example.com"},
+        "arguments": {"url": "https://example.com"},
     },
 }
 status, _, body = post(nav, sid)
