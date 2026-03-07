@@ -431,12 +431,10 @@ fi
 # Activate venv so Claude's Bash tool finds the right python
 source .venv/bin/activate
 
-# Print the agent_id so the user knows it
+# Derive agent_id from API key (same hash as chat_agent_cli.py)
+_DERIVED_AGENT_ID=""
 if [ -n "${UNCHAINED_API_KEY:-}" ]; then
-  AGENT_ID=$(python3 -c "import hashlib; print('claude-' + hashlib.sha256('${UNCHAINED_API_KEY}'.encode()).hexdigest()[:8])")
-  echo ""
-  echo "  Agent ID: $AGENT_ID"
-  echo ""
+  _DERIVED_AGENT_ID=$(python3 -c "import hashlib; print('claude-' + hashlib.sha256('${UNCHAINED_API_KEY}'.encode()).hexdigest()[:8])")
 fi
 
 if $DAEMON; then
@@ -507,6 +505,19 @@ if $DAEMON; then
 
   echo "$DAEMON_PID" > "$PIDFILE"
   echo "Agent started (PID $DAEMON_PID)"
+  if [ -n "$_DERIVED_AGENT_ID" ]; then
+    echo ""
+    echo "  Agent ID:  $_DERIVED_AGENT_ID"
+    echo "  API key:   ${UNCHAINED_API_KEY}"
+    echo ""
+    echo "  Add to Claude Code:"
+    echo "    claude mcp add unchainedsky \\"
+    echo "      https://api.unchainedsky.com/mcp \\"
+    echo "      -t http \\"
+    echo "      -H \"Authorization: Bearer ${UNCHAINED_API_KEY}\""
+    echo ""
+    echo "  Then restart Claude Code for tools to take effect."
+  fi
   echo ""
   echo "  Logs:  tail -f $LOGFILE"
   echo "  Stop:  ./stop.sh"
@@ -1375,9 +1386,23 @@ echo "[3/3] Installing dependencies..."
 chmod +x start.sh
 chmod +x update.sh 2>/dev/null || true
 
+AGENT_ID=$(python3 -c "import hashlib; print('claude-' + hashlib.sha256('$API_KEY'.encode()).hexdigest()[:8])")
+
 echo ""
 echo "=== Installation complete ==="
-echo "Location: $INSTALL_DIR"
+echo ""
+echo "  Location:  $INSTALL_DIR"
+echo "  Agent ID:  $AGENT_ID"
+echo "  API key:   $API_KEY"
+echo ""
+echo "  Add to Claude Code (copy-paste this):"
+echo ""
+echo "    claude mcp add unchainedsky \\\\"
+echo "      https://api.unchainedsky.com/mcp \\\\"
+echo "      -t http \\\\"
+echo "      -H \\"Authorization: Bearer $API_KEY\\""
+echo ""
+echo "  Then restart Claude Code for tools to take effect."
 echo ""
 echo "To start the agent:"
 echo "  cd $INSTALL_DIR"
