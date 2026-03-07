@@ -1494,6 +1494,82 @@ async def handle_admin_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+def _scheduler_api_auth(core, request: web.Request) -> tuple[dict | None, web.Response | None]:
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return None, web.json_response({"error": "Not authenticated"}, status=401)
+    if core._is_pending_user(auth_info):
+        return None, core._pending_limited_response()
+    return auth_info, None
+
+
+async def _scheduler_json_body(request: web.Request) -> tuple[dict | None, web.Response | None]:
+    can_read = getattr(request, "can_read_body", True)
+    try:
+        body = await request.json() if can_read else {}
+    except Exception:
+        return None, web.json_response({"error": "Invalid JSON body"}, status=400)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return None, web.json_response({"error": "Body must be a JSON object"}, status=400)
+    return body, None
+
+
+def _scheduler_read_jobs(core, user_id: str, *, tolerate_invalid: bool = False):
+    import scheduled_tasks as st
+
+    payload = core._scheduler_read_jobs_payload(user_id)
+    try:
+        return st.parse_jobs_payload(payload)
+    except Exception:
+        if tolerate_invalid:
+            return []
+        raise
+
+
+def _scheduler_jobs_response(core, user_id: str, jobs: list, *, write: bool = False, extra: dict | None = None) -> dict:
+    import scheduled_tasks as st
+
+    if len(jobs) > 200:
+        raise ValueError("Too many jobs (max 200)")
+    canonical = st.jobs_to_payload(jobs)
+    if write:
+        core._scheduler_write_jobs_payload(user_id, canonical)
+    data = {
+        "jobs": canonical["jobs"],
+        "preview": core._scheduler_preview_rows(user_id, jobs),
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+
+def _scheduler_parse_single_job(body: dict):
+    import scheduled_tasks as st
+
+    raw_job = body.get("job")
+    if not isinstance(raw_job, dict):
+        raise ValueError("job must be a JSON object")
+    jobs = st.parse_jobs_payload({"jobs": [raw_job]})
+    return jobs[0]
+
+
+def _scheduler_require_turn_grant(core, auth_info: dict, body: dict) -> web.Response | None:
+    session_id = str(body.get("session_id", "") or "").strip()
+    grant_id = str(body.get("scheduler_grant_id", "") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id required"}, status=400)
+    if not grant_id:
+        return web.json_response({"error": "scheduler_grant_id required"}, status=400)
+    if not core._validate_scheduler_turn_grant(auth_info.get("user_id", ""), session_id, grant_id):
+        return web.json_response(
+            {"error": "scheduler trigger not active for this turn"},
+            status=403,
+        )
+    return None
+
+
 async def handle_scheduler_page(request: web.Request) -> web.Response:
     """GET /scheduler — authenticated scheduler editor UI."""
     core = _core()
@@ -1512,61 +1588,45 @@ async def handle_scheduler_page(request: web.Request) -> web.Response:
 async def handle_scheduler_jobs(request: web.Request) -> web.Response:
     """GET/POST /web/scheduler/jobs — per-user scheduler config."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
     user_id = auth_info["user_id"]
 
     import scheduled_tasks as st
 
     if request.method == "GET":
-        payload = core._scheduler_read_jobs_payload(user_id)
         try:
-            jobs = st.parse_jobs_payload(payload)
-            preview = core._scheduler_preview_rows(user_id, jobs)
-            return web.json_response({"jobs": st.jobs_to_payload(jobs)["jobs"], "preview": preview})
+            jobs = _scheduler_read_jobs(core, user_id, tolerate_invalid=True)
+            return web.json_response(_scheduler_jobs_response(core, user_id, jobs))
         except Exception:
             return web.json_response({"jobs": [], "preview": []})
 
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
 
     try:
         jobs = st.parse_jobs_payload(body)
+        payload = _scheduler_jobs_response(core, user_id, jobs, write=True, extra={"ok": True})
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
-
-    if len(jobs) > 200:
-        return web.json_response({"error": "Too many jobs (max 200)"}, status=400)
-
-    canonical = st.jobs_to_payload(jobs)
-    core._scheduler_write_jobs_payload(user_id, canonical)
-    preview = core._scheduler_preview_rows(user_id, jobs)
-    return web.json_response({"ok": True, "jobs": canonical["jobs"], "preview": preview})
+    return web.json_response(payload)
 
 
 async def handle_scheduler_preview(request: web.Request) -> web.Response:
     """POST /web/scheduler/preview — preview next run times for job payload."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
     user_id = auth_info["user_id"]
 
     import scheduled_tasks as st
 
-    try:
-        body = await request.json() if request.can_read_body else {}
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    if body is None:
-        body = {}
-    if not isinstance(body, dict):
-        return web.json_response({"error": "Body must be a JSON object"}, status=400)
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
 
     payload = body if isinstance(body.get("jobs"), list) else core._scheduler_read_jobs_payload(user_id)
     try:
@@ -1581,9 +1641,9 @@ async def handle_scheduler_preview(request: web.Request) -> web.Response:
 async def handle_scheduler_history(request: web.Request) -> web.Response:
     """GET /web/scheduler/history — recent persisted run records for one job."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
     user_id = auth_info["user_id"]
     job_id = str(request.query.get("job_id", "") or "").strip()
     if not job_id:
@@ -1606,3 +1666,130 @@ async def handle_scheduler_history(request: web.Request) -> web.Response:
 
     records = st.load_run_history(core._scheduler_state_path(user_id), job_id, limit=limit)
     return web.json_response({"records": records, "job_id": job_id})
+
+
+async def handle_scheduler_agent_list(request: web.Request) -> web.Response:
+    """POST /web/scheduler/agent/list — list scheduler jobs for the armed turn."""
+    core = _core()
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
+    error = _scheduler_require_turn_grant(core, auth_info, body)
+    if error is not None:
+        return error
+    jobs = _scheduler_read_jobs(core, auth_info["user_id"], tolerate_invalid=True)
+    return web.json_response(_scheduler_jobs_response(core, auth_info["user_id"], jobs, extra={"ok": True}))
+
+
+async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
+    """POST /web/scheduler/agent/preview — preview one candidate job for the armed turn."""
+    core = _core()
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
+    error = _scheduler_require_turn_grant(core, auth_info, body)
+    if error is not None:
+        return error
+    try:
+        job = _scheduler_parse_single_job(body)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+    import scheduled_tasks as st
+
+    canonical_job = st.jobs_to_payload([job])["jobs"][0]
+    preview = core._scheduler_preview_rows(auth_info["user_id"], [job])
+    return web.json_response({"ok": True, "job": canonical_job, "preview": preview[0] if preview else None})
+
+
+async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
+    """POST /web/scheduler/agent/upsert — create or replace one job for the armed turn."""
+    core = _core()
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
+    error = _scheduler_require_turn_grant(core, auth_info, body)
+    if error is not None:
+        return error
+    raw_job = body.get("job")
+    if not isinstance(raw_job, dict):
+        return web.json_response({"error": "job must be a JSON object"}, status=400)
+    try:
+        jobs = _scheduler_read_jobs(core, auth_info["user_id"])
+    except Exception as e:
+        return web.json_response({"error": f"Failed to load current jobs: {e}"}, status=500)
+
+    import scheduled_tasks as st
+
+    job = None
+    created = True
+    canonical_jobs = st.jobs_to_payload(jobs)["jobs"]
+    for idx, existing in enumerate(jobs):
+        if existing.id == str(raw_job.get("id", "") or "").strip():
+            merged_job = dict(canonical_jobs[idx])
+            merged_job.update(raw_job)
+            if isinstance(raw_job.get("schedule"), dict):
+                merged_job["schedule"] = raw_job["schedule"]
+            try:
+                job = st.parse_jobs_payload({"jobs": [merged_job]})[0]
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            jobs[idx] = job
+            created = False
+            break
+    else:
+        try:
+            job = _scheduler_parse_single_job(body)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        jobs.append(job)
+
+    try:
+        payload = _scheduler_jobs_response(core, auth_info["user_id"], jobs, write=True, extra={"ok": True, "created": created})
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    payload["job"] = next((item for item in payload["jobs"] if item.get("id") == job.id), None)
+    return web.json_response(payload)
+
+
+async def handle_scheduler_agent_delete(request: web.Request) -> web.Response:
+    """POST /web/scheduler/agent/delete — delete one job for the armed turn."""
+    core = _core()
+    auth_info, error = _scheduler_api_auth(core, request)
+    if error is not None:
+        return error
+    body, error = await _scheduler_json_body(request)
+    if error is not None:
+        return error
+    error = _scheduler_require_turn_grant(core, auth_info, body)
+    if error is not None:
+        return error
+    job_id = str(body.get("job_id", "") or "").strip()
+    if not job_id:
+        return web.json_response({"error": "job_id required"}, status=400)
+    try:
+        jobs = _scheduler_read_jobs(core, auth_info["user_id"])
+    except Exception as e:
+        return web.json_response({"error": f"Failed to load current jobs: {e}"}, status=500)
+
+    remaining = [job for job in jobs if job.id != job_id]
+    if len(remaining) == len(jobs):
+        return web.json_response({"error": "job not found"}, status=404)
+
+    payload = _scheduler_jobs_response(
+        core,
+        auth_info["user_id"],
+        remaining,
+        write=True,
+        extra={"ok": True, "deleted_id": job_id},
+    )
+    return web.json_response(payload)

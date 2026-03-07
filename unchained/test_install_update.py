@@ -62,6 +62,7 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/web/agent/files" in update_ps1
         # start.sh still there
         assert "unchained-agent/start.sh" in names
+        assert "unchained-agent/unchained/scheduler_tool.py" in names
         start_sh = zf.read("unchained-agent/start.sh").decode()
         assert "/web/install/claim/start" in start_sh
         assert "/web/install/claim/poll" in start_sh
@@ -98,6 +99,7 @@ def test_build_update_zip_no_env_no_start():
         assert "unchained-agent/update.sh" in names
         assert "unchained-agent/update.ps1" in names
         assert "unchained-agent/unchained/cdp_tool.py" in names
+        assert "unchained-agent/unchained/scheduler_tool.py" in names
         # Should NOT have .env or start.sh
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
         assert "unchained-agent/start.sh" not in names, "start.sh should not be in update ZIP"
@@ -922,8 +924,9 @@ def test_cli_agent_forwards_model_from_ws():
     with open(source_path) as f:
         source = f.read()
     assert 'msg.get("model"' in source, "main loop should extract model from WS message"
-    assert "handle_message(ws, sid, user_text, msg_model" in source, \
-        "main loop should pass model to handle_message"
+    assert "msg.get(\"scheduler_armed\")" in source, "main loop should read scheduler arming from WS message"
+    assert "scheduler_armed=msg_scheduler_armed" in source, \
+        "main loop should pass scheduler arming to handle_message"
     print(f"  CLI agent main loop forwards model from WS message")
 
 

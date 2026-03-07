@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.26"
+VERSION = "0.3.27"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -23,6 +23,7 @@ _PACKAGE_FILES = {
     "unchained/chrome_bridge.py": "chrome_bridge.py",
     "unchained/chat_agent_cli.py": "chat_agent_cli.py",
     "unchained/scheduled_tasks.py": "scheduled_tasks.py",
+    "unchained/scheduler_tool.py": "scheduler_tool.py",
     "scheduled_jobs.json": "scheduled_jobs.example.json",
     "unchained/auth.py": "auth.py",
     "unchained/nudge.py": "nudge.py",
@@ -1777,6 +1778,9 @@ def _patch_chat_agent_cli(source: str) -> str:
     )
     # Use plain python instead of uv run (package has venv activated)
     source = source.replace("uv run python cdp_tool.py", "python cdp_tool.py")
+    source = source.replace("uv run python scheduler_tool.py", "python scheduler_tool.py")
+    source = source.replace("Bash(uv run python cdp_tool.py:*)", "Bash(python cdp_tool.py:*)")
+    source = source.replace("Bash(uv run python scheduler_tool.py:*)", "Bash(python scheduler_tool.py:*)")
     source = source.replace(
         '["uv", "run", "python", "cdp_tool.py",',
         '["python", "cdp_tool.py",',

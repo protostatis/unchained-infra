@@ -431,6 +431,8 @@ def _ui_tool_name(tool_name: str) -> str:
     """Map function-call tool names to the same UI categories as chat_agent_cli.py."""
     if tool_name.startswith("intel_"):
         return "intel"
+    if tool_name.startswith("scheduler_"):
+        return "scheduler"
     if tool_name == "type_text":
         return "type"
     if tool_name == "js_eval":
@@ -473,6 +475,11 @@ def _ui_tool_input(tool_name: str, args: dict) -> str:
         return "active form"
     if tool_name == "press_enter":
         return "Enter"
+    if tool_name == "scheduler_list_jobs":
+        return "list"
+    if tool_name in {"scheduler_preview_job", "scheduler_save_job", "scheduler_delete_job"}:
+        job_id = str(args.get("job_id", "")).strip()
+        return job_id or "job"
     if tool_name == "screenshot":
         return ""
     return json.dumps(args, sort_keys=True)

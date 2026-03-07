@@ -517,7 +517,7 @@ class ChatTriggerClient:
         headless: bool = False,
         timeout_seconds: int = 180,
     ) -> TriggerResult:
-        body: dict[str, Any] = {"message": prompt}
+        body: dict[str, Any] = {"message": prompt, "allow_scheduler_trigger": False}
         if model:
             body["model"] = model
         if session_id:
