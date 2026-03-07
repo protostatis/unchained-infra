@@ -329,7 +329,8 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     style.id = 'uc-auth-btn-style';
     style.textContent = [
       '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}',
-      '#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}',
+      '#login .g_id_signin > div,#login .g_id_signin > div > div{width:100% !important;max-width:340px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;}',
+      '#login .g_id_signin iframe{display:block !important;width:100% !important;max-width:340px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;}',
       '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
     ].join('');
