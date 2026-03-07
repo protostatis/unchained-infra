@@ -107,6 +107,8 @@ echo "==> Uploading Python modules..."
     unchained/chat_agent_gemini.py \
     unchained/chat_agent_codex.py \
     unchained/chat_agent_sdk.py \
+    unchained/scheduler_agent.py \
+    unchained/scheduler_tool.py \
     unchained/signup_agent.py \
     unchained/nudge.py \
     unchained/reflex.py \
