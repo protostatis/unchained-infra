@@ -1222,6 +1222,178 @@ Write-Host "Updated to $remoteVersion. Restart required: .\start.ps1"
 """
 
 
+def _generate_public_install_script(base_url: str) -> str:
+    """Generate a public curl|bash install script with browser-based claim flow.
+
+    No secrets are embedded — the script generates a claim_id/secret at runtime,
+    opens the browser for sign-in, polls for approval, then downloads + bootstraps.
+    """
+    return f"""#!/bin/bash
+set -euo pipefail
+
+echo "=== Unchained Agent Installer ==="
+echo ""
+
+BASE_URL="{base_url}"
+INSTALL_DIR="$HOME/unchained-agent"
+
+# ── Prerequisites ────────────────────────────────────────────────────
+if ! command -v python3 &>/dev/null; then
+  echo "ERROR: python3 is required. Install Python 3.9+."; exit 1
+fi
+if ! command -v curl &>/dev/null; then
+  echo "ERROR: curl is required."; exit 1
+fi
+if ! command -v unzip &>/dev/null; then
+  echo "ERROR: unzip is required."; exit 1
+fi
+
+# ── Claim flow (browser sign-in) ────────────────────────────────────
+CLAIM_ID=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+CLAIM_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+START_PAYLOAD=$(CLAIM_ID="$CLAIM_ID" CLAIM_SECRET="$CLAIM_SECRET" python3 - <<'PY'
+import json, os
+print(json.dumps({{"claim_id": os.environ["CLAIM_ID"], "claim_secret": os.environ["CLAIM_SECRET"]}}))
+PY
+)
+curl -sf \\
+  -H "Content-Type: application/json" \\
+  -d "$START_PAYLOAD" \\
+  "$BASE_URL/web/install/claim/start" >/dev/null || {{
+    echo "ERROR: could not initialize installer auth claim."; exit 1;
+  }}
+
+CLAIM_URL="$BASE_URL/install/claim/$CLAIM_ID"
+echo "Sign in to authorize this installation:"
+echo "  $CLAIM_URL"
+echo ""
+if command -v open >/dev/null 2>&1; then
+  open "$CLAIM_URL" >/dev/null 2>&1 || true
+elif command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "$CLAIM_URL" >/dev/null 2>&1 || true
+fi
+echo "Waiting for approval (5 min timeout)..."
+
+INSTALL_TOKEN=""
+for _ in $(seq 1 150); do
+  POLL_PAYLOAD=$(CLAIM_ID="$CLAIM_ID" CLAIM_SECRET="$CLAIM_SECRET" python3 - <<'PY'
+import json, os
+print(json.dumps({{"claim_id": os.environ["CLAIM_ID"], "claim_secret": os.environ["CLAIM_SECRET"]}}))
+PY
+)
+  POLL_RESP=$(curl -sf \\
+    -H "Content-Type: application/json" \\
+    -d "$POLL_PAYLOAD" \\
+    "$BASE_URL/web/install/claim/poll" 2>/dev/null || true)
+  STATUS=$(printf '%s' "$POLL_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  if [ "$STATUS" = "approved" ]; then
+    INSTALL_TOKEN=$(printf '%s' "$POLL_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("install_token",""))' 2>/dev/null || true)
+    break
+  fi
+  if [ "$STATUS" = "expired" ]; then
+    break
+  fi
+  sleep 2
+done
+
+if [ -z "$INSTALL_TOKEN" ]; then
+  echo "ERROR: approval timed out. Run the installer again and approve in your browser."
+  exit 1
+fi
+echo "Approved!"
+echo ""
+
+# ── Download agent ZIP (before bootstrap — bootstrap consumes the token) ──
+echo "Downloading agent package..."
+TMPFILE=$(mktemp)
+trap "rm -f $TMPFILE" EXIT
+HTTP_CODE=$(curl -sf -w '%{{http_code}}' \\
+  -H "X-Install-Token: $INSTALL_TOKEN" \\
+  "$BASE_URL/web/download-agent" -o "$TMPFILE")
+if [ "$HTTP_CODE" != "200" ] || [ ! -s "$TMPFILE" ]; then
+  echo "ERROR: Failed to download agent package (HTTP $HTTP_CODE)."; exit 1
+fi
+
+# ── Bootstrap (exchange install token for API key — consumes token) ───
+echo "Activating credentials..."
+PAYLOAD=$(TOKEN="$INSTALL_TOKEN" python3 - <<'PY'
+import json, os
+print(json.dumps({{"token": os.environ["TOKEN"]}}))
+PY
+)
+BOOTSTRAP=$(curl -sf \\
+  -H "Content-Type: application/json" \\
+  -d "$PAYLOAD" \\
+  "$BASE_URL/web/install/bootstrap") || {{
+    echo "ERROR: credential exchange failed."; exit 1;
+  }}
+API_KEY=$(printf '%s' "$BOOTSTRAP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))' 2>/dev/null || true)
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: invalid credential response."; exit 1
+fi
+
+# ── Extract + setup ──────────────────────────────────────────────────
+if [ -d "$INSTALL_DIR" ]; then
+  echo "Existing installation found — backing up .env..."
+  cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak" 2>/dev/null || true
+fi
+mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR"
+unzip -qo "$TMPFILE"
+if [ -d "unchained-agent" ]; then
+  cp -rf unchained-agent/* . 2>/dev/null || true
+  cp -f unchained-agent/.env . 2>/dev/null || true
+  rm -rf unchained-agent
+fi
+
+# Write .env with the real API key (start.sh will skip claim flow)
+cat > .env << ENVEOF
+UNCHAINED_API_KEY=$API_KEY
+UNCHAINED_SERVER=wss://api.unchainedsky.com/chat/ws
+UNCHAINED_RELAY_HOST=api.unchainedsky.com
+UNCHAINED_RELAY_PORT=443
+UNCHAINED_API_URL=https://api.unchainedsky.com
+CODEX_MAX_RUNTIME_S=300
+ENVEOF
+
+echo "[1/3] Creating Python environment..."
+python3 -m venv .venv
+echo "[2/3] Upgrading pip..."
+.venv/bin/pip install -q --upgrade pip
+echo "[3/3] Installing dependencies..."
+.venv/bin/pip install -q -r requirements.txt
+
+chmod +x start.sh
+chmod +x update.sh 2>/dev/null || true
+
+echo ""
+echo "=== Installation complete ==="
+echo "Location: $INSTALL_DIR"
+echo ""
+echo "To start the agent:"
+echo "  cd $INSTALL_DIR"
+echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
+echo "  ./start.sh --daemon   # background (close terminal safely)"
+echo ""
+if [ -t 0 ]; then
+  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r
+  echo ""
+elif [ -e /dev/tty ]; then
+  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r </dev/tty || REPLY=n
+  echo ""
+else
+  echo "Non-interactive — run ./start.sh manually."
+  REPLY=n
+fi
+if [[ $REPLY =~ ^[Dd]$ ]]; then
+  cd "$INSTALL_DIR" && ./start.sh --daemon
+elif [[ $REPLY =~ ^[Ff]$ ]]; then
+  cd "$INSTALL_DIR" && ./start.sh
+fi
+"""
+
+
 def _generate_install_script(install_token: str, relay_host: str, base_url: str) -> str:
     """Generate a curl|bash install script without embedding the long-lived API key."""
     return f"""#!/bin/bash

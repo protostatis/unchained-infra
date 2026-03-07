@@ -85,6 +85,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/web/chat/slots"),
             ("POST", "/web/chat/switch"),
             ("GET", "/web/download-agent"),
+            ("GET", "/install.sh"),
             ("POST", "/web/install-token"),
             ("POST", "/web/install/bootstrap"),
             ("GET", "/install/{token}"),

@@ -70,6 +70,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/install/claim/poll", "web_app.handlers.install_flow:handle_install_claim_poll"),
     ("POST", "/web/install/claim/approve", "web_app.handlers.install_flow:handle_install_claim_approve"),
     ("POST", "/web/install/bootstrap", "web_app.handlers.install_flow:handle_install_bootstrap"),
+    ("GET", "/install.sh", "web_app.handlers.install_flow:handle_public_install_script"),
     ("GET", "/install/script", "web_app.handlers.install_flow:handle_install_script"),
     ("GET", "/install/windows/script", "web_app.handlers.install_flow:handle_install_script_windows"),
     ("GET", "/install/{token}", "web_app.handlers.install_flow:handle_install_script"),
