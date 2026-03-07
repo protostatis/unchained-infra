@@ -40,8 +40,23 @@ async def close_session_tab(session_id: str):
     tab_id = core._session_tabs.pop(session_id, None)
     agent_id = core._session_agent_map.pop(session_id, None)
     core._session_last_active.pop(session_id, None)
+    if hasattr(core, "_session_profile_paths"):
+        core._session_profile_paths.pop(session_id, None)
     if not tab_id or not agent_id:
         return
+
+    if str(tab_id).startswith("prov-"):
+        relay_host, relay_port = core._parse_relay()
+        import cloud_tools
+
+        try:
+            await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+            core._tabs_pending_close.pop(tab_id, None)
+            print(f"[tabs] Cleaned provision browser for session {session_id}")
+            return
+        except Exception:
+            core._tabs_pending_close[tab_id] = (agent_id, 0)
+            return
 
     from cdp import CDP
 
@@ -107,6 +122,17 @@ async def stale_tab_cleanup_loop():
             if retries >= core._MAX_CLOSE_RETRIES:
                 print(f"[tabs] Giving up on tab {tab_id} after {retries} retries")
                 del core._tabs_pending_close[tab_id]
+                continue
+            if str(tab_id).startswith("prov-"):
+                relay_host, relay_port = core._parse_relay()
+                import cloud_tools
+
+                try:
+                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+                    del core._tabs_pending_close[tab_id]
+                    print("[tabs] Retry-cleaned provision browser")
+                except Exception:
+                    core._tabs_pending_close[tab_id] = (agent_id, retries + 1)
                 continue
             try:
                 from cdp import CDP

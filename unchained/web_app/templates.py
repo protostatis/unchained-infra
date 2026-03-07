@@ -1622,6 +1622,12 @@ body{
   font-family:var(--mono);cursor:pointer;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
+#profilesel{
+  height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
+  background:var(--bg);color:var(--text);font-size:12px;
+  font-family:var(--mono);cursor:pointer;min-width:190px;
+}
+#profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
   display:none;margin:0 16px;padding:8px 10px;border-radius:8px;
   border:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
@@ -3386,6 +3392,10 @@ body{
       <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
       <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
     </select>
+    <label for="profilesel">Profile</label>
+    <select id="profilesel" onchange="onProfileChange(this.value)" title="Optional profile copy to avoid re-sign-in prompts">
+      <option value="">Current browser (no profile copy)</option>
+    </select>
   </div>
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
@@ -3402,6 +3412,7 @@ let _userName = '';
 let sending = false;
 let _cancelCtrl = null;
 let geminiProvisioned = false;
+let selectedProfilePath = '';
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -3465,6 +3476,58 @@ function _persistSessionId(sid) {
 
 function onModelChange(model) {
   localStorage.setItem('unchained_gemini_model', model);
+}
+
+function _profileStoreKey() {
+  return 'unchained_chat_profile_' + agentId + '_' + window.location.pathname;
+}
+
+function onProfileChange(profilePath) {
+  selectedProfilePath = String(profilePath || '');
+  try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
+}
+
+function currentProfilePath() {
+  return selectedProfilePath || '';
+}
+
+async function loadChatProfiles() {
+  const sel = document.getElementById('profilesel');
+  if (!sel) return;
+
+  let remembered = '';
+  try { remembered = localStorage.getItem(_profileStoreKey()) || ''; } catch(e) {}
+  selectedProfilePath = remembered;
+  sel.innerHTML = '';
+
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Current browser (no profile copy)';
+  sel.appendChild(defaultOpt);
+
+  try {
+    const r = await fetch('/web/provision/profiles');
+    if (r.ok) {
+      const data = await r.json();
+      for (const p of (data.profiles || [])) {
+        const path = String(p.profile_path || p.path || '').trim();
+        if (!path) continue;
+        const label = String(p.name || p.dir_name || 'Profile').trim();
+        const email = String(p.email || '').trim();
+        const opt = document.createElement('option');
+        opt.value = path;
+        opt.textContent = email ? (label + ' (' + email + ')') : label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+
+  if ([...sel.options].some(opt => opt.value === remembered)) {
+    sel.value = remembered;
+  } else {
+    sel.value = '';
+  }
+  selectedProfilePath = sel.value || '';
 }
 
 function updateStatusPill(el, text, mode) {
@@ -3561,6 +3624,7 @@ function showMain() {
   }
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
+  loadChatProfiles();
   checkProvisionStatus();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
@@ -4043,15 +4107,20 @@ async function doSend() {
   _cancelCtrl = new AbortController();
 
   try {
+    const payload = {
+      message: msg,
+      agent_id: agentId,
+      session_id: sessionId,
+      model: currentModel(),
+    };
+    const profilePath = currentProfilePath();
+    if (profilePath) {
+      payload.profile_path = profilePath;
+    }
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        agent_id: agentId,
-        session_id: sessionId,
-        model: currentModel(),
-      }),
+      body: JSON.stringify(payload),
       signal: _cancelCtrl.signal,
     });
 
@@ -5913,6 +5982,12 @@ body{
   font-family:var(--mono);cursor:pointer;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
+#profilesel{
+  height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
+  background:var(--bg);color:var(--text);font-size:12px;
+  font-family:var(--mono);cursor:pointer;min-width:190px;
+}
+#profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
   display:none;margin:0 16px;padding:8px 10px;border-radius:8px;
   border:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
@@ -6087,6 +6162,10 @@ body{
       <option value="claude-opus-4-6">Opus 4.6</option>
       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
     </select>
+    <label for="profilesel">Profile</label>
+    <select id="profilesel" onchange="onProfileChange(this.value)" title="Optional profile copy to avoid re-sign-in prompts">
+      <option value="">Current browser (no profile copy)</option>
+    </select>
   </div>
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
@@ -6104,6 +6183,7 @@ let _cancelCtrl = null;
 let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
+let selectedProfilePath = '';
 const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
@@ -6247,6 +6327,58 @@ function onModelChange(model) {
   checkAgentStatus();
 }
 
+function _profileStoreKey() {
+  return 'unchained_chat_profile_' + agentId + '_' + window.location.pathname;
+}
+
+function onProfileChange(profilePath) {
+  selectedProfilePath = String(profilePath || '');
+  try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
+}
+
+function currentProfilePath() {
+  return selectedProfilePath || '';
+}
+
+async function loadChatProfiles() {
+  const sel = document.getElementById('profilesel');
+  if (!sel) return;
+
+  let remembered = '';
+  try { remembered = localStorage.getItem(_profileStoreKey()) || ''; } catch(e) {}
+  selectedProfilePath = remembered;
+  sel.innerHTML = '';
+
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Current browser (no profile copy)';
+  sel.appendChild(defaultOpt);
+
+  try {
+    const r = await fetch('/web/provision/profiles');
+    if (r.ok) {
+      const data = await r.json();
+      for (const p of (data.profiles || [])) {
+        const path = String(p.profile_path || p.path || '').trim();
+        if (!path) continue;
+        const label = String(p.name || p.dir_name || 'Profile').trim();
+        const email = String(p.email || '').trim();
+        const opt = document.createElement('option');
+        opt.value = path;
+        opt.textContent = email ? (label + ' (' + email + ')') : label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+
+  if ([...sel.options].some(opt => opt.value === remembered)) {
+    sel.value = remembered;
+  } else {
+    sel.value = '';
+  }
+  selectedProfilePath = sel.value || '';
+}
+
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
 
@@ -6328,6 +6460,7 @@ function showMain() {
   }
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
+  loadChatProfiles();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
@@ -6865,15 +6998,20 @@ async function doSend() {
   }
 
   try {
+    const payload = {
+      message: msg,
+      agent_id: agentId,
+      session_id: sessionId,
+      model: model,
+    };
+    const profilePath = currentProfilePath();
+    if (profilePath) {
+      payload.profile_path = profilePath;
+    }
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        agent_id: agentId,
-        session_id: sessionId,
-        model: model,
-      }),
+      body: JSON.stringify(payload),
       signal: _cancelCtrl.signal,
     });
 
