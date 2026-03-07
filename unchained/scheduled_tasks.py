@@ -100,6 +100,7 @@ class ScheduledJob:
     session_id: str = ""
     use_stable_session: bool = False
     headless: bool = False
+    profile_path: str = ""
     timeout_seconds: int = 180
     retry_seconds: int = 0
 
@@ -205,6 +206,10 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
         retry_seconds = int(item.get("retry_seconds", item.get("retry_after_seconds", 0)))
         if retry_seconds < 0:
             raise ValueError(f"job {job_id!r} retry_seconds must be >= 0")
+        headless = bool(item.get("headless", False))
+        profile_path = str(item.get("profile_path", "")).strip()
+        if headless and profile_path:
+            raise ValueError(f"job {job_id!r} profile_path is not supported in headless mode")
 
         jobs.append(
             ScheduledJob(
@@ -215,7 +220,8 @@ def parse_jobs_payload(payload: dict[str, Any]) -> list[ScheduledJob]:
                 model=str(item.get("model", "")),
                 session_id=str(item.get("session_id", "")),
                 use_stable_session=bool(item.get("use_stable_session", item.get("keep_session", False))),
-                headless=bool(item.get("headless", False)),
+                headless=headless,
+                profile_path=profile_path,
                 timeout_seconds=timeout_seconds,
                 retry_seconds=retry_seconds,
             )
@@ -251,6 +257,8 @@ def jobs_to_payload(jobs: list[ScheduledJob]) -> dict[str, Any]:
             item["use_stable_session"] = True
         if job.headless:
             item["headless"] = True
+        if job.profile_path:
+            item["profile_path"] = job.profile_path
         out.append(item)
     return {"jobs": out}
 
@@ -515,6 +523,7 @@ class ChatTriggerClient:
         model: str = "",
         session_id: str = "",
         headless: bool = False,
+        profile_path: str = "",
         timeout_seconds: int = 180,
     ) -> TriggerResult:
         body: dict[str, Any] = {"message": prompt}
@@ -524,6 +533,8 @@ class ChatTriggerClient:
             body["session_id"] = session_id
         if headless:
             body["headless"] = True
+        if profile_path:
+            body["profile_path"] = profile_path
 
         req = urllib.request.Request(
             f"{self.api_url}/web/chat",
@@ -606,6 +617,7 @@ def run_due_jobs_once(
             model=job.model,
             session_id=session_id,
             headless=job.headless,
+            profile_path=job.profile_path,
             timeout_seconds=job.timeout_seconds,
         )
         engine.mark_run(job, run_now, result.ok, result.error)

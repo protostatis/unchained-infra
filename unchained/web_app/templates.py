@@ -9953,6 +9953,13 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
         <label for="f-model-custom">Custom Model ID</label>
         <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.1-codex">
       </div>
+      <div class="field" style="margin-top:10px">
+        <label for="f-profile">Chrome Profile</label>
+        <select id="f-profile" title="Optional profile copy to avoid re-sign-in prompts">
+          <option value="">Current browser (no profile copy)</option>
+        </select>
+        <span class="hint">Optional. Reuse a signed-in Chrome profile from your local chat agent.</span>
+      </div>
       <div class="adv-grid" style="margin-top:10px">
         <div class="field">
           <label>Timeout (seconds)</label>
@@ -10015,6 +10022,7 @@ let jobs = [];
 let preview = {};
 let editingIndex = -1;
 let historyJobId = '';
+const schedulerProfileLabels = {};
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -10112,6 +10120,68 @@ function getSchedulerModelValue(){
   return select.value.trim();
 }
 
+function formatSchedulerProfile(value){
+  const path=String(value||'').trim();
+  if(!path) return '';
+  if(schedulerProfileLabels[path]) return 'Profile: '+schedulerProfileLabels[path];
+  const fallback=path.split('/').filter(Boolean).pop()||path;
+  return 'Profile: '+fallback;
+}
+
+function setSchedulerProfileValue(value){
+  const path=String(value||'').trim();
+  const select=document.getElementById('f-profile');
+  if(!select) return;
+  if(path && ![...select.options].some(opt=>opt.value===path)){
+    const opt=document.createElement('option');
+    opt.value=path;
+    opt.textContent='Unavailable profile ('+path+')';
+    select.appendChild(opt);
+  }
+  select.value=path;
+  if(select.value!==path) select.value='';
+}
+
+function getSchedulerProfileValue(){
+  const select=document.getElementById('f-profile');
+  if(!select) return '';
+  return String(select.value||'').trim();
+}
+
+async function loadSchedulerProfiles(){
+  const select=document.getElementById('f-profile');
+  if(!select) return;
+  const currentValue=getSchedulerProfileValue();
+  select.innerHTML='';
+  Object.keys(schedulerProfileLabels).forEach(key=>delete schedulerProfileLabels[key]);
+
+  const defaultOpt=document.createElement('option');
+  defaultOpt.value='';
+  defaultOpt.textContent='Current browser (no profile copy)';
+  select.appendChild(defaultOpt);
+
+  try{
+    const r=await fetch('/web/provision/profiles');
+    if(r.ok){
+      const data=await r.json();
+      for(const p of (data.profiles||[])){
+        const path=String(p.profile_path||p.path||'').trim();
+        if(!path||schedulerProfileLabels[path]) continue;
+        const label=String(p.name||p.dir_name||'Profile').trim()||'Profile';
+        const email=String(p.email||'').trim();
+        const text=email?(label+' ('+email+')'):label;
+        schedulerProfileLabels[path]=text;
+        const opt=document.createElement('option');
+        opt.value=path;
+        opt.textContent=text;
+        select.appendChild(opt);
+      }
+    }
+  }catch(e){}
+
+  setSchedulerProfileValue(currentValue);
+}
+
 // ── Render ──
 function render(){
   const list=document.getElementById('job-list');
@@ -10131,6 +10201,7 @@ function render(){
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
     const lastOutput=p.last_output?'<div class="card-output"><span class="label">Last output</span>'+esc(p.last_output)+'</div>':'';
     const modelMeta='<span>'+esc(formatSchedulerModel(j.model||''))+'</span>';
+    const profileMeta=j.profile_path?'<span>'+esc(formatSchedulerProfile(j.profile_path))+'</span>':'';
     return '<div class="card'+(en?'':' disabled')+'">' +
       '<div class="card-top">' +
         '<label class="toggle"><input type="checkbox" '+(en?'checked':'')+' onchange="toggleJob('+i+',this.checked)"><span class="slider"></span></label>' +
@@ -10145,6 +10216,7 @@ function render(){
       '<div class="card-schedule">'+esc(scheduleToText(j.schedule))+'</div>' +
       '<div class="card-meta">' +
         modelMeta +
+        profileMeta +
         (lastAgo?'<span>Last: '+esc(lastAgo)+'</span>':'') +
         (p.last_status?'<span class="'+statusCls+'">'+esc(p.last_status)+'</span>':'') +
         (p.run_count?'<span>'+p.run_count+' run'+(p.run_count==1?'':'s')+'</span>':'') +
@@ -10224,6 +10296,7 @@ function openAddModal(){
   document.getElementById('f-timeout').value='180';
   document.getElementById('f-retry').value='0';
   setSchedulerModelValue('');
+  setSchedulerProfileValue('');
   document.getElementById('f-headless').checked=false;
   document.getElementById('f-session').checked=false;
   openModal();
@@ -10257,6 +10330,7 @@ function openEditModal(i){
   document.getElementById('f-timeout').value=j.timeout_seconds||180;
   document.getElementById('f-retry').value=j.retry_after_seconds||j.retry_seconds||0;
   setSchedulerModelValue(j.model||'');
+  setSchedulerProfileValue(j.profile_path||'');
   document.getElementById('f-headless').checked=!!j.headless;
   document.getElementById('f-session').checked=!!(j.keep_session||j.use_stable_session);
 
@@ -10287,11 +10361,18 @@ async function saveModal(){
   const timeout=parseInt(document.getElementById('f-timeout').value)||180;
   const retry=parseInt(document.getElementById('f-retry').value)||0;
   const model=getSchedulerModelValue();
+  const profilePath=getSchedulerProfileValue();
   const headless=document.getElementById('f-headless').checked;
   const keepSession=document.getElementById('f-session').checked;
 
+  if(headless&&profilePath){
+    toast('Profile selection is not supported with headless mode','err');
+    return;
+  }
+
   const job={id:name,prompt:prompt,schedule:schedule,enabled:true,timeout_seconds:timeout};
   if(model) job.model=model;
+  if(profilePath) job.profile_path=profilePath;
   if(retry>0) job.retry_seconds=retry;
   if(headless) job.headless=true;
   if(keepSession) job.use_stable_session=true;
@@ -10417,7 +10498,12 @@ document.addEventListener('keydown',e=>{
 
 // ── Init ──
 (async function init(){
-  try{if(await checkSession()) await loadJobs();}
+  try{
+    if(await checkSession()){
+      await loadSchedulerProfiles();
+      await loadJobs();
+    }
+  }
   catch(e){toast('Session check failed: '+e.message,'err');}
 })();
 </script>

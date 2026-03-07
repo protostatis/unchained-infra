@@ -161,7 +161,8 @@ class TestScheduledTasks(unittest.TestCase):
       "id": "stable",
       "prompt": "p",
       "schedule": {"at": "2026-02-25T11:00:00Z"},
-      "use_stable_session": true
+      "use_stable_session": true,
+      "profile_path": "/tmp/chrome/Profile 2"
     }
   ]
 }
@@ -179,6 +180,7 @@ class TestScheduledTasks(unittest.TestCase):
             session_id = fake.calls[0].get("session_id", "")
             self.assertTrue(session_id.startswith("s-claude-"))
             self.assertEqual(len(session_id.split("-")), 4)
+            self.assertEqual(fake.calls[0].get("profile_path"), "/tmp/chrome/Profile 2")
 
     def test_parse_payload_and_preview_due(self):
         payload = {
@@ -188,6 +190,7 @@ class TestScheduledTasks(unittest.TestCase):
                     "prompt": "p",
                     "schedule": {"every_seconds": 60},
                     "enabled": True,
+                    "profile_path": "/tmp/chrome/Profile 1",
                 }
             ]
         }
@@ -195,12 +198,28 @@ class TestScheduledTasks(unittest.TestCase):
         canonical = jobs_to_payload(jobs)
         self.assertEqual(canonical["jobs"][0]["id"], "a")
         self.assertEqual(canonical["jobs"][0]["schedule"], {"every_seconds": 60})
+        self.assertEqual(canonical["jobs"][0]["profile_path"], "/tmp/chrome/Profile 1")
 
         state = {"a": JobState(next_run_at=_utc(2026, 2, 25, 12, 0, 0))}
         rows = preview_jobs(jobs, state=state, now=_utc(2026, 2, 25, 12, 0, 1))
         self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]["is_due"])
         self.assertEqual(rows[0]["id"], "a")
+
+    def test_parse_rejects_headless_profile_path_combo(self):
+        payload = {
+            "jobs": [
+                {
+                    "id": "bad",
+                    "prompt": "p",
+                    "schedule": {"every_seconds": 60},
+                    "headless": True,
+                    "profile_path": "/tmp/chrome/Profile 9",
+                }
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "profile_path is not supported in headless mode"):
+            parse_jobs_payload(payload)
 
     def test_history_append_and_tail_read(self):
         with tempfile.TemporaryDirectory() as td:
