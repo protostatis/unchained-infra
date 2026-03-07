@@ -45,6 +45,8 @@ from web_cmd import (
 from web_app.handlers.auth_admin import (
     handle_facebook_callback as _handle_facebook_callback,
     handle_facebook_start as _handle_facebook_start,
+    handle_github_callback as _handle_github_callback,
+    handle_github_start as _handle_github_start,
 )
 
 log = logging.getLogger(__name__)
@@ -14274,6 +14276,8 @@ _ROUTES: list[tuple[str, str, object]] = [
     ("POST", "/auth/google", handle_google_auth),
     ("GET", "/auth/facebook/start", _handle_facebook_start),
     ("GET", "/auth/facebook/callback", _handle_facebook_callback),
+    ("GET", "/auth/github/start", _handle_github_start),
+    ("GET", "/auth/github/callback", _handle_github_callback),
     ("POST", "/auth/request-claude-access", handle_request_claude_access),
     ("POST", "/auth/logout", handle_logout),
     ("GET", "/auth/me", handle_auth_me),
