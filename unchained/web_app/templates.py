@@ -378,7 +378,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>Type a task and watch the agent work</div>
       </div>
       <div class="card-note">Demo uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
-      <a href="/demo" class="card-btn">Launch Demo &#8594;</a>
+      <a href="/first-look" class="card-btn">Launch Demo &#8594;</a>
     </div>
 
     <!-- Free Tier -->
@@ -495,6 +495,23 @@ body::before{
       <a href="/chat-codex?model=codex-cli:gpt-5.1-codex-mini" class="card-btn">Open Chat &#8594;</a>
     </div>
 
+    <!-- MCP -->
+    <div class="card trial">
+      <div class="card-badge">MCP</div>
+      <div class="card-title">MCP Server</div>
+      <div class="card-desc">Use your real Chrome through any MCP client &mdash; Claude Code, Claude Desktop, or any tool that speaks MCP. One command to connect.</div>
+      <div class="card-reqs">
+        <span class="req">MCP Client</span>
+        <span class="req">Agent Installed</span>
+      </div>
+      <div class="card-steps">
+        <div class="step"><span class="step-num">1</span>Install the agent (one-line curl)</div>
+        <div class="step"><span class="step-num">2</span>Add MCP server config to your client</div>
+        <div class="step"><span class="step-num">3</span>Use browser tools from any MCP conversation</div>
+      </div>
+      <a href="/mcp" class="card-btn">Set Up MCP &#8594;</a>
+    </div>
+
   </div>
 </div>
 
@@ -516,8 +533,9 @@ body::before{
 
 <div class="footer">
   <div class="footer-links">
-    <a href="/demo">Demo</a>
+    <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="/mcp">MCP</a>
     <a href="/setup">API Setup</a>
     <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
@@ -1045,7 +1063,7 @@ a:hover{text-decoration:underline}
   <h2>Your browser agent, ready when you are</h2>
   <p>The agent works with your real browser, your real logins, and your real data. No screenshots to upload, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/demo" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -1053,8 +1071,9 @@ a:hover{text-decoration:underline}
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/demo">Demo</a>
+    <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="/mcp">MCP</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -1622,6 +1641,12 @@ body{
   font-family:var(--mono);cursor:pointer;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
+#profilesel{
+  height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
+  background:var(--bg);color:var(--text);font-size:12px;
+  font-family:var(--mono);cursor:pointer;min-width:190px;
+}
+#profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
   display:none;margin:0 16px;padding:8px 10px;border-radius:8px;
   border:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
@@ -3386,6 +3411,10 @@ body{
       <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
       <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
     </select>
+    <label for="profilesel">Profile</label>
+    <select id="profilesel" onchange="onProfileChange(this.value)" title="Optional profile copy to avoid re-sign-in prompts">
+      <option value="">Current browser (no profile copy)</option>
+    </select>
   </div>
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
@@ -3402,6 +3431,7 @@ let _userName = '';
 let sending = false;
 let _cancelCtrl = null;
 let geminiProvisioned = false;
+let selectedProfilePath = '';
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -3465,6 +3495,58 @@ function _persistSessionId(sid) {
 
 function onModelChange(model) {
   localStorage.setItem('unchained_gemini_model', model);
+}
+
+function _profileStoreKey() {
+  return 'unchained_chat_profile_' + agentId + '_' + window.location.pathname;
+}
+
+function onProfileChange(profilePath) {
+  selectedProfilePath = String(profilePath || '');
+  try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
+}
+
+function currentProfilePath() {
+  return selectedProfilePath || '';
+}
+
+async function loadChatProfiles() {
+  const sel = document.getElementById('profilesel');
+  if (!sel) return;
+
+  let remembered = '';
+  try { remembered = localStorage.getItem(_profileStoreKey()) || ''; } catch(e) {}
+  selectedProfilePath = remembered;
+  sel.innerHTML = '';
+
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Current browser (no profile copy)';
+  sel.appendChild(defaultOpt);
+
+  try {
+    const r = await fetch('/web/provision/profiles');
+    if (r.ok) {
+      const data = await r.json();
+      for (const p of (data.profiles || [])) {
+        const path = String(p.profile_path || p.path || '').trim();
+        if (!path) continue;
+        const label = String(p.name || p.dir_name || 'Profile').trim();
+        const email = String(p.email || '').trim();
+        const opt = document.createElement('option');
+        opt.value = path;
+        opt.textContent = email ? (label + ' (' + email + ')') : label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+
+  if ([...sel.options].some(opt => opt.value === remembered)) {
+    sel.value = remembered;
+  } else {
+    sel.value = '';
+  }
+  selectedProfilePath = sel.value || '';
 }
 
 function updateStatusPill(el, text, mode) {
@@ -3561,6 +3643,7 @@ function showMain() {
   }
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
+  loadChatProfiles();
   checkProvisionStatus();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
@@ -4043,15 +4126,20 @@ async function doSend() {
   _cancelCtrl = new AbortController();
 
   try {
+    const payload = {
+      message: msg,
+      agent_id: agentId,
+      session_id: sessionId,
+      model: currentModel(),
+    };
+    const profilePath = currentProfilePath();
+    if (profilePath) {
+      payload.profile_path = profilePath;
+    }
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        agent_id: agentId,
-        session_id: sessionId,
-        model: currentModel(),
-      }),
+      body: JSON.stringify(payload),
       signal: _cancelCtrl.signal,
     });
 
@@ -4650,6 +4738,63 @@ body{
 
 /* === Main === */
 #main{display:none;flex-direction:column;height:100dvh}
+#workspace{
+  flex:1;min-height:0;display:flex;overflow:hidden;
+}
+#chat-pane{
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;
+}
+#live-pane{
+  flex:2 1 0;min-width:420px;width:auto;
+  border-left:1px solid #2a2a2a;background:#111;
+  display:flex;flex-direction:column;min-height:0;
+}
+#live-pane-head{
+  padding:10px 12px;border-bottom:1px solid #222;
+  color:#d5d5d5;font-size:12px;letter-spacing:0.4px;
+  text-transform:uppercase;
+}
+#live-window{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  padding:12px;
+}
+#live-window-bar{
+  height:28px;border:1px solid #2f2f2f;border-bottom:none;
+  border-radius:8px 8px 0 0;background:#171717;
+  display:flex;align-items:center;gap:6px;padding:0 10px;
+}
+#live-window-bar .dot{
+  width:9px;height:9px;border-radius:50%;display:inline-block;
+}
+#live-window-bar .dot.red{background:#ff5f56}
+#live-window-bar .dot.yellow{background:#ffbd2e}
+#live-window-bar .dot.green{background:#27c93f}
+#live-window-bar .title{
+  margin-left:8px;color:#9a9a9a;font-size:11px;font-family:var(--mono);
+}
+#live-canvas-wrap{
+  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
+  background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
+}
+#live-image{
+  width:100%;height:100%;object-fit:contain;background:#0b0b0b;display:none;
+}
+#live-placeholder{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:13px;padding:16px;text-align:center;
+}
+#live-status{
+  padding:8px 12px 12px;color:var(--muted);font-size:12px;min-height:34px;
+}
+@media (max-width: 1100px) {
+  #live-pane{min-width:320px}
+}
+@media (max-width: 900px) {
+  #workspace{flex-direction:column}
+  #live-pane{
+    width:100%;min-width:0;height:40vh;border-left:none;border-top:1px solid #2a2a2a;
+  }
+}
 
 #topbar{
   display:flex;align-items:center;justify-content:space-between;
@@ -4870,8 +5015,8 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>Demo limit reached</h2>
-    <p class="quota-sub">You've used your free demo interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>First look limit reached</h2>
+    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
     <div class="quota-grid">
       <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
       <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
@@ -4879,14 +5024,14 @@ body{
       <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on demo</button>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
   </div>
 </div>
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained Demo</h1>
-  <div class="sub">AI browser agent demo &mdash; watch it browse in real time</div>
+  <h1>Unchained First Look</h1>
+  <div class="sub">AI browser agent first look &mdash; watch it browse in real time</div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -4929,33 +5074,54 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
-  <div id="agent-bar">
-    <span id="agent-action"></span>
-    <span id="nav-trail"></span>
-    <span id="turn-ctr"></span>
-  </div>
-
-  <div id="chat">
-      <div id="chat-hints">
-        <div class="hint-title">Try it &mdash; ask the agent anything</div>
-      <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
-      <div class="hint-examples">
-        <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-        <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-        <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
-        <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="agent-bar">
+        <span id="agent-action"></span>
+        <span id="nav-trail"></span>
+        <span id="turn-ctr"></span>
       </div>
-      <div class="hint-footer">Free to try &mdash; no setup needed</div>
-    </div>
-  </div>
 
-  <div id="inputbar">
-    <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
-              onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
-    <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      <div id="chat">
+          <div id="chat-hints">
+            <div class="hint-title">Try it &mdash; ask the agent anything</div>
+          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+          <div class="hint-examples">
+            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
+            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
+            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
+            <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+          </div>
+          <div class="hint-footer">Free to try &mdash; no setup needed</div>
+        </div>
+      </div>
+
+      <div id="inputbar">
+        <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
+                  onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+        <button id="sendbtn" onclick="doSend()">&#9654;</button>
+        <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      </div>
+    </div>
+
+    <aside id="live-pane">
+      <div id="live-pane-head">Live Browser</div>
+      <div id="live-window">
+        <div id="live-window-bar">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="title">headless-chrome</span>
+        </div>
+        <div id="live-canvas-wrap">
+          <img id="live-image" alt="Headless browser live preview">
+          <div id="live-placeholder">The browser preview appears here after navigation.</div>
+        </div>
+      </div>
+      <div id="live-status">Waiting for first page load...</div>
+    </aside>
   </div>
 </div>
 <script>
@@ -4969,6 +5135,38 @@ let demoUnlimited = false;
 let _autoPromptFired = false;
 let _userName = '';
 let _userPicture = '';
+let _livePreviewHasFrame = false;
+let _isAuthenticatedUser = false;
+
+function setLiveStatus(text) {
+  const el = document.getElementById('live-status');
+  if (el) el.textContent = text;
+}
+
+function resetLivePreview() {
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (ph) ph.style.display = 'flex';
+  _livePreviewHasFrame = false;
+  setLiveStatus('Waiting for first page load...');
+}
+
+function updateLivePreview(imageB64, note) {
+  if (!imageB64) return;
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (!img) return;
+  img.src = 'data:image/png;base64,' + imageB64;
+  img.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  _livePreviewHasFrame = true;
+  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  setLiveStatus((note || 'Live page refreshed') + ' \u2022 ' + stamp);
+}
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -4980,9 +5178,10 @@ async function handleGoogleCredential(response) {
       body: JSON.stringify({credential: response.credential, source: 'trial'}),
     });
     const data = await r.json();
-    if (data.pending) { showPending(); return; }
+    if (data.pending || data.status === 'pending') { showPending(); return; }
     if (!r.ok) { errEl.textContent = data.error || 'Sign-in failed'; return; }
     agentId = data.agent_id;
+    _isAuthenticatedUser = true;
     demoPromptCount = data.demo_prompt_count || 0;
     demoUnlimited = !!data.demo_unlimited;
     showMain();
@@ -4991,10 +5190,14 @@ async function handleGoogleCredential(response) {
 
 async function checkSession() {
   try {
-    const r = await fetch('/auth/me');
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       _userName = data.name || '';
@@ -5002,9 +5205,12 @@ async function checkSession() {
       showMain();
       return;
     }
-    if (data.pending) { showPending(); return; }
+    if (data.pending || data.status === 'pending') { showPending(); return; }
   } catch(e) {}
-  document.getElementById('login').style.display = 'flex';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 async function checkApproval() {
@@ -5029,9 +5235,10 @@ async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
   agentId = '';
   sessionId = '';
-  document.getElementById('login').style.display = 'flex';
-  document.getElementById('main').style.display = 'none';
-  document.getElementById('pending').style.display = 'none';
+  _isAuthenticatedUser = false;
+  _userName = 'Guest';
+  _userPicture = '';
+  showMain();
 }
 
 function showPending() {
@@ -5057,11 +5264,11 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedDemoModel || 'google/gemini-3-flash-preview';
+  return _forcedFirstLookModel || 'google/gemini-3-flash-preview';
 }
 
 function _sessionStoreKey() {
-  return 'unchained_session_' + agentId + '_demo';
+  return 'unchained_session_' + agentId + '_first_look';
 }
 
 function _restoreSessionId() {
@@ -5077,7 +5284,7 @@ function _persistSessionId(sid) {
 }
 
 let lastAgentConnected = false;
-let _forcedDemoModel = '';
+let _forcedFirstLookModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
@@ -5089,8 +5296,9 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
-  document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  try { localStorage.setItem('unchained_last_route', '/demo'); } catch(e){}
+  document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
+  resetLivePreview();
+  try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
   checkAgentStatus();
@@ -5100,9 +5308,10 @@ function showMain() {
 
 async function checkAgentStatus() {
   try {
-    const r = await fetch('/web/chat/status');
+    const r = await fetch('/web/chat/status?first_look_guest=1');
     if (r.ok) {
       const data = await r.json();
+      if (data.agent_id) agentId = data.agent_id;
       lastAgentConnected = data.connected;
       updateAgentStatusUI(data.connected);
     }
@@ -5114,6 +5323,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      first_look_guest: '1',
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -5150,8 +5360,12 @@ async function maybeAutoPrompt() {
     if (lastAgentConnected) break;
     await new Promise(r => setTimeout(r, 500));
     try {
-      const r = await fetch('/web/chat/status');
-      if (r.ok) { const d = await r.json(); lastAgentConnected = d.connected; }
+      const r = await fetch('/web/chat/status?first_look_guest=1');
+      if (r.ok) {
+        const d = await r.json();
+        if (d.agent_id) agentId = d.agent_id;
+        lastAgentConnected = d.connected;
+      }
     } catch(e) {}
   }
   if (!lastAgentConnected) return;
@@ -5194,6 +5408,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        first_look_guest: true,
       }),
     });
     if (r.ok) {
@@ -5582,8 +5797,10 @@ async function doSend() {
 
   addUserBubble(msg);
   const bubble = addAsstBubble();
+  resetLivePreview();
 
   let currentTool = null;
+  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -5596,6 +5813,7 @@ async function doSend() {
         session_id: sessionId,
         model: currentModel(),
         headless: true,
+        first_look_guest: true,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -5659,16 +5877,29 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
+            currentToolName = evt.name || '';
+            if (currentToolName === 'navigate') {
+              setLiveStatus('Loading page...');
+            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
+              if (currentToolName === 'navigate' && !_livePreviewHasFrame) {
+                setLiveStatus('Page loaded. Capturing preview...');
+              }
+              if (evt.is_screenshot && evt.visible) {
+                updateLivePreview(evt.data, 'Screenshot captured');
+              }
               currentTool = null;
+              currentToolName = '';
             }
+          } else if (evt.type === 'live_preview') {
+            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
             if (evt.model) {
-              _forcedDemoModel = evt.model;
+              _forcedFirstLookModel = evt.model;
             }
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
@@ -5913,6 +6144,12 @@ body{
   font-family:var(--mono);cursor:pointer;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
+#profilesel{
+  height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
+  background:var(--bg);color:var(--text);font-size:12px;
+  font-family:var(--mono);cursor:pointer;min-width:190px;
+}
+#profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
   display:none;margin:0 16px;padding:8px 10px;border-radius:8px;
   border:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
@@ -6087,6 +6324,10 @@ body{
       <option value="claude-opus-4-6">Opus 4.6</option>
       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
     </select>
+    <label for="profilesel">Profile</label>
+    <select id="profilesel" onchange="onProfileChange(this.value)" title="Optional profile copy to avoid re-sign-in prompts">
+      <option value="">Current browser (no profile copy)</option>
+    </select>
   </div>
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
@@ -6104,6 +6345,7 @@ let _cancelCtrl = null;
 let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
+let selectedProfilePath = '';
 const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
@@ -6247,6 +6489,58 @@ function onModelChange(model) {
   checkAgentStatus();
 }
 
+function _profileStoreKey() {
+  return 'unchained_chat_profile_' + agentId + '_' + window.location.pathname;
+}
+
+function onProfileChange(profilePath) {
+  selectedProfilePath = String(profilePath || '');
+  try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
+}
+
+function currentProfilePath() {
+  return selectedProfilePath || '';
+}
+
+async function loadChatProfiles() {
+  const sel = document.getElementById('profilesel');
+  if (!sel) return;
+
+  let remembered = '';
+  try { remembered = localStorage.getItem(_profileStoreKey()) || ''; } catch(e) {}
+  selectedProfilePath = remembered;
+  sel.innerHTML = '';
+
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Current browser (no profile copy)';
+  sel.appendChild(defaultOpt);
+
+  try {
+    const r = await fetch('/web/provision/profiles');
+    if (r.ok) {
+      const data = await r.json();
+      for (const p of (data.profiles || [])) {
+        const path = String(p.profile_path || p.path || '').trim();
+        if (!path) continue;
+        const label = String(p.name || p.dir_name || 'Profile').trim();
+        const email = String(p.email || '').trim();
+        const opt = document.createElement('option');
+        opt.value = path;
+        opt.textContent = email ? (label + ' (' + email + ')') : label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+
+  if ([...sel.options].some(opt => opt.value === remembered)) {
+    sel.value = remembered;
+  } else {
+    sel.value = '';
+  }
+  selectedProfilePath = sel.value || '';
+}
+
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
 
@@ -6328,6 +6622,7 @@ function showMain() {
   }
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
   _persistSessionId(sessionId);
+  loadChatProfiles();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
@@ -6865,15 +7160,20 @@ async function doSend() {
   }
 
   try {
+    const payload = {
+      message: msg,
+      agent_id: agentId,
+      session_id: sessionId,
+      model: model,
+    };
+    const profilePath = currentProfilePath();
+    if (profilePath) {
+      payload.profile_path = profilePath;
+    }
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        agent_id: agentId,
-        session_id: sessionId,
-        model: model,
-      }),
+      body: JSON.stringify(payload),
       signal: _cancelCtrl.signal,
     });
 
@@ -9370,5 +9670,409 @@ document.addEventListener('keydown',e=>{
   catch(e){toast('Session check failed: '+e.message,'err');}
 })();
 </script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# MCP Install Page — /mcp
+# ---------------------------------------------------------------------------
+
+MCP_PAGE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MCP Setup | Unchained</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      background:#0a0a0f;color:#e8e8ec;line-height:1.6;
+    }
+    a{color:#ff8398;text-decoration:none}
+    a:hover{text-decoration:underline}
+    .wrap{max-width:960px;margin:0 auto;padding:28px 18px 56px}
+    .nav{display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between;margin-bottom:24px}
+    .brand{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:#8e8ea0}
+    .nav-links{display:flex;gap:8px}
+    .nav-btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid #3a3a44;border-radius:10px;padding:8px 14px;
+      color:#e8e8ec;text-decoration:none;font-size:13px;background:#141420;
+    }
+    .nav-btn:hover{border-color:#e94560;text-decoration:none}
+    .hero{
+      border:1px solid #252532;border-radius:16px;padding:32px 24px;
+      background:linear-gradient(180deg,#141420 0%,#101018 100%);
+      margin-bottom:28px;text-align:center;
+    }
+    .hero h1{font-size:clamp(26px,3.5vw,38px);margin-bottom:8px}
+    .hero h1 span{color:#e94560}
+    .hero p{color:#a6a6b5;font-size:16px;max-width:600px;margin:0 auto}
+    .steps{display:flex;flex-direction:column;gap:20px;margin-bottom:32px}
+    .step{
+      border:1px solid #252532;border-radius:14px;background:#0e0e15;
+      padding:22px 20px;position:relative;
+    }
+    .step-num{
+      display:inline-flex;align-items:center;justify-content:center;
+      width:28px;height:28px;border-radius:50%;background:#e94560;
+      color:#fff;font-size:13px;font-weight:700;margin-right:10px;
+    }
+    .step h2{display:inline;font-size:18px;vertical-align:middle}
+    .step-body{margin-top:14px}
+    .agent-status{
+      display:flex;align-items:center;gap:8px;padding:10px 14px;
+      border-radius:10px;background:#111118;border:1px solid #2a2a34;
+      font-size:13px;margin-bottom:10px;
+    }
+    .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .dot.green{background:#34d399}
+    .dot.yellow{background:#fbbf24}
+    .dot.red{background:#f87171}
+    .tab-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+    .tab-btn{
+      border:1px solid #2a2a34;border-radius:999px;padding:7px 14px;
+      background:#12121b;color:#aeb0c0;cursor:pointer;font-size:13px;
+      font-family:inherit;
+    }
+    .tab-btn.active{border-color:#e94560;background:#23141a;color:#fff}
+    .code-wrap{position:relative;margin-bottom:8px}
+    .code-block{
+      overflow-x:auto;padding:14px 16px;border-radius:10px;
+      background:#111118;border:1px solid #2b2b36;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all;
+    }
+    .copy-btn{
+      position:absolute;top:8px;right:8px;padding:5px 10px;
+      border:1px solid #3a3a44;border-radius:8px;background:#1a1a26;
+      color:#aeb0c0;cursor:pointer;font-size:12px;font-family:inherit;
+    }
+    .copy-btn:hover{border-color:#e94560;color:#fff}
+    .copy-btn.copied{background:#23141a;color:#e94560;border-color:#e94560}
+    .signin-prompt{
+      display:flex;align-items:center;gap:10px;padding:12px 16px;
+      border-radius:10px;background:rgba(233,69,96,0.08);
+      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:12px;
+    }
+    .signin-btn{
+      padding:7px 16px;border-radius:8px;background:#e94560;
+      color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+      border:none;text-decoration:none;
+    }
+    .signin-btn:hover{background:#d63b55;text-decoration:none}
+    .tools-section{
+      border:1px solid #252532;border-radius:14px;background:#0e0e15;
+      padding:22px 20px;margin-bottom:28px;
+    }
+    .tools-toggle{
+      display:flex;align-items:center;justify-content:space-between;
+      cursor:pointer;user-select:none;
+    }
+    .tools-toggle h2{font-size:18px}
+    .tools-toggle .arrow{font-size:14px;color:#8e8ea0;transition:transform .2s}
+    .tools-toggle .arrow.open{transform:rotate(180deg)}
+    .tools-table{
+      width:100%;border-collapse:collapse;margin-top:14px;
+      font-size:13px;display:none;
+    }
+    .tools-table.show{display:table}
+    .tools-table th{text-align:left;padding:8px 10px;border-bottom:1px solid #252532;color:#8e8ea0;font-weight:500}
+    .tools-table td{padding:8px 10px;border-bottom:1px solid #1a1a24}
+    .tools-table tr:last-child td{border-bottom:none}
+    .tools-table code{
+      background:#171722;border:1px solid #2f2f3c;border-radius:4px;
+      padding:1px 5px;font-size:12px;
+    }
+    .footer{text-align:center;color:#6e6e80;font-size:13px;padding:20px 0}
+    .footer a{color:#8e8ea0}
+    @media(max-width:640px){
+      .wrap{padding:16px 12px 40px}
+      .step{padding:16px 14px}
+      .hero{padding:24px 16px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <div class="brand">Unchained MCP</div>
+      <div class="nav-links">
+        <a class="nav-btn" href="/">Home</a>
+        <a class="nav-btn" href="/local">Chat</a>
+        <a class="nav-btn" href="/mcp-guide">Docs</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <h1>Your browser, <span>one command</span> away</h1>
+      <p>Use your real Chrome through any MCP client. No Playwright. No headless. Raw CDP over your existing agent.</p>
+    </section>
+
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <h2>Connect Your Browser</h2>
+        <div class="step-body">
+          <div class="agent-status" id="agent-status">
+            <div class="dot yellow" id="agent-dot"></div>
+            <span id="agent-status-text">Checking agent status...</span>
+          </div>
+          <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+            Install the Unchained agent on your Mac to bridge your local Chrome:
+          </p>
+          <div class="code-wrap" id="installer-wrap">
+            <pre class="code-block" id="installer-cmd">curl -fsSL https://api.unchainedsky.com/install.sh | bash</pre>
+            <button class="copy-btn" onclick="copyCode('installer-cmd',this)">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <span class="step-num">2</span>
+        <h2>Add MCP Server</h2>
+        <div class="step-body">
+          <div id="signin-section" class="signin-prompt" style="display:none">
+            <span>Sign in to auto-fill your API key</span>
+            <div id="mcp-gsi-btn"></div>
+          </div>
+          <div class="tab-bar">
+            <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
+            <button class="tab-btn" onclick="switchTab('claude-desktop',this)">Claude Desktop</button>
+            <button class="tab-btn" onclick="switchTab('other',this)">Other</button>
+          </div>
+          <div id="tab-claude-code">
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
+  https://api.unchainedsky.com/mcp \
+  -t http \
+  -H "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+              <p style="color:#a6a6b5;font-size:12px;margin-top:8px">
+                Restart Claude Code after adding (<code>/mcp</code> to verify tools are loaded).
+              </p>
+              <button class="copy-btn" onclick="copySnippet('claude-code',this)">Copy</button>
+            </div>
+          </div>
+          <div id="tab-claude-desktop" style="display:none">
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-desktop">{
+  "mcpServers": {
+    "unchainedsky": {
+      "url": "https://api.unchainedsky.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <span id="key-cd">YOUR_API_KEY</span>"
+      }
+    }
+  }
+}</pre>
+              <button class="copy-btn" onclick="copySnippet('claude-desktop',this)">Copy</button>
+            </div>
+          </div>
+          <div id="tab-other" style="display:none">
+            <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+              Use any MCP client that supports HTTP transport. Set the endpoint and Authorization header:
+            </p>
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-other">Endpoint: https://api.unchainedsky.com/mcp
+Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
+              <button class="copy-btn" onclick="copySnippet('other',this)">Copy</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <span class="step-num">3</span>
+        <h2>Verify</h2>
+        <div class="step-body">
+          <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+            Ask your MCP client to run a quick DDM extraction (agent_id is auto-detected from your API key):
+          </p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-verify">ddm url=https://example.com</pre>
+            <button class="copy-btn" onclick="copySnippet('verify',this)">Copy</button>
+          </div>
+          <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
+            To check your agent connection status:
+          </p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
+            <button class="copy-btn" onclick="copyCode('snippet-agent-lookup',this)">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tools-section">
+      <div class="tools-toggle" onclick="toggleTools()">
+        <h2>Available MCP Tools</h2>
+        <span class="arrow" id="tools-arrow">&#9660;</span>
+      </div>
+      <table class="tools-table" id="tools-table">
+        <thead>
+          <tr><th>Tool</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>navigate</code></td><td>Navigate to a URL in the browser</td></tr>
+          <tr><td><code>screenshot</code></td><td>Take a screenshot of the current page</td></tr>
+          <tr><td><code>click</code></td><td>Click an element using CSS selector or coordinates</td></tr>
+          <tr><td><code>type_text</code></td><td>Type text into focused element or selector</td></tr>
+          <tr><td><code>scroll</code></td><td>Scroll the page or a specific element</td></tr>
+          <tr><td><code>ddm</code></td><td>Extract structured page data via DOM Density Map</td></tr>
+          <tr><td><code>page_intel</code></td><td>Analyze page structure and interactive elements</td></tr>
+          <tr><td><code>execute_js</code></td><td>Run JavaScript in the browser context</td></tr>
+          <tr><td><code>tabs</code></td><td>List open browser tabs</td></tr>
+          <tr><td><code>new_tab</code></td><td>Open a new browser tab</td></tr>
+          <tr><td><code>close_tab</code></td><td>Close a specific browser tab</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer class="footer">
+      <a href="/mcp-guide">MCP Docs</a> &middot;
+      <a href="/local">Open Chat</a> &middot;
+      <a href="/install">Install Agent</a> &middot;
+      <a href="/">Home</a>
+    </footer>
+  </div>
+
+  <script>
+    let apiKey = '';
+    let agentId = '';
+
+    async function handleMcpGoogleCredential(response) {
+      try {
+        var res = await fetch('/auth/google', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({credential: response.credential}),
+          credentials: 'include'
+        });
+        if (res.ok) { location.reload(); }
+      } catch(e) {}
+    }
+
+    window.addEventListener('load', function() {
+      var gcid = '__GOOGLE_CLIENT_ID__';
+      if (gcid && gcid !== '__GOOGLE_' + 'CLIENT_ID__' && window.google && google.accounts) {
+        google.accounts.id.initialize({
+          client_id: gcid,
+          callback: handleMcpGoogleCredential,
+          auto_prompt: false
+        });
+        var el = document.getElementById('mcp-gsi-btn');
+        if (el) {
+          google.accounts.id.renderButton(el, {
+            theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'rectangular', width: 260
+          });
+        }
+      }
+    });
+
+    function switchTab(tab, btn) {
+      document.querySelectorAll('[id^="tab-"]').forEach(function(el) {
+        if (el.id.startsWith('tab-claude') || el.id === 'tab-other') {
+          el.style.display = 'none';
+        }
+      });
+      document.getElementById('tab-' + tab).style.display = '';
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+    }
+
+    function copyCode(id, btn) {
+      var el = id ? document.getElementById(id) : btn.previousElementSibling;
+      if (!el) return;
+      navigator.clipboard.writeText(el.textContent).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function copySnippet(tab, btn) {
+      var el = document.getElementById('snippet-' + tab);
+      if (!el) return;
+      var text = el.textContent;
+      if (apiKey) text = text.replace(/YOUR_API_KEY/g, apiKey);
+      if (agentId) text = text.replace(/YOUR_AGENT_ID/g, agentId);
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function toggleTools() {
+      var table = document.getElementById('tools-table');
+      var arrow = document.getElementById('tools-arrow');
+      table.classList.toggle('show');
+      arrow.classList.toggle('open');
+    }
+
+    function fillKey(key) {
+      apiKey = key;
+      ['key-cc','key-cd','key-ot'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.textContent = key; el.style.color = '#34d399'; }
+      });
+    }
+
+    function fillAgentId(aid) {
+      agentId = aid;
+    }
+
+    (async function init() {
+      try {
+        var meResp = await fetch('/auth/me', { credentials: 'include' });
+        if (meResp.ok) {
+          var me = await meResp.json();
+          if (me.authenticated && me.api_key) {
+            fillKey(me.api_key);
+            document.getElementById('signin-section').style.display = 'none';
+            try {
+              var agentsResp = await fetch('/api/agents', {
+                headers: { 'Authorization': 'Bearer ' + me.api_key }
+              });
+              if (agentsResp.ok) {
+                var agents = await agentsResp.json();
+                var list = agents.agents || [];
+                if (list.length > 0) {
+                  var aid = list[0].agent_id || list[0].id || '';
+                  if (aid) fillAgentId(aid);
+                  document.getElementById('agent-dot').className = 'dot green';
+                  document.getElementById('agent-status-text').textContent =
+                    'Agent connected' + (aid ? ' (' + aid + ')' : '') + ' \u2014 skip to step 2';
+                  document.getElementById('installer-wrap').style.display = 'none';
+                } else {
+                  document.getElementById('agent-dot').className = 'dot red';
+                  document.getElementById('agent-status-text').textContent =
+                    'No agent connected \u2014 install below';
+                }
+              }
+            } catch(e) {}
+          } else {
+            document.getElementById('signin-section').style.display = '';
+            document.getElementById('agent-dot').className = 'dot yellow';
+            document.getElementById('agent-status-text').textContent =
+              'Sign in to check agent status';
+          }
+        } else {
+          document.getElementById('signin-section').style.display = '';
+          document.getElementById('agent-dot').className = 'dot yellow';
+          document.getElementById('agent-status-text').textContent =
+            'Sign in to check agent status';
+        }
+      } catch(e) {
+        document.getElementById('agent-dot').className = 'dot yellow';
+        document.getElementById('agent-status-text').textContent =
+          'Could not check status';
+      }
+    })();
+  </script>
 </body>
 </html>"""

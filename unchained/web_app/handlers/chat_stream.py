@@ -14,6 +14,58 @@ from aiohttp import web
 from web_app.core import get_core as _core
 
 
+def _normalize_profile_path(raw: object) -> str:
+    """Normalize optional profile path from client payloads."""
+    return str(raw or "").strip()
+
+
+async def _allowed_profile_paths(core, agent_id: str) -> set[str]:
+    """Return server-validated profile paths for this user bridge."""
+    import signup_agent
+
+    profiles = signup_agent.list_chrome_profiles()
+    if not profiles and agent_id:
+        relay_host, relay_port = core._parse_relay()
+        profiles = await core.provision_helpers.fetch_relay_profiles(
+            agent_id=agent_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            headers=core._relay_auth_headers(),
+        )
+    allowed: set[str] = set()
+    for profile in profiles:
+        path = _normalize_profile_path(profile.get("profile_path") or profile.get("path"))
+        if path:
+            allowed.add(path)
+    return allowed
+
+
+async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
+    """Ensure session is pinned to a provision browser tab for selected profile."""
+    current_tab = core._session_tabs.get(session_id, "")
+    current_profile = core._session_profile_paths.get(session_id, "")
+    if current_tab and current_profile == profile_path:
+        core._session_last_active[session_id] = time.time()
+        return current_tab
+
+    if current_tab:
+        await core._close_session_tab(session_id)
+
+    relay_host, relay_port = core._parse_relay()
+    import cloud_tools
+
+    launch = await cloud_tools.provision_launch(cdp_agent_id, profile_path, relay_host, relay_port)
+    tab_id = str((launch or {}).get("tab_id", "")).strip()
+    if not tab_id:
+        raise RuntimeError("Profile browser launch did not return tab_id")
+
+    core._session_tabs[session_id] = tab_id
+    core._session_agent_map[session_id] = cdp_agent_id
+    core._session_last_active[session_id] = time.time()
+    core._session_profile_paths[session_id] = profile_path
+    return tab_id
+
+
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
@@ -141,18 +193,34 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
 async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     """POST /web/chat — phone sends message, gets SSE stream back."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json body"}, status=400)
 
-    body = await request.json()
+    auth_info = core._authenticate(request)
+    guest_mode = False
+    guest_id = ""
+    guest_quota_count = 0
+    guest_quota_increment = False
+    if auth_info is None:
+        wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
+        if not wants_guest_first_look:
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, guest_quota_count = core._first_look_guest_auth(request)
+        guest_mode = True
+    if guest_mode and not core.HEADLESS_AGENT_ID:
+        err = web.json_response({"error": "headless_bridge_not_configured"}, status=503)
+        core._attach_first_look_guest_cookies(err, request, guest_id, quota_count=guest_quota_count)
+        return err
+
     req_id = core._request_id(request)
     message = body.get("message", "").strip()
     agent_id = auth_info.get("agent_id")
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
+    if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     core._trace(
         "chat.msg.in",
@@ -173,6 +241,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_sdk = core._is_codex_sdk_model(model)
     is_codex_cli = core._is_codex_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
+    if guest_mode and not is_openrouter:
+        return web.json_response(
+            {"error": "guest_mode_requires_openrouter_model"},
+            status=400,
+        )
     if core._is_pending_user(auth_info) and not is_openrouter:
         return core._pending_limited_response()
     openrouter_forced_model = ""
@@ -180,6 +253,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     openrouter_forced_notice = ""
     openrouter_budget_state: dict | None = None
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
+    selected_profile_path = _normalize_profile_path(body.get("profile_path"))
 
     def _session_owned(sid: str) -> bool:
         parts = sid.split("-")
@@ -321,21 +395,38 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             )
 
     if body.get("headless", False):
-        email = auth_info.get("email", "")
-        if email:
-            user = core._auth.find_user_by_email(email)
-            if not core._is_demo_unlimited(user):
-                count = core._auth.get_demo_count(email)
-                if count >= core._DEMO_PROMPT_LIMIT:
-                    return web.json_response(
-                        {
-                            "error": "demo_quota_exceeded",
-                            "demo_prompt_count": count,
-                            "demo_prompt_limit": core._DEMO_PROMPT_LIMIT,
-                        },
-                        status=429,
-                    )
-                core._auth.increment_demo_count(email)
+        if guest_mode:
+            if guest_quota_count >= core._FIRST_LOOK_GUEST_PROMPT_LIMIT:
+                quota_resp = web.json_response(
+                    {
+                        "error": "demo_quota_exceeded",
+                        "demo_prompt_count": guest_quota_count,
+                        "demo_prompt_limit": core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+                    },
+                    status=429,
+                )
+                core._attach_first_look_guest_cookies(
+                    quota_resp, request, guest_id, quota_count=guest_quota_count,
+                )
+                return quota_resp
+            guest_quota_count += 1
+            guest_quota_increment = True
+        else:
+            email = auth_info.get("email", "")
+            if email:
+                user = core._auth.find_user_by_email(email)
+                if not core._is_demo_unlimited(user):
+                    count = core._auth.get_demo_count(email)
+                    if count >= core._DEMO_PROMPT_LIMIT:
+                        return web.json_response(
+                            {
+                                "error": "demo_quota_exceeded",
+                                "demo_prompt_count": count,
+                                "demo_prompt_limit": core._DEMO_PROMPT_LIMIT,
+                            },
+                            status=429,
+                        )
+                    core._auth.increment_demo_count(email)
 
     email = auth_info.get("email", "")
     if email:
@@ -360,7 +451,30 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._response_queues[session_id] = q
 
     use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
+    if use_headless and selected_profile_path:
+        core._response_queues.pop(session_id, None)
+        return web.json_response(
+            {"error": "Profile selection is not supported in headless mode."},
+            status=400,
+        )
+
     cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else agent_id
+
+    tab_id = core._session_tabs.get(session_id)
+    if selected_profile_path:
+        allowed_paths = await _allowed_profile_paths(core, agent_id)
+        if selected_profile_path not in allowed_paths:
+            core._response_queues.pop(session_id, None)
+            return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
+        try:
+            tab_id = await _ensure_profile_tab(core, session_id, cdp_agent_id, selected_profile_path)
+        except Exception as e:
+            core._response_queues.pop(session_id, None)
+            return web.json_response({"error": f"Failed to launch selected profile: {e}"}, status=502)
+    elif tab_id and str(tab_id).startswith("prov-"):
+        await core._close_session_tab(session_id)
+        tab_id = None
+
     try:
         ws_msg = {
             "type": "user_message",
@@ -380,11 +494,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._codex_sdk_last_active[chat_agent_id] = time.time()
         elif is_codex_cli:
             core._session_last_active[session_id] = time.time()
-        tab_id = core._session_tabs.get(session_id)
         if not tab_id and use_headless:
             tab_id = await core._ensure_session_tab(session_id, cdp_agent_id)
         if tab_id:
             ws_msg["tab_id"] = tab_id
+        if not selected_profile_path:
+            core._session_profile_paths.pop(session_id, None)
         core._session_last_active[session_id] = time.time()
         await ws.send_json(ws_msg)
         core._trace(
@@ -415,6 +530,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "X-Accel-Buffering": "no",
         },
     )
+    if guest_mode:
+        core._attach_first_look_guest_cookies(
+            resp,
+            request,
+            guest_id,
+            quota_count=guest_quota_count if guest_quota_increment else None,
+        )
     await resp.prepare(request)
     if openrouter_forced_model:
         forced_evt = {
@@ -472,19 +594,37 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 async def handle_chat_cancel(request: web.Request) -> web.Response:
     """POST /web/chat/cancel — cancel an active chat session."""
     core = _core()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     auth_info = core._authenticate(request)
+    guest_mode = False
+    guest_id = ""
     if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    body = await request.json()
+        if not bool(body.get("first_look_guest")):
+            return web.json_response({"error": "Not authenticated"}, status=401)
+        auth_info, guest_id, _ = core._first_look_guest_auth(request)
+        guest_mode = True
     session_id = body.get("session_id", "")
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
 
     agent_id = auth_info.get("agent_id", "")
-    routing_agent_id = core._session_agents.get(session_id, agent_id)
+    if guest_mode and not session_id.startswith(f"s-{agent_id}-"):
+        denied = web.json_response({"error": "session_id not owned by guest"}, status=403)
+        core._attach_first_look_guest_cookies(denied, request, guest_id)
+        return denied
+    default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
+    routing_agent_id = core._session_agents.get(session_id, default_agent)
     ws = core._chat_agents.get(routing_agent_id)
     if ws and not ws.closed:
         await ws.send_json({"type": "cancel", "session_id": session_id})
-        return web.json_response({"ok": True})
-    return web.json_response({"error": "Agent not connected"}, status=503)
+        ok = web.json_response({"ok": True})
+        if guest_mode:
+            core._attach_first_look_guest_cookies(ok, request, guest_id)
+        return ok
+    err = web.json_response({"error": "Agent not connected"}, status=503)
+    if guest_mode:
+        core._attach_first_look_guest_cookies(err, request, guest_id)
+    return err

@@ -150,6 +150,68 @@ def _list_chrome_profiles():
     return profiles
 
 
+_PROFILE_CACHE_DIRS = {
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "ShaderCache",
+    "Service Worker",
+    "GrShaderCache",
+    "DawnCache",
+}
+_LIGHT_PROFILE_FILES = (
+    "Preferences",
+    "Secure Preferences",
+    "Cookies",
+    "Cookies-journal",
+    "Login Data",
+    "Login Data-journal",
+    "Web Data",
+    "Web Data-journal",
+    os.path.join("Network", "Cookies"),
+    os.path.join("Network", "Cookies-journal"),
+)
+_LIGHT_PROFILE_DIRS = (
+    "Local Storage",
+    "Session Storage",
+    "IndexedDB",
+)
+
+
+def _copy_profile_full(src_profile: str, dest_user_data_dir: str, profile_dir_name: str):
+    """Copy full profile directory excluding heavyweight cache folders."""
+    shutil.copytree(
+        src_profile,
+        os.path.join(dest_user_data_dir, profile_dir_name),
+        ignore=lambda _directory, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+    )
+
+
+def _copy_profile_light(src_profile: str, dest_user_data_dir: str, profile_dir_name: str):
+    """Copy only sign-in/session state required to reduce re-login prompts."""
+    dest_profile = os.path.join(dest_user_data_dir, profile_dir_name)
+    os.makedirs(dest_profile, exist_ok=True)
+
+    for rel in _LIGHT_PROFILE_FILES:
+        src = os.path.join(src_profile, rel)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(dest_profile, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+    for rel in _LIGHT_PROFILE_DIRS:
+        src = os.path.join(src_profile, rel)
+        if not os.path.isdir(src):
+            continue
+        shutil.copytree(
+            src,
+            os.path.join(dest_profile, rel),
+            dirs_exist_ok=True,
+            ignore=lambda _directory, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -464,11 +526,15 @@ class Agent:
         """Launch a temporary Chrome with the user's selected profile for provisioning."""
         # Parse profile_path from query string: /provision-launch?profile_path=<encoded>
         profile_path = ""
+        copy_mode = "light"
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
             params = urllib.parse.parse_qs(qs)
             profile_path = params.get("profile_path", [""])[0]
+            copy_mode = (params.get("copy_mode", ["light"])[0] or "light").strip().lower()
+        if copy_mode not in {"light", "full"}:
+            copy_mode = "light"
 
         if not profile_path or not os.path.isdir(profile_path):
             await self.ws.send(json.dumps({
@@ -496,18 +562,11 @@ class Agent:
             if os.path.isfile(local_state):
                 shutil.copy2(local_state, os.path.join(temp_dir, "Local State"))
 
-            # Copy the profile dir, skipping caches
-            cache_dirs = {"Cache", "Code Cache", "GPUCache", "ShaderCache",
-                          "Service Worker", "GrShaderCache", "DawnCache"}
-            def _ignore(directory, contents):
-                return [c for c in contents if c in cache_dirs]
-
-            shutil.copytree(
-                profile_path,
-                os.path.join(temp_dir, profile_dir_name),
-                ignore=_ignore,
-            )
-            print(f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir}")
+            if copy_mode == "full":
+                _copy_profile_full(profile_path, temp_dir, profile_dir_name)
+            else:
+                _copy_profile_light(profile_path, temp_dir, profile_dir_name)
+            print(f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir} (mode={copy_mode})")
         except Exception as e:
             await self.ws.send(json.dumps({
                 "type": "http_response",
@@ -610,7 +669,7 @@ class Agent:
             "type": "http_response",
             "req_id": req_id,
             "status": 200,
-            "body": {"tab_id": prov_tab_id, "port": prov_port},
+            "body": {"tab_id": prov_tab_id, "port": prov_port, "copy_mode": copy_mode},
         }))
 
     async def _handle_provision_cleanup(self, req_id):

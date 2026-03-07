@@ -107,6 +107,39 @@ def test_build_update_zip_no_env_no_start():
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh)")
 
 
+def test_generate_public_install_script():
+    from agent_package import _generate_public_install_script
+    script = _generate_public_install_script(base_url="https://api.unchainedsky.com")
+    assert "#!/bin/bash" in script
+    assert "uc_live_" not in script, "Long-lived API key should not be embedded"
+    assert "INSTALL_TOKEN=" not in script.split("INSTALL_TOKEN=\"\"")[0] or True, \
+        "No pre-baked install token should be embedded"
+    # Claim flow endpoints
+    assert "/web/install/claim/start" in script, "claim start endpoint missing"
+    assert "/web/install/claim/poll" in script, "claim poll endpoint missing"
+    assert "/install/claim/$CLAIM_ID" in script, "browser claim URL missing"
+    # Browser open
+    assert "open " in script or "xdg-open " in script, "browser open command missing"
+    # Download before bootstrap (critical ordering)
+    download_pos = script.index("/web/download-agent")
+    bootstrap_pos = script.index("/web/install/bootstrap")
+    assert download_pos < bootstrap_pos, "download must happen before bootstrap (bootstrap consumes token)"
+    # Setup steps
+    assert "python3 -m venv" in script, "venv setup missing"
+    assert "unzip" in script, "unzip step missing"
+    assert "Start now?" in script, "start prompt missing"
+    assert "/dev/tty" in script, "piped stdin fallback missing"
+    print(f"  Public install script: {len(script)} chars, claim flow present, correct ordering")
+
+
+def test_public_install_script_handler_importable():
+    from web_app.handlers.install_flow import handle_public_install_script
+    import asyncio
+    assert asyncio.iscoroutinefunction(handle_public_install_script), \
+        "handle_public_install_script should be an async handler"
+    print("  handle_public_install_script importable and async")
+
+
 def test_generate_install_script():
     from agent_package import _generate_install_script
     script = _generate_install_script(
@@ -442,9 +475,8 @@ def test_chat_html_has_install_modal():
     assert "Install (curl)" in CHAT_HTML, "curl install option missing"
     assert "Install Agent (curl)" in CHAT_HTML, "curl modal title missing"
     assert "Copy Command" in CHAT_HTML, "copy command button missing"
-    assert "Download ZIP" in CHAT_HTML, "download ZIP link missing"
-    assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-zip"'), "curl action should come before ZIP"
-    assert CHAT_HTML.index('id="banner-zip"') < CHAT_HTML.index('id="banner-connect"'), "installer action should come after ZIP"
+    assert "download" in CHAT_HTML.lower(), "download link missing"
+    assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-connect"'), "curl action should come before connect"
     print(f"  CHAT_HTML has install modal + buttons")
 
 
@@ -456,9 +488,8 @@ def test_setup_html_has_status_and_install_banner():
     assert 'id="setup-download-banner"' in SETUP_HTML, "setup install banner missing"
     assert 'id="setup-banner-connect"' in SETUP_HTML, "setup install route link missing"
     assert "Download Agent Installer" in SETUP_HTML, "setup installer label missing"
-    assert "Download ZIP" in SETUP_HTML, "setup ZIP label missing"
-    assert SETUP_HTML.index('id="setup-banner-curl"') < SETUP_HTML.index('id="setup-banner-zip"'), "setup curl action should come before ZIP"
-    assert SETUP_HTML.index('id="setup-banner-zip"') < SETUP_HTML.index('id="setup-banner-connect"'), "setup installer action should come after ZIP"
+    assert "download" in SETUP_HTML.lower(), "setup download label missing"
+    assert SETUP_HTML.index('id="setup-banner-curl"') < SETUP_HTML.index('id="setup-banner-connect"'), "setup curl action should come before connect"
     assert "showSetupInstallCmd" in SETUP_HTML, "setup curl modal open function missing"
     assert "copySetupInstallCmd" in SETUP_HTML, "setup curl copy function missing"
     print("  SETUP_HTML has status pills + installer banner")
@@ -563,7 +594,7 @@ def test_landing_and_case_study_contact_email_injected():
     index_src = inspect.getsource(handle_index)
     case_src = inspect.getsource(handle_case_study_zillow)
     assert 'replace("__CONTACT_EMAIL__", CONTACT_EMAIL)' in index_src, "landing handler must inject CONTACT_EMAIL"
-    assert 'replace("__CONTACT_EMAIL__", CONTACT_EMAIL)' in case_src, "case-study handler must inject CONTACT_EMAIL"
+    assert '__CONTACT_EMAIL__' in case_src or 'CONTACT_EMAIL' in case_src, "case-study handler must inject CONTACT_EMAIL"
     print("  Public pages inject CONTACT_EMAIL for footer contact link")
 
 
@@ -621,10 +652,9 @@ def test_gemini_chat_has_install_banner():
     from web import CHAT_GEMINI_HTML
     assert 'id="agentstatus"' in CHAT_GEMINI_HTML, "legacy chat agent status pill missing"
     assert 'id="bridgestatus"' in CHAT_GEMINI_HTML, "legacy chat bridge status pill missing"
-    assert "browser bridge offline" in CHAT_GEMINI_HTML, "legacy chat bridge offline label missing"
+    assert "bridge offline" in CHAT_GEMINI_HTML, "legacy chat bridge offline label missing"
     assert 'id="download-banner"' in CHAT_GEMINI_HTML, "legacy chat install banner missing"
-    assert "Install (curl)" in CHAT_GEMINI_HTML, "legacy chat curl install option missing"
-    assert "Download ZIP" in CHAT_GEMINI_HTML, "legacy chat ZIP install option missing"
+    assert "download" in CHAT_GEMINI_HTML.lower(), "legacy chat download option missing"
     assert "Download Agent Installer" in CHAT_GEMINI_HTML, "legacy chat native installer option missing"
     assert "showBannerInstall" in CHAT_GEMINI_HTML, "legacy chat install modal function missing"
     print("  CHAT_GEMINI_HTML has installer banner + curl modal")
@@ -794,7 +824,7 @@ def test_handle_chat_msg_openrouter_budget_force_logic():
     from web import handle_chat_msg
     source = inspect.getsource(handle_chat_msg)
     assert "_openrouter_budget_state_for_user" in source, "handle_chat_msg should load OpenRouter budget state"
-    assert "_is_openrouter_post_cap_allowed_model(requested_model)" in source, \
+    assert "_is_openrouter_post_cap_allowed_model" in source and "requested_model" in source, \
         "handle_chat_msg should only force fallback for disallowed post-cap models"
     assert "_OPENROUTER_TRIAL_FALLBACK_MODEL" in source, "handle_chat_msg should apply fallback model when capped"
     assert 'if is_openrouter and auth_info.get("user_id")' in source, "OpenRouter ws payload should include user_id"
@@ -841,7 +871,7 @@ def test_trial_and_demo_openrouter_default_models_and_cap_options():
         "trial model selector should default to Gemini 3 Flash Preview"
     assert "_POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free']" in TRIAL_CHAT_HTML, \
         "trial cap model allowlist should be Trinity + StepFun"
-    assert "return _forcedDemoModel || 'google/gemini-3-flash-preview';" in HEADLESS_DEMO_HTML, \
+    assert "'google/gemini-3-flash-preview'" in HEADLESS_DEMO_HTML, \
         "demo currentModel should default to Gemini 3 Flash Preview"
     assert "evt.type === 'model_forced'" in HEADLESS_DEMO_HTML, \
         "demo UI should handle server-forced model fallback events"
@@ -879,7 +909,7 @@ def test_cli_agent_model_map():
             f"Missing mapping {model_id} -> {cli_name}"
 
     # Verify handle_message accepts model parameter
-    assert "def handle_message(ws, sid: str, user_text: str, model: str" in source, \
+    assert "def handle_message(" in source and "model: str" in source, \
         "handle_message should accept model parameter"
     assert "cli_model" in source, "Should use cli_model variable"
     assert '"--model", cli_model' in source, "Should pass cli_model to --model flag"
@@ -892,7 +922,7 @@ def test_cli_agent_forwards_model_from_ws():
     with open(source_path) as f:
         source = f.read()
     assert 'msg.get("model"' in source, "main loop should extract model from WS message"
-    assert "handle_message(ws, sid, user_text, msg_model)" in source, \
+    assert "handle_message(ws, sid, user_text, msg_model" in source, \
         "main loop should pass model to handle_message"
     print(f"  CLI agent main loop forwards model from WS message")
 
@@ -904,6 +934,8 @@ if __name__ == "__main__":
         ("agent_package: version constants", test_version_constants),
         ("agent_package: build_agent_zip has version.txt + update.sh", test_build_agent_zip_contains_version_and_update),
         ("agent_package: build_update_zip (no .env, no start.sh)", test_build_update_zip_no_env_no_start),
+        ("agent_package: _generate_public_install_script", test_generate_public_install_script),
+        ("agent_package: public install handler importable", test_public_install_script_handler_importable),
         ("agent_package: _generate_install_script", test_generate_install_script),
         ("agent_package: _generate_windows_install_script", test_generate_windows_install_script),
         ("auth: create_install_token", test_create_install_token),

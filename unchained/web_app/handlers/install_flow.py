@@ -8,6 +8,26 @@ from aiohttp import web
 from web_app.core import get_core as _core
 
 
+async def handle_public_install_script(request: web.Request) -> web.Response:
+    """GET /install.sh — public, no-auth install script with browser claim flow."""
+    core = _core()
+    from agent_package import _generate_public_install_script
+
+    base_url = core._public_base_url(request)
+    script = _generate_public_install_script(base_url)
+    core._track_event(
+        request,
+        "public_install_script_served",
+        route="/install.sh",
+        route_intended="/install",
+        route_effective="/install.sh",
+        cta_id="public_install_sh",
+        source="web",
+        status_code=200,
+    )
+    return web.Response(text=script, content_type="text/plain")
+
+
 async def handle_download_agent(request: web.Request) -> web.Response:
     """GET /web/download-agent — download agent ZIP package."""
     core = _core()

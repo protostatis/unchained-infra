@@ -16,6 +16,14 @@ async def handle_install_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_mcp_page(request: web.Request) -> web.Response:
+    """Serve the MCP install/setup page."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.inject_google_client_id(core.MCP_PAGE_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
 async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     """Serve markdown-rendered MCP setup + route-plan docs."""
     core = _core()
@@ -153,12 +161,22 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
-async def handle_demo_page(request: web.Request) -> web.Response:
-    """Serve the headless demo chat HTML page."""
+async def handle_first_look_page(request: web.Request) -> web.Response:
+    """Serve the headless first-look chat HTML page."""
     core = _core()
     core._track_page_view(request)
     html = core.inject_google_client_id(core.HEADLESS_DEMO_HTML, core.GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    resp = web.Response(text=html, content_type="text/html")
+    _, guest_id, quota_count = core._first_look_guest_auth(request)
+    core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
+    return resp
+
+
+async def handle_demo_page(request: web.Request) -> web.Response:
+    """Redirect /demo to /first-look for backward compatibility."""
+    core = _core()
+    core._track_redirect(request, "/first-look", reason="legacy_route_alias")
+    raise web.HTTPFound("/first-look")
 
 
 async def handle_local_page(request: web.Request) -> web.Response:

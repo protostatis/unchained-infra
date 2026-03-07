@@ -507,7 +507,13 @@ def _codex_tool_name_and_input(command: str) -> tuple[str, str]:
     return "bash", cmd
 
 
-async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
+async def handle_message_claude(
+    ws,
+    sid: str,
+    user_text: str,
+    model: str = "",
+    tab_id: str = "auto",
+):
     """Single claude -p call with streaming tool events and session resume."""
     cli_model = _MODEL_CLI_MAP.get(model, "opus")
 
@@ -523,6 +529,7 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
     env["CDP_AGENT_ID"] = AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
+    env["CDP_TAB_ID"] = tab_id or "auto"
 
     # Build command with stream-json for real-time tool events
     allowed = "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh)"
@@ -901,7 +908,7 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
             print(f"  Stale session ({stderr_text[:80]}), starting fresh...")
             del claude_sessions[sid]
             await asyncio.sleep(1)  # let API state settle
-            return await handle_message_claude(ws, sid, user_text, model)
+            return await handle_message_claude(ws, sid, user_text, model, tab_id=tab_id)
         if is_resume and proc.returncode != 0:
             log.info("[%s] Resume failed (exit %d): %s", sid, proc.returncode, stderr_text[:200])
         response = f"Error: {stderr_text}" if stderr_text else f"Error: exit code {proc.returncode}"
@@ -915,7 +922,13 @@ async def handle_message_claude(ws, sid: str, user_text: str, model: str = ""):
     await ws.send(json.dumps({"session_id": sid, "type": "done"}))
 
 
-async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
+async def handle_message_codex(
+    ws,
+    sid: str,
+    user_text: str,
+    model: str = "",
+    tab_id: str = "auto",
+):
     """Single codex exec call with JSON event parsing and session resume."""
     codex_model = _resolve_codex_model(model)
 
@@ -943,6 +956,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
     env["CDP_AGENT_ID"] = AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
+    env["CDP_TAB_ID"] = tab_id or "auto"
 
     output_file = os.path.join(
         tempfile.gettempdir(),
@@ -1243,7 +1257,7 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
             codex_sessions.pop(sid, None)
             _save_codex_session("", "")
             await asyncio.sleep(1)
-            return await handle_message_codex(ws, sid, user_text, model)
+            return await handle_message_codex(ws, sid, user_text, model, tab_id=tab_id)
         if is_resume and not timed_out and (proc.returncode != 0 or error_text):
             log.info("[%s] Codex resume error (exit %d, keeping session): %s",
                      sid, proc.returncode or 0, (error_text or stderr_text)[:200])
@@ -1266,7 +1280,13 @@ async def handle_message_codex(ws, sid: str, user_text: str, model: str = ""):
         pass
 
 
-async def handle_message(ws, sid: str, user_text: str, model: str = ""):
+async def handle_message(
+    ws,
+    sid: str,
+    user_text: str,
+    model: str = "",
+    tab_id: str = "auto",
+):
     """Dispatch to local Claude CLI or Codex CLI handler by model prefix."""
     if _is_codex_cli_model(model):
         if shutil.which(CODEX_BIN) is None:
@@ -1277,8 +1297,8 @@ async def handle_message(ws, sid: str, user_text: str, model: str = ""):
             }))
             await ws.send(json.dumps({"session_id": sid, "type": "done"}))
             return
-        return await handle_message_codex(ws, sid, user_text, model)
-    return await handle_message_claude(ws, sid, user_text, model)
+        return await handle_message_codex(ws, sid, user_text, model, tab_id=tab_id)
+    return await handle_message_claude(ws, sid, user_text, model, tab_id=tab_id)
 
 
 async def main():
@@ -1337,6 +1357,7 @@ async def main():
                     sid = msg["session_id"]
                     user_text = msg["message"]
                     msg_model = msg.get("model", "")
+                    msg_tab_id = msg.get("tab_id", "auto")
                     log.info("[%s] User: %s (model=%s)", sid, user_text, msg_model or "default")
                     # Kill any existing process for this session to avoid concurrent API calls
                     existing_proc = active_procs.get(sid)
@@ -1353,7 +1374,9 @@ async def main():
                             await asyncio.wait_for(asyncio.shield(existing_task), timeout=2.0)
                         except (asyncio.CancelledError, asyncio.TimeoutError):
                             pass
-                    task = asyncio.create_task(handle_message(ws, sid, user_text, msg_model))
+                    task = asyncio.create_task(
+                        handle_message(ws, sid, user_text, msg_model, tab_id=msg_tab_id)
+                    )
                     active_tasks[sid] = task
                     task.add_done_callback(
                         lambda t, s=sid: (
