@@ -98,6 +98,27 @@ Then call tools with your `agent_id`, for example:
 - `js_eval` with `expression=document.title`
 - `ddm` with `flags=--text --find Slickdeals`
 
+## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
+
+Use this subsection in your agent instruction file so tool behavior stays
+consistent:
+
+```md
+### Unchained MCP Tool Use
+
+- MCP endpoint: `https://api.unchainedsky.com/mcp`
+- Always include `agent_id` in tool calls.
+- On every new page, run `ddm` first for orientation.
+- On unknown SPAs, run `intel_probe` before extraction.
+- Use `cdp_navigate`, `cdp_click`, `cdp_type` for actions.
+- After `cdp_navigate`/`cdp_click`, use returned layout first; call `ddm` again only if needed.
+- Use `js_eval` for deterministic reads (title, URLs, structured DOM data).
+- Use `cdp_screenshot` only for visual-only states (CAPTCHA, image verification).
+- If you get `Agent ... not connected`, stop and ask user to start/restart the local bridge.
+```
+
+This keeps instruction quality high without duplicating private-core internals.
+
 ## Raw MCP Smoke Test (No SDK)
 
 Use this when debugging handshake/tool issues:

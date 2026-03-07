@@ -39,6 +39,7 @@ Playwright skill for core user workflows.
 - bridge launch command (`--no-headless`)
 - MCP server URL
 - example tool calls (`cdp_navigate`, `ddm`, `js_eval`)
+- copyable AGENTS.md/CLAUDE.md "Unchained MCP Tool Use" snippet
 
 4. MCP vs Playwright skill comparison (single table)
 - rows:
