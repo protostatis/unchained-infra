@@ -16,6 +16,13 @@ async def handle_install_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_mcp_guide_page(request: web.Request) -> web.Response:
+    """Serve markdown-rendered MCP setup + route-plan docs."""
+    core = _core()
+    core._track_page_view(request)
+    return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
+
+
 async def handle_trial_page(request: web.Request) -> web.Response:
     """Serve the trial chat HTML page (OpenRouter models)."""
     core = _core()
