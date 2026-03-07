@@ -25,6 +25,8 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/auth/google", "web_app.handlers.auth_admin:handle_google_auth"),
     ("GET", "/auth/facebook/start", "web_app.handlers.auth_admin:handle_facebook_start"),
     ("GET", "/auth/facebook/callback", "web_app.handlers.auth_admin:handle_facebook_callback"),
+    ("GET", "/auth/github/start", "web_app.handlers.auth_admin:handle_github_start"),
+    ("GET", "/auth/github/callback", "web_app.handlers.auth_admin:handle_github_callback"),
     ("POST", "/auth/request-claude-access", "web_app.handlers.auth_admin:handle_request_claude_access"),
     ("POST", "/auth/logout", "web_app.handlers.auth_admin:handle_logout"),
     ("GET", "/auth/me", "web_app.handlers.auth_admin:handle_auth_me"),

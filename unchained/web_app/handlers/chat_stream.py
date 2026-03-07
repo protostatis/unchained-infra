@@ -14,6 +14,58 @@ from aiohttp import web
 from web_app.core import get_core as _core
 
 
+def _normalize_profile_path(raw: object) -> str:
+    """Normalize optional profile path from client payloads."""
+    return str(raw or "").strip()
+
+
+async def _allowed_profile_paths(core, agent_id: str) -> set[str]:
+    """Return server-validated profile paths for this user bridge."""
+    import signup_agent
+
+    profiles = signup_agent.list_chrome_profiles()
+    if not profiles and agent_id:
+        relay_host, relay_port = core._parse_relay()
+        profiles = await core.provision_helpers.fetch_relay_profiles(
+            agent_id=agent_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            headers=core._relay_auth_headers(),
+        )
+    allowed: set[str] = set()
+    for profile in profiles:
+        path = _normalize_profile_path(profile.get("profile_path") or profile.get("path"))
+        if path:
+            allowed.add(path)
+    return allowed
+
+
+async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
+    """Ensure session is pinned to a provision browser tab for selected profile."""
+    current_tab = core._session_tabs.get(session_id, "")
+    current_profile = core._session_profile_paths.get(session_id, "")
+    if current_tab and current_profile == profile_path:
+        core._session_last_active[session_id] = time.time()
+        return current_tab
+
+    if current_tab:
+        await core._close_session_tab(session_id)
+
+    relay_host, relay_port = core._parse_relay()
+    import cloud_tools
+
+    launch = await cloud_tools.provision_launch(cdp_agent_id, profile_path, relay_host, relay_port)
+    tab_id = str((launch or {}).get("tab_id", "")).strip()
+    if not tab_id:
+        raise RuntimeError("Profile browser launch did not return tab_id")
+
+    core._session_tabs[session_id] = tab_id
+    core._session_agent_map[session_id] = cdp_agent_id
+    core._session_last_active[session_id] = time.time()
+    core._session_profile_paths[session_id] = profile_path
+    return tab_id
+
+
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
@@ -180,6 +232,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     openrouter_forced_notice = ""
     openrouter_budget_state: dict | None = None
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
+    selected_profile_path = _normalize_profile_path(body.get("profile_path"))
 
     def _session_owned(sid: str) -> bool:
         parts = sid.split("-")
@@ -360,7 +413,30 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._response_queues[session_id] = q
 
     use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
+    if use_headless and selected_profile_path:
+        core._response_queues.pop(session_id, None)
+        return web.json_response(
+            {"error": "Profile selection is not supported in headless mode."},
+            status=400,
+        )
+
     cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else agent_id
+
+    tab_id = core._session_tabs.get(session_id)
+    if selected_profile_path:
+        allowed_paths = await _allowed_profile_paths(core, agent_id)
+        if selected_profile_path not in allowed_paths:
+            core._response_queues.pop(session_id, None)
+            return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
+        try:
+            tab_id = await _ensure_profile_tab(core, session_id, cdp_agent_id, selected_profile_path)
+        except Exception as e:
+            core._response_queues.pop(session_id, None)
+            return web.json_response({"error": f"Failed to launch selected profile: {e}"}, status=502)
+    elif tab_id and str(tab_id).startswith("prov-"):
+        await core._close_session_tab(session_id)
+        tab_id = None
+
     try:
         ws_msg = {
             "type": "user_message",
@@ -380,11 +456,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._codex_sdk_last_active[chat_agent_id] = time.time()
         elif is_codex_cli:
             core._session_last_active[session_id] = time.time()
-        tab_id = core._session_tabs.get(session_id)
         if not tab_id and use_headless:
             tab_id = await core._ensure_session_tab(session_id, cdp_agent_id)
         if tab_id:
             ws_msg["tab_id"] = tab_id
+        if not selected_profile_path:
+            core._session_profile_paths.pop(session_id, None)
         core._session_last_active[session_id] = time.time()
         await ws.send_json(ws_msg)
         core._trace(

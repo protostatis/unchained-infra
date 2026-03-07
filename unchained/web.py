@@ -624,6 +624,7 @@ _response_queues = _state.response_queues  # session_id -> event queue
 _session_agents = _state.session_agents  # session_id -> agent_id that handled it
 _agent_req_queues = _state.agent_req_queues  # req_id -> one-shot response queue
 _session_tabs = _state.session_tabs  # session_id -> Chrome tab_id
+_session_profile_paths = _state.session_profile_paths  # session_id -> selected Chrome profile path
 _session_last_active = _state.session_last_active  # session_id -> timestamp
 _session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
 _STALE_TAB_SECONDS = 30 * 60

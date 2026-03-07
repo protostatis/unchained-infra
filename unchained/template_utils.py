@@ -274,8 +274,9 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 
 _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
 (function(){
-  var APP_ID = __UC_FACEBOOK_APP_ID__;
-  if(!APP_ID) return;
+  var FB_APP_ID = __UC_FACEBOOK_APP_ID__;
+  var GH_CLIENT_ID = __UC_GITHUB_CLIENT_ID__;
+  if(!FB_APP_ID && !GH_CLIENT_ID) return;
 
   function inferSource(){
     var p = window.location.pathname || '';
@@ -298,7 +299,13 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     if(code === 'facebook_exchange_failed') return 'Facebook sign-in failed during token exchange.';
     if(code === 'facebook_profile_failed') return 'Facebook sign-in failed while reading your profile.';
     if(code === 'facebook_not_configured') return 'Facebook sign-in is not configured yet.';
-    return 'Facebook sign-in failed. Please try again.';
+    if(code === 'github_email_required') return 'GitHub account email is required. Add a public/verified email and try again.';
+    if(code === 'github_denied') return 'GitHub sign-in was canceled.';
+    if(code === 'github_state_invalid') return 'GitHub sign-in expired. Please try again.';
+    if(code === 'github_exchange_failed') return 'GitHub sign-in failed during token exchange.';
+    if(code === 'github_profile_failed') return 'GitHub sign-in failed while reading your profile.';
+    if(code === 'github_not_configured') return 'GitHub sign-in is not configured yet.';
+    return 'Social sign-in failed. Please try again.';
   }
 
   function renderQueryError(){
@@ -317,6 +324,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
   }
 
   function insertFacebookButton(){
+    if(!FB_APP_ID) return;
     var login = document.getElementById('login');
     if(!login) return;
     if(document.getElementById('fb-login-btn')) return;
@@ -345,8 +353,44 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     login.appendChild(btn);
   }
 
+  function insertGithubButton(){
+    if(!GH_CLIENT_ID) return;
+    var login = document.getElementById('login');
+    if(!login) return;
+    if(document.getElementById('gh-login-btn')) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'gh-login-btn';
+    btn.textContent = 'Continue with GitHub';
+    btn.style.cssText = 'display:block;width:320px;height:44px;border:1px solid #30363d;border-radius:8px;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin-top:10px';
+    btn.addEventListener('click', function(){
+      var source = inferSource();
+      var next = currentNextPath();
+      var url = '/auth/github/start?source=' + encodeURIComponent(source) + '&next=' + encodeURIComponent(next);
+      window.location.href = url;
+    });
+
+    var fb = login.querySelector('#fb-login-btn');
+    if(fb && fb.parentNode){
+      fb.insertAdjacentElement('afterend', btn);
+      return;
+    }
+    var gsi = login.querySelector('.g_id_signin');
+    if(gsi && gsi.parentNode){
+      gsi.insertAdjacentElement('afterend', btn);
+      return;
+    }
+    var loginErr = login.querySelector('#loginerr');
+    if(loginErr && loginErr.parentNode){
+      loginErr.insertAdjacentElement('beforebegin', btn);
+      return;
+    }
+    login.appendChild(btn);
+  }
+
   function init(){
     insertFacebookButton();
+    insertGithubButton();
     renderQueryError();
   }
 
@@ -370,12 +414,18 @@ def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     html = template_html.replace("__GOOGLE_CLIENT_ID__", google_client_id)
     facebook_app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
     facebook_app_secret = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
-    facebook_enabled = bool(facebook_app_id and facebook_app_secret)
+    facebook_ui_enabled = os.environ.get("FACEBOOK_LOGIN_UI_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    facebook_enabled = bool(facebook_app_id and facebook_app_secret and facebook_ui_enabled)
+    github_client_id = os.environ.get("GITHUB_CLIENT_ID", "").strip()
+    github_client_secret = os.environ.get("GITHUB_CLIENT_SECRET", "").strip()
+    github_enabled = bool(github_client_id and github_client_secret)
     html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id if facebook_enabled else "")
-    if facebook_enabled and "data-uc-facebook-login" not in html:
+    if (facebook_enabled or github_enabled) and "data-uc-facebook-login" not in html:
         fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
-            "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id)
-        )
+            "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id if facebook_enabled else "")
+        ).replace("__UC_GITHUB_CLIENT_ID__", json.dumps(github_client_id if github_enabled else ""))
         html = _inject_before_body(html, fb_snippet)
     if "data-uc-analytics-client" in html:
         return html

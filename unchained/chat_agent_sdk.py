@@ -270,6 +270,7 @@ class ChatAgent:
         agent_id: str,
         severity: str,
         prompt: str,
+        tab_id: str | None = None,
     ):
         """Emit intervention event and optional screenshot context."""
         await self._send_event(session_id, {
@@ -294,7 +295,7 @@ class ChatAgent:
         })
         try:
             screenshot = await asyncio.wait_for(
-                self._execute_tool(agent_id, "screenshot", {"tab_id": "auto"}),
+                self._execute_tool(agent_id, "screenshot", {"tab_id": "auto"}, tab_id=tab_id),
                 timeout=INTERVENTION_SCREENSHOT_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -318,6 +319,7 @@ class ChatAgent:
         agent_id = msg.get("agent_id", self.agent_id)
         user_text = msg["message"]
         model = _resolve_model(msg.get("model") or self.model, self.model)
+        session_tab_id = msg.get("tab_id")
 
         print(f"[{session_id}] User: {user_text[:80]} (model={model})")
 
@@ -385,6 +387,7 @@ class ChatAgent:
                             session_id, agent_id,
                             getattr(loop_feedback, "severity", "hard_stop"),
                             loop_nudge,
+                            tab_id=session_tab_id,
                         )
 
                     # Inject nudge into tool results, force final
@@ -462,7 +465,7 @@ class ChatAgent:
                     })
 
                     result = await self._execute_tool(
-                        agent_id, block.name, block.input,
+                        agent_id, block.name, block.input, tab_id=session_tab_id,
                     )
 
                     # Progress signature for stagnation tracking
@@ -525,6 +528,7 @@ class ChatAgent:
                         await self._emit_intervention_event(
                             session_id, agent_id,
                             feedback.severity, prompt,
+                            tab_id=session_tab_id,
                         )
                         if feedback.severity == "nudge":
                             prev_stagnation = nudge.stagnation_score
@@ -664,22 +668,33 @@ class ChatAgent:
                     "type": "error", "data": msg,
                 })
 
-    async def _execute_tool(self, agent_id: str, name: str,
-                            input_data: dict) -> str:
+    async def _execute_tool(
+        self,
+        agent_id: str,
+        name: str,
+        input_data: dict,
+        tab_id: str | None = None,
+    ) -> str:
         """Execute a tool call against the agent's Chrome via cloud_tools."""
-        tab_id = input_data.get("tab_id", "auto")
+        args_tab = input_data.get("tab_id", "")
+        if args_tab and args_tab != "auto":
+            effective_tab = args_tab
+        elif tab_id:
+            effective_tab = tab_id
+        else:
+            effective_tab = "auto"
 
         try:
             if name == "ddm":
                 flags = input_data.get("flags", "--llm-2pass --cols 60")
                 return await cloud_tools.run_ddm(
-                    agent_id, tab_id, flags.split(),
+                    agent_id, effective_tab, flags.split(),
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "intel_probe":
                 return await cloud_tools.run_intel(
-                    agent_id, tab_id, ["--probe"],
+                    agent_id, effective_tab, ["--probe"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
@@ -689,13 +704,13 @@ class ChatAgent:
                 if strategy:
                     flags += ["--strategy", strategy]
                 return await cloud_tools.run_intel(
-                    agent_id, tab_id, flags,
+                    agent_id, effective_tab, flags,
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "intel_stores":
                 return await cloud_tools.run_intel(
-                    agent_id, tab_id, ["--stores"],
+                    agent_id, effective_tab, ["--stores"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
@@ -703,39 +718,39 @@ class ChatAgent:
                 global_name = input_data["global_name"]
                 key = input_data["key"]
                 return await cloud_tools.run_intel(
-                    agent_id, tab_id,
+                    agent_id, effective_tab,
                     ["--find-paths", global_name, key],
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "navigate":
                 return await cloud_tools.navigate(
-                    agent_id, tab_id, input_data["url"],
+                    agent_id, effective_tab, input_data["url"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "click":
                 return await cloud_tools.click(
-                    agent_id, tab_id,
+                    agent_id, effective_tab,
                     input_data["x"], input_data["y"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "type_text":
                 return await cloud_tools.type_text(
-                    agent_id, tab_id, input_data["text"],
+                    agent_id, effective_tab, input_data["text"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "js_eval":
                 return await cloud_tools.run_js(
-                    agent_id, tab_id, input_data["expression"],
+                    agent_id, effective_tab, input_data["expression"],
                     RELAY_HOST, RELAY_PORT,
                 )
 
             elif name == "screenshot":
                 data = await cloud_tools.screenshot(
-                    agent_id, tab_id,
+                    agent_id, effective_tab,
                     RELAY_HOST, RELAY_PORT,
                 )
                 return data  # base64 PNG

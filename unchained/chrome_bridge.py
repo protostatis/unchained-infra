@@ -8,6 +8,7 @@ credentials, cookies, and IP.
 Usage:
     cd unchained/
     uv run chrome_bridge.py start                          # Connect to default relay
+    uv run chrome_bridge.py start --daemon                 # Start detached (survives terminal close)
     uv run chrome_bridge.py start --headless               # Launch local Chrome headless
     uv run chrome_bridge.py start --relay ws://host:8765/tunnel  # Custom relay
     uv run chrome_bridge.py start --key uk_live_xxx        # With API key
@@ -147,6 +148,68 @@ def _list_chrome_profiles():
             "email": email,
         })
     return profiles
+
+
+_PROFILE_CACHE_DIRS = {
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "ShaderCache",
+    "Service Worker",
+    "GrShaderCache",
+    "DawnCache",
+}
+_LIGHT_PROFILE_FILES = (
+    "Preferences",
+    "Secure Preferences",
+    "Cookies",
+    "Cookies-journal",
+    "Login Data",
+    "Login Data-journal",
+    "Web Data",
+    "Web Data-journal",
+    os.path.join("Network", "Cookies"),
+    os.path.join("Network", "Cookies-journal"),
+)
+_LIGHT_PROFILE_DIRS = (
+    "Local Storage",
+    "Session Storage",
+    "IndexedDB",
+)
+
+
+def _copy_profile_full(src_profile: str, dest_user_data_dir: str, profile_dir_name: str):
+    """Copy full profile directory excluding heavyweight cache folders."""
+    shutil.copytree(
+        src_profile,
+        os.path.join(dest_user_data_dir, profile_dir_name),
+        ignore=lambda _directory, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+    )
+
+
+def _copy_profile_light(src_profile: str, dest_user_data_dir: str, profile_dir_name: str):
+    """Copy only sign-in/session state required to reduce re-login prompts."""
+    dest_profile = os.path.join(dest_user_data_dir, profile_dir_name)
+    os.makedirs(dest_profile, exist_ok=True)
+
+    for rel in _LIGHT_PROFILE_FILES:
+        src = os.path.join(src_profile, rel)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(dest_profile, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+    for rel in _LIGHT_PROFILE_DIRS:
+        src = os.path.join(src_profile, rel)
+        if not os.path.isdir(src):
+            continue
+        shutil.copytree(
+            src,
+            os.path.join(dest_profile, rel),
+            dirs_exist_ok=True,
+            ignore=lambda _directory, contents: [c for c in contents if c in _PROFILE_CACHE_DIRS],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -463,11 +526,15 @@ class Agent:
         """Launch a temporary Chrome with the user's selected profile for provisioning."""
         # Parse profile_path from query string: /provision-launch?profile_path=<encoded>
         profile_path = ""
+        copy_mode = "light"
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
             params = urllib.parse.parse_qs(qs)
             profile_path = params.get("profile_path", [""])[0]
+            copy_mode = (params.get("copy_mode", ["light"])[0] or "light").strip().lower()
+        if copy_mode not in {"light", "full"}:
+            copy_mode = "light"
 
         if not profile_path or not os.path.isdir(profile_path):
             await self.ws.send(json.dumps({
@@ -495,18 +562,11 @@ class Agent:
             if os.path.isfile(local_state):
                 shutil.copy2(local_state, os.path.join(temp_dir, "Local State"))
 
-            # Copy the profile dir, skipping caches
-            cache_dirs = {"Cache", "Code Cache", "GPUCache", "ShaderCache",
-                          "Service Worker", "GrShaderCache", "DawnCache"}
-            def _ignore(directory, contents):
-                return [c for c in contents if c in cache_dirs]
-
-            shutil.copytree(
-                profile_path,
-                os.path.join(temp_dir, profile_dir_name),
-                ignore=_ignore,
-            )
-            print(f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir}")
+            if copy_mode == "full":
+                _copy_profile_full(profile_path, temp_dir, profile_dir_name)
+            else:
+                _copy_profile_light(profile_path, temp_dir, profile_dir_name)
+            print(f"[agent:prov] Copied profile {profile_dir_name} to {temp_dir} (mode={copy_mode})")
         except Exception as e:
             await self.ws.send(json.dumps({
                 "type": "http_response",
@@ -609,7 +669,7 @@ class Agent:
             "type": "http_response",
             "req_id": req_id,
             "status": 200,
-            "body": {"tab_id": prov_tab_id, "port": prov_port},
+            "body": {"tab_id": prov_tab_id, "port": prov_port, "copy_mode": copy_mode},
         }))
 
     async def _handle_provision_cleanup(self, req_id):
@@ -771,6 +831,7 @@ def _load_config() -> dict:
         "profile": "default",
         "chrome_headless": False,
         "chrome_args": "",
+        "daemon": False,
     }
     # Layer 1: config file
     if os.path.exists(AGENT_CONFIG_FILE):
@@ -824,6 +885,9 @@ def _parse_args(args: list[str], config: dict) -> dict:
             i += 1
         elif args[i] == "--no-headless":
             config["chrome_headless"] = False
+            i += 1
+        elif args[i] in ("--daemon", "-d"):
+            config["daemon"] = True
             i += 1
         elif args[i] == "--chrome-args" and i + 1 < len(args):
             config["chrome_args"] = args[i + 1]
@@ -913,10 +977,19 @@ def _is_agent_running() -> bool:
         _remove_pid()
         return False
 
-    cmdline = _process_cmdline(pid)
-    if not cmdline:
+    # Fast path: process exists.
+    try:
+        os.kill(pid, 0)
+    except OSError:
         _remove_pid()
         return False
+
+    cmdline = _process_cmdline(pid)
+    if not cmdline:
+        # In restricted environments (sandboxed CI, limited containers), we may
+        # be unable to inspect command lines even when the process exists.
+        # Keep the pid file and treat it as running to avoid false "stopped".
+        return True
     if "chrome_bridge.py" not in cmdline:
         # PID got recycled by an unrelated process; treat as stale.
         _remove_pid()
@@ -1017,6 +1090,10 @@ def cmd_start(config: dict):
         print(f"[agent] already running (PID {pid})")
         return
 
+    if config.get("daemon"):
+        _start_detached(config)
+        return
+
     # Ensure Chrome is running with CDP
     if not _ensure_chrome(
         config["cdp_host"],
@@ -1085,6 +1162,62 @@ def cmd_start(config: dict):
         _remove_pid()
         loop.close()
         log.info("[bridge] stopped")
+
+
+def _start_detached(config: dict):
+    """Start the bridge as a detached background process."""
+    script_path = os.path.abspath(__file__)
+    cmd = [
+        sys.executable,
+        script_path,
+        "start",
+        "--relay",
+        config["relay_url"],
+        "--host",
+        config["cdp_host"],
+        "--port",
+        str(config["cdp_port"]),
+        "--profile",
+        config["profile"],
+    ]
+    if config.get("api_key"):
+        cmd.extend(["--key", config["api_key"]])
+    if config.get("chrome_headless", False):
+        cmd.append("--headless")
+    else:
+        cmd.append("--no-headless")
+    if config.get("chrome_args"):
+        cmd.extend(["--chrome-args", config["chrome_args"]])
+
+    log_path = os.path.join(DATA_DIR, "bridge.log")
+    log_fp = open(log_path, "a", buffering=1)
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": log_fp,
+        "stderr": log_fp,
+        "cwd": os.getcwd(),
+    }
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+
+    try:
+        subprocess.Popen(cmd, **kwargs)
+
+        for _ in range(40):
+            time.sleep(0.25)
+            if _is_agent_running():
+                pid = _read_pid()
+                print(f"[agent] started in daemon mode (PID {pid})")
+                print(f"[agent] logs: {log_path}")
+                return
+
+        print("[agent] daemon launch requested, but bridge PID was not confirmed yet")
+        print(f"[agent] check logs: {log_path}")
+    finally:
+        log_fp.close()
 
 
 def cmd_status():
@@ -1161,6 +1294,7 @@ Options:
     --profile <name>    Chrome profile name (default: default)
     --headless          Launch local Chrome in headless mode
     --no-headless       Launch local Chrome with a visible window
+    --daemon, -d        Run in background (detached from terminal)
     --chrome-args <s>   Extra Chrome launch args string
 
 Each profile gets its own Chrome data directory (~/.unchained/chrome_<name>/)

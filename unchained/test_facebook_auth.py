@@ -125,16 +125,11 @@ class TestFacebookAuthHandlers(unittest.IsolatedAsyncioTestCase):
 
 
 class TestTemplateFacebookGate(unittest.TestCase):
-    def test_facebook_button_requires_app_id_and_secret(self):
+    def test_facebook_button_hidden_by_default(self):
         template = (
             "<!DOCTYPE html><html><body><div id='login'>"
             "<div class='g_id_signin'></div><div id='loginerr'></div></div></body></html>"
         )
-
-        with patch.dict(os.environ, {"FACEBOOK_APP_ID": "app-id"}, clear=False):
-            with patch.dict(os.environ, {"FACEBOOK_APP_SECRET": ""}, clear=False):
-                html = template_utils.inject_google_client_id(template, "google-id")
-        self.assertNotIn("data-uc-facebook-login", html)
 
         with patch.dict(
             os.environ,
@@ -142,7 +137,44 @@ class TestTemplateFacebookGate(unittest.TestCase):
             clear=False,
         ):
             html = template_utils.inject_google_client_id(template, "google-id")
+        self.assertNotIn("data-uc-facebook-login", html)
+
+    def test_facebook_button_requires_app_id_secret_and_ui_flag(self):
+        template = (
+            "<!DOCTYPE html><html><body><div id='login'>"
+            "<div class='g_id_signin'></div><div id='loginerr'></div></div></body></html>"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FACEBOOK_APP_ID": "app-id",
+                "FACEBOOK_APP_SECRET": "app-secret",
+                "FACEBOOK_LOGIN_UI_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            html = template_utils.inject_google_client_id(template, "google-id")
         self.assertIn("data-uc-facebook-login", html)
+
+    def test_facebook_app_id_is_blank_when_ui_hidden_even_with_github(self):
+        template = (
+            "<!DOCTYPE html><html><body><div id='login'>"
+            "<div class='g_id_signin'></div><div id='loginerr'></div></div></body></html>"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FACEBOOK_APP_ID": "app-id",
+                "FACEBOOK_APP_SECRET": "app-secret",
+                "GITHUB_CLIENT_ID": "gh-id",
+                "GITHUB_CLIENT_SECRET": "gh-secret",
+            },
+            clear=False,
+        ):
+            html = template_utils.inject_google_client_id(template, "google-id")
+        self.assertIn('var FB_APP_ID = "";', html)
 
 
 if __name__ == "__main__":
