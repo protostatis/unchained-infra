@@ -328,9 +328,11 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}',
-      '#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}',
-      '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
+      '#login .g_id_signin{position:relative;display:block;width:min(100%,360px);max-width:360px;height:48px;margin:0 auto;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117;}',
+      '#login .g_id_signin::before{content:\"Continue with Google\";position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;gap:10px;padding-left:24px;color:#f0f6fc;font-size:15px;font-weight:600;line-height:1;pointer-events:none;}',
+      '#login .g_id_signin::after{content:\"G\";position:absolute;left:14px;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:3px;background:#fff;color:#1a73e8;font-size:14px;font-weight:700;line-height:1;pointer-events:none;}',
+      '#login .g_id_signin > div,#login .g_id_signin > div > div{position:absolute !important;inset:0 !important;width:100% !important;height:100% !important;max-width:100% !important;border:0 !important;overflow:hidden !important;background:transparent !important;z-index:3 !important;}',
+      '#login .g_id_signin iframe{position:absolute !important;inset:0 !important;display:block !important;width:100% !important;height:100% !important;max-width:100% !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:0.015 !important;z-index:4 !important;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
     ].join('');
     if(document.head){
