@@ -323,6 +323,21 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     }catch(_err){}
   }
 
+  function injectAuthButtonStyles(){
+    if(document.getElementById('uc-auth-btn-style')) return;
+    var style = document.createElement('style');
+    style.id = 'uc-auth-btn-style';
+    style.textContent = [
+      '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}',
+      '#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}',
+      '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
+      '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
+    ].join('');
+    if(document.head){
+      document.head.appendChild(style);
+    }
+  }
+
   function insertFacebookButton(){
     if(!FB_APP_ID) return;
     var login = document.getElementById('login');
@@ -389,6 +404,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
   }
 
   function init(){
+    injectAuthButtonStyles();
     insertFacebookButton();
     insertGithubButton();
     renderQueryError();
