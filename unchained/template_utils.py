@@ -328,15 +328,35 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,320px);margin:0 auto;}',
-      '#login .g_id_signin > div,#login .g_id_signin > div > div{width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;}',
-      '#login .g_id_signin iframe{display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;}',
-      '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
+      '#login .uc-google-auth-wrap{position:relative;width:min(100%,320px);height:44px;margin:0 auto;}',
+      '#login .uc-google-auth-visual{display:flex;align-items:center;justify-content:center;width:100%;height:100%;border:1px solid #2a3341;border-radius:12px;background:linear-gradient(180deg,#1c212a 0%,#161a22 100%);color:#edf2f7;font-size:15px;font-weight:600;letter-spacing:0.01em;}',
+      '#login .uc-google-auth-wrap .g_id_signin{position:absolute !important;inset:0;z-index:2;opacity:0.01;width:100% !important;max-width:none !important;margin:0 !important;}',
+      '#login .uc-google-auth-wrap .g_id_signin > div,#login .uc-google-auth-wrap .g_id_signin > div > div,#login .uc-google-auth-wrap .g_id_signin iframe{width:100% !important;max-width:none !important;height:100% !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;}',
+      '#login .uc-google-auth-wrap .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
     ].join('');
     if(document.head){
       document.head.appendChild(style);
     }
+  }
+
+  function decorateGoogleButton(){
+    var login = document.getElementById('login');
+    if(!login) return;
+    var gsi = login.querySelector('.g_id_signin');
+    if(!gsi) return;
+    if(gsi.parentNode && gsi.parentNode.classList && gsi.parentNode.classList.contains('uc-google-auth-wrap')) return;
+    if(!gsi.parentNode) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'uc-google-auth-wrap';
+    var visual = document.createElement('div');
+    visual.className = 'uc-google-auth-visual';
+    visual.textContent = 'Continue with Google';
+    wrap.appendChild(visual);
+
+    gsi.parentNode.insertBefore(wrap, gsi);
+    wrap.appendChild(gsi);
   }
 
   function insertFacebookButton(){
@@ -408,6 +428,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     injectAuthButtonStyles();
     insertFacebookButton();
     insertGithubButton();
+    decorateGoogleButton();
     renderQueryError();
   }
 
