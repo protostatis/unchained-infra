@@ -10424,6 +10424,274 @@ document.addEventListener('keydown',e=>{
 </body>
 </html>"""
 
+# Setup page visual alignment with the modern chat skin.
+_MODERN_SETUP_THEME_STYLE = """<style id="modern-setup-theme">
+:root{
+  color-scheme:dark;
+  --bg:#0a0c0f;
+  --surface:#11161d;
+  --surface-elev:#171d26;
+  --accent:#ff6b4a;
+  --accent-strong:#ff8768;
+  --accent-soft:rgba(255,107,74,0.16);
+  --text:#edf2f7;
+  --muted:#9da7b7;
+  --line:#2a3341;
+  --line-strong:#3a4555;
+  --green:#5cd48a;
+  --red:#ef7c7c;
+  --yellow:#f0c46d;
+  --border:var(--line);
+  --fg:var(--text);
+  --mono:'IBM Plex Mono','SF Mono','Menlo','Consolas',monospace;
+  --sans:'Space Grotesk','Avenir Next','Segoe UI',sans-serif;
+}
+body{
+  font-family:var(--sans)!important;
+  background:
+    radial-gradient(1200px 420px at 12% -8%, rgba(255,107,74,0.15), transparent 58%),
+    radial-gradient(900px 340px at 95% 4%, rgba(64,136,124,0.14), transparent 62%),
+    linear-gradient(180deg,#121720 0%,#0d1118 44%,#0a0c0f 100%)!important;
+  color:var(--text)!important;
+}
+a{color:var(--accent-strong)}
+#login h1{
+  font-size:34px!important;
+  color:var(--text)!important;
+  letter-spacing:0.06em!important;
+  text-transform:uppercase;
+  font-weight:700;
+}
+#login .sub{color:var(--muted)!important}
+#login #dev-auth button{
+  border-radius:12px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+}
+#topbar{
+  align-items:flex-start!important;
+  gap:14px;
+  padding:12px clamp(12px,2vw,24px)!important;
+  background:rgba(17,22,29,0.88)!important;
+  border-bottom:1px solid var(--line)!important;
+  backdrop-filter:blur(8px);
+}
+#topbar .left{display:flex;align-items:center;gap:12px}
+#topbar .title{
+  font-family:var(--mono)!important;
+  font-size:12px!important;
+  color:var(--accent-strong)!important;
+  letter-spacing:0.04em;
+  background:var(--accent-soft)!important;
+  border:1px solid rgba(255,107,74,0.4)!important;
+  padding:4px 10px;
+  border-radius:999px;
+}
+#topbar .status-stack{display:flex;flex-direction:column;gap:2px}
+#topbar .status{color:var(--muted)!important}
+#topbar .status.online{color:var(--green)!important}
+#topbar .status.warn{color:var(--yellow)!important}
+#topbar .nav a{
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  color:var(--muted)!important;
+  border:1px solid var(--line)!important;
+  background:rgba(255,255,255,0.02)!important;
+  padding:6px 10px!important;
+  border-radius:999px!important;
+}
+#topbar .nav a:hover{
+  border-color:var(--accent)!important;
+  color:#ffd2c8!important;
+  background:var(--accent-soft)!important;
+}
+#main{
+  max-width:1160px;
+  margin:0 auto;
+  border-left:1px solid rgba(255,255,255,0.05);
+  border-right:1px solid rgba(255,255,255,0.05);
+  background:linear-gradient(180deg,rgba(17,22,29,0.9) 0%,rgba(11,14,19,0.93) 100%);
+  box-shadow:0 22px 50px rgba(0,0,0,0.34);
+}
+#setup-download-banner{
+  padding:9px clamp(12px,2vw,24px)!important;
+  background:rgba(255,107,74,0.1)!important;
+  border-bottom:1px solid rgba(255,107,74,0.3)!important;
+}
+#setup-download-banner .detail{color:#b5bfce!important}
+#setup-download-banner a{
+  color:#ffd8cf!important;
+  border:1px solid rgba(255,107,74,0.5)!important;
+  border-radius:999px!important;
+  background:rgba(255,107,74,0.2)!important;
+}
+#setup-download-banner a:hover{
+  background:rgba(255,107,74,0.28)!important;
+  border-color:var(--accent-strong)!important;
+}
+.content{
+  max-width:760px!important;
+  padding:24px clamp(12px,2vw,24px)!important;
+}
+.step{
+  background:rgba(17,22,29,0.9)!important;
+  border:1px solid var(--line)!important;
+  border-radius:14px!important;
+  padding:18px!important;
+}
+.step h2{
+  color:#ffd4cb!important;
+  font-family:var(--mono)!important;
+  font-size:12px!important;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+.profile-option{
+  border:1px solid var(--line)!important;
+  border-radius:12px!important;
+  background:rgba(255,255,255,0.01)!important;
+}
+.profile-option:hover{border-color:var(--accent)!important;background:var(--accent-soft)!important}
+.profile-option.selected{
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+.profiles-loading,.profile-email,.profile-hint{color:var(--muted)!important}
+.provision-btn{
+  border-radius:12px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+  font-family:var(--sans)!important;
+}
+.provision-status{font-family:var(--mono)!important}
+.provision-status.running{color:var(--yellow)!important}
+.provision-status.done{color:var(--green)!important}
+.provision-status.error{color:var(--red)!important}
+.key-row{border-bottom:1px solid var(--line)!important}
+.key-preview{color:var(--muted)!important}
+.revoke-btn{
+  border-radius:8px!important;
+  border:1px solid #5a2626!important;
+  background:#351818!important;
+  color:#ffb8b8!important;
+}
+.agent-label{color:var(--muted)!important}
+.agent-label.online{color:var(--green)!important}
+.install-cmd,#setup-install-modal .cmd{
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+  background:#10151d!important;
+}
+.copy-btn{
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+  background:rgba(255,255,255,0.02)!important;
+  color:var(--muted)!important;
+}
+.copy-btn:hover{
+  border-color:var(--accent)!important;
+  color:#ffd2c8!important;
+  background:var(--accent-soft)!important;
+}
+#consent-modal{
+  background:rgba(0,0,0,0.72)!important;
+}
+#consent-modal .modal-card{
+  background:var(--surface-elev)!important;
+  border:1px solid var(--line-strong)!important;
+  border-radius:14px!important;
+}
+#consent-modal h3{color:#ffd5cc!important}
+#consent-modal p{color:var(--muted)!important}
+#consent-modal li{color:#c7cfda!important}
+#consent-modal .btn-agree{
+  border-radius:10px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+}
+#consent-modal .btn-cancel{
+  border-radius:10px!important;
+  border:1px solid var(--line)!important;
+  color:var(--muted)!important;
+}
+#setup-install-modal{
+  background:rgba(0,0,0,0.72)!important;
+}
+#setup-install-modal .card{
+  background:var(--surface-elev)!important;
+  border:1px solid var(--line-strong)!important;
+  border-radius:14px!important;
+}
+#setup-install-modal h3{color:#ffd5cc!important}
+#setup-install-modal p{color:var(--muted)!important}
+#setup-install-modal .x{color:var(--muted)!important}
+#pending{
+  align-items:center!important;
+  justify-content:center!important;
+  text-align:center!important;
+}
+#pending h1{
+  color:var(--text)!important;
+  letter-spacing:0.04em!important;
+}
+#pending p{color:var(--muted)!important}
+#pending button{
+  border-radius:12px!important;
+  border:1px solid var(--line-strong)!important;
+  background:rgba(255,255,255,0.02)!important;
+  color:var(--text)!important;
+}
+#pending button:hover{
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+#pendingmsg{color:var(--muted)!important}
+.toast{
+  border-radius:10px!important;
+  font-family:var(--mono)!important;
+}
+.toast.ok{
+  background:rgba(92,212,138,0.12)!important;
+  color:#9bf0bc!important;
+  border:1px solid rgba(92,212,138,0.35)!important;
+}
+.toast.err{
+  background:rgba(239,124,124,0.12)!important;
+  color:#ffb8b8!important;
+  border:1px solid rgba(239,124,124,0.35)!important;
+}
+@media (max-width: 900px){
+  #main{max-width:none;border:none;box-shadow:none}
+}
+@media (max-width: 640px){
+  #topbar{
+    flex-direction:column!important;
+    align-items:flex-start!important;
+    gap:10px;
+    padding:10px!important;
+  }
+  #topbar .nav{
+    width:100%;
+    overflow:auto;
+    display:flex;
+    flex-wrap:nowrap;
+  }
+  .content{padding:14px 10px!important}
+}
+</style>"""
+
+
+def _apply_modern_setup_theme(html: str) -> str:
+    if 'id="modern-setup-theme"' in html:
+        return html
+    if "</head>" not in html:
+        return html
+    parts: list[str] = []
+    if "fonts.googleapis.com/css2?family=Space+Grotesk" not in html:
+        parts.append(_MODERN_CHAT_THEME_LINKS)
+    parts.append(_MODERN_SETUP_THEME_STYLE)
+    return html.replace("</head>", "\n" + "\n".join(parts) + "\n</head>", 1)
+
+
+SETUP_HTML = _apply_modern_setup_theme(SETUP_HTML)
+
 
 # ---------------------------------------------------------------------------
 # MCP Install Page — /mcp
