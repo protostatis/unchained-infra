@@ -15,6 +15,7 @@ Playwright skill for core user workflows.
 
 ## Page Goals
 
+- Lead with the "zero config if agent already installed" path
 - Explain the architecture in plain language: local Chrome + bridge + MCP server
 - Give copy-paste setup steps that work end-to-end
 - Frame the decision clearly: when MCP is better, when Playwright still fits
@@ -28,10 +29,11 @@ Playwright skill for core user workflows.
   - `Open Chat` (`/local`) for login/API key retrieval
   - `Docs` (deep link to `docs/mcp-local-browser-guide.md` or public mirror)
 
-2. 3-step quickstart
-- Step 1: get/reuse API key
-- Step 2: start `chrome_bridge.py` to `wss://api.unchainedsky.com/tunnel`
-- Step 3: connect MCP client to `https://api.unchainedsky.com/mcp`
+2. Two-path quickstart
+- Path A (recommended): "Already installed agent" -> point MCP client at
+  `https://api.unchainedsky.com/mcp` and use current connected `agent_id`
+- Path B (manual): start `chrome_bridge.py` to
+  `wss://api.unchainedsky.com/tunnel`
 
 3. Copy blocks
 - bridge launch command (`--no-headless`)
@@ -79,6 +81,7 @@ Playwright skill for core user workflows.
 ## Acceptance Criteria
 
 - `GET /mcp` returns 200 in local dev and production
+- existing installed-agent users can complete setup without source checkout
 - user can copy commands directly from page without external docs
 - comparison section gives explicit "MCP default / Playwright exception" guidance
 - route does not require login to read, but clearly states execution prerequisites
@@ -93,4 +96,3 @@ Playwright skill for core user workflows.
 
 - Harden MCP auth enforcement in `mcp_server.py` so tool calls require validated
   API key ownership checks before launch traffic increases from this route.
-

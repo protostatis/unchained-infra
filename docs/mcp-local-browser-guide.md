@@ -10,23 +10,55 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 - Keep your real browser session (cookies, extensions, 2FA state, IP)
 - Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`) from any
   MCP-compatible client
+- Zero-config path if you already installed the agent via `curl | bash`
 - Avoid setting up and maintaining a custom Playwright skill for each tool host
 
 ## Prerequisites
 
-- A valid Unchained API key (`uc_live_...`)
-- Local Chrome installed
-- `uv` + this repo checked out
+- A valid Unchained API key (`uc_live_...`) and local Chrome
+- Either:
+  - installed agent already running (`~/unchained-agent`, recommended)
+  - or local repo checkout + `uv` for manual bridge start
 
-If you already run the packaged agent, reuse its API key from your existing
-agent env/config. For local self-hosted dev, you can mint a key:
+If you already run the packaged agent, reuse its existing API key from
+`~/unchained-agent/.env`.
+
+For local self-hosted dev, you can mint a key:
 
 ```bash
 cd unchained-infra/unchained
 uv run python -c "from auth import Auth; print(Auth().create_key('u-dev'))"
 ```
 
-## 1. Start Local Bridge to Production Relay
+## Fast Path (Zero Config): Existing Installed Agent
+
+If the agent is already installed, you do not need to run `uv run ... chrome_bridge.py`
+from source.
+
+1. Ensure your installed agent is running:
+
+```bash
+cd ~/unchained-agent
+./start.sh --daemon
+```
+
+2. Point your MCP client to:
+
+```text
+https://api.unchainedsky.com/mcp
+```
+
+3. Get your connected `agent_id` (from same API key in `~/unchained-agent/.env`):
+
+```bash
+API_KEY="$(grep '^UNCHAINED_API_KEY=' ~/unchained-agent/.env | cut -d= -f2-)"
+curl -sS https://api.unchainedsky.com/api/agents \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Use the returned `agent_id` in MCP tool calls.
+
+## Manual Path: Start Bridge from Repo
 
 ```bash
 cd unchained-infra/unchained
@@ -43,7 +75,7 @@ Expected output includes:
 
 Save that `agent_id`.
 
-## 2. (Optional) Verify Agent Connectivity
+## (Optional) Verify Agent Connectivity
 
 ```bash
 curl -sS https://api.unchainedsky.com/api/agents \
@@ -52,7 +84,7 @@ curl -sS https://api.unchainedsky.com/api/agents \
 
 You should see your `agent_id` in the response list.
 
-## 3. Connect MCP Client
+## Connect MCP Client
 
 Example (Claude Code):
 
@@ -66,7 +98,7 @@ Then call tools with your `agent_id`, for example:
 - `js_eval` with `expression=document.title`
 - `ddm` with `flags=--text --find Slickdeals`
 
-## 4. Raw MCP Smoke Test (No SDK)
+## Raw MCP Smoke Test (No SDK)
 
 Use this when debugging handshake/tool issues:
 
@@ -143,4 +175,3 @@ Playwright skill still has valid use cases:
 - `4004 Agent ... not connected`: bridge is not running or wrong `agent_id`
 - `401 Missing Authorization header` on `/api/agents`: add Bearer API key
 - Bridge reconnect loop: verify relay URL and API key are valid
-
