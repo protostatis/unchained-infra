@@ -369,8 +369,10 @@ def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     """Replace Google client placeholder and inject lightweight analytics client."""
     html = template_html.replace("__GOOGLE_CLIENT_ID__", google_client_id)
     facebook_app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
-    html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id)
-    if facebook_app_id and "data-uc-facebook-login" not in html:
+    facebook_app_secret = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
+    facebook_enabled = bool(facebook_app_id and facebook_app_secret)
+    html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id if facebook_enabled else "")
+    if facebook_enabled and "data-uc-facebook-login" not in html:
         fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
             "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id)
         )

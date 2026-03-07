@@ -489,6 +489,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
                     "code": code,
                 },
             )
+        token_resp.raise_for_status()
         token_payload = token_resp.json() if token_resp.content else {}
         access_token = str(token_payload.get("access_token", "")).strip()
     except Exception:
@@ -514,9 +515,28 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
                     "access_token": access_token,
                 },
             )
+        profile_resp.raise_for_status()
         profile = profile_resp.json() if profile_resp.content else {}
     except Exception:
-        profile = {}
+        core._track_event(
+            request,
+            "auth_facebook_fail",
+            source=source,
+            error_code="profile_fetch_failed",
+            meta={"source": source, "reason": "profile_fetch_failed"},
+            status_code=502,
+        )
+        return _redirect(auth_error="facebook_profile_failed")
+    if not isinstance(profile, dict):
+        core._track_event(
+            request,
+            "auth_facebook_fail",
+            source=source,
+            error_code="invalid_profile_payload",
+            meta={"source": source, "reason": "invalid_profile_payload"},
+            status_code=502,
+        )
+        return _redirect(auth_error="facebook_profile_failed")
     email = str(profile.get("email", "")).strip().lower()
     name = str(profile.get("name", "")).strip()
     picture = ""
