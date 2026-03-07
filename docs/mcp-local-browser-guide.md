@@ -1,0 +1,146 @@
+# MCP Local Browser Guide (Production)
+
+Last validated: March 7, 2026.
+
+This guide shows how to drive your local Chrome through the production MCP
+endpoint (`https://api.unchainedsky.com/mcp`).
+
+## What This Enables
+
+- Keep your real browser session (cookies, extensions, 2FA state, IP)
+- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`) from any
+  MCP-compatible client
+- Avoid setting up and maintaining a custom Playwright skill for each tool host
+
+## Prerequisites
+
+- A valid Unchained API key (`uc_live_...`)
+- Local Chrome installed
+- `uv` + this repo checked out
+
+If you already run the packaged agent, reuse its API key from your existing
+agent env/config. For local self-hosted dev, you can mint a key:
+
+```bash
+cd unchained-infra/unchained
+uv run python -c "from auth import Auth; print(Auth().create_key('u-dev'))"
+```
+
+## 1. Start Local Bridge to Production Relay
+
+```bash
+cd unchained-infra/unchained
+UNCHAINED_RELAY_URL=wss://api.unchainedsky.com/tunnel \
+UNCHAINED_API_KEY=<your_uc_live_key> \
+uv run python chrome_bridge.py start --no-headless
+```
+
+Expected output includes:
+
+```text
+[agent] authenticated as claude-xxxxxxxx
+```
+
+Save that `agent_id`.
+
+## 2. (Optional) Verify Agent Connectivity
+
+```bash
+curl -sS https://api.unchainedsky.com/api/agents \
+  -H "Authorization: Bearer <your_uc_live_key>"
+```
+
+You should see your `agent_id` in the response list.
+
+## 3. Connect MCP Client
+
+Example (Claude Code):
+
+```bash
+claude --mcp-server https://api.unchainedsky.com/mcp
+```
+
+Then call tools with your `agent_id`, for example:
+
+- `cdp_navigate` with `url=https://slickdeals.net`
+- `js_eval` with `expression=document.title`
+- `ddm` with `flags=--text --find Slickdeals`
+
+## 4. Raw MCP Smoke Test (No SDK)
+
+Use this when debugging handshake/tool issues:
+
+```bash
+python - <<'PY'
+import json, urllib.request
+
+URL = "https://api.unchainedsky.com/mcp"
+AGENT = "claude-xxxxxxxx"
+
+def post(payload, sid=None):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if sid:
+        headers["mcp-session-id"] = sid
+    req = urllib.request.Request(
+        URL, data=json.dumps(payload).encode(), method="POST", headers=headers
+    )
+    with urllib.request.urlopen(req, timeout=45) as r:
+        return r.status, r.headers, r.read().decode("utf-8", "replace")
+
+init = {
+    "jsonrpc": "2.0",
+    "id": "1",
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {},
+        "clientInfo": {"name": "manual-smoke", "version": "0.1"},
+    },
+}
+status, headers, _ = post(init)
+sid = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
+print("initialize:", status, "session:", sid)
+
+post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, sid)
+
+nav = {
+    "jsonrpc": "2.0",
+    "id": "2",
+    "method": "tools/call",
+    "params": {
+        "name": "cdp_navigate",
+        "arguments": {"agent_id": AGENT, "url": "https://example.com"},
+    },
+}
+status, _, body = post(nav, sid)
+print("navigate:", status)
+print(body[:500])
+PY
+```
+
+## Why This Is Better (For Product Usage) Than a Playwright Skill
+
+For Unchained's main user flow, MCP + local bridge is the better default:
+
+- Auth reliability: uses the user's already-authenticated browser session
+- Less setup drift: one MCP server endpoint, no per-skill wrapper maintenance
+- Cross-client reuse: same MCP tools work with multiple MCP hosts/agents
+- Lower operational overhead: no separate browser sandbox lifecycle to manage
+- Better alignment with Unchained moat: "your browser, your identity, your IP"
+
+Playwright skill still has valid use cases:
+
+- deterministic CI test automation in isolated environments
+- DOM/visual assertions against a disposable browser context
+- scripted QA flows where local user identity is not required
+
+## Troubleshooting
+
+- `404` on `/mcp`: confirm deploy includes Caddy route for exact `/mcp`
+- `4004 Agent ... not connected`: bridge is not running or wrong `agent_id`
+- `401 Missing Authorization header` on `/api/agents`: add Bearer API key
+- Bridge reconnect loop: verify relay URL and API key are valid
+

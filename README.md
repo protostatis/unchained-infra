@@ -133,6 +133,10 @@ unchained-infra/
 - [docs/cloud-tools-execution-map.md](./docs/cloud-tools-execution-map.md): where
   browser actions execute across the public/private boundary
 - [docs/debugging-map.md](./docs/debugging-map.md): trace events and incident triage
+- [docs/mcp-local-browser-guide.md](./docs/mcp-local-browser-guide.md): run
+  production MCP against your local Chrome bridge
+- [docs/mcp-frontend-route-plan.md](./docs/mcp-frontend-route-plan.md): plan for
+  a public `/mcp` onboarding route and positioning copy
 - [docs/split-repo-setup.md](./docs/split-repo-setup.md): CI and private-core overlay
 - [unchained/benchmark/README.md](./unchained/benchmark/README.md): local benchmark flow
 - [unchained/README.md](./unchained/README.md): package-level developer notes
