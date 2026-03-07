@@ -9372,3 +9372,376 @@ document.addEventListener('keydown',e=>{
 </script>
 </body>
 </html>"""
+
+
+# ---------------------------------------------------------------------------
+# MCP Install Page — /mcp
+# ---------------------------------------------------------------------------
+
+MCP_PAGE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MCP Setup | Unchained</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      background:#0a0a0f;color:#e8e8ec;line-height:1.6;
+    }
+    a{color:#ff8398;text-decoration:none}
+    a:hover{text-decoration:underline}
+    .wrap{max-width:960px;margin:0 auto;padding:28px 18px 56px}
+    .nav{display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between;margin-bottom:24px}
+    .brand{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:#8e8ea0}
+    .nav-links{display:flex;gap:8px}
+    .nav-btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid #3a3a44;border-radius:10px;padding:8px 14px;
+      color:#e8e8ec;text-decoration:none;font-size:13px;background:#141420;
+    }
+    .nav-btn:hover{border-color:#e94560;text-decoration:none}
+    .hero{
+      border:1px solid #252532;border-radius:16px;padding:32px 24px;
+      background:linear-gradient(180deg,#141420 0%,#101018 100%);
+      margin-bottom:28px;text-align:center;
+    }
+    .hero h1{font-size:clamp(26px,3.5vw,38px);margin-bottom:8px}
+    .hero h1 span{color:#e94560}
+    .hero p{color:#a6a6b5;font-size:16px;max-width:600px;margin:0 auto}
+    .steps{display:flex;flex-direction:column;gap:20px;margin-bottom:32px}
+    .step{
+      border:1px solid #252532;border-radius:14px;background:#0e0e15;
+      padding:22px 20px;position:relative;
+    }
+    .step-num{
+      display:inline-flex;align-items:center;justify-content:center;
+      width:28px;height:28px;border-radius:50%;background:#e94560;
+      color:#fff;font-size:13px;font-weight:700;margin-right:10px;
+    }
+    .step h2{display:inline;font-size:18px;vertical-align:middle}
+    .step-body{margin-top:14px}
+    .agent-status{
+      display:flex;align-items:center;gap:8px;padding:10px 14px;
+      border-radius:10px;background:#111118;border:1px solid #2a2a34;
+      font-size:13px;margin-bottom:10px;
+    }
+    .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .dot.green{background:#34d399}
+    .dot.yellow{background:#fbbf24}
+    .dot.red{background:#f87171}
+    .tab-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+    .tab-btn{
+      border:1px solid #2a2a34;border-radius:999px;padding:7px 14px;
+      background:#12121b;color:#aeb0c0;cursor:pointer;font-size:13px;
+      font-family:inherit;
+    }
+    .tab-btn.active{border-color:#e94560;background:#23141a;color:#fff}
+    .code-wrap{position:relative;margin-bottom:8px}
+    .code-block{
+      overflow-x:auto;padding:14px 16px;border-radius:10px;
+      background:#111118;border:1px solid #2b2b36;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all;
+    }
+    .copy-btn{
+      position:absolute;top:8px;right:8px;padding:5px 10px;
+      border:1px solid #3a3a44;border-radius:8px;background:#1a1a26;
+      color:#aeb0c0;cursor:pointer;font-size:12px;font-family:inherit;
+    }
+    .copy-btn:hover{border-color:#e94560;color:#fff}
+    .copy-btn.copied{background:#23141a;color:#e94560;border-color:#e94560}
+    .signin-prompt{
+      display:flex;align-items:center;gap:10px;padding:12px 16px;
+      border-radius:10px;background:rgba(233,69,96,0.08);
+      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:12px;
+    }
+    .signin-btn{
+      padding:7px 16px;border-radius:8px;background:#e94560;
+      color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+      border:none;text-decoration:none;
+    }
+    .signin-btn:hover{background:#d63b55;text-decoration:none}
+    .tools-section{
+      border:1px solid #252532;border-radius:14px;background:#0e0e15;
+      padding:22px 20px;margin-bottom:28px;
+    }
+    .tools-toggle{
+      display:flex;align-items:center;justify-content:space-between;
+      cursor:pointer;user-select:none;
+    }
+    .tools-toggle h2{font-size:18px}
+    .tools-toggle .arrow{font-size:14px;color:#8e8ea0;transition:transform .2s}
+    .tools-toggle .arrow.open{transform:rotate(180deg)}
+    .tools-table{
+      width:100%;border-collapse:collapse;margin-top:14px;
+      font-size:13px;display:none;
+    }
+    .tools-table.show{display:table}
+    .tools-table th{text-align:left;padding:8px 10px;border-bottom:1px solid #252532;color:#8e8ea0;font-weight:500}
+    .tools-table td{padding:8px 10px;border-bottom:1px solid #1a1a24}
+    .tools-table tr:last-child td{border-bottom:none}
+    .tools-table code{
+      background:#171722;border:1px solid #2f2f3c;border-radius:4px;
+      padding:1px 5px;font-size:12px;
+    }
+    .footer{text-align:center;color:#6e6e80;font-size:13px;padding:20px 0}
+    .footer a{color:#8e8ea0}
+    @media(max-width:640px){
+      .wrap{padding:16px 12px 40px}
+      .step{padding:16px 14px}
+      .hero{padding:24px 16px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <div class="brand">Unchained MCP</div>
+      <div class="nav-links">
+        <a class="nav-btn" href="/">Home</a>
+        <a class="nav-btn" href="/local">Chat</a>
+        <a class="nav-btn" href="/mcp-guide">Docs</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <h1>Your browser, <span>one command</span> away</h1>
+      <p>Use your real Chrome through any MCP client. No Playwright. No headless. Raw CDP over your existing agent.</p>
+    </section>
+
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <h2>Connect Your Browser</h2>
+        <div class="step-body">
+          <div class="agent-status" id="agent-status">
+            <div class="dot yellow" id="agent-dot"></div>
+            <span id="agent-status-text">Checking agent status...</span>
+          </div>
+          <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+            Install the Unchained agent on your Mac to bridge your local Chrome:
+          </p>
+          <div class="code-wrap" id="installer-wrap">
+            <pre class="code-block" id="installer-cmd">curl -fsSL https://api.unchainedsky.com/install/script | bash</pre>
+            <button class="copy-btn" onclick="copyCode('installer-cmd',this)">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <span class="step-num">2</span>
+        <h2>Add MCP Server</h2>
+        <div class="step-body">
+          <div id="signin-section" class="signin-prompt" style="display:none">
+            <span>Sign in to auto-fill your API key</span>
+            <a class="signin-btn" href="/auth/google" id="signin-link">Sign in with Google</a>
+          </div>
+          <div class="tab-bar">
+            <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
+            <button class="tab-btn" onclick="switchTab('claude-desktop',this)">Claude Desktop</button>
+            <button class="tab-btn" onclick="switchTab('other',this)">Other</button>
+          </div>
+          <div id="tab-claude-code">
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
+  --transport http \
+  --url https://api.unchainedsky.com/mcp \
+  --header "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+              <button class="copy-btn" onclick="copySnippet('claude-code',this)">Copy</button>
+            </div>
+          </div>
+          <div id="tab-claude-desktop" style="display:none">
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-desktop">{
+  "mcpServers": {
+    "unchainedsky": {
+      "url": "https://api.unchainedsky.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <span id="key-cd">YOUR_API_KEY</span>"
+      }
+    }
+  }
+}</pre>
+              <button class="copy-btn" onclick="copySnippet('claude-desktop',this)">Copy</button>
+            </div>
+          </div>
+          <div id="tab-other" style="display:none">
+            <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+              Use any MCP client that supports HTTP transport. Set the endpoint and Authorization header:
+            </p>
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-other">Endpoint: https://api.unchainedsky.com/mcp
+Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
+              <button class="copy-btn" onclick="copySnippet('other',this)">Copy</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <span class="step-num">3</span>
+        <h2>Verify</h2>
+        <div class="step-body">
+          <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+            Ask your MCP client to run a quick DDM extraction:
+          </p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-verify">ddm url=https://example.com agent_id=<span id="verify-aid">YOUR_AGENT_ID</span></pre>
+            <button class="copy-btn" onclick="copySnippet('verify',this)">Copy</button>
+          </div>
+          <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
+            If you don't know your agent_id, check your agent's startup output or run:
+          </p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
+            <button class="copy-btn" onclick="copyCode('snippet-agent-lookup',this)">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tools-section">
+      <div class="tools-toggle" onclick="toggleTools()">
+        <h2>Available MCP Tools</h2>
+        <span class="arrow" id="tools-arrow">&#9660;</span>
+      </div>
+      <table class="tools-table" id="tools-table">
+        <thead>
+          <tr><th>Tool</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>navigate</code></td><td>Navigate to a URL in the browser</td></tr>
+          <tr><td><code>screenshot</code></td><td>Take a screenshot of the current page</td></tr>
+          <tr><td><code>click</code></td><td>Click an element using CSS selector or coordinates</td></tr>
+          <tr><td><code>type_text</code></td><td>Type text into focused element or selector</td></tr>
+          <tr><td><code>scroll</code></td><td>Scroll the page or a specific element</td></tr>
+          <tr><td><code>ddm</code></td><td>Extract structured page data via DOM Density Map</td></tr>
+          <tr><td><code>page_intel</code></td><td>Analyze page structure and interactive elements</td></tr>
+          <tr><td><code>execute_js</code></td><td>Run JavaScript in the browser context</td></tr>
+          <tr><td><code>tabs</code></td><td>List open browser tabs</td></tr>
+          <tr><td><code>new_tab</code></td><td>Open a new browser tab</td></tr>
+          <tr><td><code>close_tab</code></td><td>Close a specific browser tab</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer class="footer">
+      <a href="/mcp-guide">MCP Docs</a> &middot;
+      <a href="/local">Open Chat</a> &middot;
+      <a href="/install">Install Agent</a> &middot;
+      <a href="/">Home</a>
+    </footer>
+  </div>
+
+  <script>
+    let apiKey = '';
+    let agentId = '';
+
+    function switchTab(tab, btn) {
+      document.querySelectorAll('[id^="tab-"]').forEach(function(el) {
+        if (el.id.startsWith('tab-claude') || el.id === 'tab-other') {
+          el.style.display = 'none';
+        }
+      });
+      document.getElementById('tab-' + tab).style.display = '';
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+    }
+
+    function copyCode(id, btn) {
+      var el = id ? document.getElementById(id) : btn.previousElementSibling;
+      if (!el) return;
+      navigator.clipboard.writeText(el.textContent).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function copySnippet(tab, btn) {
+      var el = document.getElementById('snippet-' + tab);
+      if (!el) return;
+      var text = el.textContent;
+      if (apiKey) text = text.replace(/YOUR_API_KEY/g, apiKey);
+      if (agentId) text = text.replace(/YOUR_AGENT_ID/g, agentId);
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function toggleTools() {
+      var table = document.getElementById('tools-table');
+      var arrow = document.getElementById('tools-arrow');
+      table.classList.toggle('show');
+      arrow.classList.toggle('open');
+    }
+
+    function fillKey(key) {
+      apiKey = key;
+      ['key-cc','key-cd','key-ot'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.textContent = key; el.style.color = '#34d399'; }
+      });
+    }
+
+    function fillAgentId(aid) {
+      agentId = aid;
+      var el = document.getElementById('verify-aid');
+      if (el) { el.textContent = aid; el.style.color = '#34d399'; }
+    }
+
+    (async function init() {
+      try {
+        var meResp = await fetch('/auth/me', { credentials: 'include' });
+        if (meResp.ok) {
+          var me = await meResp.json();
+          if (me.authenticated && me.api_key) {
+            fillKey(me.api_key);
+            document.getElementById('signin-section').style.display = 'none';
+            try {
+              var agentsResp = await fetch('/api/agents', {
+                headers: { 'Authorization': 'Bearer ' + me.api_key }
+              });
+              if (agentsResp.ok) {
+                var agents = await agentsResp.json();
+                var list = agents.agents || [];
+                if (list.length > 0) {
+                  var aid = list[0].agent_id || list[0].id || '';
+                  if (aid) fillAgentId(aid);
+                  document.getElementById('agent-dot').className = 'dot green';
+                  document.getElementById('agent-status-text').textContent =
+                    'Agent connected' + (aid ? ' (' + aid + ')' : '') + ' \u2014 skip to step 2';
+                  document.getElementById('installer-wrap').style.display = 'none';
+                } else {
+                  document.getElementById('agent-dot').className = 'dot red';
+                  document.getElementById('agent-status-text').textContent =
+                    'No agent connected \u2014 install below';
+                }
+              }
+            } catch(e) {}
+          } else {
+            document.getElementById('signin-section').style.display = '';
+            document.getElementById('agent-dot').className = 'dot yellow';
+            document.getElementById('agent-status-text').textContent =
+              'Sign in to check agent status';
+          }
+        } else {
+          document.getElementById('signin-section').style.display = '';
+          document.getElementById('agent-dot').className = 'dot yellow';
+          document.getElementById('agent-status-text').textContent =
+            'Sign in to check agent status';
+        }
+      } catch(e) {
+        document.getElementById('agent-dot').className = 'dot yellow';
+        document.getElementById('agent-status-text').textContent =
+          'Could not check status';
+      }
+    })();
+  </script>
+</body>
+</html>"""

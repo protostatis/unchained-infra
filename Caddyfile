@@ -27,7 +27,16 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy relay:8765
 	}
 
-	# MCP server — Mode B users connect here
+	# MCP install page — GET /mcp serves the web UI setup page
+	@mcp_get {
+		method GET
+		path /mcp
+	}
+	handle @mcp_get {
+		reverse_proxy web:8080
+	}
+
+	# MCP server — POST /mcp and /mcp/* route to MCP transport
 	handle /mcp {
 		reverse_proxy mcp:8766
 	}
