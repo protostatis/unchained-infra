@@ -115,7 +115,9 @@ OPENAI_SCHEDULER_TOOLS = [
         "function": {
             "name": SCHEDULER_PREVIEW_TOOL,
             "description": (
-                "Preview one scheduler job without saving it. Use this to inspect the normalized job and next run time."
+                "Preview one scheduler job without saving it. "
+                "For existing jobs, send job_id plus only the fields you want to change. "
+                "For new jobs, also send prompt and exactly one schedule field."
             ),
             "parameters": {
                 "type": "object",
@@ -129,7 +131,9 @@ OPENAI_SCHEDULER_TOOLS = [
         "function": {
             "name": SCHEDULER_SAVE_TOOL,
             "description": (
-                "Create or update one scheduler job in the shared /scheduler task list."
+                "Create or update one scheduler job in the shared /scheduler task list. "
+                "For existing jobs, send job_id plus only the fields you want to change. "
+                "For new jobs, also send prompt and exactly one schedule field."
             ),
             "parameters": {
                 "type": "object",
@@ -165,7 +169,11 @@ ANTHROPIC_SCHEDULER_TOOLS = [
     },
     {
         "name": SCHEDULER_PREVIEW_TOOL,
-        "description": "Preview one scheduler job without saving it.",
+        "description": (
+            "Preview one scheduler job without saving it. "
+            "For existing jobs, send job_id plus only the fields you want to change. "
+            "For new jobs, also send prompt and exactly one schedule field."
+        ),
         "input_schema": {
             "type": "object",
             "properties": _SCHEDULER_JOB_PROPERTIES,
@@ -174,7 +182,11 @@ ANTHROPIC_SCHEDULER_TOOLS = [
     },
     {
         "name": SCHEDULER_SAVE_TOOL,
-        "description": "Create or update one scheduler job in the shared /scheduler task list.",
+        "description": (
+            "Create or update one scheduler job in the shared /scheduler task list. "
+            "For existing jobs, send job_id plus only the fields you want to change. "
+            "For new jobs, also send prompt and exactly one schedule field."
+        ),
         "input_schema": {
             "type": "object",
             "properties": _SCHEDULER_JOB_PROPERTIES,

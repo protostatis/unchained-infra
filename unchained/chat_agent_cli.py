@@ -1008,6 +1008,9 @@ async def handle_message_codex(
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
     env["UNCHAINED_CHAT_SESSION_ID"] = sid
+    if not scheduler_armed:
+        env.pop("UNCHAINED_API_KEY", None)
+        env.pop("UNCHAINED_INSTALL_TOKEN", None)
     if scheduler_armed and scheduler_grant_id:
         env["UNCHAINED_SCHEDULER_GRANT_ID"] = scheduler_grant_id
     else:

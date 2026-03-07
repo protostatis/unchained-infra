@@ -1545,14 +1545,67 @@ def _scheduler_jobs_response(core, user_id: str, jobs: list, *, write: bool = Fa
     return data
 
 
-def _scheduler_parse_single_job(body: dict):
+def _scheduler_request_uses_bearer_auth(request: web.Request) -> bool:
+    headers = getattr(request, "headers", {}) or {}
+    auth_header = str(headers.get("Authorization", "") or "").strip()
+    return auth_header.lower().startswith("bearer ")
+
+
+def _scheduler_require_session_or_turn_grant(
+    core,
+    request: web.Request,
+    auth_info: dict,
+    payload: dict | None = None,
+) -> web.Response | None:
+    if not _scheduler_request_uses_bearer_auth(request):
+        return None
+
+    data = payload if isinstance(payload, dict) else {}
+    session_id = str(data.get("session_id", "") or "").strip()
+    grant_id = str(data.get("scheduler_grant_id", "") or "").strip()
+    if session_id and grant_id and core._validate_scheduler_turn_grant(
+        auth_info.get("user_id", ""),
+        session_id,
+        grant_id,
+    ):
+        return None
+    return web.json_response(
+        {"error": "scheduler JSON endpoints require a browser session or an active /schedule turn"},
+        status=403,
+    )
+
+
+def _scheduler_merge_existing_raw_job(raw_job: dict, canonical_job: dict) -> dict:
+    merged_job = dict(canonical_job)
+    merged_job.update(raw_job)
+    if isinstance(raw_job.get("schedule"), dict):
+        merged_job["schedule"] = raw_job["schedule"]
+    return merged_job
+
+
+def _scheduler_parse_agent_job(
+    core,
+    user_id: str,
+    body: dict,
+    *,
+    merge_existing: bool,
+):
     import scheduled_tasks as st
 
     raw_job = body.get("job")
     if not isinstance(raw_job, dict):
         raise ValueError("job must be a JSON object")
-    jobs = st.parse_jobs_payload({"jobs": [raw_job]})
-    return jobs[0]
+
+    jobs = _scheduler_read_jobs(core, user_id)
+    target_id = str(raw_job.get("id", "") or "").strip()
+    if merge_existing and target_id:
+        canonical_jobs = st.jobs_to_payload(jobs)["jobs"]
+        for idx, existing in enumerate(jobs):
+            if existing.id == target_id:
+                merged_job = _scheduler_merge_existing_raw_job(raw_job, canonical_jobs[idx])
+                return st.parse_jobs_payload({"jobs": [merged_job]})[0], jobs, idx, False
+
+    return st.parse_jobs_payload({"jobs": [raw_job]})[0], jobs, None, True
 
 
 def _scheduler_require_turn_grant(core, auth_info: dict, body: dict) -> web.Response | None:
@@ -1596,6 +1649,14 @@ async def handle_scheduler_jobs(request: web.Request) -> web.Response:
     import scheduled_tasks as st
 
     if request.method == "GET":
+        grant_error = _scheduler_require_session_or_turn_grant(
+            core,
+            request,
+            auth_info,
+            dict(getattr(request, "query", {}) or {}),
+        )
+        if grant_error is not None:
+            return grant_error
         try:
             jobs = _scheduler_read_jobs(core, user_id, tolerate_invalid=True)
             return web.json_response(_scheduler_jobs_response(core, user_id, jobs))
@@ -1605,6 +1666,9 @@ async def handle_scheduler_jobs(request: web.Request) -> web.Response:
     body, error = await _scheduler_json_body(request)
     if error is not None:
         return error
+    grant_error = _scheduler_require_session_or_turn_grant(core, request, auth_info, body)
+    if grant_error is not None:
+        return grant_error
 
     try:
         jobs = st.parse_jobs_payload(body)
@@ -1627,6 +1691,9 @@ async def handle_scheduler_preview(request: web.Request) -> web.Response:
     body, error = await _scheduler_json_body(request)
     if error is not None:
         return error
+    grant_error = _scheduler_require_session_or_turn_grant(core, request, auth_info, body)
+    if grant_error is not None:
+        return grant_error
 
     payload = body if isinstance(body.get("jobs"), list) else core._scheduler_read_jobs_payload(user_id)
     try:
@@ -1644,6 +1711,14 @@ async def handle_scheduler_history(request: web.Request) -> web.Response:
     auth_info, error = _scheduler_api_auth(core, request)
     if error is not None:
         return error
+    grant_error = _scheduler_require_session_or_turn_grant(
+        core,
+        request,
+        auth_info,
+        dict(getattr(request, "query", {}) or {}),
+    )
+    if grant_error is not None:
+        return grant_error
     user_id = auth_info["user_id"]
     job_id = str(request.query.get("job_id", "") or "").strip()
     if not job_id:
@@ -1697,9 +1772,16 @@ async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
     if error is not None:
         return error
     try:
-        job = _scheduler_parse_single_job(body)
+        job, _jobs, _idx, _created = _scheduler_parse_agent_job(
+            core,
+            auth_info["user_id"],
+            body,
+            merge_existing=True,
+        )
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": f"Failed to load current jobs: {e}"}, status=500)
 
     import scheduled_tasks as st
 
@@ -1720,38 +1802,22 @@ async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
-    raw_job = body.get("job")
-    if not isinstance(raw_job, dict):
-        return web.json_response({"error": "job must be a JSON object"}, status=400)
     try:
-        jobs = _scheduler_read_jobs(core, auth_info["user_id"])
+        job, jobs, existing_idx, created = _scheduler_parse_agent_job(
+            core,
+            auth_info["user_id"],
+            body,
+            merge_existing=True,
+        )
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
     except Exception as e:
         return web.json_response({"error": f"Failed to load current jobs: {e}"}, status=500)
 
-    import scheduled_tasks as st
-
-    job = None
-    created = True
-    canonical_jobs = st.jobs_to_payload(jobs)["jobs"]
-    for idx, existing in enumerate(jobs):
-        if existing.id == str(raw_job.get("id", "") or "").strip():
-            merged_job = dict(canonical_jobs[idx])
-            merged_job.update(raw_job)
-            if isinstance(raw_job.get("schedule"), dict):
-                merged_job["schedule"] = raw_job["schedule"]
-            try:
-                job = st.parse_jobs_payload({"jobs": [merged_job]})[0]
-            except ValueError as e:
-                return web.json_response({"error": str(e)}, status=400)
-            jobs[idx] = job
-            created = False
-            break
-    else:
-        try:
-            job = _scheduler_parse_single_job(body)
-        except ValueError as e:
-            return web.json_response({"error": str(e)}, status=400)
+    if existing_idx is None:
         jobs.append(job)
+    else:
+        jobs[existing_idx] = job
 
     try:
         payload = _scheduler_jobs_response(core, auth_info["user_id"], jobs, write=True, extra={"ok": True, "created": created})

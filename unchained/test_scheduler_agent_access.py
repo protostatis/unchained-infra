@@ -158,6 +158,28 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403)
         self.assertEqual(json.loads(response.body.decode()), {"error": "pending_account_limited"})
 
+    async def test_scheduler_jobs_post_rejects_bearer_without_turn_grant(self):
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-1"},
+            _is_pending_user=lambda _auth: False,
+            _validate_scheduler_turn_grant=lambda _user_id, _session_id, _grant_id: False,
+        )
+        request = SimpleNamespace(
+            method="POST",
+            headers={"Authorization": "Bearer uc_live_test"},
+            can_read_body=True,
+            json=AsyncMock(return_value={"jobs": []}),
+        )
+
+        with patch("web_app.handlers.auth_admin._core", return_value=core):
+            response = await auth_admin.handle_scheduler_jobs(request)
+
+        self.assertEqual(response.status, 403)
+        self.assertEqual(
+            json.loads(response.body.decode()),
+            {"error": "scheduler JSON endpoints require a browser session or an active /schedule turn"},
+        )
+
     async def test_agent_upsert_requires_valid_turn_grant(self):
         core = SimpleNamespace(
             _authenticate=lambda _req: {"user_id": "u-1"},
@@ -273,6 +295,51 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stored["use_stable_session"])
         self.assertEqual(stored["timeout_seconds"], 240)
         self.assertFalse(stored["enabled"])
+
+    async def test_agent_preview_preserves_existing_fields_on_partial_update(self):
+        existing_payload = {
+            "jobs": [
+                {
+                    "id": "daily-brief",
+                    "prompt": "Old prompt",
+                    "schedule": {"daily_at": "09:00"},
+                    "enabled": True,
+                    "model": "claude-opus-4-6",
+                    "use_stable_session": True,
+                }
+            ]
+        }
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-1"},
+            _is_pending_user=lambda _auth: False,
+            _validate_scheduler_turn_grant=lambda _user_id, _session_id, _grant_id: True,
+            _scheduler_read_jobs_payload=lambda _user_id: existing_payload,
+            _scheduler_preview_rows=lambda _user_id, jobs: [{"id": job.id, "next_run_at": "2026-03-08T10:00:00Z"} for job in jobs],
+        )
+        request = SimpleNamespace(
+            can_read_body=True,
+            json=AsyncMock(
+                return_value={
+                    "session_id": "s-test",
+                    "scheduler_grant_id": "sg-valid",
+                    "job": {
+                        "id": "daily-brief",
+                        "schedule": {"daily_at": "10:00"},
+                    },
+                }
+            ),
+        )
+
+        with patch("web_app.handlers.auth_admin._core", return_value=core):
+            response = await auth_admin.handle_scheduler_agent_preview(request)
+
+        self.assertEqual(response.status, 200)
+        data = json.loads(response.body.decode())
+        self.assertEqual(data["job"]["id"], "daily-brief")
+        self.assertEqual(data["job"]["prompt"], "Old prompt")
+        self.assertEqual(data["job"]["schedule"], {"daily_at": "10:00"})
+        self.assertTrue(data["job"]["use_stable_session"])
+        self.assertEqual(data["preview"]["next_run_at"], "2026-03-08T10:00:00Z")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.27"
+VERSION = "0.3.28"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
