@@ -10424,6 +10424,297 @@ document.addEventListener('keydown',e=>{
 </body>
 </html>"""
 
+# Scheduler page visual alignment with the modern chat/setup skin.
+_MODERN_SCHEDULER_THEME_STYLE = """<style id="modern-scheduler-theme">
+:root{
+  color-scheme:dark;
+  --bg:#0a0c0f;
+  --surface:#11161d;
+  --surface-elev:#171d26;
+  --accent:#ff6b4a;
+  --accent-strong:#ff8768;
+  --accent-soft:rgba(255,107,74,0.16);
+  --text:#edf2f7;
+  --muted:#9da7b7;
+  --line:#2a3341;
+  --line-strong:#3a4555;
+  --green:#5cd48a;
+  --red:#ef7c7c;
+  --warn:#f0c46d;
+  --radius:14px;
+  --border:var(--line);
+  --sans:'Space Grotesk','Avenir Next','Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono','SF Mono','Menlo','Consolas',monospace;
+}
+body{
+  font-family:var(--sans)!important;
+  background:
+    radial-gradient(1200px 420px at 12% -8%, rgba(255,107,74,0.15), transparent 58%),
+    radial-gradient(900px 340px at 95% 4%, rgba(64,136,124,0.14), transparent 62%),
+    linear-gradient(180deg,#121720 0%,#0d1118 44%,#0a0c0f 100%)!important;
+  color:var(--text)!important;
+  letter-spacing:0.01em;
+}
+#topbar{
+  align-items:flex-start!important;
+  gap:14px;
+  padding:12px clamp(12px,2vw,24px)!important;
+  background:rgba(17,22,29,0.88)!important;
+  border-bottom:1px solid var(--line)!important;
+  backdrop-filter:blur(8px);
+}
+#topbar .left{display:flex;align-items:center;gap:12px}
+#topbar .title{
+  font-family:var(--mono)!important;
+  font-size:12px!important;
+  color:var(--accent-strong)!important;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  background:var(--accent-soft)!important;
+  border:1px solid rgba(255,107,74,0.4)!important;
+  border-radius:999px;
+  padding:4px 10px;
+}
+#topbar .badge{
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  color:var(--muted)!important;
+  border:1px solid var(--line)!important;
+  background:rgba(255,255,255,0.02)!important;
+}
+#topbar .nav a{
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  color:var(--muted)!important;
+  border:1px solid var(--line)!important;
+  border-radius:999px!important;
+  background:rgba(255,255,255,0.02)!important;
+  padding:6px 10px!important;
+}
+#topbar .nav a:hover{
+  border-color:var(--accent)!important;
+  color:#ffd2c8!important;
+  background:var(--accent-soft)!important;
+}
+main{
+  max-width:860px!important;
+  padding:24px clamp(12px,2vw,24px)!important;
+}
+.header-bar .count{
+  font-family:var(--mono)!important;
+  color:var(--muted)!important;
+}
+.btn{
+  border-radius:12px!important;
+  font-family:var(--sans)!important;
+}
+.btn-accent{
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+  color:#fff!important;
+}
+.btn-ghost{
+  border:1px solid var(--line)!important;
+  color:var(--muted)!important;
+  background:rgba(255,255,255,0.02)!important;
+}
+.btn-ghost:hover{
+  color:#ffd2c8!important;
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+.btn-danger{
+  border:1px solid rgba(239,124,124,0.55)!important;
+  color:#ffb8b8!important;
+  background:rgba(239,124,124,0.1)!important;
+}
+#toast{
+  border-radius:12px!important;
+  font-family:var(--mono)!important;
+}
+#toast.ok{
+  background:rgba(92,212,138,0.13)!important;
+  border:1px solid rgba(92,212,138,0.45)!important;
+  color:#a7efc4!important;
+}
+#toast.err{
+  background:rgba(239,124,124,0.13)!important;
+  border:1px solid rgba(239,124,124,0.45)!important;
+  color:#ffc2c2!important;
+}
+.card{
+  background:rgba(17,22,29,0.9)!important;
+  border:1px solid var(--line)!important;
+  border-radius:14px!important;
+  padding:16px!important;
+  transition:border-color 0.16s ease,transform 0.16s ease,box-shadow 0.16s ease;
+}
+.card:hover{
+  border-color:rgba(255,107,74,0.45)!important;
+  transform:translateY(-1px);
+  box-shadow:0 16px 30px rgba(0,0,0,0.28);
+}
+.card-top .name{font-size:15px!important}
+.card-top .actions button{
+  border:1px solid transparent;
+  border-radius:8px!important;
+}
+.card-top .actions button:hover{
+  color:#ffd2c8!important;
+  border-color:var(--line)!important;
+  background:var(--accent-soft)!important;
+}
+.card-top .actions .del-btn:hover{
+  color:#ffb8b8!important;
+  border-color:rgba(239,124,124,0.45)!important;
+  background:rgba(239,124,124,0.1)!important;
+}
+.card-prompt{color:var(--muted)!important}
+.card-schedule{
+  color:#ffd2c8!important;
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  letter-spacing:0.03em;
+}
+.card-meta{
+  color:var(--muted)!important;
+  font-family:var(--mono)!important;
+}
+.card-meta .status-ok{color:var(--green)!important}
+.card-meta .status-fail{color:#ffb8b8!important}
+.card-output{
+  border-top:1px solid var(--line)!important;
+  color:#dbe3f4!important;
+}
+.card-output .label{
+  color:var(--muted)!important;
+  font-family:var(--mono)!important;
+}
+.toggle .slider{
+  background:#3b4557!important;
+  border:1px solid var(--line)!important;
+}
+.toggle input:checked + .slider{
+  background:linear-gradient(135deg,#5cd48a,#45bf77)!important;
+}
+.empty{color:var(--muted)!important}
+.empty .icon{opacity:0.5}
+.advanced{
+  border-top:1px solid var(--line)!important;
+}
+.advanced summary{
+  color:var(--muted)!important;
+  font-family:var(--mono)!important;
+  letter-spacing:0.02em;
+}
+.advanced summary:hover{color:#ffd2c8!important}
+.modal-overlay{
+  background:rgba(0,0,0,0.72)!important;
+}
+.modal{
+  background:var(--surface-elev)!important;
+  border:1px solid var(--line-strong)!important;
+  border-radius:16px!important;
+}
+.modal h2{
+  color:#ffd4cb!important;
+  letter-spacing:0.01em;
+}
+.field label{
+  color:var(--muted)!important;
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+}
+.field input[type="text"],.field input[type="number"],.field textarea,.field input[type="datetime-local"],.field select{
+  background:rgba(255,255,255,0.03)!important;
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+  color:var(--text)!important;
+}
+.field input:focus,.field textarea:focus,.field select:focus{
+  border-color:var(--accent)!important;
+  box-shadow:0 0 0 3px rgba(255,107,74,0.15);
+}
+.field .hint{color:var(--muted)!important}
+.sched-option{
+  background:rgba(255,255,255,0.02)!important;
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+}
+.sched-option:has(input:checked){
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+.sched-option .sched-inputs input{
+  background:#10151d!important;
+  border:1px solid var(--line)!important;
+  border-radius:8px!important;
+}
+.sched-option .sched-inputs span{color:var(--muted)!important}
+.adv-fields summary{
+  color:var(--muted)!important;
+  font-family:var(--mono)!important;
+}
+.check-field label{color:var(--text)!important}
+.modal-footer{
+  border-top:1px solid var(--line)!important;
+}
+.import-area textarea{
+  background:#10151d!important;
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+  font-family:var(--mono)!important;
+}
+.history-item{
+  background:rgba(255,255,255,0.02)!important;
+  border:1px solid var(--line)!important;
+  border-radius:12px!important;
+}
+.history-status.ok{
+  background:rgba(92,212,138,0.14)!important;
+  color:#a7efc4!important;
+}
+.history-status.err{
+  background:rgba(239,124,124,0.14)!important;
+  color:#ffc2c2!important;
+}
+.history-ts,.history-len{color:var(--muted)!important}
+.history-detail{
+  border-top:1px solid var(--line)!important;
+  color:#dbe3f4!important;
+}
+.history-empty{color:var(--muted)!important}
+@media (max-width: 640px){
+  #topbar{
+    flex-direction:column!important;
+    align-items:flex-start!important;
+    gap:10px;
+  }
+  #topbar .nav{
+    width:100%;
+    overflow:auto;
+    flex-wrap:nowrap;
+  }
+  main{padding:14px 10px!important}
+}
+</style>"""
+
+
+def _apply_modern_scheduler_theme(html: str) -> str:
+    if 'id="modern-scheduler-theme"' in html:
+        return html
+    if "</head>" not in html:
+        return html
+    parts: list[str] = []
+    if "fonts.googleapis.com/css2?family=Space+Grotesk" not in html:
+        parts.append(_MODERN_CHAT_THEME_LINKS)
+    parts.append(_MODERN_SCHEDULER_THEME_STYLE)
+    return html.replace("</head>", "\n" + "\n".join(parts) + "\n</head>", 1)
+
+
+SCHEDULER_HTML = _apply_modern_scheduler_theme(SCHEDULER_HTML)
+
 # Setup page visual alignment with the modern chat skin.
 _MODERN_SETUP_THEME_STYLE = """<style id="modern-setup-theme">
 :root{
