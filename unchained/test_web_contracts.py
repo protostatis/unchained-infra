@@ -56,6 +56,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/privacy-policy"),
             ("GET", "/data-deletion"),
             ("POST", "/auth/google"),
+            ("GET", "/auth/google/start"),
+            ("GET", "/auth/google/callback"),
             ("GET", "/auth/facebook/start"),
             ("GET", "/auth/facebook/callback"),
             ("GET", "/auth/github/start"),

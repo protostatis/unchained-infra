@@ -22,6 +22,12 @@ _FACEBOOK_OAUTH_NEXT_COOKIE = "uc_fb_oauth_next"
 _FACEBOOK_OAUTH_MAX_AGE = 600
 _FACEBOOK_DIALOG_URL_DEFAULT = "https://www.facebook.com/v22.0/dialog/oauth"
 _FACEBOOK_GRAPH_BASE_DEFAULT = "https://graph.facebook.com/v22.0"
+_GOOGLE_OAUTH_STATE_COOKIE = "uc_google_oauth_state"
+_GOOGLE_OAUTH_SOURCE_COOKIE = "uc_google_oauth_source"
+_GOOGLE_OAUTH_NEXT_COOKIE = "uc_google_oauth_next"
+_GOOGLE_OAUTH_MAX_AGE = 600
+_GOOGLE_OAUTH_AUTHORIZE_URL_DEFAULT = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_OAUTH_TOKEN_URL_DEFAULT = "https://oauth2.googleapis.com/token"
 _GITHUB_OAUTH_STATE_COOKIE = "uc_gh_oauth_state"
 _GITHUB_OAUTH_SOURCE_COOKIE = "uc_gh_oauth_source"
 _GITHUB_OAUTH_NEXT_COOKIE = "uc_gh_oauth_next"
@@ -79,6 +85,22 @@ def _facebook_oauth_config() -> tuple[str, str, str, str]:
         or _FACEBOOK_GRAPH_BASE_DEFAULT
     ).rstrip("/")
     return app_id, app_secret, dialog_url, graph_base
+
+
+def _google_oauth_config(core) -> tuple[str, str, str, str]:
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip() or str(
+        getattr(core, "GOOGLE_CLIENT_ID", "") or ""
+    ).strip()
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    authorize_url = (
+        os.environ.get("GOOGLE_OAUTH_AUTHORIZE_URL", _GOOGLE_OAUTH_AUTHORIZE_URL_DEFAULT).strip()
+        or _GOOGLE_OAUTH_AUTHORIZE_URL_DEFAULT
+    )
+    token_url = (
+        os.environ.get("GOOGLE_OAUTH_TOKEN_URL", _GOOGLE_OAUTH_TOKEN_URL_DEFAULT).strip()
+        or _GOOGLE_OAUTH_TOKEN_URL_DEFAULT
+    )
+    return client_id, client_secret, authorize_url, token_url
 
 
 def _github_oauth_config() -> tuple[str, str, str, str, str]:
@@ -150,6 +172,30 @@ def _set_github_oauth_cookie(
         samesite="Lax",
         path="/",
     )
+
+
+def _set_google_oauth_cookie(
+    core,
+    response: web.StreamResponse,
+    request: web.Request,
+    name: str,
+    value: str,
+) -> None:
+    response.set_cookie(
+        name,
+        value,
+        max_age=_GOOGLE_OAUTH_MAX_AGE,
+        httponly=True,
+        secure=core._cookie_secure(request),
+        samesite="Lax",
+        path="/",
+    )
+
+
+def _clear_google_oauth_cookies(response: web.StreamResponse) -> None:
+    response.del_cookie(_GOOGLE_OAUTH_STATE_COOKIE, path="/")
+    response.del_cookie(_GOOGLE_OAUTH_SOURCE_COOKIE, path="/")
+    response.del_cookie(_GOOGLE_OAUTH_NEXT_COOKIE, path="/")
 
 
 def _clear_github_oauth_cookies(response: web.StreamResponse) -> None:
@@ -412,6 +458,353 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
         }
     )
+    core._set_session_cookie(resp, session_token, request)
+    core._track_event(
+        request,
+        "signup_created",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending"},
+        status_code=200,
+    )
+    core._track_event(
+        request,
+        "auth_google_pending",
+        user_id=user["user_id"],
+        user_type=user_type,
+        source=source,
+        meta={"source": source, "status": "pending", "new_user": True},
+        status_code=200,
+    )
+    return resp
+
+
+async def handle_google_start(request: web.Request) -> web.Response:
+    """GET /auth/google/start — begin Google OAuth redirect flow."""
+    core = _core()
+    source = _normalize_source(request.query.get("source", "claude"))
+    next_path = _safe_next_path(request.query.get("next", ""), source=source)
+    client_id, client_secret, authorize_url, _token_url = _google_oauth_config(core)
+    if not client_id or not client_secret:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_config",
+            meta={"source": source, "reason": "missing_config"},
+            status_code=503,
+        )
+        raise web.HTTPFound(_append_query_params(next_path, auth_error="google_not_configured"))
+
+    state = secrets.token_urlsafe(24)
+    redirect_uri = f"{core._public_base_url(request)}/auth/google/callback"
+    oauth_params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    }
+    oauth_url = f"{authorize_url}?{urlencode(oauth_params)}"
+
+    resp = web.HTTPFound(oauth_url)
+    _set_google_oauth_cookie(core, resp, request, _GOOGLE_OAUTH_STATE_COOKIE, state)
+    _set_google_oauth_cookie(core, resp, request, _GOOGLE_OAUTH_SOURCE_COOKIE, source)
+    _set_google_oauth_cookie(core, resp, request, _GOOGLE_OAUTH_NEXT_COOKIE, next_path)
+    core._track_event(
+        request,
+        "auth_google_attempt",
+        source=source,
+        meta={"source": source, "stage": "oauth_start"},
+        status_code=302,
+    )
+    return resp
+
+
+async def handle_google_callback(request: web.Request) -> web.Response:
+    """GET /auth/google/callback — exchange code and create session."""
+    core = _core()
+    client_id, client_secret, _authorize_url, token_url = _google_oauth_config(core)
+    source = _normalize_source(
+        request.cookies.get(_GOOGLE_OAUTH_SOURCE_COOKIE, request.query.get("source", "claude"))
+    )
+    next_path = _safe_next_path(
+        request.cookies.get(_GOOGLE_OAUTH_NEXT_COOKIE, request.query.get("next", "")),
+        source=source,
+    )
+
+    def _redirect(*, auth_error: str = "", pending: bool = False) -> web.Response:
+        location = _append_query_params(
+            next_path,
+            auth_error=auth_error,
+            auth_pending="1" if pending else "",
+        )
+        resp = web.HTTPFound(location)
+        _clear_google_oauth_cookies(resp)
+        return resp
+
+    if not client_id or not client_secret:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_config",
+            meta={"source": source, "reason": "missing_config"},
+            status_code=503,
+        )
+        return _redirect(auth_error="google_not_configured")
+
+    if request.query.get("error"):
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="oauth_denied",
+            meta={"source": source, "reason": "oauth_denied"},
+            status_code=401,
+        )
+        return _redirect(auth_error="google_denied")
+
+    expected_state = request.cookies.get(_GOOGLE_OAUTH_STATE_COOKIE, "")
+    got_state = str(request.query.get("state", "")).strip()
+    if not expected_state or not got_state or not hmac.compare_digest(expected_state, got_state):
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="invalid_state",
+            meta={"source": source, "reason": "invalid_state"},
+            status_code=401,
+        )
+        return _redirect(auth_error="google_state_invalid")
+
+    code = str(request.query.get("code", "")).strip()
+    if not code:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_code",
+            meta={"source": source, "reason": "missing_code"},
+            status_code=400,
+        )
+        return _redirect(auth_error="google_exchange_failed")
+
+    redirect_uri = f"{core._public_base_url(request)}/auth/google/callback"
+    token_payload = {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_resp = await client.post(
+                token_url,
+                data={
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                headers={"Accept": "application/json"},
+            )
+        token_resp.raise_for_status()
+        token_payload = token_resp.json() if token_resp.content else {}
+        id_token = str(token_payload.get("id_token", "")).strip()
+    except Exception:
+        id_token = ""
+    if not id_token:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="token_exchange_failed",
+            meta={"source": source, "reason": "token_exchange_failed"},
+            status_code=401,
+        )
+        return _redirect(auth_error="google_exchange_failed")
+
+    payload = await core.verify_google_token(id_token)
+    if payload is None:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="invalid_google_token",
+            meta={"source": source, "reason": "invalid_google_token"},
+            status_code=401,
+        )
+        return _redirect(auth_error="google_exchange_failed")
+
+    email = _normalized_email(payload.get("email", ""))
+    name = str(payload.get("name", "")).strip()
+    picture = str(payload.get("picture", "")).strip()
+    if not email:
+        core._track_event(
+            request,
+            "auth_google_fail",
+            source=source,
+            error_code="missing_email",
+            meta={"source": source, "reason": "missing_email"},
+            status_code=400,
+        )
+        return _redirect(auth_error="google_email_required")
+
+    core._track_event(
+        request,
+        "auth_google_attempt",
+        source=source,
+        meta={"source": source, "stage": "oauth_callback"},
+        status_code=200,
+    )
+
+    user_type = "trial" if source == "trial" else "claude"
+    existing = core._auth.find_user_by_email(email)
+
+    if existing:
+        status = existing.get("status", "approved")
+
+        if status == "approved":
+            user = core._auth.get_or_create_user(email, name, picture)
+            session_token = core.create_session_token(user["user_id"], email)
+            resp = _redirect()
+            core._set_session_cookie(resp, session_token, request)
+            core._track_event(
+                request,
+                "auth_google_success",
+                user_id=user["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                meta={"source": source, "status": "approved", "existing": True},
+                status_code=200,
+            )
+            return resp
+
+        if status == "pending":
+            if source == "trial":
+                api_key = existing.get("api_key")
+                if not api_key:
+                    api_key = core._auth.create_key(existing["user_id"])
+                now = time.time()
+                with core._auth._conn() as conn:
+                    conn.execute(
+                        "UPDATE users SET api_key = COALESCE(api_key, ?), "
+                        "last_login_at = ?, name = ?, picture = ? WHERE email = ?",
+                        (
+                            api_key,
+                            now,
+                            name or existing.get("name", ""),
+                            picture or existing.get("picture", ""),
+                            email,
+                        ),
+                    )
+                refreshed = core._auth.find_user_by_email(email) or existing
+                pending_user_type = refreshed.get("user_type", "trial")
+                session_token = core.create_session_token(existing["user_id"], email)
+                resp = _redirect(pending=True)
+                core._set_session_cookie(resp, session_token, request)
+                core._track_event(
+                    request,
+                    "auth_google_success",
+                    user_id=existing["user_id"],
+                    user_type=pending_user_type,
+                    source=source,
+                    meta={"source": source, "status": "pending", "existing": True},
+                    status_code=200,
+                )
+                return resp
+
+            pending_user_type = existing.get("user_type", "claude")
+            core._track_event(
+                request,
+                "auth_google_pending",
+                user_id=existing["user_id"],
+                user_type=pending_user_type,
+                source=source,
+                meta={"source": source, "status": "pending", "existing": True},
+                status_code=200,
+            )
+            return _redirect(auth_error="pending_review")
+
+        if status == "rejected":
+            core._track_event(
+                request,
+                "auth_google_fail",
+                user_id=existing["user_id"],
+                user_type=existing.get("user_type", "claude"),
+                source=source,
+                error_code="rejected",
+                meta={"source": source, "reason": "rejected"},
+                status_code=403,
+            )
+            return _redirect(auth_error="rejected")
+
+    if source == "trial":
+        user = core._auth.create_pending_user(email, name, picture, user_type="trial")
+        api_key = core._auth.create_key(user["user_id"])
+        with core._auth._conn() as conn:
+            conn.execute(
+                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
+                (api_key, email),
+            )
+        session_token = core.create_session_token(user["user_id"], email)
+        resp = _redirect(pending=True)
+        core._set_session_cookie(resp, session_token, request)
+        core._track_event(
+            request,
+            "signup_created",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending"},
+            status_code=200,
+        )
+        core._track_event(
+            request,
+            "auth_google_success",
+            user_id=user["user_id"],
+            user_type="trial",
+            source=source,
+            meta={"source": source, "status": "pending", "new_user": True},
+            status_code=200,
+        )
+
+        core.send_email(
+            email,
+            "Unchained — Trial access enabled (account review pending)",
+            f"<p>Hi {name or email},</p>"
+            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
+            "<p>We'll notify you once your full account is approved.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+        for admin in core.ADMIN_EMAILS:
+            core.send_email(
+                admin,
+                f"New trial sign-up (pending review): {email}",
+                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
+                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
+            )
+        return resp
+
+    user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
+    session_token = core.create_session_token(user["user_id"], email)
+    core.send_email(
+        email,
+        "Unchained — Sign-up request received",
+        f"<p>Hi {name or email},</p>"
+        "<p>We received your request to join Unchained. "
+        "We're reviewing it now and will get back to you shortly.</p>"
+        "<p>— The Unchained Team</p>",
+    )
+    for admin in core.ADMIN_EMAILS:
+        core.send_email(
+            admin,
+            f"New Unchained sign-up: {email}",
+            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
+            f"<p>Source: <b>{user_type}</b></p>"
+            f"<p>Approve: <code>POST /admin/approve</code> with body "
+            f'<code>{{"email": "{email}"}}</code></p>',
+        )
+    resp = _redirect(pending=True)
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
         request,

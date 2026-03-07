@@ -149,6 +149,7 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | Variable | Service | Purpose |
 |----------|---------|---------|
 | `GOOGLE_CLIENT_ID` | web | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | web | Google OAuth client secret (enables server-side redirect flow) |
 | `JWT_SECRET` | web | HMAC key for JWT signing |
 | `ALLOWED_EMAILS` | web | Comma-separated whitelist |
 | `UNCHAINED_DB_PATH` | all | Path to auth.db (default: `/data/auth.db`) |

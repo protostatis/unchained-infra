@@ -276,7 +276,8 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
 (function(){
   var FB_APP_ID = __UC_FACEBOOK_APP_ID__;
   var GH_CLIENT_ID = __UC_GITHUB_CLIENT_ID__;
-  if(!FB_APP_ID && !GH_CLIENT_ID) return;
+  var GOOGLE_REDIRECT_ENABLED = __UC_GOOGLE_REDIRECT_ENABLED__;
+  if(!FB_APP_ID && !GH_CLIENT_ID && !GOOGLE_REDIRECT_ENABLED) return;
 
   function inferSource(){
     var p = window.location.pathname || '';
@@ -294,6 +295,11 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     if(code === 'facebook_email_required') return 'Facebook account email is required. Please share your email to continue.';
     if(code === 'pending_review') return 'Your sign-up request is still being reviewed.';
     if(code === 'rejected') return 'Your sign-up request was not approved.';
+    if(code === 'google_denied') return 'Google sign-in was canceled.';
+    if(code === 'google_state_invalid') return 'Google sign-in expired. Please try again.';
+    if(code === 'google_exchange_failed') return 'Google sign-in failed during token exchange.';
+    if(code === 'google_email_required') return 'Google account email is required to continue.';
+    if(code === 'google_not_configured') return 'Google sign-in is not configured yet.';
     if(code === 'facebook_denied') return 'Facebook sign-in was canceled.';
     if(code === 'facebook_state_invalid') return 'Facebook sign-in expired. Please try again.';
     if(code === 'facebook_exchange_failed') return 'Facebook sign-in failed during token exchange.';
@@ -327,15 +333,50 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     if(document.getElementById('uc-auth-btn-style')) return;
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
-    style.textContent = [
-      '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}',
-      '#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}',
-      '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
-      '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
-    ].join('');
+    var parts = [
+      '#login #google-login-btn,#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
+    ];
+    if(GOOGLE_REDIRECT_ENABLED){
+      parts.push('#login .g_id_signin{display:none !important;}');
+      parts.push('#login #google-login-btn{display:block;width:320px;height:44px;border:1px solid #30363d;border-radius:8px;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin:0 auto;}');
+    }else{
+      parts.push('#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}');
+      parts.push('#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}');
+      parts.push('#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}');
+    }
+    style.textContent = parts.join('');
     if(document.head){
       document.head.appendChild(style);
     }
+  }
+
+  function insertGoogleButton(){
+    if(!GOOGLE_REDIRECT_ENABLED) return;
+    var login = document.getElementById('login');
+    if(!login) return;
+    if(document.getElementById('google-login-btn')) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'google-login-btn';
+    btn.textContent = 'Continue with Google';
+    btn.addEventListener('click', function(){
+      var source = inferSource();
+      var next = currentNextPath();
+      var url = '/auth/google/start?source=' + encodeURIComponent(source) + '&next=' + encodeURIComponent(next);
+      window.location.href = url;
+    });
+
+    var gsi = login.querySelector('.g_id_signin');
+    if(gsi && gsi.parentNode){
+      gsi.insertAdjacentElement('beforebegin', btn);
+      return;
+    }
+    var loginErr = login.querySelector('#loginerr');
+    if(loginErr && loginErr.parentNode){
+      loginErr.insertAdjacentElement('beforebegin', btn);
+      return;
+    }
+    login.appendChild(btn);
   }
 
   function insertFacebookButton(){
@@ -355,6 +396,11 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
       window.location.href = url;
     });
 
+    var googleBtn = login.querySelector('#google-login-btn');
+    if(googleBtn && googleBtn.parentNode){
+      googleBtn.insertAdjacentElement('afterend', btn);
+      return;
+    }
     var gsi = login.querySelector('.g_id_signin');
     if(gsi && gsi.parentNode){
       gsi.insertAdjacentElement('afterend', btn);
@@ -390,6 +436,11 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
       fb.insertAdjacentElement('afterend', btn);
       return;
     }
+    var googleBtn = login.querySelector('#google-login-btn');
+    if(googleBtn && googleBtn.parentNode){
+      googleBtn.insertAdjacentElement('afterend', btn);
+      return;
+    }
     var gsi = login.querySelector('.g_id_signin');
     if(gsi && gsi.parentNode){
       gsi.insertAdjacentElement('afterend', btn);
@@ -405,6 +456,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
 
   function init(){
     injectAuthButtonStyles();
+    insertGoogleButton();
     insertFacebookButton();
     insertGithubButton();
     renderQueryError();
@@ -437,11 +489,16 @@ def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     github_client_id = os.environ.get("GITHUB_CLIENT_ID", "").strip()
     github_client_secret = os.environ.get("GITHUB_CLIENT_SECRET", "").strip()
     github_enabled = bool(github_client_id and github_client_secret)
+    google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    google_redirect_enabled = bool(google_client_id and google_client_secret)
     html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id if facebook_enabled else "")
-    if (facebook_enabled or github_enabled) and "data-uc-facebook-login" not in html:
+    if (facebook_enabled or github_enabled or google_redirect_enabled) and "data-uc-facebook-login" not in html:
         fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
             "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id if facebook_enabled else "")
-        ).replace("__UC_GITHUB_CLIENT_ID__", json.dumps(github_client_id if github_enabled else ""))
+        ).replace("__UC_GITHUB_CLIENT_ID__", json.dumps(github_client_id if github_enabled else "")).replace(
+            "__UC_GOOGLE_REDIRECT_ENABLED__",
+            "true" if google_redirect_enabled else "false",
+        )
         html = _inject_before_body(html, fb_snippet)
     if "data-uc-analytics-client" in html:
         return html
