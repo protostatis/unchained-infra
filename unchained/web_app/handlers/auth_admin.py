@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -35,6 +36,7 @@ _GITHUB_OAUTH_MAX_AGE = 600
 _GITHUB_AUTHORIZE_URL_DEFAULT = "https://github.com/login/oauth/authorize"
 _GITHUB_TOKEN_URL_DEFAULT = "https://github.com/login/oauth/access_token"
 _GITHUB_API_BASE_DEFAULT = "https://api.github.com"
+_LOG = logging.getLogger(__name__)
 
 
 def _normalize_source(raw_source: str | None) -> str:
@@ -611,6 +613,7 @@ async def handle_google_callback(request: web.Request) -> web.Response:
         token_payload = token_resp.json() if token_resp.content else {}
         id_token = str(token_payload.get("id_token", "")).strip()
     except Exception:
+        _LOG.warning("Google OAuth token exchange failed", exc_info=True)
         id_token = ""
     if not id_token:
         core._track_event(

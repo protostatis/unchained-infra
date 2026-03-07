@@ -338,7 +338,9 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     ];
     if(GOOGLE_REDIRECT_ENABLED){
       parts.push('#login .g_id_signin{display:none !important;}');
-      parts.push('#login #google-login-btn{display:block;width:320px;height:44px;border:1px solid #30363d;border-radius:8px;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin:0 auto;}');
+      parts.push('#login #google-login-btn{display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #30363d;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin:0 auto;}');
+      parts.push('#login #google-login-btn .icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:0 0 18px;}');
+      parts.push('#login #google-login-btn .label{display:inline-block;line-height:1;}');
     }else{
       parts.push('#login .g_id_signin{display:flex;justify-content:center;width:min(100%,360px);margin:0 auto;}');
       parts.push('#login .g_id_signin iframe{border:0 !important;box-shadow:none !important;}');
@@ -358,7 +360,16 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.id = 'google-login-btn';
-    btn.textContent = 'Continue with Google';
+    btn.setAttribute('aria-label', 'Continue with Google');
+    var icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\"><path fill=\"#4285F4\" d=\"M23.49 12.27c0-.79-.07-1.54-.2-2.27H12v4.3h6.45a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.26-2.08 3.56-5.14 3.56-8.65z\"></path><path fill=\"#34A853\" d=\"M12 24c3.24 0 5.96-1.07 7.95-2.9l-3.88-3a7.2 7.2 0 0 1-10.72-3.78H1.34v3.08A12 12 0 0 0 12 24z\"></path><path fill=\"#FBBC05\" d=\"M5.35 14.32A7.2 7.2 0 0 1 4.95 12c0-.8.14-1.58.4-2.32V6.6H1.34A12 12 0 0 0 0 12c0 1.93.46 3.76 1.34 5.4l4.01-3.08z\"></path><path fill=\"#EA4335\" d=\"M12 4.8c1.76 0 3.33.6 4.57 1.8l3.43-3.43A11.95 11.95 0 0 0 12 0 12 12 0 0 0 1.34 6.6l4.01 3.08A7.2 7.2 0 0 1 12 4.8z\"></path></svg>';
+    var label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = 'Continue with Google';
+    btn.appendChild(icon);
+    btn.appendChild(label);
     btn.addEventListener('click', function(){
       var source = inferSource();
       var next = currentNextPath();

@@ -112,10 +112,12 @@ class TestGoogleOAuthRedirectHandlers(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, env, clear=False):
             with patch("web_app.handlers.auth_admin._core", return_value=core):
                 with patch("web_app.handlers.auth_admin.httpx.AsyncClient", _TokenFailAsyncClient):
-                    resp = await auth_admin.handle_google_callback(req)
+                    with patch("web_app.handlers.auth_admin._LOG.warning") as warn:
+                        resp = await auth_admin.handle_google_callback(req)
 
         self.assertEqual(resp.status, 302)
         self.assertIn("auth_error=google_exchange_failed", resp.headers.get("Location", ""))
+        warn.assert_called_once()
 
 
 class TestTemplateGoogleRedirectGate(unittest.TestCase):
@@ -155,6 +157,7 @@ class TestTemplateGoogleRedirectGate(unittest.TestCase):
             html = template_utils.inject_google_client_id(template, "google-id")
         self.assertIn("/auth/google/start", html)
         self.assertIn("Continue with Google", html)
+        self.assertIn("viewBox=\\\"0 0 24 24\\\"", html)
         self.assertIn("#login .g_id_signin{display:none !important;}", html)
 
 
