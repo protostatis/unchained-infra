@@ -328,8 +328,8 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);margin:0 auto;border-radius:12px;overflow:hidden;}',
-      '#login .g_id_signin::after{content:\"\";position:absolute;inset:0;z-index:3;border:1px solid transparent;border-radius:12px;pointer-events:none;box-shadow:inset 0 0 0 2px rgba(10,12,15,0.96);}',
+      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);margin:0 auto;border-radius:12px;overflow:hidden;background:#0a0c0f;}',
+      '#login .g_id_signin::after{content:\"\";position:absolute;inset:-1px;z-index:4;border:2px solid #0a0c0f;border-radius:13px;pointer-events:none;box-shadow:inset 0 0 0 2px #0a0c0f;}',
       '#login .g_id_signin > div,#login .g_id_signin > div > div{width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
       '#login .g_id_signin iframe{display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;}',
       '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
