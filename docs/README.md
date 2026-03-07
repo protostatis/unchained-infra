@@ -24,6 +24,10 @@ live at the repo root.
 ## Specialized docs
 
 - [streaming.md](./streaming.md): live-stream subsystem
+- [mcp-local-browser-guide.md](./mcp-local-browser-guide.md): production
+  quickstart for controlling local Chrome through MCP
+- [mcp-frontend-route-plan.md](./mcp-frontend-route-plan.md): implementation
+  plan for a public `/mcp` onboarding route
 - [../unchained/benchmark/README.md](../unchained/benchmark/README.md): local
   benchmark runner and safety procedure
 - [../unchained/README.md](../unchained/README.md): package-level tool and agent notes

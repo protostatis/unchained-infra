@@ -223,6 +223,7 @@ def _trace(event: str, **fields):
 
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
+    "/mcp-guide",
     "/privacy",
     "/privacy-policy",
     "/data-deletion",
@@ -1516,6 +1517,190 @@ def _pending_trial_limited_response() -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# MCP docs page content
+# ---------------------------------------------------------------------------
+
+_MCP_DOC_SPECS: tuple[tuple[str, str], ...] = (
+    ("MCP Local Browser Guide", "mcp-local-browser-guide.md"),
+    ("MCP Frontend Route Plan", "mcp-frontend-route-plan.md"),
+)
+
+
+def _mcp_doc_candidates(filename: str) -> tuple[Path, ...]:
+    here = Path(__file__).resolve().parent
+    return (
+        here / "web_app" / "content" / filename,
+        here.parent / "docs" / filename,
+    )
+
+
+def _load_mcp_doc_markdown(filename: str) -> str:
+    for path in _mcp_doc_candidates(filename):
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return (
+        f"# Missing document: {filename}\n\n"
+        "This markdown source is not available in the current runtime."
+    )
+
+
+def _build_mcp_guide_html() -> str:
+    docs_payload = [
+        {
+            "title": title,
+            "filename": filename,
+            "markdown": _load_mcp_doc_markdown(filename),
+        }
+        for title, filename in _MCP_DOC_SPECS
+    ]
+    docs_json = json.dumps(docs_payload)
+    html = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCP Docs | Unchained</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      background:#0a0a0f;
+      color:#e8e8ec;
+      line-height:1.55;
+    }
+    .wrap{max-width:1240px;margin:0 auto;padding:28px 18px 56px}
+    .top{display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between;margin-bottom:18px}
+    .brand{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:#8e8ea0}
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid #3a3a44;border-radius:10px;padding:9px 14px;
+      color:#e8e8ec;text-decoration:none;font-size:13px;
+      background:#141420;
+    }
+    .btn:hover{border-color:#e94560}
+    .hero{
+      border:1px solid #252532;border-radius:16px;padding:20px 18px;
+      background:linear-gradient(180deg,#141420 0%,#101018 100%);
+      margin-bottom:16px;
+    }
+    .hero h1{margin:0 0 6px;font-size:clamp(24px,3vw,34px)}
+    .hero p{margin:0;color:#a6a6b5}
+    .notice{
+      margin-top:14px;border-left:3px solid #e94560;padding:10px 12px;
+      background:rgba(233,69,96,0.08);color:#f7d0d8;font-size:13px;
+    }
+    .tabs{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
+    .tab{
+      border:1px solid #2a2a34;border-radius:999px;padding:8px 12px;
+      background:#12121b;color:#aeb0c0;cursor:pointer;font-size:13px;
+    }
+    .tab.active{border-color:#e94560;background:#23141a;color:#fff}
+    .panel{
+      border:1px solid #252532;border-radius:14px;background:#0e0e15;
+      padding:18px;min-height:460px;
+    }
+    .panel h2{margin:0 0 6px;font-size:20px}
+    .filename{font-size:12px;color:#8e8ea0;margin-bottom:16px}
+    .markdown{
+      color:#e8e8ec;
+    }
+    .markdown h1,.markdown h2,.markdown h3,.markdown h4{margin:20px 0 10px;line-height:1.25}
+    .markdown p{margin:8px 0}
+    .markdown ul,.markdown ol{margin:8px 0 12px 20px}
+    .markdown li{margin:4px 0}
+    .markdown code{
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      background:#171722;border:1px solid #2f2f3c;border-radius:6px;padding:1px 5px;
+      font-size:.92em;
+    }
+    .markdown pre{
+      overflow:auto;padding:12px;border-radius:10px;background:#111118;border:1px solid #2b2b36;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:13px;
+    }
+    .markdown pre code{background:transparent;border:0;padding:0}
+    .markdown a{color:#ff8398}
+    @media (max-width: 780px){
+      .wrap{padding:16px 12px 40px}
+      .panel{padding:14px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">Unchained • MCP Docs</div>
+      <div>
+        <a class="btn" href="/">Landing</a>
+        <a class="btn" href="/local">Open Chat</a>
+      </div>
+    </div>
+    <section class="hero">
+      <h1>Zero-Config MCP Setup</h1>
+      <p>Reference docs for connecting your existing installed agent to Unchained MCP and shipping the `/mcp` onboarding route.</p>
+      <div class="notice">If your agent is already installed and running, use `https://api.unchainedsky.com/mcp` directly and reuse your current `agent_id`.</div>
+    </section>
+
+    <div class="tabs" id="doc-tabs"></div>
+
+    <section class="panel">
+      <h2 id="doc-title"></h2>
+      <div class="filename" id="doc-file"></div>
+      <article class="markdown" id="doc-content"></article>
+    </section>
+  </div>
+
+  <script>
+    const DOCS = __MCP_DOCS_JSON__;
+    const tabs = document.getElementById('doc-tabs');
+    const titleEl = document.getElementById('doc-title');
+    const fileEl = document.getElementById('doc-file');
+    const contentEl = document.getElementById('doc-content');
+
+    function esc(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function renderDoc(index) {
+      const doc = DOCS[index];
+      titleEl.textContent = doc.title;
+      fileEl.textContent = doc.filename;
+      if (typeof marked !== 'undefined' && marked.parse) {
+        contentEl.innerHTML = marked.parse(doc.markdown || '');
+      } else {
+        contentEl.innerHTML = '<pre>' + esc(doc.markdown || '') + '</pre>';
+      }
+      Array.from(tabs.querySelectorAll('.tab')).forEach((el, i) => {
+        el.classList.toggle('active', i === index);
+      });
+    }
+
+    DOCS.forEach((doc, index) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tab' + (index === 0 ? ' active' : '');
+      b.textContent = doc.title;
+      b.addEventListener('click', () => renderDoc(index));
+      tabs.appendChild(b);
+    });
+
+    renderDoc(0);
+  </script>
+</body>
+</html>"""
+    return html.replace("__MCP_DOCS_JSON__", docs_json)
+
+
+# ---------------------------------------------------------------------------
 # Landing page
 # ---------------------------------------------------------------------------
 
@@ -1600,6 +1785,17 @@ body::before{
   background:var(--accent);color:#fff;
   box-shadow:0 0 30px var(--accent-glow);
 }
+.cta-row{
+  display:flex;flex-wrap:wrap;justify-content:center;gap:12px;
+  animation:fadeIn 1s ease-out 2.2s both;
+}
+.cta-row .cta{animation:none}
+.cta.cta-secondary{
+  border-color:#3b3b47;color:#d4d4df;background:rgba(255,255,255,0.02);
+}
+.cta.cta-secondary:hover{
+  border-color:var(--accent);background:#1b1317;color:#fff;
+}
 
 .tagline{
   margin-top:80px;font-size:13px;
@@ -1636,6 +1832,18 @@ body::before{
 }
 .gs-header p{
   color:var(--muted);font-size:15px;line-height:1.7;max-width:480px;margin:0 auto;
+}
+.gs-docs{
+  margin-top:18px;
+}
+.gs-docs a{
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid #3b3b47;border-radius:999px;padding:8px 14px;
+  color:#f0c8d0;background:rgba(233,69,96,0.09);
+  text-decoration:none;font-size:12px;letter-spacing:0.7px;text-transform:uppercase;
+}
+.gs-docs a:hover{
+  border-color:var(--accent);background:rgba(233,69,96,0.18);color:#fff;
 }
 
 .section-label{
@@ -1855,7 +2063,10 @@ body::before{
     <span class="line">Wind rushes where walls once stood</span>
     <span class="line">I am sky, unchained</span>
   </div>
-  <a href="/first-look" class="cta">Try it free &rarr;</a>
+  <div class="cta-row">
+    <a href="/first-look" class="cta">Try it free &rarr;</a>
+    <a href="/mcp-guide" class="cta cta-secondary">MCP Docs &rarr;</a>
+  </div>
   <div class="tagline">Your browser. Your data. No walls.</div>
   <div class="scroll-hint" onclick="document.querySelector('.mock-section').scrollIntoView({behavior:'smooth'})">
     <span>&#8595;</span>
@@ -1878,6 +2089,7 @@ body::before{
   <div class="gs-header">
     <h2>Get Started</h2>
     <p>No API key? Start free in 30 seconds. Have an API key? Provision once and get full model power.</p>
+    <p class="gs-docs"><a href="/mcp-guide">Zero-Config MCP Guide + Route Plan</a></p>
   </div>
   <div class="cards">
 
@@ -10900,6 +11112,12 @@ async def handle_index(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_mcp_guide_page(request: web.Request) -> web.Response:
+    """GET /mcp-guide — render markdown views for MCP setup and route plan docs."""
+    _track_page_view(request)
+    return web.Response(text=_build_mcp_guide_html(), content_type="text/html")
+
+
 async def handle_test(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if not auth_info:
@@ -14267,6 +14485,7 @@ async def handle_cmd(request: web.Request) -> web.Response:
 _ROUTES: list[tuple[str, str, object]] = [
     ("GET", "/favicon.svg", handle_favicon),
     ("GET", "/", handle_index),
+    ("GET", "/mcp-guide", handle_mcp_guide_page),
     ("GET", "/test", handle_test),
     ("GET", "/privacy", handle_privacy_policy_page),
     ("GET", "/privacy-policy", handle_privacy_policy_page),
