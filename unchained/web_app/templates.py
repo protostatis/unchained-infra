@@ -378,7 +378,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>Type a task and watch the agent work</div>
       </div>
       <div class="card-note">Demo uses lighter models on a server-side browser. No logins or cookies from your machine.</div>
-      <a href="/demo" class="card-btn">Launch Demo &#8594;</a>
+      <a href="/first-look" class="card-btn">Launch Demo &#8594;</a>
     </div>
 
     <!-- Free Tier -->
@@ -495,6 +495,23 @@ body::before{
       <a href="/chat-codex?model=codex-cli:gpt-5.1-codex-mini" class="card-btn">Open Chat &#8594;</a>
     </div>
 
+    <!-- MCP -->
+    <div class="card trial">
+      <div class="card-badge">MCP</div>
+      <div class="card-title">MCP Server</div>
+      <div class="card-desc">Use your real Chrome through any MCP client &mdash; Claude Code, Claude Desktop, or any tool that speaks MCP. One command to connect.</div>
+      <div class="card-reqs">
+        <span class="req">MCP Client</span>
+        <span class="req">Agent Installed</span>
+      </div>
+      <div class="card-steps">
+        <div class="step"><span class="step-num">1</span>Install the agent (one-line curl)</div>
+        <div class="step"><span class="step-num">2</span>Add MCP server config to your client</div>
+        <div class="step"><span class="step-num">3</span>Use browser tools from any MCP conversation</div>
+      </div>
+      <a href="/mcp" class="card-btn">Set Up MCP &#8594;</a>
+    </div>
+
   </div>
 </div>
 
@@ -516,8 +533,9 @@ body::before{
 
 <div class="footer">
   <div class="footer-links">
-    <a href="/demo">Demo</a>
+    <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="/mcp">MCP</a>
     <a href="/setup">API Setup</a>
     <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
@@ -1045,7 +1063,7 @@ a:hover{text-decoration:underline}
   <h2>Your browser agent, ready when you are</h2>
   <p>The agent works with your real browser, your real logins, and your real data. No screenshots to upload, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/demo" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -1053,8 +1071,9 @@ a:hover{text-decoration:underline}
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/demo">Demo</a>
+    <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="/mcp">MCP</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -4719,6 +4738,63 @@ body{
 
 /* === Main === */
 #main{display:none;flex-direction:column;height:100dvh}
+#workspace{
+  flex:1;min-height:0;display:flex;overflow:hidden;
+}
+#chat-pane{
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;
+}
+#live-pane{
+  flex:2 1 0;min-width:420px;width:auto;
+  border-left:1px solid #2a2a2a;background:#111;
+  display:flex;flex-direction:column;min-height:0;
+}
+#live-pane-head{
+  padding:10px 12px;border-bottom:1px solid #222;
+  color:#d5d5d5;font-size:12px;letter-spacing:0.4px;
+  text-transform:uppercase;
+}
+#live-window{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  padding:12px;
+}
+#live-window-bar{
+  height:28px;border:1px solid #2f2f2f;border-bottom:none;
+  border-radius:8px 8px 0 0;background:#171717;
+  display:flex;align-items:center;gap:6px;padding:0 10px;
+}
+#live-window-bar .dot{
+  width:9px;height:9px;border-radius:50%;display:inline-block;
+}
+#live-window-bar .dot.red{background:#ff5f56}
+#live-window-bar .dot.yellow{background:#ffbd2e}
+#live-window-bar .dot.green{background:#27c93f}
+#live-window-bar .title{
+  margin-left:8px;color:#9a9a9a;font-size:11px;font-family:var(--mono);
+}
+#live-canvas-wrap{
+  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
+  background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
+}
+#live-image{
+  width:100%;height:100%;object-fit:contain;background:#0b0b0b;display:none;
+}
+#live-placeholder{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:13px;padding:16px;text-align:center;
+}
+#live-status{
+  padding:8px 12px 12px;color:var(--muted);font-size:12px;min-height:34px;
+}
+@media (max-width: 1100px) {
+  #live-pane{min-width:320px}
+}
+@media (max-width: 900px) {
+  #workspace{flex-direction:column}
+  #live-pane{
+    width:100%;min-width:0;height:40vh;border-left:none;border-top:1px solid #2a2a2a;
+  }
+}
 
 #topbar{
   display:flex;align-items:center;justify-content:space-between;
@@ -5000,31 +5076,52 @@ body{
 
   <div id="model-notice" style="display:none"><strong>Demo mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
 
-  <div id="agent-bar">
-    <span id="agent-action"></span>
-    <span id="nav-trail"></span>
-    <span id="turn-ctr"></span>
-  </div>
-
-  <div id="chat">
-      <div id="chat-hints">
-        <div class="hint-title">Try it &mdash; ask the agent anything</div>
-      <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
-      <div class="hint-examples">
-        <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-        <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-        <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
-        <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="agent-bar">
+        <span id="agent-action"></span>
+        <span id="nav-trail"></span>
+        <span id="turn-ctr"></span>
       </div>
-      <div class="hint-footer">Free to try &mdash; no setup needed</div>
-    </div>
-  </div>
 
-  <div id="inputbar">
-    <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
-              onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
-    <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      <div id="chat">
+          <div id="chat-hints">
+            <div class="hint-title">Try it &mdash; ask the agent anything</div>
+          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+          <div class="hint-examples">
+            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
+            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
+            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
+            <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+          </div>
+          <div class="hint-footer">Free to try &mdash; no setup needed</div>
+        </div>
+      </div>
+
+      <div id="inputbar">
+        <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
+                  onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+        <button id="sendbtn" onclick="doSend()">&#9654;</button>
+        <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+      </div>
+    </div>
+
+    <aside id="live-pane">
+      <div id="live-pane-head">Live Browser</div>
+      <div id="live-window">
+        <div id="live-window-bar">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="title">headless-chrome</span>
+        </div>
+        <div id="live-canvas-wrap">
+          <img id="live-image" alt="Headless browser live preview">
+          <div id="live-placeholder">The browser preview appears here after navigation.</div>
+        </div>
+      </div>
+      <div id="live-status">Waiting for first page load...</div>
+    </aside>
   </div>
 </div>
 <script>
@@ -5038,6 +5135,37 @@ let demoUnlimited = false;
 let _autoPromptFired = false;
 let _userName = '';
 let _userPicture = '';
+let _livePreviewHasFrame = false;
+
+function setLiveStatus(text) {
+  const el = document.getElementById('live-status');
+  if (el) el.textContent = text;
+}
+
+function resetLivePreview() {
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (ph) ph.style.display = 'flex';
+  _livePreviewHasFrame = false;
+  setLiveStatus('Waiting for first page load...');
+}
+
+function updateLivePreview(imageB64, note) {
+  if (!imageB64) return;
+  const img = document.getElementById('live-image');
+  const ph = document.getElementById('live-placeholder');
+  if (!img) return;
+  img.src = 'data:image/png;base64,' + imageB64;
+  img.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  _livePreviewHasFrame = true;
+  const stamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  setLiveStatus((note || 'Live page refreshed') + ' \u2022 ' + stamp);
+}
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -5651,8 +5779,10 @@ async function doSend() {
 
   addUserBubble(msg);
   const bubble = addAsstBubble();
+  resetLivePreview();
 
   let currentTool = null;
+  let currentToolName = '';
   _cancelCtrl = new AbortController();
 
   try {
@@ -5728,11 +5858,24 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentTool = addToolCall(bubble, evt.name, evt.input);
+            currentToolName = evt.name || '';
+            if (currentToolName === 'navigate') {
+              setLiveStatus('Loading page...');
+            }
           } else if (evt.type === 'tool_result') {
             if (currentTool) {
               setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
+              if (currentToolName === 'navigate' && !_livePreviewHasFrame) {
+                setLiveStatus('Page loaded. Capturing preview...');
+              }
+              if (evt.is_screenshot && evt.visible) {
+                updateLivePreview(evt.data, 'Screenshot captured');
+              }
               currentTool = null;
+              currentToolName = '';
             }
+          } else if (evt.type === 'live_preview') {
+            updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
             appendText(bubble, evt.data);
           } else if (evt.type === 'model_forced') {
