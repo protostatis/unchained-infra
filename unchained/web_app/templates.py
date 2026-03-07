@@ -9522,6 +9522,7 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MCP Setup | Unchained</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -9663,7 +9664,7 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
             Install the Unchained agent on your Mac to bridge your local Chrome:
           </p>
           <div class="code-wrap" id="installer-wrap">
-            <pre class="code-block" id="installer-cmd">curl -fsSL https://api.unchainedsky.com/install/script | bash</pre>
+            <pre class="code-block" id="installer-cmd">curl -fsSL https://api.unchainedsky.com/install.sh | bash</pre>
             <button class="copy-btn" onclick="copyCode('installer-cmd',this)">Copy</button>
           </div>
         </div>
@@ -9675,7 +9676,7 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
         <div class="step-body">
           <div id="signin-section" class="signin-prompt" style="display:none">
             <span>Sign in to auto-fill your API key</span>
-            <a class="signin-btn" href="/auth/google" id="signin-link">Sign in with Google</a>
+            <div id="mcp-gsi-btn"></div>
           </div>
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
@@ -9777,6 +9778,35 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
   <script>
     let apiKey = '';
     let agentId = '';
+
+    async function handleMcpGoogleCredential(response) {
+      try {
+        var res = await fetch('/auth/google', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({credential: response.credential}),
+          credentials: 'include'
+        });
+        if (res.ok) { location.reload(); }
+      } catch(e) {}
+    }
+
+    window.addEventListener('load', function() {
+      var gcid = '__GOOGLE_CLIENT_ID__';
+      if (gcid && gcid !== '__GOOGLE_' + 'CLIENT_ID__' && window.google && google.accounts) {
+        google.accounts.id.initialize({
+          client_id: gcid,
+          callback: handleMcpGoogleCredential,
+          auto_prompt: false
+        });
+        var el = document.getElementById('mcp-gsi-btn');
+        if (el) {
+          google.accounts.id.renderButton(el, {
+            theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'rectangular', width: 260
+          });
+        }
+      }
+    });
 
     function switchTab(tab, btn) {
       document.querySelectorAll('[id^="tab-"]').forEach(function(el) {
