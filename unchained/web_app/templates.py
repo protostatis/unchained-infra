@@ -7724,6 +7724,331 @@ function closeInstallModal() {
 </body>
 </html>"""
 
+# Shared modern skin for all chat-like routes so /trial, /chat-*, /first-look,
+# and /local stay visually aligned.
+_MODERN_CHAT_THEME_LINKS = """<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">"""
+
+_MODERN_CHAT_THEME_STYLE = """<style id="modern-chat-theme">
+:root{
+  color-scheme:dark;
+  --bg:#0a0c0f;
+  --surface:#11161d;
+  --surface-elev:#171d26;
+  --accent:#ff6b4a;
+  --accent-strong:#ff8768;
+  --accent-soft:rgba(255,107,74,0.16);
+  --text:#edf2f7;
+  --muted:#9da7b7;
+  --line:#2a3341;
+  --line-strong:#3a4555;
+  --user-bg:#2f1f1b;
+  --asst-bg:#171f29;
+  --success:#5cd48a;
+  --mono:'IBM Plex Mono','SF Mono','Menlo','Consolas',monospace;
+  --sans:'Space Grotesk','Avenir Next','Segoe UI',sans-serif;
+}
+body{
+  font-family:var(--sans)!important;
+  background:
+    radial-gradient(1200px 420px at 12% -8%, rgba(255,107,74,0.15), transparent 58%),
+    radial-gradient(900px 340px at 95% 4%, rgba(64,136,124,0.14), transparent 62%),
+    linear-gradient(180deg,#121720 0%,#0d1118 44%,#0a0c0f 100%)!important;
+  color:var(--text)!important;
+  letter-spacing:0.01em;
+}
+#login h1{
+  font-size:34px!important;
+  color:var(--text)!important;
+  letter-spacing:0.06em!important;
+  text-transform:uppercase;
+  font-weight:700;
+}
+#login .sub{color:var(--muted)!important}
+#login input{
+  border:1px solid var(--line)!important;
+  border-radius:12px!important;
+  background:var(--surface)!important;
+  color:var(--text)!important;
+}
+#login button{
+  border-radius:12px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+  color:#fff!important;
+}
+#login button:active{transform:translateY(1px)}
+#login #dev-login-btn{
+  border-radius:12px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+}
+#login a[href="/trial"]{color:var(--muted)!important}
+#login a[href="/trial"]:hover{color:#c9d1df!important}
+#login > div[style*="background:#0d2d1a"]{
+  border-radius:999px!important;
+  background:rgba(92,212,138,0.12)!important;
+  border:1px solid rgba(92,212,138,0.35)!important;
+  color:#9bf0bc!important;
+}
+#pending{
+  align-items:center!important;
+  justify-content:center!important;
+  text-align:center!important;
+}
+#pending h1{color:var(--text)!important;letter-spacing:0.04em!important}
+#pending p{color:var(--muted)!important}
+#pending button{
+  border-radius:12px!important;
+  border:1px solid var(--line-strong)!important;
+  background:rgba(255,255,255,0.02)!important;
+  color:var(--text)!important;
+}
+#pending button:hover{
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+#main{
+  max-width:1160px;
+  margin:0 auto;
+  border-left:1px solid rgba(255,255,255,0.05);
+  border-right:1px solid rgba(255,255,255,0.05);
+  background:linear-gradient(180deg,rgba(17,22,29,0.9) 0%,rgba(11,14,19,0.93) 100%);
+  box-shadow:0 22px 50px rgba(0,0,0,0.34);
+}
+#topbar{
+  align-items:flex-start!important;
+  gap:14px;
+  padding:12px clamp(12px,2vw,24px)!important;
+  background:rgba(17,22,29,0.88)!important;
+  border-bottom:1px solid var(--line)!important;
+  backdrop-filter:blur(8px);
+}
+#topbar .left{display:flex;align-items:center;gap:12px}
+#topbar .status-stack{display:flex;flex-direction:column;gap:2px}
+#topbar .agent{
+  font-family:var(--mono)!important;
+  font-size:12px!important;
+  color:var(--accent-strong)!important;
+  letter-spacing:0.04em;
+  background:var(--accent-soft)!important;
+  border:1px solid rgba(255,107,74,0.4)!important;
+  padding:4px 9px;
+  border-radius:999px;
+}
+#topbar .status{color:var(--muted)!important}
+#topbar .status.online{color:var(--success)!important}
+#topbar .status.warn{color:#f0d58b!important}
+#topbar .nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+#topbar .nav a{
+  font-family:var(--mono)!important;
+  font-size:11px!important;
+  color:var(--muted)!important;
+  border:1px solid var(--line)!important;
+  background:rgba(255,255,255,0.02)!important;
+  padding:6px 10px!important;
+  border-radius:999px!important;
+}
+#topbar .nav a:hover{
+  border-color:var(--accent)!important;
+  color:#ffd2c8!important;
+  background:var(--accent-soft)!important;
+}
+#workspace{
+  background:transparent!important;
+  gap:10px;
+  padding:10px clamp(10px,2vw,20px);
+}
+#chat-pane,#browser-pane{
+  background:rgba(17,22,29,0.9)!important;
+  border:1px solid var(--line)!important;
+  border-radius:14px!important;
+}
+#chat{
+  padding:18px clamp(12px,2vw,24px)!important;
+  gap:12px!important;
+}
+#chat::-webkit-scrollbar{width:9px}
+#chat::-webkit-scrollbar-thumb{background:#2b3341;border-radius:8px}
+.bubble{
+  max-width:min(86%,860px)!important;
+  padding:11px 14px!important;
+  border-radius:14px!important;
+  line-height:1.55!important;
+  border:1px solid var(--line)!important;
+}
+.bubble.user{
+  background:linear-gradient(145deg,var(--user-bg),rgba(255,107,74,0.14))!important;
+  border-color:rgba(255,107,74,0.28)!important;
+  border-bottom-right-radius:6px!important;
+}
+.bubble.asst{
+  background:linear-gradient(180deg,var(--asst-bg) 0%,rgba(23,31,41,0.94) 100%)!important;
+  border-color:#303b4a!important;
+  border-bottom-left-radius:6px!important;
+}
+.bubble.asst .copy-btn{
+  border-radius:6px!important;
+  border:1px solid rgba(255,255,255,0.06)!important;
+  background:rgba(255,255,255,0.08)!important;
+}
+.bubble.asst .copy-btn:hover{background:var(--accent-soft)!important;color:#ffd7ce!important}
+.bubble.asst .copy-btn.copied{color:var(--accent-strong)!important}
+#agent-bar{
+  padding:5px clamp(12px,2vw,24px)!important;
+  background:rgba(14,19,25,0.78)!important;
+  border-bottom:1px solid var(--line)!important;
+}
+#slotbar{
+  gap:8px!important;
+  padding:8px clamp(12px,2vw,24px)!important;
+  background:rgba(14,19,25,0.82)!important;
+  border-bottom:1px solid var(--line)!important;
+}
+#slotbar button{
+  height:33px!important;
+  border:1px solid var(--line)!important;
+  border-radius:999px!important;
+  background:rgba(255,255,255,0.02)!important;
+  font-size:11px!important;
+}
+#slotbar button:hover{
+  border-color:var(--accent)!important;
+  color:#ffe0d8!important;
+  background:var(--accent-soft)!important;
+}
+#slotbar button.active{
+  border-color:var(--accent)!important;
+  color:#ffd5cb!important;
+  background:var(--accent-soft)!important;
+}
+#modelrow{
+  padding:8px clamp(12px,2vw,24px) 0!important;
+  gap:8px!important;
+  flex-wrap:wrap;
+}
+#modelrow label{
+  font-size:10px!important;
+  letter-spacing:0.08em!important;
+  text-transform:uppercase;
+  font-family:var(--mono)!important;
+  color:var(--muted)!important;
+}
+#modelsel,#profilesel{
+  height:32px!important;
+  border:1px solid var(--line)!important;
+  border-radius:10px!important;
+  background:var(--surface-elev)!important;
+  color:var(--text)!important;
+}
+#inputbar{
+  padding:10px clamp(12px,2vw,24px)!important;
+  background:rgba(15,20,27,0.9)!important;
+  border-top:1px solid var(--line)!important;
+}
+#msginput{
+  border:1px solid var(--line)!important;
+  border-radius:14px!important;
+  background:var(--surface-elev)!important;
+  color:var(--text)!important;
+  font-family:var(--sans)!important;
+}
+#msginput::placeholder{color:#718097}
+#sendbtn{
+  border-radius:14px!important;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
+}
+#cancelbtn{border-radius:14px!important;background:#ef5c5c!important}
+#download-banner{
+  padding:9px clamp(12px,2vw,24px)!important;
+  background:rgba(255,107,74,0.1)!important;
+  border-bottom:1px solid rgba(255,107,74,0.3)!important;
+}
+#download-banner .detail{color:#b5bfce!important}
+#download-banner a{
+  color:#ffd8cf!important;
+  border:1px solid rgba(255,107,74,0.5)!important;
+  border-radius:999px!important;
+  background:rgba(255,107,74,0.2)!important;
+}
+#download-banner a:hover{
+  background:rgba(255,107,74,0.28)!important;
+  border-color:var(--accent-strong)!important;
+}
+#chat-hints{padding-top:min(8vh,68px)!important}
+.hint-title{
+  font-size:26px!important;
+  color:var(--text)!important;
+}
+.hint-sub{color:var(--muted)!important;font-size:14px!important}
+.hint-examples{max-width:620px!important;gap:9px!important}
+.hint-item{
+  border:1px solid var(--line)!important;
+  border-radius:12px!important;
+  background:rgba(255,255,255,0.02)!important;
+}
+.hint-item:hover{
+  border-color:var(--accent)!important;
+  background:var(--accent-soft)!important;
+}
+#install-modal{
+  background:rgba(0,0,0,0.7)!important;
+}
+#install-modal .modal-card,
+#install-modal>div{
+  background:var(--surface-elev)!important;
+  border:1px solid var(--line-strong)!important;
+  border-radius:14px!important;
+}
+#install-modal .modal-title{color:#ffd5cc!important}
+#install-modal .modal-code,
+#install-modal code[id="install-cmd"]{
+  font-family:var(--mono)!important;
+}
+@media (max-width: 900px){
+  #main{max-width:none;border:none;box-shadow:none}
+  #profilesel{min-width:0;flex:1}
+  .bubble{max-width:92%!important;font-size:13px!important}
+}
+@media (max-width: 640px){
+  #topbar{
+    flex-direction:column!important;
+    align-items:flex-start!important;
+    gap:10px;
+    padding:10px!important;
+  }
+  #topbar .nav{
+    width:100%;
+    overflow:auto;
+    flex-wrap:nowrap;
+  }
+  #slotbar{padding:8px 10px!important;gap:6px!important}
+  #modelrow{padding:8px 10px 0!important}
+  #chat{padding:12px 10px!important}
+  #inputbar{padding:10px!important}
+  #download-banner{flex-wrap:wrap;justify-content:flex-start}
+  #download-banner .copy{width:100%}
+}
+</style>"""
+
+
+def _apply_modern_chat_theme(html: str) -> str:
+    if 'id="modern-chat-theme"' in html:
+        return html
+    if "</head>" not in html:
+        return html
+    parts: list[str] = []
+    if "fonts.googleapis.com/css2?family=Space+Grotesk" not in html:
+        parts.append(_MODERN_CHAT_THEME_LINKS)
+    parts.append(_MODERN_CHAT_THEME_STYLE)
+    return html.replace("</head>", "\n" + "\n".join(parts) + "\n</head>", 1)
+
+
+TRIAL_CHAT_HTML = _apply_modern_chat_theme(TRIAL_CHAT_HTML)
+CHAT_GEMINI_HTML = _apply_modern_chat_theme(CHAT_GEMINI_HTML)
+CHAT_CLAUDE_SDK_HTML = _apply_modern_chat_theme(CHAT_CLAUDE_SDK_HTML)
+CHAT_CODEX_HTML = _apply_modern_chat_theme(CHAT_CODEX_HTML)
+HEADLESS_DEMO_HTML = _apply_modern_chat_theme(HEADLESS_DEMO_HTML)
+
 # Backward-compat alias used by older tests and tooling.
 # Older tests assert an inline model expression in doSend().
 _CHAT_HTML_MODEL_SENTINEL = "model: currentModel()"
