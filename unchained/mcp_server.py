@@ -16,7 +16,6 @@ Claude Code connects:
 """
 
 import hashlib
-import os
 import sys
 
 from fastmcp import FastMCP
@@ -35,9 +34,7 @@ mcp = FastMCP(
         "Unchained browser automation tools. Use DDM (dom density map) for "
         "page orientation (~500 tokens), intel for extraction strategy "
         "classification, and CDP tools for interaction. Navigate and click "
-        "return page layout inline — no separate DDM call needed after them. "
-        "You do NOT need to provide agent_id — it is auto-detected from your "
-        "API key."
+        "return page layout inline — no separate DDM call needed after them."
     ),
 )
 
@@ -62,17 +59,17 @@ def _agent_id_from_key(api_key: str) -> str:
     return f"claude-{hashlib.sha256(api_key.encode()).hexdigest()[:8]}"
 
 
-def _resolve_agent(agent_id: str) -> str:
-    """Resolve agent_id — auto-detect from API key if not provided."""
-    if agent_id:
-        return agent_id
+def _resolve_agent() -> str:
+    """Authenticate the caller and derive agent_id from their API key."""
     api_key = _extract_api_key()
-    if api_key:
-        return _agent_id_from_key(api_key)
-    raise ValueError(
-        "agent_id could not be resolved. Either pass agent_id explicitly "
-        "or set the Authorization: Bearer <api_key> header."
-    )
+    if not api_key:
+        raise ValueError(
+            "Authorization: Bearer <api_key> header is required."
+        )
+    info = _auth.validate_key(api_key)
+    if info is None:
+        raise ValueError("Invalid API key.")
+    return _agent_id_from_key(api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +92,7 @@ async def ddm(flags: str = "--llm-2pass --cols 60",
       --forms                 (detect forms)
       --js "expression"       (execute JavaScript)
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_ddm(aid, tab_id, flags.split())
 
 
@@ -107,7 +104,7 @@ async def intel_probe(tab_id: str = "auto", agent_id: str = "") -> str:
     data stores, shadow DOM structure, and ranks 8 extraction strategies.
     Run this on first visit to any unknown SPA.
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_intel(aid, tab_id, ["--probe"])
 
 
@@ -121,7 +118,7 @@ async def intel_extract(tab_id: str = "auto",
 
     Best for: Reddit (host_attrs), GitHub (data_testid), React SPAs (react_fiber).
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     flags = ["--extract"]
     if strategy:
         flags += ["--strategy", strategy]
@@ -135,7 +132,7 @@ async def intel_stores(tab_id: str = "auto", agent_id: str = "") -> str:
     Use on Nuxt/Next/YouTube sites to discover data before extraction.
     Follow up with intel_shape and intel_find_paths.
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_intel(aid, tab_id, ["--stores"])
 
 
@@ -149,7 +146,7 @@ async def intel_shape(global_name: str,
         global_name: Name of the JS global (e.g. "__NUXT__", "ytInitialData")
         depth: How deep to traverse (default 3)
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_intel(
         aid, tab_id,
         ["--shape", global_name, "--depth", str(depth)],
@@ -166,7 +163,7 @@ async def intel_find_paths(global_name: str,
         global_name: Name of the JS global (e.g. "__NUXT__")
         pattern: Key name to search for (e.g. "deals", "title", "price")
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_intel(
         aid, tab_id,
         ["--find-paths", global_name, pattern],
@@ -177,7 +174,7 @@ async def intel_find_paths(global_name: str,
 async def cdp_navigate(url: str,
                        tab_id: str = "auto", agent_id: str = "") -> str:
     """Navigate the browser to a URL. Returns page title and final URL."""
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.navigate(aid, tab_id, url)
 
 
@@ -185,7 +182,7 @@ async def cdp_navigate(url: str,
 async def cdp_click(x: int, y: int,
                     tab_id: str = "auto", agent_id: str = "") -> str:
     """Click at pixel coordinates. Get coordinates from DDM output."""
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.click(aid, tab_id, x, y)
 
 
@@ -197,7 +194,7 @@ async def cdp_type(text: str,
     Click on an input field first (using cdp_click) to give it focus,
     then use this to type text.
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.type_text(aid, tab_id, text)
 
 
@@ -210,7 +207,7 @@ async def js_eval(expression: str,
     Use for: reading page data, interacting with SPA widgets,
     extracting structured data with querySelectorAll.
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.run_js(aid, tab_id, expression)
 
 
@@ -222,7 +219,7 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
     DDM for page understanding (~500 tokens).
     Only use for: CAPTCHAs, visual state, image verification.
     """
-    aid = _resolve_agent(agent_id)
+    aid = _resolve_agent()
     return await cloud_tools.screenshot(aid, tab_id)
 
 
