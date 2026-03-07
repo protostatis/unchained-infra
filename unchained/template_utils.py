@@ -328,11 +328,11 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);margin:0 auto;border-radius:12px;overflow:hidden;background:#0a0c0f;}',
-      '#login .g_id_signin::after{content:\"\";position:absolute;inset:0;z-index:4;border-radius:12px;pointer-events:none;box-shadow:inset 4px 0 0 #0a0c0f,inset -5px 0 0 #0a0c0f,inset 2px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
-      '#login .g_id_signin > div,#login .g_id_signin > div > div{width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
-      '#login .g_id_signin iframe{display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;}',
-      '#login .g_id_signin [role=\"button\"]{border-radius:12px !important;overflow:hidden !important;}',
+      '#login .g_id_signin{position:relative;display:block;width:min(100%,320px);max-width:320px;height:48px;margin:0 auto;border-radius:12px;overflow:hidden;background:#1f2127;border:1px solid rgba(255,255,255,0.16);}',
+      '#login .g_id_signin::before{content:\"Sign in with Google\";position:absolute;inset:0;z-index:1;pointer-events:none;display:flex;align-items:center;justify-content:center;padding-left:26px;color:#f3f4f6;font-size:16px;font-weight:600;line-height:1;font-family:inherit;}',
+      '#login .g_id_signin::after{content:\"G\";position:absolute;left:14px;top:50%;transform:translateY(-50%);z-index:1;pointer-events:none;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:4px;background:#fff;color:#1a73e8;font-size:17px;font-weight:700;line-height:1;}',
+      '#login .g_id_signin > div,#login .g_id_signin > div > div{position:absolute !important;inset:0 !important;width:100% !important;max-width:100% !important;height:100% !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
+      '#login .g_id_signin iframe{position:absolute !important;inset:0 !important;display:block !important;width:100% !important;max-width:100% !important;height:100% !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:0 !important;z-index:2;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
     ].join('');
     if(document.head){
