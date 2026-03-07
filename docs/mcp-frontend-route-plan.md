@@ -41,7 +41,12 @@ Playwright skill for core user workflows.
 - example tool calls (`cdp_navigate`, `ddm`, `js_eval`)
 - copyable AGENTS.md/CLAUDE.md "Unchained MCP Tool Use" snippet
 
-4. MCP vs Playwright skill comparison (single table)
+4. DDM-first operating model section
+- include the 6-step pipeline (ORIENT, IDENTIFY, CLASSIFY, ACT, VERIFY, EXTRACT)
+- include extraction decision mini-list (`ddm --text`, `intel --extract`,
+  `intel --stores -> --find-paths -> js`, `querySelectorAll`)
+
+5. MCP vs Playwright skill comparison (single table)
 - rows:
   - auth/session fidelity
   - setup and maintenance burden
@@ -49,7 +54,7 @@ Playwright skill for core user workflows.
   - CI determinism
   - best-fit use cases
 
-5. Troubleshooting
+6. Troubleshooting
 - `/mcp` routing check
 - `Agent not connected`
 - missing/invalid API key
