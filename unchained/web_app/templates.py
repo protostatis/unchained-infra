@@ -9848,9 +9848,12 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
           <div id="tab-claude-code">
             <div class="code-wrap">
               <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
-  --transport http \
-  --url https://api.unchainedsky.com/mcp \
-  --header "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+  https://api.unchainedsky.com/mcp \
+  -t http \
+  -H "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+              <p style="color:#a6a6b5;font-size:12px;margin-top:8px">
+                Restart Claude Code after adding (<code>/mcp</code> to verify tools are loaded).
+              </p>
               <button class="copy-btn" onclick="copySnippet('claude-code',this)">Copy</button>
             </div>
           </div>
@@ -9887,14 +9890,14 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
         <h2>Verify</h2>
         <div class="step-body">
           <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
-            Ask your MCP client to run a quick DDM extraction:
+            Ask your MCP client to run a quick DDM extraction (agent_id is auto-detected from your API key):
           </p>
           <div class="code-wrap">
-            <pre class="code-block" id="snippet-verify">ddm url=https://example.com agent_id=<span id="verify-aid">YOUR_AGENT_ID</span></pre>
+            <pre class="code-block" id="snippet-verify">ddm url=https://example.com</pre>
             <button class="copy-btn" onclick="copySnippet('verify',this)">Copy</button>
           </div>
           <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
-            If you don't know your agent_id, check your agent's startup output or run:
+            To check your agent connection status:
           </p>
           <div class="code-wrap">
             <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
@@ -10021,8 +10024,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
 
     function fillAgentId(aid) {
       agentId = aid;
-      var el = document.getElementById('verify-aid');
-      if (el) { el.textContent = aid; el.style.color = '#34d399'; }
     }
 
     (async function init() {

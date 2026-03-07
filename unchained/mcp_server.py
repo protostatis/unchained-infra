@@ -15,10 +15,12 @@ Claude Code connects:
     claude --mcp-server https://api.unchained.dev/mcp
 """
 
+import hashlib
 import os
 import sys
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 
 import cloud_tools
 from auth import Auth
@@ -33,7 +35,9 @@ mcp = FastMCP(
         "Unchained browser automation tools. Use DDM (dom density map) for "
         "page orientation (~500 tokens), intel for extraction strategy "
         "classification, and CDP tools for interaction. Navigate and click "
-        "return page layout inline — no separate DDM call needed after them."
+        "return page layout inline — no separate DDM call needed after them. "
+        "You do NOT need to provide agent_id — it is auto-detected from your "
+        "API key."
     ),
 )
 
@@ -41,15 +45,34 @@ mcp = FastMCP(
 _auth = Auth()
 
 
-def _resolve_agent(agent_id: str | None, api_key: str | None) -> str:
-    """Resolve agent_id, validating the API key if provided."""
-    if not agent_id:
-        raise ValueError("agent_id is required")
+def _extract_api_key() -> str:
+    """Extract the Bearer API key from the current HTTP request headers."""
+    try:
+        request = get_http_request()
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:].strip()
+    except RuntimeError:
+        pass
+    return ""
+
+
+def _agent_id_from_key(api_key: str) -> str:
+    """Derive the agent_id from an API key (same logic as chat_agent_cli.py)."""
+    return f"claude-{hashlib.sha256(api_key.encode()).hexdigest()[:8]}"
+
+
+def _resolve_agent(agent_id: str) -> str:
+    """Resolve agent_id — auto-detect from API key if not provided."""
+    if agent_id:
+        return agent_id
+    api_key = _extract_api_key()
     if api_key:
-        info = _auth.validate_key(api_key)
-        if info is None:
-            raise ValueError("Invalid API key")
-    return agent_id
+        return _agent_id_from_key(api_key)
+    raise ValueError(
+        "agent_id could not be resolved. Either pass agent_id explicitly "
+        "or set the Authorization: Bearer <api_key> header."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +80,8 @@ def _resolve_agent(agent_id: str | None, api_key: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def ddm(agent_id: str, flags: str = "--llm-2pass --cols 60",
-              tab_id: str = "auto") -> str:
+async def ddm(flags: str = "--llm-2pass --cols 60",
+              tab_id: str = "auto", agent_id: str = "") -> str:
     """DOM Density Map — structural page layout + interactive elements.
 
     Returns ~500 tokens of page understanding. Use this FIRST on every page
@@ -72,23 +95,25 @@ async def ddm(agent_id: str, flags: str = "--llm-2pass --cols 60",
       --forms                 (detect forms)
       --js "expression"       (execute JavaScript)
     """
-    return await cloud_tools.run_ddm(agent_id, tab_id, flags.split())
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.run_ddm(aid, tab_id, flags.split())
 
 
 @mcp.tool()
-async def intel_probe(agent_id: str, tab_id: str = "auto") -> str:
+async def intel_probe(tab_id: str = "auto", agent_id: str = "") -> str:
     """Page intelligence probe — DOM fingerprint + Bayesian strategy ranking.
 
     Returns ~100 tokens. Identifies the page framework (Nuxt/Next/React),
     data stores, shadow DOM structure, and ranks 8 extraction strategies.
     Run this on first visit to any unknown SPA.
     """
-    return await cloud_tools.run_intel(agent_id, tab_id, ["--probe"])
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.run_intel(aid, tab_id, ["--probe"])
 
 
 @mcp.tool()
-async def intel_extract(agent_id: str, tab_id: str = "auto",
-                        strategy: str = "") -> str:
+async def intel_extract(tab_id: str = "auto",
+                        strategy: str = "", agent_id: str = "") -> str:
     """Extract structured data using auto-selected or forced strategy.
 
     Strategies: innerText, host_attrs, js_global, react_fiber,
@@ -96,98 +121,109 @@ async def intel_extract(agent_id: str, tab_id: str = "auto",
 
     Best for: Reddit (host_attrs), GitHub (data_testid), React SPAs (react_fiber).
     """
+    aid = _resolve_agent(agent_id)
     flags = ["--extract"]
     if strategy:
         flags += ["--strategy", strategy]
-    return await cloud_tools.run_intel(agent_id, tab_id, flags)
+    return await cloud_tools.run_intel(aid, tab_id, flags)
 
 
 @mcp.tool()
-async def intel_stores(agent_id: str, tab_id: str = "auto") -> str:
+async def intel_stores(tab_id: str = "auto", agent_id: str = "") -> str:
     """List all JavaScript data stores on the page (globals >10KB).
 
     Use on Nuxt/Next/YouTube sites to discover data before extraction.
     Follow up with intel_shape and intel_find_paths.
     """
-    return await cloud_tools.run_intel(agent_id, tab_id, ["--stores"])
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.run_intel(aid, tab_id, ["--stores"])
 
 
 @mcp.tool()
-async def intel_shape(agent_id: str, global_name: str,
-                      depth: int = 3, tab_id: str = "auto") -> str:
+async def intel_shape(global_name: str,
+                      depth: int = 3, tab_id: str = "auto",
+                      agent_id: str = "") -> str:
     """Map the shape of a JavaScript global object.
 
     Args:
         global_name: Name of the JS global (e.g. "__NUXT__", "ytInitialData")
         depth: How deep to traverse (default 3)
     """
+    aid = _resolve_agent(agent_id)
     return await cloud_tools.run_intel(
-        agent_id, tab_id,
+        aid, tab_id,
         ["--shape", global_name, "--depth", str(depth)],
     )
 
 
 @mcp.tool()
-async def intel_find_paths(agent_id: str, global_name: str,
-                           pattern: str, tab_id: str = "auto") -> str:
+async def intel_find_paths(global_name: str,
+                           pattern: str, tab_id: str = "auto",
+                           agent_id: str = "") -> str:
     """Find paths to a key pattern inside a JavaScript global.
 
     Args:
         global_name: Name of the JS global (e.g. "__NUXT__")
         pattern: Key name to search for (e.g. "deals", "title", "price")
     """
+    aid = _resolve_agent(agent_id)
     return await cloud_tools.run_intel(
-        agent_id, tab_id,
+        aid, tab_id,
         ["--find-paths", global_name, pattern],
     )
 
 
 @mcp.tool()
-async def cdp_navigate(agent_id: str, url: str,
-                       tab_id: str = "auto") -> str:
+async def cdp_navigate(url: str,
+                       tab_id: str = "auto", agent_id: str = "") -> str:
     """Navigate the browser to a URL. Returns page title and final URL."""
-    return await cloud_tools.navigate(agent_id, tab_id, url)
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.navigate(aid, tab_id, url)
 
 
 @mcp.tool()
-async def cdp_click(agent_id: str, x: int, y: int,
-                    tab_id: str = "auto") -> str:
+async def cdp_click(x: int, y: int,
+                    tab_id: str = "auto", agent_id: str = "") -> str:
     """Click at pixel coordinates. Get coordinates from DDM output."""
-    return await cloud_tools.click(agent_id, tab_id, x, y)
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.click(aid, tab_id, x, y)
 
 
 @mcp.tool()
-async def cdp_type(agent_id: str, text: str,
-                   tab_id: str = "auto") -> str:
+async def cdp_type(text: str,
+                   tab_id: str = "auto", agent_id: str = "") -> str:
     """Type text into the currently focused element.
 
     Click on an input field first (using cdp_click) to give it focus,
     then use this to type text.
     """
-    return await cloud_tools.type_text(agent_id, tab_id, text)
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.type_text(aid, tab_id, text)
 
 
 @mcp.tool()
-async def js_eval(agent_id: str, expression: str,
-                  tab_id: str = "auto") -> str:
+async def js_eval(expression: str,
+                  tab_id: str = "auto", agent_id: str = "") -> str:
     """Execute JavaScript on the page and return the result.
 
     Returns: JSON for objects/arrays, raw string for primitives.
     Use for: reading page data, interacting with SPA widgets,
     extracting structured data with querySelectorAll.
     """
-    return await cloud_tools.run_js(agent_id, tab_id, expression)
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.run_js(aid, tab_id, expression)
 
 
 @mcp.tool()
-async def cdp_screenshot(agent_id: str, tab_id: str = "auto") -> str:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
     """Take a screenshot of the current page.
 
     Returns base64-encoded PNG. Use sparingly (~2100 tokens) — prefer
     DDM for page understanding (~500 tokens).
     Only use for: CAPTCHAs, visual state, image verification.
     """
-    return await cloud_tools.screenshot(agent_id, tab_id)
+    aid = _resolve_agent(agent_id)
+    return await cloud_tools.screenshot(aid, tab_id)
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.25"
+VERSION = "0.3.26"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -430,6 +430,14 @@ fi
 
 # Activate venv so Claude's Bash tool finds the right python
 source .venv/bin/activate
+
+# Print the agent_id so the user knows it
+if [ -n "${UNCHAINED_API_KEY:-}" ]; then
+  AGENT_ID=$(python3 -c "import hashlib; print('claude-' + hashlib.sha256('${UNCHAINED_API_KEY}'.encode()).hexdigest()[:8])")
+  echo ""
+  echo "  Agent ID: $AGENT_ID"
+  echo ""
+fi
 
 if $DAEMON; then
   # --- Daemon mode: run in background, log to file ---
