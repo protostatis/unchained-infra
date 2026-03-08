@@ -58,12 +58,42 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
+    explicit = os.environ.get(env_var, "").strip()
+    if explicit:
+        return explicit
+    discovered = shutil.which(default_name)
+    if discovered:
+        return discovered
+    fallback_dirs: list[str] = []
+    if sys.platform == "darwin":
+        # launchd often starts the agent with a stripped PATH on macOS.
+        fallback_dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"])
+    fallback_dirs.append(os.path.expanduser("~/.local/bin"))
+    for fallback_dir in fallback_dirs:
+        fallback = os.path.join(fallback_dir, default_name)
+        if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+            return fallback
+    return default_name
+
+
+def _cli_binary_available(path_or_name: str) -> bool:
+    candidate = str(path_or_name or "").strip()
+    if not candidate:
+        return False
+    if os.path.sep in candidate:
+        return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+    return shutil.which(candidate) is not None
+
+
 KEY = os.environ.get("UNCHAINED_API_KEY", "")
 SERVER = os.environ.get("UNCHAINED_SERVER", "wss://api.unchainedsky.com/chat/ws")
 RELAY_HOST = os.environ.get("UNCHAINED_RELAY_HOST", "api.unchainedsky.com")
 RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
 CWD = os.path.expanduser("~/unchained-agent/unchained")
-CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
+CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
 CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
@@ -366,6 +396,32 @@ This checks the server for a newer version, downloads code updates, and prints
 - Be concise — report findings, not process.
 """
 
+
+SCHEDULER_TOOL_PROMPT = """## Scheduler Tool (this turn only)
+
+The user explicitly armed scheduler access by starting the message with `/schedule`.
+Use the scheduler tool only for scheduled-task management. It reads and writes the
+same local task list shown in `/scheduler`.
+
+Commands:
+- uv run python scheduler_tool.py list
+- uv run python scheduler_tool.py preview --id "task-id" --prompt "full prompt" --daily-at 09:00
+- uv run python scheduler_tool.py upsert --id "task-id" --prompt "full prompt" --daily-at 09:00
+- uv run python scheduler_tool.py delete --id "task-id"
+
+Rules:
+- If modifying an existing task, list it first and preserve fields the user did not ask to change.
+- Scheduled prompts must be self-contained. Do not save "do this again" style prompts.
+- If the user is ambiguous about the schedule or desired task, ask a concise follow-up question.
+"""
+
+
+def _claude_system_prompt(*, scheduler_armed: bool) -> str:
+    if not scheduler_armed:
+        return SYSTEM_PROMPT
+    return f"{SYSTEM_PROMPT}\n\n{SCHEDULER_TOOL_PROMPT}"
+
+
 # Codex CLI does not currently support a dedicated `--system-prompt` flag like
 # Claude CLI. Inject equivalent browser-agent instructions into the prompt text.
 CODEX_RESUME_REMINDER = """You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
@@ -391,21 +447,22 @@ Never answer factual browser tasks from memory when tool use is available.
 """
 
 
-def _build_codex_prompt(user_text: str, *, is_resume: bool) -> str:
+def _build_codex_prompt(user_text: str, *, is_resume: bool, scheduler_armed: bool = False) -> str:
     """Build Codex input text with browser-agent instructions."""
     req = (user_text or "").strip()
     if not req:
         return ""
+    scheduler_block = f"\n{SCHEDULER_TOOL_PROMPT}\n" if scheduler_armed else ""
     if is_resume:
         return (
             "[AGENT REMINDER]\n"
-            f"{CODEX_RESUME_REMINDER}\n"
+            f"{CODEX_RESUME_REMINDER}{scheduler_block}\n"
             "[/AGENT REMINDER]\n\n"
             f"User request:\n{req}\n"
         )
     return (
         "[SYSTEM PROMPT]\n"
-        f"{SYSTEM_PROMPT}\n"
+        f"{_claude_system_prompt(scheduler_armed=scheduler_armed)}\n"
         "[/SYSTEM PROMPT]\n\n"
         f"User request:\n{req}\n"
     )
@@ -501,6 +558,8 @@ def _codex_tool_name_and_input(command: str) -> tuple[str, str]:
     shell_m = re.match(r"^/bin/(?:zsh|bash)\s+-lc\s+'(.+)'$", cmd, re.DOTALL)
     if shell_m:
         cmd = shell_m.group(1).strip()
+    if "scheduler_tool.py" in cmd:
+        return "scheduler", cmd
     m = re.search(r"cdp_tool\.py\s+([a-zA-Z0-9_-]+)", cmd)
     if m:
         return m.group(1).lower(), cmd
@@ -513,6 +572,8 @@ async def handle_message_claude(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
 ):
     """Single claude -p call with streaming tool events and session resume."""
     cli_model = _MODEL_CLI_MAP.get(model, "opus")
@@ -530,31 +591,50 @@ async def handle_message_claude(
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
+    env["UNCHAINED_CHAT_SESSION_ID"] = sid
+    if scheduler_armed and scheduler_grant_id:
+        env["UNCHAINED_SCHEDULER_GRANT_ID"] = scheduler_grant_id
+    else:
+        env.pop("UNCHAINED_SCHEDULER_GRANT_ID", None)
 
     # Build command with stream-json for real-time tool events
     allowed = "Bash(uv run python cdp_tool.py:*) Bash(bash ../update.sh)"
+    if scheduler_armed:
+        allowed += " Bash(uv run python scheduler_tool.py:*)"
     tools = ["Bash"]
     # Optional: set CLAUDE_ENABLE_WEB_TOOLS=1 to enable WebFetch/WebSearch
     if os.environ.get("CLAUDE_ENABLE_WEB_TOOLS"):
         allowed += " WebFetch WebSearch"
         tools += ["WebFetch", "WebSearch"]
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
+    cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model, "--max-turns", "100",
            "--allowedTools", allowed,
-           "--system-prompt", SYSTEM_PROMPT,
+           "--system-prompt", _claude_system_prompt(scheduler_armed=scheduler_armed),
            "--tools"] + tools
     if is_resume:
         cmd += ["--resume", claude_sid]
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-        cwd=CWD,
-        start_new_session=True,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=CWD,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        await ws.send(json.dumps({
+            "session_id": sid,
+            "type": "error",
+            "data": (
+                f"Claude CLI is not installed or not on PATH. "
+                f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
+            ),
+        }))
+        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        return
     active_procs[sid] = proc
 
     # Send input and close stdin
@@ -728,7 +808,9 @@ async def handle_message_claude(
                     if block_name == "Bash":
                         cmd_str = tool_input.get("command", "")
                         tool_name = "bash"
-                        if "cdp_tool.py" in cmd_str:
+                        if "scheduler_tool.py" in cmd_str:
+                            tool_name = "scheduler"
+                        elif "cdp_tool.py" in cmd_str:
                             parts = cmd_str.split("cdp_tool.py", 1)
                             tool_name = parts[1].strip().split()[0] if len(parts) > 1 else "cdp"
                         display = cmd_str[:200]
@@ -908,7 +990,15 @@ async def handle_message_claude(
             print(f"  Stale session ({stderr_text[:80]}), starting fresh...")
             del claude_sessions[sid]
             await asyncio.sleep(1)  # let API state settle
-            return await handle_message_claude(ws, sid, user_text, model, tab_id=tab_id)
+            return await handle_message_claude(
+                ws,
+                sid,
+                user_text,
+                model,
+                tab_id=tab_id,
+                scheduler_armed=scheduler_armed,
+                scheduler_grant_id=scheduler_grant_id,
+            )
         if is_resume and proc.returncode != 0:
             log.info("[%s] Resume failed (exit %d): %s", sid, proc.returncode, stderr_text[:200])
         response = f"Error: {stderr_text}" if stderr_text else f"Error: exit code {proc.returncode}"
@@ -928,6 +1018,8 @@ async def handle_message_codex(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
 ):
     """Single codex exec call with JSON event parsing and session resume."""
     codex_model = _resolve_codex_model(model)
@@ -957,6 +1049,12 @@ async def handle_message_codex(
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
+    env["UNCHAINED_CHAT_SESSION_ID"] = sid
+    env.pop("UNCHAINED_INSTALL_TOKEN", None)
+    if scheduler_armed and scheduler_grant_id:
+        env["UNCHAINED_SCHEDULER_GRANT_ID"] = scheduler_grant_id
+    else:
+        env.pop("UNCHAINED_SCHEDULER_GRANT_ID", None)
 
     output_file = os.path.join(
         tempfile.gettempdir(),
@@ -999,7 +1097,7 @@ async def handle_message_codex(
     )
     active_procs[sid] = proc
 
-    codex_input = _build_codex_prompt(user_text, is_resume=is_resume)
+    codex_input = _build_codex_prompt(user_text, is_resume=is_resume, scheduler_armed=scheduler_armed)
     proc.stdin.write(codex_input.encode())
     await proc.stdin.drain()
     proc.stdin.close()
@@ -1257,7 +1355,15 @@ async def handle_message_codex(
             codex_sessions.pop(sid, None)
             _save_codex_session("", "")
             await asyncio.sleep(1)
-            return await handle_message_codex(ws, sid, user_text, model, tab_id=tab_id)
+            return await handle_message_codex(
+                ws,
+                sid,
+                user_text,
+                model,
+                tab_id=tab_id,
+                scheduler_armed=scheduler_armed,
+                scheduler_grant_id=scheduler_grant_id,
+            )
         if is_resume and not timed_out and (proc.returncode != 0 or error_text):
             log.info("[%s] Codex resume error (exit %d, keeping session): %s",
                      sid, proc.returncode or 0, (error_text or stderr_text)[:200])
@@ -1286,10 +1392,12 @@ async def handle_message(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
 ):
     """Dispatch to local Claude CLI or Codex CLI handler by model prefix."""
     if _is_codex_cli_model(model):
-        if shutil.which(CODEX_BIN) is None:
+        if not _cli_binary_available(CODEX_BIN):
             await ws.send(json.dumps({
                 "session_id": sid,
                 "type": "error",
@@ -1297,8 +1405,35 @@ async def handle_message(
             }))
             await ws.send(json.dumps({"session_id": sid, "type": "done"}))
             return
-        return await handle_message_codex(ws, sid, user_text, model, tab_id=tab_id)
-    return await handle_message_claude(ws, sid, user_text, model, tab_id=tab_id)
+        return await handle_message_codex(
+            ws,
+            sid,
+            user_text,
+            model,
+            tab_id=tab_id,
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+        )
+    if not _cli_binary_available(CLAUDE_BIN):
+        await ws.send(json.dumps({
+            "session_id": sid,
+            "type": "error",
+            "data": (
+                f"Claude CLI is not installed or not on PATH. "
+                f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
+            ),
+        }))
+        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        return
+    return await handle_message_claude(
+        ws,
+        sid,
+        user_text,
+        model,
+        tab_id=tab_id,
+        scheduler_armed=scheduler_armed,
+        scheduler_grant_id=scheduler_grant_id,
+    )
 
 
 async def main():
@@ -1323,7 +1458,12 @@ async def main():
     if not check_chrome_bridge():
         print("WARNING: Chrome bridge offline — browser tools will fail.")
         print("The agent will still work with WebFetch/WebSearch only.\n")
-    if shutil.which(CODEX_BIN) is None:
+    if not _cli_binary_available(CLAUDE_BIN):
+        print(
+            f"WARNING: {CLAUDE_BIN} not found — Claude CLI lane will fail until Claude Code is installed "
+            "or CLAUDE_BIN points to it."
+        )
+    if not _cli_binary_available(CODEX_BIN):
         print(f"WARNING: {CODEX_BIN} not found in PATH — codex-cli model lane will be unavailable.")
 
     # Restore claude session from local storage
@@ -1343,8 +1483,8 @@ async def main():
             await ws.send(json.dumps({
                 "key": KEY,
                 "capabilities": {
-                    "claude_cli": True,
-                    "codex_cli": bool(shutil.which(CODEX_BIN)),
+                    "claude_cli": bool(_cli_binary_available(CLAUDE_BIN)),
+                    "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
                 },
             }))
             resp = json.loads(await ws.recv())
@@ -1358,6 +1498,8 @@ async def main():
                     user_text = msg["message"]
                     msg_model = msg.get("model", "")
                     msg_tab_id = msg.get("tab_id", "auto")
+                    msg_scheduler_armed = bool(msg.get("scheduler_armed"))
+                    msg_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
                     log.info("[%s] User: %s (model=%s)", sid, user_text, msg_model or "default")
                     # Kill any existing process for this session to avoid concurrent API calls
                     existing_proc = active_procs.get(sid)
@@ -1375,7 +1517,15 @@ async def main():
                         except (asyncio.CancelledError, asyncio.TimeoutError):
                             pass
                     task = asyncio.create_task(
-                        handle_message(ws, sid, user_text, msg_model, tab_id=msg_tab_id)
+                        handle_message(
+                            ws,
+                            sid,
+                            user_text,
+                            msg_model,
+                            tab_id=msg_tab_id,
+                            scheduler_armed=msg_scheduler_armed,
+                            scheduler_grant_id=msg_scheduler_grant_id,
+                        )
                     )
                     active_tasks[sid] = task
                     task.add_done_callback(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import re
 import time
 import uuid
 
@@ -14,9 +15,29 @@ from aiohttp import web
 from web_app.core import get_core as _core
 
 
+_SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
+
+
 def _normalize_profile_path(raw: object) -> str:
     """Normalize optional profile path from client payloads."""
     return str(raw or "").strip()
+
+
+def _extract_scheduler_turn(message: str, *, allow_trigger: bool = True) -> tuple[bool, str]:
+    text = str(message or "").strip()
+    if not allow_trigger:
+        return False, text
+    match = _SCHEDULER_TRIGGER_RE.match(text)
+    if not match:
+        return False, text
+    remainder = text[match.end():].strip()
+    if not remainder:
+        remainder = "List my scheduled tasks and help me manage them."
+    return True, remainder
+
+
+def _scheduler_trigger_supported(*, guest_mode: bool, is_openrouter: bool) -> bool:
+    return not guest_mode and not is_openrouter
 
 
 async def _allowed_profile_paths(core, agent_id: str) -> set[str]:
@@ -215,7 +236,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         return err
 
     req_id = core._request_id(request)
-    message = body.get("message", "").strip()
+    raw_message = body.get("message", "").strip()
+    scheduler_armed, message = _extract_scheduler_turn(
+        raw_message,
+        allow_trigger=bool(body.get("allow_scheduler_trigger", True)),
+    )
     agent_id = auth_info.get("agent_id")
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
@@ -248,6 +273,17 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         )
     if core._is_pending_user(auth_info) and not is_openrouter:
         return core._pending_limited_response()
+    if scheduler_armed and not _scheduler_trigger_supported(
+        guest_mode=guest_mode,
+        is_openrouter=is_openrouter,
+    ):
+        return web.json_response(
+            {
+                "error": "scheduler_trigger_requires_local_bridge_lane",
+                "message": "The /schedule trigger is supported only on bridge-backed local agent lanes, not the guest/trial OpenRouter lane.",
+            },
+            status=400,
+        )
     openrouter_forced_model = ""
     openrouter_forced_from_model = ""
     openrouter_forced_notice = ""
@@ -263,6 +299,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
     elif not _session_owned(session_id):
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
+    scheduler_grant_id = ""
+    if scheduler_armed:
+        scheduler_grant_id = core._mint_scheduler_turn_grant(auth_info.get("user_id", ""), session_id)
 
     core._track_event(
         request,
@@ -274,7 +313,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         user_id=auth_info.get("user_id", ""),
         user_type=auth_info.get("user_type", ""),
         source="web",
-        meta={"model": model or "", "headless": bool(body.get("headless", False))},
+        meta={
+            "model": model or "",
+            "headless": bool(body.get("headless", False)),
+            "scheduler_armed": scheduler_armed,
+        },
         status_code=200,
     )
 
@@ -482,6 +525,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "agent_id": cdp_agent_id,
             "message": message,
         }
+        if scheduler_armed:
+            ws_msg["scheduler_armed"] = True
+            ws_msg["scheduler_grant_id"] = scheduler_grant_id
         if model:
             ws_msg["model"] = model
         if is_openrouter and auth_info.get("user_id"):
@@ -510,6 +556,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             cdp_agent_id=cdp_agent_id,
         )
     except Exception:
+        if scheduler_grant_id:
+            core._scheduler_turn_grants.pop(scheduler_grant_id, None)
         core._trace(
             "chat.msg.forward_error",
             req_id=req_id,
@@ -579,6 +627,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     finally:
         core._response_queues.pop(session_id, None)
         core._session_agents.pop(session_id, None)
+        if scheduler_grant_id:
+            core._scheduler_turn_grants.pop(scheduler_grant_id, None)
         if not stream_completed:
             asyncio.create_task(core._close_session_tab(session_id))
         core._trace(

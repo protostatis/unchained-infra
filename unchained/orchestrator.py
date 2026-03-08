@@ -26,6 +26,10 @@ import json
 import sys
 
 import cloud_tools
+from scheduler_agent import (
+    build_anthropic_tools as _build_scheduler_anthropic_tools,
+    build_system_prompt as _build_scheduler_system_prompt,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt — encodes DDM-first browsing methodology
@@ -253,6 +257,30 @@ TOOLS = [
         },
     },
 ]
+
+
+def build_system_prompt(
+    *,
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
+) -> str:
+    return _build_scheduler_system_prompt(
+        SYSTEM_PROMPT,
+        scheduler_armed=scheduler_armed,
+        scheduler_grant_id=scheduler_grant_id,
+    )
+
+
+def build_tools(
+    *,
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
+) -> list[dict]:
+    return _build_scheduler_anthropic_tools(
+        TOOLS,
+        scheduler_armed=scheduler_armed,
+        scheduler_grant_id=scheduler_grant_id,
+    )
 
 
 # ---------------------------------------------------------------------------

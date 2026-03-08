@@ -29,7 +29,7 @@ py-modules = [
     "private_core_client", "private_core_contracts",
     "private_core_engine", "private_core_server",
     "provision_helpers", "rate_limit", "reflex", "relay",
-    "scheduled_tasks", "signup_agent", "stream_ctl",
+    "scheduled_tasks", "scheduler_agent", "scheduler_tool", "signup_agent", "stream_ctl",
     "template_utils", "web", "web_state", "webmcp",
 ]
 

@@ -70,6 +70,12 @@ from chat_agent_openrouter import (
     _looks_like_internal_tool_payload,
     _strip_internal_tool_payload,
 )
+from scheduler_agent import (
+    SCHEDULER_TOOL_NAMES,
+    build_openai_tools,
+    build_system_prompt,
+    execute_scheduler_tool,
+)
 
 try:
     from reflex import ReflexState, REFLEX_ENABLED
@@ -366,7 +372,7 @@ class CodexChatAgent:
 
     async def _call_codex(self, client: httpx.AsyncClient, messages: list,
                            model: str = "", tool_choice: str = "auto",
-                           codex_key: str = "") -> dict:
+                           codex_key: str = "", tools: list[dict] | None = None) -> dict:
         """Call OpenAI/Codex via chat completions."""
         requested_model = model or self.model
         active_model = self._model_fallbacks.get(requested_model, requested_model)
@@ -379,7 +385,7 @@ class CodexChatAgent:
         if tool_choice == "none":
             body["tool_choice"] = "none"
         else:
-            body["tools"] = TOOLS
+            body["tools"] = tools or TOOLS
             body["tool_choice"] = "auto"
 
         key = codex_key or self.codex_key
@@ -463,7 +469,18 @@ class CodexChatAgent:
     # --- Tool execution (reuses cloud_tools dispatch from openrouter agent) ---
 
     async def _execute_tool(self, agent_id: str, name: str, args: dict,
-                            tab_id: str | None = None) -> str:
+                            tab_id: str | None = None, session_id: str = "",
+                            scheduler_grant_id: str = "") -> str:
+        if name in SCHEDULER_TOOL_NAMES:
+            return await execute_scheduler_tool(
+                server_url=self.server,
+                api_key=self.api_key,
+                session_id=session_id,
+                scheduler_grant_id=scheduler_grant_id,
+                tool_name=name,
+                args=args,
+            )
+
         args_tab = args.get("tab_id", "")
         if args_tab and args_tab != "auto" and "://" not in args_tab and "/" not in args_tab:
             effective_tab = args_tab
@@ -550,12 +567,28 @@ class CodexChatAgent:
         user_text = msg["message"]
         model = self._resolve_model(msg.get("model") or self.model)
         codex_key = self.codex_key
+        scheduler_armed = bool(msg.get("scheduler_armed"))
+        scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
+        system_prompt = build_system_prompt(
+            SYSTEM_PROMPT,
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+        )
+        tools = build_openai_tools(
+            TOOLS,
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+        )
 
         print(f"[{session_id}] User ({agent_id}): {user_text[:80]} (model={model})")
 
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
         messages = self.sessions[session_id]
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = system_prompt
+        else:
+            messages.insert(0, {"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_text})
 
         ns = NudgeState()
@@ -571,7 +604,7 @@ class CodexChatAgent:
                         final_resp = await asyncio.wait_for(
                             self._call_codex(
                                 client, messages, model,
-                                tool_choice="none", codex_key=codex_key,
+                                tool_choice="none", codex_key=codex_key, tools=tools,
                             ),
                             timeout=FORCE_FINAL_TIMEOUT,
                         )
@@ -613,7 +646,7 @@ class CodexChatAgent:
                             print(f"[{session_id}] Hard-stop guard: forcing final response")
                         response = await self._call_codex(
                             client, messages, model,
-                            tool_choice=next_tool_choice, codex_key=codex_key,
+                            tool_choice=next_tool_choice, codex_key=codex_key, tools=tools,
                         )
                     except httpx.HTTPStatusError as e:
                         if e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
@@ -622,7 +655,7 @@ class CodexChatAgent:
                             self.sessions[session_id] = messages
                             print(f"[{session_id}] 400 on turn {turn} — trimmed to {len(messages)} msgs")
                             response = await self._call_codex(
-                                client, messages, model, codex_key=codex_key,
+                                client, messages, model, codex_key=codex_key, tools=tools,
                             )
                         else:
                             raise
@@ -717,7 +750,14 @@ class CodexChatAgent:
                               f"{name} args={_truncate(json.dumps(args, sort_keys=True), 200)}")
                         try:
                             result = await asyncio.wait_for(
-                                self._execute_tool(agent_id, name, args, tab_id=session_tab_id),
+                                self._execute_tool(
+                                    agent_id,
+                                    name,
+                                    args,
+                                    tab_id=session_tab_id,
+                                    session_id=session_id,
+                                    scheduler_grant_id=scheduler_grant_id,
+                                ),
                                 timeout=TOOL_EXEC_TIMEOUT,
                             )
                         except asyncio.TimeoutError:

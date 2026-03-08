@@ -5,14 +5,18 @@ and chat_agent_cli.py version checking.
 """
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
+import types
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -62,10 +66,18 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/web/agent/files" in update_ps1
         # start.sh still there
         assert "unchained-agent/start.sh" in names
+        assert "unchained-agent/unchained/scheduler_tool.py" in names
         start_sh = zf.read("unchained-agent/start.sh").decode()
         assert "/web/install/claim/start" in start_sh
         assert "/web/install/claim/poll" in start_sh
         assert "/install/claim/" in start_sh
+        assert "<key>KeepAlive</key>" in start_sh
+        assert "<true/>" in start_sh
+        assert "<string>--daemon</string>" not in start_sh
+        assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"' in start_sh
+        assert 'command -v claude >/dev/null 2>&1' in start_sh
+        assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
+        assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' not in start_sh
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1
@@ -98,6 +110,7 @@ def test_build_update_zip_no_env_no_start():
         assert "unchained-agent/update.sh" in names
         assert "unchained-agent/update.ps1" in names
         assert "unchained-agent/unchained/cdp_tool.py" in names
+        assert "unchained-agent/unchained/scheduler_tool.py" in names
         # Should NOT have .env or start.sh
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
         assert "unchained-agent/start.sh" not in names, "start.sh should not be in update ZIP"
@@ -105,6 +118,47 @@ def test_build_update_zip_no_env_no_start():
         v = zf.read("unchained-agent/version.txt").decode()
         assert v == VERSION
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh)")
+
+
+def test_runtime_dockerfile_copies_scheduler_files():
+    repo_root = Path(__file__).resolve().parent.parent
+    dockerfile = (repo_root / "Dockerfile").read_text()
+    assert "COPY unchained/scheduler_tool.py ." in dockerfile
+    assert "COPY unchained/scheduler_agent.py ." in dockerfile
+    print("  Dockerfile copies scheduler runtime files")
+
+
+def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
+    available = {
+        "/opt/homebrew/bin/claude": True,
+        "/Users/test/.local/bin/claude": True,
+    }
+
+    source_path = Path(__file__).resolve().parent / "chat_agent_cli.py"
+    module_ast = ast.parse(source_path.read_text())
+    resolver_node = next(
+        node for node in module_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_local_cli_binary"
+    )
+    resolver_module = ast.Module(body=[resolver_node], type_ignores=[])
+    namespace = {"os": os, "shutil": shutil, "sys": types.SimpleNamespace(platform="darwin")}
+    exec(compile(resolver_module, str(source_path), "exec"), namespace)
+
+    with mock.patch.dict(os.environ, {"CLAUDE_BIN": ""}, clear=False):
+        with mock.patch.object(shutil, "which", return_value=None):
+            with mock.patch.object(os.path, "expanduser", return_value="/Users/test/.local/bin"):
+                with mock.patch.object(
+                    os.path,
+                    "isfile",
+                    side_effect=lambda path: available.get(path, False),
+                ):
+                    with mock.patch.object(
+                        os,
+                        "access",
+                        side_effect=lambda path, mode: available.get(path, False),
+                    ):
+                        resolved = namespace["_resolve_local_cli_binary"]("CLAUDE_BIN", "claude")
+    assert resolved == "/opt/homebrew/bin/claude"
 
 
 def test_generate_public_install_script():
@@ -922,8 +976,9 @@ def test_cli_agent_forwards_model_from_ws():
     with open(source_path) as f:
         source = f.read()
     assert 'msg.get("model"' in source, "main loop should extract model from WS message"
-    assert "handle_message(ws, sid, user_text, msg_model" in source, \
-        "main loop should pass model to handle_message"
+    assert "msg.get(\"scheduler_armed\")" in source, "main loop should read scheduler arming from WS message"
+    assert "scheduler_armed=msg_scheduler_armed" in source, \
+        "main loop should pass scheduler arming to handle_message"
     print(f"  CLI agent main loop forwards model from WS message")
 
 

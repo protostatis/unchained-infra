@@ -107,6 +107,10 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/scheduler/jobs"),
             ("POST", "/web/scheduler/preview"),
             ("GET", "/web/scheduler/history"),
+            ("POST", "/web/scheduler/agent/list"),
+            ("POST", "/web/scheduler/agent/preview"),
+            ("POST", "/web/scheduler/agent/upsert"),
+            ("POST", "/web/scheduler/agent/delete"),
         }
         if not web.GOOGLE_CLIENT_ID:
             expected.add(("POST", "/auth/dev"))

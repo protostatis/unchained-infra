@@ -638,6 +638,8 @@ _gemini_last_active = _state.gemini_last_active  # agent_id -> last msg timestam
 _gemini_spawn_lock = _state.gemini_spawn_lock  # prevents duplicate spawn race
 _GEMINI_IDLE_TIMEOUT = 600
 _gemini_cleanup_task: asyncio.Task | None = None
+_scheduler_turn_grants = _state.scheduler_turn_grants  # grant_id -> {user_id, session_id, expires_at}
+_SCHEDULER_TURN_GRANT_TTL = 5 * 60
 
 # Per-user Codex agent process management (sdk + cli modes)
 _codex_sdk_procs: dict[str, subprocess.Popen] = {}   # agent_id → subprocess
@@ -708,6 +710,44 @@ _PUBLIC_BASE_URL = (os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "https://api.unc
 _install_claims: dict[str, dict] = {}  # claim_id -> {secret, expires_at, install_token?}
 _install_claims_lock = threading.Lock()
 _install_claim_start_hits: dict[str, list[float]] = {}  # source_ip -> recent claim timestamps
+
+
+def _prune_scheduler_turn_grants(now: float | None = None) -> None:
+    now_ts = time.time() if now is None else float(now)
+    for grant_id, meta in list(_scheduler_turn_grants.items()):
+        expires_at = 0.0
+        if isinstance(meta, dict):
+            try:
+                expires_at = float(meta.get("expires_at", 0) or 0)
+            except (TypeError, ValueError):
+                expires_at = 0.0
+        if expires_at <= now_ts:
+            _scheduler_turn_grants.pop(grant_id, None)
+
+
+def _mint_scheduler_turn_grant(user_id: str, session_id: str, *, now: float | None = None) -> str:
+    now_ts = time.time() if now is None else float(now)
+    _prune_scheduler_turn_grants(now_ts)
+    grant_id = f"sg-{uuid.uuid4().hex}"
+    _scheduler_turn_grants[grant_id] = {
+        "user_id": str(user_id or ""),
+        "session_id": str(session_id or ""),
+        "expires_at": now_ts + _SCHEDULER_TURN_GRANT_TTL,
+    }
+    return grant_id
+
+
+def _validate_scheduler_turn_grant(user_id: str, session_id: str, grant_id: str, *, now: float | None = None) -> bool:
+    if not user_id or not session_id or not grant_id:
+        return False
+    _prune_scheduler_turn_grants(now)
+    meta = _scheduler_turn_grants.get(str(grant_id))
+    if not isinstance(meta, dict):
+        return False
+    return (
+        hmac.compare_digest(str(meta.get("user_id", "")), str(user_id))
+        and hmac.compare_digest(str(meta.get("session_id", "")), str(session_id))
+    )
 
 
 def _parse_relay() -> tuple[str, int]:
@@ -1348,6 +1388,10 @@ from web_app.handlers.auth_admin import (
     handle_google_auth,
     handle_logout,
     handle_request_claude_access,
+    handle_scheduler_agent_delete,
+    handle_scheduler_agent_list,
+    handle_scheduler_agent_preview,
+    handle_scheduler_agent_upsert,
     handle_scheduler_history,
     handle_scheduler_jobs,
     handle_scheduler_page,

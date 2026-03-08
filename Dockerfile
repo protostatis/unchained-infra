@@ -35,6 +35,8 @@ COPY unchained/chat_agent_openrouter.py .
 COPY unchained/chat_agent_gemini.py .
 COPY unchained/chat_agent_codex.py .
 COPY unchained/chat_agent_sdk.py .
+COPY unchained/scheduler_agent.py .
+COPY unchained/scheduler_tool.py .
 COPY unchained/signup_agent.py .
 COPY unchained/nudge.py .
 COPY unchained/reflex.py .

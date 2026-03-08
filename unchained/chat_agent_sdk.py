@@ -36,8 +36,11 @@ import time
 import anthropic
 import websockets
 
-from orchestrator import SYSTEM_PROMPT, TOOLS
 import cloud_tools
+from orchestrator import (
+    build_system_prompt as _build_orchestrator_system_prompt,
+    build_tools as _build_orchestrator_tools,
+)
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -48,6 +51,7 @@ from nudge import (
     INTERVENTION_SCREENSHOT_TIMEOUT,
     INTERVENTION_NUDGE_RESET_PROGRESS,
 )
+from scheduler_agent import SCHEDULER_TOOL_NAMES, execute_scheduler_tool
 
 
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
@@ -320,6 +324,16 @@ class ChatAgent:
         user_text = msg["message"]
         model = _resolve_model(msg.get("model") or self.model, self.model)
         session_tab_id = msg.get("tab_id")
+        scheduler_armed = bool(msg.get("scheduler_armed"))
+        scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
+        system_prompt = _build_orchestrator_system_prompt(
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+        )
+        tools = _build_orchestrator_tools(
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+        )
 
         print(f"[{session_id}] User: {user_text[:80]} (model={model})")
 
@@ -342,8 +356,8 @@ class ChatAgent:
                 response = await self.client.messages.create(
                     model=model,
                     max_tokens=4096,
-                    system=SYSTEM_PROMPT,
-                    tools=TOOLS,
+                    system=system_prompt,
+                    tools=tools,
                     messages=messages,
                     **extra_kwargs,
                 )
@@ -408,8 +422,8 @@ class ChatAgent:
                         final_resp = await self.client.messages.create(
                             model=model,
                             max_tokens=4096,
-                            system=SYSTEM_PROMPT,
-                            tools=TOOLS,
+                            system=system_prompt,
+                            tools=tools,
                             messages=messages,
                             tool_choice={"type": "none"},
                         )
@@ -465,7 +479,12 @@ class ChatAgent:
                     })
 
                     result = await self._execute_tool(
-                        agent_id, block.name, block.input, tab_id=session_tab_id,
+                        agent_id,
+                        block.name,
+                        block.input,
+                        tab_id=session_tab_id,
+                        session_id=session_id,
+                        scheduler_grant_id=scheduler_grant_id,
                     )
 
                     # Progress signature for stagnation tracking
@@ -579,8 +598,8 @@ class ChatAgent:
                         final_resp = await self.client.messages.create(
                             model=model,
                             max_tokens=4096,
-                            system=SYSTEM_PROMPT,
-                            tools=TOOLS,
+                            system=system_prompt,
+                            tools=tools,
                             messages=messages,
                             tool_choice={"type": "none"},
                         )
@@ -674,8 +693,20 @@ class ChatAgent:
         name: str,
         input_data: dict,
         tab_id: str | None = None,
+        session_id: str = "",
+        scheduler_grant_id: str = "",
     ) -> str:
         """Execute a tool call against the agent's Chrome via cloud_tools."""
+        if name in SCHEDULER_TOOL_NAMES:
+            return await execute_scheduler_tool(
+                server_url=self.server,
+                api_key=self.api_key,
+                session_id=session_id,
+                scheduler_grant_id=scheduler_grant_id,
+                tool_name=name,
+                args=input_data,
+            )
+
         args_tab = input_data.get("tab_id", "")
         if args_tab and args_tab != "auto":
             effective_tab = args_tab
