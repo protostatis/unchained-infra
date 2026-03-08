@@ -27,12 +27,22 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy relay:8765
 	}
 
-	# MCP install page — GET /mcp serves the web UI setup page
-	@mcp_get {
+	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server
+	@mcp_sse {
+		method GET
+		path /mcp
+		header Accept *text/event-stream*
+	}
+	handle @mcp_sse {
+		reverse_proxy mcp:8766
+	}
+
+	# MCP install page — GET /mcp from browsers → web UI setup page
+	@mcp_page {
 		method GET
 		path /mcp
 	}
-	handle @mcp_get {
+	handle @mcp_page {
 		reverse_proxy web:8080
 	}
 
