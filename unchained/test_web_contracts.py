@@ -171,6 +171,10 @@ class TestWebTemplateContracts(unittest.TestCase):
             web.CHAT_GEMINI_HTML,
         )
         self.assertIn(
+            "if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';",
+            web.CHAT_GEMINI_HTML,
+        )
+        self.assertIn(
             "CLIENT_UPDATE_TIMEOUT_MS = 90000",
             web.CLAUDE_CHAT_HTML,
         )
@@ -187,6 +191,10 @@ class TestWebTemplateContracts(unittest.TestCase):
             web.CLAUDE_CHAT_HTML,
         )
         self.assertIn(
+            "if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
             "CLIENT_UPDATE_TIMEOUT_MS = 90000",
             web.CHAT_CODEX_HTML,
         )
@@ -200,6 +208,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn(
             "Update timed out. Check the local client logs and retry.",
+            web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
+            "if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';",
             web.CHAT_CODEX_HTML,
         )
         self.assertIn(
@@ -219,6 +231,10 @@ class TestWebTemplateContracts(unittest.TestCase):
             web.SETUP_HTML,
         )
         self.assertIn(
+            "if (!setupClientUpdateInFlight && !data.client_outdated) setupClientUpdateError = '';",
+            web.SETUP_HTML,
+        )
+        self.assertIn(
             "INSTALL_CLIENT_UPDATE_TIMEOUT_MS = 90000",
             web.INSTALL_ONBOARD_HTML,
         )
@@ -232,6 +248,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn(
             "Update timed out. Check the local client logs and retry.",
+            web.INSTALL_ONBOARD_HTML,
+        )
+        self.assertIn(
+            "if (!installClientUpdateInFlight && !data.client_outdated) installClientUpdateError = '';",
             web.INSTALL_ONBOARD_HTML,
         )
 

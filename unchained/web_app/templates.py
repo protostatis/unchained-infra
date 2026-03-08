@@ -3781,6 +3781,7 @@ async function checkAgentStatus() {
           clientUpdateError = 'Update timed out. Check the local client logs and retry.';
         }
       }
+      if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';
       lastClientStatus = data;
       updateClientUpdateUI(data);
       updateAgentStatusUI({
@@ -7224,6 +7225,7 @@ function updateAgentStatusUI(data) {
       clientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
+  if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';
   lastClientStatus = data;
   updateClientUpdateUI(data);
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
@@ -8664,6 +8666,7 @@ function updateInstallAgentStatusUI(data) {
       installClientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
+  if (!installClientUpdateInFlight && !data.client_outdated) installClientUpdateError = '';
   lastInstallClientStatus = data;
   updateInstallClientUpdateUI(data);
 
@@ -9386,6 +9389,7 @@ function updateSetupAgentStatusUI(data) {
       setupClientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
+  if (!setupClientUpdateInFlight && !data.client_outdated) setupClientUpdateError = '';
   lastSetupClientStatus = data;
   updateSetupClientUpdateUI(data);
 
