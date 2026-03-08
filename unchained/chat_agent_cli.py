@@ -66,6 +66,8 @@ def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
     discovered = shutil.which(default_name)
     if discovered:
         return discovered
+    # launchd often starts the agent with a stripped PATH, so a bare `claude`
+    # lookup can fail even when the CLI is installed in ~/.local/bin.
     fallback = os.path.expanduser(f"~/.local/bin/{default_name}")
     if os.path.isfile(fallback):
         return fallback
