@@ -61,6 +61,9 @@ def test_build_agent_zip_contains_version_and_update():
         assert "unchained-agent/start.ps1" in names, "start.ps1 missing"
         assert "unchained-agent/stop.ps1" in names, "stop.ps1 missing"
         assert "unchained-agent/update.ps1" in names, "update.ps1 missing"
+        stop_ps1 = zf.read("unchained-agent/stop.ps1").decode()
+        assert 'Remove-WindowsAutostart' in stop_ps1
+        assert 'Join-Path $startupDir "Unchained Agent.cmd"' in stop_ps1
         update_ps1 = zf.read("unchained-agent/update.ps1").decode()
         assert "/web/agent/version" in update_ps1
         assert "/web/agent/files" in update_ps1
@@ -78,6 +81,9 @@ def test_build_agent_zip_contains_version_and_update():
         assert 'command -v claude >/dev/null 2>&1' in start_sh
         assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
         assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' not in start_sh
+        stop_sh = zf.read("unchained-agent/stop.sh").decode()
+        assert 'AUTOSTART_LABEL="com.unchained.agent"' in stop_sh
+        assert 'launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL"' in stop_sh
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1
@@ -111,13 +117,25 @@ def test_build_update_zip_no_env_no_start():
         assert "unchained-agent/update.ps1" in names
         assert "unchained-agent/unchained/cdp_tool.py" in names
         assert "unchained-agent/unchained/scheduler_tool.py" in names
+        assert "unchained-agent/stop.sh" in names
+        assert "unchained-agent/stop.ps1" in names
+        stop_sh = zf.read("unchained-agent/stop.sh").decode()
+        assert 'launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL"' in stop_sh
+        stop_ps1 = zf.read("unchained-agent/stop.ps1").decode()
+        assert 'Remove-WindowsAutostart' in stop_ps1
+        update_sh = zf.read("unchained-agent/update.sh").decode()
+        assert 'cp -f unchained-agent/stop.sh "$AGENT_DIR/"' in update_sh
+        assert 'chmod +x "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh"' in update_sh
+        update_ps1 = zf.read("unchained-agent/update.ps1").decode()
+        assert '"stop.sh"' in update_ps1
+        assert '"stop.ps1"' in update_ps1
         # Should NOT have .env or start.sh
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
         assert "unchained-agent/start.sh" not in names, "start.sh should not be in update ZIP"
         # version.txt content
         v = zf.read("unchained-agent/version.txt").decode()
         assert v == VERSION
-    print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh)")
+    print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh; stop.sh included)")
 
 
 def test_runtime_dockerfile_copies_scheduler_files():
