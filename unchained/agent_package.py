@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.36"
+VERSION = "0.3.37"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -1017,6 +1017,23 @@ function Get-ProcessCommandLine([int]$ProcessId) {
   }
 }
 
+function Remove-WindowsAutostart() {
+  try {
+    $startupDir = [Environment]::GetFolderPath("Startup")
+    if ([string]::IsNullOrWhiteSpace($startupDir)) {
+      return
+    }
+    $launcherPath = Join-Path $startupDir "Unchained Agent.cmd"
+    if (Test-Path $launcherPath) {
+      Remove-Item -Path $launcherPath -Force -ErrorAction SilentlyContinue
+      Write-Host "Removed autostart launcher."
+    }
+  } catch {
+  }
+}
+
+Remove-WindowsAutostart
+
 $pidPath = Join-Path (Get-Location) ".agent.pid.json"
 if (-not (Test-Path $pidPath)) {
   Write-Host "No agent PID file found. Is the agent running in daemon mode?"
@@ -1237,7 +1254,7 @@ try {
 
   New-Item -ItemType Directory -Path ".\unchained" -Force | Out-Null
   Copy-Item -Path (Join-Path $srcRoot "unchained\*.py") -Destination ".\unchained" -Force -ErrorAction SilentlyContinue
-  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat", "stop.sh")) {
+  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat", "stop.sh", "stop.ps1")) {
     $src = Join-Path $srcRoot $name
     if (Test-Path $src) {
       Copy-Item -Path $src -Destination ".\" -Force
@@ -2012,6 +2029,7 @@ def build_update_zip() -> bytes:
         info = zipfile.ZipInfo("unchained-agent/stop.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _STOP_SH)
+        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
 
         # CLAUDE.md
         claude_md_path = os.path.join(src_dir, "CLAUDE.md")
