@@ -323,16 +323,20 @@ class Agent:
     async def _message_loop(self):
         """Main relay loop: listen on tunnel, dispatch messages."""
         self._last_pong = time.time()  # seed with connect time
-        self._in_handler = False
         ping_task = asyncio.create_task(self._heartbeat())
         watchdog_task = asyncio.create_task(self._pong_watchdog())
         try:
             async for raw in self.ws:
                 self._last_pong = time.time()  # any recv proves tunnel alive
                 msg = json.loads(raw)
-                self._in_handler = True
                 await self._handle_message(msg)
-                self._in_handler = False
+                # Reset after handler: long blocking handlers (e.g.
+                # provision-launch doing sync file copies) starve the
+                # event loop so pongs queue up and _last_pong goes stale.
+                # Resetting here gives the watchdog a fresh baseline —
+                # if the tunnel is alive, the next pong arrives within
+                # HEARTBEAT_INTERVAL; if dead, the watchdog catches it.
+                self._last_pong = time.time()
         finally:
             ping_task.cancel()
             watchdog_task.cancel()
@@ -809,15 +813,15 @@ class Agent:
                     break
 
     async def _pong_watchdog(self):
-        """Close tunnel if no message received within timeout.
+        """Close tunnel if no activity within timeout.
 
-        Skips the check while _in_handler is True — long-running handlers
-        (e.g. provision-launch with blocking file copies) prevent the message
-        loop from draining pongs, which would cause a false trigger.
+        _last_pong is reset both on message receipt AND after each handler
+        returns, so long blocking handlers (provision-launch, etc.) cannot
+        cause a false trigger — the post-handler reset gives a fresh baseline.
         """
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
-            if self._in_handler or not self.ws:
+            if not self.ws:
                 continue
             elapsed = time.time() - self._last_pong
             if elapsed > HEARTBEAT_INTERVAL + HEARTBEAT_TIMEOUT:
