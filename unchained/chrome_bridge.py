@@ -319,13 +319,16 @@ class Agent:
 
     async def _message_loop(self):
         """Main relay loop: listen on tunnel, dispatch messages."""
+        self._last_pong = time.time()  # seed with connect time
         ping_task = asyncio.create_task(self._heartbeat())
+        watchdog_task = asyncio.create_task(self._pong_watchdog())
         try:
             async for raw in self.ws:
                 msg = json.loads(raw)
                 await self._handle_message(msg)
         finally:
             ping_task.cancel()
+            watchdog_task.cancel()
             await self._close_all_channels()
 
     async def _handle_message(self, msg: dict):
@@ -796,6 +799,17 @@ class Agent:
                         "ts": time.time(),
                     }))
                 except Exception:
+                    break
+
+    async def _pong_watchdog(self):
+        """Close tunnel if no pong received within timeout after a ping."""
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            if self._last_pong and self.ws:
+                elapsed = time.time() - self._last_pong
+                if elapsed > HEARTBEAT_INTERVAL + HEARTBEAT_TIMEOUT:
+                    print(f"[agent] pong timeout ({elapsed:.0f}s), closing tunnel")
+                    await self.ws.close()
                     break
 
     # --- Reconnection ---
