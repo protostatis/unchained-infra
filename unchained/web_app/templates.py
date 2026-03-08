@@ -3127,6 +3127,40 @@ body{
   border:1px solid #555;padding:4px 10px;border-radius:6px;
 }
 #topbar .nav a:hover{border-color:var(--accent);color:var(--accent)}
+#topbar .client-update-wrap{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+#topbar .client-update{
+  border:1px solid #555;
+  background:rgba(255,255,255,0.03);
+  color:var(--muted);
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:11px;
+  font-family:var(--mono);
+  cursor:pointer;
+  transition:border-color 0.15s ease,background 0.15s ease,color 0.15s ease,box-shadow 0.15s ease;
+}
+#topbar .client-update:hover{border-color:var(--accent);color:var(--accent);background:rgba(255,255,255,0.05)}
+#topbar .client-update.warn{
+  color:#f2d18a;
+  border-color:#7a6326;
+  background:#1d1607;
+  animation:providerClientUpdatePulse 1.8s ease-in-out infinite;
+}
+#topbar .client-update.busy{
+  color:#f8d1dd;
+  border-color:rgba(233,69,96,0.45);
+  background:rgba(233,69,96,0.12);
+  animation:none;
+}
+#topbar .client-update:disabled{opacity:0.5;cursor:default;box-shadow:none}
+#topbar .client-update-note{
+  min-height:12px;
+  font-size:10px;
+  color:var(--muted);
+  font-family:var(--mono);
+  line-height:1.1;
+}
+@keyframes providerClientUpdatePulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 14px rgba(245,191,36,0.16)}}
 
 /* === Chat === */
 #chat{
@@ -3351,6 +3385,10 @@ body{
         <span class="status" id="agentstatus">agent offline</span>
         <span class="status" id="bridgestatus">bridge offline</span>
       </div>
+      <div class="client-update-wrap">
+        <button id="client-update-btn" class="client-update" type="button" onclick="triggerClientUpdate()">Client current</button>
+        <span id="client-update-note" class="client-update-note"></span>
+      </div>
     </div>
     <div class="nav">
       <a href="#" onclick="doNewChat();return false">New Chat</a>
@@ -3432,6 +3470,10 @@ let sending = false;
 let _cancelCtrl = null;
 let geminiProvisioned = false;
 let selectedProfilePath = '';
+let clientUpdateInFlight = false;
+let clientUpdateSawDisconnect = false;
+let clientUpdateError = '';
+let lastClientStatus = null;
 
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -3555,6 +3597,61 @@ function updateStatusPill(el, text, mode) {
   el.className = 'status' + (mode ? ' ' + mode : '');
 }
 
+function updateClientUpdateUI(data) {
+  const btn = document.getElementById('client-update-btn');
+  const note = document.getElementById('client-update-note');
+  if (!btn || !note) return;
+  const clientConnected = !!data.client_connected;
+  const updateSupported = !!data.client_update_supported;
+  const outdated = !!data.client_outdated;
+  const required = !!data.client_update_required;
+  const localVersion = String(data.client_version || '').trim();
+  const serverVersion = String(data.server_version || '').trim();
+  btn.className = 'client-update';
+  if (clientUpdateInFlight) {
+    btn.classList.add('busy');
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    note.textContent = 'Client will reconnect after restart.';
+    return;
+  }
+  if (outdated) btn.classList.add('warn');
+  btn.disabled = !clientConnected || !updateSupported;
+  if (!clientConnected) {
+    btn.textContent = 'Client offline';
+    note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
+  } else if (!updateSupported) {
+    btn.textContent = 'Manual update';
+    note.textContent = localVersion ? ('Client v' + localVersion) : 'Reconnect with the latest package once.';
+  } else if (outdated) {
+    btn.textContent = required ? 'Update required' : 'Update client';
+    note.textContent = (localVersion && serverVersion) ? ('v' + localVersion + ' -> v' + serverVersion) : 'New client available';
+  } else {
+    btn.textContent = 'Client current';
+    note.textContent = localVersion ? ('v' + localVersion) : '';
+  }
+  if (clientUpdateError) note.textContent = clientUpdateError;
+}
+
+async function triggerClientUpdate() {
+  if (clientUpdateInFlight) return;
+  clientUpdateError = '';
+  clientUpdateInFlight = true;
+  clientUpdateSawDisconnect = false;
+  updateClientUpdateUI(lastClientStatus || {});
+  try {
+    const r = await fetch('/web/chat/update-client', {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    checkAgentStatus();
+  } catch(e) {
+    clientUpdateInFlight = false;
+    clientUpdateSawDisconnect = false;
+    clientUpdateError = e.message || 'Update failed';
+    updateClientUpdateUI(lastClientStatus || {});
+  }
+}
+
 function updateAgentStatusUI(data) {
   const chatEl = document.getElementById('agentstatus');
   const bridgeEl = document.getElementById('bridgestatus');
@@ -3666,6 +3763,16 @@ async function checkAgentStatus() {
     const r = await fetch('/web/chat/status?gemini=1');
     if (r.ok) {
       const data = await r.json();
+      if (clientUpdateInFlight) {
+        if (!data.client_connected) clientUpdateSawDisconnect = true;
+        else if (clientUpdateSawDisconnect) {
+          clientUpdateInFlight = false;
+          clientUpdateSawDisconnect = false;
+          clientUpdateError = '';
+        }
+      }
+      lastClientStatus = data;
+      updateClientUpdateUI(data);
       updateAgentStatusUI({
         chat_connected: data.gemini_connected || false,
         bridge_connected: !!data.bridge_connected,
@@ -6146,6 +6253,41 @@ body{
   transition:border-color 0.15s,color 0.15s,background 0.15s;
 }
 #topbar .nav a:hover{border-color:var(--accent);color:#ffd2c8;background:var(--accent-soft)}
+#topbar .client-update-wrap{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+#topbar .client-update{
+  border:1px solid var(--line);
+  background:rgba(255,255,255,0.03);
+  color:var(--muted);
+  border-radius:999px;
+  padding:6px 10px;
+  font-size:11px;
+  font-family:var(--mono);
+  cursor:pointer;
+  transition:border-color 0.15s ease,background 0.15s ease,color 0.15s ease,box-shadow 0.15s ease;
+}
+#topbar .client-update:hover{border-color:var(--accent);color:#ffe0d8;background:var(--accent-soft)}
+#topbar .client-update.warn{
+  color:#ffd8a8;
+  border-color:#b57b1e;
+  background:rgba(219,152,32,0.16);
+  box-shadow:0 0 0 1px rgba(219,152,32,0.12) inset;
+  animation:clientUpdatePulse 1.8s ease-in-out infinite;
+}
+#topbar .client-update.busy{
+  color:#ffd9d0;
+  border-color:rgba(255,107,74,0.55);
+  background:rgba(255,107,74,0.16);
+  animation:none;
+}
+#topbar .client-update:disabled{opacity:0.5;cursor:default;box-shadow:none}
+#topbar .client-update-note{
+  min-height:12px;
+  font-size:10px;
+  line-height:1.1;
+  color:var(--muted);
+  font-family:var(--mono);
+}
+@keyframes clientUpdatePulse{0%,100%{box-shadow:0 0 0 1px rgba(219,152,32,0.12) inset}50%{box-shadow:0 0 0 1px rgba(219,152,32,0.26) inset,0 0 14px rgba(219,152,32,0.18)}}
 
 /* === Chat === */
 #chat{
@@ -6684,6 +6826,10 @@ body{
         <span class="status" id="agentstatus">agent offline</span>
         <span class="status" id="bridgestatus">bridge offline</span>
       </div>
+      <div class="client-update-wrap">
+        <button id="client-update-btn" class="client-update" type="button" onclick="triggerClientUpdate()">Client current</button>
+        <span id="client-update-note" class="client-update-note"></span>
+      </div>
     </div>
     <div class="nav">
       <a href="/trial">Free Trial</a>
@@ -6969,11 +7115,71 @@ async function loadChatProfiles() {
 
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
+let clientUpdateInFlight = false;
+let clientUpdateSawDisconnect = false;
+let clientUpdateError = '';
+let lastClientStatus = null;
 
 function updateStatusPill(el, text, mode) {
   if (!el) return;
   el.textContent = text;
   el.className = 'status' + (mode ? ' ' + mode : '');
+}
+
+function updateClientUpdateUI(data) {
+  const btn = document.getElementById('client-update-btn');
+  const note = document.getElementById('client-update-note');
+  if (!btn || !note) return;
+  const clientConnected = !!data.client_connected;
+  const updateSupported = !!data.client_update_supported;
+  const outdated = !!data.client_outdated;
+  const required = !!data.client_update_required;
+  const localVersion = String(data.client_version || '').trim();
+  const serverVersion = String(data.server_version || '').trim();
+  btn.className = 'client-update';
+  if (clientUpdateInFlight) {
+    btn.classList.add('busy');
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    note.textContent = 'Client will reconnect after restart.';
+    return;
+  }
+  if (outdated) btn.classList.add('warn');
+  btn.disabled = !clientConnected || !updateSupported;
+  if (!clientConnected) {
+    btn.textContent = 'Client offline';
+    note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
+  } else if (!updateSupported) {
+    btn.textContent = 'Manual update';
+    note.textContent = localVersion ? ('Client v' + localVersion) : 'Reconnect with the latest package once.';
+  } else if (outdated) {
+    btn.textContent = required ? 'Update required' : 'Update client';
+    note.textContent = (localVersion && serverVersion) ? ('v' + localVersion + ' -> v' + serverVersion) : 'New client available';
+  } else {
+    btn.textContent = 'Client current';
+    note.textContent = localVersion ? ('v' + localVersion) : '';
+  }
+  if (clientUpdateError) note.textContent = clientUpdateError;
+  btn.title = (localVersion && serverVersion) ? ('Local client ' + localVersion + ' / server ' + serverVersion) : 'Update and restart the local client';
+}
+
+async function triggerClientUpdate() {
+  if (clientUpdateInFlight) return;
+  clientUpdateError = '';
+  clientUpdateInFlight = true;
+  clientUpdateSawDisconnect = false;
+  updateClientUpdateUI(lastClientStatus || {});
+  try {
+    const r = await fetch('/web/chat/update-client', {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    checkAgentStatus();
+  } catch(e) {
+    clientUpdateInFlight = false;
+    clientUpdateSawDisconnect = false;
+    clientUpdateError = e.message || 'Update failed';
+    updateClientUpdateUI(lastClientStatus || {});
+  }
 }
 
 function updateAgentStatusUI(data) {
@@ -6990,6 +7196,16 @@ function updateAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
   const codexCliSupported = data.codex_cli_supported !== false;
+  if (clientUpdateInFlight) {
+    if (!data.client_connected) clientUpdateSawDisconnect = true;
+    else if (clientUpdateSawDisconnect) {
+      clientUpdateInFlight = false;
+      clientUpdateSawDisconnect = false;
+      clientUpdateError = '';
+    }
+  }
+  lastClientStatus = data;
+  updateClientUpdateUI(data);
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
@@ -8220,6 +8436,26 @@ h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
 .note.warn{color:#f9c56e}
 .status{margin-top:10px;font-size:13px;color:#cde0f5}
 .warn{color:#f9c56e}
+.runtime-actions{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:10px}
+.install-client-update-btn{
+  border-radius:999px;
+  padding:9px 12px;
+  transition:border-color 0.15s ease,background 0.15s ease,color 0.15s ease,box-shadow 0.15s ease;
+}
+.install-client-update-btn.warn{
+  color:#f2d18a;
+  border-color:#7a6326;
+  background:#1d1607;
+  animation:installClientUpdatePulse 1.8s ease-in-out infinite;
+}
+.install-client-update-btn.busy{
+  color:#d8fff0;
+  border-color:#1f7f5a;
+  background:rgba(35,196,131,0.12);
+  animation:none;
+}
+.install-client-update-note{margin-top:0;min-height:20px;line-height:1.4}
+@keyframes installClientUpdatePulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 14px rgba(245,158,11,0.16)}}
 a{color:#93d5ff}
 #auth-panel{display:none}
 #ready-panel{display:none}
@@ -8263,6 +8499,10 @@ a{color:#93d5ff}
         <span class="pill" id="install-bridgestatus">bridge offline</span>
       </div>
       <div class="note" id="install-runtime-status">Checking local agent status...</div>
+      <div class="runtime-actions">
+        <button class="btn btn-ghost install-client-update-btn" id="install-client-update-btn" type="button" onclick="triggerInstallClientUpdate()">Client current</button>
+        <span class="note install-client-update-note" id="install-client-update-note"></span>
+      </div>
 
       <ul class="safe">
         <li>Installer download is issued from your authenticated account session.</li>
@@ -8289,6 +8529,10 @@ a{color:#93d5ff}
 <script>
 let _installOs = 'mac';
 let _installStatusTimer = null;
+let installClientUpdateInFlight = false;
+let installClientUpdateSawDisconnect = false;
+let installClientUpdateError = '';
+let lastInstallClientStatus = null;
 
 function _detectInstallOs() {
   const src = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
@@ -8323,10 +8567,75 @@ function _setInstallPill(id, text, mode) {
   el.className = 'pill' + (mode ? ' ' + mode : '');
 }
 
+function updateInstallClientUpdateUI(data) {
+  const btn = document.getElementById('install-client-update-btn');
+  const note = document.getElementById('install-client-update-note');
+  if (!btn || !note) return;
+  const clientConnected = !!data.client_connected;
+  const updateSupported = !!data.client_update_supported;
+  const outdated = !!data.client_outdated;
+  const required = !!data.client_update_required;
+  const localVersion = String(data.client_version || '').trim();
+  const serverVersion = String(data.server_version || '').trim();
+  btn.className = 'btn btn-ghost install-client-update-btn';
+  if (installClientUpdateInFlight) {
+    btn.classList.add('busy');
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    note.textContent = 'Client will reconnect after restart.';
+    return;
+  }
+  if (outdated) btn.classList.add('warn');
+  btn.disabled = !clientConnected || !updateSupported;
+  if (!clientConnected) {
+    btn.textContent = 'Client offline';
+    note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
+  } else if (!updateSupported) {
+    btn.textContent = 'Manual update';
+    note.textContent = localVersion ? ('Client v' + localVersion) : 'Reconnect with the latest package once.';
+  } else if (outdated) {
+    btn.textContent = required ? 'Update required' : 'Update client';
+    note.textContent = (localVersion && serverVersion) ? ('v' + localVersion + ' -> v' + serverVersion) : 'New client available';
+  } else {
+    btn.textContent = 'Client current';
+    note.textContent = localVersion ? ('v' + localVersion) : '';
+  }
+  if (installClientUpdateError) note.textContent = installClientUpdateError;
+}
+
+async function triggerInstallClientUpdate() {
+  if (installClientUpdateInFlight) return;
+  installClientUpdateError = '';
+  installClientUpdateInFlight = true;
+  installClientUpdateSawDisconnect = false;
+  updateInstallClientUpdateUI(lastInstallClientStatus || {});
+  try {
+    const r = await fetch('/web/chat/update-client', {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    checkInstallAgentStatus();
+  } catch(e) {
+    installClientUpdateInFlight = false;
+    installClientUpdateSawDisconnect = false;
+    installClientUpdateError = e.message || 'Update failed';
+    updateInstallClientUpdateUI(lastInstallClientStatus || {});
+  }
+}
+
 function updateInstallAgentStatusUI(data) {
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
+  if (installClientUpdateInFlight) {
+    if (!data.client_connected) installClientUpdateSawDisconnect = true;
+    else if (installClientUpdateSawDisconnect) {
+      installClientUpdateInFlight = false;
+      installClientUpdateSawDisconnect = false;
+      installClientUpdateError = '';
+    }
+  }
+  lastInstallClientStatus = data;
+  updateInstallClientUpdateUI(data);
 
   if (chatConnected) _setInstallPill('install-agentstatus', 'agent online', 'online');
   else if (mismatch) _setInstallPill('install-agentstatus', 'agent mismatch', 'warn');
@@ -8485,6 +8794,40 @@ body{
 .status{font-size:11px;color:var(--muted)}
 .status.online{color:var(--green)}
 .status.warn{color:var(--yellow)}
+.setup-client-update{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.setup-client-update-btn{
+  border:1px solid #555;
+  background:rgba(255,255,255,0.03);
+  color:var(--muted);
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:11px;
+  font-family:var(--mono,monospace);
+  cursor:pointer;
+  transition:border-color 0.15s ease,background 0.15s ease,color 0.15s ease,box-shadow 0.15s ease;
+}
+.setup-client-update-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(255,255,255,0.05)}
+.setup-client-update-btn.warn{
+  color:#f3c56a;
+  border-color:#8d6722;
+  background:rgba(243,197,106,0.12);
+  animation:setupClientUpdatePulse 1.8s ease-in-out infinite;
+}
+.setup-client-update-btn.busy{
+  color:#ffd2c7;
+  border-color:rgba(233,69,96,0.45);
+  background:rgba(233,69,96,0.12);
+  animation:none;
+}
+.setup-client-update-btn:disabled{opacity:0.5;cursor:default;box-shadow:none}
+.setup-client-update-note{
+  min-height:12px;
+  font-size:10px;
+  color:var(--muted);
+  font-family:var(--mono,monospace);
+  line-height:1.1;
+}
+@keyframes setupClientUpdatePulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 14px rgba(243,197,106,0.16)}}
 
 /* Setup install banner */
 #setup-download-banner{
@@ -8708,6 +9051,10 @@ body{
         <span class="status" id="setup-agentstatus">agent offline</span>
         <span class="status" id="setup-bridgestatus">bridge offline</span>
       </div>
+      <div class="setup-client-update">
+        <button class="setup-client-update-btn" id="setup-client-update-btn" type="button" onclick="triggerSetupClientUpdate()">Client current</button>
+        <span class="setup-client-update-note" id="setup-client-update-note"></span>
+      </div>
     </div>
     <div class="nav">
       <a href="/local">Chat</a>
@@ -8904,6 +9251,10 @@ let selectedProfile = undefined; // undefined = nothing selected, null = clean p
 let selectedProvider = 'gemini';
 let agentConnected = false;
 let statusPollTimer = null;
+let setupClientUpdateInFlight = false;
+let setupClientUpdateSawDisconnect = false;
+let setupClientUpdateError = '';
+let lastSetupClientStatus = null;
 
 function _normalizeLocalUrl(raw) {
   const s = String(raw || '');
@@ -8920,6 +9271,61 @@ function updateSetupStatusPill(el, text, mode) {
   el.className = 'status' + (mode ? ' ' + mode : '');
 }
 
+function updateSetupClientUpdateUI(data) {
+  const btn = document.getElementById('setup-client-update-btn');
+  const note = document.getElementById('setup-client-update-note');
+  if (!btn || !note) return;
+  const clientConnected = !!data.client_connected;
+  const updateSupported = !!data.client_update_supported;
+  const outdated = !!data.client_outdated;
+  const required = !!data.client_update_required;
+  const localVersion = String(data.client_version || '').trim();
+  const serverVersion = String(data.server_version || '').trim();
+  btn.className = 'setup-client-update-btn';
+  if (setupClientUpdateInFlight) {
+    btn.classList.add('busy');
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    note.textContent = 'Client will reconnect after restart.';
+    return;
+  }
+  if (outdated) btn.classList.add('warn');
+  btn.disabled = !clientConnected || !updateSupported;
+  if (!clientConnected) {
+    btn.textContent = 'Client offline';
+    note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
+  } else if (!updateSupported) {
+    btn.textContent = 'Manual update';
+    note.textContent = localVersion ? ('Client v' + localVersion) : 'Reconnect with the latest package once.';
+  } else if (outdated) {
+    btn.textContent = required ? 'Update required' : 'Update client';
+    note.textContent = (localVersion && serverVersion) ? ('v' + localVersion + ' -> v' + serverVersion) : 'New client available';
+  } else {
+    btn.textContent = 'Client current';
+    note.textContent = localVersion ? ('v' + localVersion) : '';
+  }
+  if (setupClientUpdateError) note.textContent = setupClientUpdateError;
+}
+
+async function triggerSetupClientUpdate() {
+  if (setupClientUpdateInFlight) return;
+  setupClientUpdateError = '';
+  setupClientUpdateInFlight = true;
+  setupClientUpdateSawDisconnect = false;
+  updateSetupClientUpdateUI(lastSetupClientStatus || {});
+  try {
+    const r = await fetch('/web/chat/update-client', {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    checkAgentStatus();
+  } catch(e) {
+    setupClientUpdateInFlight = false;
+    setupClientUpdateSawDisconnect = false;
+    setupClientUpdateError = e.message || 'Update failed';
+    updateSetupClientUpdateUI(lastSetupClientStatus || {});
+  }
+}
+
 function updateSetupAgentStatusUI(data) {
   const chatEl = document.getElementById('setup-agentstatus');
   const bridgeEl = document.getElementById('setup-bridgestatus');
@@ -8932,6 +9338,16 @@ function updateSetupAgentStatusUI(data) {
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
+  if (setupClientUpdateInFlight) {
+    if (!data.client_connected) setupClientUpdateSawDisconnect = true;
+    else if (setupClientUpdateSawDisconnect) {
+      setupClientUpdateInFlight = false;
+      setupClientUpdateSawDisconnect = false;
+      setupClientUpdateError = '';
+    }
+  }
+  lastSetupClientStatus = data;
+  updateSetupClientUpdateUI(data);
 
   if (bridgeConnected) updateSetupStatusPill(bridgeEl, 'bridge online', 'online');
   else updateSetupStatusPill(bridgeEl, 'bridge offline', '');

@@ -99,6 +99,7 @@ RELAY_PORT = int(os.environ.get("RELAY_PORT", "443"))
 MAX_TURNS = 50
 EXTENSION_BLOCK = 25
 MAX_ABSOLUTE_TURNS = 200
+SLOT_COUNT = 3
 
 SESSION_DIR = os.environ.get(
     "SESSION_DIR",
@@ -182,6 +183,115 @@ class CodexChatAgent:
                 json.dump({"messages": non_system}, f)
         except Exception as e:
             print(f"[{session_id}] Failed to save session: {e}")
+
+    def _slot_meta_path(self) -> str:
+        os.makedirs(SESSION_DIR, exist_ok=True)
+        mode_tag = "codexcli" if self.mode == "codex-cli" else "codexsdk"
+        return os.path.join(SESSION_DIR, f"{mode_tag}-{self.agent_id}-slots.json")
+
+    def _load_slot_meta(self) -> dict:
+        try:
+            with open(self._slot_meta_path()) as f:
+                raw = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            raw = {}
+        try:
+            active_slot = int(raw.get("active_slot", 1))
+        except (TypeError, ValueError):
+            active_slot = 1
+        if active_slot not in range(1, SLOT_COUNT + 1):
+            active_slot = 1
+        raw_sessions = raw.get("slot_sessions", {})
+        slot_sessions = {}
+        for slot in range(1, SLOT_COUNT + 1):
+            session_id = ""
+            if isinstance(raw_sessions, dict):
+                session_id = str(raw_sessions.get(str(slot), raw_sessions.get(slot, "")) or "").strip()
+            slot_sessions[str(slot)] = session_id
+        return {"active_slot": active_slot, "slot_sessions": slot_sessions}
+
+    def _save_slot_meta(self, meta: dict):
+        normalized = self._load_slot_meta()
+        try:
+            active_slot = int(meta.get("active_slot", normalized["active_slot"]))
+        except (TypeError, ValueError):
+            active_slot = normalized["active_slot"]
+        if active_slot not in range(1, SLOT_COUNT + 1):
+            active_slot = 1
+        normalized["active_slot"] = active_slot
+        raw_sessions = meta.get("slot_sessions", {})
+        if isinstance(raw_sessions, dict):
+            for slot in range(1, SLOT_COUNT + 1):
+                normalized["slot_sessions"][str(slot)] = str(
+                    raw_sessions.get(str(slot), raw_sessions.get(slot, normalized["slot_sessions"][str(slot)]))
+                    or ""
+                ).strip()
+        with open(self._slot_meta_path(), "w") as f:
+            json.dump(normalized, f)
+
+    def _active_slot(self) -> int:
+        return self._load_slot_meta().get("active_slot", 1)
+
+    def _session_for_slot(self, slot: int | None = None) -> str:
+        current_slot = self._active_slot() if slot is None else int(slot)
+        if current_slot not in range(1, SLOT_COUNT + 1):
+            current_slot = 1
+        meta = self._load_slot_meta()
+        return str(meta.get("slot_sessions", {}).get(str(current_slot), "") or "").strip()
+
+    def _set_slot_session(self, slot: int, session_id: str):
+        current_slot = int(slot)
+        if current_slot not in range(1, SLOT_COUNT + 1):
+            current_slot = 1
+        meta = self._load_slot_meta()
+        meta["slot_sessions"][str(current_slot)] = str(session_id or "").strip()
+        self._save_slot_meta(meta)
+
+    def _new_session_id(self) -> str:
+        return f"s-{self.agent_id}-{int(time.time() * 1000):x}"
+
+    def _delete_session(self, session_id: str):
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        self.sessions.pop(sid, None)
+        try:
+            os.remove(self._session_path(sid))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"[{sid}] Failed to delete session file: {e}")
+
+    def _clear_slot(self, slot: int | None = None):
+        current_slot = self._active_slot() if slot is None else int(slot)
+        if current_slot not in range(1, SLOT_COUNT + 1):
+            current_slot = 1
+        existing_session = self._session_for_slot(current_slot)
+        if existing_session:
+            self._delete_session(existing_session)
+        meta = self._load_slot_meta()
+        meta["slot_sessions"][str(current_slot)] = ""
+        self._save_slot_meta(meta)
+
+    def _get_slots_info(self) -> dict:
+        meta = self._load_slot_meta()
+        slots = []
+        for slot in range(1, SLOT_COUNT + 1):
+            session_id = str(meta["slot_sessions"].get(str(slot), "") or "").strip()
+            preview = ""
+            empty = True
+            if session_id:
+                messages = self.sessions.get(session_id)
+                if messages is None:
+                    messages = self._load_session(session_id)
+                visible_messages = [m for m in messages if m.get("role") != "system"]
+                empty = len(visible_messages) == 0
+                for message in visible_messages:
+                    if message.get("role") == "user":
+                        preview = str(message.get("content", "") or "")[:40]
+                        break
+            slots.append({"slot": slot, "empty": empty, "preview": preview})
+        return {"active_slot": meta.get("active_slot", 1), "slots": slots}
 
     # --- Sanitization ---
 
@@ -267,6 +377,8 @@ class CodexChatAgent:
                     if msg.get("type") == "user_message":
                         sid = msg.get("session_id", "")
                         if sid:
+                            self._set_slot_session(self._active_slot(), sid)
+                        if sid:
                             old_task = self.active_tasks.pop(sid, None)
                             if old_task and not old_task.done():
                                 old_task.cancel()
@@ -279,20 +391,43 @@ class CodexChatAgent:
                             )
                     elif msg.get("type") == "new_chat":
                         req_id = msg.get("req_id", "")
-                        # Clear all in-memory sessions and generate a fresh session_id
-                        for sid in list(self.sessions):
-                            self.sessions.pop(sid, None)
-                        new_sid = f"s-{self.agent_id}-{int(time.time() * 1000):x}"
-                        print(f"[new_chat] Cleared sessions, new session: {new_sid}")
+                        current_slot = self._active_slot()
+                        self._clear_slot(current_slot)
+                        new_sid = self._new_session_id()
+                        self._set_slot_session(current_slot, new_sid)
+                        print(f"[new_chat] Cleared slot {current_slot}, new session: {new_sid}")
                         await self.ws.send(json.dumps({
                             "type": "new_chat_ok",
                             "req_id": req_id,
                             "session_id": new_sid,
-                            "active_slot": 1,
+                            "active_slot": current_slot,
                         }))
+                    elif msg.get("type") == "switch_slot":
+                        req_id = msg.get("req_id", "")
+                        try:
+                            slot = int(msg.get("slot", 1))
+                        except (TypeError, ValueError):
+                            slot = 1
+                        if slot not in range(1, SLOT_COUNT + 1):
+                            slot = 1
+                        meta = self._load_slot_meta()
+                        meta["active_slot"] = slot
+                        self._save_slot_meta(meta)
+                        print(f"[slot] Switched to slot {slot}")
+                        await self.ws.send(json.dumps({
+                            "type": "switch_slot_ok",
+                            "req_id": req_id,
+                            "active_slot": slot,
+                        }))
+                    elif msg.get("type") == "get_slots":
+                        req_id = msg.get("req_id", "")
+                        info = self._get_slots_info()
+                        info["type"] = "slots_response"
+                        info["req_id"] = req_id
+                        await self.ws.send(json.dumps(info))
                     elif msg.get("type") == "get_history":
                         req_id = msg.get("req_id", "")
-                        sid = msg.get("session_id", "")
+                        sid = msg.get("session_id", "") or self._session_for_slot()
                         raw_msgs = []
                         if sid and sid in self.sessions:
                             raw_msgs = [

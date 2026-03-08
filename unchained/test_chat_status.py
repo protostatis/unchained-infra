@@ -22,14 +22,18 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._chat_agents = dict(web._chat_agents)
         self._chat_agent_users = dict(web._chat_agent_users)
+        self._chat_agent_caps = dict(web._chat_agent_caps)
         web._chat_agents.clear()
         web._chat_agent_users.clear()
+        web._chat_agent_caps.clear()
 
     def tearDown(self):
         web._chat_agents.clear()
         web._chat_agents.update(self._chat_agents)
         web._chat_agent_users.clear()
         web._chat_agent_users.update(self._chat_agent_users)
+        web._chat_agent_caps.clear()
+        web._chat_agent_caps.update(self._chat_agent_caps)
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
@@ -52,6 +56,9 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["bridge_connected"])
         self.assertEqual(data["chat_agent_id"], "claude-abc12345")
         self.assertEqual(data["bridge_agent_id"], "claude-abc12345")
+        self.assertIn("client_version", data)
+        self.assertIn("server_version", data)
+        self.assertFalse(data["client_connected"])
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
@@ -76,6 +83,34 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["mismatch"])
         self.assertEqual(data["mismatch_agent_id"], "claude-other")
 
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_status_includes_client_update_flags(self, mock_auth, mock_check_relay):
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-updated",
+            "key_hash": "updated",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        mock_check_relay.return_value = True
+        web._chat_agents["claude-updated"] = SimpleNamespace(closed=False)
+        web._chat_agent_users["claude-updated"] = "u-test"
+        web._chat_agent_caps["claude-updated"] = {
+            "client_version": "0.3.37",
+            "remote_update": True,
+        }
+
+        request = SimpleNamespace(query={"chat_only": "1", "model": "claude-sonnet-4-6"})
+        response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertTrue(data["client_connected"])
+        self.assertEqual(data["client_version"], "0.3.37")
+        self.assertTrue(data["client_update_supported"])
+        self.assertTrue(data["client_outdated"])
+        self.assertFalse(data["client_update_required"])
+
 
 class TestLocalChatTemplate(unittest.TestCase):
     """Protect local-chat status markers in the exported HTML."""
@@ -84,6 +119,7 @@ class TestLocalChatTemplate(unittest.TestCase):
         self.assertIn('id="agentstatus"', web.CLAUDE_CHAT_HTML)
         self.assertIn('id="bridgestatus"', web.CLAUDE_CHAT_HTML)
         self.assertIn('id="banner-detail"', web.CLAUDE_CHAT_HTML)
+        self.assertIn('id="client-update-btn"', web.CLAUDE_CHAT_HTML)
         self.assertIn("Browser bridge and chat agent are tracked separately.", web.CLAUDE_CHAT_HTML)
 
 

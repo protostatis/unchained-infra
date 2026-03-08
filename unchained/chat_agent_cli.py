@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import signal
 import shutil
@@ -263,23 +264,53 @@ def _parse_version(v: str) -> tuple:
         return (0, 0, 0)
 
 
+def _agent_root() -> str:
+    """Return the packaged agent root containing start/update scripts."""
+    candidates = [
+        Path(CWD).resolve().parent,
+        Path(CWD).resolve(),
+        Path.cwd().resolve(),
+    ]
+    for candidate in candidates:
+        if (candidate / "update.sh").exists() or (candidate / "update.ps1").exists():
+            return str(candidate)
+    return str(candidates[0])
+
+
+def _local_version_path() -> str | None:
+    """Return the packaged version.txt path if present."""
+    roots = [
+        os.path.join(CWD, "..", "version.txt"),
+        os.path.join(CWD, "version.txt"),
+        os.path.join(_agent_root(), "version.txt"),
+    ]
+    for path in roots:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _local_version() -> str:
+    """Return the packaged local version string when available."""
+    version_path = _local_version_path()
+    if not version_path:
+        return ""
+    try:
+        with open(version_path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def check_for_updates() -> str | None:
     """Check for agent updates. Returns a warning string if outdated, else None."""
     import urllib.request
     import urllib.error
 
     # Read local version
-    version_path = os.path.join(CWD, "..", "version.txt")
-    if not os.path.exists(version_path):
-        version_path = os.path.join(CWD, "version.txt")
-    if not os.path.exists(version_path):
+    local_version = _local_version()
+    if not local_version:
         return None  # No version file — skip check (dev environment)
-
-    try:
-        with open(version_path) as f:
-            local_version = f.read().strip()
-    except OSError:
-        return None
 
     # Check remote version
     api_url = os.environ.get("UNCHAINED_API_URL", f"https://{RELAY_HOST}")
@@ -312,6 +343,257 @@ def check_for_updates() -> str | None:
             f"Run: bash update.sh"
         )
     return None
+
+
+def _pid_exists(pid: int) -> bool:
+    """Return True if PID appears to be alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _daemon_supervisor_alive(agent_root: str) -> bool:
+    """Return True if the daemon supervisor PID file points at a live process."""
+    if os.name == "nt":
+        pid_path = os.path.join(agent_root, ".agent.pid.json")
+        if not os.path.exists(pid_path):
+            return False
+        try:
+            with open(pid_path, "r") as f:
+                pid_state = json.load(f)
+            agent_pid = int(pid_state.get("agent_pid") or 0)
+            bridge_pid = int(pid_state.get("bridge_pid") or 0)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return False
+        return _pid_exists(agent_pid) or _pid_exists(bridge_pid)
+
+    pid_path = os.path.join(agent_root, ".agent.pid")
+    if not os.path.exists(pid_path):
+        return False
+    try:
+        with open(pid_path, "r") as f:
+            pid = int((f.read() or "").strip())
+    except (OSError, ValueError):
+        return False
+    return _pid_exists(pid)
+
+
+def _ps_output(*args: str) -> str:
+    """Run ps and return decoded stdout, or empty string on failure."""
+    try:
+        proc = subprocess.run(
+            ["ps", *args],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return ""
+    return proc.stdout or ""
+
+
+def _launched_by_launchd() -> bool:
+    """Best-effort detection for launchd-managed foreground start.sh jobs."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        pid = os.getppid()
+    except Exception:
+        return False
+    for _ in range(5):
+        if pid <= 1:
+            break
+        cmd = _ps_output("-o", "comm=", "-p", str(pid)).strip()
+        if os.path.basename(cmd) == "launchd":
+            return True
+        parent_raw = _ps_output("-o", "ppid=", "-p", str(pid)).strip()
+        try:
+            pid = int(parent_raw)
+        except ValueError:
+            break
+    return False
+
+
+def _current_run_hint(agent_root: str) -> str:
+    """Classify the current runtime so post-update restart can avoid duplicates."""
+    if _daemon_supervisor_alive(agent_root):
+        return "daemon"
+    if _launched_by_launchd():
+        return "launchd"
+    return "manual"
+
+
+def _run_logged(cmd: list[str], *, cwd: str) -> int:
+    """Run a subprocess and mirror combined output into the agent log."""
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output = (proc.stdout or "").strip()
+    if output:
+        for line in output.splitlines():
+            log.info("[self-update] %s", line)
+    return proc.returncode
+
+
+def _terminate_windows_runtime(helper_pid: int):
+    """Stop current chat/bridge processes without touching Startup autostart."""
+    cmd = (
+        "$helperPid=[int]$env:UNCHAINED_HELPER_PID; "
+        "Get-CimInstance Win32_Process | Where-Object { "
+        "$_.ProcessId -ne $helperPid -and $_.CommandLine -and ("
+        "$_.CommandLine -like '*chat_agent_cli.py*' -or "
+        "$_.CommandLine -like '*chrome_bridge.py*'"
+        ") } | ForEach-Object { "
+        "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} "
+        "}"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+        check=False,
+        env={**os.environ, "UNCHAINED_HELPER_PID": str(helper_pid)},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _start_windows_daemon(agent_root: str):
+    """Start the packaged Windows agent in background mode."""
+    flags = 0
+    flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+    flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "start.ps1", "-Daemon"],
+        cwd=agent_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+    )
+
+
+def _other_posix_chat_agent_running(helper_pid: int) -> bool:
+    """Return True if another chat_agent_cli process is already running."""
+    listing = _ps_output("-ax", "-o", "pid=,command=")
+    if not listing:
+        return False
+    for line in listing.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        command = parts[1]
+        if pid == helper_pid:
+            continue
+        if "chat_agent_cli.py" not in command:
+            continue
+        if "--self-update-helper" in command:
+            continue
+        return True
+    return False
+
+
+def _run_self_update_helper():
+    """Detached helper that updates the package and restarts it if needed."""
+    agent_root = os.environ.get("UNCHAINED_AGENT_ROOT", "").strip() or _agent_root()
+    run_hint = os.environ.get("UNCHAINED_UPDATE_RUN_HINT", "").strip() or "manual"
+    helper_pid = os.getpid()
+    log.info("[self-update] helper starting (root=%s mode=%s)", agent_root, run_hint)
+    time.sleep(1.0)
+
+    if os.name == "nt":
+        update_cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "update.ps1"]
+    else:
+        update_cmd = ["bash", "update.sh"]
+    rc = _run_logged(update_cmd, cwd=agent_root)
+    if rc != 0:
+        log.error("[self-update] update command failed with exit code %s", rc)
+        raise SystemExit(rc)
+
+    if os.name == "nt":
+        _terminate_windows_runtime(helper_pid)
+        time.sleep(2.0)
+        _start_windows_daemon(agent_root)
+        log.info("[self-update] windows daemon restart started")
+        return
+
+    trigger_pid_raw = os.environ.get("UNCHAINED_UPDATE_TRIGGER_PID", "").strip()
+    try:
+        trigger_pid = int(trigger_pid_raw)
+    except ValueError:
+        trigger_pid = 0
+
+    if trigger_pid > 0:
+        try:
+            os.kill(trigger_pid, signal.SIGTERM)
+        except OSError:
+            pass
+    subprocess.run(
+        ["pkill", "-f", "chrome_bridge.py start"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    if run_hint == "daemon":
+        log.info("[self-update] waiting for daemon supervisor to restart runtime")
+        return
+
+    time.sleep(4.0)
+    if _other_posix_chat_agent_running(helper_pid):
+        log.info("[self-update] detected restarted chat agent; skipping manual daemon start")
+        return
+
+    subprocess.Popen(
+        ["bash", "start.sh", "--daemon"],
+        cwd=agent_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    log.info("[self-update] started daemon after update")
+
+
+def _spawn_remote_update() -> tuple[bool, str]:
+    """Launch a detached self-update helper and return (ok, error_message)."""
+    agent_root = _agent_root()
+    helper_env = dict(os.environ)
+    helper_env["UNCHAINED_AGENT_ROOT"] = agent_root
+    helper_env["UNCHAINED_UPDATE_TRIGGER_PID"] = str(os.getpid())
+    helper_env["UNCHAINED_UPDATE_RUN_HINT"] = _current_run_hint(agent_root)
+    helper_cmd = [sys.executable, os.path.abspath(__file__), "--self-update-helper"]
+    kwargs = {
+        "cwd": agent_root,
+        "env": helper_env,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        flags = 0
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(helper_cmd, **kwargs)
+    except Exception as e:
+        return False, str(e)
+    return True, ""
 
 
 SYSTEM_PROMPT = f"""You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
@@ -1485,6 +1767,8 @@ async def main():
                 "capabilities": {
                     "claude_cli": bool(_cli_binary_available(CLAUDE_BIN)),
                     "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
+                    "client_version": _local_version(),
+                    "remote_update": True,
                 },
             }))
             resp = json.loads(await ws.recv())
@@ -1596,6 +1880,21 @@ async def main():
                     info["type"] = "slots_response"
                     info["req_id"] = req_id
                     await ws.send(json.dumps(info))
+                elif msg.get("type") == "update_client":
+                    req_id = msg.get("req_id", "")
+                    ok, err = _spawn_remote_update()
+                    if ok:
+                        await ws.send(json.dumps({
+                            "type": "update_client_ok",
+                            "req_id": req_id,
+                            "status": "updating",
+                        }))
+                    else:
+                        await ws.send(json.dumps({
+                            "type": "update_client_error",
+                            "req_id": req_id,
+                            "error": err or "Could not start update helper.",
+                        }))
 
         except Exception as e:
             log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
@@ -1635,4 +1934,8 @@ def _run():
         raise
 
 
-_run()
+if __name__ == "__main__":
+    if "--self-update-helper" in sys.argv[1:]:
+        _run_self_update_helper()
+    else:
+        _run()

@@ -12,6 +12,36 @@ from aiohttp import web
 from web_app.core import get_core as _core
 
 
+def _parse_version_tuple(value: str) -> tuple[int, int, int]:
+    """Parse a semver-like string into a comparable tuple."""
+    try:
+        parts = tuple(int(part) for part in str(value or "").strip().split("."))
+    except (TypeError, ValueError):
+        return (0, 0, 0)
+    if len(parts) != 3:
+        return (0, 0, 0)
+    return parts
+
+
+def _client_version_status(caps: dict | None) -> dict:
+    """Summarize the connected local client package version from auth caps."""
+    from agent_package import MIN_VERSION, VERSION
+
+    caps = caps or {}
+    local_version = str(caps.get("client_version", "") or "").strip()
+    local_t = _parse_version_tuple(local_version) if local_version else (0, 0, 0)
+    server_t = _parse_version_tuple(VERSION)
+    min_t = _parse_version_tuple(MIN_VERSION)
+    return {
+        "client_version": local_version,
+        "server_version": VERSION,
+        "min_client_version": MIN_VERSION,
+        "client_update_supported": bool(caps.get("remote_update")),
+        "client_outdated": bool(local_version) and local_t < server_t,
+        "client_update_required": bool(local_version) and local_t < min_t,
+    }
+
+
 async def check_relay_agent(agent_id: str) -> bool:
     """Quick check if an agent is connected to the relay via HTTP API."""
     core = _core()
@@ -216,11 +246,18 @@ async def handle_chat_status(request: web.Request) -> web.Response:
                         mismatch_agent = other_id
                         break
 
+    local_client_agent_id = auth_info.get("agent_id", "")
+    local_client_ws = core._chat_agents.get(local_client_agent_id) if local_client_agent_id else None
+    local_client_connected = local_client_ws is not None and not local_client_ws.closed
+
     resp = {"connected": connected, "agent_id": agent_id}
     resp["chat_connected"] = chat_connected
     resp["chat_agent_id"] = agent_id
     resp["bridge_connected"] = bridge_connected
     resp["bridge_agent_id"] = bridge_agent_id
+    resp["client_agent_id"] = local_client_agent_id
+    resp["client_connected"] = local_client_connected
+    resp.update(_client_version_status(core._chat_agent_caps.get(local_client_agent_id, {})))
     if mismatch_agent:
         resp["mismatch"] = True
         resp["mismatch_agent_id"] = mismatch_agent
@@ -236,6 +273,52 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         resp["claude_sdk_agent_id"] = claude_sdk_agent_id
         resp["claude_sdk_connected"] = claude_sdk_connected
     return web.json_response(resp)
+
+
+async def handle_chat_update_client(request: web.Request) -> web.Response:
+    """POST /web/chat/update-client — ask the local client package to self-update."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    agent_id = str(auth_info.get("agent_id", "") or "").strip()
+    if not agent_id:
+        return web.json_response({"error": "agent_id required"}, status=400)
+    ws = core._chat_agents.get(agent_id)
+    if ws is None or ws.closed:
+        return web.json_response({"error": "Your local client is offline."}, status=503)
+
+    caps = core._chat_agent_caps.get(agent_id, {})
+    if not bool(caps.get("remote_update")):
+        return web.json_response(
+            {
+                "error": (
+                    "This local client package does not support one-click updates yet. "
+                    "Run the installer or update script once manually, then retry."
+                )
+            },
+            status=409,
+        )
+
+    resp = await agent_request(agent_id, {"type": "update_client"}, timeout=4)
+    if not resp:
+        return web.json_response(
+            {"error": "Timed out waiting for the local client to start updating."},
+            status=504,
+        )
+    if resp.get("type") == "update_client_ok":
+        return web.json_response(
+            {
+                "ok": True,
+                "status": str(resp.get("status") or "updating"),
+                "client_version": str(caps.get("client_version") or "").strip(),
+            }
+        )
+    return web.json_response(
+        {"error": str(resp.get("error") or "Local client update failed to start.")},
+        status=500,
+    )
 
 
 async def handle_chat_history(request: web.Request) -> web.Response:

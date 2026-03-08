@@ -82,6 +82,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/chat"),
             ("POST", "/web/chat/cancel"),
             ("GET", "/web/chat/status"),
+            ("POST", "/web/chat/update-client"),
             ("GET", "/web/chat/history"),
             ("POST", "/web/chat/new"),
             ("GET", "/web/chat/slots"),
@@ -143,6 +144,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("showInstallCmd", web.CLAUDE_CHAT_HTML)
         self.assertIn("copyInstallCmd", web.CLAUDE_CHAT_HTML)
         self.assertIn("closeInstallModal", web.CLAUDE_CHAT_HTML)
+        self.assertIn("/web/chat/update-client", web.CLAUDE_CHAT_HTML)
+        self.assertIn("/web/chat/update-client", web.SETUP_HTML)
+        self.assertIn("/web/chat/update-client", web.INSTALL_ONBOARD_HTML)
         self.assertIn('id="modelsel"', web.CLAUDE_CHAT_HTML)
         self.assertIn("model: currentModel()", web.CLAUDE_CHAT_HTML)
         self.assertIn('id="f-model"', web.SCHEDULER_HTML)
