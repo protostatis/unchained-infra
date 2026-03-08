@@ -58,12 +58,36 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
+    explicit = os.environ.get(env_var, "").strip()
+    if explicit:
+        return explicit
+    discovered = shutil.which(default_name)
+    if discovered:
+        return discovered
+    fallback = os.path.expanduser(f"~/.local/bin/{default_name}")
+    if os.path.isfile(fallback):
+        return fallback
+    return default_name
+
+
+def _cli_binary_available(path_or_name: str) -> bool:
+    candidate = str(path_or_name or "").strip()
+    if not candidate:
+        return False
+    if os.path.sep in candidate:
+        return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+    return shutil.which(candidate) is not None
+
+
 KEY = os.environ.get("UNCHAINED_API_KEY", "")
 SERVER = os.environ.get("UNCHAINED_SERVER", "wss://api.unchainedsky.com/chat/ws")
 RELAY_HOST = os.environ.get("UNCHAINED_RELAY_HOST", "api.unchainedsky.com")
 RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
 CWD = os.path.expanduser("~/unchained-agent/unchained")
-CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
+CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
 CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
@@ -576,7 +600,7 @@ async def handle_message_claude(
     if os.environ.get("CLAUDE_ENABLE_WEB_TOOLS"):
         allowed += " WebFetch WebSearch"
         tools += ["WebFetch", "WebSearch"]
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
+    cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model, "--max-turns", "100",
            "--allowedTools", allowed,
            "--system-prompt", _claude_system_prompt(scheduler_armed=scheduler_armed),
@@ -584,15 +608,27 @@ async def handle_message_claude(
     if is_resume:
         cmd += ["--resume", claude_sid]
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-        cwd=CWD,
-        start_new_session=True,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=CWD,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        await ws.send(json.dumps({
+            "session_id": sid,
+            "type": "error",
+            "data": (
+                f"Claude CLI is not installed or not on PATH. "
+                f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
+            ),
+        }))
+        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        return
     active_procs[sid] = proc
 
     # Send input and close stdin
@@ -1355,7 +1391,7 @@ async def handle_message(
 ):
     """Dispatch to local Claude CLI or Codex CLI handler by model prefix."""
     if _is_codex_cli_model(model):
-        if shutil.which(CODEX_BIN) is None:
+        if not _cli_binary_available(CODEX_BIN):
             await ws.send(json.dumps({
                 "session_id": sid,
                 "type": "error",
@@ -1372,6 +1408,17 @@ async def handle_message(
             scheduler_armed=scheduler_armed,
             scheduler_grant_id=scheduler_grant_id,
         )
+    if not _cli_binary_available(CLAUDE_BIN):
+        await ws.send(json.dumps({
+            "session_id": sid,
+            "type": "error",
+            "data": (
+                f"Claude CLI is not installed or not on PATH. "
+                f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
+            ),
+        }))
+        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        return
     return await handle_message_claude(
         ws,
         sid,
@@ -1405,7 +1452,12 @@ async def main():
     if not check_chrome_bridge():
         print("WARNING: Chrome bridge offline — browser tools will fail.")
         print("The agent will still work with WebFetch/WebSearch only.\n")
-    if shutil.which(CODEX_BIN) is None:
+    if not _cli_binary_available(CLAUDE_BIN):
+        print(
+            f"WARNING: {CLAUDE_BIN} not found — Claude CLI lane will fail until Claude Code is installed "
+            "or CLAUDE_BIN points to it."
+        )
+    if not _cli_binary_available(CODEX_BIN):
         print(f"WARNING: {CODEX_BIN} not found in PATH — codex-cli model lane will be unavailable.")
 
     # Restore claude session from local storage
@@ -1425,8 +1477,8 @@ async def main():
             await ws.send(json.dumps({
                 "key": KEY,
                 "capabilities": {
-                    "claude_cli": True,
-                    "codex_cli": bool(shutil.which(CODEX_BIN)),
+                    "claude_cli": bool(_cli_binary_available(CLAUDE_BIN)),
+                    "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
                 },
             }))
             resp = json.loads(await ws.recv())
