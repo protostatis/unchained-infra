@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.34"
+VERSION = "0.3.35"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -558,6 +558,21 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PIDFILE="$(pwd)/.agent.pid"
+AUTOSTART_LABEL="com.unchained.agent"
+OS_NAME="$(uname -s 2>/dev/null || echo unknown)"
+
+stop_launchd_autostart() {
+  if [[ "$OS_NAME" != "Darwin" ]]; then
+    return 0
+  fi
+  if ! command -v launchctl >/dev/null 2>&1; then
+    return 0
+  fi
+  launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 && \
+    echo "Stopped autostart job: $AUTOSTART_LABEL" || true
+}
+
+stop_launchd_autostart
 
 if [ ! -f "$PIDFILE" ]; then
   echo "No agent PID file found. Is the agent running in daemon mode?"

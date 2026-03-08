@@ -78,6 +78,9 @@ def test_build_agent_zip_contains_version_and_update():
         assert 'command -v claude >/dev/null 2>&1' in start_sh
         assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
         assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' not in start_sh
+        stop_sh = zf.read("unchained-agent/stop.sh").decode()
+        assert 'AUTOSTART_LABEL="com.unchained.agent"' in stop_sh
+        assert 'launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL"' in stop_sh
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1
