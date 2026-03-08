@@ -67,6 +67,9 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/web/install/claim/start" in start_sh
         assert "/web/install/claim/poll" in start_sh
         assert "/install/claim/" in start_sh
+        assert "<key>KeepAlive</key>" in start_sh
+        assert "<true/>" in start_sh
+        assert "<string>--daemon</string>" not in start_sh
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1

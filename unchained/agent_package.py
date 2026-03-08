@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.29"
+VERSION = "0.3.30"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -278,12 +278,11 @@ install_autostart() {
   <array>
     <string>/bin/bash</string>
     <string>$SCRIPT_PATH</string>
-    <string>--daemon</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <false/>
+  <true/>
   <key>WorkingDirectory</key>
   <string>$AGENT_DIR</string>
   <key>StandardOutPath</key>
