@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock
 import httpx
 from aiohttp import web as aiohttp_web
 
+from agent_package import MIN_VERSION, VERSION
+
 
 _TMP_ROOT = tempfile.mkdtemp(prefix="uc-dev-server-smoke-")
 atexit.register(lambda: shutil.rmtree(_TMP_ROOT, ignore_errors=True))
@@ -153,8 +155,8 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         response = await self._client.get("/web/agent/version")
         self.assertEqual(response.status_code, 200)
         version_data = response.json()
-        self.assertEqual(version_data["version"], "0.3.38")
-        self.assertEqual(version_data["min_version"], "0.2.0")
+        self.assertEqual(version_data["version"], VERSION)
+        self.assertEqual(version_data["min_version"], MIN_VERSION)
 
         response = await self._client.post("/web/install-token")
         self.assertEqual(response.status_code, 200)
