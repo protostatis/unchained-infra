@@ -290,6 +290,7 @@ class Agent:
 
     async def _connect_and_run(self):
         """Single connection lifecycle: connect → auth → message loop."""
+        self._watchdog_triggered = False
         async with websockets.connect(self.relay_url,
                                       max_size=50 * 1024 * 1024) as ws:
             self.ws = ws
@@ -299,6 +300,8 @@ class Agent:
             if self._headless:
                 self._cleanup_orphan_tabs()
             await self._message_loop()
+        if self._watchdog_triggered:
+            raise ConnectionError("pong timeout — relay tunnel dead")
 
     async def _authenticate(self):
         """Send auth message, wait for auth_ok."""
@@ -320,12 +323,16 @@ class Agent:
     async def _message_loop(self):
         """Main relay loop: listen on tunnel, dispatch messages."""
         self._last_pong = time.time()  # seed with connect time
+        self._in_handler = False
         ping_task = asyncio.create_task(self._heartbeat())
         watchdog_task = asyncio.create_task(self._pong_watchdog())
         try:
             async for raw in self.ws:
+                self._last_pong = time.time()  # any recv proves tunnel alive
                 msg = json.loads(raw)
+                self._in_handler = True
                 await self._handle_message(msg)
+                self._in_handler = False
         finally:
             ping_task.cancel()
             watchdog_task.cancel()
@@ -802,15 +809,22 @@ class Agent:
                     break
 
     async def _pong_watchdog(self):
-        """Close tunnel if no pong received within timeout after a ping."""
+        """Close tunnel if no message received within timeout.
+
+        Skips the check while _in_handler is True — long-running handlers
+        (e.g. provision-launch with blocking file copies) prevent the message
+        loop from draining pongs, which would cause a false trigger.
+        """
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
-            if self._last_pong and self.ws:
-                elapsed = time.time() - self._last_pong
-                if elapsed > HEARTBEAT_INTERVAL + HEARTBEAT_TIMEOUT:
-                    print(f"[agent] pong timeout ({elapsed:.0f}s), closing tunnel")
-                    await self.ws.close()
-                    break
+            if self._in_handler or not self.ws:
+                continue
+            elapsed = time.time() - self._last_pong
+            if elapsed > HEARTBEAT_INTERVAL + HEARTBEAT_TIMEOUT:
+                print(f"[agent] pong timeout ({elapsed:.0f}s), closing tunnel")
+                self._watchdog_triggered = True
+                await self.ws.close()
+                break
 
     # --- Reconnection ---
 
