@@ -112,6 +112,14 @@ def test_build_update_zip_no_env_no_start():
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh)")
 
 
+def test_runtime_dockerfile_copies_scheduler_files():
+    repo_root = Path(__file__).resolve().parent.parent
+    dockerfile = (repo_root / "Dockerfile").read_text()
+    assert "COPY unchained/scheduler_tool.py ." in dockerfile
+    assert "COPY unchained/scheduler_agent.py ." in dockerfile
+    print("  Dockerfile copies scheduler runtime files")
+
+
 def test_generate_public_install_script():
     from agent_package import _generate_public_install_script
     script = _generate_public_install_script(base_url="https://api.unchainedsky.com")
