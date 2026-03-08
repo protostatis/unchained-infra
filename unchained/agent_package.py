@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.33"
+VERSION = "0.3.34"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -431,13 +431,14 @@ fi
 # Activate venv so Claude's Bash tool finds the right python
 source .venv/bin/activate
 
-# launchd starts with a minimal PATH; add common local CLI locations.
-export PATH="$HOME/.local/bin:$PATH"
-if [ -z "${CLAUDE_BIN:-}" ] && [ -x "$HOME/.local/bin/claude" ]; then
-  export CLAUDE_BIN="$HOME/.local/bin/claude"
+# launchd starts with a minimal PATH; add common CLI locations, but keep
+# Homebrew/system installs ahead of ~/.local/bin so stale local shims do not win.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
+if [ -z "${CLAUDE_BIN:-}" ] && command -v claude >/dev/null 2>&1; then
+  export CLAUDE_BIN="$(command -v claude)"
 fi
-if [ -z "${CODEX_BIN:-}" ] && [ -x "$HOME/.local/bin/codex" ]; then
-  export CODEX_BIN="$HOME/.local/bin/codex"
+if [ -z "${CODEX_BIN:-}" ] && command -v codex >/dev/null 2>&1; then
+  export CODEX_BIN="$(command -v codex)"
 fi
 
 # Derive agent_id from API key (same hash as chat_agent_cli.py)

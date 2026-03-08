@@ -66,11 +66,15 @@ def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
     discovered = shutil.which(default_name)
     if discovered:
         return discovered
-    # launchd often starts the agent with a stripped PATH, so a bare `claude`
-    # lookup can fail even when the CLI is installed in ~/.local/bin.
-    fallback = os.path.expanduser(f"~/.local/bin/{default_name}")
-    if os.path.isfile(fallback):
-        return fallback
+    fallback_dirs: list[str] = []
+    if sys.platform == "darwin":
+        # launchd often starts the agent with a stripped PATH on macOS.
+        fallback_dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"])
+    fallback_dirs.append(os.path.expanduser("~/.local/bin"))
+    for fallback_dir in fallback_dirs:
+        fallback = os.path.join(fallback_dir, default_name)
+        if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+            return fallback
     return default_name
 
 

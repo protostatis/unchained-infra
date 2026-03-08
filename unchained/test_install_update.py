@@ -5,14 +5,18 @@ and chat_agent_cli.py version checking.
 """
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
+import types
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -70,8 +74,10 @@ def test_build_agent_zip_contains_version_and_update():
         assert "<key>KeepAlive</key>" in start_sh
         assert "<true/>" in start_sh
         assert "<string>--daemon</string>" not in start_sh
-        assert 'export PATH="$HOME/.local/bin:$PATH"' in start_sh
-        assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' in start_sh
+        assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"' in start_sh
+        assert 'command -v claude >/dev/null 2>&1' in start_sh
+        assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
+        assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' not in start_sh
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "/web/install/claim/start" in start_ps1
         assert "/web/install/claim/poll" in start_ps1
@@ -120,6 +126,39 @@ def test_runtime_dockerfile_copies_scheduler_files():
     assert "COPY unchained/scheduler_tool.py ." in dockerfile
     assert "COPY unchained/scheduler_agent.py ." in dockerfile
     print("  Dockerfile copies scheduler runtime files")
+
+
+def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
+    available = {
+        "/opt/homebrew/bin/claude": True,
+        "/Users/test/.local/bin/claude": True,
+    }
+
+    source_path = Path(__file__).resolve().parent / "chat_agent_cli.py"
+    module_ast = ast.parse(source_path.read_text())
+    resolver_node = next(
+        node for node in module_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_local_cli_binary"
+    )
+    resolver_module = ast.Module(body=[resolver_node], type_ignores=[])
+    namespace = {"os": os, "shutil": shutil, "sys": types.SimpleNamespace(platform="darwin")}
+    exec(compile(resolver_module, str(source_path), "exec"), namespace)
+
+    with mock.patch.dict(os.environ, {"CLAUDE_BIN": ""}, clear=False):
+        with mock.patch.object(shutil, "which", return_value=None):
+            with mock.patch.object(os.path, "expanduser", return_value="/Users/test/.local/bin"):
+                with mock.patch.object(
+                    os.path,
+                    "isfile",
+                    side_effect=lambda path: available.get(path, False),
+                ):
+                    with mock.patch.object(
+                        os,
+                        "access",
+                        side_effect=lambda path, mode: available.get(path, False),
+                    ):
+                        resolved = namespace["_resolve_local_cli_binary"]("CLAUDE_BIN", "claude")
+    assert resolved == "/opt/homebrew/bin/claude"
 
 
 def test_generate_public_install_script():
