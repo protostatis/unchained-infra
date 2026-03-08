@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.35"
+VERSION = "0.3.36"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -1140,6 +1140,8 @@ cp -f unchained-agent/CLAUDE.md "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/version.txt "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/requirements.txt "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/update.sh "$AGENT_DIR/" 2>/dev/null || true
+cp -f unchained-agent/stop.sh "$AGENT_DIR/" 2>/dev/null || true
+chmod +x "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh" 2>/dev/null || true
 # Copy scheduled_jobs.json only if it doesn't exist (don't overwrite user edits)
 if [ ! -f "$AGENT_DIR/scheduled_jobs.json" ]; then
   cp -f unchained-agent/scheduled_jobs.json "$AGENT_DIR/" 2>/dev/null || true
@@ -1235,7 +1237,7 @@ try {
 
   New-Item -ItemType Directory -Path ".\unchained" -Force | Out-Null
   Copy-Item -Path (Join-Path $srcRoot "unchained\*.py") -Destination ".\unchained" -Force -ErrorAction SilentlyContinue
-  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat")) {
+  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat", "stop.sh")) {
     $src = Join-Path $srcRoot $name
     if (Test-Path $src) {
       Copy-Item -Path $src -Destination ".\" -Force
@@ -1985,7 +1987,7 @@ def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> b
 
 
 def build_update_zip() -> bytes:
-    """Build a code-only update ZIP (no .env, no start.sh, no venv).
+    """Build an update ZIP (no .env, no start.sh, no venv).
 
     Returns the ZIP as bytes, ready to be served as a download.
     """
@@ -2005,6 +2007,11 @@ def build_update_zip() -> bytes:
         zf.writestr(info, _UPDATE_SH)
         zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
         zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
+
+        # stop.sh (executable) so installed agents pick up stop/autostart fixes.
+        info = zipfile.ZipInfo("unchained-agent/stop.sh")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, _STOP_SH)
 
         # CLAUDE.md
         claude_md_path = os.path.join(src_dir, "CLAUDE.md")
