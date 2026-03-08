@@ -514,6 +514,7 @@ def _run_self_update_helper():
     helper_pid = os.getpid()
     log.info("[self-update] helper starting (root=%s mode=%s)", agent_root, run_hint)
     time.sleep(1.0)
+    before_version = _local_version()
 
     if os.name == "nt":
         update_cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "update.ps1"]
@@ -523,6 +524,10 @@ def _run_self_update_helper():
     if rc != 0:
         log.error("[self-update] update command failed with exit code %s", rc)
         raise SystemExit(rc)
+    after_version = _local_version()
+    if before_version and after_version and before_version == after_version:
+        log.info("[self-update] local version unchanged at %s; skipping restart", after_version)
+        return
 
     if os.name == "nt":
         _terminate_windows_runtime(helper_pid)

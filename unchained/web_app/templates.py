@@ -3616,7 +3616,7 @@ function updateClientUpdateUI(data) {
     return;
   }
   if (outdated) btn.classList.add('warn');
-  btn.disabled = !clientConnected || !updateSupported;
+  btn.disabled = !clientConnected || !updateSupported || !outdated;
   if (!clientConnected) {
     btn.textContent = 'Client offline';
     note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
@@ -3765,7 +3765,7 @@ async function checkAgentStatus() {
       const data = await r.json();
       if (clientUpdateInFlight) {
         if (!data.client_connected) clientUpdateSawDisconnect = true;
-        else if (clientUpdateSawDisconnect) {
+        else if (clientUpdateSawDisconnect || !data.client_outdated) {
           clientUpdateInFlight = false;
           clientUpdateSawDisconnect = false;
           clientUpdateError = '';
@@ -7145,7 +7145,7 @@ function updateClientUpdateUI(data) {
     return;
   }
   if (outdated) btn.classList.add('warn');
-  btn.disabled = !clientConnected || !updateSupported;
+  btn.disabled = !clientConnected || !updateSupported || !outdated;
   if (!clientConnected) {
     btn.textContent = 'Client offline';
     note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
@@ -7198,7 +7198,7 @@ function updateAgentStatusUI(data) {
   const codexCliSupported = data.codex_cli_supported !== false;
   if (clientUpdateInFlight) {
     if (!data.client_connected) clientUpdateSawDisconnect = true;
-    else if (clientUpdateSawDisconnect) {
+    else if (clientUpdateSawDisconnect || !data.client_outdated) {
       clientUpdateInFlight = false;
       clientUpdateSawDisconnect = false;
       clientUpdateError = '';
@@ -8586,7 +8586,7 @@ function updateInstallClientUpdateUI(data) {
     return;
   }
   if (outdated) btn.classList.add('warn');
-  btn.disabled = !clientConnected || !updateSupported;
+  btn.disabled = !clientConnected || !updateSupported || !outdated;
   if (!clientConnected) {
     btn.textContent = 'Client offline';
     note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
@@ -8628,7 +8628,7 @@ function updateInstallAgentStatusUI(data) {
   const mismatch = !!data.mismatch;
   if (installClientUpdateInFlight) {
     if (!data.client_connected) installClientUpdateSawDisconnect = true;
-    else if (installClientUpdateSawDisconnect) {
+    else if (installClientUpdateSawDisconnect || !data.client_outdated) {
       installClientUpdateInFlight = false;
       installClientUpdateSawDisconnect = false;
       installClientUpdateError = '';
@@ -9290,7 +9290,7 @@ function updateSetupClientUpdateUI(data) {
     return;
   }
   if (outdated) btn.classList.add('warn');
-  btn.disabled = !clientConnected || !updateSupported;
+  btn.disabled = !clientConnected || !updateSupported || !outdated;
   if (!clientConnected) {
     btn.textContent = 'Client offline';
     note.textContent = localVersion ? ('Last seen v' + localVersion) : '';
@@ -9340,7 +9340,7 @@ function updateSetupAgentStatusUI(data) {
   const mismatch = !!data.mismatch;
   if (setupClientUpdateInFlight) {
     if (!data.client_connected) setupClientUpdateSawDisconnect = true;
-    else if (setupClientUpdateSawDisconnect) {
+    else if (setupClientUpdateSawDisconnect || !data.client_outdated) {
       setupClientUpdateInFlight = false;
       setupClientUpdateSawDisconnect = false;
       setupClientUpdateError = '';

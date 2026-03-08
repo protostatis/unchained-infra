@@ -153,6 +153,40 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
+            "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
+            "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
+            web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.SETUP_HTML,
+        )
+        self.assertIn(
+            "else if (setupClientUpdateSawDisconnect || !data.client_outdated) {",
+            web.SETUP_HTML,
+        )
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.INSTALL_ONBOARD_HTML,
+        )
+        self.assertIn(
+            "else if (installClientUpdateSawDisconnect || !data.client_outdated) {",
+            web.INSTALL_ONBOARD_HTML,
+        )
+
     def test_trial_auth_session_handshake_contract(self):
         trial = web.TRIAL_CHAT_HTML
         self.assertIn(

@@ -300,6 +300,16 @@ async def handle_chat_update_client(request: web.Request) -> web.Response:
             },
             status=409,
         )
+    version_status = _client_version_status(caps)
+    if not bool(version_status.get("client_outdated")):
+        return web.json_response(
+            {
+                "error": "Your local client is already current.",
+                "client_version": str(version_status.get("client_version") or "").strip(),
+                "server_version": str(version_status.get("server_version") or "").strip(),
+            },
+            status=409,
+        )
 
     resp = await agent_request(agent_id, {"type": "update_client"}, timeout=4)
     if not resp:

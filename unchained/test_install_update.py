@@ -451,6 +451,32 @@ def test_parse_version():
     print(f"  All version comparisons correct")
 
 
+def test_self_update_helper_skips_restart_when_version_unchanged():
+    import chat_agent_cli
+
+    with mock.patch.object(chat_agent_cli, "_agent_root", return_value="/tmp/unchained-agent"):
+        with mock.patch.object(chat_agent_cli, "_local_version", side_effect=["0.3.38", "0.3.38"]):
+            with mock.patch.object(chat_agent_cli, "_run_logged", return_value=0):
+                with mock.patch.object(chat_agent_cli.time, "sleep", return_value=None):
+                    with mock.patch.object(chat_agent_cli.os, "kill") as mock_kill:
+                        with mock.patch.object(chat_agent_cli.subprocess, "run") as mock_run:
+                            with mock.patch.object(chat_agent_cli.subprocess, "Popen") as mock_popen:
+                                with mock.patch.dict(
+                                    chat_agent_cli.os.environ,
+                                    {
+                                        "UNCHAINED_AGENT_ROOT": "/tmp/unchained-agent",
+                                        "UNCHAINED_UPDATE_RUN_HINT": "manual",
+                                        "UNCHAINED_UPDATE_TRIGGER_PID": "12345",
+                                    },
+                                    clear=False,
+                                ):
+                                    chat_agent_cli._run_self_update_helper()
+    mock_kill.assert_not_called()
+    mock_run.assert_not_called()
+    mock_popen.assert_not_called()
+    print("  Self-update helper skips restart when version is unchanged")
+
+
 # ── web.py endpoint handler tests (unit-level) ──────────────────────
 
 def test_web_imports():

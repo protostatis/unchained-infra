@@ -111,6 +111,58 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["client_outdated"])
         self.assertFalse(data["client_update_required"])
 
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_update_client_rejects_current_client(self, mock_auth, mock_agent_request):
+        from agent_package import VERSION
+        from web_app.handlers.chat_flow import handle_chat_update_client
+
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-current",
+            "key_hash": "current",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agents["claude-current"] = SimpleNamespace(closed=False)
+        web._chat_agent_caps["claude-current"] = {
+            "client_version": VERSION,
+            "remote_update": True,
+        }
+
+        response = await handle_chat_update_client(SimpleNamespace())
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertIn("already current", data["error"].lower())
+        mock_agent_request.assert_not_awaited()
+
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_update_client_allows_outdated_client(self, mock_auth, mock_agent_request):
+        from web_app.handlers.chat_flow import handle_chat_update_client
+
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-outdated",
+            "key_hash": "outdated",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agents["claude-outdated"] = SimpleNamespace(closed=False)
+        web._chat_agent_caps["claude-outdated"] = {
+            "client_version": "0.3.37",
+            "remote_update": True,
+        }
+        mock_agent_request.return_value = {"type": "update_client_ok", "status": "updating"}
+
+        response = await handle_chat_update_client(SimpleNamespace())
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["ok"])
+        mock_agent_request.assert_awaited_once()
+
 
 class TestLocalChatTemplate(unittest.TestCase):
     """Protect local-chat status markers in the exported HTML."""
@@ -121,6 +173,16 @@ class TestLocalChatTemplate(unittest.TestCase):
         self.assertIn('id="banner-detail"', web.CLAUDE_CHAT_HTML)
         self.assertIn('id="client-update-btn"', web.CLAUDE_CHAT_HTML)
         self.assertIn("Browser bridge and chat agent are tracked separately.", web.CLAUDE_CHAT_HTML)
+
+    def test_local_chat_update_button_only_enables_when_outdated(self):
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
+            "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
+            web.CLAUDE_CHAT_HTML,
+        )
 
 
 if __name__ == "__main__":
