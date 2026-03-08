@@ -155,6 +155,26 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
+            "CLIENT_UPDATE_TIMEOUT_MS = 90000",
+            web.CHAT_GEMINI_HTML,
+        )
+        self.assertIn(
+            "btn.disabled = !clientConnected || !updateSupported || !outdated;",
+            web.CHAT_GEMINI_HTML,
+        )
+        self.assertIn(
+            "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
+            web.CHAT_GEMINI_HTML,
+        )
+        self.assertIn(
+            "Update timed out. Check the local client logs and retry.",
+            web.CHAT_GEMINI_HTML,
+        )
+        self.assertIn(
+            "CLIENT_UPDATE_TIMEOUT_MS = 90000",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
             "btn.disabled = !clientConnected || !updateSupported || !outdated;",
             web.CLAUDE_CHAT_HTML,
         )
@@ -163,12 +183,28 @@ class TestWebTemplateContracts(unittest.TestCase):
             web.CLAUDE_CHAT_HTML,
         )
         self.assertIn(
+            "Update timed out. Check the local client logs and retry.",
+            web.CLAUDE_CHAT_HTML,
+        )
+        self.assertIn(
+            "CLIENT_UPDATE_TIMEOUT_MS = 90000",
+            web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
             "btn.disabled = !clientConnected || !updateSupported || !outdated;",
             web.CHAT_CODEX_HTML,
         )
         self.assertIn(
             "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
             web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
+            "Update timed out. Check the local client logs and retry.",
+            web.CHAT_CODEX_HTML,
+        )
+        self.assertIn(
+            "SETUP_CLIENT_UPDATE_TIMEOUT_MS = 90000",
+            web.SETUP_HTML,
         )
         self.assertIn(
             "btn.disabled = !clientConnected || !updateSupported || !outdated;",
@@ -179,11 +215,23 @@ class TestWebTemplateContracts(unittest.TestCase):
             web.SETUP_HTML,
         )
         self.assertIn(
+            "Update timed out. Check the local client logs and retry.",
+            web.SETUP_HTML,
+        )
+        self.assertIn(
+            "INSTALL_CLIENT_UPDATE_TIMEOUT_MS = 90000",
+            web.INSTALL_ONBOARD_HTML,
+        )
+        self.assertIn(
             "btn.disabled = !clientConnected || !updateSupported || !outdated;",
             web.INSTALL_ONBOARD_HTML,
         )
         self.assertIn(
             "else if (installClientUpdateSawDisconnect || !data.client_outdated) {",
+            web.INSTALL_ONBOARD_HTML,
+        )
+        self.assertIn(
+            "Update timed out. Check the local client logs and retry.",
             web.INSTALL_ONBOARD_HTML,
         )
 

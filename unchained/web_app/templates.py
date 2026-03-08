@@ -3473,6 +3473,8 @@ let selectedProfilePath = '';
 let clientUpdateInFlight = false;
 let clientUpdateSawDisconnect = false;
 let clientUpdateError = '';
+const CLIENT_UPDATE_TIMEOUT_MS = 90000;
+let clientUpdateStartedAt = 0;
 let lastClientStatus = null;
 
 async function handleGoogleCredential(response) {
@@ -3638,6 +3640,7 @@ async function triggerClientUpdate() {
   clientUpdateError = '';
   clientUpdateInFlight = true;
   clientUpdateSawDisconnect = false;
+  clientUpdateStartedAt = Date.now();
   updateClientUpdateUI(lastClientStatus || {});
   try {
     const r = await fetch('/web/chat/update-client', {method: 'POST'});
@@ -3647,6 +3650,7 @@ async function triggerClientUpdate() {
   } catch(e) {
     clientUpdateInFlight = false;
     clientUpdateSawDisconnect = false;
+    clientUpdateStartedAt = 0;
     clientUpdateError = e.message || 'Update failed';
     updateClientUpdateUI(lastClientStatus || {});
   }
@@ -3768,7 +3772,13 @@ async function checkAgentStatus() {
         else if (clientUpdateSawDisconnect || !data.client_outdated) {
           clientUpdateInFlight = false;
           clientUpdateSawDisconnect = false;
+          clientUpdateStartedAt = 0;
           clientUpdateError = '';
+        } else if (clientUpdateStartedAt && (Date.now() - clientUpdateStartedAt) >= CLIENT_UPDATE_TIMEOUT_MS) {
+          clientUpdateInFlight = false;
+          clientUpdateSawDisconnect = false;
+          clientUpdateStartedAt = 0;
+          clientUpdateError = 'Update timed out. Check the local client logs and retry.';
         }
       }
       lastClientStatus = data;
@@ -7118,6 +7128,8 @@ let lastCodexCliSupported = true;
 let clientUpdateInFlight = false;
 let clientUpdateSawDisconnect = false;
 let clientUpdateError = '';
+const CLIENT_UPDATE_TIMEOUT_MS = 90000;
+let clientUpdateStartedAt = 0;
 let lastClientStatus = null;
 
 function updateStatusPill(el, text, mode) {
@@ -7168,6 +7180,7 @@ async function triggerClientUpdate() {
   clientUpdateError = '';
   clientUpdateInFlight = true;
   clientUpdateSawDisconnect = false;
+  clientUpdateStartedAt = Date.now();
   updateClientUpdateUI(lastClientStatus || {});
   try {
     const r = await fetch('/web/chat/update-client', {method: 'POST'});
@@ -7177,6 +7190,7 @@ async function triggerClientUpdate() {
   } catch(e) {
     clientUpdateInFlight = false;
     clientUpdateSawDisconnect = false;
+    clientUpdateStartedAt = 0;
     clientUpdateError = e.message || 'Update failed';
     updateClientUpdateUI(lastClientStatus || {});
   }
@@ -7201,7 +7215,13 @@ function updateAgentStatusUI(data) {
     else if (clientUpdateSawDisconnect || !data.client_outdated) {
       clientUpdateInFlight = false;
       clientUpdateSawDisconnect = false;
+      clientUpdateStartedAt = 0;
       clientUpdateError = '';
+    } else if (clientUpdateStartedAt && (Date.now() - clientUpdateStartedAt) >= CLIENT_UPDATE_TIMEOUT_MS) {
+      clientUpdateInFlight = false;
+      clientUpdateSawDisconnect = false;
+      clientUpdateStartedAt = 0;
+      clientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
   lastClientStatus = data;
@@ -8532,6 +8552,8 @@ let _installStatusTimer = null;
 let installClientUpdateInFlight = false;
 let installClientUpdateSawDisconnect = false;
 let installClientUpdateError = '';
+const INSTALL_CLIENT_UPDATE_TIMEOUT_MS = 90000;
+let installClientUpdateStartedAt = 0;
 let lastInstallClientStatus = null;
 
 function _detectInstallOs() {
@@ -8608,6 +8630,7 @@ async function triggerInstallClientUpdate() {
   installClientUpdateError = '';
   installClientUpdateInFlight = true;
   installClientUpdateSawDisconnect = false;
+  installClientUpdateStartedAt = Date.now();
   updateInstallClientUpdateUI(lastInstallClientStatus || {});
   try {
     const r = await fetch('/web/chat/update-client', {method: 'POST'});
@@ -8617,6 +8640,7 @@ async function triggerInstallClientUpdate() {
   } catch(e) {
     installClientUpdateInFlight = false;
     installClientUpdateSawDisconnect = false;
+    installClientUpdateStartedAt = 0;
     installClientUpdateError = e.message || 'Update failed';
     updateInstallClientUpdateUI(lastInstallClientStatus || {});
   }
@@ -8631,7 +8655,13 @@ function updateInstallAgentStatusUI(data) {
     else if (installClientUpdateSawDisconnect || !data.client_outdated) {
       installClientUpdateInFlight = false;
       installClientUpdateSawDisconnect = false;
+      installClientUpdateStartedAt = 0;
       installClientUpdateError = '';
+    } else if (installClientUpdateStartedAt && (Date.now() - installClientUpdateStartedAt) >= INSTALL_CLIENT_UPDATE_TIMEOUT_MS) {
+      installClientUpdateInFlight = false;
+      installClientUpdateSawDisconnect = false;
+      installClientUpdateStartedAt = 0;
+      installClientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
   lastInstallClientStatus = data;
@@ -9254,6 +9284,8 @@ let statusPollTimer = null;
 let setupClientUpdateInFlight = false;
 let setupClientUpdateSawDisconnect = false;
 let setupClientUpdateError = '';
+const SETUP_CLIENT_UPDATE_TIMEOUT_MS = 90000;
+let setupClientUpdateStartedAt = 0;
 let lastSetupClientStatus = null;
 
 function _normalizeLocalUrl(raw) {
@@ -9312,6 +9344,7 @@ async function triggerSetupClientUpdate() {
   setupClientUpdateError = '';
   setupClientUpdateInFlight = true;
   setupClientUpdateSawDisconnect = false;
+  setupClientUpdateStartedAt = Date.now();
   updateSetupClientUpdateUI(lastSetupClientStatus || {});
   try {
     const r = await fetch('/web/chat/update-client', {method: 'POST'});
@@ -9321,6 +9354,7 @@ async function triggerSetupClientUpdate() {
   } catch(e) {
     setupClientUpdateInFlight = false;
     setupClientUpdateSawDisconnect = false;
+    setupClientUpdateStartedAt = 0;
     setupClientUpdateError = e.message || 'Update failed';
     updateSetupClientUpdateUI(lastSetupClientStatus || {});
   }
@@ -9343,7 +9377,13 @@ function updateSetupAgentStatusUI(data) {
     else if (setupClientUpdateSawDisconnect || !data.client_outdated) {
       setupClientUpdateInFlight = false;
       setupClientUpdateSawDisconnect = false;
+      setupClientUpdateStartedAt = 0;
       setupClientUpdateError = '';
+    } else if (setupClientUpdateStartedAt && (Date.now() - setupClientUpdateStartedAt) >= SETUP_CLIENT_UPDATE_TIMEOUT_MS) {
+      setupClientUpdateInFlight = false;
+      setupClientUpdateSawDisconnect = false;
+      setupClientUpdateStartedAt = 0;
+      setupClientUpdateError = 'Update timed out. Check the local client logs and retry.';
     }
   }
   lastSetupClientStatus = data;
