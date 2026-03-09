@@ -142,6 +142,10 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertEqual(step_counts["login_page_view"], 1)
             self.assertEqual(step_counts["login_gate_visible"], 1)
             self.assertEqual(step_counts["auth_google_attempt"], 1)
+            self.assertEqual(
+                summary["gate_exposures_by_route"],
+                [{"route": "/local", "count": 1}],
+            )
 
     def test_install_funnel_report(self):
         with tempfile.TemporaryDirectory() as td:

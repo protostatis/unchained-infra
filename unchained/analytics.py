@@ -656,7 +656,7 @@ class AnalyticsStore:
             if event == "cta_click" and cta_id:
                 top_cta_clicks[cta_id] = top_cta_clicks.get(cta_id, 0) + 1
 
-            if event in {"login_gate_visible", "gate_shown"}:
+            if step == "login_gate_visible":
                 route_key = route or "unknown"
                 gate_seen_by_route[route_key] = gate_seen_by_route.get(route_key, 0) + 1
 
