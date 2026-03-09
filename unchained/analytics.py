@@ -166,8 +166,8 @@ class AnalyticsStore:
         },
         "chat_activation": {
             "steps": [
-                "auth_google_success",
                 "local_or_chat_page_view",
+                "auth_google_success",
                 "chat_message_send",
             ],
         },
@@ -542,6 +542,9 @@ class AnalyticsStore:
         if funnel == "auth_inline_gsi":
             if event == "page_view" and route in LOGIN_ROUTES:
                 return "login_page_view"
+            if event == "gsi_iframe_loaded":
+                if route in AUTH_INLINE_GSI_ROUTES or gate_type in {"inline_gsi", "gsi"}:
+                    return "login_gate_visible"
             if event in {"login_gate_visible", "gate_shown"}:
                 if gate_type in {"", "inline_gsi", "inline", "gsi"} or route in AUTH_INLINE_GSI_ROUTES:
                     return "login_gate_visible"

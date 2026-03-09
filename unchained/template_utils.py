@@ -10,6 +10,10 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 (function(){
   var ROUTE = window.location.pathname || '';
   var STORAGE_KEY = 'uc_analytics_session_id';
+  var SESSION_HEADER = 'X-Unchained-Analytics-Session';
+  var PAGE_VIEW_HEADER = 'X-Unchained-Analytics-Page-View';
+  var ROUTE_HEADER = 'X-Unchained-Analytics-Route';
+  var GATE_HEADER = 'X-Unchained-Analytics-Gate-Type';
   var EVENT_SEQ = 0;
   var queue = [];
   var flushTimer = null;
@@ -39,6 +43,11 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 
   var sessionId = getSessionId();
   var pageViewId = 'pv-' + Date.now().toString(36) + '-' + randHex(8);
+  window.__ucAnalytics = {
+    sessionId: sessionId,
+    pageViewId: pageViewId,
+    route: ROUTE
+  };
 
   function inferGateType(){
     var login = document.getElementById('login');
@@ -58,7 +67,7 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
   function detectCta(ev){
     var t = ev && ev.target;
     if(!t) return '';
-    var node = t.closest ? t.closest('a,button,[role=button],div,input[type=button],input[type=submit]') : t;
+    var node = t.closest ? t.closest('a,button,[role=button],input[type=button],input[type=submit]') : t;
     if(!node) return '';
     if(node.dataset && node.dataset.analyticsCta) return String(node.dataset.analyticsCta || '').trim();
 
@@ -83,6 +92,50 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
     if(href === '/install') return 'open_install_page';
     if(href === '/trial') return 'open_trial_page';
     return id ? ('id_' + id) : '';
+  }
+
+  function analyticsHeaders(existing){
+    var headers = new Headers(existing || {});
+    headers.set(SESSION_HEADER, sessionId);
+    headers.set(PAGE_VIEW_HEADER, pageViewId);
+    headers.set(ROUTE_HEADER, ROUTE);
+    headers.set(GATE_HEADER, inferGateType());
+    return headers;
+  }
+
+  function normalizeFetchUrl(input){
+    try{
+      if(typeof Request !== 'undefined' && input instanceof Request){
+        return new URL(String(input.url || ''), window.location.origin);
+      }
+      return new URL(String(input || ''), window.location.origin);
+    }catch(_e){
+      return null;
+    }
+  }
+
+  function shouldAttachAnalytics(urlObj){
+    if(!urlObj) return false;
+    if(urlObj.origin !== window.location.origin) return false;
+    return urlObj.pathname.indexOf('/web/') === 0 || urlObj.pathname.indexOf('/auth/') === 0;
+  }
+
+  if(window.fetch){
+    var originalFetch = window.fetch.bind(window);
+    window.fetch = function(input, init){
+      var urlObj = normalizeFetchUrl(input);
+      if(!shouldAttachAnalytics(urlObj)){
+        return originalFetch(input, init);
+      }
+      if(typeof Request !== 'undefined' && input instanceof Request){
+        var requestInit = init ? Object.assign({}, init) : {};
+        requestInit.headers = analyticsHeaders(requestInit.headers || input.headers);
+        return originalFetch(new Request(input, requestInit));
+      }
+      var nextInit = init ? Object.assign({}, init) : {};
+      nextInit.headers = analyticsHeaders(nextInit.headers);
+      return originalFetch(input, nextInit);
+    };
   }
 
   function makeEvent(eventName, opts){
@@ -168,26 +221,59 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
   }
 
   function maybeTrackGate(){
-    if(gateShown) return;
     var gateType = inferGateType();
-    if(gateType === 'none') return;
+    if(gateType === 'none') return false;
+    if(gateShown) return true;
     gateShown = true;
     postEvent('gate_shown', {gate_type: gateType, meta: {gate_type: gateType}});
     if(gateType === 'inline_gsi' || gateType === 'inline_gate'){
       postEvent('login_gate_visible', {gate_type: gateType, meta: {gate_type: gateType}});
     }
+    return true;
   }
 
   function maybeTrackGsiIframe(){
-    if(gsiIframeSeen) return;
+    if(gsiIframeSeen) return true;
     var iframes = document.querySelectorAll('iframe');
     for(var i = 0; i < iframes.length; i++){
       var src = (iframes[i].getAttribute('src') || '').toLowerCase();
       if(src.indexOf('accounts.google.com') !== -1 || src.indexOf('gsi') !== -1){
         gsiIframeSeen = true;
         postEvent('gsi_iframe_loaded', {gate_type: 'inline_gsi'});
-        return;
+        return true;
       }
+    }
+    return false;
+  }
+
+  function startAnalyticsObservers(){
+    var observer = null;
+    var polls = 0;
+    var timer = setInterval(function(){
+      polls += 1;
+      maybeTrackGate();
+      maybeTrackGsiIframe();
+      if((gateShown && gsiIframeSeen) || polls >= 30){
+        clearInterval(timer);
+        if(observer) observer.disconnect();
+      }
+    }, 400);
+
+    if(window.MutationObserver && document.documentElement){
+      observer = new MutationObserver(function(){
+        maybeTrackGate();
+        maybeTrackGsiIframe();
+        watchWarnings();
+        if(gateShown && gsiIframeSeen){
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden']
+      });
     }
   }
 
@@ -243,13 +329,7 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
   function init(){
     setTimeout(maybeTrackGate, 300);
     setTimeout(maybeTrackGate, 1200);
-    var gsiPoll = 0;
-    var gsiTimer = setInterval(function(){
-      gsiPoll += 1;
-      maybeTrackGsiIframe();
-      if(gsiIframeSeen || gsiPoll >= 12) clearInterval(gsiTimer);
-    }, 350);
-
+    startAnalyticsObservers();
     bindClicks();
     setInterval(watchWarnings, 1800);
     setTimeout(watchWarnings, 1400);

@@ -304,14 +304,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     scheduler_grant_id = ""
     if scheduler_armed:
         scheduler_grant_id = core._mint_scheduler_turn_grant(auth_info.get("user_id", ""), session_id)
+    analytics_route = core._analytics_route_from_request(request) or request.path
 
     core._track_event(
         request,
         "chat_message_send",
-        session_id=session_id,
+        session_id=core._analytics_session_id_from_request(request) or session_id,
+        page_view_id=core._analytics_page_view_id_from_request(request),
         route="/web/chat",
-        route_intended=body.get("route_intended", request.path),
-        route_effective=body.get("route_effective", request.path),
+        route_intended=body.get("route_intended", analytics_route),
+        route_effective=body.get("route_effective", analytics_route),
         user_id=auth_info.get("user_id", ""),
         user_type=auth_info.get("user_type", ""),
         source="web",
@@ -319,6 +321,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "model": model or "",
             "headless": bool(body.get("headless", False)),
             "scheduler_armed": scheduler_armed,
+            "chat_session_id": session_id,
         },
         status_code=200,
     )
