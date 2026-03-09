@@ -166,8 +166,8 @@ class AnalyticsStore:
         },
         "chat_activation": {
             "steps": [
-                "auth_google_success",
                 "local_or_chat_page_view",
+                "auth_google_success",
                 "chat_message_send",
             ],
         },
@@ -498,14 +498,14 @@ class AnalyticsStore:
 
     def _load_window_rows(self, since_ts: float) -> list[dict]:
         query = (
-            "SELECT visitor_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, "
+            "SELECT visitor_id, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, "
             "source, status_code, latency_ms, ts, meta_json "
             "FROM analytics_events WHERE ts >= ? ORDER BY ts ASC"
         )
         with self._conn_ctx() as conn:
             rows = conn.execute(query, (since_ts,)).fetchall()
         out: list[dict] = []
-        for visitor_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, source, status_code, latency_ms, ts, meta_json in rows:
+        for visitor_id, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, source, status_code, latency_ms, ts, meta_json in rows:
             payload: dict
             try:
                 payload = json.loads(meta_json or "{}")
@@ -516,6 +516,8 @@ class AnalyticsStore:
             out.append(
                 {
                     "visitor_id": visitor_id or "",
+                    "session_id": session_id or "",
+                    "page_view_id": page_view_id or "",
                     "event": event or "",
                     "route": route or "",
                     "route_intended": route_intended or "",
@@ -532,6 +534,17 @@ class AnalyticsStore:
             )
         return out
 
+    def _gate_exposure_key(self, row: dict) -> tuple[str, str]:
+        route = row["route_effective"] or row["route"] or "unknown"
+        page_view_id = str(row.get("page_view_id", "") or "").strip()
+        if page_view_id:
+            return route, f"page:{page_view_id}"
+        session_id = str(row.get("session_id", "") or "").strip()
+        visitor_id = str(row.get("visitor_id", "") or "").strip()
+        if session_id:
+            return route, f"session:{session_id}:{route}"
+        return route, f"visitor:{visitor_id}:{route}"
+
     def _step_for_event(self, funnel: str, row: dict) -> str:
         event = row["event"]
         route = row["route_effective"] or row["route"]
@@ -542,6 +555,9 @@ class AnalyticsStore:
         if funnel == "auth_inline_gsi":
             if event == "page_view" and route in LOGIN_ROUTES:
                 return "login_page_view"
+            if event == "gsi_iframe_loaded":
+                if route in AUTH_INLINE_GSI_ROUTES or gate_type in {"inline_gsi", "gsi"}:
+                    return "login_gate_visible"
             if event in {"login_gate_visible", "gate_shown"}:
                 if gate_type in {"", "inline_gsi", "inline", "gsi"} or route in AUTH_INLINE_GSI_ROUTES:
                     return "login_gate_visible"
@@ -634,6 +650,7 @@ class AnalyticsStore:
         signup_by_source: dict[str, int] = {}
         top_cta_clicks: dict[str, int] = {}
         gate_seen_by_route: dict[str, int] = {}
+        gate_seen_keys: set[tuple[str, str]] = set()
         redirects_by_target: dict[str, int] = {}
         total_latency = 0
         latency_count = 0
@@ -653,9 +670,12 @@ class AnalyticsStore:
             if event == "cta_click" and cta_id:
                 top_cta_clicks[cta_id] = top_cta_clicks.get(cta_id, 0) + 1
 
-            if event in {"login_gate_visible", "gate_shown"}:
-                route_key = route or "unknown"
-                gate_seen_by_route[route_key] = gate_seen_by_route.get(route_key, 0) + 1
+            if step == "login_gate_visible":
+                route_key, exposure_key = self._gate_exposure_key(row)
+                dedupe_key = (route_key, exposure_key)
+                if dedupe_key not in gate_seen_keys:
+                    gate_seen_keys.add(dedupe_key)
+                    gate_seen_by_route[route_key] = gate_seen_by_route.get(route_key, 0) + 1
 
             if event == "route_redirect":
                 target = row["route_effective"] or str(meta.get("to", "")).strip() or "unknown"

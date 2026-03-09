@@ -7,6 +7,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+import os
 from unittest.mock import patch
 
 from analytics import AnalyticsStore
@@ -124,6 +125,31 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertEqual(summary["signups_by_source"][0]["source"], "trial")
             self.assertEqual(summary["signups_by_source"][0]["count"], 1)
 
+    def test_login_funnel_treats_gsi_iframe_as_gate_visible(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            now = time.time()
+            req = _req("/local", "10.0.0.7")
+            page_view_id = "pv-local-1"
+
+            store.track("page_view", request=req, route="/local", page_view_id=page_view_id, now=now - 10)
+            store.track("gate_shown", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9.5)
+            store.track("login_gate_visible", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9.25)
+            store.track("gsi_iframe_loaded", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9)
+            store.track("google_signin_click", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 8)
+            store.track("auth_google_attempt", request=req, route="/local", source="claude", now=now - 7)
+
+            summary = store.login_funnel(days=7)
+            step_counts = {row["step"]: row["visitors"] for row in summary["steps"]}
+            self.assertEqual(step_counts["login_page_view"], 1)
+            self.assertEqual(step_counts["login_gate_visible"], 1)
+            self.assertEqual(step_counts["auth_google_attempt"], 1)
+            self.assertEqual(
+                summary["gate_exposures_by_route"],
+                [{"route": "/local", "count": 1}],
+            )
+
     def test_install_funnel_report(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = f"{td}/auth.db"
@@ -145,6 +171,23 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertEqual(step_counts["installer_download_start"], 1)
             self.assertEqual(step_counts["install_bootstrap_success"], 1)
 
+    def test_chat_activation_counts_page_view_before_auth_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            now = time.time()
+            req = _req("/local", "10.0.0.5")
+
+            store.track("page_view", request=req, route="/local", now=now - 20)
+            store.track("auth_google_success", request=req, route="/local", user_id="u-1", user_type="claude", now=now - 10)
+            store.track("chat_message_send", request=req, route="/web/chat", user_id="u-1", user_type="claude", now=now - 5)
+
+            summary = store.funnel_report(funnel="chat_activation", days=7)
+            step_counts = {row["step"]: row["visitors"] for row in summary["steps"]}
+            self.assertEqual(step_counts["local_or_chat_page_view"], 1)
+            self.assertEqual(step_counts["auth_google_success"], 1)
+            self.assertEqual(step_counts["chat_message_send"], 1)
+
     def test_cleanup_old_events(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = f"{td}/auth.db"
@@ -155,6 +198,51 @@ class TestAnalyticsStore(unittest.TestCase):
             store.track("page_view", request=req, route="/trial", now=now - (86400.0 * 200))
             deleted = store.cleanup_old_events(keep_days=90)
             self.assertEqual(deleted, 1)
+
+
+class TestWebAnalyticsContext(unittest.TestCase):
+    def test_track_event_uses_request_analytics_headers(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                req = SimpleNamespace(
+                    headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "X-Unchained-Analytics-Session": "s-browser-123",
+                        "X-Unchained-Analytics-Page-View": "pv-browser-123",
+                        "X-Unchained-Analytics-Route": "/trial",
+                        "X-Unchained-Analytics-Gate-Type": "inline_gsi",
+                    },
+                    remote="10.0.0.88",
+                    path="/auth/google",
+                )
+                inserted = web._track_event(
+                    req,
+                    "auth_google_attempt",
+                    source="trial",
+                    status_code=200,
+                )
+                self.assertTrue(inserted)
+                conn = sqlite3.connect(db_path)
+                row = conn.execute(
+                    "SELECT session_id, page_view_id, route, route_intended, route_effective, gate_type "
+                    "FROM analytics_events"
+                ).fetchone()
+                conn.close()
+                self.assertEqual(
+                    row,
+                    ("s-browser-123", "pv-browser-123", "/trial", "/trial", "/trial", "inline_gsi"),
+                )
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
 
 
 class _FakeRequest:

@@ -274,6 +274,10 @@ _ANALYTICS_INLINE_GSI_ROUTES = {
 _ANALYTICS_LINK_GATE_ROUTES = {
     "/install",
 }
+_ANALYTICS_SESSION_HEADER = "X-Unchained-Analytics-Session"
+_ANALYTICS_PAGE_VIEW_HEADER = "X-Unchained-Analytics-Page-View"
+_ANALYTICS_ROUTE_HEADER = "X-Unchained-Analytics-Route"
+_ANALYTICS_GATE_TYPE_HEADER = "X-Unchained-Analytics-Gate-Type"
 _analytics_last_cleanup_ts = 0.0
 
 
@@ -311,17 +315,21 @@ def _track_event(
     dedupe_ttl_s: float = 0.0,
 ):
     try:
+        header_session_id = _analytics_session_id_from_request(request)
+        header_page_view_id = _analytics_page_view_id_from_request(request)
+        header_route = _analytics_route_from_request(request)
+        header_gate_type = _analytics_gate_type_from_request(request)
         _analytics_maybe_cleanup()
         return _analytics.track(
             event,
             request=request,
             event_id=event_id,
-            session_id=session_id,
-            page_view_id=page_view_id,
-            route=route,
-            route_intended=route_intended,
-            route_effective=route_effective,
-            gate_type=gate_type,
+            session_id=session_id or header_session_id,
+            page_view_id=page_view_id or header_page_view_id,
+            route=route or header_route,
+            route_intended=route_intended or route or header_route,
+            route_effective=route_effective or route or header_route,
+            gate_type=gate_type or header_gate_type,
             cta_id=cta_id,
             error_code=error_code,
             user_id=user_id,
@@ -335,6 +343,32 @@ def _track_event(
     except Exception as e:
         log.warning("[analytics] event=%s failed: %s", event, e)
         return False
+
+
+def _analytics_header_value(request: web.Request | None, name: str, limit: int) -> str:
+    if request is None:
+        return ""
+    try:
+        value = str(request.headers.get(name, "")).strip()
+    except Exception:
+        return ""
+    return value[:limit]
+
+
+def _analytics_session_id_from_request(request: web.Request | None) -> str:
+    return _analytics_header_value(request, _ANALYTICS_SESSION_HEADER, 80)
+
+
+def _analytics_page_view_id_from_request(request: web.Request | None) -> str:
+    return _analytics_header_value(request, _ANALYTICS_PAGE_VIEW_HEADER, 80)
+
+
+def _analytics_route_from_request(request: web.Request | None) -> str:
+    return _analytics_header_value(request, _ANALYTICS_ROUTE_HEADER, 200)
+
+
+def _analytics_gate_type_from_request(request: web.Request | None) -> str:
+    return _analytics_header_value(request, _ANALYTICS_GATE_TYPE_HEADER, 32)
 
 
 def _track_page_view(request: web.Request):

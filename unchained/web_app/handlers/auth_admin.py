@@ -165,6 +165,16 @@ async def handle_google_auth(request: web.Request) -> web.Response:
     source = _normalize_source(body.get("source", "claude"))
     core._track_event(
         request,
+        "google_signin_click",
+        gate_type=core._analytics_gate_type_from_request(request) or "inline_gsi",
+        cta_id="gsi_button",
+        source=source,
+        meta={"source": source, "inferred": True, "via": "auth_google_attempt"},
+        status_code=200,
+        dedupe_ttl_s=15.0,
+    )
+    core._track_event(
+        request,
         "auth_google_attempt",
         source=source,
         meta={"source": source},
