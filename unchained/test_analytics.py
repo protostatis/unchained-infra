@@ -131,10 +131,13 @@ class TestAnalyticsStore(unittest.TestCase):
             store = AnalyticsStore(db_path=db_path)
             now = time.time()
             req = _req("/local", "10.0.0.7")
+            page_view_id = "pv-local-1"
 
-            store.track("page_view", request=req, route="/local", now=now - 10)
-            store.track("gsi_iframe_loaded", request=req, route="/local", gate_type="inline_gsi", now=now - 9)
-            store.track("google_signin_click", request=req, route="/local", gate_type="inline_gsi", now=now - 8)
+            store.track("page_view", request=req, route="/local", page_view_id=page_view_id, now=now - 10)
+            store.track("gate_shown", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9.5)
+            store.track("login_gate_visible", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9.25)
+            store.track("gsi_iframe_loaded", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 9)
+            store.track("google_signin_click", request=req, route="/local", page_view_id=page_view_id, gate_type="inline_gsi", now=now - 8)
             store.track("auth_google_attempt", request=req, route="/local", source="claude", now=now - 7)
 
             summary = store.login_funnel(days=7)
