@@ -16,6 +16,8 @@ Claude Code connects:
 """
 
 import hashlib
+import json
+import os
 import sys
 
 from fastmcp import FastMCP
@@ -54,13 +56,20 @@ def _extract_api_key() -> str:
     return ""
 
 
-def _agent_id_from_key(api_key: str) -> str:
-    """Derive the agent_id from an API key (same logic as chat_agent_cli.py)."""
-    return f"claude-{hashlib.sha256(api_key.encode()).hexdigest()[:8]}"
+def _agent_id_from_key(api_key: str, profile: str = "") -> str:
+    """Derive the agent_id from an API key and optional profile name."""
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
+    if profile and profile != "default":
+        return f"claude-{key_hash}-{profile}"
+    return f"claude-{key_hash}"
 
 
-def _resolve_agent() -> str:
-    """Authenticate the caller and derive agent_id from their API key."""
+def _resolve_agent(profile: str = "") -> str:
+    """Authenticate the caller and derive agent_id from their API key.
+
+    If profile is provided and not "default", the agent_id includes
+    the profile suffix (e.g. claude-abc12345-facebook).
+    """
     api_key = _extract_api_key()
     if not api_key:
         raise ValueError(
@@ -69,7 +78,7 @@ def _resolve_agent() -> str:
     info = _auth.validate_key(api_key)
     if info is None:
         raise ValueError("Invalid API key.")
-    return _agent_id_from_key(api_key)
+    return _agent_id_from_key(api_key, profile)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +230,59 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
     """
     aid = _resolve_agent()
     return await cloud_tools.screenshot(aid, tab_id)
+
+
+@mcp.tool()
+async def cdp_set_file(selector: str, file_path: str,
+                       tab_id: str = "auto", agent_id: str = "") -> str:
+    """Set a file on an <input type="file"> element without the OS file picker.
+
+    Args:
+        selector: CSS selector for the file input (e.g. 'input[type="file"]')
+        file_path: Absolute path to the file on the agent's machine
+    """
+    aid = _resolve_agent()
+    return await cloud_tools.set_file(aid, tab_id, selector, file_path)
+
+
+@mcp.tool()
+async def list_connected_agents(agent_id: str = "") -> str:
+    """List all connected browser agents with their IDs and profiles.
+
+    Use this to discover available agent_ids when you have multiple
+    Chrome profiles connected (e.g. claude-abc12345-facebook).
+    Pass the profile name in other tools' agent_id param to target
+    a specific profile.
+    """
+    relay_host = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
+    # Extract host from ws://host:port
+    host = relay_host.replace("ws://", "").replace("wss://", "").split(":")[0]
+    port_str = relay_host.split(":")[-1] if ":" in relay_host.split("//")[-1] else "8765"
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 8765
+
+    import httpx
+    scheme = "https" if port == 443 else "http"
+    port_part = "" if port in (443, 80) else f":{port}"
+    api_url = f"{scheme}://{host}{port_part}/api/agents"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(api_url)
+            if not resp.is_success:
+                return "Failed to query relay for agents."
+            agents = resp.json()
+    except Exception as e:
+        return f"Error querying agents: {e}"
+
+    if not agents:
+        return "No agents connected."
+    lines = ["Connected agents:"]
+    for a in agents:
+        profile = a.get("profile", "default")
+        lines.append(f"  {a['agent_id']} (profile: {profile})")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
