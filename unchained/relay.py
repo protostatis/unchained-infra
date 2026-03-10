@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -53,6 +54,7 @@ class Relay:
         self.auth = Auth(db_path)
         self.agents: dict[str, ServerConnection] = {}  # agent_id → ws
         self.agent_users: dict[str, str] = {}  # agent_id → user_id
+        self.agent_profiles: dict[str, str] = {}  # agent_id → profile name
         self._next_channel: dict[str, int] = {}  # agent_id → channel counter
         # client_ws → (agent_id, channel_id) for routing replies
         self.clients: dict[ServerConnection, tuple[str, int]] = {}
@@ -311,14 +313,20 @@ class Relay:
                 return
 
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
+            profile = msg.get("profile", "default")
+            if not re.match(r'^[a-zA-Z0-9_-]{1,32}$', profile):
+                profile = "default"
             if api_key.startswith("uc_headless_"):
                 agent_id = f"headless-{key_hash}"
+            elif profile and profile != "default":
+                agent_id = f"claude-{key_hash}-{profile}"
             else:
                 agent_id = f"claude-{key_hash}"
             self.agents[agent_id] = ws
             self.agent_users[agent_id] = key_info["user_id"]
+            self.agent_profiles[agent_id] = profile
             self._next_channel[agent_id] = 1
-            print(f"[relay] agent {agent_id} connected (user={key_info['user_id']}, key={api_key[:12]}...)")
+            print(f"[relay] agent {agent_id} connected (user={key_info['user_id']}, profile={profile}, key={api_key[:12]}...)")
 
             await ws.send(json.dumps({
                 "type": "auth_ok",
@@ -336,6 +344,7 @@ class Relay:
             if agent_id:
                 self.agents.pop(agent_id, None)
                 self.agent_users.pop(agent_id, None)
+                self.agent_profiles.pop(agent_id, None)
                 self._next_channel.pop(agent_id, None)
                 # Close all clients connected to this agent
                 to_close = [c for c, (aid, _) in self.clients.items()
@@ -518,14 +527,15 @@ class Relay:
     def get_agents(self) -> list[dict]:
         """List all connected agents."""
         return [
-            {"agent_id": aid, "user_id": self.agent_users.get(aid, "")}
+            {"agent_id": aid, "user_id": self.agent_users.get(aid, ""),
+             "profile": self.agent_profiles.get(aid, "default")}
             for aid in self.agents
         ]
 
     def get_agents_for_user(self, user_id: str) -> list[dict]:
         """List agents belonging to a specific user."""
         return [
-            {"agent_id": aid}
+            {"agent_id": aid, "profile": self.agent_profiles.get(aid, "default")}
             for aid, uid in self.agent_users.items()
             if uid == user_id
         ]

@@ -19,6 +19,7 @@ OP_CREATE_TAB = "create_tab"
 OP_PROVISION_LAUNCH = "provision_launch"
 OP_PROVISION_CLEANUP = "provision_cleanup"
 OP_CLOSE_TAB = "close_tab"
+OP_SET_FILE = "set_file"
 
 PRIVATE_CORE_OPS = {
     OP_RUN_DDM,
@@ -35,6 +36,7 @@ PRIVATE_CORE_OPS = {
     OP_PROVISION_LAUNCH,
     OP_PROVISION_CLEANUP,
     OP_CLOSE_TAB,
+    OP_SET_FILE,
 }
 
 DEFAULT_PRIVATE_CORE_PORT = 8770

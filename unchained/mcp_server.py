@@ -16,6 +16,8 @@ Claude Code connects:
 """
 
 import hashlib
+import os
+import re
 import sys
 
 from fastmcp import FastMCP
@@ -54,13 +56,34 @@ def _extract_api_key() -> str:
     return ""
 
 
-def _agent_id_from_key(api_key: str) -> str:
-    """Derive the agent_id from an API key (same logic as chat_agent_cli.py)."""
-    return f"claude-{hashlib.sha256(api_key.encode()).hexdigest()[:8]}"
+def _user_owns_agent(user_id: str, agent_id: str) -> bool:
+    """Check if a full agent_id belongs to any active key owned by this user."""
+    for key in _auth.get_keys_for_user(user_id):
+        key_hash = hashlib.sha256(key.encode()).hexdigest()[:8]
+        if agent_id.startswith(f"claude-{key_hash}") or agent_id.startswith(f"headless-{key_hash}"):
+            return True
+    return False
 
 
-def _resolve_agent() -> str:
-    """Authenticate the caller and derive agent_id from their API key."""
+def _agent_id_from_key(api_key: str, profile: str = "") -> str:
+    """Derive the agent_id from an API key and optional profile name."""
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
+    if profile and profile != "default":
+        if not re.match(r'^[a-zA-Z0-9_-]{1,32}$', profile):
+            raise ValueError(f"Invalid profile name: {profile!r}")
+        return f"claude-{key_hash}-{profile}"
+    return f"claude-{key_hash}"
+
+
+def _resolve_agent(profile: str = "") -> str:
+    """Authenticate the caller and resolve the target agent_id.
+
+    Accepts either:
+    - A profile name (e.g. "facebook") → derives claude-<hash>-facebook
+    - A full agent ID from list_connected_agents (e.g. "claude-abc12345-facebook")
+      → validates ownership and uses it directly
+    - Empty string → default agent (claude-<hash>)
+    """
     api_key = _extract_api_key()
     if not api_key:
         raise ValueError(
@@ -69,7 +92,21 @@ def _resolve_agent() -> str:
     info = _auth.validate_key(api_key)
     if info is None:
         raise ValueError("Invalid API key.")
-    return _agent_id_from_key(api_key)
+
+    if not profile:
+        return _agent_id_from_key(api_key)
+
+    # If caller passed a full agent ID (from list_connected_agents), validate
+    # ownership by checking it matches a key hash belonging to this user.
+    # This is necessary because private-core uses an internal token that
+    # bypasses relay per-user ownership checks.
+    if re.match(r'^(?:claude|headless)-[0-9a-f]{8}', profile):
+        if _user_owns_agent(info["user_id"], profile):
+            return profile
+        raise ValueError(f"Agent {profile} does not belong to you.")
+
+    # Otherwise treat as a profile name suffix
+    return _agent_id_from_key(api_key, profile)
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +129,7 @@ async def ddm(flags: str = "--llm-2pass --cols 60",
       --forms                 (detect forms)
       --js "expression"       (execute JavaScript)
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_ddm(aid, tab_id, flags.split())
 
 
@@ -104,7 +141,7 @@ async def intel_probe(tab_id: str = "auto", agent_id: str = "") -> str:
     data stores, shadow DOM structure, and ranks 8 extraction strategies.
     Run this on first visit to any unknown SPA.
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_intel(aid, tab_id, ["--probe"])
 
 
@@ -118,7 +155,7 @@ async def intel_extract(tab_id: str = "auto",
 
     Best for: Reddit (host_attrs), GitHub (data_testid), React SPAs (react_fiber).
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     flags = ["--extract"]
     if strategy:
         flags += ["--strategy", strategy]
@@ -132,7 +169,7 @@ async def intel_stores(tab_id: str = "auto", agent_id: str = "") -> str:
     Use on Nuxt/Next/YouTube sites to discover data before extraction.
     Follow up with intel_shape and intel_find_paths.
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_intel(aid, tab_id, ["--stores"])
 
 
@@ -146,7 +183,7 @@ async def intel_shape(global_name: str,
         global_name: Name of the JS global (e.g. "__NUXT__", "ytInitialData")
         depth: How deep to traverse (default 3)
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_intel(
         aid, tab_id,
         ["--shape", global_name, "--depth", str(depth)],
@@ -163,7 +200,7 @@ async def intel_find_paths(global_name: str,
         global_name: Name of the JS global (e.g. "__NUXT__")
         pattern: Key name to search for (e.g. "deals", "title", "price")
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_intel(
         aid, tab_id,
         ["--find-paths", global_name, pattern],
@@ -174,7 +211,7 @@ async def intel_find_paths(global_name: str,
 async def cdp_navigate(url: str,
                        tab_id: str = "auto", agent_id: str = "") -> str:
     """Navigate the browser to a URL. Returns page title and final URL."""
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.navigate(aid, tab_id, url)
 
 
@@ -182,7 +219,7 @@ async def cdp_navigate(url: str,
 async def cdp_click(x: int, y: int,
                     tab_id: str = "auto", agent_id: str = "") -> str:
     """Click at pixel coordinates. Get coordinates from DDM output."""
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.click(aid, tab_id, x, y)
 
 
@@ -194,7 +231,7 @@ async def cdp_type(text: str,
     Click on an input field first (using cdp_click) to give it focus,
     then use this to type text.
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.type_text(aid, tab_id, text)
 
 
@@ -207,7 +244,7 @@ async def js_eval(expression: str,
     Use for: reading page data, interacting with SPA widgets,
     extracting structured data with querySelectorAll.
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_js(aid, tab_id, expression)
 
 
@@ -219,8 +256,66 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
     DDM for page understanding (~500 tokens).
     Only use for: CAPTCHAs, visual state, image verification.
     """
-    aid = _resolve_agent()
+    aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.screenshot(aid, tab_id)
+
+
+@mcp.tool()
+async def cdp_set_file(selector: str, file_path: str,
+                       tab_id: str = "auto", agent_id: str = "") -> str:
+    """Set a file on an <input type="file"> element without the OS file picker.
+
+    Args:
+        selector: CSS selector for the file input (e.g. 'input[type="file"]')
+        file_path: Absolute path to the file on the agent's machine
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.set_file(aid, tab_id, selector, file_path)
+
+
+@mcp.tool()
+async def list_connected_agents(agent_id: str = "") -> str:
+    """List all connected browser agents with their IDs and profiles.
+
+    Use this to discover available agents when you have multiple
+    Chrome profiles connected. To target a specific profile in other
+    tools, pass either the full agent_id (e.g. claude-abc12345-facebook)
+    or just the profile name (e.g. facebook) in the agent_id parameter.
+    """
+    api_key = _extract_api_key()
+    if not api_key:
+        raise ValueError("Authorization: Bearer <api_key> header is required.")
+    info = _auth.validate_key(api_key)
+    if info is None:
+        raise ValueError("Invalid API key.")
+
+    from urllib.parse import urlparse
+    import httpx
+
+    relay_url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
+    parsed = urlparse(relay_url)
+    host = parsed.hostname or "relay"
+    port = parsed.port or 8765
+    scheme = "https" if port == 443 else "http"
+    port_part = "" if port in (443, 80) else f":{port}"
+    api_url = f"{scheme}://{host}{port_part}/api/agents"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(api_url, headers=headers)
+            if not resp.is_success:
+                return "Failed to query relay for agents."
+            agents = resp.json()
+    except Exception as e:
+        return f"Error querying agents: {e}"
+
+    if not agents:
+        return "No agents connected."
+    lines = ["Connected agents:"]
+    for a in agents:
+        profile = a.get("profile", "default")
+        lines.append(f"  {a['agent_id']} (profile: {profile})")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

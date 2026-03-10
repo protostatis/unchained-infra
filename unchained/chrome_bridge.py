@@ -328,6 +328,7 @@ class Agent:
             "api_key": self.api_key,
             "agent_version": VERSION,
             "cdp_port": self.cdp_port,
+            "profile": self.profile,
         }))
         raw = await asyncio.wait_for(self.ws.recv(), timeout=10)
         resp = json.loads(raw)

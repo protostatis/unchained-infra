@@ -1,6 +1,6 @@
 # MCP Local Browser Guide (Production)
 
-Last validated: March 7, 2026.
+Last validated: March 10, 2026.
 
 This guide shows how to drive your local Chrome through the production MCP
 endpoint (`https://api.unchainedsky.com/mcp`).
@@ -8,8 +8,9 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 ## What This Enables
 
 - Keep your real browser session (cookies, extensions, 2FA state, IP)
-- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`) from any
+- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`) from any
   MCP-compatible client
+- Run multiple Chrome profiles simultaneously (e.g. personal + work + social)
 - Zero-config path if you already installed the agent via `curl | bash`
 - Avoid setting up and maintaining a custom Playwright skill for each tool host
 
@@ -98,6 +99,49 @@ Then call tools directly — `agent_id` is auto-detected from your API key:
 - `js_eval` with `expression=document.title`
 - `ddm` with `flags=--text --find Slickdeals`
 
+## Multi-Profile Support
+
+You can connect multiple Chrome profiles simultaneously under the same API key.
+Each profile gets its own agent on the relay, and you target it by passing the
+profile name in the `agent_id` parameter of any MCP tool.
+
+### Start a second bridge with a named profile
+
+```bash
+# Terminal 1 — default profile (already running)
+cd ~/unchained-agent && ./start.sh --daemon
+
+# Terminal 2 — "facebook" profile on a separate CDP port
+UNCHAINED_RELAY_URL=wss://api.unchainedsky.com/tunnel \
+UNCHAINED_API_KEY=<your_uc_live_key> \
+uv run python chrome_bridge.py start --no-headless \
+  --profile facebook --port 9223
+```
+
+Each profile gets its own Chrome data directory (`~/.unchained/chrome_<name>/`)
+with separate cookies, sessions, and extensions.
+
+### Discover connected profiles
+
+Use the `list_connected_agents` MCP tool to see all connected agents:
+
+```text
+Connected agents:
+  claude-abc12345 (profile: default)
+  claude-abc12345-facebook (profile: facebook)
+```
+
+### Target a specific profile
+
+Pass the profile name in the `agent_id` parameter of any tool:
+
+```text
+cdp_navigate url=https://facebook.com agent_id=facebook
+ddm agent_id=facebook
+```
+
+When `agent_id` is empty (the default), tools target the default profile.
+
 ## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
 
 Use this subsection in your agent instruction file so tool behavior stays
@@ -108,6 +152,8 @@ consistent:
 
 - MCP endpoint: `https://api.unchainedsky.com/mcp`
 - `agent_id` is auto-detected from your API key — you do not need to pass it.
+- To target a specific Chrome profile, pass the profile name in `agent_id` (e.g. `agent_id=facebook`).
+- Use `list_connected_agents` to discover all connected profiles.
 
 #### DDM-First Methodology
 
@@ -129,6 +175,7 @@ Every browsing task follows this pipeline:
 
 - Use `cdp_navigate`, `cdp_click`, `cdp_type` for actions.
 - Use `js_eval` for deterministic reads (title, URLs, structured DOM data).
+- Use `cdp_set_file` to upload files to `<input type="file">` elements without the OS picker.
 - Use `cdp_screenshot` only for visual-only states (CAPTCHA, image verification).
 - If you get `Agent ... not connected`, stop and ask user to start/restart the local bridge.
 ```

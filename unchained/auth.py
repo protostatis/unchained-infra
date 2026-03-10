@@ -153,6 +153,15 @@ class Auth:
             )
             return cur.rowcount > 0
 
+    def get_keys_for_user(self, user_id: str) -> list[str]:
+        """Get all active API keys belonging to a user."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT key FROM api_keys WHERE user_id = ? AND active = 1",
+                (user_id,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
     def list_keys(self, active_only: bool = True) -> list[dict]:
         """List API keys."""
         query = "SELECT key, user_id, created_at, last_used_at, active FROM api_keys"

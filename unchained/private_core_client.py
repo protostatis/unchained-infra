@@ -26,6 +26,7 @@ from private_core_contracts import (
     OP_RUN_INTEL,
     OP_RUN_JS,
     OP_SCREENSHOT,
+    OP_SET_FILE,
     OP_SUBMIT_FORM,
     OP_TYPE_TEXT,
     PRIVATE_CORE_OPS,
@@ -130,7 +131,14 @@ class PrivateCoreClient:
             OP_PROVISION_CLEANUP: engine.provision_cleanup,
             OP_CLOSE_TAB: engine.close_tab,
         }
-        fn = dispatch[op]
+        # Ops that may not yet exist in the engine (safe for staggered deploys)
+        for op_name, fn_name in [(OP_SET_FILE, "set_file")]:
+            fn = getattr(engine, fn_name, None)
+            if fn is not None:
+                dispatch[op_name] = fn
+        fn = dispatch.get(op)
+        if fn is None:
+            raise NotImplementedError(f"Op {op!r} not available in engine")
         return await fn(**kwargs)
 
     async def run_ddm(self, agent_id: str, tab_id: str, flags: list[str], relay_host: str, relay_port: int) -> str:
@@ -265,6 +273,17 @@ class PrivateCoreClient:
             relay_host=relay_host,
             relay_port=relay_port,
             slot=slot,
+        )
+
+    async def set_file(self, agent_id: str, tab_id: str, selector: str, file_path: str, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_SET_FILE,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            selector=selector,
+            file_path=file_path,
+            relay_host=relay_host,
+            relay_port=relay_port,
         )
 
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:

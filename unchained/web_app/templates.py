@@ -11784,6 +11784,8 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
           <tr><td><code>tabs</code></td><td>List open browser tabs</td></tr>
           <tr><td><code>new_tab</code></td><td>Open a new browser tab</td></tr>
           <tr><td><code>close_tab</code></td><td>Close a specific browser tab</td></tr>
+          <tr><td><code>cdp_set_file</code></td><td>Set a file on an &lt;input type=&quot;file&quot;&gt; without the OS picker</td></tr>
+          <tr><td><code>list_connected_agents</code></td><td>List connected agents and Chrome profiles</td></tr>
         </tbody>
       </table>
     </div>
