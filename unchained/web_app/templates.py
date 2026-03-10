@@ -3589,13 +3589,16 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
-    selectedProfilePath = remembered;
-  } else if (gotProfiles || !remembered) {
-    sel.value = '';
-    selectedProfilePath = '';
+  } else if (!gotProfiles && remembered) {
+    const opt = document.createElement('option');
+    opt.value = remembered;
+    opt.textContent = 'Saved profile (bridge offline)';
+    sel.appendChild(opt);
+    sel.value = remembered;
   } else {
     sel.value = '';
   }
+  selectedProfilePath = sel.value || '';
 }
 
 function updateStatusPill(el, text, mode) {
@@ -7125,13 +7128,16 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
-    selectedProfilePath = remembered;
-  } else if (gotProfiles || !remembered) {
-    sel.value = '';
-    selectedProfilePath = '';
+  } else if (!gotProfiles && remembered) {
+    const opt = document.createElement('option');
+    opt.value = remembered;
+    opt.textContent = 'Saved profile (bridge offline)';
+    sel.appendChild(opt);
+    sel.value = remembered;
   } else {
     sel.value = '';
   }
+  selectedProfilePath = sel.value || '';
 }
 
 let lastAgentConnected = false;

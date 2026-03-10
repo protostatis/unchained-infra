@@ -513,7 +513,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     tab_id = core._session_tabs.get(session_id)
     if selected_profile_path:
         allowed_paths = await _allowed_profile_paths(core, agent_id)
-        if allowed_paths and selected_profile_path not in allowed_paths:
+        if selected_profile_path not in allowed_paths:
             core._response_queues.pop(session_id, None)
             return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
         try:
