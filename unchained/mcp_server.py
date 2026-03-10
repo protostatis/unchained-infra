@@ -18,6 +18,7 @@ Claude Code connects:
 import hashlib
 import json
 import os
+import re
 import sys
 
 from fastmcp import FastMCP
@@ -60,6 +61,8 @@ def _agent_id_from_key(api_key: str, profile: str = "") -> str:
     """Derive the agent_id from an API key and optional profile name."""
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
     if profile and profile != "default":
+        if not re.match(r'^[a-zA-Z0-9_-]{1,32}$', profile):
+            raise ValueError(f"Invalid profile name: {profile!r}")
         return f"claude-{key_hash}-{profile}"
     return f"claude-{key_hash}"
 
@@ -275,16 +278,13 @@ async def list_connected_agents(agent_id: str = "") -> str:
     if info is None:
         raise ValueError("Invalid API key.")
 
-    relay_host = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
-    # Extract host from ws://host:port
-    host = relay_host.replace("ws://", "").replace("wss://", "").split(":")[0]
-    port_str = relay_host.split(":")[-1] if ":" in relay_host.split("//")[-1] else "8765"
-    try:
-        port = int(port_str)
-    except ValueError:
-        port = 8765
-
+    from urllib.parse import urlparse
     import httpx
+
+    relay_url = os.environ.get("RELAY_INTERNAL_URL", "ws://relay:8765")
+    parsed = urlparse(relay_url)
+    host = parsed.hostname or "relay"
+    port = parsed.port or 8765
     scheme = "https" if port == 443 else "http"
     port_part = "" if port in (443, 80) else f":{port}"
     api_url = f"{scheme}://{host}{port_part}/api/agents"

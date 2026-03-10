@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -313,6 +314,8 @@ class Relay:
 
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
             profile = msg.get("profile", "default")
+            if not re.match(r'^[a-zA-Z0-9_-]{1,32}$', profile):
+                profile = "default"
             if api_key.startswith("uc_headless_"):
                 agent_id = f"headless-{key_hash}"
             elif profile and profile != "default":
