@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import os
 import re
 import time
 import uuid
@@ -65,7 +66,8 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
     """Ensure session is pinned to a provision browser tab for selected profile."""
     current_tab = core._session_tabs.get(session_id, "")
     current_profile = core._session_profile_paths.get(session_id, "")
-    if current_tab and current_profile == profile_path:
+    pending_close = current_tab and current_tab in getattr(core, "_tabs_pending_close", {})
+    if current_tab and current_profile == profile_path and not pending_close:
         core._session_last_active[session_id] = time.time()
         return current_tab
 
@@ -75,6 +77,7 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
     relay_host, relay_port = core._parse_relay()
     import cloud_tools
 
+    print(f"[profile] Provisioning Chrome for session {session_id} profile={os.path.basename(profile_path)}")
     launch = await cloud_tools.provision_launch(cdp_agent_id, profile_path, relay_host, relay_port)
     tab_id = str((launch or {}).get("tab_id", "")).strip()
     if not tab_id:
