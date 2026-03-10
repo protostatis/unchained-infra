@@ -1075,14 +1075,20 @@ def _check_port_conflict(port: int, profile: str) -> str | None:
             continue
         if other_profile == profile:
             continue  # same profile, not a conflict
-        # Check if this other agent is actually alive
+        # Check if this other agent is actually alive AND is a bridge process
         try:
             with open(pid_path) as f:
                 other_pid = int(f.read().strip())
             os.kill(other_pid, 0)  # just check existence
         except (OSError, ValueError):
             continue  # dead or unreadable, skip
+        cmdline = _process_cmdline(other_pid)
+        if cmdline and "chrome_bridge" not in cmdline:
+            continue  # PID recycled by unrelated process, not a real bridge
         other_port = _read_port(other_profile)
+        if other_port is None:
+            # Legacy bridge (pre-port-file). Assume default CDP port.
+            other_port = DEFAULT_CDP_PORT
         if other_port == port:
             return other_profile
     return None
