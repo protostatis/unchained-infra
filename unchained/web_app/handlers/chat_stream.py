@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import os
 import re
 import time
 import uuid
@@ -76,7 +77,7 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
     relay_host, relay_port = core._parse_relay()
     import cloud_tools
 
-    print(f"[profile] Provisioning Chrome for session {session_id} profile={profile_path}")
+    print(f"[profile] Provisioning Chrome for session {session_id} profile={os.path.basename(profile_path)}")
     launch = await cloud_tools.provision_launch(cdp_agent_id, profile_path, relay_host, relay_port)
     tab_id = str((launch or {}).get("tab_id", "")).strip()
     if not tab_id:
