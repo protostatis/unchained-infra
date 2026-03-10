@@ -130,9 +130,15 @@ class PrivateCoreClient:
             OP_PROVISION_LAUNCH: engine.provision_launch,
             OP_PROVISION_CLEANUP: engine.provision_cleanup,
             OP_CLOSE_TAB: engine.close_tab,
-            OP_SET_FILE: engine.set_file,
         }
-        fn = dispatch[op]
+        # Ops that may not yet exist in the engine (safe for staggered deploys)
+        for op_name, fn_name in [(OP_SET_FILE, "set_file")]:
+            fn = getattr(engine, fn_name, None)
+            if fn is not None:
+                dispatch[op_name] = fn
+        fn = dispatch.get(op)
+        if fn is None:
+            raise NotImplementedError(f"Op {op!r} not available in engine")
         return await fn(**kwargs)
 
     async def run_ddm(self, agent_id: str, tab_id: str, flags: list[str], relay_host: str, relay_port: int) -> str:
