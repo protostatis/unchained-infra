@@ -359,7 +359,6 @@ class Agent:
             ping_task.cancel()
             watchdog_task.cancel()
             await self._close_all_channels()
-            self._cleanup_all_prov_chromes()
 
     async def _handle_message(self, msg: dict):
         """Dispatch incoming message from relay."""
@@ -752,12 +751,19 @@ class Agent:
             }))
             return
 
-        if slot and slot in self._prov_chromes:
-            prov = self._prov_chromes.pop(slot)
+        if slot:
+            # Specific slot requested — clean only that one (no-op if already gone)
+            prov = self._prov_chromes.pop(slot, None)
+            if prov:
+                self._cleanup_single_prov(prov)
+        elif len(self._prov_chromes) == 1:
+            # No slot + exactly one prov Chrome → backward compat (old format tab IDs)
+            _, prov = self._prov_chromes.popitem()
             self._cleanup_single_prov(prov)
         else:
-            # No slot or slot not found: clean up all
-            self._cleanup_all_prov_chromes()
+            # No slot + multiple prov Chromes → ambiguous, don't destroy all.
+            # Callers should always pass a slot; this path is a no-op safety net.
+            pass
 
         await self.ws.send(json.dumps({
             "type": "http_response",
