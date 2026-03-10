@@ -41,8 +41,27 @@ DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
                           os.path.join(os.path.expanduser("~"), ".unchained"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
-AGENT_PID_FILE = os.path.join(DATA_DIR, ".agent_pid")
+AGENT_PID_FILE = os.path.join(DATA_DIR, ".agent_pid")  # legacy default
 AGENT_CONFIG_FILE = os.path.join(DATA_DIR, "agent.json")
+
+
+def _sanitize_profile(name: str) -> str:
+    """Normalize a profile name for use as an agent_id suffix.
+
+    Replaces spaces/dots with underscores, strips invalid chars,
+    truncates to 32 chars. Matches relay validation: ^[a-zA-Z0-9_-]{1,32}$
+    Preserves case to avoid breaking existing agent IDs.
+    """
+    name = name.replace(" ", "_").replace(".", "_")
+    name = re.sub(r'[^a-zA-Z0-9_-]', '', name)
+    return name[:32] or "default"
+
+
+def _pid_file(profile: str = "default") -> str:
+    """Return per-profile PID file path."""
+    if profile and profile != "default":
+        return os.path.join(DATA_DIR, f".agent_pid_{profile}")
+    return AGENT_PID_FILE
 
 DEFAULT_RELAY_URL = "ws://127.0.0.1:8765/tunnel"
 DEFAULT_CDP_HOST = "127.0.0.1"
@@ -993,27 +1012,102 @@ def _parse_args(args: list[str], config: dict) -> dict:
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
-def _write_pid():
-    """Write current PID to agent PID file."""
-    with open(AGENT_PID_FILE, "w") as f:
+def _port_file(profile: str = "default") -> str:
+    """Return per-profile port file path."""
+    if profile and profile != "default":
+        return os.path.join(DATA_DIR, f".agent_port_{profile}")
+    return os.path.join(DATA_DIR, ".agent_port")
+
+
+def _write_pid(profile: str = "default", port: int = 0):
+    """Write current PID and port to per-profile agent files."""
+    with open(_pid_file(profile), "w") as f:
         f.write(str(os.getpid()))
+    if port:
+        with open(_port_file(profile), "w") as f:
+            f.write(str(port))
 
 
-def _read_pid():
-    """Read agent PID from file."""
+def _read_pid(profile: str = "default"):
+    """Read agent PID from per-profile file."""
     try:
-        with open(AGENT_PID_FILE) as f:
+        with open(_pid_file(profile)) as f:
             return int(f.read().strip())
     except (OSError, ValueError):
         return None
 
 
-def _remove_pid():
-    """Remove agent PID file."""
+def _read_port(profile: str = "default") -> int | None:
+    """Read agent CDP port from per-profile file."""
     try:
-        os.remove(AGENT_PID_FILE)
+        with open(_port_file(profile)) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _remove_pid(profile: str = "default"):
+    """Remove per-profile agent PID and port files."""
+    try:
+        os.remove(_pid_file(profile))
     except OSError:
         pass
+    try:
+        os.remove(_port_file(profile))
+    except OSError:
+        pass
+
+
+def _parse_port_from_cmdline(cmdline: str) -> int:
+    """Extract --port value from a bridge process cmdline.
+
+    Returns DEFAULT_CDP_PORT if --port is absent or unparseable.
+    """
+    parts = cmdline.split()
+    for i, part in enumerate(parts):
+        if part == "--port" and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except ValueError:
+                break
+    return DEFAULT_CDP_PORT
+
+
+def _check_port_conflict(port: int, profile: str) -> str | None:
+    """Check if another profile is already using this CDP port.
+
+    Returns the conflicting profile name, or None if no conflict.
+    """
+    import glob as _glob
+    # Check all PID files to find running agents
+    for pid_path in _glob.glob(os.path.join(DATA_DIR, ".agent_pid*")):
+        basename = os.path.basename(pid_path)
+        if basename == ".agent_pid":
+            other_profile = "default"
+        elif basename.startswith(".agent_pid_"):
+            other_profile = basename[len(".agent_pid_"):]
+        else:
+            continue
+        if other_profile == profile:
+            continue  # same profile, not a conflict
+        # Check if this other agent is actually alive AND is a bridge process
+        try:
+            with open(pid_path) as f:
+                other_pid = int(f.read().strip())
+            os.kill(other_pid, 0)  # just check existence
+        except (OSError, ValueError):
+            continue  # dead or unreadable, skip
+        cmdline = _process_cmdline(other_pid)
+        if cmdline and "chrome_bridge" not in cmdline:
+            continue  # PID recycled by unrelated process, not a real bridge
+        other_port = _read_port(other_profile)
+        if other_port is None:
+            # Legacy bridge (pre-port-file). Parse --port from cmdline,
+            # fall back to default CDP port.
+            other_port = _parse_port_from_cmdline(cmdline)
+        if other_port == port:
+            return other_profile
+    return None
 
 
 def _process_cmdline(pid: int) -> str:
@@ -1059,22 +1153,22 @@ def _process_cmdline(pid: int) -> str:
         return ""
 
 
-def _is_agent_running() -> bool:
-    """Check if agent process is still alive."""
-    pid = _read_pid()
+def _is_agent_running(profile: str = "default") -> bool:
+    """Check if agent process is still alive for the given profile."""
+    pid = _read_pid(profile)
     if pid is None:
         return False
     if pid == os.getpid():
         # Stale PID file from a previous container/run that happened to use the
         # same PID (always PID 1 in Docker). This is us, not a duplicate agent.
-        _remove_pid()
+        _remove_pid(profile)
         return False
 
     # Fast path: process exists.
     try:
         os.kill(pid, 0)
     except OSError:
-        _remove_pid()
+        _remove_pid(profile)
         return False
 
     cmdline = _process_cmdline(pid)
@@ -1085,7 +1179,7 @@ def _is_agent_running() -> bool:
         return True
     if "chrome_bridge.py" not in cmdline:
         # PID got recycled by an unrelated process; treat as stale.
-        _remove_pid()
+        _remove_pid(profile)
         return False
     return True
 
@@ -1178,9 +1272,18 @@ def _ensure_chrome(
 
 def cmd_start(config: dict):
     """Start the agent (foreground)."""
-    if _is_agent_running():
-        pid = _read_pid()
-        print(f"[agent] already running (PID {pid})")
+    profile = config["profile"]
+    if _is_agent_running(profile):
+        pid = _read_pid(profile)
+        print(f"[agent] already running (PID {pid}, profile={profile})")
+        return
+
+    # Guard: block if another profile already uses this CDP port
+    cdp_port = config["cdp_port"]
+    conflict = _check_port_conflict(cdp_port, profile)
+    if conflict:
+        print(f"[agent] CDP port {cdp_port} is already used by profile '{conflict}'")
+        print(f"[agent] use --port <other_port> to avoid conflicts")
         return
 
     if config.get("daemon"):
@@ -1190,15 +1293,15 @@ def cmd_start(config: dict):
     # Ensure Chrome is running with CDP
     if not _ensure_chrome(
         config["cdp_host"],
-        config["cdp_port"],
-        config["profile"],
+        cdp_port,
+        profile,
         config.get("chrome_headless", False),
         config.get("chrome_args", ""),
     ):
         print("[agent] cannot start without Chrome CDP")
         return
 
-    _write_pid()
+    _write_pid(profile, port=cdp_port)
     agent = Agent(
         relay_url=config["relay_url"],
         api_key=config["api_key"],
@@ -1252,7 +1355,7 @@ def cmd_start(config: dict):
         log.critical("[bridge] crashed with unhandled exception", exc_info=True)
         raise
     finally:
-        _remove_pid()
+        _remove_pid(profile)
         loop.close()
         log.info("[bridge] stopped")
 
@@ -1299,11 +1402,12 @@ def _start_detached(config: dict):
     try:
         subprocess.Popen(cmd, **kwargs)
 
+        profile = config["profile"]
         for _ in range(40):
             time.sleep(0.25)
-            if _is_agent_running():
-                pid = _read_pid()
-                print(f"[agent] started in daemon mode (PID {pid})")
+            if _is_agent_running(profile):
+                pid = _read_pid(profile)
+                print(f"[agent] started in daemon mode (PID {pid}, profile={profile})")
                 print(f"[agent] logs: {log_path}")
                 return
 
@@ -1313,24 +1417,26 @@ def _start_detached(config: dict):
         log_fp.close()
 
 
-def cmd_status():
+def cmd_status(config: dict):
     """Show agent connection state."""
-    if _is_agent_running():
-        pid = _read_pid()
-        print(json.dumps({"status": "running", "pid": pid}))
+    profile = config["profile"]
+    if _is_agent_running(profile):
+        pid = _read_pid(profile)
+        print(json.dumps({"status": "running", "pid": pid, "profile": profile}))
     else:
-        print(json.dumps({"status": "stopped"}))
+        print(json.dumps({"status": "stopped", "profile": profile}))
 
 
-def cmd_stop():
+def cmd_stop(config: dict):
     """Stop the running agent."""
-    pid = _read_pid()
+    profile = config["profile"]
+    pid = _read_pid(profile)
     if pid is None:
-        print("[agent] not running")
+        print(f"[agent] not running (profile={profile})")
         return
     try:
         os.kill(pid, signal.SIGTERM)
-        print(f"[agent] sent SIGTERM to PID {pid}")
+        print(f"[agent] sent SIGTERM to PID {pid} (profile={profile})")
     except ProcessLookupError:
         print("[agent] process not found")
     except OSError:
@@ -1347,7 +1453,7 @@ def cmd_stop():
                 print("[agent] failed to stop process")
         else:
             print("[agent] failed to stop process")
-    _remove_pid()
+    _remove_pid(profile)
 
 
 # ---------------------------------------------------------------------------
@@ -1357,6 +1463,9 @@ def main():
     config = _load_config()
     args = sys.argv[1:]
     config = _parse_args(args, config)
+
+    # Sanitize profile name (e.g. "Profile 5" → "profile_5")
+    config["profile"] = _sanitize_profile(config["profile"])
 
     # Extract command (first non-flag argument)
     cmd = None
@@ -1368,9 +1477,9 @@ def main():
     if cmd == "start":
         cmd_start(config)
     elif cmd == "status":
-        cmd_status()
+        cmd_status(config)
     elif cmd == "stop":
-        cmd_stop()
+        cmd_stop(config)
     else:
         print("""Usage: uv run chrome_bridge.py <command> [options]
 
