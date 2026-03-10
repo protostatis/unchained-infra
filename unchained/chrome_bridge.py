@@ -50,10 +50,11 @@ def _sanitize_profile(name: str) -> str:
 
     Replaces spaces/dots with underscores, strips invalid chars,
     truncates to 32 chars. Matches relay validation: ^[a-zA-Z0-9_-]{1,32}$
+    Preserves case to avoid breaking existing agent IDs.
     """
     name = name.replace(" ", "_").replace(".", "_")
     name = re.sub(r'[^a-zA-Z0-9_-]', '', name)
-    return (name[:32] or "default").lower()
+    return name[:32] or "default"
 
 
 def _pid_file(profile: str = "default") -> str:
@@ -1011,10 +1012,20 @@ def _parse_args(args: list[str], config: dict) -> dict:
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
-def _write_pid(profile: str = "default"):
-    """Write current PID to per-profile agent PID file."""
+def _port_file(profile: str = "default") -> str:
+    """Return per-profile port file path."""
+    if profile and profile != "default":
+        return os.path.join(DATA_DIR, f".agent_port_{profile}")
+    return os.path.join(DATA_DIR, ".agent_port")
+
+
+def _write_pid(profile: str = "default", port: int = 0):
+    """Write current PID and port to per-profile agent files."""
     with open(_pid_file(profile), "w") as f:
         f.write(str(os.getpid()))
+    if port:
+        with open(_port_file(profile), "w") as f:
+            f.write(str(port))
 
 
 def _read_pid(profile: str = "default"):
@@ -1026,12 +1037,55 @@ def _read_pid(profile: str = "default"):
         return None
 
 
+def _read_port(profile: str = "default") -> int | None:
+    """Read agent CDP port from per-profile file."""
+    try:
+        with open(_port_file(profile)) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _remove_pid(profile: str = "default"):
-    """Remove per-profile agent PID file."""
+    """Remove per-profile agent PID and port files."""
     try:
         os.remove(_pid_file(profile))
     except OSError:
         pass
+    try:
+        os.remove(_port_file(profile))
+    except OSError:
+        pass
+
+
+def _check_port_conflict(port: int, profile: str) -> str | None:
+    """Check if another profile is already using this CDP port.
+
+    Returns the conflicting profile name, or None if no conflict.
+    """
+    import glob as _glob
+    # Check all PID files to find running agents
+    for pid_path in _glob.glob(os.path.join(DATA_DIR, ".agent_pid*")):
+        basename = os.path.basename(pid_path)
+        if basename == ".agent_pid":
+            other_profile = "default"
+        elif basename.startswith(".agent_pid_"):
+            other_profile = basename[len(".agent_pid_"):]
+        else:
+            continue
+        if other_profile == profile:
+            continue  # same profile, not a conflict
+        # Check if this other agent is actually alive
+        try:
+            with open(pid_path) as f:
+                other_pid = int(f.read().strip())
+            os.kill(other_pid, 0)  # just check existence
+        except (OSError, ValueError):
+            continue  # dead or unreadable, skip
+        other_port = _read_port(other_profile)
+        if other_port == port:
+            return other_profile
+    return None
 
 
 def _process_cmdline(pid: int) -> str:
@@ -1202,6 +1256,14 @@ def cmd_start(config: dict):
         print(f"[agent] already running (PID {pid}, profile={profile})")
         return
 
+    # Guard: block if another profile already uses this CDP port
+    cdp_port = config["cdp_port"]
+    conflict = _check_port_conflict(cdp_port, profile)
+    if conflict:
+        print(f"[agent] CDP port {cdp_port} is already used by profile '{conflict}'")
+        print(f"[agent] use --port <other_port> to avoid conflicts")
+        return
+
     if config.get("daemon"):
         _start_detached(config)
         return
@@ -1209,7 +1271,7 @@ def cmd_start(config: dict):
     # Ensure Chrome is running with CDP
     if not _ensure_chrome(
         config["cdp_host"],
-        config["cdp_port"],
+        cdp_port,
         profile,
         config.get("chrome_headless", False),
         config.get("chrome_args", ""),
@@ -1217,7 +1279,7 @@ def cmd_start(config: dict):
         print("[agent] cannot start without Chrome CDP")
         return
 
-    _write_pid(profile)
+    _write_pid(profile, port=cdp_port)
     agent = Agent(
         relay_url=config["relay_url"],
         api_key=config["api_key"],
