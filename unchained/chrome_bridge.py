@@ -1058,6 +1058,21 @@ def _remove_pid(profile: str = "default"):
         pass
 
 
+def _parse_port_from_cmdline(cmdline: str) -> int:
+    """Extract --port value from a bridge process cmdline.
+
+    Returns DEFAULT_CDP_PORT if --port is absent or unparseable.
+    """
+    parts = cmdline.split()
+    for i, part in enumerate(parts):
+        if part == "--port" and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except ValueError:
+                break
+    return DEFAULT_CDP_PORT
+
+
 def _check_port_conflict(port: int, profile: str) -> str | None:
     """Check if another profile is already using this CDP port.
 
@@ -1087,8 +1102,9 @@ def _check_port_conflict(port: int, profile: str) -> str | None:
             continue  # PID recycled by unrelated process, not a real bridge
         other_port = _read_port(other_profile)
         if other_port is None:
-            # Legacy bridge (pre-port-file). Assume default CDP port.
-            other_port = DEFAULT_CDP_PORT
+            # Legacy bridge (pre-port-file). Parse --port from cmdline,
+            # fall back to default CDP port.
+            other_port = _parse_port_from_cmdline(cmdline)
         if other_port == port:
             return other_profile
     return None
