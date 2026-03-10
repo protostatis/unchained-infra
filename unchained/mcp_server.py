@@ -88,10 +88,10 @@ def _resolve_agent(profile: str = "") -> str:
     if not profile:
         return _agent_id_from_key(api_key)
 
-    # If caller passed a full agent ID (from list_connected_agents), validate
-    # ownership by checking the key hash prefix, then use it directly.
-    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
-    if profile.startswith(f"claude-{key_hash}") or profile.startswith(f"headless-{key_hash}"):
+    # If caller passed a full agent ID (from list_connected_agents), use it
+    # directly. Full IDs match claude-<8hex>[...] or headless-<8hex>[...].
+    # Ownership is enforced downstream by the relay on CDP/HTTP requests.
+    if re.match(r'^(?:claude|headless)-[0-9a-f]{8}', profile):
         return profile
 
     # Otherwise treat as a profile name suffix
