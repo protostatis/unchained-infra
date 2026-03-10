@@ -258,12 +258,13 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def provision_cleanup(self, agent_id: str, relay_host: str, relay_port: int) -> bool:
+    async def provision_cleanup(self, agent_id: str, relay_host: str, relay_port: int, slot: str = "") -> bool:
         return await self.execute(
             OP_PROVISION_CLEANUP,
             agent_id=agent_id,
             relay_host=relay_host,
             relay_port=relay_port,
+            slot=slot,
         )
 
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:
