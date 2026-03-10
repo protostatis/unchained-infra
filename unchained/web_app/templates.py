@@ -3568,6 +3568,7 @@ async function loadChatProfiles() {
   defaultOpt.textContent = 'Current browser (no profile copy)';
   sel.appendChild(defaultOpt);
 
+  let gotProfiles = false;
   try {
     const r = await fetch('/web/provision/profiles');
     if (r.ok) {
@@ -3575,6 +3576,7 @@ async function loadChatProfiles() {
       for (const p of (data.profiles || [])) {
         const path = String(p.profile_path || p.path || '').trim();
         if (!path) continue;
+        gotProfiles = true;
         const label = String(p.name || p.dir_name || 'Profile').trim();
         const email = String(p.email || '').trim();
         const opt = document.createElement('option');
@@ -3587,10 +3589,13 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
+    selectedProfilePath = remembered;
+  } else if (gotProfiles || !remembered) {
+    sel.value = '';
+    selectedProfilePath = '';
   } else {
     sel.value = '';
   }
-  selectedProfilePath = sel.value || '';
 }
 
 function updateStatusPill(el, text, mode) {
@@ -7099,6 +7104,7 @@ async function loadChatProfiles() {
   defaultOpt.textContent = 'Current browser (no profile copy)';
   sel.appendChild(defaultOpt);
 
+  let gotProfiles = false;
   try {
     const r = await fetch('/web/provision/profiles');
     if (r.ok) {
@@ -7106,6 +7112,7 @@ async function loadChatProfiles() {
       for (const p of (data.profiles || [])) {
         const path = String(p.profile_path || p.path || '').trim();
         if (!path) continue;
+        gotProfiles = true;
         const label = String(p.name || p.dir_name || 'Profile').trim();
         const email = String(p.email || '').trim();
         const opt = document.createElement('option');
@@ -7118,10 +7125,13 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
+    selectedProfilePath = remembered;
+  } else if (gotProfiles || !remembered) {
+    sel.value = '';
+    selectedProfilePath = '';
   } else {
     sel.value = '';
   }
-  selectedProfilePath = sel.value || '';
 }
 
 let lastAgentConnected = false;
