@@ -56,6 +56,15 @@ def _extract_api_key() -> str:
     return ""
 
 
+def _user_owns_agent(user_id: str, agent_id: str) -> bool:
+    """Check if a full agent_id belongs to any active key owned by this user."""
+    for key in _auth.get_keys_for_user(user_id):
+        key_hash = hashlib.sha256(key.encode()).hexdigest()[:8]
+        if agent_id.startswith(f"claude-{key_hash}") or agent_id.startswith(f"headless-{key_hash}"):
+            return True
+    return False
+
+
 def _agent_id_from_key(api_key: str, profile: str = "") -> str:
     """Derive the agent_id from an API key and optional profile name."""
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
@@ -87,11 +96,14 @@ def _resolve_agent(profile: str = "") -> str:
     if not profile:
         return _agent_id_from_key(api_key)
 
-    # If caller passed a full agent ID (from list_connected_agents), use it
-    # directly. Full IDs match claude-<8hex>[...] or headless-<8hex>[...].
-    # Ownership is enforced downstream by the relay on CDP/HTTP requests.
+    # If caller passed a full agent ID (from list_connected_agents), validate
+    # ownership by checking it matches a key hash belonging to this user.
+    # This is necessary because private-core uses an internal token that
+    # bypasses relay per-user ownership checks.
     if re.match(r'^(?:claude|headless)-[0-9a-f]{8}', profile):
-        return profile
+        if _user_owns_agent(info["user_id"], profile):
+            return profile
+        raise ValueError(f"Agent {profile} does not belong to you.")
 
     # Otherwise treat as a profile name suffix
     return _agent_id_from_key(api_key, profile)
