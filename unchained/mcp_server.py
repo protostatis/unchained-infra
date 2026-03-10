@@ -65,10 +65,13 @@ def _agent_id_from_key(api_key: str, profile: str = "") -> str:
 
 
 def _resolve_agent(profile: str = "") -> str:
-    """Authenticate the caller and derive agent_id from their API key.
+    """Authenticate the caller and resolve the target agent_id.
 
-    If profile is provided and not "default", the agent_id includes
-    the profile suffix (e.g. claude-abc12345-facebook).
+    Accepts either:
+    - A profile name (e.g. "facebook") → derives claude-<hash>-facebook
+    - A full agent ID from list_connected_agents (e.g. "claude-abc12345-facebook")
+      → validates ownership and uses it directly
+    - Empty string → default agent (claude-<hash>)
     """
     api_key = _extract_api_key()
     if not api_key:
@@ -78,6 +81,17 @@ def _resolve_agent(profile: str = "") -> str:
     info = _auth.validate_key(api_key)
     if info is None:
         raise ValueError("Invalid API key.")
+
+    if not profile:
+        return _agent_id_from_key(api_key)
+
+    # If caller passed a full agent ID (from list_connected_agents), validate
+    # ownership by checking the key hash prefix, then use it directly.
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
+    if profile.startswith(f"claude-{key_hash}") or profile.startswith(f"headless-{key_hash}"):
+        return profile
+
+    # Otherwise treat as a profile name suffix
     return _agent_id_from_key(api_key, profile)
 
 
@@ -249,10 +263,10 @@ async def cdp_set_file(selector: str, file_path: str,
 async def list_connected_agents(agent_id: str = "") -> str:
     """List all connected browser agents with their IDs and profiles.
 
-    Use this to discover available agent_ids when you have multiple
-    Chrome profiles connected (e.g. claude-abc12345-facebook).
-    Pass the profile name in other tools' agent_id param to target
-    a specific profile.
+    Use this to discover available agents when you have multiple
+    Chrome profiles connected. To target a specific profile in other
+    tools, pass either the full agent_id (e.g. claude-abc12345-facebook)
+    or just the profile name (e.g. facebook) in the agent_id parameter.
     """
     api_key = _extract_api_key()
     if not api_key:
