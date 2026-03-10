@@ -48,9 +48,11 @@ async def close_session_tab(session_id: str):
     if str(tab_id).startswith("prov-"):
         relay_host, relay_port = core._parse_relay()
         import cloud_tools
+        from chrome_bridge import _extract_prov_slot
+        slot = _extract_prov_slot(str(tab_id))
 
         try:
-            await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+            await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
             core._tabs_pending_close.pop(tab_id, None)
             print(f"[tabs] Cleaned provision browser for session {session_id}")
             return
@@ -126,9 +128,11 @@ async def stale_tab_cleanup_loop():
             if str(tab_id).startswith("prov-"):
                 relay_host, relay_port = core._parse_relay()
                 import cloud_tools
+                from chrome_bridge import _extract_prov_slot
+                slot = _extract_prov_slot(str(tab_id))
 
                 try:
-                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
                     del core._tabs_pending_close[tab_id]
                     print("[tabs] Retry-cleaned provision browser")
                 except Exception:

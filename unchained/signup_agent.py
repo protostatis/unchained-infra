@@ -813,7 +813,9 @@ class GeminiProvider(AIProvider):
             if _used_prov_chrome:
                 # Relay mode with provision Chrome: clean up the entire temp Chrome
                 try:
-                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+                    from chrome_bridge import _extract_prov_slot
+                    _slot = _extract_prov_slot(str(tab_id)) if tab_id else ""
+                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=_slot)
                     print("[provision:gemini] Provision Chrome cleaned up")
                 except Exception:
                     pass
@@ -1186,7 +1188,9 @@ class _CodexProviderBase(AIProvider):
             if _used_prov_chrome:
                 # Relay mode with provision Chrome: clean up the entire temp Chrome
                 try:
-                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+                    from chrome_bridge import _extract_prov_slot
+                    _slot = _extract_prov_slot(str(tab_id)) if tab_id else ""
+                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=_slot)
                     print(f"[provision:{self.name}] Provision Chrome cleaned up")
                 except Exception:
                     pass
@@ -1593,7 +1597,9 @@ class ClaudeSDKProvider(AIProvider):
         finally:
             if _used_prov_chrome:
                 try:
-                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port)
+                    from chrome_bridge import _extract_prov_slot
+                    _slot = _extract_prov_slot(str(tab_id)) if tab_id else ""
+                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=_slot)
                     print(f"[provision:{self.name}] Provision Chrome cleaned up")
                 except Exception:
                     pass

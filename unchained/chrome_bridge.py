@@ -212,6 +212,24 @@ def _copy_profile_light(src_profile: str, dest_user_data_dir: str, profile_dir_n
         )
 
 
+def _parse_prov_tab_id(tab_id: str) -> tuple[str, str]:
+    """Parse a prov-prefixed tab ID into (slot, real_id).
+
+    New format: ``prov-{slot}-{real_id}`` → (slot, real_id)
+    Old format: ``prov-{real_id}``        → ("", real_id)
+    """
+    parts = tab_id.split("-", 2)
+    if len(parts) == 3:
+        return parts[1], parts[2]
+    return "", parts[1] if len(parts) == 2 else ""
+
+
+def _extract_prov_slot(tab_id: str) -> str:
+    """Return the slot portion of a prov tab ID, or empty string."""
+    slot, _ = _parse_prov_tab_id(tab_id)
+    return slot
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -236,8 +254,8 @@ class Agent:
         self.agent_id = None  # type: Optional[str]
         self._backoff = 1
         self._last_pong = 0.0
-        # Provision Chrome: temporary Chrome launched with a user-selected profile
-        self._prov_chrome = None  # {port, process, temp_dir, profile_dir_name}
+        # Provision Chrome: temporary Chromes keyed by slot (4-char hex)
+        self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, temp_dir, profile_dir_name}
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
@@ -382,14 +400,32 @@ class Agent:
             return
 
         # Provision Chrome: cleanup (kill temp Chrome, delete temp dir)
-        if path == "/provision-cleanup":
-            await self._handle_provision_cleanup(req_id)
+        if path.startswith("/provision-cleanup"):
+            await self._handle_provision_cleanup(req_id, path)
             return
 
-        # Proxy /prov/* requests to the provision Chrome's port
-        if path.startswith("/prov/") and self._prov_chrome:
-            prov_path = path[5:]  # strip "/prov" prefix → e.g. "/json/new?..."
-            prov_url = f"http://127.0.0.1:{self._prov_chrome['port']}{prov_path}"
+        # Proxy /prov/{slot}/{path} requests to the provision Chrome's port
+        if path.startswith("/prov/") and self._prov_chromes:
+            # Parse: /prov/{slot}/{chrome_path}
+            prov_parts = path.split("/", 3)  # ['', 'prov', slot, chrome_path]
+            prov_slot = prov_parts[2] if len(prov_parts) > 2 else ""
+            prov = self._prov_chromes.get(prov_slot)
+            if not prov:
+                # Backward compat: if no matching slot and exactly one prov Chrome, use it
+                if len(self._prov_chromes) == 1:
+                    prov = next(iter(self._prov_chromes.values()))
+                    prov_path = path[5:]  # strip "/prov" prefix
+                else:
+                    await self.ws.send(json.dumps({
+                        "type": "http_response",
+                        "req_id": req_id,
+                        "status": 404,
+                        "body": {"error": f"Provision Chrome slot '{prov_slot}' not found"},
+                    }))
+                    return
+            else:
+                prov_path = "/" + prov_parts[3] if len(prov_parts) > 3 else "/"
+            prov_url = f"http://127.0.0.1:{prov['port']}{prov_path}"
             try:
                 req = urllib.request.Request(prov_url, method=method)
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -490,11 +526,19 @@ class Agent:
         """Look up a tab's WebSocket URL from local Chrome.
 
         If tab_id starts with 'prov-', route to the provision Chrome instead.
+        New format: prov-{slot}-{real_id}  Old format: prov-{real_id}
         """
-        # Provision Chrome routing: strip "prov-" prefix, query provision Chrome
-        if tab_id.startswith("prov-") and self._prov_chrome:
-            real_id = tab_id[5:]
-            prov_port = self._prov_chrome["port"]
+        # Provision Chrome routing
+        if tab_id.startswith("prov-") and self._prov_chromes:
+            slot, real_id = _parse_prov_tab_id(tab_id)
+            # Look up by slot; backward compat: if no slot and exactly one prov Chrome, use it
+            if slot and slot in self._prov_chromes:
+                prov = self._prov_chromes[slot]
+            elif not slot and len(self._prov_chromes) == 1:
+                prov = next(iter(self._prov_chromes.values()))
+            else:
+                raise RuntimeError(f"Provision Chrome slot '{slot}' not found")
+            prov_port = prov["port"]
             url = f"http://127.0.0.1:{prov_port}/json"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=3) as resp:
@@ -559,12 +603,11 @@ class Agent:
             }))
             return
 
-        # Clean up any existing provision Chrome first
-        if self._prov_chrome:
-            self._cleanup_prov_chrome_sync()
+        # Generate a unique slot for this provision Chrome
+        slot = os.urandom(2).hex()
 
         # Copy profile to temp dir (same logic as signup_agent._copy_chrome_profile)
-        temp_dir = os.path.join(DATA_DIR, f"prov_tmp_{os.getpid()}_{int(time.time())}")
+        temp_dir = os.path.join(DATA_DIR, f"prov_tmp_{slot}_{os.getpid()}_{int(time.time())}")
         profile_dir_name = os.path.basename(profile_path)
         chrome_parent = os.path.dirname(profile_path)
 
@@ -668,16 +711,16 @@ class Agent:
         except Exception:
             first_tab_id = ""
 
-        # Store state
-        self._prov_chrome = {
+        # Store state keyed by slot
+        self._prov_chromes[slot] = {
             "port": prov_port,
             "process": proc,
             "temp_dir": temp_dir,
             "profile_dir_name": profile_dir_name,
         }
 
-        prov_tab_id = f"prov-{first_tab_id}" if first_tab_id else "prov-auto"
-        print(f"[agent:prov] Provision Chrome ready: port={prov_port}, tab={prov_tab_id}")
+        prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
+        print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
 
         await self.ws.send(json.dumps({
             "type": "http_response",
@@ -686,9 +729,20 @@ class Agent:
             "body": {"tab_id": prov_tab_id, "port": prov_port, "copy_mode": copy_mode},
         }))
 
-    async def _handle_provision_cleanup(self, req_id):
-        """Kill the provision Chrome and clean up temp dir."""
-        if not self._prov_chrome:
+    async def _handle_provision_cleanup(self, req_id, path=""):
+        """Kill provision Chrome(s) and clean up temp dir(s).
+
+        If path contains ?slot=<hex>, clean up only that slot.
+        If no slot specified, clean up ALL provision Chromes.
+        """
+        slot = ""
+        if "?" in path:
+            import urllib.parse
+            qs = path.split("?", 1)[1]
+            params = urllib.parse.parse_qs(qs)
+            slot = params.get("slot", [""])[0]
+
+        if not self._prov_chromes:
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
@@ -697,7 +751,19 @@ class Agent:
             }))
             return
 
-        self._cleanup_prov_chrome_sync()
+        if slot:
+            # Specific slot requested — clean only that one (no-op if already gone)
+            prov = self._prov_chromes.pop(slot, None)
+            if prov:
+                self._cleanup_single_prov(prov)
+        elif len(self._prov_chromes) == 1:
+            # No slot + exactly one prov Chrome → backward compat (old format tab IDs)
+            _, prov = self._prov_chromes.popitem()
+            self._cleanup_single_prov(prov)
+        else:
+            # No slot + multiple prov Chromes → ambiguous, don't destroy all.
+            # Callers should always pass a slot; this path is a no-op safety net.
+            pass
 
         await self.ws.send(json.dumps({
             "type": "http_response",
@@ -706,20 +772,8 @@ class Agent:
             "body": {"status": "cleaned_up"},
         }))
 
-    def _cleanup_prov_chrome_sync(self):
-        """Synchronously kill provision Chrome and clean up temp dir."""
-        if not self._prov_chrome:
-            return
-        prov = self._prov_chrome
-        self._prov_chrome = None
-
-        # Close any prov-* channels
-        prov_channels = [ch for ch in self.channels if isinstance(ch, int)]
-        # Note: channels are identified by integer IDs, not tab_id strings.
-        # The relay routes prov- tab IDs through normal channels, so no special
-        # channel cleanup is needed here.
-
-        # Kill Chrome process
+    def _cleanup_single_prov(self, prov: dict):
+        """Kill one provision Chrome process and delete its temp dir."""
         proc = prov.get("process")
         if proc:
             try:
@@ -733,7 +787,6 @@ class Agent:
                 except Exception:
                     pass
 
-        # Delete temp dir
         temp_dir = prov.get("temp_dir", "")
         if temp_dir and os.path.isdir(temp_dir):
             try:
@@ -741,6 +794,12 @@ class Agent:
                 print(f"[agent:prov] Cleaned up {temp_dir}")
             except Exception as e:
                 print(f"[agent:prov] Warning: failed to clean up {temp_dir}: {e}")
+
+    def _cleanup_all_prov_chromes(self):
+        """Kill all provision Chromes and clean up temp dirs."""
+        for slot in list(self._prov_chromes):
+            prov = self._prov_chromes.pop(slot)
+            self._cleanup_single_prov(prov)
 
     async def _handle_ws_send(self, msg: dict):
         """Forward a CDP message from relay to Chrome."""
@@ -846,6 +905,7 @@ class Agent:
         print("[agent] stopping...")
         self.running = False
         await self._close_all_channels()
+        self._cleanup_all_prov_chromes()
         if self.ws:
             await self.ws.close()
 

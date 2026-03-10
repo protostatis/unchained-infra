@@ -224,7 +224,7 @@ class Relay:
                 result = await self.http_proxy(agent_id, "POST", bridge_path, timeout=60)
                 return self._json_response(result.get("status", 200), "OK", result.get("body", {}))
         # GET /api/agents/<id>/provision-cleanup — clean up provision Chrome
-        if path.startswith("/api/agents/") and path.endswith("/provision-cleanup"):
+        if path.startswith("/api/agents/") and "/provision-cleanup" in path:
             parts = path.split("/")
             if len(parts) >= 5:
                 agent_id = parts[3]
@@ -238,7 +238,11 @@ class Relay:
                 )
                 if not allowed:
                     return self._rate_limit_response(retry_after, "relay_http")
-                result = await self.http_proxy(agent_id, "POST", "/provision-cleanup")
+                bridge_path = "/provision-cleanup"
+                query = urllib.parse.urlsplit(full_path).query
+                if query:
+                    bridge_path = f"{bridge_path}?{query}"
+                result = await self.http_proxy(agent_id, "POST", bridge_path)
                 return self._json_response(result.get("status", 200), "OK", result.get("body", {}))
         # GET /api/agents/<id>/http/<method>/<chrome_path> — proxy HTTP to agent's Chrome
         # Example: /api/agents/claude-abc/http/PUT/json/new?about:blank
