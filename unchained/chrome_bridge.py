@@ -563,7 +563,7 @@ class Agent:
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=3) as resp:
                 tabs = json.loads(resp.read())
-            page_tabs = [t for t in tabs if t.get("type") == "page"]
+            page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
             if real_id == "auto" and page_tabs:
                 return page_tabs[0]["webSocketDebuggerUrl"]
             matches = [t for t in page_tabs if t["id"].startswith(real_id)]
@@ -578,7 +578,7 @@ class Agent:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
-        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
         if tab_id == "auto" and not page_tabs:
             # Chrome is running but has no page tabs — create one
             new_req = urllib.request.Request(
