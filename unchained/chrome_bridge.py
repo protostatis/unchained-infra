@@ -564,8 +564,12 @@ class Agent:
             with urllib.request.urlopen(req, timeout=3) as resp:
                 tabs = json.loads(resp.read())
             page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
-            if real_id == "auto" and page_tabs:
-                return page_tabs[0]["webSocketDebuggerUrl"]
+            if real_id == "auto":
+                # Auto prefers page tabs; fall back to popup only if no pages
+                pages_only = [t for t in tabs if t.get("type") == "page"]
+                auto_tab = pages_only[0] if pages_only else (page_tabs[0] if page_tabs else None)
+                if auto_tab:
+                    return auto_tab["webSocketDebuggerUrl"]
             matches = [t for t in page_tabs if t["id"].startswith(real_id)]
             if len(matches) == 1:
                 return matches[0]["webSocketDebuggerUrl"]
@@ -579,6 +583,7 @@ class Agent:
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
         page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+        pages_only = [t for t in tabs if t.get("type") == "page"]
         if tab_id == "auto" and not page_tabs:
             # Chrome is running but has no page tabs — create one
             new_req = urllib.request.Request(
@@ -588,8 +593,10 @@ class Agent:
                 new_tab = json.loads(resp.read())
             print(f"[agent] auto-created tab (Chrome had 0 page tabs)")
             return new_tab["webSocketDebuggerUrl"]
-        if tab_id == "auto" and page_tabs:
-            return page_tabs[0]["webSocketDebuggerUrl"]
+        if tab_id == "auto":
+            # Prefer page tabs; fall back to popup only if no pages exist
+            auto_tab = pages_only[0] if pages_only else page_tabs[0]
+            return auto_tab["webSocketDebuggerUrl"]
         matches = [t for t in page_tabs if t["id"].startswith(tab_id)]
         if len(matches) == 1:
             return matches[0]["webSocketDebuggerUrl"]
