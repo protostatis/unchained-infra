@@ -72,6 +72,10 @@ async def provision_cleanup(agent_id: str, relay_host: str = "127.0.0.1", relay_
     return await _client().provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
 
 
+async def provision_status(agent_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> dict:
+    return await _client().provision_status(agent_id, relay_host, relay_port)
+
+
 async def set_file(agent_id: str, tab_id: str, selector: str, file_path: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
     return await _client().set_file(agent_id, tab_id, selector, file_path, relay_host, relay_port)
 

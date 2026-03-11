@@ -424,6 +424,11 @@ class Agent:
             await self._handle_provision_cleanup(req_id, path)
             return
 
+        # Provision Chrome: status (list all provisioned slots and their tabs)
+        if path == "/provision-status":
+            await self._handle_provision_status(req_id)
+            return
+
         # Proxy /prov/{slot}/{path} requests to the provision Chrome's port
         if path.startswith("/prov/") and self._prov_chromes:
             # Parse: /prov/{slot}/{chrome_path}
@@ -563,9 +568,13 @@ class Agent:
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=3) as resp:
                 tabs = json.loads(resp.read())
-            page_tabs = [t for t in tabs if t.get("type") == "page"]
-            if real_id == "auto" and page_tabs:
-                return page_tabs[0]["webSocketDebuggerUrl"]
+            page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+            if real_id == "auto":
+                # Auto prefers page tabs; fall back to popup only if no pages
+                pages_only = [t for t in tabs if t.get("type") == "page"]
+                auto_tab = pages_only[0] if pages_only else (page_tabs[0] if page_tabs else None)
+                if auto_tab:
+                    return auto_tab["webSocketDebuggerUrl"]
             matches = [t for t in page_tabs if t["id"].startswith(real_id)]
             if len(matches) == 1:
                 return matches[0]["webSocketDebuggerUrl"]
@@ -578,7 +587,8 @@ class Agent:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
-        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+        pages_only = [t for t in tabs if t.get("type") == "page"]
         if tab_id == "auto" and not page_tabs:
             # Chrome is running but has no page tabs — create one
             new_req = urllib.request.Request(
@@ -588,8 +598,10 @@ class Agent:
                 new_tab = json.loads(resp.read())
             print(f"[agent] auto-created tab (Chrome had 0 page tabs)")
             return new_tab["webSocketDebuggerUrl"]
-        if tab_id == "auto" and page_tabs:
-            return page_tabs[0]["webSocketDebuggerUrl"]
+        if tab_id == "auto":
+            # Prefer page tabs; fall back to popup only if no pages exist
+            auto_tab = pages_only[0] if pages_only else page_tabs[0]
+            return auto_tab["webSocketDebuggerUrl"]
         matches = [t for t in page_tabs if t["id"].startswith(tab_id)]
         if len(matches) == 1:
             return matches[0]["webSocketDebuggerUrl"]
@@ -790,6 +802,51 @@ class Agent:
             "req_id": req_id,
             "status": 200,
             "body": {"status": "cleaned_up"},
+        }))
+
+    async def _handle_provision_status(self, req_id):
+        """Return all provisioned Chrome slots with their tabs (prov-prefixed IDs)."""
+        if not self._prov_chromes:
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 200,
+                "body": {"slots": {}},
+            }))
+            return
+
+        slots = {}
+        for slot, prov in self._prov_chromes.items():
+            port = prov["port"]
+            profile_dir = prov.get("profile_dir_name", "")
+            tabs_info = []
+            try:
+                url = f"http://127.0.0.1:{port}/json"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs = json.loads(resp.read())
+                for t in tabs:
+                    if t.get("type") not in ("page", "popup"):
+                        continue
+                    tabs_info.append({
+                        "tab_id": f"prov-{slot}-{t['id']}",
+                        "type": t.get("type", ""),
+                        "title": t.get("title", ""),
+                        "url": t.get("url", ""),
+                    })
+            except Exception as e:
+                tabs_info.append({"error": str(e)})
+            slots[slot] = {
+                "profile": profile_dir,
+                "port": port,
+                "tabs": tabs_info,
+            }
+
+        await self.ws.send(json.dumps({
+            "type": "http_response",
+            "req_id": req_id,
+            "status": 200,
+            "body": {"slots": slots},
         }))
 
     def _cleanup_single_prov(self, prov: dict):

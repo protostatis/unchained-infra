@@ -225,6 +225,23 @@ class Relay:
                     bridge_path = f"{bridge_path}?{query}"
                 result = await self.http_proxy(agent_id, "POST", bridge_path, timeout=60)
                 return self._json_response(result.get("status", 200), "OK", result.get("body", {}))
+        # GET /api/agents/<id>/provision-status — list provisioned tabs
+        if path.startswith("/api/agents/") and path.endswith("/provision-status"):
+            parts = path.split("/")
+            if len(parts) == 5:
+                agent_id = parts[3]
+                _, _, reason = self._authorize_headers(request.headers, agent_id)
+                if reason is not None:
+                    return self._auth_error_response(reason, agent_id)
+                key, internal = self._rate_limit_key_from_headers(request.headers, "http-provision")
+                allowed, retry_after = self._check_rate_limit(
+                    key,
+                    self.internal_http_limit if internal else self.http_limit,
+                )
+                if not allowed:
+                    return self._rate_limit_response(retry_after, "relay_http")
+                result = await self.http_proxy(agent_id, "GET", "/provision-status")
+                return self._json_response(result.get("status", 200), "OK", result.get("body", {}))
         # GET /api/agents/<id>/provision-cleanup — clean up provision Chrome
         if path.startswith("/api/agents/") and "/provision-cleanup" in path:
             parts = path.split("/")
