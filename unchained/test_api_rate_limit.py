@@ -79,7 +79,7 @@ class TestApiRateLimit(unittest.TestCase):
         self.assertEqual(first.status, 200)
         self.assertEqual(second.status, 429)
 
-    def test_create_tab_defaults_to_branded_local_tab_page(self):
+    def test_create_tab_defaults_to_about_blank_in_standalone_local_mode(self):
         request = SimpleNamespace(
             headers={"Authorization": "Bearer uc_live_test"},
             match_info={"agent_id": "claude-abc"},
@@ -95,7 +95,27 @@ class TestApiRateLimit(unittest.TestCase):
         self.api.relay.http_proxy.assert_awaited_once_with(
             "claude-abc",
             "PUT",
-            "/json/new?http://127.0.0.1:8080/tab",
+            "/json/new?about:blank",
+        )
+
+    def test_create_tab_uses_configured_public_base_for_branded_tab(self):
+        os.environ["UNCHAINED_PUBLIC_BASE_URL"] = "https://api.unchainedsky.com"
+        request = SimpleNamespace(
+            headers={"Authorization": "Bearer uc_live_test"},
+            match_info={"agent_id": "claude-abc"},
+            can_read_body=True,
+            host="127.0.0.1:8765",
+            json=AsyncMock(return_value={}),
+        )
+        self.api.relay.http_proxy = AsyncMock(return_value={"status": 200, "body": {}})
+
+        response = asyncio.run(self.api.handle_create_tab(request))
+
+        self.assertEqual(response.status, 200)
+        self.api.relay.http_proxy.assert_awaited_once_with(
+            "claude-abc",
+            "PUT",
+            "/json/new?https://api.unchainedsky.com/tab",
         )
 
 

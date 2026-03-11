@@ -70,11 +70,9 @@ def _default_new_tab_url(request: web.Request) -> str:
 
     host = (getattr(request, "host", "") or "").strip()
     hostname = _hostname_from_host(host)
-    if hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
-        return f"http://{hostname}:8080{_DEFAULT_TAB_PATH}"
     if hostname == "unchainedsky.com" or hostname.endswith(".unchainedsky.com"):
         return f"https://{host}{_DEFAULT_TAB_PATH}"
-    return f"https://api.unchainedsky.com{_DEFAULT_TAB_PATH}"
+    return "about:blank"
 
 
 # ---------------------------------------------------------------------------
