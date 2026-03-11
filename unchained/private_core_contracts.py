@@ -18,6 +18,7 @@ OP_SCREENSHOT = "screenshot"
 OP_CREATE_TAB = "create_tab"
 OP_PROVISION_LAUNCH = "provision_launch"
 OP_PROVISION_CLEANUP = "provision_cleanup"
+OP_PROVISION_STATUS = "provision_status"
 OP_CLOSE_TAB = "close_tab"
 OP_SET_FILE = "set_file"
 
@@ -35,6 +36,7 @@ PRIVATE_CORE_OPS = {
     OP_CREATE_TAB,
     OP_PROVISION_LAUNCH,
     OP_PROVISION_CLEANUP,
+    OP_PROVISION_STATUS,
     OP_CLOSE_TAB,
     OP_SET_FILE,
 }

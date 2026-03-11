@@ -424,6 +424,11 @@ class Agent:
             await self._handle_provision_cleanup(req_id, path)
             return
 
+        # Provision Chrome: status (list all provisioned slots and their tabs)
+        if path == "/provision-status":
+            await self._handle_provision_status(req_id)
+            return
+
         # Proxy /prov/{slot}/{path} requests to the provision Chrome's port
         if path.startswith("/prov/") and self._prov_chromes:
             # Parse: /prov/{slot}/{chrome_path}
@@ -797,6 +802,51 @@ class Agent:
             "req_id": req_id,
             "status": 200,
             "body": {"status": "cleaned_up"},
+        }))
+
+    async def _handle_provision_status(self, req_id):
+        """Return all provisioned Chrome slots with their tabs (prov-prefixed IDs)."""
+        if not self._prov_chromes:
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 200,
+                "body": {"slots": {}},
+            }))
+            return
+
+        slots = {}
+        for slot, prov in self._prov_chromes.items():
+            port = prov["port"]
+            profile_dir = prov.get("profile_dir_name", "")
+            tabs_info = []
+            try:
+                url = f"http://127.0.0.1:{port}/json"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs = json.loads(resp.read())
+                for t in tabs:
+                    if t.get("type") not in ("page", "popup"):
+                        continue
+                    tabs_info.append({
+                        "tab_id": f"prov-{slot}-{t['id']}",
+                        "type": t.get("type", ""),
+                        "title": t.get("title", ""),
+                        "url": t.get("url", ""),
+                    })
+            except Exception as e:
+                tabs_info.append({"error": str(e)})
+            slots[slot] = {
+                "profile": profile_dir,
+                "port": port,
+                "tabs": tabs_info,
+            }
+
+        await self.ws.send(json.dumps({
+            "type": "http_response",
+            "req_id": req_id,
+            "status": 200,
+            "body": {"slots": slots},
         }))
 
     def _cleanup_single_prov(self, prov: dict):

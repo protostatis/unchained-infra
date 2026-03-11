@@ -321,6 +321,38 @@ async def list_connected_agents(agent_id: str = "") -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+async def list_provisioned_tabs(agent_id: str = "") -> str:
+    """List all tabs in provisioned Chrome instances.
+
+    Use this after provisioning Chrome with a profile to discover
+    new tabs (e.g., OAuth popups). Returns prov-prefixed tab IDs
+    that can be passed to ddm, cdp_click, cdp_type, etc.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    result = await cloud_tools.provision_status(aid)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    slots = result.get("slots", {})
+    if not slots:
+        return "No provisioned Chrome instances."
+    lines = []
+    for slot, info in slots.items():
+        profile = info.get("profile", "")
+        tabs = info.get("tabs", [])
+        lines.append(f"Slot {slot} (profile: {profile}, {len(tabs)} tab{'s' if len(tabs) != 1 else ''}):")
+        for t in tabs:
+            if "error" in t:
+                lines.append(f"  [error] {t['error']}")
+                continue
+            tab_id = t.get("tab_id", "")
+            title = t.get("title", "(empty)")[:50]
+            url = t.get("url", "")[:80]
+            popup = "  [popup]" if t.get("type") == "popup" else ""
+            lines.append(f"  {tab_id}  {title}{popup}  {url}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

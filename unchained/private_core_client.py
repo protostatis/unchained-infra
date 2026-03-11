@@ -21,6 +21,7 @@ from private_core_contracts import (
     OP_PRESS_ENTER,
     OP_PROVISION_CLEANUP,
     OP_PROVISION_LAUNCH,
+    OP_PROVISION_STATUS,
     OP_RUN_CDP_COMMAND,
     OP_RUN_DDM,
     OP_RUN_INTEL,
@@ -132,7 +133,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SET_FILE, "set_file")]:
+        for op_name, fn_name in [(OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -273,6 +274,14 @@ class PrivateCoreClient:
             relay_host=relay_host,
             relay_port=relay_port,
             slot=slot,
+        )
+
+    async def provision_status(self, agent_id: str, relay_host: str, relay_port: int) -> dict:
+        return await self.execute(
+            OP_PROVISION_STATUS,
+            agent_id=agent_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
         )
 
     async def set_file(self, agent_id: str, tab_id: str, selector: str, file_path: str, relay_host: str, relay_port: int) -> str:
