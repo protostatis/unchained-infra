@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.41"
+VERSION = "0.3.42"
 MIN_VERSION = "0.2.0"
 
 # Source files to include as-is (non-proprietary)
@@ -64,6 +64,7 @@ import urllib.error
 
 API_KEY = os.environ.get("UNCHAINED_API_KEY", "")
 API_URL = os.environ.get("UNCHAINED_API_URL", "https://api.unchainedsky.com")
+DEFAULT_NEW_TAB_PATH = "/tab"
 TAB_ID = os.environ.get("CDP_TAB_ID", "auto")
 CDP_HOST = os.environ.get("CDP_HOST", "127.0.0.1")
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
@@ -139,7 +140,7 @@ def main():
             return
 
         elif command == "new-tab":
-            url = args[0] if args else "about:blank"
+            url = args[0] if args else f"{API_URL.rstrip('/')}{DEFAULT_NEW_TAB_PATH}"
             req = urllib.request.Request(
                 f"http://{CDP_HOST}:{CDP_PORT}/json/new?{url}", method="PUT")
             with urllib.request.urlopen(req, timeout=5) as resp:

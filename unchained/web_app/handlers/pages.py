@@ -31,6 +31,17 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
+async def handle_tab_page(request: web.Request) -> web.Response:
+    """Serve the lightweight branded default tab page."""
+    del request
+    core = _core()
+    return web.Response(
+        text=core.BRANDED_TAB_HTML,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_trial_page(request: web.Request) -> web.Response:
     """Serve the trial chat HTML page (OpenRouter models)."""
     core = _core()

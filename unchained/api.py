@@ -48,6 +48,33 @@ def _get_bearer_token(request: web.Request) -> str | None:
     return None
 
 
+_DEFAULT_TAB_PATH = "/tab"
+
+
+def _configured_public_base_url() -> str:
+    base_url = (
+        os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
+        or os.environ.get("UNCHAINED_API_URL", "").strip()
+    )
+    return base_url.rstrip("/")
+
+
+def _hostname_from_host(host: str) -> str:
+    return host.split(":", 1)[0].strip().lower()
+
+
+def _default_new_tab_url(request: web.Request) -> str:
+    configured = _configured_public_base_url()
+    if configured:
+        return f"{configured}{_DEFAULT_TAB_PATH}"
+
+    host = (getattr(request, "host", "") or "").strip()
+    hostname = _hostname_from_host(host)
+    if hostname == "unchainedsky.com" or hostname.endswith(".unchainedsky.com"):
+        return f"https://{host}{_DEFAULT_TAB_PATH}"
+    return "about:blank"
+
+
 # ---------------------------------------------------------------------------
 # API Server
 # ---------------------------------------------------------------------------
@@ -157,7 +184,7 @@ class API:
         if limited is not None:
             return limited
         body = await request.json() if request.can_read_body else {}
-        url = body.get("url", "about:blank")
+        url = body.get("url") or _default_new_tab_url(request)
         encoded = urllib.parse.quote(url, safe=':/?#[]@!$&\'()*+,;=-._~')
         resp = await self.relay.http_proxy(agent_id, "PUT", f"/json/new?{encoded}")
         return web.json_response(resp["body"], status=resp["status"])
