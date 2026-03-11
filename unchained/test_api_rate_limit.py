@@ -39,8 +39,12 @@ class TestApiRateLimit(unittest.TestCase):
     def setUp(self):
         self._old_window = os.environ.get("UNCHAINED_API_RATE_WINDOW_S")
         self._old_js = os.environ.get("UNCHAINED_API_JS_RATE_LIMIT")
+        self._old_public_base = os.environ.get("UNCHAINED_PUBLIC_BASE_URL")
+        self._old_api_url = os.environ.get("UNCHAINED_API_URL")
         os.environ["UNCHAINED_API_RATE_WINDOW_S"] = "60"
         os.environ["UNCHAINED_API_JS_RATE_LIMIT"] = "1"
+        os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+        os.environ.pop("UNCHAINED_API_URL", None)
         self.api = API(_FakeRelay())
 
     def tearDown(self):
@@ -52,6 +56,14 @@ class TestApiRateLimit(unittest.TestCase):
             os.environ.pop("UNCHAINED_API_JS_RATE_LIMIT", None)
         else:
             os.environ["UNCHAINED_API_JS_RATE_LIMIT"] = self._old_js
+        if self._old_public_base is None:
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+        else:
+            os.environ["UNCHAINED_PUBLIC_BASE_URL"] = self._old_public_base
+        if self._old_api_url is None:
+            os.environ.pop("UNCHAINED_API_URL", None)
+        else:
+            os.environ["UNCHAINED_API_URL"] = self._old_api_url
 
     def test_js_endpoint_rate_limits_second_request(self):
         request = SimpleNamespace(
@@ -66,6 +78,25 @@ class TestApiRateLimit(unittest.TestCase):
 
         self.assertEqual(first.status, 200)
         self.assertEqual(second.status, 429)
+
+    def test_create_tab_defaults_to_branded_local_tab_page(self):
+        request = SimpleNamespace(
+            headers={"Authorization": "Bearer uc_live_test"},
+            match_info={"agent_id": "claude-abc"},
+            can_read_body=True,
+            host="127.0.0.1:8765",
+            json=AsyncMock(return_value={}),
+        )
+        self.api.relay.http_proxy = AsyncMock(return_value={"status": 200, "body": {}})
+
+        response = asyncio.run(self.api.handle_create_tab(request))
+
+        self.assertEqual(response.status, 200)
+        self.api.relay.http_proxy.assert_awaited_once_with(
+            "claude-abc",
+            "PUT",
+            "/json/new?http://127.0.0.1:8080/tab",
+        )
 
 
 if __name__ == "__main__":

@@ -115,6 +115,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
 
         expected_pages = {
             "/": "Get Started",
+            "/tab": "Ready for navigation",
             "/local": "client-update-btn",
             "/setup": "setup-client-update-btn",
             "/install": "install-client-update-btn",

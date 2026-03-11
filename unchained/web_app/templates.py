@@ -2,6 +2,115 @@
 
 from __future__ import annotations
 
+BRANDED_TAB_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>UnchainedSky</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{
+  --bg:#07111b;--bg2:#0e1b2d;--panel:rgba(9,16,28,0.82);
+  --line:rgba(148,163,184,0.12);--text:#eef2ff;--muted:#9fb0c8;--accent:#e94560;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  color:var(--text);
+  background:
+    radial-gradient(circle at top, rgba(233,69,96,0.16), transparent 34%),
+    radial-gradient(circle at 80% 20%, rgba(59,130,246,0.16), transparent 28%),
+    linear-gradient(160deg, var(--bg), var(--bg2));
+  font-family:"Avenir Next","Segoe UI",sans-serif;
+}
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size:56px 56px;
+  mask-image:linear-gradient(to bottom, rgba(0,0,0,0.75), transparent 82%);
+  pointer-events:none;
+}
+.shell{
+  position:relative;
+  width:min(560px, calc(100vw - 32px));
+  padding:28px 30px 30px;
+  border:1px solid rgba(255,255,255,0.1);
+  border-radius:28px;
+  background:var(--panel);
+  backdrop-filter:blur(18px);
+  box-shadow:0 24px 80px rgba(0,0,0,0.38);
+}
+.eyebrow{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:20px;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:600;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+}
+.eyebrow::before{
+  content:"";
+  width:34px;
+  height:1px;
+  background:linear-gradient(90deg, transparent, var(--accent));
+}
+h1{
+  margin:0;
+  font-size:clamp(40px, 8vw, 72px);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+h1 span{color:var(--accent)}
+p{
+  margin:14px 0 0;
+  max-width:28ch;
+  color:var(--muted);
+  font-size:16px;
+  line-height:1.6;
+}
+.status{
+  margin-top:22px;
+  display:inline-block;
+  padding:8px 12px;
+  border-radius:999px;
+  border:1px solid rgba(233,69,96,0.28);
+  background:rgba(233,69,96,0.08);
+  color:#ffd7df;
+  font-size:12px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+@media (max-width: 640px){
+  .shell{padding:24px 22px 24px;border-radius:22px}
+  h1{letter-spacing:0.05em}
+}
+</style>
+</head>
+<body data-unchained-tab="brand-default">
+  <main class="shell" aria-label="UnchainedSky default tab">
+    <div class="eyebrow">Local browser agent</div>
+    <h1>Unchained<span>Sky</span></h1>
+    <p>Your browser is connected. Open a destination or let the agent navigate from here.</p>
+    <div class="status">Ready for navigation</div>
+  </main>
+</body>
+</html>
+"""
+
 LANDING_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>

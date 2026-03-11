@@ -44,6 +44,7 @@ from web_app.cmd_dispatch import (
 from web_app.routes import ROUTE_SPECS, register_route_specs
 from web_app.templates import (
     ADMIN_HTML,
+    BRANDED_TAB_HTML,
     CASE_STUDY_ZILLOW_HTML,
     CHAT_CLAUDE_SDK_HTML,
     CHAT_CODEX_HTML,

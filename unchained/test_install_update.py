@@ -138,6 +138,18 @@ def test_build_update_zip_no_env_no_start():
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh; stop.sh included)")
 
 
+def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():
+    from agent_package import build_update_zip
+
+    zip_bytes = build_update_zip()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        cdp_tool = zf.read("unchained-agent/unchained/cdp_tool.py").decode()
+
+    assert 'DEFAULT_NEW_TAB_PATH = "/tab"' in cdp_tool
+    assert 'url = args[0] if args else f"{API_URL.rstrip(\'/\')}{DEFAULT_NEW_TAB_PATH}"' in cdp_tool
+    print("  packaged cdp_tool.py defaults blank new-tab to /tab")
+
+
 def test_runtime_dockerfile_copies_scheduler_files():
     repo_root = Path(__file__).resolve().parent.parent
     dockerfile = (repo_root / "Dockerfile").read_text()
@@ -680,6 +692,7 @@ def test_landing_and_case_study_contact_email_injected():
     """Verify public pages use configurable CONTACT_EMAIL instead of hardcoded mailbox."""
     import inspect
     from web import (
+        BRANDED_TAB_HTML,
         CASE_STUDY_ZILLOW_HTML,
         LANDING_HTML,
         handle_case_study_zillow,
@@ -688,6 +701,9 @@ def test_landing_and_case_study_contact_email_injected():
 
     assert "mailto:__CONTACT_EMAIL__" in LANDING_HTML, "landing page contact placeholder missing"
     assert "mailto:__CONTACT_EMAIL__" in CASE_STUDY_ZILLOW_HTML, "case study contact placeholder missing"
+    assert 'data-unchained-tab="brand-default"' in BRANDED_TAB_HTML, "branded tab marker missing"
+    assert 'content="noindex, nofollow"' in BRANDED_TAB_HTML, "branded tab should stay out of search indexes"
+    assert "Ready for navigation" in BRANDED_TAB_HTML, "branded tab ready-state missing"
 
     index_src = inspect.getsource(handle_index)
     case_src = inspect.getsource(handle_case_study_zillow)

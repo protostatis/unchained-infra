@@ -50,6 +50,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/"),
+            ("GET", "/tab"),
             ("GET", "/mcp-guide"),
             ("GET", "/test"),
             ("GET", "/privacy"),
@@ -126,6 +127,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_chat_pages_exported(self):
         templates = [
             "LANDING_HTML",
+            "BRANDED_TAB_HTML",
             "HTML",
             "TRIAL_CHAT_HTML",
             "CHAT_GEMINI_HTML",
