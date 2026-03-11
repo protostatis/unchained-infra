@@ -43,8 +43,8 @@ body::before{
 }
 .shell{
   position:relative;
-  width:min(560px, calc(100vw - 32px));
-  padding:28px 30px 30px;
+  width:min(940px, calc(100vw - 32px));
+  padding:34px 40px 38px;
   border:1px solid rgba(255,255,255,0.1);
   border-radius:28px;
   background:var(--panel);
@@ -70,14 +70,15 @@ body::before{
 }
 h1{
   margin:0;
-  font-size:clamp(40px, 8vw, 72px);
-  letter-spacing:0.08em;
+  font-size:clamp(42px, 8vw, 104px);
+  letter-spacing:0.04em;
+  line-height:0.94;
   text-transform:uppercase;
 }
 h1 span{color:var(--accent)}
 p{
   margin:14px 0 0;
-  max-width:28ch;
+  max-width:32ch;
   color:var(--muted);
   font-size:16px;
   line-height:1.6;
@@ -96,7 +97,7 @@ p{
 }
 @media (max-width: 640px){
   .shell{padding:24px 22px 24px;border-radius:22px}
-  h1{letter-spacing:0.05em}
+  h1{font-size:clamp(34px, 15vw, 62px);letter-spacing:0.03em}
 }
 </style>
 </head>
