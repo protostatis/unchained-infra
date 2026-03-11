@@ -15,6 +15,7 @@ Claude Code connects:
     claude --mcp-server https://api.unchained.dev/mcp
 """
 
+import base64
 import hashlib
 import os
 import re
@@ -22,6 +23,7 @@ import sys
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
+from fastmcp.utilities.types import Image
 
 import cloud_tools
 from auth import Auth
@@ -249,15 +251,16 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
-async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 
-    Returns base64-encoded PNG. Use sparingly (~2100 tokens) — prefer
+    Returns PNG image content. Use sparingly (~2100 tokens) — prefer
     DDM for page understanding (~500 tokens).
     Only use for: CAPTCHAs, visual state, image verification.
     """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.screenshot(aid, tab_id)
+    png_b64 = await cloud_tools.screenshot(aid, tab_id)
+    return Image(data=base64.b64decode(png_b64, validate=True), format="png")
 
 
 @mcp.tool()
