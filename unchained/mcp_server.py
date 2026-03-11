@@ -322,6 +322,53 @@ async def list_connected_agents(agent_id: str = "") -> str:
 
 
 @mcp.tool()
+async def cdp_provision_launch(profile_path: str, agent_id: str = "") -> str:
+    """Launch a temporary Chrome with a user profile for OAuth or authenticated browsing.
+
+    Args:
+        profile_path: Absolute path to the Chrome profile directory
+            (e.g. "/Users/you/Library/Application Support/Google/Chrome/Profile 5").
+        agent_id: Agent to provision on (default: auto-detected).
+
+    Returns the provisioned slot ID and initial tab ID. Use the returned
+    prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    result = await cloud_tools.provision_launch(aid, profile_path)
+    if not result or "error" in result:
+        err = result.get("error", "Unknown error") if result else "No response"
+        return f"Error: {err}"
+    tab_id = result.get("tab_id", "")
+    slot = result.get("slot", "")
+    port = result.get("port", "")
+    lines = [f"Provisioned Chrome launched."]
+    if slot:
+        lines.append(f"  Slot: {slot}")
+    if tab_id:
+        lines.append(f"  Tab ID: {tab_id}")
+    if port:
+        lines.append(f"  Debug port: {port}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
+    """Clean up provisioned Chrome instances.
+
+    Args:
+        slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all slots.
+        agent_id: Agent to clean up on (default: auto-detected).
+    """
+    aid = _resolve_agent(profile=agent_id)
+    result = await cloud_tools.provision_cleanup(aid, slot=slot)
+    if result:
+        if slot:
+            return f"Cleaned up provisioned Chrome slot {slot}."
+        return "Cleaned up all provisioned Chrome instances."
+    return "Cleanup returned false — no provisioned instances found or cleanup failed."
+
+
+@mcp.tool()
 async def list_provisioned_tabs(agent_id: str = "") -> str:
     """List all tabs in provisioned Chrome instances.
 
