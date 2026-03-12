@@ -1044,6 +1044,101 @@ def test_cli_agent_forwards_model_from_ws():
     print(f"  CLI agent main loop forwards model from WS message")
 
 
+# ── PowerShell syntax validation ─────────────────────────────────────
+
+def test_powershell_scripts_parse_without_errors():
+    """Extract all .ps1 scripts from agent ZIP and validate syntax via pwsh."""
+    if not shutil.which("pwsh"):
+        print("  SKIP: pwsh not installed")
+        return
+
+    from agent_package import build_agent_zip
+
+    zip_bytes = build_agent_zip(
+        api_key="uc_live_test123",
+        relay_host="localhost",
+        install_token="inst_test_bootstrap",
+    )
+
+    errors = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        ps1_files = [n for n in zf.namelist() if n.endswith(".ps1")]
+        assert ps1_files, "No .ps1 files found in agent ZIP"
+
+        for name in ps1_files:
+            content = zf.read(name).decode("utf-8")
+            with tempfile.NamedTemporaryFile(
+                suffix=".ps1", mode="w", delete=False, encoding="utf-8",
+            ) as f:
+                f.write(content)
+                f.flush()
+                tmp_path = f.name
+
+            try:
+                import subprocess
+                result = subprocess.run(
+                    [
+                        "pwsh", "-NoProfile", "-NonInteractive", "-Command",
+                        f'$errs = $null; '
+                        f'[System.Management.Automation.Language.Parser]::ParseFile('
+                        f'"{tmp_path}", [ref]$null, [ref]$errs); '
+                        f'if ($errs.Count -gt 0) {{ '
+                        f'$errs | ForEach-Object {{ Write-Error $_.ToString() }}; '
+                        f'exit 1 }}',
+                    ],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
+                    errors.append(f"{name}: {result.stderr.strip()}")
+            finally:
+                os.unlink(tmp_path)
+
+    assert not errors, "PowerShell syntax errors:\n" + "\n".join(errors)
+    print(f"  All {len(ps1_files)} .ps1 scripts parse cleanly: {ps1_files}")
+
+
+def test_powershell_windows_install_script_parses():
+    """Validate the generated Windows install script parses cleanly."""
+    if not shutil.which("pwsh"):
+        print("  SKIP: pwsh not installed")
+        return
+
+    from agent_package import _generate_windows_install_script
+    script = _generate_windows_install_script(
+        install_token="test_token_123",
+        relay_host="api.unchainedsky.com",
+        base_url="https://api.unchainedsky.com",
+    )
+    assert len(script) > 100, "Windows install script seems too short"
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".ps1", mode="w", delete=False, encoding="utf-8",
+    ) as f:
+        f.write(script)
+        f.flush()
+        tmp_path = f.name
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [
+                "pwsh", "-NoProfile", "-NonInteractive", "-Command",
+                f'$errs = $null; '
+                f'[System.Management.Automation.Language.Parser]::ParseFile('
+                f'"{tmp_path}", [ref]$null, [ref]$errs); '
+                f'if ($errs.Count -gt 0) {{ '
+                f'$errs | ForEach-Object {{ Write-Error $_.ToString() }}; '
+                f'exit 1 }}',
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, f"Windows install PS1 syntax error: {result.stderr.strip()}"
+    finally:
+        os.unlink(tmp_path)
+
+    print(f"  Windows install script parses cleanly ({len(script)} chars)")
+
+
 # ── Runner ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1097,6 +1192,8 @@ if __name__ == "__main__":
         ("sdk: uses per-message model", test_sdk_agent_uses_per_message_model),
         ("cli: model ID to CLI name map", test_cli_agent_model_map),
         ("cli: main loop forwards model", test_cli_agent_forwards_model_from_ws),
+        ("powershell: agent ZIP .ps1 scripts parse cleanly", test_powershell_scripts_parse_without_errors),
+        ("powershell: windows install script parses", test_powershell_windows_install_script_parses),
     ]
 
     passed = 0
