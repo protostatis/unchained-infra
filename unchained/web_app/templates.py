@@ -7400,6 +7400,14 @@ function _syncSlotButtons() {
   }
 }
 
+function _highlightSlotButtons(slot) {
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (!btn) continue;
+    btn.classList.toggle('active', i === slot);
+  }
+}
+
 function onModelChange(model) {
   localStorage.setItem('unchained_model', model);
   // Refresh model-scoped status immediately when switching lanes.
@@ -7659,6 +7667,7 @@ async function loadSlots() {
     const r = await fetch('/web/chat/slots?' + qs.toString());
     if (!r.ok) return;
     const data = await r.json();
+    if (data.offline) return;
     if (data.session_id) {
       sessionId = data.session_id;
       _persistSessionId(sessionId);
@@ -7667,7 +7676,7 @@ async function loadSlots() {
     activeSlot = data.active_slot || 1;
     const state = _loadSlotState();
     state.active_slot = activeSlot;
-    if (sessionId && sessionId.startsWith('s-' + agentId + '-')) {
+    if (data.session_id && sessionId && sessionId.startsWith('s-' + agentId + '-')) {
       state.slots[String(activeSlot)] = sessionId;
     }
     _saveSlotState(state);
@@ -7689,26 +7698,53 @@ async function loadSlots() {
 async function switchSlot(n) {
   if (n === activeSlot) return;
   if (sending) return;
-  const state = _loadSlotState();
-  state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
-  if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
-  _saveSlotState(state);
-  activeSlot = state.active_slot;
-  sessionId = state.slots[String(activeSlot)];
-  _persistSessionId(sessionId);
-  _syncSlotButtons();
+  const targetSlot = (n === 1 || n === 2 || n === 3) ? n : 1;
+  const previousState = _loadSlotState();
+  const previousActiveSlot = activeSlot;
+  const previousSessionId = sessionId;
+  const targetSessionId = previousState.slots[String(targetSlot)] || _newSessionId();
+  activeSlot = targetSlot;
+  sessionId = targetSessionId;
+  _highlightSlotButtons(targetSlot);
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  let switched = false;
   try {
-    await fetch('/web/chat/switch', {
+    const r = await fetch('/web/chat/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        slot: n,
+        slot: targetSlot,
         model: currentModel(),
-        session_id: sessionId,
+        session_id: previousSessionId,
       }),
     });
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      const confirmedSlot = (data.active_slot === 1 || data.active_slot === 2 || data.active_slot === 3)
+        ? data.active_slot
+        : targetSlot;
+      const nextState = _loadSlotState();
+      nextState.active_slot = confirmedSlot;
+      if (!nextState.slots[String(targetSlot)]) nextState.slots[String(targetSlot)] = targetSessionId;
+      if (!nextState.slots[String(confirmedSlot)]) {
+        nextState.slots[String(confirmedSlot)] =
+          (confirmedSlot === targetSlot) ? targetSessionId : _newSessionId();
+      }
+      _saveSlotState(nextState);
+      activeSlot = confirmedSlot;
+      sessionId = nextState.slots[String(activeSlot)];
+      _persistSessionId(sessionId);
+      _syncSlotButtons();
+      switched = true;
+    }
   } catch(e) {}
+  if (!switched) {
+    _saveSlotState(previousState);
+    activeSlot = previousActiveSlot;
+    sessionId = previousSessionId;
+    _persistSessionId(sessionId);
+    _syncSlotButtons();
+  }
   document.getElementById('chat').innerHTML = '';
   await loadHistory();
 }
