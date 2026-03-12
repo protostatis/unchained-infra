@@ -48,6 +48,7 @@ echo "==> Uploading Python modules..."
     unchained/chat_agent_openrouter.py \
     unchained/chrome_bridge.py \
     unchained/cloud_tools.py \
+    unchained/context_compact.py \
     unchained/cdp.py \
     unchained/ddm.py \
     unchained/intel.py \

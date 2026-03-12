@@ -113,18 +113,14 @@ async def agent_request(agent_id: str, msg: dict, timeout: float = 10) -> dict |
 async def _agent_request_after_reconnect(
     agent_id: str, msg: dict, *, timeout: float = 10, retry_delay: float = 1.0
 ) -> dict | None:
-    """Retry once when the local client is in a brief reconnect window."""
-    resp = await agent_request(agent_id, dict(msg), timeout=timeout)
-    if resp is not None:
-        return resp
+    """Wait through an initial reconnect window without replaying ambiguous requests."""
     core = _core()
     ws = core._chat_agents.get(agent_id)
-    if ws is not None and not ws.closed:
-        return None
-    await asyncio.sleep(retry_delay)
-    ws = core._chat_agents.get(agent_id)
     if ws is None or ws.closed:
-        return None
+        await asyncio.sleep(retry_delay)
+        ws = core._chat_agents.get(agent_id)
+        if ws is None or ws.closed:
+            return None
     return await agent_request(agent_id, dict(msg), timeout=timeout)
 
 
