@@ -758,7 +758,7 @@ class Agent:
             "type": "http_response",
             "req_id": req_id,
             "status": 200,
-            "body": {"tab_id": prov_tab_id, "port": prov_port, "copy_mode": copy_mode},
+            "body": {"tab_id": prov_tab_id, "slot": slot, "port": prov_port, "copy_mode": copy_mode},
         }))
 
     async def _handle_provision_cleanup(self, req_id, path=""):
@@ -783,25 +783,26 @@ class Agent:
             }))
             return
 
+        cleaned = 0
         if slot:
             # Specific slot requested — clean only that one (no-op if already gone)
             prov = self._prov_chromes.pop(slot, None)
             if prov:
                 self._cleanup_single_prov(prov)
-        elif len(self._prov_chromes) == 1:
-            # No slot + exactly one prov Chrome → backward compat (old format tab IDs)
-            _, prov = self._prov_chromes.popitem()
-            self._cleanup_single_prov(prov)
+                cleaned = 1
         else:
-            # No slot + multiple prov Chromes → ambiguous, don't destroy all.
-            # Callers should always pass a slot; this path is a no-op safety net.
-            pass
+            # No slot — clean up all provisioned Chromes.
+            while self._prov_chromes:
+                _, prov = self._prov_chromes.popitem()
+                self._cleanup_single_prov(prov)
+                cleaned += 1
 
+        status = "cleaned_up" if cleaned else "nothing_to_clean"
         await self.ws.send(json.dumps({
             "type": "http_response",
             "req_id": req_id,
             "status": 200,
-            "body": {"status": "cleaned_up"},
+            "body": {"status": status, "cleaned": cleaned},
         }))
 
     async def _handle_provision_status(self, req_id):

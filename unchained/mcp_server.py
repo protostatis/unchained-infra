@@ -356,7 +356,7 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
     """Clean up provisioned Chrome instances.
 
     Args:
-        slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all slots.
+        slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
     aid = _resolve_agent(profile=agent_id)
@@ -365,7 +365,7 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         if slot:
             return f"Cleaned up provisioned Chrome slot {slot}."
         return "Cleaned up all provisioned Chrome instances."
-    return "Cleanup returned false — no provisioned instances found or cleanup failed."
+    return "No provisioned instances found or cleanup failed."
 
 
 @mcp.tool()
