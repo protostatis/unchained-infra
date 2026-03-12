@@ -2484,7 +2484,7 @@ function updateAgentStatusUI(data) {
   else updateStatusPill(bridgeEl, 'bridge offline', '');
 
   if (bannerMsg) bannerMsg.textContent = 'Connect your browser to browse.';
-  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+  if (bannerCurl) { const w = typeof _isWindows==='function'&&_isWindows(); bannerCurl.textContent = mismatch ? (w ? 'Reinstall (PowerShell)' : 'Reinstall (curl)') : (w ? 'Install (PowerShell)' : 'Install (curl)'); }
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
@@ -3245,13 +3245,18 @@ function dismissUpgrade() {
   document.getElementById('upgrade-banner').style.display = 'none';
 }
 
+function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
+
 async function showBannerInstall() {
   await showTrialInstallCmd();
 }
 
 async function showTrialInstallCmd() {
+  const isWin = _isWindows();
   document.getElementById('install-modal-title').textContent = 'Connect Your Browser';
-  document.getElementById('install-modal-desc').textContent = 'Run this in your terminal to connect Chrome (Python 3 + curl required):';
+  document.getElementById('install-modal-desc').textContent = isWin
+    ? 'Run this in PowerShell to connect Chrome (Python 3.9+ required):'
+    : 'Run this in your terminal to connect Chrome (Python 3 + curl required):';
   document.getElementById('install-modal-note').textContent = 'Link expires in 15 minutes. Only installs websockets \u2014 no API key needed.';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
@@ -3260,7 +3265,7 @@ async function showTrialInstallCmd() {
     const r = await fetch('/trial/token', {method: 'POST'});
     if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    document.getElementById('install-cmd').textContent = data.curl_command;
+    document.getElementById('install-cmd').textContent = isWin ? data.powershell_command : data.curl_command;
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
   }
@@ -3908,7 +3913,7 @@ function updateAgentStatusUI(data) {
   else updateStatusPill(bridgeEl, 'bridge offline', '');
 
   if (bannerMsg) bannerMsg.textContent = 'Local chat agent is offline on this machine.';
-  if (bannerCurl) bannerCurl.textContent = mismatch ? 'Reinstall (curl)' : 'Install (curl)';
+  if (bannerCurl) { const w = typeof _isWindows==='function'&&_isWindows(); bannerCurl.textContent = mismatch ? (w ? 'Reinstall (PowerShell)' : 'Reinstall (curl)') : (w ? 'Install (PowerShell)' : 'Install (curl)'); }
 
   if (banner) {
     if (chatConnected && bridgeConnected) {
@@ -3924,6 +3929,8 @@ function updateAgentStatusUI(data) {
   }
 }
 
+function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
+
 async function showBannerInstall() {
   await showInstallCmd();
 }
@@ -3936,9 +3943,10 @@ function _normalizeLocalUrl(raw) {
 }
 
 async function showInstallCmd() {
-  document.getElementById('install-modal-title').textContent = 'Install Agent (curl)';
-  document.getElementById('install-modal-desc').textContent = 'Run this command in your terminal:';
-  document.getElementById('install-modal-note').textContent = 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  const isWin = _isWindows();
+  document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.9+.' : 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
@@ -3947,7 +3955,7 @@ async function showInstallCmd() {
     const r = await fetch('/web/install-token', {method: 'POST'});
     if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    const command = _normalizeLocalUrl(data.curl_command || '');
+    const command = _normalizeLocalUrl(isWin ? (data.powershell_command || '') : (data.curl_command || ''));
     document.getElementById('install-cmd').textContent = command || 'No install command available.';
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
@@ -7581,7 +7589,7 @@ function updateAgentStatusUI(data) {
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-  if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
+  if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Install (PowerShell)' : 'Install (curl)';
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
     bannerMsg.textContent = 'Codex CLI requires an updated local chat agent package.';
@@ -7608,7 +7616,7 @@ function updateAgentStatusUI(data) {
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
     if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-    if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
+    if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Reinstall (PowerShell)' : 'Reinstall (curl)';
     if (banner) banner.style.display = 'flex';
   } else {
     if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
@@ -8394,6 +8402,8 @@ async function doSend() {
   }
 }
 
+function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
+
 async function showBannerInstall() {
   await showInstallCmd();
 }
@@ -8406,9 +8416,10 @@ function _normalizeLocalUrl(raw) {
 }
 
 async function showInstallCmd() {
-  document.getElementById('install-modal-title').textContent = 'Install Agent (curl)';
-  document.getElementById('install-modal-desc').textContent = 'Run this command in your terminal:';
-  document.getElementById('install-modal-note').textContent = 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  const isWin = _isWindows();
+  document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.9+.' : 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
@@ -8417,7 +8428,7 @@ async function showInstallCmd() {
     const r = await fetch('/web/install-token', {method: 'POST'});
     if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    const command = _normalizeLocalUrl(data.curl_command || '');
+    const command = _normalizeLocalUrl(isWin ? (data.powershell_command || '') : (data.curl_command || ''));
     document.getElementById('install-cmd').textContent = command || 'No install command available.';
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
@@ -9827,10 +9838,10 @@ body{
         <span class="agent-dot" id="agent-dot"></span>
         <span class="agent-label" id="agent-label">Agent Offline</span>
       </div>
-      <p style="color:var(--muted);font-size:13px;margin-bottom:10px">Run this in your terminal:</p>
+      <p id="setup-connect-desc" style="color:var(--muted);font-size:13px;margin-bottom:10px">Run this in your terminal:</p>
       <div class="install-cmd" id="setup-install-cmd">Loading...</div>
       <button class="copy-btn" onclick="copySetupCmd(this)">Copy</button>
-      <p style="color:var(--muted);font-size:11px;margin-top:12px">Requires Python 3 and curl. Link expires in 15 minutes.</p>
+      <p id="setup-connect-note" style="color:var(--muted);font-size:11px;margin-top:12px">Requires Python 3 and curl. Link expires in 15 minutes.</p>
     </div>
 
     <!-- Step: Choose Chrome Profile -->
@@ -9882,6 +9893,8 @@ body{
 </div>
 
 <script>
+function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
+
 /* --- Auth --- */
 async function handleGoogleCredential(response) {
   const errEl = document.getElementById('loginerr');
@@ -10100,7 +10113,7 @@ function updateSetupAgentStatusUI(data) {
   if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
   if (bannerDetail) bannerDetail.textContent = 'Start the full local agent package to enable chat and browser control.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-  if (bannerCurl) bannerCurl.textContent = 'Install (curl)';
+  if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Install (PowerShell)' : 'Install (curl)';
 
   if (chatConnected && bridgeConnected) {
     banner.style.display = 'none';
@@ -10116,7 +10129,7 @@ function updateSetupAgentStatusUI(data) {
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Reinstall only if this machine should own the active chat agent.';
     if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-    if (bannerCurl) bannerCurl.textContent = 'Reinstall (curl)';
+    if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Reinstall (PowerShell)' : 'Reinstall (curl)';
     banner.style.display = 'flex';
     return;
   }
@@ -10205,18 +10218,24 @@ async function init() {
 /* --- Connect step (production) --- */
 async function loadInstallCmd() {
   const cmdEl = document.getElementById('setup-install-cmd');
+  const isWin = _isWindows();
+  const descEl = document.getElementById('setup-connect-desc');
+  const noteEl = document.getElementById('setup-connect-note');
+  if (descEl) descEl.textContent = isWin ? 'Run this in PowerShell:' : 'Run this in your terminal:';
+  if (noteEl) noteEl.textContent = isWin ? 'Requires Python 3.9+. Link expires in 15 minutes.' : 'Requires Python 3 and curl. Link expires in 15 minutes.';
   cmdEl.textContent = 'Generating link...';
   try {
     const r = await fetch('/trial/token', {method: 'POST'});
     if (!r.ok) { cmdEl.textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    cmdEl.textContent = data.curl_command;
+    cmdEl.textContent = isWin ? data.powershell_command : data.curl_command;
   } catch(e) {
     cmdEl.textContent = 'Error: ' + e.message;
   }
 }
 
 async function showSetupInstallCmd() {
+  const isWin = _isWindows();
   const modal = document.getElementById('setup-install-modal');
   const cmdEl = document.getElementById('setup-install-curl-cmd');
   modal.style.display = 'flex';
@@ -10229,7 +10248,7 @@ async function showSetupInstallCmd() {
       return;
     }
     const data = await r.json();
-    cmdEl.textContent = _normalizeLocalUrl(data.curl_command || '') || 'No install command available.';
+    cmdEl.textContent = _normalizeLocalUrl(isWin ? (data.powershell_command || '') : (data.curl_command || '')) || 'No install command available.';
   } catch(e) {
     cmdEl.textContent = 'Error: ' + e.message;
   }

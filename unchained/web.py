@@ -1462,6 +1462,7 @@ from web_app.handlers.install_flow import (
     handle_install_token,
     handle_trial_connector,
     handle_trial_script,
+    handle_trial_script_windows,
     handle_trial_token,
 )
 from web_app.handlers.pages import (

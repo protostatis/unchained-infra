@@ -207,6 +207,26 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("error", payload)
                     self.assertEqual(payload.get("os"), platform)
 
+    async def test_trial_token_and_windows_script(self):
+        await self._dev_login()
+
+        response = await self._client.post("/trial/token")
+        self.assertEqual(response.status_code, 200)
+        trial_data = response.json()
+        self.assertIn("curl_command", trial_data)
+        self.assertIn("powershell_command", trial_data)
+        self.assertIn("trial/script", trial_data["curl_command"])
+        self.assertIn("trial/windows/script", trial_data["powershell_command"])
+
+        trial_token = self._extract_install_token(trial_data)
+        headers = {"X-Install-Token": trial_token}
+
+        response = await self._client.get("/trial/windows/script", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Find-PythonCommand", response.text)
+        self.assertIn("Invoke-WebRequest", response.text)
+        self.assertIn("Stop-Process", response.text)
+
     async def test_install_claim_approval_and_bootstrap_flow(self):
         await self._dev_login()
 

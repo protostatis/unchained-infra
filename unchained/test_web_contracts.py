@@ -95,6 +95,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/install/{token}"),
             ("GET", "/trial/connector"),
             ("POST", "/trial/token"),
+            ("GET", "/trial/windows/script"),
             ("GET", "/trial/{token}"),
             ("GET", "/web/agent/version"),
             ("GET", "/web/agent/files"),
