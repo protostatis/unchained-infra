@@ -124,6 +124,7 @@ CHAT_DIR = os.path.join(
     os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
     "chats",
 )
+ARCHIVE_DIR = os.path.join(CHAT_DIR, "archive")
 META_FILE = os.path.join(CHAT_DIR, "meta.json")
 
 
@@ -233,10 +234,87 @@ def _load_codex_session() -> dict:
     return data.get("codex_session", {})
 
 
-def _clear_slot(slot: int | None = None):
-    """Clear chat history and claude session for a slot."""
+def _archive_slot(slot: int | None = None):
+    """Archive a slot's chat data before clearing. No-op if slot is empty."""
     if slot is None:
         slot = _active_slot()
+    data = _load_chat(slot)
+    msgs = data.get("messages", [])
+    if not msgs:
+        return None
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    ts = int(time.time())
+    archive_id = f"{ts}_{slot}"
+    preview = ""
+    for m in msgs:
+        if m.get("role") == "user":
+            preview = m.get("content", "")[:80]
+            break
+    archive = {
+        "slot_data": data,
+        "archived_at": ts,
+        "slot": slot,
+        "preview": preview,
+        "message_count": len(msgs),
+    }
+    archive_path = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    with open(archive_path, "w") as f:
+        json.dump(archive, f)
+    log.info("[archive] Archived slot %d as %s (%d messages)", slot, archive_id, len(msgs))
+    return archive_id
+
+
+def _list_archives(limit: int = 50) -> list[dict]:
+    """List archived chats, newest first."""
+    if not os.path.isdir(ARCHIVE_DIR):
+        return []
+    entries = []
+    for fname in os.listdir(ARCHIVE_DIR):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(ARCHIVE_DIR, fname)
+        try:
+            with open(fpath, "r") as f:
+                arc = json.load(f)
+            entries.append({
+                "id": fname[:-5],  # strip .json
+                "preview": arc.get("preview", ""),
+                "message_count": arc.get("message_count", 0),
+                "archived_at": arc.get("archived_at", 0),
+                "slot": arc.get("slot", 0),
+            })
+        except (json.JSONDecodeError, OSError):
+            continue
+    entries.sort(key=lambda e: e["archived_at"], reverse=True)
+    return entries[:limit]
+
+
+def _restore_archive(archive_id: str) -> dict | None:
+    """Load an archive file and return its slot_data, or None."""
+    fpath = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    try:
+        with open(fpath, "r") as f:
+            arc = json.load(f)
+        return arc.get("slot_data")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _delete_archive(archive_id: str) -> bool:
+    """Delete an archive file. Returns True if deleted."""
+    fpath = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    try:
+        os.remove(fpath)
+        return True
+    except OSError:
+        return False
+
+
+def _clear_slot(slot: int | None = None):
+    """Archive then clear chat history and claude session for a slot."""
+    if slot is None:
+        slot = _active_slot()
+    _archive_slot(slot)
     _save_chat({"messages": [], "claude_session": {}, "codex_session": {}}, slot)
 
 
@@ -760,6 +838,9 @@ claude_sessions: dict[str, str] = {}
 # Map chat session_id → codex thread/session id for exec resume continuity
 codex_sessions: dict[str, str] = {}
 
+# Track which sessions already received context injection (per-session flag)
+_context_injected: set[str] = set()
+
 # Track active subprocesses and tasks for cancel support
 active_procs: dict[str, asyncio.subprocess.Process] = {}
 active_tasks: dict[str, asyncio.Task] = {}
@@ -871,6 +952,32 @@ async def handle_message_claude(
     claude_sid = claude_sessions.get(sid)
     is_resume = claude_sid is not None
 
+    # Context fallback: if no resume session but slot has history, inject summary
+    effective_text = user_text
+    if not is_resume and sid not in _context_injected:
+        data = _load_chat()
+        prev_msgs = data.get("messages", [])
+        # Exclude the message we just appended (last one)
+        prev_msgs = prev_msgs[:-1] if prev_msgs else []
+        if prev_msgs:
+            _context_injected.add(sid)
+            # Format last 20 messages as context
+            history_lines = []
+            for m in prev_msgs[-20:]:
+                role = m.get("role", "unknown")
+                content = m.get("content", "")
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                history_lines.append(f"[{role}]: {content}")
+            history_summary = "\n".join(history_lines)
+            effective_text = (
+                f"[Previous conversation context — the session was restarted, "
+                f"here is the recent history for continuity]\n"
+                f"{history_summary}\n\n"
+                f"[New message]\n{user_text}"
+            )
+            log.info("  Injected %d previous messages as context", len(prev_msgs[-20:]))
+
     log.info("  Calling Claude (model=%s)%s...", cli_model, f"  (resume {claude_sid[:12]})" if is_resume else " (new)")
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -925,7 +1032,7 @@ async def handle_message_claude(
     active_procs[sid] = proc
 
     # Send input and close stdin
-    proc.stdin.write(user_text.encode())
+    proc.stdin.write(effective_text.encode())
     await proc.stdin.drain()
     proc.stdin.close()
 
@@ -1850,6 +1957,7 @@ async def main():
                     _clear_slot(current)
                     claude_sessions.clear()
                     codex_sessions.clear()
+                    _context_injected.clear()
                     print(f"[chat] New chat — cleared slot {current}")
                     await ws.send(json.dumps({
                         "type": "new_chat_ok",
@@ -1866,6 +1974,7 @@ async def main():
                     _save_meta(meta)
                     claude_sessions.clear()
                     codex_sessions.clear()
+                    _context_injected.clear()
                     # Restore sessions for the new slot
                     saved = _load_claude_session()
                     if saved.get("session_id") and saved.get("chat_session_id"):
@@ -1885,6 +1994,51 @@ async def main():
                     info["type"] = "slots_response"
                     info["req_id"] = req_id
                     await ws.send(json.dumps(info))
+                elif msg.get("type") == "get_archives":
+                    req_id = msg.get("req_id", "")
+                    archives = _list_archives()
+                    await ws.send(json.dumps({
+                        "type": "archives_response",
+                        "req_id": req_id,
+                        "archives": archives,
+                    }))
+                elif msg.get("type") == "restore_archive":
+                    req_id = msg.get("req_id", "")
+                    archive_id = msg.get("archive_id", "")
+                    slot_data = _restore_archive(archive_id)
+                    if slot_data is None:
+                        await ws.send(json.dumps({
+                            "type": "restore_archive_error",
+                            "req_id": req_id,
+                            "error": "Archive not found",
+                        }))
+                    else:
+                        current = _active_slot()
+                        _save_chat(slot_data, current)
+                        # Restore sessions into memory
+                        claude_sessions.clear()
+                        codex_sessions.clear()
+                        _context_injected.clear()
+                        saved = slot_data.get("claude_session", {})
+                        if saved.get("session_id") and saved.get("chat_session_id"):
+                            claude_sessions[saved["chat_session_id"]] = saved["session_id"]
+                        saved_codex = slot_data.get("codex_session", {})
+                        if saved_codex.get("session_id") and saved_codex.get("chat_session_id"):
+                            codex_sessions[saved_codex["chat_session_id"]] = saved_codex["session_id"]
+                        print(f"[chat] Restored archive {archive_id} into slot {current}")
+                        await ws.send(json.dumps({
+                            "type": "restore_archive_ok",
+                            "req_id": req_id,
+                            "active_slot": current,
+                        }))
+                elif msg.get("type") == "delete_archive":
+                    req_id = msg.get("req_id", "")
+                    archive_id = msg.get("archive_id", "")
+                    ok = _delete_archive(archive_id)
+                    await ws.send(json.dumps({
+                        "type": "delete_archive_ok" if ok else "delete_archive_error",
+                        "req_id": req_id,
+                    }))
                 elif msg.get("type") == "update_client":
                     req_id = msg.get("req_id", "")
                     ok, err = _spawn_remote_update()

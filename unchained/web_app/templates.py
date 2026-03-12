@@ -1870,6 +1870,27 @@ body{
   #topbar .status.online,
   #topbar .status.warn{border-color:transparent}
 }
+
+/* Archive panel */
+#archive-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;justify-content:center;align-items:center}
+#archive-overlay.open{display:flex}
+#archive-panel{background:var(--surface,#11161d);border:1px solid var(--line,#2a3341);border-radius:12px;width:90%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+#archive-panel .archive-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line,#2a3341)}
+#archive-panel .archive-header h3{font-size:16px;font-weight:600;color:var(--text,#edf2f7)}
+#archive-panel .archive-close{background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px}
+#archive-panel .archive-close:hover{color:var(--text,#edf2f7)}
+#archive-list{overflow-y:auto;flex:1;padding:8px}
+.archive-item{display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:8px;cursor:default}
+.archive-item:hover{background:var(--surface-elev,#171d26)}
+.archive-item .archive-info{flex:1;min-width:0}
+.archive-item .archive-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.archive-item .archive-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:4px}
+.archive-item .archive-actions{display:flex;gap:6px;flex-shrink:0}
+.archive-item .archive-actions button{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+.archive-item .archive-actions button:hover{color:var(--text,#edf2f7);border-color:var(--muted,#9da7b7)}
+.archive-item .archive-actions .restore-btn:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+.archive-item .archive-actions .delete-btn:hover{border-color:#e53e3e;color:#e53e3e}
+.archive-empty{text-align:center;color:var(--muted,#9da7b7);padding:40px 20px;font-size:14px}
 </style>
 </head>
 <body>
@@ -1929,9 +1950,20 @@ body{
       <a href="/">Home</a>
       <a href="/demo">Demo</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
+      <a href="#" onclick="openArchives();return false">Archives</a>
       <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
+    </div>
+  </div>
+
+  <div id="archive-overlay" onclick="if(event.target===this)closeArchives()">
+    <div id="archive-panel">
+      <div class="archive-header">
+        <h3>Archived Chats</h3>
+        <button class="archive-close" onclick="closeArchives()">&times;</button>
+      </div>
+      <div id="archive-list"></div>
     </div>
   </div>
 
@@ -2584,6 +2616,84 @@ async function doNewChat() {
     }
   } catch(e) {}
   _syncSlotButtons();
+}
+
+async function openArchives() {
+  const overlay = document.getElementById('archive-overlay');
+  overlay.classList.add('open');
+  const list = document.getElementById('archive-list');
+  list.innerHTML = '<div class="archive-empty">Loading...</div>';
+  try {
+    const r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
+    if (!r.ok) { list.innerHTML = '<div class="archive-empty">Failed to load archives</div>'; return; }
+    const data = await r.json();
+    const archives = data.archives || [];
+    if (archives.length === 0) {
+      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for (const arc of archives) {
+      const d = new Date(arc.archived_at * 1000);
+      const dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const div = document.createElement('div');
+      div.className = 'archive-item';
+      div.innerHTML =
+        '<div class="archive-info">' +
+          '<div class="archive-preview">' + esc(arc.preview || '(empty)') + '</div>' +
+          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + '</div>' +
+        '</div>' +
+        '<div class="archive-actions">' +
+          '<button class="restore-btn" data-id="' + esc(arc.id) + '">Restore</button>' +
+          '<button class="delete-btn" data-id="' + esc(arc.id) + '">Delete</button>' +
+        '</div>';
+      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id);
+      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div);
+      list.appendChild(div);
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="archive-empty">Error loading archives</div>';
+  }
+}
+
+function closeArchives() {
+  document.getElementById('archive-overlay').classList.remove('open');
+}
+
+async function restoreArchive(id) {
+  if (!confirm('Restore this archived conversation? It will replace your current chat.')) return;
+  try {
+    const r = await fetch('/web/chat/restore-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (r.ok) {
+      closeArchives();
+      location.reload();
+    } else {
+      const data = await r.json().catch(() => ({}));
+      alert(data.error || 'Failed to restore archive');
+    }
+  } catch(e) { alert('Failed to restore archive'); }
+}
+
+async function deleteArchive(id, el) {
+  if (!confirm('Delete this archived chat permanently?')) return;
+  try {
+    const r = await fetch('/web/chat/delete-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (r.ok) {
+      el.remove();
+      const list = document.getElementById('archive-list');
+      if (!list.querySelector('.archive-item')) {
+        list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+      }
+    }
+  } catch(e) {}
 }
 
 checkSession();
@@ -6907,6 +7017,27 @@ body{
   #download-banner{flex-wrap:wrap;justify-content:flex-start;gap:8px}
   #download-banner .copy{width:100%}
 }
+
+/* Archive panel */
+#archive-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;justify-content:center;align-items:center}
+#archive-overlay.open{display:flex}
+#archive-panel{background:var(--surface,#11161d);border:1px solid var(--line,#2a3341);border-radius:12px;width:90%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+#archive-panel .archive-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line,#2a3341)}
+#archive-panel .archive-header h3{font-size:16px;font-weight:600;color:var(--text,#edf2f7)}
+#archive-panel .archive-close{background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px}
+#archive-panel .archive-close:hover{color:var(--text,#edf2f7)}
+#archive-list{overflow-y:auto;flex:1;padding:8px}
+.archive-item{display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:8px;cursor:default}
+.archive-item:hover{background:var(--surface-elev,#171d26)}
+.archive-item .archive-info{flex:1;min-width:0}
+.archive-item .archive-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.archive-item .archive-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:4px}
+.archive-item .archive-actions{display:flex;gap:6px;flex-shrink:0}
+.archive-item .archive-actions button{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+.archive-item .archive-actions button:hover{color:var(--text,#edf2f7);border-color:var(--muted,#9da7b7)}
+.archive-item .archive-actions .restore-btn:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+.archive-item .archive-actions .delete-btn:hover{border-color:#e53e3e;color:#e53e3e}
+.archive-empty{text-align:center;color:var(--muted,#9da7b7);padding:40px 20px;font-size:14px}
 </style>
 </head>
 <body>
@@ -6963,9 +7094,20 @@ body{
     <div class="nav">
       <a href="/trial">Free Trial</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
+      <a href="#" onclick="openArchives();return false">Archives</a>
       <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
+    </div>
+  </div>
+
+  <div id="archive-overlay" onclick="if(event.target===this)closeArchives()">
+    <div id="archive-panel">
+      <div class="archive-header">
+        <h3>Archived Chats</h3>
+        <button class="archive-close" onclick="closeArchives()">&times;</button>
+      </div>
+      <div id="archive-list"></div>
     </div>
   </div>
 
@@ -7550,6 +7692,84 @@ async function doNewChat() {
     }
   } catch(e) {}
   await loadSlots();
+}
+
+async function openArchives() {
+  const overlay = document.getElementById('archive-overlay');
+  overlay.classList.add('open');
+  const list = document.getElementById('archive-list');
+  list.innerHTML = '<div class="archive-empty">Loading...</div>';
+  try {
+    const r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
+    if (!r.ok) { list.innerHTML = '<div class="archive-empty">Failed to load archives</div>'; return; }
+    const data = await r.json();
+    const archives = data.archives || [];
+    if (archives.length === 0) {
+      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for (const arc of archives) {
+      const d = new Date(arc.archived_at * 1000);
+      const dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const div = document.createElement('div');
+      div.className = 'archive-item';
+      div.innerHTML =
+        '<div class="archive-info">' +
+          '<div class="archive-preview">' + esc(arc.preview || '(empty)') + '</div>' +
+          '<div class="archive-meta">' + arc.message_count + ' messages &middot; ' + dateStr + '</div>' +
+        '</div>' +
+        '<div class="archive-actions">' +
+          '<button class="restore-btn" data-id="' + esc(arc.id) + '">Restore</button>' +
+          '<button class="delete-btn" data-id="' + esc(arc.id) + '">Delete</button>' +
+        '</div>';
+      div.querySelector('.restore-btn').onclick = () => restoreArchive(arc.id);
+      div.querySelector('.delete-btn').onclick = () => deleteArchive(arc.id, div);
+      list.appendChild(div);
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="archive-empty">Error loading archives</div>';
+  }
+}
+
+function closeArchives() {
+  document.getElementById('archive-overlay').classList.remove('open');
+}
+
+async function restoreArchive(id) {
+  if (!confirm('Restore this archived conversation? It will replace your current chat.')) return;
+  try {
+    const r = await fetch('/web/chat/restore-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (r.ok) {
+      closeArchives();
+      location.reload();
+    } else {
+      const data = await r.json().catch(() => ({}));
+      alert(data.error || 'Failed to restore archive');
+    }
+  } catch(e) { alert('Failed to restore archive'); }
+}
+
+async function deleteArchive(id, el) {
+  if (!confirm('Delete this archived chat permanently?')) return;
+  try {
+    const r = await fetch('/web/chat/delete-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (r.ok) {
+      el.remove();
+      const list = document.getElementById('archive-list');
+      if (!list.querySelector('.archive-item')) {
+        list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+      }
+    }
+  } catch(e) {}
 }
 
 maybeShowDevLogin();
