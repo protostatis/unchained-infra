@@ -196,6 +196,7 @@ class TestEngineCleanupURL(unittest.IsolatedAsyncioTestCase):
         mock_client = AsyncMock()
         mock_resp = MagicMock()
         mock_resp.is_success = True
+        mock_resp.json.return_value = {"status": "cleaned_up", "cleaned": 1}
         mock_client.get = AsyncMock(return_value=mock_resp)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -208,7 +209,7 @@ class TestEngineCleanupURL(unittest.IsolatedAsyncioTestCase):
             slot="ab12",
         )
 
-        self.assertTrue(result)
+        self.assertEqual(result["status"], "cleaned_up")
         # Verify the URL includes ?slot=ab12
         call_args = mock_client.get.call_args
         url = call_args[0][0]
@@ -223,6 +224,7 @@ class TestEngineCleanupURL(unittest.IsolatedAsyncioTestCase):
         mock_client = AsyncMock()
         mock_resp = MagicMock()
         mock_resp.is_success = True
+        mock_resp.json.return_value = {"status": "cleaned_up", "cleaned": 2}
         mock_client.get = AsyncMock(return_value=mock_resp)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -234,7 +236,7 @@ class TestEngineCleanupURL(unittest.IsolatedAsyncioTestCase):
             relay_port=8765,
         )
 
-        self.assertTrue(result)
+        self.assertEqual(result["status"], "cleaned_up")
         url = mock_client.get.call_args[0][0]
         self.assertIn("/provision-cleanup", url)
         self.assertNotIn("?slot=", url)

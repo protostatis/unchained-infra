@@ -361,11 +361,19 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
     """
     aid = _resolve_agent(profile=agent_id)
     result = await cloud_tools.provision_cleanup(aid, slot=slot)
-    if result:
+    status = result.get("status", "") if isinstance(result, dict) else ""
+    cleaned = result.get("cleaned", 0) if isinstance(result, dict) else 0
+    if status == "cleaned_up" and cleaned > 0:
         if slot:
             return f"Cleaned up provisioned Chrome slot {slot}."
-        return "Cleaned up all provisioned Chrome instances."
-    return "No provisioned instances found or cleanup failed."
+        return f"Cleaned up {cleaned} provisioned Chrome instance{'s' if cleaned != 1 else ''}."
+    if status == "no_provision_chrome":
+        return "No provisioned Chrome instances to clean up."
+    if status == "nothing_to_clean":
+        return f"Slot not found — nothing cleaned. Use list_provisioned_tabs to see active slots."
+    if status == "error":
+        return f"Cleanup error: {result.get('error', 'unknown')}"
+    return f"Unexpected cleanup result: {result}"
 
 
 @mcp.tool()
