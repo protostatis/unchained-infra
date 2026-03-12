@@ -289,9 +289,21 @@ def _list_archives(limit: int = 50) -> list[dict]:
     return entries[:limit]
 
 
+def _safe_archive_path(archive_id: str) -> str | None:
+    """Validate archive_id and return safe path, or None if invalid."""
+    if not archive_id or "/" in archive_id or "\\" in archive_id or ".." in archive_id:
+        return None
+    fpath = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    if not os.path.realpath(fpath).startswith(os.path.realpath(ARCHIVE_DIR) + os.sep):
+        return None
+    return fpath
+
+
 def _restore_archive(archive_id: str) -> dict | None:
     """Load an archive file and return its slot_data, or None."""
-    fpath = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    fpath = _safe_archive_path(archive_id)
+    if fpath is None:
+        return None
     try:
         with open(fpath, "r") as f:
             arc = json.load(f)
@@ -302,7 +314,9 @@ def _restore_archive(archive_id: str) -> dict | None:
 
 def _delete_archive(archive_id: str) -> bool:
     """Delete an archive file. Returns True if deleted."""
-    fpath = os.path.join(ARCHIVE_DIR, f"{archive_id}.json")
+    fpath = _safe_archive_path(archive_id)
+    if fpath is None:
+        return False
     try:
         os.remove(fpath)
         return True

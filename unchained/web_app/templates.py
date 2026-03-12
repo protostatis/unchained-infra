@@ -8633,6 +8633,211 @@ CHAT_CLAUDE_SDK_HTML = _apply_modern_chat_theme(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _apply_modern_chat_theme(CHAT_CODEX_HTML)
 HEADLESS_DEMO_HTML = _apply_modern_chat_theme(HEADLESS_DEMO_HTML)
 
+
+# ---------------------------------------------------------------------------
+# Sidebar injection — ChatGPT-style left sidebar for chat history
+# ---------------------------------------------------------------------------
+
+_SIDEBAR_STYLE = """<style id="sidebar-panel">
+#app-shell{display:none;height:100dvh}
+#app-shell #main{height:auto;flex:1;min-height:0}
+#sidebar{width:260px;flex-shrink:0;background:var(--surface,#11161d);border-right:1px solid var(--line,#2a3341);display:flex;flex-direction:column;overflow:hidden}
+.sidebar-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line,#2a3341)}
+.sidebar-title{font-size:15px;font-weight:600;color:var(--text,#edf2f7);letter-spacing:0.5px}
+.sidebar-new{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
+.sidebar-new:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+#sidebar-history{overflow-y:auto;flex:1;padding:8px}
+.sidebar-item{display:flex;flex-direction:column;padding:10px 12px;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px}
+.sidebar-item:hover{background:var(--surface-elev,#171d26)}
+.sidebar-item.active{border-left-color:var(--accent,#ff6b4a);background:var(--surface-elev,#171d26)}
+.sidebar-item .sb-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar-item .sb-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:3px;display:flex;gap:8px}
+.sidebar-empty{text-align:center;color:var(--muted,#9da7b7);padding:32px 16px;font-size:13px}
+#sidebar-toggle{display:none;background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px;margin-right:4px;line-height:1}
+@media(max-width:768px){
+  #sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:999;transition:left 0.2s ease;box-shadow:4px 0 20px rgba(0,0,0,0.5)}
+  body.sidebar-open #sidebar{left:0}
+  body.sidebar-open::after{content:'';position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:998}
+  #sidebar-toggle{display:block}
+}
+</style>"""
+
+_SIDEBAR_BODY = """<div id="app-shell">
+<aside id="sidebar">
+  <div class="sidebar-head">
+    <span class="sidebar-title">Unchained</span>
+    <button class="sidebar-new" onclick="doNewChat()">+ New</button>
+  </div>
+  <div id="sidebar-history"></div>
+</aside>
+"""
+
+_SIDEBAR_JS = """
+function _relativeDate(ts) {
+  var d = new Date(ts * 1000);
+  var now = new Date();
+  var days = Math.floor((now - d) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return d.toLocaleDateString(undefined, {weekday:'long'});
+  return d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+}
+
+async function loadSidebarHistory() {
+  var list = document.getElementById('sidebar-history');
+  if (!list) return;
+  try {
+    var r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
+    if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load history</div>'; return; }
+    var data = await r.json();
+    var archives = (data.archives || []).slice(0, 6);
+    if (archives.length === 0) {
+      list.innerHTML = '<div class="sidebar-empty">No chat history yet</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for (var i = 0; i < archives.length; i++) {
+      var arc = archives[i];
+      var div = document.createElement('div');
+      div.className = 'sidebar-item';
+      div.setAttribute('data-id', arc.id);
+      div.innerHTML =
+        '<div class="sb-preview">' + esc(arc.preview || '(empty)') + '</div>' +
+        '<div class="sb-meta"><span>' + _relativeDate(arc.archived_at) + '</span><span>' + arc.message_count + ' msgs</span></div>';
+      div.onclick = (function(id) { return function() { restoreArchive(id); }; })(arc.id);
+      list.appendChild(div);
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="sidebar-empty">Could not load history</div>';
+  }
+}
+
+function toggleSidebar() {
+  document.body.classList.toggle('sidebar-open');
+}
+
+document.addEventListener('click', function(e) {
+  if (document.body.classList.contains('sidebar-open') && window.innerWidth <= 768) {
+    var sidebar = document.getElementById('sidebar');
+    var toggle = document.getElementById('sidebar-toggle');
+    if (sidebar && !sidebar.contains(e.target) && toggle && !toggle.contains(e.target)) {
+      document.body.classList.remove('sidebar-open');
+    }
+  }
+});
+"""
+
+_OLD_DELETE_ARCHIVE_JS = """async function deleteArchive(id, el) {
+  if (!confirm('Delete this archived chat permanently?')) return;
+  try {
+    const r = await fetch('/web/chat/delete-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (r.ok) {
+      el.remove();
+      const list = document.getElementById('archive-list');
+      if (!list.querySelector('.archive-item')) {
+        list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+      }
+    }
+  } catch(e) {}
+}"""
+
+_NEW_DELETE_ARCHIVE_JS = """async function deleteArchive(id, el) {
+  if (!confirm('Delete this archived chat permanently?')) return;
+  try {
+    const r = await fetch('/web/chat/delete-archive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+    });
+    if (!r.ok) { try { alert((await r.json()).error || 'Delete failed'); } catch(_) { alert('Delete failed'); } return; }
+    el.remove();
+    loadSidebarHistory();
+    const list = document.getElementById('archive-list');
+    if (!list.querySelector('.archive-item')) {
+      list.innerHTML = '<div class="archive-empty">No archived chats yet.<br>Archives are created automatically when you start a new chat.</div>';
+    }
+  } catch(e) {}
+}"""
+
+
+def _inject_sidebar(html: str) -> str:
+    """Inject ChatGPT-style left sidebar for chat history."""
+    if 'id="sidebar"' in html:
+        return html
+
+    # 1. Sidebar CSS before </head>
+    html = html.replace("</head>", _SIDEBAR_STYLE + "\n</head>", 1)
+
+    # 2. Wrap #main in app-shell with sidebar
+    html = html.replace(
+        "<!-- Main -->\n<div id=\"main\">",
+        _SIDEBAR_BODY + "<!-- Main -->\n<div id=\"main\">",
+    )
+
+    # 3. Hamburger button in topbar
+    html = html.replace(
+        '<div class="left">',
+        '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
+        1,
+    )
+
+    # 4. Remove Archives nav link (sidebar replaces it)
+    html = html.replace(
+        '      <a href="#" onclick="openArchives();return false">Archives</a>\n',
+        '',
+    )
+
+    # 5. Close app-shell wrapper after main closes, before <script>
+    html = html.replace("</div>\n<script>", "</div>\n</div>\n<script>", 1)
+
+    # 6. Show/hide app-shell alongside main
+    html = html.replace(
+        "document.getElementById('main').style.display = 'flex';",
+        "document.getElementById('app-shell').style.display = 'flex';\n"
+        "  document.getElementById('main').style.display = 'flex';\n"
+        "  loadSidebarHistory();",
+    )
+    html = html.replace(
+        "document.getElementById('main').style.display = 'none';",
+        "document.getElementById('app-shell').style.display = 'none';\n"
+        "  document.getElementById('main').style.display = 'none';",
+    )
+
+    # 7. Sidebar JS functions (before checkSession)
+    html = html.replace(
+        "\ncheckSession();\n",
+        _SIDEBAR_JS + "\ncheckSession();\n",
+        1,
+    )
+
+    # 8. doNewChat → reload sidebar after new chat
+    for old_hook, new_hook in [
+        (
+            "  _syncSlotButtons();\n}",
+            "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
+        ),
+        (
+            "  await loadSlots();\n}",
+            "  await loadSlots();\n  loadSidebarHistory();\n}",
+        ),
+    ]:
+        if old_hook in html:
+            html = html.replace(old_hook, new_hook, 1)
+            break
+
+    # 9. Fix deleteArchive: show error on failure, refresh sidebar on success
+    html = html.replace(_OLD_DELETE_ARCHIVE_JS, _NEW_DELETE_ARCHIVE_JS)
+
+    return html
+
+
+TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML)
+CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
+
 # Backward-compat alias used by older tests and tooling.
 # Older tests assert an inline model expression in doSend().
 _CHAT_HTML_MODEL_SENTINEL = "model: currentModel()"

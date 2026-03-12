@@ -564,4 +564,6 @@ async def handle_chat_delete_archive(request: web.Request) -> web.Response:
     resp = await agent_request(chat_agent_id, {"type": "delete_archive", "archive_id": archive_id})
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
+    if resp.get("type") == "delete_archive_error":
+        return web.json_response({"error": "Archive not found or could not be deleted"}, status=404)
     return web.json_response({"ok": True})
