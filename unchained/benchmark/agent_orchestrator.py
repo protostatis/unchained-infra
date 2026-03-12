@@ -9,6 +9,7 @@ import time
 import anthropic
 
 from benchmark.common import BenchmarkBrowser, BenchmarkConfig, TaskResult
+from context_compact import compact_messages
 from orchestrator import SYSTEM_PROMPT, TOOLS
 
 try:
@@ -64,6 +65,9 @@ async def run_task(
     try:
         async def _run_loop():
             for turn in range(max_turns):
+                if turn > 0 and turn % 5 == 0:
+                    compact_messages(messages, fmt="anthropic")
+
                 response = await client.messages.create(
                     model=orch_model,
                     max_tokens=4096,
