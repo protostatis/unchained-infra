@@ -8653,6 +8653,8 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 .sidebar-item .sb-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-item .sb-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:3px;display:flex;gap:8px}
 .sidebar-empty{text-align:center;color:var(--muted,#9da7b7);padding:32px 16px;font-size:13px}
+.sidebar-viewall{display:block;text-align:center;padding:10px 12px;font-size:12px;color:var(--muted,#9da7b7);cursor:pointer;border-top:1px solid var(--line,#2a3341);text-decoration:none}
+.sidebar-viewall:hover{color:var(--accent,#ff6b4a)}
 #sidebar-toggle{display:none;background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px;margin-right:4px;line-height:1}
 @media(max-width:768px){
   #sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:999;transition:left 0.2s ease;box-shadow:4px 0 20px rgba(0,0,0,0.5)}
@@ -8690,7 +8692,8 @@ async function loadSidebarHistory() {
     var r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
     if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load history</div>'; return; }
     var data = await r.json();
-    var archives = (data.archives || []).slice(0, 6);
+    var allArchives = data.archives || [];
+    var archives = allArchives.slice(0, 6);
     if (archives.length === 0) {
       list.innerHTML = '<div class="sidebar-empty">No chat history yet</div>';
       return;
@@ -8707,6 +8710,12 @@ async function loadSidebarHistory() {
       div.onclick = (function(id) { return function() { restoreArchive(id); }; })(arc.id);
       list.appendChild(div);
     }
+    var link = document.createElement('a');
+    link.className = 'sidebar-viewall';
+    link.href = '#';
+    link.textContent = allArchives.length > 6 ? 'View all ' + allArchives.length + ' archives' : 'View all archives';
+    link.onclick = function(e) { e.preventDefault(); openArchives(); };
+    list.appendChild(link);
   } catch(e) {
     list.innerHTML = '<div class="sidebar-empty">Could not load history</div>';
   }
@@ -8783,12 +8792,6 @@ def _inject_sidebar(html: str) -> str:
         '<div class="left">',
         '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
         1,
-    )
-
-    # 4. Remove Archives nav link (sidebar replaces it)
-    html = html.replace(
-        '      <a href="#" onclick="openArchives();return false">Archives</a>\n',
-        '',
     )
 
     # 5. Close app-shell wrapper after main closes, before <script>

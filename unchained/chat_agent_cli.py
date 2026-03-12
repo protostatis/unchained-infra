@@ -244,7 +244,7 @@ def _archive_slot(slot: int | None = None):
         return None
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
     ts = int(time.time())
-    archive_id = f"{ts}_{slot}"
+    archive_id = f"{int(time.time() * 1000)}_{slot}"
     preview = ""
     for m in msgs:
         if m.get("role") == "user":
