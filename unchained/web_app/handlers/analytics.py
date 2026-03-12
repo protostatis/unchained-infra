@@ -114,12 +114,18 @@ async def handle_admin_analytics_funnel(request: web.Request) -> web.Response:
         return web.json_response({"error": "Admin access required"}, status=403)
     raw_days = str(request.query.get("days", "7")).strip() or "7"
     funnel = str(request.query.get("funnel", "auth_inline_gsi")).strip() or "auth_inline_gsi"
+    raw_exclude_registered = str(request.query.get("exclude_registered", "1")).strip().lower()
     try:
         days = max(1, min(90, int(raw_days)))
     except ValueError:
         return web.json_response({"error": "days must be an integer"}, status=400)
+    exclude_registered = raw_exclude_registered not in {"0", "false", "no", "off"}
     try:
-        payload = core._analytics.funnel_report(funnel=funnel, days=days)
+        payload = core._analytics.funnel_report(
+            funnel=funnel,
+            days=days,
+            exclude_current_registered_users=exclude_registered,
+        )
     except Exception as e:
         core.log.warning("[analytics] funnel query failed: %s", e)
         return web.json_response({"error": "Failed to build funnel"}, status=500)

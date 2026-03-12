@@ -372,10 +372,12 @@ def _analytics_gate_type_from_request(request: web.Request | None) -> str:
     return _analytics_header_value(request, _ANALYTICS_GATE_TYPE_HEADER, 32)
 
 
-def _track_page_view(request: web.Request):
+def _track_page_view(request: web.Request, auth_info: dict | None = None):
     route = request.path
     if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
         return
+    if auth_info is None:
+        auth_info = _authenticate(request)
     gate_type = ""
     if route in _ANALYTICS_INLINE_GSI_ROUTES:
         gate_type = "inline_gsi"
@@ -388,6 +390,8 @@ def _track_page_view(request: web.Request):
         route_intended=route,
         route_effective=route,
         gate_type=gate_type,
+        user_id=(auth_info or {}).get("user_id", ""),
+        user_type=(auth_info or {}).get("user_type", ""),
         source="web",
         status_code=200,
         dedupe_ttl_s=5.0,
