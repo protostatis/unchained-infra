@@ -149,7 +149,9 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_chat_restore_archive_returns_session_id(self, mock_core, mock_agent_request):
         from web_app.handlers.chat_flow import handle_chat_restore_archive
 
-        mock_core.return_value = self._core_stub()
+        core = self._core_stub()
+        core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=False)
+        mock_core.return_value = core
         mock_agent_request.return_value = {
             "type": "restore_archive_ok",
             "active_slot": 1,
@@ -169,7 +171,7 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
     @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web_app.handlers.chat_flow._core")
-    async def test_chat_restore_archive_retries_after_reconnect(
+    async def test_chat_restore_archive_waits_for_reconnect_before_single_send(
         self, mock_core, mock_agent_request, mock_sleep
     ):
         from web_app.handlers.chat_flow import handle_chat_restore_archive
@@ -177,10 +179,11 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         core = self._core_stub()
         core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=True)
         mock_core.return_value = core
-        mock_agent_request.side_effect = [
-            None,
-            {"type": "restore_archive_ok", "active_slot": 2, "session_id": "s-agent-restored"},
-        ]
+        mock_agent_request.return_value = {
+            "type": "restore_archive_ok",
+            "active_slot": 2,
+            "session_id": "s-agent-restored",
+        }
 
         async def reconnect(_delay):
             core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=False)
@@ -194,7 +197,7 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(data["session_id"], "s-agent-restored")
-        self.assertEqual(mock_agent_request.await_count, 2)
+        self.assertEqual(mock_agent_request.await_count, 1)
         mock_sleep.assert_awaited_once()
 
     @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
@@ -219,11 +222,38 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertIn("reconnecting", data["error"])
         mock_sleep.assert_awaited_once()
 
+    @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_restore_archive_does_not_replay_after_lost_response(
+        self, mock_core, mock_agent_request, mock_sleep
+    ):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        core = self._core_stub()
+        core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=False)
+        mock_core.return_value = core
+        mock_agent_request.return_value = None
+
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"archive_id": "arc", "model": "claude-sonnet-4-6"})
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 503)
+        self.assertIn("reconnecting", data["error"])
+        self.assertEqual(mock_agent_request.await_count, 1)
+        mock_sleep.assert_not_awaited()
+
 
 class TestLocalArchiveTemplate(unittest.TestCase):
     def test_restore_archive_persists_restored_session_before_reload(self):
         self.assertIn("if (data.session_id) {", web.CLAUDE_CHAT_HTML)
         self.assertIn("_setActiveSlotSession(sessionId);", web.CLAUDE_CHAT_HTML)
+
+    def test_local_template_defines_slot_session_helper(self):
+        self.assertIn("function _setActiveSlotSession(sid) {", web.CLAUDE_CHAT_HTML)
 
 
 if __name__ == "__main__":

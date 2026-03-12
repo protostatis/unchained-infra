@@ -7332,6 +7332,74 @@ function _persistSessionId(sid) {
   }
 }
 
+function _slotLabel(n) {
+  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+}
+
+function _slotStateKey() {
+  return _sessionStoreKey() + '_slots_v1';
+}
+
+function _newSessionId() {
+  return 's-' + agentId + '-' + Date.now().toString(36);
+}
+
+function _loadSlotState() {
+  let state = {active_slot: 1, slots: {}};
+  try {
+    const raw = localStorage.getItem(_slotStateKey()) || '';
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') state = parsed;
+    }
+  } catch(e) {}
+  const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const normalized = {};
+  for (let i = 1; i <= 3; i++) {
+    const sid = String(slots[String(i)] || '').trim();
+    normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+  }
+  let active = Number(state && state.active_slot);
+  if (active !== 1 && active !== 2 && active !== 3) active = 1;
+  return {active_slot: active, slots: normalized};
+}
+
+function _saveSlotState(state) {
+  try { localStorage.setItem(_slotStateKey(), JSON.stringify(state)); } catch(e) {}
+}
+
+function _ensureSlotState() {
+  const state = _loadSlotState();
+  const restored = _restoreSessionId();
+  if (!state.slots['1']) state.slots['1'] = restored || _newSessionId();
+  for (let i = 1; i <= 3; i++) {
+    if (!state.slots[String(i)]) state.slots[String(i)] = _newSessionId();
+  }
+  if (!state.slots[String(state.active_slot)]) state.active_slot = 1;
+  _saveSlotState(state);
+  return state;
+}
+
+function _setActiveSlotSession(sid) {
+  if (!sid || !sid.startsWith('s-' + agentId + '-')) return;
+  const state = _loadSlotState();
+  state.slots[String(activeSlot)] = sid;
+  state.active_slot = activeSlot;
+  _saveSlotState(state);
+}
+
+function _syncSlotButtons() {
+  const state = _loadSlotState();
+  activeSlot = state.active_slot;
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById('slot' + i);
+    if (!btn) continue;
+    btn.className = '';
+    btn.textContent = _slotLabel(i);
+    if (i === activeSlot) btn.classList.add('active');
+  }
+}
+
 function onModelChange(model) {
   localStorage.setItem('unchained_model', model);
   // Refresh model-scoped status immediately when switching lanes.
@@ -7558,8 +7626,12 @@ function showMain() {
   if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
     document.getElementById('modelsel').value = saved;
   }
-  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
+  const slotState = _ensureSlotState();
+  activeSlot = slotState.active_slot;
+  sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
   _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();
   loadChatProfiles();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
@@ -7590,8 +7662,15 @@ async function loadSlots() {
     if (data.session_id) {
       sessionId = data.session_id;
       _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);
     }
     activeSlot = data.active_slot || 1;
+    const state = _loadSlotState();
+    state.active_slot = activeSlot;
+    if (sessionId && sessionId.startsWith('s-' + agentId + '-')) {
+      state.slots[String(activeSlot)] = sessionId;
+    }
+    _saveSlotState(state);
     for (const s of (data.slots || [])) {
       const btn = document.getElementById('slot' + s.slot);
       if (!btn) continue;
@@ -7610,11 +7689,14 @@ async function loadSlots() {
 async function switchSlot(n) {
   if (n === activeSlot) return;
   if (sending) return;
-  activeSlot = n;
-  for (let i = 1; i <= 3; i++) {
-    const btn = document.getElementById('slot' + i);
-    if (btn) btn.classList.toggle('active', i === n);
-  }
+  const state = _loadSlotState();
+  state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
+  if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
+  _saveSlotState(state);
+  activeSlot = state.active_slot;
+  sessionId = state.slots[String(activeSlot)];
+  _persistSessionId(sessionId);
+  _syncSlotButtons();
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
   try {
     await fetch('/web/chat/switch', {
@@ -7644,6 +7726,7 @@ async function loadHistory() {
     if (data.session_id) {
       sessionId = data.session_id;
       _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);
     }
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
@@ -7694,6 +7777,7 @@ async function doNewChat() {
       if (data.session_id) {
         sessionId = data.session_id;
         _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
       }
     }
   } catch(e) {}

@@ -18,6 +18,7 @@ COPY unchained/auth.py .
 COPY unchained/chat_agent_openrouter.py .
 COPY unchained/chrome_bridge.py .
 COPY unchained/cloud_tools.py .
+COPY unchained/context_compact.py .
 COPY unchained/cdp.py .
 COPY unchained/ddm.py .
 COPY unchained/intel.py .
