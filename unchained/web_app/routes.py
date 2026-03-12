@@ -90,6 +90,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/trial/connector", "web_app.handlers.install_flow:handle_trial_connector"),
     ("POST", "/trial/token", "web_app.handlers.install_flow:handle_trial_token"),
     ("GET", "/trial/script", "web_app.handlers.install_flow:handle_trial_script"),
+    ("GET", "/trial/windows/script", "web_app.handlers.install_flow:handle_trial_script_windows"),
     ("GET", "/trial/{token}", "web_app.handlers.install_flow:handle_trial_script"),
     ("GET", "/web/agent/version", "handle_agent_version"),
     ("GET", "/web/agent/files", "handle_agent_files"),

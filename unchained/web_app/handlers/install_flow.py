@@ -514,9 +514,16 @@ async def handle_trial_token(request: web.Request) -> web.Response:
         return web.json_response({"error": "Not authenticated"}, status=401)
     token = core._auth.create_install_token(auth_info["user_id"], auth_info["key"])
     base_url = core._public_base_url(request)
+    powershell_command = (
+        "powershell -ExecutionPolicy Bypass -Command "
+        f"\"$h=@{{'X-Install-Token'='{token}'}}; "
+        f"Invoke-Expression ((Invoke-WebRequest -UseBasicParsing -Headers $h "
+        f"'{base_url}/trial/windows/script').Content)\""
+    )
     return web.json_response(
         {
             "curl_command": f'curl -sSL -H "X-Install-Token: {token}" "{base_url}/trial/script" | bash',
+            "powershell_command": powershell_command,
         }
     )
 
@@ -609,5 +616,86 @@ echo ""
 echo "  Stop:  python3 ~/.unchained/chrome_bridge.py stop"
 echo "  Logs:  tail -f ~/.unchained/connector.log"
 echo ""
+"""
+    return web.Response(text=script, content_type="text/plain")
+
+
+async def handle_trial_script_windows(request: web.Request) -> web.Response:
+    """GET /trial/windows/script — PowerShell trial connector script for Windows."""
+    core = _core()
+    token = core._request_install_token(request) or request.match_info.get("token", "")
+    token = token.strip()
+    token_info = core._auth.validate_install_token(token, consume=False)
+    if not token_info:
+        return web.Response(
+            text='Write-Error "Install link expired or already used. Get a new one from https://api.unchainedsky.com/chat"\nexit 1\n',
+            content_type="text/plain",
+        )
+    base_url = core._public_base_url(request)
+    relay_url = core._public_relay_url(request)
+    script = f"""# Unchained Trial - Browser Connector (Windows)
+# Connects your Chrome to the Unchained AI agent
+# Requires: Python 3 and PowerShell
+$ErrorActionPreference = "Stop"
+
+$INSTALL_TOKEN = "{token}"
+$RELAY = "{relay_url}"
+$DIR = "$env:USERPROFILE\\.unchained"
+$BRIDGE = "$DIR\\chrome_bridge.py"
+$BOOTSTRAP_URL = "{base_url}/web/install/bootstrap"
+
+Write-Host ""
+Write-Host "  Unchained - Connecting your browser..."
+Write-Host ""
+
+# Check Python 3
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) {{
+    Write-Host "  Error: Python not found. Install from https://python.org"
+    exit 1
+}}
+
+# Install websockets (the only dependency)
+$wsCheck = python -c "import websockets" 2>&1
+if ($LASTEXITCODE -ne 0) {{
+    Write-Host "  Installing websockets..."
+    python -m pip install -q websockets
+}}
+
+# Create directory and download the connector
+if (-not (Test-Path $DIR)) {{ New-Item -ItemType Directory -Path $DIR -Force | Out-Null }}
+Write-Host "  Downloading connector..."
+Invoke-WebRequest -UseBasicParsing -Uri "{base_url}/trial/connector" -OutFile $BRIDGE
+
+# Exchange the short-lived install token for the real API key
+$body = ConvertTo-Json @{{token = $INSTALL_TOKEN}}
+try {{
+    $resp = Invoke-RestMethod -Uri $BOOTSTRAP_URL -Method Post -ContentType "application/json" -Body $body
+}} catch {{
+    Write-Host "  Error: install token exchange failed"
+    exit 1
+}}
+$API_KEY = $resp.api_key
+if (-not $API_KEY) {{
+    Write-Host "  Error: invalid install token response"
+    exit 1
+}}
+
+# Launch Chrome + connector
+Write-Host "  Starting..."
+$env:UNCHAINED_API_KEY = $API_KEY
+Start-Process -NoNewWindow -FilePath python -ArgumentList "$BRIDGE", "start", "--relay", "$RELAY" -RedirectStandardOutput "$DIR\\connector.log" -RedirectStandardError "$DIR\\connector_err.log"
+Start-Sleep -Seconds 4
+
+Write-Host ""
+Write-Host "  Your browser is connected!"
+Write-Host "  An Unchained Chrome window will open - that's where the agent browses."
+Write-Host "  Screenshots of each page will appear in the chat so you can see what's happening."
+Write-Host ""
+Write-Host "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
+Write-Host ""
+Write-Host "  Stop:  python $env:USERPROFILE\\.unchained\\chrome_bridge.py stop"
+Write-Host "  Logs:  Get-Content -Wait $env:USERPROFILE\\.unchained\\connector.log"
+Write-Host ""
 """
     return web.Response(text=script, content_type="text/plain")
