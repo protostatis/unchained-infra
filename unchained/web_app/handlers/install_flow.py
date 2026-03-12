@@ -635,7 +635,7 @@ async def handle_trial_script_windows(request: web.Request) -> web.Response:
     relay_url = core._public_relay_url(request)
     script = f"""# Unchained Trial - Browser Connector (Windows)
 # Connects your Chrome to the Unchained AI agent
-# Requires: Python 3 and PowerShell
+# Requires: Python 3.9+ and PowerShell
 $ErrorActionPreference = "Stop"
 
 $INSTALL_TOKEN = "{token}"
@@ -648,18 +648,77 @@ Write-Host ""
 Write-Host "  Unchained - Connecting your browser..."
 Write-Host ""
 
-# Check Python 3
-$py = Get-Command python -ErrorAction SilentlyContinue
-if (-not $py) {{
-    Write-Host "  Error: Python not found. Install from https://python.org"
+# --- Robust Python 3.9+ detection (py -3, python, python3; skip WindowsApps shim) ---
+function Test-PythonCommand([string]$Source, [string[]]$Prefix) {{
+  if ([string]::IsNullOrWhiteSpace($Source)) {{ return $false }}
+  $invokeArgs = @()
+  if ($Prefix) {{ $invokeArgs += $Prefix }}
+  $invokeArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  try {{
+    & $Source @invokeArgs *> $null
+    return ($LASTEXITCODE -eq 0)
+  }} catch {{
+    return $false
+  }}
+}}
+
+function Find-PythonCommand() {{
+  $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCmd) {{
+    $pySource = [string]$pyCmd.Source
+    if (Test-PythonCommand $pySource @("-3")) {{
+      return @{{ Source = $pySource; Prefix = @("-3") }}
+    }}
+  }}
+  foreach ($name in @("python", "python3")) {{
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if (-not $cmd) {{ continue }}
+    $source = [string]$cmd.Source
+    if ([string]::IsNullOrWhiteSpace($source)) {{ continue }}
+    if ($source -like "*WindowsApps*") {{ continue }}
+    if (Test-PythonCommand $source @()) {{
+      return @{{ Source = $source; Prefix = @() }}
+    }}
+  }}
+  return $null
+}}
+
+$pyInfo = Find-PythonCommand
+if (-not $pyInfo) {{
+    Write-Host "  Error: Python 3.9+ not found. Install from https://python.org"
     exit 1
+}}
+$pySrc = $pyInfo.Source
+$pyPrefix = $pyInfo.Prefix
+
+function Invoke-Python([string[]]$PyArgs) {{
+    $all = @()
+    if ($pyPrefix) {{ $all += $pyPrefix }}
+    $all += $PyArgs
+    & $pySrc @all
+}}
+
+# --- Stop any existing connector ---
+$pidFile = Join-Path $DIR ".agent_pid"
+if (Test-Path $pidFile) {{
+    $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+    if ($oldPid) {{
+        try {{
+            $proc = Get-Process -Id ([int]$oldPid) -ErrorAction SilentlyContinue
+            if ($proc) {{
+                Write-Host "  Stopping previous connector (PID $oldPid)..."
+                Stop-Process -Id ([int]$oldPid) -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+            }}
+        }} catch {{}}
+    }}
 }}
 
 # Install websockets (the only dependency)
-$wsCheck = python -c "import websockets" 2>&1
+Invoke-Python @("-c", "import websockets") 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {{
     Write-Host "  Installing websockets..."
-    python -m pip install -q websockets
+    Invoke-Python @("-m", "pip", "install", "-q", "websockets")
 }}
 
 # Create directory and download the connector
@@ -684,7 +743,10 @@ if (-not $API_KEY) {{
 # Launch Chrome + connector
 Write-Host "  Starting..."
 $env:UNCHAINED_API_KEY = $API_KEY
-Start-Process -NoNewWindow -FilePath python -ArgumentList "$BRIDGE", "start", "--relay", "$RELAY" -RedirectStandardOutput "$DIR\\connector.log" -RedirectStandardError "$DIR\\connector_err.log"
+$pyArgs = @()
+if ($pyPrefix) {{ $pyArgs += $pyPrefix }}
+$pyArgs += @($BRIDGE, "start", "--relay", $RELAY)
+Start-Process -NoNewWindow -FilePath $pySrc -ArgumentList $pyArgs -RedirectStandardOutput "$DIR\\connector.log" -RedirectStandardError "$DIR\\connector_err.log"
 Start-Sleep -Seconds 4
 
 Write-Host ""
@@ -694,7 +756,7 @@ Write-Host "  Screenshots of each page will appear in the chat so you can see wh
 Write-Host ""
 Write-Host "  Open https://unchainedsky.com/chat, pick Trinity or StepFun 3.5 Flash, and start chatting."
 Write-Host ""
-Write-Host "  Stop:  python $env:USERPROFILE\\.unchained\\chrome_bridge.py stop"
+Write-Host "  Stop:  $pySrc $($pyPrefix -join ' ') $env:USERPROFILE\\.unchained\\chrome_bridge.py stop"
 Write-Host "  Logs:  Get-Content -Wait $env:USERPROFILE\\.unchained\\connector.log"
 Write-Host ""
 """
