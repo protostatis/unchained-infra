@@ -3255,7 +3255,7 @@ async function showTrialInstallCmd() {
   const isWin = _isWindows();
   document.getElementById('install-modal-title').textContent = 'Connect Your Browser';
   document.getElementById('install-modal-desc').textContent = isWin
-    ? 'Run this in PowerShell to connect Chrome (Python 3 required):'
+    ? 'Run this in PowerShell to connect Chrome (Python 3.9+ required):'
     : 'Run this in your terminal to connect Chrome (Python 3 + curl required):';
   document.getElementById('install-modal-note').textContent = 'Link expires in 15 minutes. Only installs websockets \u2014 no API key needed.';
   const modal = document.getElementById('install-modal');
@@ -9718,10 +9718,10 @@ body{
         <span class="agent-dot" id="agent-dot"></span>
         <span class="agent-label" id="agent-label">Agent Offline</span>
       </div>
-      <p style="color:var(--muted);font-size:13px;margin-bottom:10px">Run this in your terminal:</p>
+      <p id="setup-connect-desc" style="color:var(--muted);font-size:13px;margin-bottom:10px">Run this in your terminal:</p>
       <div class="install-cmd" id="setup-install-cmd">Loading...</div>
       <button class="copy-btn" onclick="copySetupCmd(this)">Copy</button>
-      <p style="color:var(--muted);font-size:11px;margin-top:12px">Requires Python 3 and curl. Link expires in 15 minutes.</p>
+      <p id="setup-connect-note" style="color:var(--muted);font-size:11px;margin-top:12px">Requires Python 3 and curl. Link expires in 15 minutes.</p>
     </div>
 
     <!-- Step: Choose Chrome Profile -->
@@ -10098,12 +10098,17 @@ async function init() {
 /* --- Connect step (production) --- */
 async function loadInstallCmd() {
   const cmdEl = document.getElementById('setup-install-cmd');
+  const isWin = _isWindows();
+  const descEl = document.getElementById('setup-connect-desc');
+  const noteEl = document.getElementById('setup-connect-note');
+  if (descEl) descEl.textContent = isWin ? 'Run this in PowerShell:' : 'Run this in your terminal:';
+  if (noteEl) noteEl.textContent = isWin ? 'Requires Python 3.9+. Link expires in 15 minutes.' : 'Requires Python 3 and curl. Link expires in 15 minutes.';
   cmdEl.textContent = 'Generating link...';
   try {
     const r = await fetch('/trial/token', {method: 'POST'});
     if (!r.ok) { cmdEl.textContent = 'Error: ' + (await r.json()).error; return; }
     const data = await r.json();
-    cmdEl.textContent = _isWindows() ? data.powershell_command : data.curl_command;
+    cmdEl.textContent = isWin ? data.powershell_command : data.curl_command;
   } catch(e) {
     cmdEl.textContent = 'Error: ' + e.message;
   }
