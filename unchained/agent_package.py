@@ -14,8 +14,8 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.45"
-MIN_VERSION = "0.3.45"
+VERSION = "0.3.46"
+MIN_VERSION = "0.3.46"
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
