@@ -542,7 +542,7 @@ body::before{
         <span class="req">Auto-provision</span>
       </div>
       <div class="card-steps">
-        <div class="step"><span class="step-num">1</span>Provision or paste your OpenAI key</div>
+        <div class="step"><span class="step-num">1</span>Provision or paste your Anthropic key</div>
         <div class="step"><span class="step-num">2</span>Open the chat page</div>
       </div>
       <a href="/setup?provider=claude-sdk" class="card-btn">Setup &#8594;</a>
