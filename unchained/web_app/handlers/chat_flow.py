@@ -504,3 +504,66 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
     return web.json_response({"ok": True, "active_slot": resp.get("active_slot", slot)})
+
+
+async def handle_chat_archives(request: web.Request) -> web.Response:
+    """GET /web/chat/archives — list archived conversations from agent."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    agent_id = auth_info.get("agent_id", "")
+    model = request.query.get("model", "")
+    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
+    resp = await agent_request(chat_agent_id, {"type": "get_archives"})
+    if resp is None:
+        return web.json_response({"archives": [], "offline": True})
+    return web.json_response({"archives": resp.get("archives", [])})
+
+
+async def handle_chat_restore_archive(request: web.Request) -> web.Response:
+    """POST /web/chat/restore-archive — restore an archived conversation."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    archive_id = body.get("archive_id", "")
+    if not archive_id:
+        return web.json_response({"error": "archive_id required"}, status=400)
+    agent_id = auth_info.get("agent_id", "")
+    model = body.get("model", "")
+    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
+    resp = await agent_request(chat_agent_id, {"type": "restore_archive", "archive_id": archive_id})
+    if resp is None:
+        return web.json_response({"error": "Agent not connected"}, status=503)
+    if resp.get("type") == "restore_archive_error":
+        return web.json_response({"error": resp.get("error", "Restore failed")}, status=404)
+    return web.json_response({"ok": True, "active_slot": resp.get("active_slot", 1)})
+
+
+async def handle_chat_delete_archive(request: web.Request) -> web.Response:
+    """POST /web/chat/delete-archive — delete an archived conversation."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    archive_id = body.get("archive_id", "")
+    if not archive_id:
+        return web.json_response({"error": "archive_id required"}, status=400)
+    agent_id = auth_info.get("agent_id", "")
+    model = body.get("model", "")
+    chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
+    resp = await agent_request(chat_agent_id, {"type": "delete_archive", "archive_id": archive_id})
+    if resp is None:
+        return web.json_response({"error": "Agent not connected"}, status=503)
+    if resp.get("type") == "delete_archive_error":
+        return web.json_response({"error": "Archive not found or could not be deleted"}, status=404)
+    return web.json_response({"ok": True})
