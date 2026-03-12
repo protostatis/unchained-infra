@@ -41,6 +41,7 @@ from orchestrator import (
     build_system_prompt as _build_orchestrator_system_prompt,
     build_tools as _build_orchestrator_tools,
 )
+from context_compact import compact_messages, emergency_trim
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -347,6 +348,13 @@ class ChatAgent:
 
         try:
             for turn in range(MAX_TURNS):
+                # Periodic context compaction (every 5 turns)
+                if turn > 0 and turn % 5 == 0:
+                    messages, cstats = compact_messages(messages, fmt="anthropic")
+                    if cstats["compacted"]:
+                        print(f"[{session_id}] Compacted {cstats['compacted']} tool results "
+                              f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
+
                 # Hard-stop guard: force final after one recovery turn
                 extra_kwargs = {}
                 if nudge.hard_stop_guard and nudge.hard_stop_recovery_used >= 1:
@@ -662,11 +670,23 @@ class ChatAgent:
             print(f"[{session_id}] Bad request: {e}")
             self._save_session(session_id, messages)
             msg = str(e)
-            if "credit balance" in msg.lower():
+            low = msg.lower()
+            if "credit balance" in low:
                 await self._send_event(session_id, {
                     "type": "error",
                     "data": "Anthropic API credit balance is too low. "
                             "Please add credits at https://console.anthropic.com/settings/billing",
+                })
+            elif ("too long" in low or "too many tokens" in low or "context length" in low
+                  or "max tokens" in low) and len(messages) > 12:
+                # Context overflow — emergency trim for next request
+                messages = emergency_trim(messages, fmt="anthropic", keep_tail=10)
+                self.sessions[session_id] = messages
+                self._save_session(session_id, messages)
+                print(f"[{session_id}] Context overflow — emergency trim to {len(messages)} msgs")
+                await self._send_event(session_id, {
+                    "type": "error",
+                    "data": "Context was too large — trimmed history. Please resend your last message.",
                 })
             else:
                 await self._send_event(session_id, {

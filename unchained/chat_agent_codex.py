@@ -29,6 +29,7 @@ import httpx
 import websockets
 
 import cloud_tools
+from context_compact import compact_messages, emergency_trim
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -775,6 +776,13 @@ class CodexChatAgent:
                             )
                             return
 
+                    # Periodic context compaction (every 5 turns)
+                    if turn > 0 and turn % 5 == 0:
+                        messages, cstats = compact_messages(messages, fmt="openai")
+                        if cstats["compacted"]:
+                            print(f"[{session_id}] Compacted {cstats['compacted']} tool results "
+                                  f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
+
                     try:
                         next_tool_choice = "none" if (ns.hard_stop_guard and ns.hard_stop_recovery_used >= 1) else "auto"
                         if next_tool_choice == "none":
@@ -785,10 +793,9 @@ class CodexChatAgent:
                         )
                     except httpx.HTTPStatusError as e:
                         if e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
-                            system = messages[0]
-                            messages = [system] + messages[-(TRIM_ON_ERROR):]
+                            messages = emergency_trim(messages, fmt="openai", keep_tail=TRIM_ON_ERROR)
                             self.sessions[session_id] = messages
-                            print(f"[{session_id}] 400 on turn {turn} — trimmed to {len(messages)} msgs")
+                            print(f"[{session_id}] 400 on turn {turn} — emergency trim to {len(messages)} msgs")
                             response = await self._call_codex(
                                 client, messages, model, codex_key=codex_key, tools=tools,
                             )

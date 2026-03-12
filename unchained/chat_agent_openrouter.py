@@ -41,6 +41,7 @@ import httpx
 import websockets
 
 import cloud_tools
+from context_compact import compact_messages, emergency_trim
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -1018,6 +1019,13 @@ class TrialAgent:
                             )
                             return
 
+                    # Periodic context compaction (every 5 turns)
+                    if turn > 0 and turn % 5 == 0:
+                        messages, cstats = compact_messages(messages, fmt="openai")
+                        if cstats["compacted"]:
+                            print(f"[{session_id}] Compacted {cstats['compacted']} tool results "
+                                  f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
+
                     try:
                         next_tool_choice = "none" if (ns.hard_stop_guard and ns.hard_stop_recovery_used >= 1) else "auto"
                         if next_tool_choice == "none":
@@ -1034,11 +1042,9 @@ class TrialAgent:
                         )
                     except httpx.HTTPStatusError as e:
                         if e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
-                            # Context too large — trim to last TRIM_ON_ERROR messages + system
-                            system = messages[0]
-                            messages = [system] + messages[-(TRIM_ON_ERROR):]
+                            messages = emergency_trim(messages, fmt="openai", keep_tail=TRIM_ON_ERROR)
                             self.sessions[session_id] = messages
-                            print(f"[{session_id}] 400 on turn {turn} — trimmed to {len(messages)} msgs, retrying")
+                            print(f"[{session_id}] 400 on turn {turn} — emergency trim to {len(messages)} msgs, retrying")
                             response = await self._call_openrouter(
                                 client,
                                 messages,
@@ -1769,6 +1775,20 @@ class LocalOpenRouterCLI:
         if len(non_system) <= LOCAL_CONTEXT_KEEP_TAIL + 2:
             return False
 
+        # Tier 1: deterministic tool-result compaction (free, instant)
+        self.messages, cstats = compact_messages(self.messages, fmt="openai")
+        if cstats["compacted"]:
+            print(f"[context] Tier 1: compacted {cstats['compacted']} stale tool results "
+                  f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
+
+        # Re-check after tier 1 — if token estimate dropped enough, skip Tier 2.
+        # Tier 1 only shrinks content (never removes messages), so we check tokens.
+        if not force and cstats["compacted"] and cstats["tokens_after"] < cstats["tokens_before"] * 0.6:
+            self._save_local_session()
+            print("[context] Tier 1 sufficient — skipping Tier 2 model summary")
+            return True
+
+        # Tier 2: model-generated summary of older messages
         older = non_system[:-LOCAL_CONTEXT_KEEP_TAIL]
         tail = non_system[-LOCAL_CONTEXT_KEEP_TAIL:]
 
@@ -1799,12 +1819,12 @@ class LocalOpenRouterCLI:
             summary_msg = summary_resp["choices"][0]["message"]
             summary = (summary_msg.get("content") or summary_msg.get("reasoning") or "").strip()
         except Exception as e:
-            print(f"[context] Compaction skipped: summary request failed: {e}")
-            return False
+            print(f"[context] Tier 2 skipped: summary request failed: {e}")
+            return bool(cstats["compacted"])
 
         if not summary:
-            print("[context] Compaction skipped: empty summary from model.")
-            return False
+            print("[context] Tier 2 skipped: empty summary from model.")
+            return bool(cstats["compacted"])
 
         # Keep summary as assistant content so it persists in existing session format.
         summary_entry = {

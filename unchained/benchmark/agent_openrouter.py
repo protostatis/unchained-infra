@@ -11,6 +11,7 @@ import httpx
 
 from benchmark.common import BenchmarkBrowser, BenchmarkConfig, TaskResult
 from chat_agent_openrouter import DEFAULT_MODEL, OPENROUTER_URL, SYSTEM_PROMPT, TOOLS
+from context_compact import compact_messages
 
 try:
     from benchmark.intermediate_goal import (
@@ -112,6 +113,9 @@ async def run_task(
         async with httpx.AsyncClient() as client:
             async def _run_loop():
                 for turn in range(1, max_turns + 1):
+                    if turn > 1 and turn % 5 == 0:
+                        compact_messages(messages, fmt="openai")
+
                     payload = await _call_openrouter(client, api_key, or_model, messages)
                     usage = payload.get("usage") or {}
                     prompt_tokens = int(
