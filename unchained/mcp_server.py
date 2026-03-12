@@ -362,11 +362,13 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
     aid = _resolve_agent(profile=agent_id)
     result = await cloud_tools.provision_cleanup(aid, slot=slot)
     status = result.get("status", "") if isinstance(result, dict) else ""
-    cleaned = result.get("cleaned", 0) if isinstance(result, dict) else 0
-    if status == "cleaned_up" and cleaned > 0:
+    cleaned = result.get("cleaned") if isinstance(result, dict) else None
+    if status == "cleaned_up":
+        if cleaned and not slot:
+            return f"Cleaned up {cleaned} provisioned Chrome instance{'s' if cleaned != 1 else ''}."
         if slot:
             return f"Cleaned up provisioned Chrome slot {slot}."
-        return f"Cleaned up {cleaned} provisioned Chrome instance{'s' if cleaned != 1 else ''}."
+        return "Cleaned up provisioned Chrome."
     if status == "no_provision_chrome":
         return "No provisioned Chrome instances to clean up."
     if status == "nothing_to_clean":
