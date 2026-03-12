@@ -147,6 +147,23 @@ class TestCompactToolResult(unittest.TestCase):
         )
         self.assertEqual(result, "[screenshot — compacted]")
 
+    def test_intel_extract_truncated(self):
+        """intel_extract results should be truncated, not left intact."""
+        content = "x" * 5000
+        result = _compact_tool_result("intel_extract", content, "page_state", max_data_chars=300)
+        self.assertIn("[truncated from 5000 chars]", result)
+        self.assertLessEqual(len(result), 400)
+
+    def test_intel_probe_truncated(self):
+        content = "y" * 1000
+        result = _compact_tool_result("intel_probe", content, "page_state", max_data_chars=300)
+        self.assertIn("[truncated from 1000 chars]", result)
+
+    def test_intel_extract_short_kept(self):
+        content = "small probe result"
+        result = _compact_tool_result("intel_extract", content, "page_state")
+        self.assertEqual(result, content)
+
 
 # ---------------------------------------------------------------------------
 # Tool name index building
@@ -238,6 +255,40 @@ class TestFindTurnBoundary(unittest.TestCase):
         # Should be at the 3rd-from-last user message
         self.assertGreater(boundary, 0)
         self.assertLess(boundary, len(messages))
+
+    def test_openai_tool_results_not_counted_as_turns(self):
+        """Tool result messages should NOT count toward keep_recent user turns."""
+        messages = [{"role": "system", "content": "sys"}]
+        # 6 real user turns, each followed by assistant + tool call + tool result
+        for i in range(6):
+            messages.append({"role": "user", "content": f"Turn {i}"})
+            messages.append({
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": f"c_{i}", "type": "function",
+                                "function": {"name": "ddm", "arguments": "{}"}}],
+            })
+            messages.append({"role": "tool", "tool_call_id": f"c_{i}", "content": "layout"})
+        # keep_recent=6 should preserve all 6 user turns (compact nothing)
+        boundary = _find_turn_boundary(messages, "openai", keep_recent=6)
+        self.assertEqual(boundary, len(messages))
+
+    def test_anthropic_tool_results_not_counted_as_turns(self):
+        """Pure tool_result user messages should NOT count as user turns."""
+        messages = []
+        for i in range(6):
+            messages.append({"role": "user", "content": f"Turn {i}"})
+            messages.append({
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": f"tu_{i}", "name": "ddm", "input": {}}],
+            })
+            # Pure tool_result — no text block
+            messages.append({
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"tu_{i}", "content": "layout"}],
+            })
+        # 6 real user turns, keep_recent=6 should preserve all (compact nothing)
+        boundary = _find_turn_boundary(messages, "anthropic", keep_recent=6)
+        self.assertEqual(boundary, len(messages))
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +410,33 @@ class TestCompactMessagesOpenAI(unittest.TestCase):
         # Last tool result should still have layout
         last_tool = messages[-1]
         self.assertIn("=== Page Layout ===", last_tool["content"])
+
+    def test_intel_extract_compacted_in_conversation(self):
+        """Stale intel_extract results should be truncated (not left intact)."""
+        messages = [{"role": "system", "content": "sys"}]
+        # Old intel_extract with large result
+        messages.append({"role": "user", "content": "Extract data"})
+        messages.append({
+            "role": "assistant", "content": None,
+            "tool_calls": [
+                {"id": "call_ie", "type": "function",
+                 "function": {"name": "intel_extract", "arguments": "{}"}},
+            ],
+        })
+        large_result = "x" * 5000
+        messages.append({
+            "role": "tool", "tool_call_id": "call_ie",
+            "content": large_result,
+        })
+        # Add enough recent turns
+        for i in range(8):
+            messages.append({"role": "user", "content": f"Recent {i}"})
+            messages.append({"role": "assistant", "content": f"OK {i}"})
+
+        messages, stats = compact_messages(messages, fmt="openai", keep_recent=6)
+        ie_result = messages[3]
+        self.assertIn("[truncated from 5000 chars]", ie_result["content"])
+        self.assertGreater(stats["compacted"], 0)
 
 
 # ---------------------------------------------------------------------------

@@ -668,27 +668,27 @@ class ChatAgent:
                 })
         except anthropic.BadRequestError as e:
             print(f"[{session_id}] Bad request: {e}")
+            self._save_session(session_id, messages)
             msg = str(e)
-            if "credit balance" in msg.lower():
-                self._save_session(session_id, messages)
+            low = msg.lower()
+            if "credit balance" in low:
                 await self._send_event(session_id, {
                     "type": "error",
                     "data": "Anthropic API credit balance is too low. "
                             "Please add credits at https://console.anthropic.com/settings/billing",
                 })
-            elif len(messages) > 12:
-                # Context overflow — emergency trim and retry
+            elif ("too long" in low or "too many tokens" in low or "context length" in low
+                  or "max tokens" in low) and len(messages) > 12:
+                # Context overflow — emergency trim for next request
                 messages = emergency_trim(messages, fmt="anthropic", keep_tail=10)
                 self.sessions[session_id] = messages
-                print(f"[{session_id}] Emergency trim to {len(messages)} msgs, retrying")
                 self._save_session(session_id, messages)
-                # Don't send error — the loop will retry on next user message
+                print(f"[{session_id}] Context overflow — emergency trim to {len(messages)} msgs")
                 await self._send_event(session_id, {
                     "type": "error",
                     "data": "Context was too large — trimmed history. Please resend your last message.",
                 })
             else:
-                self._save_session(session_id, messages)
                 await self._send_event(session_id, {
                     "type": "error", "data": str(e),
                 })

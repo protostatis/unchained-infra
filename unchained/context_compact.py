@@ -98,7 +98,12 @@ def _compact_tool_result(
             return "[screenshot — compacted]"
         if short == "ddm":
             return "[ddm — compacted]"
-        # navigate/click/intel: strip page layout, keep action summary
+        if short in ("intel_probe", "intel_extract"):
+            # Intel results are structured data — truncate like data tools
+            if len(content) > max_data_chars:
+                return content[:max_data_chars] + f" [truncated from {len(content)} chars]"
+            return content
+        # navigate/click: strip page layout, keep action summary
         return _strip_page_layout(content)
 
     if classification == "ephemeral":
@@ -179,39 +184,40 @@ def _build_tool_name_index(messages: list, fmt: str) -> dict[str, str]:
 def _find_turn_boundary(messages: list, fmt: str, keep_recent: int) -> int:
     """Return the index that separates 'old' messages from 'recent' ones.
 
-    We count user messages from the end and return the index of the message
-    *before* the ``keep_recent``-th user message.  Everything at or after that
-    index is considered recent and will not be compacted.
+    We count **actual user text messages** (not tool-result messages) from the
+    end and return the index of the ``keep_recent``-th such message.  Everything
+    at or after that index is considered recent and will not be compacted.
 
     If the conversation is short enough, returns ``len(messages)`` (compact nothing).
     """
     if fmt == "anthropic":
-        # In Anthropic format, user messages carry tool results too,
-        # so count actual user turns (messages with role "user" that contain
-        # a text string, not just tool_result blocks).
+        # Count only user messages that contain real user text — not pure
+        # tool_result payloads.
         user_indices = []
         for i, msg in enumerate(messages):
             if not isinstance(msg, dict):
                 continue
-            if msg.get("role") == "user":
-                content = msg.get("content")
-                # Pure text user message
-                if isinstance(content, str):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                # Plain text user message — always a real turn
+                user_indices.append(i)
+            elif isinstance(content, list):
+                # List content: count as a real turn only if it has a text block
+                has_text = any(
+                    (isinstance(b, dict) and b.get("type") == "text")
+                    or isinstance(b, str)
+                    for b in content
+                )
+                if has_text:
                     user_indices.append(i)
-                # List content — check for text blocks (not just tool_result)
-                elif isinstance(content, list):
-                    has_text = any(
-                        (isinstance(b, dict) and b.get("type") == "text")
-                        or (isinstance(b, str))
-                        for b in content
-                    )
-                    # Also count pure tool_result messages as turns
-                    user_indices.append(i)
+                # Pure tool_result messages are NOT counted as user turns
     else:
-        # OpenAI: count user messages
+        # OpenAI: count only role=="user" messages (not role=="tool")
         user_indices = [
             i for i, msg in enumerate(messages)
-            if isinstance(msg, dict) and msg.get("role") in ("user", "tool")
+            if isinstance(msg, dict) and msg.get("role") == "user"
         ]
 
     if len(user_indices) <= keep_recent:
