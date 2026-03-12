@@ -43,6 +43,8 @@ All functions below are exported by `unchained/cloud_tools.py`.
 | `create_tab` | caller service process | `private_core_engine.create_tab` | relay HTTP proxy -> bridge -> local Chrome |
 | `provision_launch` | caller service process | `private_core_engine.provision_launch` | relay HTTP proxy -> bridge |
 | `provision_cleanup` | caller service process | `private_core_engine.provision_cleanup` | relay HTTP proxy -> bridge |
+| `provision_status` | caller service process | `private_core_engine.provision_status` | relay HTTP proxy -> bridge |
+| `set_file` | caller service process | `private_core_engine.set_file` | CDP via relay -> bridge -> local Chrome |
 | `close_tab` | caller service process | `private_core_engine.close_tab` | CDP via relay -> bridge -> local Chrome |
 
 ## Production Defaults (Current Compose)

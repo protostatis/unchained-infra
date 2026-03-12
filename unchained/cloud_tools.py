@@ -68,7 +68,7 @@ async def provision_launch(agent_id: str, profile_path: str, relay_host: str = "
     return await _client().provision_launch(agent_id, profile_path, relay_host, relay_port)
 
 
-async def provision_cleanup(agent_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765, slot: str = "") -> bool:
+async def provision_cleanup(agent_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765, slot: str = "") -> dict:
     return await _client().provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
 
 

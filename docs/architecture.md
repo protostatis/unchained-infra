@@ -93,8 +93,8 @@ All services share a `relay_data` volume containing `auth.db` (SQLite API key st
 - **intel.py** (1264 LOC) — Bayesian extraction strategy selector: 8 strategies, DOM fingerprinting, JS data store discovery
 
 ### Tunnel System
-- **chrome_bridge.py** (609 LOC) — Runs on user's machine. Connects to relay, multiplexes CDP WebSocket channels + HTTP requests over single tunnel
-- **relay.py** (339 LOC) — Runs on server. Routes messages between agents (on `/tunnel`) and clients (on `/cdp/<agent_id>/<tab_id>`)
+- **chrome_bridge.py** (609 LOC) — Runs on user's machine. Connects to relay, multiplexes CDP WebSocket channels + HTTP requests over single tunnel. Handles provisioned Chrome lifecycle (launch with user profile, tab discovery, cleanup)
+- **relay.py** (339 LOC) — Runs on server. Routes messages between agents (on `/tunnel`) and clients (on `/cdp/<agent_id>/<tab_id>`). Proxies provision HTTP requests to bridge
 
 ### Web & API
 - **web.py** (1466 LOC) — Chat UI (HTML/JS), Google OAuth, SSE bridge, `/web/cmd` API dispatching to cloud_tools
@@ -112,7 +112,7 @@ All services share a `relay_data` volume containing `auth.db` (SQLite API key st
 - **private_core_client.py** — Contract client for the private core service
 - **private_core_server.py** — Private service endpoint (`/core/execute`)
 - **private_core_engine.py** — Proprietary cdp/ddm/intel implementation
-- **mcp_server.py** (225 LOC) — FastMCP server exposing tools for MCP-compatible AI clients
+- **mcp_server.py** — FastMCP server exposing DDM/intel/CDP/provisioning tools for MCP-compatible AI clients
 
 ## Deployment
 

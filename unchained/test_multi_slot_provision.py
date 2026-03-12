@@ -399,8 +399,8 @@ class TestHandleProvisionCleanup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["status"], 200)
         self.assertEqual(sent["body"]["status"], "cleaned_up")
 
-    async def test_cleanup_no_query_multiple_prov_is_noop(self):
-        """'/provision-cleanup' with multiple prov Chromes does NOT destroy all."""
+    async def test_cleanup_no_query_multiple_prov_cleans_all(self):
+        """'/provision-cleanup' with multiple prov Chromes cleans up all."""
         agent = _make_agent()
         agent.ws = AsyncMock()
 
@@ -422,15 +422,13 @@ class TestHandleProvisionCleanup(unittest.IsolatedAsyncioTestCase):
 
         await agent._handle_provision_cleanup(req_id=99, path="/provision-cleanup")
 
-        # Both should survive — ambiguous cleanup is a no-op
-        self.assertEqual(len(agent._prov_chromes), 2)
+        # Both should be cleaned up
+        self.assertEqual(len(agent._prov_chromes), 0)
 
         sent = json.loads(agent.ws.send.call_args[0][0])
         self.assertEqual(sent["status"], 200)
         self.assertEqual(sent["body"]["status"], "cleaned_up")
-
-        shutil.rmtree(tmp_ab, ignore_errors=True)
-        shutil.rmtree(tmp_cd, ignore_errors=True)
+        self.assertEqual(sent["body"]["cleaned"], 2)
 
     async def test_cleanup_no_prov_chromes(self):
         """Cleanup with nothing to clean returns 'no_provision_chrome'."""

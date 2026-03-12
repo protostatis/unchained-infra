@@ -267,7 +267,7 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def provision_cleanup(self, agent_id: str, relay_host: str, relay_port: int, slot: str = "") -> bool:
+    async def provision_cleanup(self, agent_id: str, relay_host: str, relay_port: int, slot: str = "") -> dict:
         return await self.execute(
             OP_PROVISION_CLEANUP,
             agent_id=agent_id,

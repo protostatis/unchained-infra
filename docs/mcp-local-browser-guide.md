@@ -8,8 +8,8 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 ## What This Enables
 
 - Keep your real browser session (cookies, extensions, 2FA state, IP)
-- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`) from any
-  MCP-compatible client
+- Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`,
+  `cdp_provision_launch`, `list_provisioned_tabs`) from any MCP-compatible client
 - Run multiple Chrome profiles simultaneously (e.g. personal + work + social)
 - Discover tabs opened by provisioned Chrome flows, including OAuth popups
 - Zero-config path if you already installed the agent via `curl | bash`
@@ -176,6 +176,71 @@ ddm agent_id=facebook
 
 When `agent_id` is empty (the default), tools target the default profile.
 
+## Provisioned Chrome (OAuth / Authenticated Browsing)
+
+Use provisioned Chrome when you need to sign into a site using a real Chrome
+profile (with saved passwords, cookies, 2FA state) through the MCP tools.
+
+### Workflow
+
+1. **Launch** a temporary Chrome with the user's profile:
+
+```text
+cdp_provision_launch  profile_path="/Users/you/Library/Application Support/Google/Chrome/Profile 5"
+```
+
+Response:
+
+```text
+Provisioned Chrome launched.
+  Slot: a1b2
+  Tab ID: prov-a1b2-AABB11CC22DD33EE44FF55667788990A
+  Debug port: 9600
+```
+
+2. **Use** the returned `tab_id` with any MCP tool:
+
+```text
+cdp_navigate  url=https://x.com  tab_id=prov-a1b2-AABB11CC22DD33EE44FF55667788990A
+```
+
+3. **Discover new tabs** (e.g., OAuth popups) with `list_provisioned_tabs`:
+
+```text
+Slot a1b2 (profile: Profile 5, 2 tabs):
+  prov-a1b2-AABB11CC22DD33EE  Log in to X / X  https://x.com/i/flow/login
+  prov-a1b2-E914E9D4B944AABB  Sign in - Google  https://accounts.google.com/...
+```
+
+4. **Switch** to the popup tab using its prov-prefixed ID:
+
+```text
+ddm  tab_id=prov-a1b2-E914E9D4B944AABB
+cdp_click  x=780  y=377  tab_id=prov-a1b2-E914E9D4B944AABB
+```
+
+5. **Clean up** when done:
+
+```text
+cdp_provision_cleanup  slot=a1b2     # specific slot
+cdp_provision_cleanup                 # all slots
+```
+
+### Provisioning Tools
+
+| Tool | Purpose |
+|------|---------|
+| `cdp_provision_launch` | Launch temp Chrome with a profile. Returns slot + prov-prefixed tab ID |
+| `list_provisioned_tabs` | List all tabs across provisioned Chrome instances |
+| `cdp_provision_cleanup` | Kill provisioned Chrome(s) and clean up temp dirs |
+
+### Notes
+
+- Provisioned Chrome runs as a separate process with a copy of the profile
+- The original Chrome profile is not modified
+- Tab IDs use `prov-{slot}-{chrome_id}` format — pass these to any MCP tool's `tab_id` parameter
+- `ddm --tabs` with a prov-prefixed `tab_id` auto-prefixes tab IDs in the output
+
 ## Agent Prompt Snippet (AGENTS.md / CLAUDE.md)
 
 Use this subsection in your agent instruction file so tool behavior stays
@@ -188,7 +253,9 @@ consistent:
 - `agent_id` is auto-detected from your API key — you do not need to pass it.
 - To target a specific Chrome profile, pass the profile name in `agent_id` (e.g. `agent_id=facebook`).
 - Use `list_connected_agents` to discover all connected profiles.
-- Use `list_provisioned_tabs` after profile provisioning or OAuth flows to discover `prov-<slot>-<tab_id>` values for new tabs and popups.
+- Use `cdp_provision_launch` to launch a temp Chrome with a user profile for OAuth flows.
+- Use `list_provisioned_tabs` to discover tabs (including popups) in provisioned Chrome.
+- Use `cdp_provision_cleanup` to clean up provisioned Chrome instances when done.
 
 #### DDM-First Methodology
 
