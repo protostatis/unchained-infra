@@ -347,6 +347,9 @@ def _restore_archive_into_slot(archive_id: str, slot: int | None = None) -> tupl
     _archive_slot(slot)
     _save_chat(slot_data, slot)
 
+    # Session resume state is currently modeled as a single active mapping per
+    # agent process. Restore runs on the serialized agent control path, so we
+    # rebuild those maps wholesale for the restored slot.
     claude_sessions.clear()
     codex_sessions.clear()
     _context_injected.clear()
