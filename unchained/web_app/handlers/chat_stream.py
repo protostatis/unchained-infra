@@ -187,6 +187,11 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     "slots_response",
                     "update_client_ok",
                     "update_client_error",
+                    "archives_response",
+                    "restore_archive_ok",
+                    "restore_archive_error",
+                    "delete_archive_ok",
+                    "delete_archive_error",
                 ):
                     rq = core._agent_req_queues.get(req_id)
                     if rq:
