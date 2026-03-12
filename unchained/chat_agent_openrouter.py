@@ -1781,11 +1781,12 @@ class LocalOpenRouterCLI:
             print(f"[context] Tier 1: compacted {cstats['compacted']} stale tool results "
                   f"({cstats['tokens_before']}→{cstats['tokens_after']} est tokens)")
 
-        # Re-check after tier 1 — may be small enough now
-        non_system = [m for m in self.messages if m.get("role") != "system"]
-        if not force and len(non_system) <= self.max_history_messages:
+        # Re-check after tier 1 — if token estimate dropped enough, skip Tier 2.
+        # Tier 1 only shrinks content (never removes messages), so we check tokens.
+        if not force and cstats["compacted"] and cstats["tokens_after"] < cstats["tokens_before"] * 0.6:
             self._save_local_session()
-            return bool(cstats["compacted"])
+            print("[context] Tier 1 sufficient — skipping Tier 2 model summary")
+            return True
 
         # Tier 2: model-generated summary of older messages
         older = non_system[:-LOCAL_CONTEXT_KEEP_TAIL]
