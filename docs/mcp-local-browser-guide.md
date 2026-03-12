@@ -1,6 +1,6 @@
 # MCP Local Browser Guide (Production)
 
-Last validated: March 10, 2026.
+Last validated: March 11, 2026.
 
 This guide shows how to drive your local Chrome through the production MCP
 endpoint (`https://api.unchainedsky.com/mcp`).
@@ -11,6 +11,7 @@ endpoint (`https://api.unchainedsky.com/mcp`).
 - Use MCP tools (`cdp_navigate`, `ddm`, `cdp_click`, `js_eval`, `cdp_set_file`,
   `cdp_provision_launch`, `list_provisioned_tabs`) from any MCP-compatible client
 - Run multiple Chrome profiles simultaneously (e.g. personal + work + social)
+- Discover tabs opened by provisioned Chrome flows, including OAuth popups
 - Zero-config path if you already installed the agent via `curl | bash`
 - Avoid setting up and maintaining a custom Playwright skill for each tool host
 
@@ -98,6 +99,39 @@ Then call tools directly — `agent_id` is auto-detected from your API key:
 - `cdp_navigate` with `url=https://slickdeals.net`
 - `js_eval` with `expression=document.title`
 - `ddm` with `flags=--text --find Slickdeals`
+- `list_provisioned_tabs` after a provisioned login flow opens a popup tab
+
+## Provisioned Chrome Tabs And OAuth Popups
+
+When a provisioned Chrome flow opens a second tab or popup window, the default
+profile-level `agent_id` is not enough to target it. Use the provisioned-tab
+discovery tool to get a tab-scoped ID first.
+
+Typical flow:
+
+1. Start the provisioned flow in the app or with your existing MCP/browser tools.
+2. Call `list_provisioned_tabs` to discover tabs for the provisioned Chrome slot.
+3. Copy the returned `prov-<slot>-<tab_id>` value.
+4. Pass that value as `tab_id` to `ddm`, `cdp_click`, `cdp_type`, `js_eval`, or other tab-aware tools.
+
+Example:
+
+```text
+list_provisioned_tabs
+
+Slot ab12 (profile: Profile 5, 2 tabs):
+  prov-ab12-AAA111...  X / Login  https://x.com/i/flow/login
+  prov-ab12-BBB222...  Sign in - Google  [popup]  https://accounts.google.com/signin
+
+ddm tab_id=prov-ab12-BBB222...
+cdp_click x=742 y=508 tab_id=prov-ab12-BBB222...
+```
+
+Notes:
+
+- `list_connected_agents` finds bridge/profile agents. `list_provisioned_tabs` finds tabs inside a provisioned Chrome instance.
+- `ddm --tabs` now includes popup windows and marks them with `[popup]`.
+- Auto tab selection still prefers normal page tabs. Use an explicit `prov-...` `tab_id` when you need the popup itself.
 
 ## Multi-Profile Support
 
