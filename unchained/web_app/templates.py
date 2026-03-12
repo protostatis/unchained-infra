@@ -8794,6 +8794,16 @@ def _inject_sidebar(html: str) -> str:
         1,
     )
 
+    # 4. Remove duplicate nav links (sidebar has + New and View all archives)
+    html = html.replace(
+        '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
+        '',
+    )
+    html = html.replace(
+        '      <a href="#" onclick="openArchives();return false">Archives</a>\n',
+        '',
+    )
+
     # 5. Close app-shell wrapper after main closes, before <script>
     html = html.replace("</div>\n<script>", "</div>\n</div>\n<script>", 1)
 
