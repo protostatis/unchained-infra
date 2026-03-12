@@ -2669,6 +2669,12 @@ async function restoreArchive(id) {
       body: JSON.stringify({ archive_id: id, model: currentModel() }),
     });
     if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      if (data.session_id) {
+        sessionId = data.session_id;
+        _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
+      }
       closeArchives();
       location.reload();
     } else {
@@ -7745,6 +7751,12 @@ async function restoreArchive(id) {
       body: JSON.stringify({ archive_id: id, model: currentModel() }),
     });
     if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      if (data.session_id) {
+        sessionId = data.session_id;
+        _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
+      }
       closeArchives();
       location.reload();
     } else {

@@ -370,7 +370,10 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         chat_agent_id, {"type": "get_history", "session_id": requested_session_id}
     )
     if resp is not None:
-        return web.json_response({"messages": resp.get("messages", [])})
+        payload = {"messages": resp.get("messages", [])}
+        if resp.get("session_id"):
+            payload["session_id"] = resp["session_id"]
+        return web.json_response(payload)
 
     session_id = core._resolve_trial_session_id(agent_id, requested_session_id)
     msgs, found = core._read_trial_history(session_id)
@@ -542,7 +545,10 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
         return web.json_response({"error": "Agent not connected"}, status=503)
     if resp.get("type") == "restore_archive_error":
         return web.json_response({"error": resp.get("error", "Restore failed")}, status=404)
-    return web.json_response({"ok": True, "active_slot": resp.get("active_slot", 1)})
+    payload = {"ok": True, "active_slot": resp.get("active_slot", 1)}
+    if resp.get("session_id"):
+        payload["session_id"] = resp["session_id"]
+    return web.json_response(payload)
 
 
 async def handle_chat_delete_archive(request: web.Request) -> web.Response:
