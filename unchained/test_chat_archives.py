@@ -252,8 +252,14 @@ class TestLocalArchiveTemplate(unittest.TestCase):
         self.assertIn("if (data.session_id) {", web.CLAUDE_CHAT_HTML)
         self.assertIn("_setActiveSlotSession(sessionId);", web.CLAUDE_CHAT_HTML)
 
-    def test_local_template_defines_slot_session_helper(self):
+    def test_local_template_defines_slot_session_helpers(self):
+        self.assertIn("function _slotStateKey() {", web.CLAUDE_CHAT_HTML)
         self.assertIn("function _setActiveSlotSession(sid) {", web.CLAUDE_CHAT_HTML)
+
+    def test_local_template_recovers_slot_state_after_failed_switch(self):
+        self.assertIn("const previousState = _loadSlotState();", web.CLAUDE_CHAT_HTML)
+        self.assertIn("if (data.offline) return;", web.CLAUDE_CHAT_HTML)
+        self.assertIn("_saveSlotState(previousState);", web.CLAUDE_CHAT_HTML)
 
 
 if __name__ == "__main__":
