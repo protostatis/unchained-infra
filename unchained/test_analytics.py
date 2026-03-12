@@ -188,6 +188,63 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertEqual(step_counts["auth_google_success"], 1)
             self.assertEqual(step_counts["chat_message_send"], 1)
 
+    def test_funnel_report_excludes_current_registered_users(self):
+        with tempfile.TemporaryDirectory() as td:
+            analytics_db_path = f"{td}/analytics.db"
+            auth_db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=analytics_db_path, auth_db_path=auth_db_path)
+            now = time.time()
+            req = _req("/trial", "10.0.0.7")
+
+            conn = sqlite3.connect(auth_db_path)
+            conn.execute(
+                """
+                CREATE TABLE users (
+                    user_id TEXT PRIMARY KEY,
+                    email TEXT UNIQUE NOT NULL,
+                    status TEXT DEFAULT 'approved'
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO users (user_id, email, status) VALUES (?, ?, ?)",
+                ("u-registered", "registered@example.com", "approved"),
+            )
+            conn.commit()
+            conn.close()
+
+            store.track("page_view", request=req, route="/trial", now=now - 20)
+            store.track("login_gate_visible", request=req, route="/trial", now=now - 18)
+            store.track("google_signin_click", request=req, route="/trial", now=now - 17)
+            store.track("auth_google_attempt", request=req, route="/trial", now=now - 16.5)
+            store.track(
+                "auth_google_success",
+                request=req,
+                user_id="u-registered",
+                user_type="trial",
+                now=now - 16,
+            )
+
+            filtered = store.funnel_report(funnel="auth_inline_gsi", days=7)
+            filtered_counts = {row["step"]: row["visitors"] for row in filtered["steps"]}
+            self.assertEqual(filtered_counts["login_page_view"], 0)
+            self.assertEqual(filtered_counts["login_gate_visible"], 0)
+            self.assertEqual(filtered_counts["google_signin_click"], 0)
+            self.assertEqual(filtered_counts["auth_google_success"], 0)
+            self.assertEqual(filtered["matched_registered_user_count"], 1)
+            self.assertEqual(filtered["excluded_registered_visitor_count"], 1)
+
+            unfiltered = store.funnel_report(
+                funnel="auth_inline_gsi",
+                days=7,
+                exclude_current_registered_users=False,
+            )
+            unfiltered_counts = {row["step"]: row["visitors"] for row in unfiltered["steps"]}
+            self.assertEqual(unfiltered_counts["login_page_view"], 1)
+            self.assertEqual(unfiltered_counts["login_gate_visible"], 1)
+            self.assertEqual(unfiltered_counts["google_signin_click"], 1)
+            self.assertEqual(unfiltered_counts["auth_google_success"], 1)
+
     def test_cleanup_old_events(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = f"{td}/auth.db"

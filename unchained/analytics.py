@@ -106,6 +106,16 @@ def _parse_int(value, default: int = 0) -> int:
         return int(default)
 
 
+def _resolve_auth_db_path(analytics_db_path: str) -> str:
+    configured = os.environ.get("UNCHAINED_DB_PATH", "").strip()
+    if configured:
+        return configured
+    directory = os.path.dirname(os.path.abspath(analytics_db_path))
+    if os.path.basename(analytics_db_path) == "analytics.db":
+        return os.path.join(directory, "auth.db")
+    return os.path.abspath(analytics_db_path)
+
+
 class AnalyticsStore:
     """SQLite-backed event storage + funnel summaries."""
 
@@ -179,13 +189,15 @@ class AnalyticsStore:
         *,
         retention_days: int = DEFAULT_RETENTION_DAYS,
         hash_salt: str | None = None,
+        auth_db_path: str | None = None,
     ):
         if db_path is None:
             db_path = os.environ.get(
                 "UNCHAINED_DB_PATH",
                 os.path.expanduser("~/.unchained/auth.db"),
             )
-        self.db_path = db_path
+        self.db_path = os.path.abspath(db_path)
+        self.auth_db_path = os.path.abspath(auth_db_path) if auth_db_path else _resolve_auth_db_path(self.db_path)
         self.retention_days = max(1, int(retention_days or DEFAULT_RETENTION_DAYS))
         self.hash_salt = hash_salt or os.environ.get("ANALYTICS_HASH_SALT", "") or "unchained-analytics-v2"
         self._dedupe_lock = threading.Lock()
@@ -496,16 +508,35 @@ class AnalyticsStore:
             conn.execute("DELETE FROM analytics_sessions WHERE last_ts < ?", (cutoff,))
             return int(cur.rowcount or 0)
 
+    def _load_current_registered_user_ids(self) -> set[str]:
+        if not self.auth_db_path or not os.path.exists(self.auth_db_path):
+            return set()
+        try:
+            with sqlite3.connect(self.auth_db_path) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
+                ).fetchone()
+                if row is None:
+                    return set()
+                rows = conn.execute(
+                    "SELECT user_id FROM users "
+                    "WHERE COALESCE(user_id, '') <> '' "
+                    "AND COALESCE(status, 'approved') <> 'rejected'"
+                ).fetchall()
+        except sqlite3.Error:
+            return set()
+        return {str(row[0]).strip() for row in rows if str(row[0]).strip()}
+
     def _load_window_rows(self, since_ts: float) -> list[dict]:
         query = (
-            "SELECT visitor_id, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, "
+            "SELECT visitor_id, user_id, user_type, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, "
             "source, status_code, latency_ms, ts, meta_json "
             "FROM analytics_events WHERE ts >= ? ORDER BY ts ASC"
         )
         with self._conn_ctx() as conn:
             rows = conn.execute(query, (since_ts,)).fetchall()
         out: list[dict] = []
-        for visitor_id, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, source, status_code, latency_ms, ts, meta_json in rows:
+        for visitor_id, user_id, user_type, session_id, page_view_id, event, route, route_intended, route_effective, gate_type, cta_id, error_code, source, status_code, latency_ms, ts, meta_json in rows:
             payload: dict
             try:
                 payload = json.loads(meta_json or "{}")
@@ -516,6 +547,8 @@ class AnalyticsStore:
             out.append(
                 {
                     "visitor_id": visitor_id or "",
+                    "user_id": user_id or "",
+                    "user_type": user_type or "",
                     "session_id": session_id or "",
                     "page_view_id": page_view_id or "",
                     "event": event or "",
@@ -544,6 +577,44 @@ class AnalyticsStore:
         if session_id:
             return route, f"session:{session_id}:{route}"
         return route, f"visitor:{visitor_id}:{route}"
+
+    def _exclude_current_registered_rows(
+        self,
+        rows: list[dict],
+        *,
+        enabled: bool,
+    ) -> tuple[list[dict], set[str], set[str], set[str]]:
+        if not enabled:
+            return rows, set(), set(), set()
+        current_user_ids = self._load_current_registered_user_ids()
+        if not current_user_ids:
+            return rows, set(), set(), set()
+
+        registered_visitor_ids = {f"user:{user_id}" for user_id in current_user_ids}
+        matched_user_ids: set[str] = set()
+        excluded_visitor_ids: set[str] = set()
+        excluded_session_ids: set[str] = set()
+        for row in rows:
+            row_user_id = str(row.get("user_id", "")).strip()
+            visitor_id = str(row.get("visitor_id", "")).strip()
+            if row_user_id in current_user_ids or visitor_id in registered_visitor_ids:
+                if row_user_id:
+                    matched_user_ids.add(row_user_id)
+                if visitor_id:
+                    excluded_visitor_ids.add(visitor_id)
+                session_id = str(row.get("session_id", "")).strip()
+                if session_id:
+                    excluded_session_ids.add(session_id)
+        if not excluded_visitor_ids and not excluded_session_ids and not matched_user_ids:
+            return rows, current_user_ids, set(), set()
+
+        filtered_rows = [
+            row for row in rows
+            if str(row.get("user_id", "")).strip() not in current_user_ids
+            and str(row.get("visitor_id", "")).strip() not in excluded_visitor_ids
+            and str(row.get("session_id", "")).strip() not in excluded_session_ids
+        ]
+        return filtered_rows, current_user_ids, matched_user_ids, excluded_visitor_ids
 
     def _step_for_event(self, funnel: str, row: dict) -> str:
         event = row["event"]
@@ -639,11 +710,21 @@ class AnalyticsStore:
             prev = value
         return step_rows
 
-    def funnel_report(self, *, funnel: str = "auth_inline_gsi", days: int = 7) -> dict:
+    def funnel_report(
+        self,
+        *,
+        funnel: str = "auth_inline_gsi",
+        days: int = 7,
+        exclude_current_registered_users: bool = True,
+    ) -> dict:
         spec = self._FUNNEL_SPECS.get(funnel, self._FUNNEL_SPECS["auth_inline_gsi"])
         window_days = min(90, max(1, int(days or 7)))
         since_ts = time.time() - (86400.0 * float(window_days))
-        rows = self._load_window_rows(since_ts)
+        raw_rows = self._load_window_rows(since_ts)
+        rows, current_user_ids, matched_user_ids, excluded_visitor_ids = self._exclude_current_registered_rows(
+            raw_rows,
+            enabled=exclude_current_registered_users,
+        )
 
         per_visitor: dict[str, dict[str, float]] = {}
         auth_fail_reasons: dict[str, int] = {}
@@ -700,6 +781,10 @@ class AnalyticsStore:
             "available_funnels": sorted(self._FUNNEL_SPECS.keys()),
             "window_days": window_days,
             "since_ts": since_ts,
+            "exclude_current_registered_users": bool(exclude_current_registered_users),
+            "current_registered_user_count": len(current_user_ids),
+            "matched_registered_user_count": len(matched_user_ids),
+            "excluded_registered_visitor_count": len(excluded_visitor_ids),
             "unique_visitors": len(per_visitor),
             "events_in_window": len(rows),
             "steps": step_rows,
@@ -730,6 +815,10 @@ class AnalyticsStore:
             ]
         return payload
 
-    def login_funnel(self, days: int = 7) -> dict:
+    def login_funnel(self, days: int = 7, *, exclude_current_registered_users: bool = True) -> dict:
         """Backward-compatible helper for existing admin endpoint users."""
-        return self.funnel_report(funnel="auth_inline_gsi", days=days)
+        return self.funnel_report(
+            funnel="auth_inline_gsi",
+            days=days,
+            exclude_current_registered_users=exclude_current_registered_users,
+        )
