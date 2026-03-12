@@ -85,7 +85,9 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
-    async def test_chat_status_soft_updates_recent_safe_client(self, mock_auth, mock_check_relay):
+    async def test_chat_status_marks_current_client_as_not_outdated(
+        self, mock_auth, mock_check_relay
+    ):
         mock_auth.return_value = {
             "user_id": "u-test",
             "agent_id": "claude-updated",
@@ -97,7 +99,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         web._chat_agents["claude-updated"] = SimpleNamespace(closed=False)
         web._chat_agent_users["claude-updated"] = "u-test"
         web._chat_agent_caps["claude-updated"] = {
-            "client_version": "0.3.45",
+            "client_version": "0.3.46",
             "remote_update": True,
         }
 
@@ -106,14 +108,16 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         data = json.loads(response.body.decode())
 
         self.assertTrue(data["client_connected"])
-        self.assertEqual(data["client_version"], "0.3.45")
+        self.assertEqual(data["client_version"], "0.3.46")
         self.assertTrue(data["client_update_supported"])
-        self.assertTrue(data["client_outdated"])
+        self.assertFalse(data["client_outdated"])
         self.assertFalse(data["client_update_required"])
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
-    async def test_chat_status_requires_pre_restore_safety_client(self, mock_auth, mock_check_relay):
+    async def test_chat_status_requires_pre_restore_safety_client(
+        self, mock_auth, mock_check_relay
+    ):
         mock_auth.return_value = {
             "user_id": "u-test",
             "agent_id": "claude-required",
@@ -125,7 +129,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         web._chat_agents["claude-required"] = SimpleNamespace(closed=False)
         web._chat_agent_users["claude-required"] = "u-test"
         web._chat_agent_caps["claude-required"] = {
-            "client_version": "0.3.37",
+            "client_version": "0.3.45",
             "remote_update": True,
         }
 
@@ -134,7 +138,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         data = json.loads(response.body.decode())
 
         self.assertTrue(data["client_connected"])
-        self.assertEqual(data["client_version"], "0.3.37")
+        self.assertEqual(data["client_version"], "0.3.45")
         self.assertTrue(data["client_outdated"])
         self.assertTrue(data["client_update_required"])
 

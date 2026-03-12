@@ -15,9 +15,9 @@ import os
 import zipfile
 
 VERSION = "0.3.46"
-# 0.3.45 is the first packaged client that archives the current slot before
-# overwriting it during restore, so older clients must be forced to update.
-MIN_VERSION = "0.3.45"
+# 0.3.46 is the first packaged client version that reliably includes the
+# archive-restore safety fix on users' machines, so anything older must update.
+MIN_VERSION = "0.3.46"
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
