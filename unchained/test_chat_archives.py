@@ -121,6 +121,7 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             _is_codex_cli_model=lambda model: False,
             _resolve_chat_agent_id=lambda auth_info, model: "claude-abc12345",
             _agent_request=AsyncMock(),
+            _chat_agents={},
         )
 
     @patch("web_app.handlers.chat_flow._core")
@@ -164,6 +165,59 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(data["session_id"], "s-agent-restored")
         self.assertTrue(data["ok"])
+
+    @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_restore_archive_retries_after_reconnect(
+        self, mock_core, mock_agent_request, mock_sleep
+    ):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        core = self._core_stub()
+        core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=True)
+        mock_core.return_value = core
+        mock_agent_request.side_effect = [
+            None,
+            {"type": "restore_archive_ok", "active_slot": 2, "session_id": "s-agent-restored"},
+        ]
+
+        async def reconnect(_delay):
+            core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=False)
+
+        mock_sleep.side_effect = reconnect
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"archive_id": "arc", "model": "claude-sonnet-4-6"})
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["session_id"], "s-agent-restored")
+        self.assertEqual(mock_agent_request.await_count, 2)
+        mock_sleep.assert_awaited_once()
+
+    @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_restore_archive_returns_reconnect_error_when_still_offline(
+        self, mock_core, mock_agent_request, mock_sleep
+    ):
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        core = self._core_stub()
+        core._chat_agents["claude-abc12345"] = SimpleNamespace(closed=True)
+        mock_core.return_value = core
+        mock_agent_request.return_value = None
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"archive_id": "arc", "model": "claude-sonnet-4-6"})
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 503)
+        self.assertIn("reconnecting", data["error"])
+        mock_sleep.assert_awaited_once()
 
 
 class TestLocalArchiveTemplate(unittest.TestCase):

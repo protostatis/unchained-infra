@@ -110,6 +110,24 @@ async def agent_request(agent_id: str, msg: dict, timeout: float = 10) -> dict |
         core._agent_req_queues.pop(req_id, None)
 
 
+async def _agent_request_after_reconnect(
+    agent_id: str, msg: dict, *, timeout: float = 10, retry_delay: float = 1.0
+) -> dict | None:
+    """Retry once when the local client is in a brief reconnect window."""
+    resp = await agent_request(agent_id, dict(msg), timeout=timeout)
+    if resp is not None:
+        return resp
+    core = _core()
+    ws = core._chat_agents.get(agent_id)
+    if ws is not None and not ws.closed:
+        return None
+    await asyncio.sleep(retry_delay)
+    ws = core._chat_agents.get(agent_id)
+    if ws is None or ws.closed:
+        return None
+    return await agent_request(agent_id, dict(msg), timeout=timeout)
+
+
 async def handle_chat_status(request: web.Request) -> web.Response:
     """GET /web/chat/status — check if user's agent is connected."""
     core = _core()
@@ -540,9 +558,14 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
-    resp = await agent_request(chat_agent_id, {"type": "restore_archive", "archive_id": archive_id})
+    resp = await _agent_request_after_reconnect(
+        chat_agent_id, {"type": "restore_archive", "archive_id": archive_id}
+    )
     if resp is None:
-        return web.json_response({"error": "Agent not connected"}, status=503)
+        return web.json_response(
+            {"error": "Your local client is reconnecting. Wait a few seconds and retry."},
+            status=503,
+        )
     if resp.get("type") == "restore_archive_error":
         return web.json_response({"error": resp.get("error", "Restore failed")}, status=404)
     payload = {"ok": True, "active_slot": resp.get("active_slot", 1)}
