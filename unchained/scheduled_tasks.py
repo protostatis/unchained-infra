@@ -513,12 +513,8 @@ def recalculate_next_run(
     jobs: list[ScheduledJob],
     state: dict[str, JobState],
     now: datetime,
-) -> bool:
-    """Detect schedule changes and reset next_run_at for affected jobs.
-
-    Returns True if any state was modified.
-    """
-    changed = False
+) -> None:
+    """Detect schedule changes and reset next_run_at for affected jobs."""
     for job in jobs:
         js = state.get(job.id)
         if js is None or js.next_run_at is None:
@@ -530,21 +526,23 @@ def recalculate_next_run(
             if (js.next_run_at.hour != job.schedule.hour
                     or js.next_run_at.minute != job.schedule.minute):
                 js.next_run_at = SchedulerEngine._initial_next_run(job, now)
-                changed = True
 
         elif job.schedule.kind == "interval":
-            # Can't detect interval drift from next_run_at alone, so always
-            # recompute.  This is safe: it just means next_run_at = now + interval.
-            expected = SchedulerEngine._initial_next_run(job, now)
-            js.next_run_at = expected
-            changed = True
+            # Use last_run_at to detect whether every_seconds actually changed.
+            # If the job never ran we can't tell, so skip (harmless — the
+            # existing next_run_at from initialize_missing is fine).
+            if js.last_run_at is not None:
+                elapsed = (js.next_run_at - js.last_run_at).total_seconds()
+                interval = job.schedule.every_seconds or 0
+                if abs(elapsed - interval) < 1:
+                    continue  # matches current interval
+                if job.retry_seconds > 0 and abs(elapsed - job.retry_seconds) < 1:
+                    continue  # pending retry
+                js.next_run_at = SchedulerEngine._initial_next_run(job, now)
 
         elif job.schedule.kind == "once" and js.run_count == 0:
             if js.next_run_at != job.schedule.at:
                 js.next_run_at = job.schedule.at
-                changed = True
-
-    return changed
 
 
 class ChatTriggerClient:

@@ -293,14 +293,11 @@ class TestScheduledTasks(unittest.TestCase):
                 {"id": "d1", "prompt": "p", "schedule": {"daily_at": "12:00"}},
             ]
         })
-        # State has next_run_at at the OLD time (14:00)
         state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
         now = _utc(2026, 3, 13, 10, 0, 0)
 
-        changed = recalculate_next_run(jobs, state, now)
+        recalculate_next_run(jobs, state, now)
 
-        self.assertTrue(changed)
-        # Should now be at 12:00 (the new schedule)
         self.assertEqual(state["d1"].next_run_at.hour, 12)
         self.assertEqual(state["d1"].next_run_at.minute, 0)
 
@@ -311,13 +308,13 @@ class TestScheduledTasks(unittest.TestCase):
                 {"id": "d1", "prompt": "p", "schedule": {"daily_at": "14:00"}},
             ]
         })
-        state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
+        original = _utc(2026, 3, 14, 14, 0, 0)
+        state = {"d1": JobState(next_run_at=original)}
         now = _utc(2026, 3, 13, 10, 0, 0)
 
-        changed = recalculate_next_run(jobs, state, now)
+        recalculate_next_run(jobs, state, now)
 
-        self.assertFalse(changed)
-        self.assertEqual(state["d1"].next_run_at, _utc(2026, 3, 14, 14, 0, 0))
+        self.assertEqual(state["d1"].next_run_at, original)
 
     def test_recalculate_next_run_skips_disabled_jobs(self):
         """Disabled jobs should not be recalculated."""
@@ -326,14 +323,13 @@ class TestScheduledTasks(unittest.TestCase):
                 {"id": "d1", "prompt": "p", "schedule": {"daily_at": "12:00"}, "enabled": False},
             ]
         })
-        state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
+        original = _utc(2026, 3, 14, 14, 0, 0)
+        state = {"d1": JobState(next_run_at=original)}
         now = _utc(2026, 3, 13, 10, 0, 0)
 
-        changed = recalculate_next_run(jobs, state, now)
+        recalculate_next_run(jobs, state, now)
 
-        self.assertFalse(changed)
-        # Unchanged
-        self.assertEqual(state["d1"].next_run_at, _utc(2026, 3, 14, 14, 0, 0))
+        self.assertEqual(state["d1"].next_run_at, original)
 
     def test_recalculate_next_run_once_job_timestamp_change(self):
         """When a once-job's 'at' changes and it hasn't run yet, reset."""
@@ -345,9 +341,8 @@ class TestScheduledTasks(unittest.TestCase):
         state = {"o1": JobState(next_run_at=_utc(2026, 3, 15, 12, 0, 0), run_count=0)}
         now = _utc(2026, 3, 13, 10, 0, 0)
 
-        changed = recalculate_next_run(jobs, state, now)
+        recalculate_next_run(jobs, state, now)
 
-        self.assertTrue(changed)
         self.assertEqual(state["o1"].next_run_at, _utc(2026, 3, 20, 18, 0, 0))
 
     def test_recalculate_next_run_once_job_already_ran(self):
@@ -357,12 +352,83 @@ class TestScheduledTasks(unittest.TestCase):
                 {"id": "o1", "prompt": "p", "schedule": {"at": "2026-03-20T18:00:00Z"}},
             ]
         })
-        state = {"o1": JobState(next_run_at=_utc(2026, 3, 15, 12, 0, 0), run_count=1)}
+        original = _utc(2026, 3, 15, 12, 0, 0)
+        state = {"o1": JobState(next_run_at=original, run_count=1)}
         now = _utc(2026, 3, 13, 10, 0, 0)
 
-        changed = recalculate_next_run(jobs, state, now)
+        recalculate_next_run(jobs, state, now)
 
-        self.assertFalse(changed)
+        self.assertEqual(state["o1"].next_run_at, original)
+
+    def test_recalculate_interval_no_reset_on_prompt_edit(self):
+        """Editing prompt on an interval job should not reset the countdown."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "i1", "prompt": "new prompt", "schedule": {"every_seconds": 3600}},
+            ]
+        })
+        # Ran 50 minutes ago, next_run in 10 minutes (3600s interval)
+        last = _utc(2026, 3, 13, 9, 10, 0)
+        nxt = _utc(2026, 3, 13, 10, 10, 0)  # last + 3600s
+        state = {"i1": JobState(next_run_at=nxt, last_run_at=last, run_count=5)}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        recalculate_next_run(jobs, state, now)
+
+        # Should NOT have been reset
+        self.assertEqual(state["i1"].next_run_at, nxt)
+
+    def test_recalculate_interval_resets_when_interval_changes(self):
+        """Changing every_seconds should reset next_run_at."""
+        # Old interval was 3600s, new interval is 1800s
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "i1", "prompt": "p", "schedule": {"every_seconds": 1800}},
+            ]
+        })
+        last = _utc(2026, 3, 13, 9, 10, 0)
+        nxt = _utc(2026, 3, 13, 10, 10, 0)  # last + 3600s (old interval)
+        state = {"i1": JobState(next_run_at=nxt, last_run_at=last, run_count=5)}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        recalculate_next_run(jobs, state, now)
+
+        # Should be reset to now + 1800s
+        self.assertEqual(state["i1"].next_run_at, _utc(2026, 3, 13, 10, 30, 0))
+
+    def test_recalculate_interval_skips_never_ran_job(self):
+        """Interval job that never ran should not be touched."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "i1", "prompt": "p", "schedule": {"every_seconds": 3600}},
+            ]
+        })
+        original = _utc(2026, 3, 13, 11, 0, 0)
+        state = {"i1": JobState(next_run_at=original)}  # last_run_at=None
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        recalculate_next_run(jobs, state, now)
+
+        self.assertEqual(state["i1"].next_run_at, original)
+
+    def test_recalculate_interval_preserves_retry_countdown(self):
+        """Saving while a retry is pending should not reset next_run_at."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "i1", "prompt": "p", "schedule": {"every_seconds": 3600},
+                 "retry_seconds": 120},
+            ]
+        })
+        last = _utc(2026, 3, 13, 9, 58, 0)
+        nxt = _utc(2026, 3, 13, 10, 0, 0)  # last + 120s (retry)
+        state = {"i1": JobState(
+            next_run_at=nxt, last_run_at=last, last_status="error", run_count=3,
+        )}
+        now = _utc(2026, 3, 13, 9, 59, 0)
+
+        recalculate_next_run(jobs, state, now)
+
+        self.assertEqual(state["i1"].next_run_at, nxt)
 
 
 if __name__ == "__main__":
