@@ -509,6 +509,44 @@ class SchedulerEngine:
         return None
 
 
+def recalculate_next_run(
+    jobs: list[ScheduledJob],
+    state: dict[str, JobState],
+    now: datetime,
+) -> bool:
+    """Detect schedule changes and reset next_run_at for affected jobs.
+
+    Returns True if any state was modified.
+    """
+    changed = False
+    for job in jobs:
+        js = state.get(job.id)
+        if js is None or js.next_run_at is None:
+            continue  # initialize_missing handles these
+        if not job.enabled:
+            continue
+
+        if job.schedule.kind == "daily":
+            if (js.next_run_at.hour != job.schedule.hour
+                    or js.next_run_at.minute != job.schedule.minute):
+                js.next_run_at = SchedulerEngine._initial_next_run(job, now)
+                changed = True
+
+        elif job.schedule.kind == "interval":
+            # Can't detect interval drift from next_run_at alone, so always
+            # recompute.  This is safe: it just means next_run_at = now + interval.
+            expected = SchedulerEngine._initial_next_run(job, now)
+            js.next_run_at = expected
+            changed = True
+
+        elif job.schedule.kind == "once" and js.run_count == 0:
+            if js.next_run_at != job.schedule.at:
+                js.next_run_at = job.schedule.at
+                changed = True
+
+    return changed
+
+
 class ChatTriggerClient:
     """Minimal /web/chat client using SSE response parsing."""
 

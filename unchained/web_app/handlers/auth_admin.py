@@ -1546,6 +1546,14 @@ def _scheduler_jobs_response(core, user_id: str, jobs: list, *, write: bool = Fa
     canonical = st.jobs_to_payload(jobs)
     if write:
         core._scheduler_write_jobs_payload(user_id, canonical)
+        # Sync state: recalculate next_run_at for jobs whose schedule changed.
+        state_path = core._scheduler_state_path(user_id)
+        state = st.load_state(state_path)
+        now = st._utcnow()
+        engine = st.SchedulerEngine(jobs, state)
+        st.recalculate_next_run(jobs, engine.state, now)
+        engine.initialize_missing(now)
+        st.save_state(state_path, engine.state)
     data = {
         "jobs": canonical["jobs"],
         "preview": core._scheduler_preview_rows(user_id, jobs),

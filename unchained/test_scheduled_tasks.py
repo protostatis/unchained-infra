@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from scheduled_tasks import (  # noqa: E402
     append_run_record,
     ChatTriggerClient,
+    recalculate_next_run,
     JobState,
     SchedulerEngine,
     TriggerResult,
@@ -283,6 +284,85 @@ class TestScheduledTasks(unittest.TestCase):
             self.assertEqual(state["job1"].last_status, "success")
             history = load_run_history(jobs_dir / f"{slug}.state.json", "job1", limit=5)
             self.assertEqual(history[0]["detail"], "ok")
+
+
+    def test_recalculate_next_run_daily_schedule_change(self):
+        """When daily_at changes, next_run_at should be reset to the new time."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "d1", "prompt": "p", "schedule": {"daily_at": "12:00"}},
+            ]
+        })
+        # State has next_run_at at the OLD time (14:00)
+        state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        changed = recalculate_next_run(jobs, state, now)
+
+        self.assertTrue(changed)
+        # Should now be at 12:00 (the new schedule)
+        self.assertEqual(state["d1"].next_run_at.hour, 12)
+        self.assertEqual(state["d1"].next_run_at.minute, 0)
+
+    def test_recalculate_next_run_no_change_when_schedule_matches(self):
+        """If the schedule matches the existing next_run_at, no change."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "d1", "prompt": "p", "schedule": {"daily_at": "14:00"}},
+            ]
+        })
+        state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        changed = recalculate_next_run(jobs, state, now)
+
+        self.assertFalse(changed)
+        self.assertEqual(state["d1"].next_run_at, _utc(2026, 3, 14, 14, 0, 0))
+
+    def test_recalculate_next_run_skips_disabled_jobs(self):
+        """Disabled jobs should not be recalculated."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "d1", "prompt": "p", "schedule": {"daily_at": "12:00"}, "enabled": False},
+            ]
+        })
+        state = {"d1": JobState(next_run_at=_utc(2026, 3, 14, 14, 0, 0))}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        changed = recalculate_next_run(jobs, state, now)
+
+        self.assertFalse(changed)
+        # Unchanged
+        self.assertEqual(state["d1"].next_run_at, _utc(2026, 3, 14, 14, 0, 0))
+
+    def test_recalculate_next_run_once_job_timestamp_change(self):
+        """When a once-job's 'at' changes and it hasn't run yet, reset."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "o1", "prompt": "p", "schedule": {"at": "2026-03-20T18:00:00Z"}},
+            ]
+        })
+        state = {"o1": JobState(next_run_at=_utc(2026, 3, 15, 12, 0, 0), run_count=0)}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        changed = recalculate_next_run(jobs, state, now)
+
+        self.assertTrue(changed)
+        self.assertEqual(state["o1"].next_run_at, _utc(2026, 3, 20, 18, 0, 0))
+
+    def test_recalculate_next_run_once_job_already_ran(self):
+        """Once-job that already ran should not be reset."""
+        jobs = parse_jobs_payload({
+            "jobs": [
+                {"id": "o1", "prompt": "p", "schedule": {"at": "2026-03-20T18:00:00Z"}},
+            ]
+        })
+        state = {"o1": JobState(next_run_at=_utc(2026, 3, 15, 12, 0, 0), run_count=1)}
+        now = _utc(2026, 3, 13, 10, 0, 0)
+
+        changed = recalculate_next_run(jobs, state, now)
+
+        self.assertFalse(changed)
 
 
 if __name__ == "__main__":
