@@ -96,15 +96,16 @@ async def run_task(
                         continue
                     tool_name = block.name
                     tool_input = block.input if isinstance(block.input, dict) else {}
-                    result.record_tool_call(
-                        tool_name,
-                        tool_input,
-                        call_signature=f"{tool_name}:{json.dumps(tool_input, sort_keys=True)}",
-                    )
                     tool_output = await browser.execute_tool(
                         tool_name,
                         tool_input,
                         default_tab_id=config.tab_id,
+                    )
+                    result.record_tool_call(
+                        tool_name,
+                        tool_input,
+                        call_signature=f"{tool_name}:{json.dumps(tool_input, sort_keys=True)}",
+                        output_preview=tool_output,
                     )
                     tool_results.append(
                         {

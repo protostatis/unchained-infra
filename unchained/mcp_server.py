@@ -38,7 +38,24 @@ mcp = FastMCP(
         "Unchained browser automation tools. Use DDM (dom density map) for "
         "page orientation (~500 tokens), intel for extraction strategy "
         "classification, and CDP tools for interaction. Navigate and click "
-        "return page layout inline — no separate DDM call needed after them."
+        "return page layout inline — no separate DDM call needed after them.\n\n"
+
+        "## Extraction flow (use on every new page)\n"
+        "1. ddm (default flags) — orient yourself, find layout + interactive elements\n"
+        "2. If you need page TEXT and the page is static/article-like → ddm --text\n"
+        "3. If ddm --text returns weak/empty text (JS-heavy SPA, card grid, lazy-loaded "
+        "board) → run intel_probe to identify the best extraction strategy\n"
+        "4. Follow the probe's top-ranked strategy:\n"
+        "   - js_global ranked high → intel_stores → intel_shape/intel_find_paths → js_eval\n"
+        "   - host_attrs / react_fiber / data_testid ranked high → intel_extract (with that strategy)\n"
+        "   - innerText ranked high → ddm --text is sufficient\n\n"
+
+        "## Quick reference by site type\n"
+        "- Static pages (Wikipedia, HN, docs): ddm → ddm --text\n"
+        "- React/Next SPAs (npm, GitHub): intel_probe → intel_extract react_fiber or data_testid\n"
+        "- Web-component sites (Reddit): intel_probe → intel_extract host_attrs\n"
+        "- Data-store sites (YouTube, Nuxt): intel_probe → intel_stores → js_eval\n"
+        "- Card grids / boards (Kalshi, Polymarket): intel_probe → follow top strategy"
     ),
 )
 
@@ -127,9 +144,14 @@ async def ddm(flags: str = "--llm-2pass --cols 60",
       --llm-2pass --cols 60   (default, best for orientation)
       --text                  (extract page text)
       --text --find "keyword" (find text on page)
+      --text --max 8000       (raise text cap for long pages, default ~4000 chars)
       --at 694,584            (reverse lookup at pixel coordinates)
       --forms                 (detect forms)
       --js "expression"       (execute JavaScript)
+
+    When --text returns weak/empty results on JS-heavy pages (SPAs, card grids,
+    lazy-loaded boards), switch to the intel pipeline: intel_probe first, then
+    follow the top-ranked strategy.
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_ddm(aid, tab_id, flags.split())
@@ -142,6 +164,13 @@ async def intel_probe(tab_id: str = "auto", agent_id: str = "") -> str:
     Returns ~100 tokens. Identifies the page framework (Nuxt/Next/React),
     data stores, shadow DOM structure, and ranks 8 extraction strategies.
     Run this on first visit to any unknown SPA.
+
+    After probe, follow the top-ranked strategy:
+      js_global high   → intel_stores → intel_shape/intel_find_paths → js_eval
+      host_attrs high  → intel_extract with strategy="host_attrs"
+      react_fiber high → intel_extract with strategy="react_fiber"
+      data_testid high → intel_extract with strategy="data_testid"
+      innerText high   → ddm --text is sufficient (no intel_extract needed)
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_intel(aid, tab_id, ["--probe"])
@@ -156,6 +185,15 @@ async def intel_extract(tab_id: str = "auto",
     data_testid, heading_hier, img_alt, shadow_pierce.
 
     Best for: Reddit (host_attrs), GitHub (data_testid), React SPAs (react_fiber).
+
+    Site examples:
+      Reddit       → strategy="host_attrs" (web components with rich attributes)
+      GitHub       → strategy="data_testid" (data-testid annotated elements)
+      npm/Next.js  → strategy="react_fiber" (React fiber tree traversal)
+      YouTube      → use intel_stores + js_eval instead (ytInitialData global)
+      Nuxt sites   → use intel_stores + js_eval instead (__NUXT__ global)
+
+    If unsure which strategy, omit strategy param to auto-select based on probe.
     """
     aid = _resolve_agent(profile=agent_id)
     flags = ["--extract"]
@@ -245,6 +283,13 @@ async def js_eval(expression: str,
     Returns: JSON for objects/arrays, raw string for primitives.
     Use for: reading page data, interacting with SPA widgets,
     extracting structured data with querySelectorAll.
+
+    Example — extract all card titles from a grid page:
+      [...document.querySelectorAll('.card-title')].map(e => e.textContent.trim())
+
+    For JS data stores discovered via intel_stores, access them directly:
+      JSON.stringify(window.__NUXT__.data.deals.slice(0,5))
+      JSON.stringify(ytInitialData.contents.twoColumnBrowseResultsRenderer)
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.run_js(aid, tab_id, expression)
