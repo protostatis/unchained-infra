@@ -182,6 +182,10 @@ async def _run_task_claude(
         await proc.stdin.drain()
         proc.stdin.close()
 
+        # Map tool_use block id → index in result.tool_log for correct
+        # output_preview attribution when a turn has multiple tool calls.
+        _tool_use_id_to_log_idx: dict[str, int] = {}
+
         async def _read_stream():
             assert proc.stdout is not None
             async for raw_line in proc.stdout:
@@ -198,15 +202,16 @@ async def _run_task_claude(
                     msg = event.get("message", {}) or {}
                     for block in msg.get("content", []):
                         if block.get("type") == "tool_result":
-                            # Retroactively attach output to the last tool_log entry
                             content = block.get("content", "")
                             if isinstance(content, list):
                                 content = " ".join(
                                     str(b.get("text", "")) for b in content if isinstance(b, dict)
                                 )
                             preview = str(content)[:600] if content else None
-                            if preview and result.tool_log:
-                                result.tool_log[-1].setdefault("output_preview", preview)
+                            use_id = block.get("tool_use_id", "")
+                            log_idx = _tool_use_id_to_log_idx.get(use_id)
+                            if preview and log_idx is not None and log_idx < len(result.tool_log):
+                                result.tool_log[log_idx].setdefault("output_preview", preview)
                             continue
                         if block.get("type") != "tool_use":
                             continue
@@ -224,6 +229,9 @@ async def _run_task_claude(
                             tool_input if isinstance(tool_input, dict) else {"raw": str(tool_input)},
                             call_signature=call_sig,
                         )
+                        use_id = block.get("id", "")
+                        if use_id:
+                            _tool_use_id_to_log_idx[use_id] = len(result.tool_log) - 1
                 elif etype == "usage":
                     result.prompt_tokens += int(event.get("input_tokens", 0) or 0)
                     result.completion_tokens += int(event.get("output_tokens", 0) or 0)
@@ -315,6 +323,10 @@ async def _run_task_codex(
         await proc.stdin.drain()
         proc.stdin.close()
 
+        # Map item id → index in result.tool_log for correct
+        # output_preview attribution when a turn has multiple tool calls.
+        _item_id_to_log_idx: dict[str, int] = {}
+
         async def _read_stream():
             nonlocal response, streamed_text, error_text
             assert proc.stdout is not None
@@ -331,6 +343,7 @@ async def _run_task_codex(
                 if etype == "item.started":
                     item = event.get("item") or {}
                     item_type = str(item.get("type", "") or "").lower()
+                    item_id = str(item.get("id", "") or "")
                     if item_type == "command_execution":
                         tool_name, command = _codex_tool_name_and_command(str(item.get("command", "") or ""))
                         result.record_tool_call(
@@ -338,11 +351,15 @@ async def _run_task_codex(
                             {"command": command},
                             call_signature=f"{tool_name}:{command}",
                         )
+                        if item_id:
+                            _item_id_to_log_idx[item_id] = len(result.tool_log) - 1
                     elif "search" in item_type:
                         result.record_tool_call(
                             "websearch",
                             {"query": str(item.get("query", "") or "")[:200]},
                         )
+                        if item_id:
+                            _item_id_to_log_idx[item_id] = len(result.tool_log) - 1
                     continue
 
                 if etype == "item.completed":
@@ -352,11 +369,12 @@ async def _run_task_codex(
                         text_bits = _collect_text_strings(item)
                         if text_bits:
                             response = "\n".join(text_bits).strip()
-                    elif item_type == "command_execution":
-                        # Attach command output to the last recorded tool_log entry
+                    elif item_type in ("command_execution", "web_search_call"):
                         output = str(item.get("output", "") or "")[:600]
-                        if output and result.tool_log:
-                            result.tool_log[-1].setdefault("output_preview", output)
+                        item_id = str(item.get("id", "") or "")
+                        log_idx = _item_id_to_log_idx.get(item_id)
+                        if output and log_idx is not None and log_idx < len(result.tool_log):
+                            result.tool_log[log_idx].setdefault("output_preview", output)
                     elif item_type == "error":
                         msg = item.get("message", "")
                         if isinstance(msg, str) and msg.strip():
