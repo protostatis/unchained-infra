@@ -197,6 +197,17 @@ async def _run_task_claude(
                 if etype == "assistant":
                     msg = event.get("message", {}) or {}
                     for block in msg.get("content", []):
+                        if block.get("type") == "tool_result":
+                            # Retroactively attach output to the last tool_log entry
+                            content = block.get("content", "")
+                            if isinstance(content, list):
+                                content = " ".join(
+                                    str(b.get("text", "")) for b in content if isinstance(b, dict)
+                                )
+                            preview = str(content)[:600] if content else None
+                            if preview and result.tool_log:
+                                result.tool_log[-1].setdefault("output_preview", preview)
+                            continue
                         if block.get("type") != "tool_use":
                             continue
                         tool_input = block.get("input", {}) or {}
@@ -341,6 +352,11 @@ async def _run_task_codex(
                         text_bits = _collect_text_strings(item)
                         if text_bits:
                             response = "\n".join(text_bits).strip()
+                    elif item_type == "command_execution":
+                        # Attach command output to the last recorded tool_log entry
+                        output = str(item.get("output", "") or "")[:600]
+                        if output and result.tool_log:
+                            result.tool_log[-1].setdefault("output_preview", output)
                     elif item_type == "error":
                         msg = item.get("message", "")
                         if isinstance(msg, str) and msg.strip():
