@@ -162,6 +162,16 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_research_desk_page_renders_phase2_status_contract(self):
+        from web_app.handlers.pages import _build_research_desk_html
+
+        html = _build_research_desk_html()
+        self.assertIn("data.provider?.browser_client", html)
+        self.assertIn("data.trial?.status", html)
+        self.assertIn("data.local_urls?.home", html)
+        self.assertIn("data.launch_ready", html)
+        self.assertIn("data.missing.join(', ')", html)
+
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
             "CLIENT_UPDATE_TIMEOUT_MS = 90000",
