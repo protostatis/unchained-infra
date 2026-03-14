@@ -1055,7 +1055,7 @@ async def handle_message_claude(
         allowed += " WebFetch WebSearch"
         tools += ["WebFetch", "WebSearch"]
     cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
-           "--model", cli_model, "--max-turns", "100",
+           "--model", cli_model,
            "--allowedTools", allowed,
            "--system-prompt", _claude_system_prompt(scheduler_armed=scheduler_armed),
            "--tools"] + tools
@@ -1260,7 +1260,8 @@ async def handle_message_claude(
                             tool_name = "scheduler"
                         elif "cdp_tool.py" in cmd_str:
                             parts = cmd_str.split("cdp_tool.py", 1)
-                            tool_name = parts[1].strip().split()[0] if len(parts) > 1 else "cdp"
+                            stripped = parts[1].strip() if len(parts) > 1 else ""
+                            tool_name = stripped.split()[0] if stripped else "cdp"
                         display = cmd_str[:200]
                     elif block_name == "WebFetch":
                         tool_name = "webfetch"
@@ -1988,6 +1989,7 @@ async def main():
                 elif msg.get("type") == "cancel":
                     sid = msg.get("session_id", "")
                     proc = active_procs.get(sid)
+                    killed = False
                     if proc and proc.returncode is None:
                         if isinstance(proc.pid, int):
                             user_cancelled_pids.add(proc.pid)
@@ -1996,6 +1998,18 @@ async def main():
                             os.killpg(proc.pid, 9)  # SIGKILL entire group
                         except OSError:
                             proc.kill()
+                        killed = True
+                    else:
+                        # No running process — cancel the asyncio task if it exists
+                        task = active_tasks.get(sid)
+                        if task and not task.done():
+                            task.cancel()
+                            killed = True
+                    if not killed:
+                        # Nothing to kill — still ack so the UI stops spinning
+                        log.info("[%s] CANCEL — no active process found, sending ack", sid)
+                        await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
+                        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
                 elif msg.get("type") == "get_history":
                     req_id = msg.get("req_id", "")
                     slot = msg.get("slot")
