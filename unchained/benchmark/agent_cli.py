@@ -188,6 +188,21 @@ async def _run_task_claude(
         # Map tool_use block id → index in result.tool_log for correct
         # output_preview attribution when a turn has multiple tool calls.
         _tool_use_id_to_log_idx: dict[str, int] = {}
+        _pending_tool_use_ids: list[str] = []
+
+        def _claim_tool_log_idx(use_id: str = "") -> int | None:
+            if use_id:
+                try:
+                    _pending_tool_use_ids.remove(use_id)
+                except ValueError:
+                    pass
+                return _tool_use_id_to_log_idx.get(use_id)
+            while _pending_tool_use_ids:
+                pending_id = _pending_tool_use_ids.pop(0)
+                log_idx = _tool_use_id_to_log_idx.get(pending_id)
+                if log_idx is not None:
+                    return log_idx
+            return None
 
         async def _read_stream():
             assert proc.stdout is not None
@@ -223,6 +238,7 @@ async def _run_task_claude(
                         use_id = block.get("id", "")
                         if use_id:
                             _tool_use_id_to_log_idx[use_id] = len(result.tool_log) - 1
+                            _pending_tool_use_ids.append(use_id)
                 elif etype == "user":
                     # Tool results arrive in user events (chat_agent_cli.py:1314).
                     # Bash stdout may be in event["tool_use_result"] directly,
@@ -235,10 +251,14 @@ async def _run_task_claude(
                             result_text = str(raw_result.get("stdout", "") or "")
                         else:
                             result_text = ""
-                        if result_text and result.tool_log:
-                            result.tool_log[-1].setdefault(
-                                "output_preview", result_text[:600]
-                            )
+                        if result_text:
+                            log_idx = _claim_tool_log_idx()
+                            if log_idx is None and len(result.tool_log) == 1:
+                                log_idx = 0
+                            if log_idx is not None and log_idx < len(result.tool_log):
+                                result.tool_log[log_idx].setdefault(
+                                    "output_preview", result_text[:600]
+                                )
                     msg = event.get("message", {}) or {}
                     for block in msg.get("content", []):
                         if block.get("type") != "tool_result":
@@ -251,7 +271,9 @@ async def _run_task_claude(
                             )
                         preview = str(content)[:600] if content else None
                         use_id = block.get("tool_use_id", "")
-                        log_idx = _tool_use_id_to_log_idx.get(use_id)
+                        log_idx = _claim_tool_log_idx(use_id) if use_id else None
+                        if log_idx is None and not use_id and len(result.tool_log) == 1:
+                            log_idx = 0
                         if preview and log_idx is not None and log_idx < len(result.tool_log):
                             result.tool_log[log_idx].setdefault("output_preview", preview)
                 elif etype == "usage":
