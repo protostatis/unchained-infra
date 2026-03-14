@@ -274,6 +274,52 @@ class TestEnsureChrome(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:9090/tab")
 
+    def test_fails_fast_when_startup_tab_creation_fails_after_chrome_is_ready(self):
+        launched = {}
+
+        def _fake_popen(cmd, stdout=None, stderr=None):
+            launched["cmd"] = cmd
+            return mock.Mock(pid=12345)
+
+        version_checks = 0
+
+        def _fake_urlopen(req, timeout=0):
+            nonlocal version_checks
+            target = req.full_url if hasattr(req, "full_url") else req
+            if target.endswith("/json/version"):
+                version_checks += 1
+                if version_checks == 1:
+                    raise urllib.error.URLError("not running")
+                return _FakeResponse(200, b"{}")
+            raise AssertionError(f"Unexpected urlopen target: {target}")
+
+        with (
+            mock.patch.object(cb, "_find_chrome_binary", return_value="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            mock.patch.object(cb.subprocess, "Popen", side_effect=_fake_popen),
+            mock.patch.object(cb.time, "sleep") as mock_sleep,
+            mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen),
+            mock.patch.object(cb, "_first_page_tab", side_effect=urllib.error.URLError("create failed")) as mock_first_page_tab,
+            mock.patch.dict(os.environ, {"WEB_PORT": "9090"}, clear=False),
+            mock.patch("builtins.print") as mock_print,
+        ):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            ok = cb._ensure_chrome(
+                "127.0.0.1",
+                9222,
+                "default",
+                False,
+                "",
+                "ws://127.0.0.1:8765/tunnel",
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:9090/tab")
+        self.assertEqual(version_checks, 2)
+        self.assertEqual(mock_sleep.call_count, 1)
+        mock_first_page_tab.assert_called_once_with("127.0.0.1", 9222, "http://127.0.0.1:9090/tab")
+        self.assertTrue(any("could not open startup tab" in str(call) for call in mock_print.call_args_list))
+
 
 class TestFirstPageTab(unittest.TestCase):
     def test_raises_when_tab_creation_fails(self):

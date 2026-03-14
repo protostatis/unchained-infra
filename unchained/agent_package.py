@@ -14,7 +14,9 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.50"
+VERSION = "0.3.51"
+# 0.3.49 and 0.3.50 were consumed by earlier iterations of the startup-tab
+# fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"

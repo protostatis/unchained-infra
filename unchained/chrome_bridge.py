@@ -1444,13 +1444,20 @@ def _ensure_chrome(
         time.sleep(1)
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:
-                if resp.status == 200:
-                    # Ensure at least one page tab exists
-                    _first_page_tab(host, port, startup_url)
-                    print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
-                    return True
+                if resp.status != 200:
+                    continue
         except Exception:
-            pass
+            continue
+
+        try:
+            # Chrome is up; fail fast if the startup tab cannot be opened.
+            _first_page_tab(host, port, startup_url)
+        except Exception as e:
+            print(f"[agent] Chrome started but could not open startup tab: {e}")
+            return False
+
+        print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
+        return True
 
     print("[agent] Chrome did not start in time")
     return False
