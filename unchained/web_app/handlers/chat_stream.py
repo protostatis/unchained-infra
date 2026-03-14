@@ -201,6 +201,10 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                 sid = data.get("session_id", "")
                 q = core._response_queues.get(sid)
                 if q:
+                    expected_rid = core._response_req_ids.get(sid, "")
+                    event_rid = data.get("req_id", "")
+                    if event_rid and expected_rid and event_rid != expected_rid:
+                        continue  # stale event from previous turn
                     await q.put(data)
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
@@ -504,7 +508,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 return web.json_response(resp, status=429)
 
     q: asyncio.Queue = asyncio.Queue()
+    old_q = core._response_queues.get(session_id)
+    if old_q is not None:
+        # Signal the previous turn's SSE stream to end cleanly
+        await old_q.put({"type": "done"})
     core._response_queues[session_id] = q
+    core._response_req_ids[session_id] = req_id
 
     use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
     if use_headless and selected_profile_path:
@@ -537,6 +546,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "session_id": session_id,
             "agent_id": cdp_agent_id,
             "message": message,
+            "req_id": req_id,
         }
         if scheduler_armed:
             ws_msg["scheduler_armed"] = True
@@ -638,12 +648,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 stream_completed = True
                 break
     finally:
-        core._response_queues.pop(session_id, None)
-        core._session_agents.pop(session_id, None)
+        # Only clean up if we still own the queue (a new turn may have replaced it)
+        if core._response_queues.get(session_id) is q:
+            core._response_queues.pop(session_id, None)
+            core._session_agents.pop(session_id, None)
+            core._response_req_ids.pop(session_id, None)
+            if not stream_completed:
+                asyncio.create_task(core._close_session_tab(session_id))
         if scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
-        if not stream_completed:
-            asyncio.create_task(core._close_session_tab(session_id))
         core._trace(
             "chat.msg.stream_end",
             req_id=req_id,
@@ -680,9 +693,30 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
         return denied
     default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
     routing_agent_id = core._session_agents.get(session_id, default_agent)
+
+    # Capture queue ref before awaiting WS send (queue may be replaced by a new turn)
+    cancel_q = core._response_queues.get(session_id)
+    cancel_rid = core._response_req_ids.get(session_id, "")
+
     ws = core._chat_agents.get(routing_agent_id)
     if ws and not ws.closed:
         await ws.send_json({"type": "cancel", "session_id": session_id})
+
+    # Inject cancelled+done into the SSE queue so the client sees a clean end
+    if cancel_q is not None:
+        cancelled_evt = {"type": "cancelled", "session_id": session_id}
+        done_evt = {"type": "done", "session_id": session_id}
+        if cancel_rid:
+            cancelled_evt["req_id"] = cancel_rid
+            done_evt["req_id"] = cancel_rid
+        await cancel_q.put(cancelled_evt)
+        await cancel_q.put(done_evt)
+        ok = web.json_response({"ok": True})
+        if guest_mode:
+            core._attach_first_look_guest_cookies(ok, request, guest_id)
+        return ok
+
+    if ws and not ws.closed:
         ok = web.json_response({"ok": True})
         if guest_mode:
             core._attach_first_look_guest_cookies(ok, request, guest_id)
