@@ -31,6 +31,93 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
+def _build_research_desk_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Research Desk | Unchained</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    :root{--bg:#08111b;--panel:#10202b;--panel2:#132733;--line:rgba(183,205,214,0.16);--text:#edf4f5;--muted:#9ab0b7;--accent:#7be0b8;--accent2:#f4c55c}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",serif;background:radial-gradient(circle at top left, rgba(123,224,184,0.12), transparent 32%),radial-gradient(circle at top right, rgba(244,197,92,0.10), transparent 24%),linear-gradient(180deg,#071018 0%,#08111b 55%,#050a0f 100%)}
+    .shell{max-width:1160px;margin:0 auto;padding:32px 18px 64px}.hero,.grid{display:grid;gap:18px}.hero{grid-template-columns:1.15fr 0.85fr;margin-bottom:18px}.grid{grid-template-columns:0.92fr 1.08fr}
+    .panel{border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg, rgba(19,39,51,0.94), rgba(10,20,27,0.94));padding:22px;box-shadow:0 20px 70px rgba(0,0,0,0.28);backdrop-filter:blur(10px)}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}.eyebrow::before{content:"";width:10px;height:10px;border-radius:999px;background:var(--accent);box-shadow:0 0 18px rgba(123,224,184,0.55)}
+    h1{margin:0 0 10px;font-size:clamp(32px,5vw,56px);line-height:0.96;letter-spacing:-0.04em}h2{margin:0 0 10px;font-size:28px;line-height:1.05;letter-spacing:-0.03em}p{margin:0;color:var(--muted);line-height:1.6}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.btn,.pill{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;text-decoration:none}
+    .btn{padding:12px 18px;border:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}.btn.primary{background:linear-gradient(90deg,var(--accent),#a8f7d9);color:#062018;border:none}.btn.secondary{background:rgba(255,255,255,0.04);color:var(--text)}.btn.disabled{opacity:0.45;pointer-events:none;cursor:default}
+    .chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.pill{padding:8px 12px;border:1px solid var(--line);background:rgba(255,255,255,0.03);color:var(--muted);font-size:12px}
+    .status-shell,.capsule-list{display:grid;gap:12px}.status-card,.capsule-card{border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.02)}
+    .status-card strong{display:block;margin-bottom:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent2)}
+    .capsule-card h3{margin:0 0 6px;font-size:20px}.capsule-meta{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:6px}
+    @media (max-width:900px){.hero,.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="panel">
+        <div class="eyebrow">Research Desk</div>
+        <h1>From first look to a local dataframe and notebook.</h1>
+        <p>Research Desk is the local product for turning a live web question into a shaped object, then opening <code>Lab Notes</code> with the right dataframe already loaded. This page only checks whether your local desk is running and what it has already shaped.</p>
+        <div class="chips">
+          <span class="pill">local-first</span>
+          <span class="pill">browser to dataframe</span>
+          <span class="pill">pyreplab backed</span>
+        </div>
+        <div class="actions">
+          <a id="open-local-desk" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Local Desk</a>
+          <a class="btn secondary" href="/first-look">Back to First Look</a>
+          <a class="btn secondary" href="/mcp-guide">MCP Guide</a>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="eyebrow">Local Setup</div>
+        <div class="status-shell">
+          <div class="status-card"><strong>1. Start the browser bridge</strong><p>Run <code>uv run unchained-pyreplab bridge-start</code> on this machine.</p></div>
+          <div class="status-card"><strong>2. Start Research Desk</strong><p>Run <code>./scripts/serve_with_codex.sh</code> or <code>uv run unchained-pyreplab serve --open --reload</code>.</p></div>
+          <div class="status-card"><strong>3. Return here</strong><p>This page probes <code>127.0.0.1:8766</code> for the local status and recent mission summaries.</p></div>
+        </div>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <div class="eyebrow">Local Status</div>
+        <h2 id="status-title">Checking for a running desk...</h2>
+        <p id="status-copy">Trying <code>http://127.0.0.1:8766/web/research-desk/status</code>.</p>
+        <div id="status-chips" class="chips"></div>
+      </div>
+      <div class="panel">
+        <div class="eyebrow">Recent Missions</div>
+        <h2>Your local desk stays local.</h2>
+        <p style="margin-bottom:16px">This hosted page only reads the local summary surface. It does not execute notebook cells or mutate capsules.</p>
+        <div id="capsule-list" class="capsule-list"><div class="capsule-card"><p>Waiting for local Research Desk...</p></div></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const STATUS_URL = 'http://127.0.0.1:8766/web/research-desk/status';
+    const CAPSULES_URL = 'http://127.0.0.1:8766/web/research-desk/capsules?limit=8';
+    function chip(text){const span=document.createElement('span');span.className='pill';span.textContent=text;return span;}
+    function setLaunchReady(ready){const link=document.getElementById('open-local-desk');if(!link) return;link.classList.toggle('disabled', !ready);link.setAttribute('aria-disabled', ready ? 'false' : 'true');if(ready){link.removeAttribute('tabindex');}else{link.setAttribute('tabindex','-1');}}
+    function renderStatus(data){const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');const chips=document.getElementById('status-chips');chips.innerHTML='';title.textContent='Local Research Desk detected.';copy.textContent='Hosted Unchained can see the local status surface. Use the local app for the full workflow.';chips.appendChild(chip('provider: '+String(data.provider?.configured_provider||'unknown')));chips.appendChild(chip('agent mode: '+String(data.provider?.agent_mode||'unknown')));chips.appendChild(chip('bridge key: '+(data.bridge?.api_key_present?'present':'missing')));chips.appendChild(chip('agent: '+String(data.bridge?.agent_id||'not found')));chips.appendChild(chip('pyreplab: '+(data.pyreplab?.available?'ready':'missing')));chips.appendChild(chip('capsules: '+String(data.capsules?.count||0)));setLaunchReady(true);}
+    function renderCapsules(data){const root=document.getElementById('capsule-list');root.innerHTML='';const rows=Array.isArray(data.capsules)?data.capsules:[];if(!rows.length){const emptyCard=document.createElement('div');emptyCard.className='capsule-card';const emptyText=document.createElement('p');emptyText.textContent='No local missions yet.';emptyCard.appendChild(emptyText);root.appendChild(emptyCard);return;}rows.forEach((row)=>{const el=document.createElement('article');el.className='capsule-card';const title=document.createElement('h3');title.textContent=String(row.capsule_name||'mission');const task=document.createElement('p');task.textContent=String(row.task||'').trim()||'No task summary yet.';const meta=document.createElement('div');meta.className='capsule-meta';const objectName=String(row.primary_object_name||'not shaped');const rowCount=Number(row.primary_row_count||0);const readiness=String(row.readiness_status||'planned');[objectName, `${rowCount} rows`, readiness].forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});const next=document.createElement('p');next.textContent=String(row.next_step||'').trim()||'Open the local desk to continue.';el.appendChild(title);el.appendChild(task);el.appendChild(meta);el.appendChild(next);root.appendChild(el);});}
+    async function loadDeskState(){try{const [statusResp,capsulesResp]=await Promise.all([fetch(STATUS_URL,{mode:'cors'}),fetch(CAPSULES_URL,{mode:'cors'})]);if(!statusResp.ok) throw new Error('local status unavailable');renderStatus(await statusResp.json());if(capsulesResp.ok) renderCapsules(await capsulesResp.json());}catch(err){const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');title.textContent='Local Research Desk not detected yet.';copy.innerHTML='Start the local server on <code>127.0.0.1:8766</code>, then refresh this page.';setLaunchReady(false);}}
+    loadDeskState();
+  </script>
+</body>
+</html>"""
+
+
+async def handle_research_desk_page(request: web.Request) -> web.Response:
+    """Serve the hosted launch page for the local Research Desk app."""
+    core = _core()
+    core._track_page_view(request)
+    return web.Response(text=_build_research_desk_html(), content_type="text/html")
+
+
 async def handle_tab_page(request: web.Request) -> web.Response:
     """Serve the lightweight branded default tab page."""
     del request
