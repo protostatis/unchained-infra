@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import platform
@@ -68,7 +69,7 @@ DEFAULT_RELAY_URL = "ws://127.0.0.1:8765/tunnel"
 DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
 DEFAULT_NEW_TAB_PATH = "/tab"
-_LOCAL_TAB_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+DEFAULT_WEB_PORT = 8080
 
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
@@ -83,7 +84,77 @@ def _configured_public_base_url() -> str:
         os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
         or os.environ.get("UNCHAINED_API_URL", "").strip()
     )
-    return base_url.rstrip("/")
+    if not base_url:
+        return ""
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    netloc = _format_url_host(parsed.hostname)
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    path = parsed.path.rstrip("/")
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, path, "", ""))
+
+
+def _format_url_host(hostname: str) -> str:
+    """Format a hostname for use in an absolute URL."""
+    hostname = (hostname or "").strip()
+    if ":" in hostname and not hostname.startswith("["):
+        return f"[{hostname}]"
+    return hostname
+
+
+def _web_port() -> int:
+    """Return the local web port with a safe fallback."""
+    raw_port = (os.environ.get("WEB_PORT", "").strip() or str(DEFAULT_WEB_PORT))
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return DEFAULT_WEB_PORT
+    if 1 <= port <= 65535:
+        return port
+    return DEFAULT_WEB_PORT
+
+
+def _is_local_hostname(hostname: str) -> bool:
+    """Return True when hostname resolves to a loopback/local binding."""
+    normalized = (hostname or "").strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_unspecified
+
+
+def _local_tab_hostname(hostname: str) -> str:
+    """Return the browser-reachable local host for startup pages."""
+    normalized = (hostname or "").strip().lower()
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        return "localhost" if normalized == "localhost" else normalized
+    if addr.is_unspecified:
+        return "::1" if addr.version == 6 else "127.0.0.1"
+    return normalized
+
+
+def _is_trusted_public_hostname(hostname: str) -> bool:
+    """Return True for the official public service hostnames."""
+    normalized = (hostname or "").strip().lower()
+    return normalized == "unchainedsky.com" or normalized.endswith(".unchainedsky.com")
+
+
+def _build_tab_url(scheme: str, hostname: str, port: int | None = None) -> str:
+    """Build an absolute URL for the default startup tab page."""
+    netloc = _format_url_host(hostname)
+    if port is not None and not (
+        (scheme == "http" and port == 80)
+        or (scheme == "https" and port == 443)
+    ):
+        netloc = f"{netloc}:{port}"
+    return urllib.parse.urlunsplit((scheme, netloc, DEFAULT_NEW_TAB_PATH, "", ""))
 
 
 def _default_new_tab_url(relay_url: str = DEFAULT_RELAY_URL) -> str:
@@ -96,23 +167,33 @@ def _default_new_tab_url(relay_url: str = DEFAULT_RELAY_URL) -> str:
     hostname = (parsed.hostname or "").strip().lower()
     if not hostname:
         return "about:blank"
-    if hostname in _LOCAL_TAB_HOSTNAMES:
-        return f"http://{hostname}:8080{DEFAULT_NEW_TAB_PATH}"
+    if _is_local_hostname(hostname):
+        return _build_tab_url("http", _local_tab_hostname(hostname), port=_web_port())
+    if not _is_trusted_public_hostname(hostname):
+        return "about:blank"
 
     scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
-    netloc = parsed.hostname or hostname
-    if parsed.port and not (
-        (scheme == "http" and parsed.port == 80)
-        or (scheme == "https" and parsed.port == 443)
-    ):
-        netloc = f"{netloc}:{parsed.port}"
-    return f"{scheme}://{netloc}{DEFAULT_NEW_TAB_PATH}"
+    return _build_tab_url(scheme, hostname, port=parsed.port)
 
 
 def _new_tab_request(host: str, port: int, target_url: str) -> urllib.request.Request:
     """Build a CDP /json/new request with a safely encoded target URL."""
-    encoded = urllib.parse.quote(target_url, safe=':/?#[]@!$&\'()*+,;=-._~')
-    return urllib.request.Request(f"http://{host}:{port}/json/new?{encoded}", method="PUT")
+    encoded = urllib.parse.quote(target_url, safe="")
+    request_host = _format_url_host(host)
+    return urllib.request.Request(f"http://{request_host}:{port}/json/new?{encoded}", method="PUT")
+
+
+def _first_page_tab(host: str, port: int, startup_url: str) -> dict:
+    """Return the first page tab, creating one if Chrome has none."""
+    request_host = _format_url_host(host)
+    tabs_url = f"http://{request_host}:{port}/json"
+    with urllib.request.urlopen(tabs_url, timeout=3) as resp:
+        tabs = json.loads(resp.read())
+    page_tabs = [t for t in tabs if t.get("type") == "page"]
+    if page_tabs:
+        return page_tabs[0]
+    with urllib.request.urlopen(_new_tab_request(host, port, startup_url), timeout=3) as resp:
+        return json.loads(resp.read())
 
 
 # ---------------------------------------------------------------------------
@@ -781,22 +862,20 @@ class Agent:
             }))
             return
 
-        # Get the first page tab
-        tabs_url = f"http://127.0.0.1:{prov_port}/json"
         try:
-            with urllib.request.urlopen(tabs_url, timeout=3) as resp:
-                tabs = json.loads(resp.read())
-            page_tabs = [t for t in tabs if t.get("type") == "page"]
-            first_tab_id = page_tabs[0]["id"] if page_tabs else ""
+            first_tab = _first_page_tab("127.0.0.1", prov_port, startup_url)
+            first_tab_id = str(first_tab.get("id", "")).strip()
             if not first_tab_id:
-                with urllib.request.urlopen(
-                    _new_tab_request("127.0.0.1", prov_port, startup_url),
-                    timeout=3,
-                ) as resp:
-                    first_tab = json.loads(resp.read())
-                first_tab_id = first_tab.get("id", "")
-        except Exception:
-            first_tab_id = ""
+                raise RuntimeError("Provision Chrome returned no page tab id")
+        except Exception as e:
+            self._cleanup_single_prov({"process": proc, "temp_dir": temp_dir})
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 500,
+                "body": {"error": f"Provision Chrome could not open a startup tab: {e}"},
+            }))
+            return
 
         # Store state keyed by slot
         self._prov_chromes[slot] = {
@@ -1367,15 +1446,7 @@ def _ensure_chrome(
             with urllib.request.urlopen(url, timeout=2) as resp:
                 if resp.status == 200:
                     # Ensure at least one page tab exists
-                    tabs_url = f"http://{host}:{port}/json"
-                    with urllib.request.urlopen(tabs_url, timeout=2) as tr:
-                        tabs = json.loads(tr.read())
-                    page_tabs = [t for t in tabs if t.get("type") == "page"]
-                    if not page_tabs:
-                        urllib.request.urlopen(
-                            _new_tab_request(host, port, startup_url),
-                            timeout=3,
-                        )
+                    _first_page_tab(host, port, startup_url)
                     print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
                     return True
         except Exception:

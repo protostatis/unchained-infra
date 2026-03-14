@@ -80,12 +80,12 @@ class TestDefaultNewTabUrl(unittest.TestCase):
             )
 
     def test_uses_local_web_port_for_local_relay(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
+        with mock.patch.dict(os.environ, {"WEB_PORT": "9090"}, clear=False):
             os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
             os.environ.pop("UNCHAINED_API_URL", None)
             self.assertEqual(
                 cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
-                "http://127.0.0.1:8080/tab",
+                "http://127.0.0.1:9090/tab",
             )
 
     def test_maps_public_wss_relay_to_https_tab_page(self):
@@ -96,6 +96,45 @@ class TestDefaultNewTabUrl(unittest.TestCase):
                 cb._default_new_tab_url("wss://api.unchainedsky.com/tunnel"),
                 "https://api.unchainedsky.com/tab",
             )
+
+    def test_brackets_ipv6_local_hosts(self):
+        with mock.patch.dict(os.environ, {"WEB_PORT": "9090"}, clear=False):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("ws://[::1]:8765/tunnel"),
+                "http://[::1]:9090/tab",
+            )
+
+    def test_rejects_untrusted_relay_hosts(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("wss://example.com/tunnel"),
+                "about:blank",
+            )
+
+    def test_invalid_public_base_url_falls_back(self):
+        with mock.patch.dict(
+            os.environ,
+            {"UNCHAINED_PUBLIC_BASE_URL": "javascript:alert(1)", "WEB_PORT": "8088"},
+            clear=False,
+        ):
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
+                "http://127.0.0.1:8088/tab",
+            )
+
+
+class TestNewTabRequest(unittest.TestCase):
+    def test_encodes_reserved_characters_and_brackets_ipv6(self):
+        req = cb._new_tab_request("::1", 9222, "https://example.com/a?x=1&y=2#frag")
+        self.assertEqual(
+            req.full_url,
+            "http://[::1]:9222/json/new?https%3A%2F%2Fexample.com%2Fa%3Fx%3D1%26y%3D2%23frag",
+        )
 
 
 def _write_file(path: str, content: str):
@@ -210,7 +249,7 @@ class TestEnsureChrome(unittest.TestCase):
             if target.endswith("/json/version"):
                 return _FakeResponse(200, b"{}")
             if target.endswith("/json"):
-                body = b'[{"id":"TAB_1","type":"page","url":"http://127.0.0.1:8080/tab"}]'
+                body = b'[{"id":"TAB_1","type":"page","url":"http://127.0.0.1:9090/tab"}]'
                 return _FakeResponse(200, body)
             raise AssertionError(f"Unexpected urlopen target: {target}")
 
@@ -219,7 +258,7 @@ class TestEnsureChrome(unittest.TestCase):
             mock.patch.object(cb.subprocess, "Popen", side_effect=_fake_popen),
             mock.patch.object(cb.time, "sleep"),
             mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen),
-            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.dict(os.environ, {"WEB_PORT": "9090"}, clear=False),
         ):
             os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
             os.environ.pop("UNCHAINED_API_URL", None)
@@ -233,7 +272,22 @@ class TestEnsureChrome(unittest.TestCase):
             )
 
         self.assertTrue(ok)
-        self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:8080/tab")
+        self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:9090/tab")
+
+
+class TestFirstPageTab(unittest.TestCase):
+    def test_raises_when_tab_creation_fails(self):
+        def _fake_urlopen(req, timeout=0):
+            target = req.full_url if hasattr(req, "full_url") else req
+            if target.endswith("/json"):
+                return _FakeResponse(200, b"[]")
+            if "/json/new?" in target:
+                raise urllib.error.URLError("create failed")
+            raise AssertionError(f"Unexpected urlopen target: {target}")
+
+        with mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen):
+            with self.assertRaises(urllib.error.URLError):
+                cb._first_page_tab("127.0.0.1", 9222, "http://127.0.0.1:8080/tab")
 
 
 if __name__ == "__main__":
