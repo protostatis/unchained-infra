@@ -18,7 +18,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import logging
 import os
 import platform
 import re
@@ -27,6 +29,7 @@ import shutil
 import signal
 import sys
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -66,12 +69,231 @@ def _pid_file(profile: str = "default") -> str:
 DEFAULT_RELAY_URL = "ws://127.0.0.1:8765/tunnel"
 DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
+DEFAULT_NEW_TAB_PATH = "/tab"
+DEFAULT_WEB_PORT = 8080
 
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
 MAX_BACKOFF = 60          # seconds
 
 VERSION = "0.1.0"
+
+
+def _configured_public_base_url() -> str:
+    """Return an explicit public base URL override, if configured."""
+    # UNCHAINED_API_URL controls HTTP calls from the agent; do not reuse it as
+    # a browser navigation target. Startup tabs should only honor the dedicated
+    # public-base override or relay-derived allowlisted hosts.
+    base_url = os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
+    if not base_url:
+        return ""
+    parsed = urllib.parse.urlparse(base_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        logging.warning(
+            "[agent] ignoring invalid public base URL %r; using relay-derived defaults",
+            base_url,
+        )
+        return ""
+    if parsed.username or parsed.password:
+        logging.warning(
+            "[agent] ignoring public base URL with credentials %r; using relay-derived defaults",
+            base_url,
+        )
+        return ""
+    if _is_local_hostname(hostname):
+        scheme = parsed.scheme
+    elif _is_trusted_public_hostname(hostname):
+        if parsed.scheme != "https":
+            logging.warning(
+                "[agent] ignoring non-https public base URL %r; using relay-derived defaults",
+                base_url,
+            )
+            return ""
+        scheme = "https"
+    else:
+        logging.warning(
+            "[agent] ignoring untrusted public base URL host %r; using relay-derived defaults",
+            hostname,
+        )
+        return ""
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        logging.warning(
+            "[agent] stripping path/query/fragment from configured public base URL %r",
+            base_url,
+        )
+    netloc = _format_url_host(hostname)
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
+
+
+def _format_url_host(hostname: str) -> str:
+    """Format a hostname for use in an absolute URL."""
+    hostname = (hostname or "").strip()
+    if hostname.startswith("[") and hostname.endswith("]"):
+        hostname = hostname[1:-1].strip()
+    if ":" in hostname:
+        return f"[{hostname}]"
+    return hostname
+
+
+def _web_port() -> int:
+    """Return the local web port with a safe fallback."""
+    raw_port = os.environ.get("WEB_PORT", "").strip()
+    if not raw_port:
+        return DEFAULT_WEB_PORT
+    try:
+        port = int(raw_port)
+    except ValueError:
+        logging.warning("[agent] WEB_PORT=%r is invalid; using default %d", raw_port, DEFAULT_WEB_PORT)
+        return DEFAULT_WEB_PORT
+    if 1 <= port <= 65535:
+        return port
+    logging.warning("[agent] WEB_PORT=%r is invalid; using default %d", raw_port, DEFAULT_WEB_PORT)
+    return DEFAULT_WEB_PORT
+
+
+def _is_local_hostname(hostname: str) -> bool:
+    """Return True when hostname resolves to a loopback/local binding."""
+    normalized = (hostname or "").strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_unspecified
+
+
+def _local_tab_hostname(hostname: str) -> str:
+    """Return the browser-reachable local host for startup pages."""
+    normalized = (hostname or "").strip().lower()
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        return "localhost" if normalized == "localhost" else normalized
+    if addr.is_unspecified:
+        return "::1" if addr.version == 6 else "127.0.0.1"
+    return normalized
+
+
+def _is_trusted_public_hostname(hostname: str) -> bool:
+    """Return True for the official public service hostnames."""
+    normalized = (hostname or "").strip().lower()
+    # Leading dot ensures "fakeunchainedsky.com" does not match.
+    return normalized == "unchainedsky.com" or normalized.endswith(".unchainedsky.com")
+
+
+def _build_tab_url(scheme: str, hostname: str, port: int | None = None) -> str:
+    """Build an absolute URL for the default startup tab page."""
+    netloc = _format_url_host(hostname)
+    if port is not None and not (
+        (scheme == "http" and port == 80)
+        or (scheme == "https" and port == 443)
+    ):
+        netloc = f"{netloc}:{port}"
+    return urllib.parse.urlunsplit((scheme, netloc, DEFAULT_NEW_TAB_PATH, "", ""))
+
+
+def _default_new_tab_url(relay_url: str = DEFAULT_RELAY_URL) -> str:
+    """Resolve the default branded new-tab URL for this bridge instance."""
+    configured = _configured_public_base_url()
+    if configured:
+        return f"{configured}{DEFAULT_NEW_TAB_PATH}"
+
+    parsed = urllib.parse.urlparse(relay_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname:
+        logging.warning(
+            "[agent] could not resolve branded tab URL for relay %r; falling back to about:blank",
+            relay_url,
+        )
+        return "about:blank"
+    if _is_local_hostname(hostname):
+        return _build_tab_url("http", _local_tab_hostname(hostname), port=_web_port())
+    if not _is_trusted_public_hostname(hostname):
+        logging.warning(
+            "[agent] untrusted relay host %r for branded tab URL; falling back to about:blank",
+            hostname,
+        )
+        return "about:blank"
+
+    scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
+    return _build_tab_url(scheme, hostname, port=parsed.port)
+
+
+def _new_tab_request(host: str, port: int, target_url: str) -> urllib.request.Request:
+    """Build a CDP /json/new request with a safely encoded target URL."""
+    encoded = urllib.parse.quote(target_url, safe="")
+    request_host = _format_url_host(host)
+    return urllib.request.Request(f"http://{request_host}:{port}/json/new?{encoded}", method="PUT")
+
+
+def _first_page_tab(host: str, port: int, startup_url: str) -> dict:
+    """Return the first page tab, creating one if Chrome has none."""
+    request_host = _format_url_host(host)
+    tabs_url = f"http://{request_host}:{port}/json"
+    with urllib.request.urlopen(tabs_url, timeout=3) as resp:
+        tabs = json.loads(resp.read())
+    page_tabs = [t for t in tabs if t.get("type") == "page"]
+    if page_tabs:
+        return page_tabs[0]
+    with urllib.request.urlopen(_new_tab_request(host, port, startup_url), timeout=3) as resp:
+        raw_body = resp.read()
+    try:
+        return json.loads(raw_body)
+    except Exception as e:
+        logging.warning("[agent] /json/new response parse failed; retrying /json lookup: %s", e)
+        with urllib.request.urlopen(tabs_url, timeout=3) as retry_resp:
+            retry_tabs = json.loads(retry_resp.read())
+        retry_page_tabs = [t for t in retry_tabs if t.get("type") == "page"]
+        if retry_page_tabs:
+            return retry_page_tabs[0]
+        raise RuntimeError("Chrome created a startup tab but it could not be discovered") from e
+
+
+def _wait_for_process_exit(proc, timeout_s: float) -> bool:
+    """Wait for a subprocess to exit without relying on a blocking wait when poll exists."""
+    poll = getattr(proc, "poll", None)
+    if callable(poll):
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                if poll() is not None:
+                    return True
+            except Exception:
+                break
+            time.sleep(0.05)
+        return False
+    try:
+        proc.wait(timeout=timeout_s)
+        return True
+    except Exception:
+        return False
+
+
+def _terminate_process(proc, label: str, prefix: str = "[agent]") -> bool:
+    """Terminate a subprocess and confirm exit when possible."""
+    if not proc:
+        return True
+    try:
+        proc.terminate()
+        if _wait_for_process_exit(proc, 5):
+            print(f"{prefix} {label} terminated")
+            return True
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        if _wait_for_process_exit(proc, 1):
+            print(f"{prefix} {label} killed")
+            return True
+    except Exception as e:
+        print(f"{prefix} Warning: failed to fully stop {label}: {e}")
+        return False
+    print(f"{prefix} Warning: failed to fully stop {label}")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +500,13 @@ class Agent:
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
-        return _ensure_chrome(self.cdp_host, self.cdp_port, self.profile)
+        return _ensure_chrome(
+            self.cdp_host,
+            self.cdp_port,
+            self.profile,
+            self._headless,
+            relay_url=self.relay_url,
+        )
 
     def _cleanup_orphan_tabs(self):
         """Close all Chrome tabs except one (headless only).
@@ -689,6 +917,7 @@ class Agent:
             return
 
         # Launch Chrome with the copied profile (visible window for sign-in/ToS)
+        startup_url = _default_new_tab_url(self.relay_url)
         cmd = [
             chrome_bin,
             f"--user-data-dir={temp_dir}",
@@ -700,7 +929,7 @@ class Agent:
             "--no-default-browser-check",
             "--disable-extensions",
             "--window-size=1280,900",
-            "about:blank",
+            startup_url,
         ]
         print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -733,15 +962,20 @@ class Agent:
             }))
             return
 
-        # Get the first page tab
-        tabs_url = f"http://127.0.0.1:{prov_port}/json"
         try:
-            with urllib.request.urlopen(tabs_url, timeout=3) as resp:
-                tabs = json.loads(resp.read())
-            page_tabs = [t for t in tabs if t.get("type") == "page"]
-            first_tab_id = page_tabs[0]["id"] if page_tabs else ""
-        except Exception:
-            first_tab_id = ""
+            first_tab = _first_page_tab("127.0.0.1", prov_port, startup_url)
+            first_tab_id = str(first_tab.get("id", "")).strip()
+            if not first_tab_id:
+                raise RuntimeError("Provision Chrome returned no page tab id")
+        except Exception as e:
+            self._cleanup_single_prov({"process": proc, "temp_dir": temp_dir})
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 500,
+                "body": {"error": f"Provision Chrome could not open a startup tab: {e}"},
+            }))
+            return
 
         # Store state keyed by slot
         self._prov_chromes[slot] = {
@@ -854,16 +1088,7 @@ class Agent:
         """Kill one provision Chrome process and delete its temp dir."""
         proc = prov.get("process")
         if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-                print("[agent:prov] Provision Chrome terminated")
-            except Exception:
-                try:
-                    proc.kill()
-                    print("[agent:prov] Provision Chrome killed")
-                except Exception:
-                    pass
+            _terminate_process(proc, "Provision Chrome", prefix="[agent:prov]")
 
         temp_dir = prov.get("temp_dir", "")
         if temp_dir and os.path.isdir(temp_dir):
@@ -1248,6 +1473,7 @@ def _ensure_chrome(
     profile: str = "default",
     headless: bool = False,
     extra_chrome_args: str = "",
+    relay_url: str = DEFAULT_RELAY_URL,
 ):
     """Launch Chrome with CDP if not already running."""
     url = f"http://{host}:{port}/json/version"
@@ -1275,13 +1501,14 @@ def _ensure_chrome(
     profile_dir = os.path.join(DATA_DIR, f"chrome_{profile}")
     os.makedirs(profile_dir, exist_ok=True)
 
+    startup_url = _default_new_tab_url(relay_url)
     cmd = [
         chrome_bin,
         f"--user-data-dir={profile_dir}",
         f"--remote-debugging-port={port}",
         "--no-first-run",
         "--no-default-browser-check",
-        "about:blank",  # Ensure at least one tab opens
+        startup_url,
     ]
     if headless:
         cmd.extend([
@@ -1308,28 +1535,38 @@ def _ensure_chrome(
         time.sleep(1)
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:
-                if resp.status == 200:
-                    # Ensure at least one page tab exists
-                    tabs_url = f"http://{host}:{port}/json"
-                    with urllib.request.urlopen(tabs_url, timeout=2) as tr:
-                        tabs = json.loads(tr.read())
-                    page_tabs = [t for t in tabs if t.get("type") == "page"]
-                    if not page_tabs:
-                        # Create a blank tab via CDP
-                        req = urllib.request.Request(
-                            f"http://{host}:{port}/json/new", method="PUT")
-                        urllib.request.urlopen(req, timeout=3)
-                    print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
-                    return True
+                if resp.status != 200:
+                    continue
         except Exception:
-            pass
+            continue
+
+        try:
+            # Chrome is up; fail fast if the startup tab cannot be opened.
+            _first_page_tab(host, port, startup_url)
+        except Exception as e:
+            _terminate_process(proc, "Chrome")
+            try:
+                os.remove(chrome_pid_file)
+            except OSError:
+                pass
+            print(f"[agent] Chrome started but could not open startup tab: {e}")
+            return False
+
+        print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
+        return True
 
     print("[agent] Chrome did not start in time")
+    _terminate_process(proc, "Chrome")
+    try:
+        os.remove(chrome_pid_file)
+    except OSError:
+        pass
     return False
 
 
 def cmd_start(config: dict):
     """Start the agent (foreground)."""
+    relay_url = config.get("relay_url", DEFAULT_RELAY_URL)
     profile = config["profile"]
     if _is_agent_running(profile):
         pid = _read_pid(profile)
@@ -1355,13 +1592,14 @@ def cmd_start(config: dict):
         profile,
         config.get("chrome_headless", False),
         config.get("chrome_args", ""),
+        relay_url,
     ):
         print("[agent] cannot start without Chrome CDP")
         return
 
     _write_pid(profile, port=cdp_port)
     agent = Agent(
-        relay_url=config["relay_url"],
+        relay_url=relay_url,
         api_key=config["api_key"],
         cdp_host=config["cdp_host"],
         cdp_port=config["cdp_port"],
@@ -1370,8 +1608,6 @@ def cmd_start(config: dict):
     )
 
     import atexit
-    import logging
-
     log = logging.getLogger("chrome_bridge")
     if not log.handlers:
         _log_dir = os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained"))
@@ -1420,13 +1656,14 @@ def cmd_start(config: dict):
 
 def _start_detached(config: dict):
     """Start the bridge as a detached background process."""
+    relay_url = config.get("relay_url", DEFAULT_RELAY_URL)
     script_path = os.path.abspath(__file__)
     cmd = [
         sys.executable,
         script_path,
         "start",
         "--relay",
-        config["relay_url"],
+        relay_url,
         "--host",
         config["cdp_host"],
         "--port",
