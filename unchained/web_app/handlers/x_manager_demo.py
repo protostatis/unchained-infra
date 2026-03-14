@@ -676,6 +676,7 @@ TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{2,}", re.I)
 HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 PROFILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 HANDLE_PATH_RE = re.compile(r"^/([A-Za-z0-9_]{1,15})(?:/status/\d+)?$")
+X_READY_JS = "JSON.stringify({readyState: document.readyState, hasMain: !!document.querySelector('main'), href: location.href})"
 STOPWORDS = {
     "about", "after", "again", "also", "and", "are", "because", "been",
     "being", "brief", "build", "but", "click", "com", "does", "dont", "each",
@@ -810,6 +811,14 @@ def _resolve_local_profile_path(profile: str) -> str:
         if any(candidate and candidate.lower() == target for candidate in candidates):
             return str(profile_info.get("path", "") or "").strip()
     return ""
+
+
+def _normalize_ddm_flags(raw_flags: Any) -> list[str]:
+    if isinstance(raw_flags, str):
+        return raw_flags.split()
+    if isinstance(raw_flags, (list, tuple)):
+        return [str(flag) for flag in raw_flags if str(flag).strip()]
+    return []
 
 
 def _tokenize(text: str) -> list[str]:
@@ -987,7 +996,9 @@ async def _tool_call(
     elif name == "js_eval":
         output = await cloud_tools.run_js(agent_id, tab_id, kwargs["expression"])
     elif name == "ddm":
-        output = await cloud_tools.run_ddm(agent_id, tab_id, kwargs["flags"])
+        flags = _normalize_ddm_flags(kwargs.get("flags"))
+        output = await cloud_tools.run_ddm(agent_id, tab_id, flags)
+        kwargs["flags"] = flags
     else:
         raise ValueError(f"Unsupported tool: {name}")
     tool_calls.append(
@@ -1000,6 +1011,22 @@ async def _tool_call(
     return output
 
 
+async def _wait_for_snapshot_ready(auth_info: dict[str, Any], *, tab_id: str, attempts: int = 8, delay_s: float = 0.35) -> None:
+    agent_id = auth_info["agent_id"]
+    for idx in range(attempts):
+        try:
+            raw = await cloud_tools.run_js(agent_id, tab_id, X_READY_JS)
+            probe = _parse_js_json(raw)
+            ready_state = str(probe.get("readyState", "") or "").lower()
+            if ready_state == "complete" and probe.get("hasMain"):
+                return
+        except Exception:
+            # Navigation can race with the first few probes; retry within the bounded window.
+            pass
+        if idx < attempts - 1:
+            await asyncio.sleep(delay_s)
+
+
 async def _load_snapshot(
     auth_info: dict[str, Any],
     *,
@@ -1008,7 +1035,7 @@ async def _load_snapshot(
     tool_calls: list[dict[str, Any]],
 ) -> dict[str, Any]:
     await _tool_call(auth_info, tool_calls, "cdp_navigate", url=url, tab_id=tab_id)
-    await asyncio.sleep(1.4)
+    await _wait_for_snapshot_ready(auth_info, tab_id=tab_id)
     raw = await _tool_call(auth_info, tool_calls, "js_eval", expression=X_SNAPSHOT_JS, tab_id=tab_id)
     snapshot = _parse_js_json(raw)
     if snapshot.get("article_count") or snapshot.get("login_gate"):

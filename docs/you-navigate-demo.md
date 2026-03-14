@@ -93,7 +93,7 @@ fuller policy.
 Start from this worktree:
 
 ```bash
-cd /Users/zhiminzou/Projects/unchainedsky_com/unchained-infra/.claude/worktrees/x-manager-guest-profile
+cd /path/to/unchained-infra
 ```
 
 ### 1. Start the local stack
@@ -129,7 +129,7 @@ The web app computes the expected `agent_id` from the logged-in user's stored AP
 key. The browser bridge must use that same key.
 
 ```bash
-cd /Users/zhiminzou/Projects/unchainedsky_com/unchained-infra/.claude/worktrees/x-manager-guest-profile/unchained
+cd /path/to/unchained-infra/unchained
 uv run python - <<'PY'
 from auth import Auth
 user = Auth().find_user_by_email("dev@localhost")

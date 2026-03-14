@@ -107,6 +107,16 @@ class TestXManagerDemoHelpers(unittest.TestCase):
                 "/Users/example/Library/Application Support/Google/Chrome/Profile 5",
             )
 
+    def test_normalize_ddm_flags_accepts_string_and_sequence(self):
+        self.assertEqual(
+            demo._normalize_ddm_flags("--text --max 1600"),
+            ["--text", "--max", "1600"],
+        )
+        self.assertEqual(
+            demo._normalize_ddm_flags(["--text", "--max", 1600]),
+            ["--text", "--max", "1600"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
