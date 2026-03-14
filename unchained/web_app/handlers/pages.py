@@ -105,7 +105,46 @@ async def handle_research_desk_page(request: web.Request) -> web.Response:
     const CAPSULES_URL = 'http://127.0.0.1:8766/web/research-desk/capsules?limit=8';
     function chip(text){const span=document.createElement('span');span.className='pill';span.textContent=text;return span;}
     function renderStatus(data){const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');const chips=document.getElementById('status-chips');chips.innerHTML='';title.textContent='Local Research Desk detected.';copy.textContent='Hosted Unchained can see the local status surface. Use the local app for the full workflow.';chips.appendChild(chip('provider: '+String(data.provider?.configured_provider||'unknown')));chips.appendChild(chip('agent mode: '+String(data.provider?.agent_mode||'unknown')));chips.appendChild(chip('bridge key: '+(data.bridge?.api_key_present?'present':'missing')));chips.appendChild(chip('agent: '+String(data.bridge?.agent_id||'not found')));chips.appendChild(chip('pyreplab: '+(data.pyreplab?.available?'ready':'missing')));chips.appendChild(chip('capsules: '+String(data.capsules?.count||0)));}
-    function renderCapsules(data){const root=document.getElementById('capsule-list');root.innerHTML='';const rows=Array.isArray(data.capsules)?data.capsules:[];if(!rows.length){root.innerHTML='<div class="capsule-card"><p>No local missions yet.</p></div>';return;}rows.forEach((row)=>{const el=document.createElement('article');el.className='capsule-card';const task=String(row.task||'').trim();const objectName=String(row.primary_object_name||'not shaped');const rowCount=Number(row.primary_row_count||0);const readiness=String(row.readiness_status||'planned');const nextStep=String(row.next_step||'').trim();el.innerHTML=`<h3>${String(row.capsule_name||'mission')}</h3><p>${task||'No task summary yet.'}</p><div class="capsule-meta"><span class="pill">${objectName}</span><span class="pill">${rowCount} rows</span><span class="pill">${readiness}</span></div><p>${nextStep||'Open the local desk to continue.'}</p>`;root.appendChild(el);});}
+    function renderCapsules(data){
+      const root=document.getElementById('capsule-list');
+      root.innerHTML='';
+      const rows=Array.isArray(data.capsules)?data.capsules:[];
+      if(!rows.length){
+        const emptyCard=document.createElement('div');
+        emptyCard.className='capsule-card';
+        const emptyText=document.createElement('p');
+        emptyText.textContent='No local missions yet.';
+        emptyCard.appendChild(emptyText);
+        root.appendChild(emptyCard);
+        return;
+      }
+      rows.forEach((row)=>{
+        const el=document.createElement('article');
+        el.className='capsule-card';
+        const title=document.createElement('h3');
+        title.textContent=String(row.capsule_name||'mission');
+        const task=document.createElement('p');
+        task.textContent=String(row.task||'').trim()||'No task summary yet.';
+        const meta=document.createElement('div');
+        meta.className='capsule-meta';
+        const objectName=String(row.primary_object_name||'not shaped');
+        const rowCount=Number(row.primary_row_count||0);
+        const readiness=String(row.readiness_status||'planned');
+        [objectName, `${rowCount} rows`, readiness].forEach((value)=>{
+          const badge=document.createElement('span');
+          badge.className='pill';
+          badge.textContent=value;
+          meta.appendChild(badge);
+        });
+        const next=document.createElement('p');
+        next.textContent=String(row.next_step||'').trim()||'Open the local desk to continue.';
+        el.appendChild(title);
+        el.appendChild(task);
+        el.appendChild(meta);
+        el.appendChild(next);
+        root.appendChild(el);
+      });
+    }
     async function loadDeskState(){try{const [statusResp,capsulesResp]=await Promise.all([fetch(STATUS_URL,{mode:'cors'}),fetch(CAPSULES_URL,{mode:'cors'})]);if(!statusResp.ok) throw new Error('local status unavailable');renderStatus(await statusResp.json());if(capsulesResp.ok) renderCapsules(await capsulesResp.json());}catch(err){const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');title.textContent='Local Research Desk not detected yet.';copy.innerHTML='Start the local server on <code>127.0.0.1:8766</code>, then refresh this page.';}}
     loadDeskState();
   </script>
