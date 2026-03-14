@@ -78,6 +78,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/chat-gemini"),
             ("GET", "/first-look"),
             ("GET", "/demo"),
+            ("GET", "/labs/research-desk"),
             ("GET", "/labs/you-navigate"),
             ("GET", "/labs/x-manager"),
             ("GET", "/app"),
@@ -149,6 +150,7 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_template_js_contract_markers(self):
         self.assertIn("showInstallCmd", web.CLAUDE_CHAT_HTML)
+        self.assertIn("/labs/research-desk", web.HEADLESS_DEMO_HTML)
         self.assertIn("copyInstallCmd", web.CLAUDE_CHAT_HTML)
         self.assertIn("closeInstallModal", web.CLAUDE_CHAT_HTML)
         self.assertIn("/web/chat/update-client", web.CLAUDE_CHAT_HTML)

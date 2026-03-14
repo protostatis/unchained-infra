@@ -5384,6 +5384,7 @@ body{
       <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
+    <div style="margin-top:12px"><a href="/labs/research-desk" style="color:#dcc58a">Already running Research Desk locally? Open the launch page &rarr;</a></div>
     <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
   </div>
 </div>
@@ -5428,6 +5429,7 @@ body{
     <div class="nav">
       <a href="/">Home</a>
       <a href="/trial">Free Tier</a>
+      <a href="/labs/research-desk">Research Desk</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>

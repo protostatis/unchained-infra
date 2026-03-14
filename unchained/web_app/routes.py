@@ -59,6 +59,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/demo", "web_app.handlers.pages:handle_demo_page"),
     ("GET", "/mcp", "web_app.handlers.pages:handle_mcp_page"),
     ("GET", "/case-study/zillow-rental", "web_app.handlers.pages:handle_case_study_zillow"),
+    ("GET", "/labs/research-desk", "web_app.handlers.pages:handle_research_desk_page"),
     ("GET", "/labs/you-navigate", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
     ("GET", "/labs/x-manager", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
     ("GET", "/local", "web_app.handlers.pages:handle_local_page"),
