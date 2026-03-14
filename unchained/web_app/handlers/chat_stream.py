@@ -503,6 +503,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 }
                 return web.json_response(resp, status=429)
 
+    # Terminate any lingering SSE stream for this session so its finally
+    # block runs before ours registers (prevents stale-queue races).
+    old_q = core._response_queues.get(session_id)
+    if old_q:
+        try:
+            old_q.put_nowait({"type": "done", "session_id": session_id})
+        except asyncio.QueueFull:
+            pass
     q: asyncio.Queue = asyncio.Queue()
     core._response_queues[session_id] = q
 
@@ -638,11 +646,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 stream_completed = True
                 break
     finally:
-        core._response_queues.pop(session_id, None)
-        core._session_agents.pop(session_id, None)
+        # Only clean up if we still own the session — a new request may
+        # have already replaced our queue and agent mapping.
+        owns_session = core._response_queues.get(session_id) is q
+        if owns_session:
+            core._response_queues.pop(session_id, None)
+            core._session_agents.pop(session_id, None)
         if scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
-        if not stream_completed:
+        if not stream_completed and owns_session:
             asyncio.create_task(core._close_session_tab(session_id))
         core._trace(
             "chat.msg.stream_end",
@@ -681,8 +693,20 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
     default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
     routing_agent_id = core._session_agents.get(session_id, default_agent)
     ws = core._chat_agents.get(routing_agent_id)
+    # Capture queue ref BEFORE the await so a racing new-POST can't
+    # swap it out and receive our stale cancelled/done events.
+    cancel_q = core._response_queues.get(session_id)
     if ws and not ws.closed:
         await ws.send_json({"type": "cancel", "session_id": session_id})
+    # Inject terminal events directly into the SSE queue so the stream
+    # ends immediately — no need to wait for the agent round-trip.
+    if cancel_q:
+        try:
+            cancel_q.put_nowait({"type": "cancelled", "session_id": session_id})
+            cancel_q.put_nowait({"type": "done", "session_id": session_id})
+        except asyncio.QueueFull:
+            pass
+    if ws and not ws.closed:
         ok = web.json_response({"ok": True})
         if guest_mode:
             core._attach_first_look_guest_cookies(ok, request, guest_id)
