@@ -17,7 +17,7 @@ Usage:
 
 See also: chat_agent_sdk.py (production Anthropic SDK lane)
 """
-from __future__ import annotations  # Python 3.9 compat for int | None hints
+from __future__ import annotations
 
 import asyncio
 import hashlib

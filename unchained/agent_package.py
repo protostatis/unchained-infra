@@ -34,8 +34,8 @@ _PACKAGE_FILES = {
 _REQUIREMENTS = """\
 websockets>=13.0
 httpx
-aiohttp
-PyJWT>=2.0
+aiohttp==3.10.11
+PyJWT==2.9.0
 cryptography>=42.0
 """
 
@@ -753,7 +753,7 @@ function Test-PythonCommand([string]$Source, [string[]]$Prefix) {
   if ([string]::IsNullOrWhiteSpace($Source)) { return $false }
   $args = @()
   if ($Prefix) { $args += $Prefix }
-  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
   try {
     & $Source @args *> $null
     return ($LASTEXITCODE -eq 0)
@@ -792,7 +792,7 @@ function Install-PythonRuntime() {
   $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
   $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
 
-  Write-Host "Python 3.9+ not found. Installing Python runtime..."
+  Write-Host "Python 3.8+ not found. Installing Python runtime..."
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
     $installArgs = @(
@@ -830,7 +830,7 @@ function Resolve-PythonCommand() {
   }
 
   if (-not (Install-PythonRuntime)) {
-    Write-Error "ERROR: Python 3.9+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+    Write-Error "ERROR: Python 3.8+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
     exit 1
   }
 
@@ -839,7 +839,7 @@ function Resolve-PythonCommand() {
     return $found
   }
 
-  Write-Error "ERROR: Python 3.9+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+  Write-Error "ERROR: Python 3.8+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
   exit 1
 }
 
@@ -857,7 +857,7 @@ if (-not (Test-Path $venvDir)) {
   Write-Host "Setting up Python environment..."
   & $pythonCmd @($pythonPrefixArgs + @("-m", "venv", $venvDir))
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) {
-    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.9+ from python.org is installed (not Microsoft Store alias)."
+    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.8+ from python.org is installed (not Microsoft Store alias)."
     exit 1
   }
   & $pythonExe -m pip install -q --upgrade pip
@@ -1305,7 +1305,7 @@ INSTALL_DIR="$HOME/unchained-agent"
 
 # ── Prerequisites ────────────────────────────────────────────────────
 if ! command -v python3 &>/dev/null; then
-  echo "ERROR: python3 is required. Install Python 3.9+."; exit 1
+  echo "ERROR: python3 is required. Install Python 3.8+."; exit 1
 fi
 if ! command -v curl &>/dev/null; then
   echo "ERROR: curl is required."; exit 1
@@ -1488,7 +1488,7 @@ BASE_URL="{base_url}"
 
 # Check prerequisites
 if ! command -v python3 &>/dev/null; then
-  echo "ERROR: python3 is required. Install Python 3.9+."; exit 1
+  echo "ERROR: python3 is required. Install Python 3.8+."; exit 1
 fi
 if ! command -v curl &>/dev/null; then
   echo "ERROR: curl is required."; exit 1
@@ -1602,7 +1602,7 @@ function Test-PythonCommand([string]$Source, [string[]]$Prefix) {
   if ([string]::IsNullOrWhiteSpace($Source)) { return $false }
   $args = @()
   if ($Prefix) { $args += $Prefix }
-  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  $args += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
   try {
     & $Source @args *> $null
     return ($LASTEXITCODE -eq 0)
@@ -1641,7 +1641,7 @@ function Install-PythonRuntime() {
   $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
   $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
 
-  Write-Host "Python 3.9+ not found. Installing Python runtime..."
+  Write-Host "Python 3.8+ not found. Installing Python runtime..."
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
     $installArgs = @(
@@ -1679,7 +1679,7 @@ function Resolve-PythonCommand() {
   }
 
   if (-not (Install-PythonRuntime)) {
-    Write-Error "ERROR: Python 3.9+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+    Write-Error "ERROR: Python 3.8+ could not be installed automatically. Install it from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
     exit 1
   }
 
@@ -1688,7 +1688,7 @@ function Resolve-PythonCommand() {
     return $found
   }
 
-  Write-Error "ERROR: Python 3.9+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
+  Write-Error "ERROR: Python 3.8+ is required. Install from https://www.python.org/downloads/windows/ and disable the Microsoft Store App Execution Alias for python.exe."
   exit 1
 }
 
@@ -1754,7 +1754,7 @@ try {
   Write-Host "[1/3] Creating Python environment..."
   & $pythonCmd @($pythonPrefixArgs + @("-m", "venv", $venvDir))
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pythonExe)) {
-    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.9+ from python.org is installed (not Microsoft Store alias)."
+    Write-Error "ERROR: failed to create Python virtual environment (.venv). Ensure Python 3.8+ from python.org is installed (not Microsoft Store alias)."
     exit 1
   }
   Write-Host "[2/3] Upgrading pip..."
@@ -1864,7 +1864,7 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 
 ## Requirements
 
-- Python 3.9+ (macOS has this built in)
+- Python 3.8+ (macOS 12.3+ includes Python shims, but you may still need a real python.org/Homebrew install)
 - Google Chrome
 - Claude Code CLI (`claude`) — install from https://docs.anthropic.com/en/docs/claude-code
 
@@ -1887,8 +1887,8 @@ Chrome is not open with debugging. Fix:
 ### Agent says "Chrome is not open"
 Same as above — Chrome was closed. Click it in the dock or re-run start.sh.
 
-### "unsupported operand type(s) for |"
-Python version too old. Needs Python 3.9+. Check with:
+### "invalid syntax" or Python startup errors
+Python version too old. Needs Python 3.8+. Check with:
     python3 --version
 
 ### Agent connects but commands hang
@@ -1918,7 +1918,7 @@ If you want another Claude Code instance to set this up, paste this prompt:
     3. ./start.sh
 
     If you hit any errors, check the README.txt troubleshooting section.
-    The agent needs Chrome and Python 3.9+.
+    The agent needs Chrome and Python 3.8+.
 """
 
 
@@ -1938,7 +1938,8 @@ def _add_source_files(zf: zipfile.ZipFile, src_dir: str, prefix: str):
         if src_name == "chat_agent_cli.py":
             content = _patch_chat_agent_cli(content)
 
-        # Inject future annotations for Python 3.9 compat (X | Y syntax)
+        # Inject future annotations so packaged client files keep older-Python
+        # annotation evaluation deferred without duplicating the import.
         # only when missing to avoid duplicate future-import lines.
         if dest.endswith(".py") and "from __future__ import annotations" not in content:
             if content.startswith('"""'):

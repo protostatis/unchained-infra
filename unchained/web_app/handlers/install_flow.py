@@ -635,7 +635,7 @@ async def handle_trial_script_windows(request: web.Request) -> web.Response:
     relay_url = core._public_relay_url(request)
     script = f"""# Unchained Trial - Browser Connector (Windows)
 # Connects your Chrome to the Unchained AI agent
-# Requires: Python 3.9+ and PowerShell
+# Requires: Python 3.8+ and PowerShell
 $ErrorActionPreference = "Stop"
 
 $INSTALL_TOKEN = "{token}"
@@ -648,12 +648,12 @@ Write-Host ""
 Write-Host "  Unchained - Connecting your browser..."
 Write-Host ""
 
-# --- Robust Python 3.9+ detection (py -3, python, python3; skip WindowsApps shim) ---
+# --- Robust Python 3.8+ detection (py -3, python, python3; skip WindowsApps shim) ---
 function Test-PythonCommand([string]$Source, [string[]]$Prefix) {{
   if ([string]::IsNullOrWhiteSpace($Source)) {{ return $false }}
   $invokeArgs = @()
   if ($Prefix) {{ $invokeArgs += $Prefix }}
-  $invokeArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)")
+  $invokeArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
   try {{
     & $Source @invokeArgs *> $null
     return ($LASTEXITCODE -eq 0)
@@ -685,7 +685,7 @@ function Find-PythonCommand() {{
 
 $pyInfo = Find-PythonCommand
 if (-not $pyInfo) {{
-    Write-Host "  Error: Python 3.9+ not found. Install from https://python.org"
+    Write-Host "  Error: Python 3.8+ not found. Install from https://python.org"
     exit 1
 }}
 $pySrc = $pyInfo.Source

@@ -103,6 +103,40 @@ def test_build_agent_zip_contains_version_and_update():
     print(f"  ZIP size: {len(zip_bytes)} bytes, {len(names)} files")
 
 
+def test_build_agent_zip_targets_python38_client_runtime():
+    from agent_package import _PACKAGE_FILES, build_agent_zip
+
+    zip_bytes = build_agent_zip(
+        api_key="uc_live_test123",
+        relay_host="localhost",
+        install_token="inst_test_bootstrap",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        requirements = zf.read("unchained-agent/requirements.txt").decode()
+        assert "aiohttp==3.10.11" in requirements
+        assert "PyJWT==2.9.0" in requirements
+
+        start_ps1 = zf.read("unchained-agent/start.ps1").decode()
+        assert "Python 3.8+ not found" in start_ps1
+        assert "sys.version_info >= (3, 8)" in start_ps1
+
+        readme = zf.read("unchained-agent/README.txt").decode()
+        assert "Python 3.8+" in readme
+
+        for dest in _PACKAGE_FILES:
+            if not dest.endswith(".py"):
+                continue
+            packaged_path = f"unchained-agent/{dest}"
+            source = zf.read(packaged_path).decode()
+            # The packaged client relies on deferred annotation evaluation for
+            # older interpreters, so every shipped module should carry the import.
+            assert "from __future__ import annotations" in source, packaged_path
+            ast.parse(source)
+
+    print("  Packaged client runtime is aligned to Python 3.8+")
+
+
 def test_build_update_zip_no_env_no_start():
     from agent_package import build_update_zip, VERSION
     zip_bytes = build_update_zip()
@@ -202,6 +236,7 @@ def test_generate_public_install_script():
     assert "/web/install/claim/start" in script, "claim start endpoint missing"
     assert "/web/install/claim/poll" in script, "claim poll endpoint missing"
     assert "/install/claim/$CLAIM_ID" in script, "browser claim URL missing"
+    assert "Install Python 3.8+." in script
     # Browser open
     assert "open " in script or "xdg-open " in script, "browser open command missing"
     # Download before bootstrap (critical ordering)
