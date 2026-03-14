@@ -1989,7 +1989,6 @@ async def main():
                 elif msg.get("type") == "cancel":
                     sid = msg.get("session_id", "")
                     proc = active_procs.get(sid)
-                    killed = False
                     if proc and proc.returncode is None:
                         if isinstance(proc.pid, int):
                             user_cancelled_pids.add(proc.pid)
@@ -1998,18 +1997,16 @@ async def main():
                             os.killpg(proc.pid, 9)  # SIGKILL entire group
                         except OSError:
                             proc.kill()
-                        killed = True
                     else:
                         # No running process — cancel the asyncio task if it exists
                         task = active_tasks.get(sid)
                         if task and not task.done():
                             task.cancel()
-                            killed = True
-                    if not killed:
-                        # Nothing to kill — still ack so the UI stops spinning
-                        log.info("[%s] CANCEL — no active process found, sending ack", sid)
-                        await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
-                        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+                    # Always ack — the handler's own done may never fire
+                    # (CancelledError, pre-registration cancel, already exited).
+                    # A duplicate done is harmless for the UI.
+                    await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
+                    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
                 elif msg.get("type") == "get_history":
                     req_id = msg.get("req_id", "")
                     slot = msg.get("slot")
