@@ -660,6 +660,7 @@ _chat_agents = _state.chat_agents  # agent_id -> ws
 _chat_agent_caps: dict[str, dict] = {}  # agent_id -> capabilities
 _chat_agent_users: dict[str, str] = {}  # agent_id -> user_id
 _response_queues = _state.response_queues  # session_id -> event queue
+_response_req_ids = _state.response_req_ids  # session_id -> expected req_id
 _session_agents = _state.session_agents  # session_id -> agent_id that handled it
 _agent_req_queues = _state.agent_req_queues  # req_id -> one-shot response queue
 _session_tabs = _state.session_tabs  # session_id -> Chrome tab_id

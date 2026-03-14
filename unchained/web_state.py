@@ -18,6 +18,7 @@ from typing import TextIO
 class ChatRuntimeState:
     chat_agents: dict[str, object] = field(default_factory=dict)
     response_queues: dict[str, asyncio.Queue] = field(default_factory=dict)
+    response_req_ids: dict[str, str] = field(default_factory=dict)
     session_agents: dict[str, str] = field(default_factory=dict)
     agent_req_queues: dict[str, asyncio.Queue] = field(default_factory=dict)
     session_tabs: dict[str, str] = field(default_factory=dict)

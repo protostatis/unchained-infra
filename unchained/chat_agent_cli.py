@@ -903,6 +903,16 @@ active_tasks: dict[str, asyncio.Task] = {}
 user_cancelled_pids: set[int] = set()
 
 
+def _make_emitter(ws, sid: str, req_id: str):
+    """Return an async helper that tags every event with session_id and req_id."""
+    async def emit(evt: dict):
+        evt["session_id"] = sid
+        if req_id:
+            evt["req_id"] = req_id
+        await ws.send(json.dumps(evt))
+    return emit
+
+
 def check_chrome_bridge() -> bool:
     """Test that chrome_bridge.py is connected to the relay."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -996,8 +1006,10 @@ async def handle_message_claude(
     tab_id: str = "auto",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
+    req_id: str = "",
 ):
     """Single claude -p call with streaming tool events and session resume."""
+    emit = _make_emitter(ws, sid, req_id)
     cli_model = _MODEL_CLI_MAP.get(model, "opus")
 
     # Save user message locally
@@ -1055,7 +1067,7 @@ async def handle_message_claude(
         allowed += " WebFetch WebSearch"
         tools += ["WebFetch", "WebSearch"]
     cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
-           "--model", cli_model, "--max-turns", "100",
+           "--model", cli_model,
            "--allowedTools", allowed,
            "--system-prompt", _claude_system_prompt(scheduler_armed=scheduler_armed),
            "--tools"] + tools
@@ -1073,15 +1085,14 @@ async def handle_message_claude(
             start_new_session=True,
         )
     except FileNotFoundError:
-        await ws.send(json.dumps({
-            "session_id": sid,
+        await emit({
             "type": "error",
             "data": (
                 f"Claude CLI is not installed or not on PATH. "
                 f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
             ),
-        }))
-        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        })
+        await emit({"type": "done"})
         return
     active_procs[sid] = proc
 
@@ -1154,16 +1165,16 @@ async def handle_message_claude(
                         nudge_state.stagnation_score,
                     )
                     # Emit intervention card to UI
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_start",
+                    await emit({
+                        "type": "tool_start",
                         "name": "intervention", "input": severity,
-                    }))
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    })
+                    await emit({
+                        "type": "tool_result",
                         "name": "intervention",
                         "data": (prompt or f"Intervention: {severity}")[:1500],
                         "is_screenshot": False,
-                    }))
+                    })
                     # Decay stagnation after nudge
                     nudge_state.apply_nudge_decay()
 
@@ -1174,10 +1185,8 @@ async def handle_message_claude(
                             "I kept browsing but stopped making meaningful progress. "
                             "Please try a different approach or rephrase the request."
                         )
-                        await ws.send(json.dumps({
-                            "session_id": sid, "type": "text", "data": stop_msg,
-                        }))
-                        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+                        await emit({"type": "text", "data": stop_msg})
+                        await emit({"type": "done"})
                         return
                     elif severity == "nudge":
                         nudge_state.apply_nudge_reset()
@@ -1203,19 +1212,17 @@ async def handle_message_claude(
                         "I kept browsing but stopped making meaningful progress. "
                         "Please try a different approach or rephrase the request."
                     )
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_start",
+                    await emit({
+                        "type": "tool_start",
                         "name": "intervention", "input": "progress stalled",
-                    }))
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    })
+                    await emit({
+                        "type": "tool_result",
                         "name": "intervention", "data": stall_msg,
                         "is_screenshot": False,
-                    }))
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "text", "data": stall_msg,
-                    }))
-                    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+                    })
+                    await emit({"type": "text", "data": stall_msg})
+                    await emit({"type": "done"})
                     return
 
             # New assistant turn — reset per-turn tracking
@@ -1260,7 +1267,8 @@ async def handle_message_claude(
                             tool_name = "scheduler"
                         elif "cdp_tool.py" in cmd_str:
                             parts = cmd_str.split("cdp_tool.py", 1)
-                            tool_name = parts[1].strip().split()[0] if len(parts) > 1 else "cdp"
+                            after = parts[1].strip().split() if len(parts) > 1 else []
+                            tool_name = after[0] if after else "cdp"
                         display = cmd_str[:200]
                     elif block_name == "WebFetch":
                         tool_name = "webfetch"
@@ -1273,11 +1281,11 @@ async def handle_message_claude(
                         display = str(tool_input)[:200]
                     turn += 1
                     print(f"    [{turn}] {tool_name}: {display[:100]}")
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_start",
+                    await emit({
+                        "type": "tool_start",
                         "name": tool_name,
                         "input": display,
-                    }))
+                    })
 
             # Loop detection on tool call signatures
             if pending_tool_calls:
@@ -1296,19 +1304,17 @@ async def handle_message_claude(
                         "I got stuck repeating the same actions without making progress. "
                         "Please try rephrasing your request or asking me to take a different approach."
                     )
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_start",
+                    await emit({
+                        "type": "tool_start",
                         "name": "intervention", "input": "loop detected",
-                    }))
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    })
+                    await emit({
+                        "type": "tool_result",
                         "name": "intervention", "data": nudge_msg,
                         "is_screenshot": False,
-                    }))
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "text", "data": nudge_msg,
-                    }))
-                    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+                    })
+                    await emit({"type": "text", "data": nudge_msg})
+                    await emit({"type": "done"})
                     return
 
         elif etype == "user":
@@ -1352,20 +1358,20 @@ async def handle_message_claude(
                     screenshot_data = result_text
 
                 if is_screenshot and screenshot_data:
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    await emit({
+                        "type": "tool_result",
                         "name": "result",
                         "data": screenshot_data,
                         "is_screenshot": True,
                         "visible": True,
-                    }))
+                    })
                 else:
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    await emit({
+                        "type": "tool_result",
                         "name": "result",
                         "data": result_text[:3000],
                         "is_screenshot": False,
-                    }))
+                    })
 
                 # Stagnation tracking: build progress signature from last pending tool call
                 if pending_tool_calls:
@@ -1423,10 +1429,7 @@ async def handle_message_claude(
                 + (f" {stderr_text[:300]}" if stderr_text else "")
             )
         else:
-            await ws.send(json.dumps({
-                "session_id": sid, "type": "cancelled",
-            }))
-            await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+            # Server-side cancel injection handles the cancelled+done events
             return
 
     # Handle errors
@@ -1446,6 +1449,7 @@ async def handle_message_claude(
                 tab_id=tab_id,
                 scheduler_armed=scheduler_armed,
                 scheduler_grant_id=scheduler_grant_id,
+                req_id=req_id,
             )
         if is_resume and proc.returncode != 0:
             log.info("[%s] Resume failed (exit %d): %s", sid, proc.returncode, stderr_text[:200])
@@ -1454,10 +1458,8 @@ async def handle_message_claude(
     if response:
         # Save assistant response locally
         _append_message("assistant", response)
-        await ws.send(json.dumps({
-            "session_id": sid, "type": "text", "data": response,
-        }))
-    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        await emit({"type": "text", "data": response})
+    await emit({"type": "done"})
 
 
 async def handle_message_codex(
@@ -1468,8 +1470,10 @@ async def handle_message_codex(
     tab_id: str = "auto",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
+    req_id: str = "",
 ):
     """Single codex exec call with JSON event parsing and session resume."""
+    emit = _make_emitter(ws, sid, req_id)
     codex_model = _resolve_codex_model(model)
 
     # Save user message locally
@@ -1612,20 +1616,20 @@ async def handle_message_codex(
                 tool_name, tool_input = _codex_tool_name_and_input(str(item.get("command", "")))
                 if item_id:
                     codex_tool_items[item_id] = (tool_name, tool_input)
-                await ws.send(json.dumps({
-                    "session_id": sid, "type": "tool_start",
+                await emit({
+                    "type": "tool_start",
                     "name": tool_name, "input": tool_input,
-                }))
+                })
             else:
                 # Track non-Bash tools (WebSearch, WebFetch, etc.)
                 log.info("  Codex item.started: id=%s type=%s", item_id, item_type)
                 if item_id and "search" in item_type:
                     codex_tool_items[item_id] = ("websearch", str(item.get("query", ""))[:100])
                     codex_tool_start_times[item_id] = time.monotonic()
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_start",
+                    await emit({
+                        "type": "tool_start",
                         "name": "websearch", "input": str(item.get("query", ""))[:100],
-                    }))
+                    })
             continue
 
         if etype == "item.completed":
@@ -1636,11 +1640,11 @@ async def handle_message_codex(
             # Send tool_result for non-command_execution items that had a tool_start
             _tracked = codex_tool_items.pop(item_id, None)
             if _tracked and item_type != "command_execution":
-                await ws.send(json.dumps({
-                    "session_id": sid, "type": "tool_result",
+                await emit({
+                    "type": "tool_result",
                     "name": _tracked[0], "data": "completed",
                     "is_screenshot": False, "visible": False,
-                }))
+                })
             if item_type == "command_execution":
                 tool_name, tool_input = _tracked or _codex_tool_name_and_input(str(item.get("command", "")))
                 out = str(item.get("aggregated_output") or "").strip()
@@ -1681,17 +1685,17 @@ async def handle_message_codex(
                             except Exception as e:
                                 log.info("  Codex screenshot fallback failed: %s", e)
                 if codex_is_screenshot and codex_screenshot_data:
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    await emit({
+                        "type": "tool_result",
                         "name": tool_name, "data": codex_screenshot_data,
                         "is_screenshot": True, "visible": True,
-                    }))
+                    })
                 else:
-                    await ws.send(json.dumps({
-                        "session_id": sid, "type": "tool_result",
+                    await emit({
+                        "type": "tool_result",
                         "name": tool_name, "data": out[:12000],
                         "is_screenshot": False, "visible": None,
-                    }))
+                    })
                 continue
             if item_type in ("assistant_message", "message", "output_text"):
                 text_bits = _collect_text_strings(item)
@@ -1775,8 +1779,7 @@ async def handle_message_codex(
         if isinstance(proc_pid, int):
             user_cancelled_pids.discard(proc_pid)
         if was_user_cancel:
-            await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
-            await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+            # Server-side cancel injection handles the cancelled+done events
             try:
                 if os.path.exists(output_file):
                     os.remove(output_file)
@@ -1811,6 +1814,7 @@ async def handle_message_codex(
                 tab_id=tab_id,
                 scheduler_armed=scheduler_armed,
                 scheduler_grant_id=scheduler_grant_id,
+                req_id=req_id,
             )
         if is_resume and not timed_out and (proc.returncode != 0 or error_text):
             log.info("[%s] Codex resume error (exit %d, keeping session): %s",
@@ -1825,8 +1829,8 @@ async def handle_message_codex(
             response = "Codex CLI finished without a final response."
 
     _append_message("assistant", response)
-    await ws.send(json.dumps({"session_id": sid, "type": "text", "data": response}))
-    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+    await emit({"type": "text", "data": response})
+    await emit({"type": "done"})
     try:
         if os.path.exists(output_file):
             os.remove(output_file)
@@ -1842,16 +1846,17 @@ async def handle_message(
     tab_id: str = "auto",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
+    req_id: str = "",
 ):
     """Dispatch to local Claude CLI or Codex CLI handler by model prefix."""
+    emit = _make_emitter(ws, sid, req_id)
     if _is_codex_cli_model(model):
         if not _cli_binary_available(CODEX_BIN):
-            await ws.send(json.dumps({
-                "session_id": sid,
+            await emit({
                 "type": "error",
                 "data": "Codex CLI is not installed. Install codex and run `codex login`.",
-            }))
-            await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+            })
+            await emit({"type": "done"})
             return
         return await handle_message_codex(
             ws,
@@ -1861,17 +1866,17 @@ async def handle_message(
             tab_id=tab_id,
             scheduler_armed=scheduler_armed,
             scheduler_grant_id=scheduler_grant_id,
+            req_id=req_id,
         )
     if not _cli_binary_available(CLAUDE_BIN):
-        await ws.send(json.dumps({
-            "session_id": sid,
+        await emit({
             "type": "error",
             "data": (
                 f"Claude CLI is not installed or not on PATH. "
                 f"Expected `{CLAUDE_BIN}`. Install Claude Code or set `CLAUDE_BIN`."
             ),
-        }))
-        await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+        })
+        await emit({"type": "done"})
         return
     return await handle_message_claude(
         ws,
@@ -1881,6 +1886,7 @@ async def handle_message(
         tab_id=tab_id,
         scheduler_armed=scheduler_armed,
         scheduler_grant_id=scheduler_grant_id,
+        req_id=req_id,
     )
 
 
@@ -1950,6 +1956,7 @@ async def main():
                     msg_tab_id = msg.get("tab_id", "auto")
                     msg_scheduler_armed = bool(msg.get("scheduler_armed"))
                     msg_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
+                    msg_req_id = str(msg.get("req_id", "") or "").strip()
                     log.info("[%s] User: %s (model=%s)", sid, user_text, msg_model or "default")
                     # Kill any existing process for this session to avoid concurrent API calls
                     existing_proc = active_procs.get(sid)
@@ -1975,6 +1982,7 @@ async def main():
                             tab_id=msg_tab_id,
                             scheduler_armed=msg_scheduler_armed,
                             scheduler_grant_id=msg_scheduler_grant_id,
+                            req_id=msg_req_id,
                         )
                     )
                     active_tasks[sid] = task
