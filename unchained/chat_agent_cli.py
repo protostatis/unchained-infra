@@ -1416,19 +1416,16 @@ async def handle_message_claude(
         was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
         if isinstance(proc_pid, int):
             user_cancelled_pids.discard(proc_pid)
-        if not was_user_cancel:
+        if was_user_cancel:
+            # Cancel handler already sent cancelled+done — just exit.
+            return
+        else:
             stderr_text = (await proc.stderr.read()).decode(errors="replace").strip()
             sig = -proc.returncode
             response = (
                 f"Claude CLI terminated unexpectedly (signal {sig})."
                 + (f" {stderr_text[:300]}" if stderr_text else "")
             )
-        else:
-            await ws.send(json.dumps({
-                "session_id": sid, "type": "cancelled",
-            }))
-            await ws.send(json.dumps({"session_id": sid, "type": "done"}))
-            return
 
     # Handle errors
     if proc.returncode != 0 and not response:
@@ -1776,8 +1773,7 @@ async def handle_message_codex(
         if isinstance(proc_pid, int):
             user_cancelled_pids.discard(proc_pid)
         if was_user_cancel:
-            await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
-            await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+            # Cancel handler already sent cancelled+done — just clean up.
             try:
                 if os.path.exists(output_file):
                     os.remove(output_file)
