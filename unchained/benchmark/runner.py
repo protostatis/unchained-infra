@@ -604,6 +604,14 @@ Examples:
     )
     if not _HAS_PROGRESS_CRITIC:
         print("  (progress_critic unavailable; running without progress scoring)")
+    _llm_judge_tasks = [t["id"] for t in tasks if t.get("eval_type") == "llm_judge"]
+    if _llm_judge_tasks and not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            f"  WARNING: {len(_llm_judge_tasks)} task(s) use llm_judge but ANTHROPIC_API_KEY "
+            f"is not set — these will fall back to a lenient heuristic: "
+            f"{', '.join(_llm_judge_tasks)}",
+            file=sys.stderr,
+        )
     if not base_config.agent_id:
         print("  (no agent id supplied; tasks will reuse the default tab)")
 

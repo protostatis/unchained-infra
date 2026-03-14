@@ -224,7 +224,21 @@ async def _run_task_claude(
                         if use_id:
                             _tool_use_id_to_log_idx[use_id] = len(result.tool_log) - 1
                 elif etype == "user":
-                    # Tool results arrive in user events (chat_agent_cli.py:1314)
+                    # Tool results arrive in user events (chat_agent_cli.py:1314).
+                    # Bash stdout may be in event["tool_use_result"] directly,
+                    # or in message.content tool_result blocks for other tools.
+                    raw_result = event.get("tool_use_result")
+                    if raw_result is not None:
+                        if isinstance(raw_result, str):
+                            result_text = raw_result
+                        elif isinstance(raw_result, dict):
+                            result_text = str(raw_result.get("stdout", "") or "")
+                        else:
+                            result_text = ""
+                        if result_text and result.tool_log:
+                            result.tool_log[-1].setdefault(
+                                "output_preview", result_text[:600]
+                            )
                     msg = event.get("message", {}) or {}
                     for block in msg.get("content", []):
                         if block.get("type") != "tool_result":
