@@ -757,6 +757,10 @@ uv run python cdp_tool.py intel --extract               # Extract structured dat
 uv run python cdp_tool.py intel --stores                # List JS data store globals
 uv run python cdp_tool.py intel --find-paths GLOBAL key # Find data arrays in a global
 uv run python cdp_tool.py screenshot                    # Screenshot (CAPTCHAs only, ~2100 tok)
+uv run python cdp_tool.py pdf                           # Save current page as PDF
+uv run python cdp_tool.py tabs                          # List open Chrome tabs
+uv run python cdp_tool.py new-tab https://example.com   # Open URL in a new tab
+uv run python cdp_tool.py close-tab <tab_id>            # Close a tab by ID
 
 ## DDM-First Methodology
 
