@@ -408,9 +408,6 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;border-radius:12px;overflow:hidden;background:#0a0c0f;box-shadow:inset 4px 0 0 #0a0c0f,inset -7px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
-      '#login .g_id_signin > div,#login .g_id_signin > div > div{position:relative !important;z-index:1 !important;width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
-      '#login .g_id_signin iframe{position:relative !important;z-index:1 !important;display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:1 !important;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
     ].join('');
     if(document.head){
@@ -499,6 +496,21 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
 </script>"""
 
 
+_GSI_SAFARI_FIX_SNIPPET = r"""<script data-uc-gsi-safari-fix>
+(function(){
+  if(document.getElementById('uc-gsi-safari-fix')) return;
+  var style = document.createElement('style');
+  style.id = 'uc-gsi-safari-fix';
+  style.textContent = [
+    '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;border-radius:12px;background:#0a0c0f;box-shadow:inset 4px 0 0 #0a0c0f,inset -7px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
+    '#login .g_id_signin > div,#login .g_id_signin > div > div{position:relative !important;z-index:1 !important;width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
+    '#login .g_id_signin iframe{position:relative !important;z-index:1 !important;display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:1 !important;}'
+  ].join('');
+  if(document.head) document.head.appendChild(style);
+})();
+</script>"""
+
+
 def _inject_before_body(html: str, snippet: str) -> str:
     if "</body>" in html:
         return html.replace("</body>", snippet + "\n</body>")
@@ -518,6 +530,8 @@ def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     github_client_secret = os.environ.get("GITHUB_CLIENT_SECRET", "").strip()
     github_enabled = bool(github_client_id and github_client_secret)
     html = html.replace("__FACEBOOK_APP_ID__", facebook_app_id if facebook_enabled else "")
+    if "data-uc-gsi-safari-fix" not in html:
+        html = _inject_before_body(html, _GSI_SAFARI_FIX_SNIPPET)
     if (facebook_enabled or github_enabled) and "data-uc-facebook-login" not in html:
         fb_snippet = _FACEBOOK_LOGIN_SNIPPET_TEMPLATE.replace(
             "__UC_FACEBOOK_APP_ID__", json.dumps(facebook_app_id if facebook_enabled else "")
