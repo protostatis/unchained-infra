@@ -1998,11 +1998,11 @@ async def main():
                         task = active_tasks.get(sid)
                         if task and not task.done():
                             task.cancel()
-                    # Always ack — the handler's own done may never fire
-                    # (CancelledError, pre-registration cancel, already exited).
-                    # A duplicate done is harmless for the UI.
-                    await ws.send(json.dumps({"session_id": sid, "type": "cancelled"}))
-                    await ws.send(json.dumps({"session_id": sid, "type": "done"}))
+                    # Server-side cancel (chat_stream.py) injects cancelled+done
+                    # directly into the SSE queue.  Do NOT ack here — on a quick
+                    # cancel-then-resend the WS route resolves by session_id,
+                    # which now points to the *new* turn's queue, so a stale ack
+                    # from here would terminate the new stream.
                 elif msg.get("type") == "get_history":
                     req_id = msg.get("req_id", "")
                     slot = msg.get("slot")
