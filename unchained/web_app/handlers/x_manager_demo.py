@@ -18,6 +18,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 import json
 import math
+import os
 import re
 from typing import Any
 from urllib.parse import quote_plus
@@ -27,6 +28,7 @@ from aiohttp import web
 import cloud_tools
 from web_app.cmd_dispatch import is_chrome_unavailable_error
 from web_app.core import get_core as _core
+from web_app.handlers.auth_admin import is_admin as _is_admin
 
 PAGE_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -465,7 +467,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
               <span>X handle</span>
               <span>required</span>
             </div>
-            <input id="handle" name="handle" placeholder="@youraccount" autocomplete="off">
+            <input id="handle" name="handle" value="@unchained_sky" placeholder="@youraccount" autocomplete="off">
           </label>
 
           <label>
@@ -473,7 +475,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
               <span>Browser profile</span>
               <span>optional</span>
             </div>
-            <input id="profile" name="profile" placeholder="guest" autocomplete="off">
+            <input id="profile" name="profile" value="Profile 5" placeholder="guest" autocomplete="off">
           </label>
 
           <label>
@@ -481,7 +483,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
               <span>Growth brief</span>
               <span>required</span>
             </div>
-            <textarea id="brief" name="brief" placeholder="Example: I want to grow with founders and product engineers. My posts get impressions but weak replies. I want sharper engagement, not generic growth hacks."></textarea>
+            <textarea id="brief" name="brief" placeholder="Example: I want to grow with founders and product engineers. My posts get impressions but weak replies. I want sharper engagement, not generic growth hacks.">I want to grow with founders and product engineers. My posts get impressions but weak replies. I want sharper engagement around product strategy and shipping lessons, not generic growth advice.</textarea>
           </label>
 
           <label>
@@ -626,8 +628,8 @@ PAGE_HTML = r"""<!DOCTYPE html>
     }
 
     fillBtn.addEventListener('click', () => {
-      document.getElementById('handle').value = '@youraccount';
-      document.getElementById('profile').value = 'guest';
+      document.getElementById('handle').value = '@unchained_sky';
+      document.getElementById('profile').value = 'Profile 5';
       document.getElementById('brief').value = 'I want to grow with founders and product engineers. My posts get impressions but weak replies. I want sharper engagement around product strategy and shipping lessons, not generic growth advice.';
       document.getElementById('targets').value = '@lennysan, @shreyas';
       document.getElementById('max-steps').value = '3';
@@ -787,6 +789,27 @@ def _resolve_profile_auth(auth_info: dict[str, Any], profile: str) -> dict[str, 
     resolved["profile"] = name
     resolved["agent_id"] = f"claude-{auth_info['key_hash']}-{name}"
     return resolved
+
+
+def _resolve_local_profile_path(profile: str) -> str:
+    raw = (profile or "").strip()
+    if not raw:
+        return ""
+    try:
+        import signup_agent
+    except Exception:
+        return ""
+
+    target = raw.lower()
+    for profile_info in signup_agent.list_chrome_profiles():
+        candidates = {
+            str(profile_info.get("dir_name", "") or "").strip(),
+            str(profile_info.get("name", "") or "").strip(),
+            os.path.basename(str(profile_info.get("path", "") or "").strip()),
+        }
+        if any(candidate and candidate.lower() == target for candidate in candidates):
+            return str(profile_info.get("path", "") or "").strip()
+    return ""
 
 
 def _tokenize(text: str) -> list[str]:
@@ -1247,9 +1270,18 @@ async def _run_demo(
     brief: str,
     competitors: list[str],
     max_steps: int,
+    profile_path: str = "",
 ) -> dict[str, Any]:
     focus_terms = _extract_focus_terms(brief, handle, competitors)
-    tab_id = await cloud_tools.create_tab(auth_info["agent_id"], "about:blank") or "auto"
+    if profile_path:
+        launch = await cloud_tools.provision_launch(auth_info["agent_id"], profile_path)
+        tab_id = str((launch or {}).get("tab_id", "")).strip()
+        if not tab_id:
+            raise RuntimeError(f"Could not launch a provisioned browser tab for {os.path.basename(profile_path)}.")
+    else:
+        tab_id = await cloud_tools.create_tab(auth_info["agent_id"], "about:blank")
+        if not tab_id:
+            raise RuntimeError("Could not create a fresh browser tab for the demo.")
     seen_tokens: set[str] = set()
     stats = {name: ActionStat() for name in ACTION_ORDER}
     best_action = "profile_scan"
@@ -1378,16 +1410,9 @@ async def _run_demo(
 async def handle_x_manager_demo_page(request: web.Request) -> web.Response:
     """Serve the "Unchained drives. You navigate." X.com demo page."""
     core = _core()
-    auth_info = core._authenticate(request)
+    auth_info = _is_admin(request)
     if auth_info is None:
-        core._track_redirect(request, "/local", reason="x_manager_demo_requires_auth")
-        raise web.HTTPFound("/local")
-    if core._is_pending_user(auth_info):
-        return web.Response(
-            text='Pending accounts cannot use the "Unchained drives. You navigate." demo yet. Use /trial or get approved first.',
-            content_type="text/plain",
-            status=403,
-        )
+        raise web.HTTPNotFound()
     core._track_page_view(request, auth_info=auth_info)
     return web.Response(text=PAGE_HTML, content_type="text/html")
 
@@ -1395,14 +1420,9 @@ async def handle_x_manager_demo_page(request: web.Request) -> web.Response:
 async def handle_x_manager_demo_run(request: web.Request) -> web.Response:
     """Run the "Unchained drives. You navigate." X.com controller loop."""
     core = _core()
-    auth_info = core._authenticate(request)
+    auth_info = _is_admin(request)
     if auth_info is None:
-        return web.json_response({"error": "Not authenticated. Open /local and sign in first."}, status=401)
-    if core._is_pending_user(auth_info):
-        return web.json_response(
-            {"error": 'Pending accounts cannot run the "Unchained drives. You navigate." demo yet.'},
-            status=403,
-        )
+        return web.json_response({"error": "Not found."}, status=404)
 
     try:
         body = await request.json()
@@ -1413,6 +1433,7 @@ async def handle_x_manager_demo_run(request: web.Request) -> web.Response:
     profile = str(body.get("profile", "")).strip()
     brief = str(body.get("brief", "")).strip()
     competitors = _split_handles(str(body.get("targets", "")))
+    profile_path = _resolve_local_profile_path(profile)
     try:
         max_steps = int(body.get("max_steps", 3))
     except Exception:
@@ -1425,7 +1446,7 @@ async def handle_x_manager_demo_run(request: web.Request) -> web.Response:
         return web.json_response({"error": "A growth brief is required."}, status=400)
 
     try:
-        scoped_auth_info = _resolve_profile_auth(auth_info, profile)
+        scoped_auth_info = _resolve_profile_auth(auth_info, "" if profile_path else profile)
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
 
@@ -1436,6 +1457,7 @@ async def handle_x_manager_demo_run(request: web.Request) -> web.Response:
             brief=brief[:900],
             competitors=competitors,
             max_steps=max_steps,
+            profile_path=profile_path,
         )
     except Exception as exc:
         if is_chrome_unavailable_error(exc):

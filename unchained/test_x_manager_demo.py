@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+import types
 
 from web_app.handlers import x_manager_demo as demo
 
@@ -84,6 +86,26 @@ class TestXManagerDemoHelpers(unittest.TestCase):
         self.assertGreater(rich_reward["total"], weak_reward["total"])
         self.assertGreater(rich_reward["intent_alignment"], weak_reward["intent_alignment"])
         self.assertGreater(weak_reward["risk"], rich_reward["risk"])
+
+    def test_resolve_local_profile_path_matches_dir_name_and_display_name(self):
+        fake_signup_agent = types.SimpleNamespace(
+            list_chrome_profiles=lambda: [
+                {
+                    "path": "/Users/example/Library/Application Support/Google/Chrome/Profile 5",
+                    "dir_name": "Profile 5",
+                    "name": "UnchainedSky",
+                }
+            ]
+        )
+        with patch.dict("sys.modules", {"signup_agent": fake_signup_agent}):
+            self.assertEqual(
+                demo._resolve_local_profile_path("Profile 5"),
+                "/Users/example/Library/Application Support/Google/Chrome/Profile 5",
+            )
+            self.assertEqual(
+                demo._resolve_local_profile_path("UnchainedSky"),
+                "/Users/example/Library/Application Support/Google/Chrome/Profile 5",
+            )
 
 
 if __name__ == "__main__":
