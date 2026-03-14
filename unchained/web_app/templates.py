@@ -12491,6 +12491,19 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
       background:#171722;border:1px solid #2f2f3c;border-radius:4px;
       padding:1px 5px;font-size:12px;
     }
+    .tools-group td{
+      padding:12px 10px 6px;color:#c5c5d2;font-weight:600;font-size:13px;
+      border-bottom:1px solid #252532;letter-spacing:.3px;
+    }
+    .tools-pipeline{
+      font-size:13px;color:#8e8ea0;margin-top:14px;margin-bottom:4px;
+      line-height:1.5;display:none;
+    }
+    .tools-pipeline.show{display:block}
+    .tools-pipeline code{
+      background:#171722;border:1px solid #2f2f3c;border-radius:4px;
+      padding:1px 5px;font-size:12px;
+    }
     .footer{text-align:center;color:#6e6e80;font-size:13px;padding:20px 0}
     .footer a{color:#8e8ea0}
     @media(max-width:640px){
@@ -12615,24 +12628,35 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
         <h2>Available MCP Tools</h2>
         <span class="arrow" id="tools-arrow">&#9660;</span>
       </div>
+      <div class="tools-pipeline" id="tools-pipeline">
+        Extraction pipeline: <code>ddm</code> orients the page (~500 tokens) &#x2192; <code>intel_probe</code> classifies the best extraction strategy &#x2192; <code>intel_extract</code> pulls structured data. For JS-heavy SPAs, probe may rank <code>intel_stores</code> &#x2192; <code>intel_shape</code> / <code>intel_find_paths</code> &#x2192; <code>js_eval</code> higher.
+      </div>
       <table class="tools-table" id="tools-table">
         <thead>
           <tr><th>Tool</th><th>Description</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>navigate</code></td><td>Navigate to a URL in the browser</td></tr>
-          <tr><td><code>screenshot</code></td><td>Take a screenshot of the current page</td></tr>
-          <tr><td><code>click</code></td><td>Click an element using CSS selector or coordinates</td></tr>
-          <tr><td><code>type_text</code></td><td>Type text into focused element or selector</td></tr>
-          <tr><td><code>scroll</code></td><td>Scroll the page or a specific element</td></tr>
-          <tr><td><code>ddm</code></td><td>Extract structured page data via DOM Density Map</td></tr>
-          <tr><td><code>page_intel</code></td><td>Analyze page structure and interactive elements</td></tr>
-          <tr><td><code>execute_js</code></td><td>Run JavaScript in the browser context</td></tr>
-          <tr><td><code>tabs</code></td><td>List open browser tabs</td></tr>
-          <tr><td><code>new_tab</code></td><td>Open a new browser tab</td></tr>
-          <tr><td><code>close_tab</code></td><td>Close a specific browser tab</td></tr>
-          <tr><td><code>cdp_set_file</code></td><td>Set a file on an &lt;input type=&quot;file&quot;&gt; without the OS picker</td></tr>
-          <tr><td><code>list_connected_agents</code></td><td>List connected agents and Chrome profiles</td></tr>
+          <tr class="tools-group"><td colspan="2">Page Understanding</td></tr>
+          <tr><td><code>ddm</code></td><td>DOM Density Map &mdash; structural page layout + interactive elements (~500 tokens). Use <code>--text</code> for page text, <code>--at x,y</code> for element details, <code>--find "keyword"</code> to search.</td></tr>
+          <tr><td><code>intel_probe</code></td><td>Page intelligence probe &mdash; DOM fingerprint + Bayesian strategy ranking (~100 tokens). Run on first visit to any SPA.</td></tr>
+          <tr><td><code>intel_extract</code></td><td>Extract structured data using auto-selected or forced strategy (host_attrs, react_fiber, data_testid, etc.)</td></tr>
+          <tr class="tools-group"><td colspan="2">Data Store Extraction</td></tr>
+          <tr><td><code>intel_stores</code></td><td>List JavaScript data stores on page (globals &gt;10KB). Use on Nuxt/Next/YouTube sites.</td></tr>
+          <tr><td><code>intel_shape</code></td><td>Map the shape of a JS global object (e.g. <code>__NUXT__</code>, <code>ytInitialData</code>).</td></tr>
+          <tr><td><code>intel_find_paths</code></td><td>Find paths to a key pattern inside a JS global.</td></tr>
+          <tr class="tools-group"><td colspan="2">Browser Interaction</td></tr>
+          <tr><td><code>cdp_navigate</code></td><td>Navigate to a URL. Returns page title and DDM layout.</td></tr>
+          <tr><td><code>cdp_click</code></td><td>Click at pixel coordinates (from DDM output). Returns updated DDM layout.</td></tr>
+          <tr><td><code>cdp_type</code></td><td>Type text into the focused element. Click an input first to focus it.</td></tr>
+          <tr><td><code>js_eval</code></td><td>Execute JavaScript and return the result. Use for SPA widgets, querySelectorAll, data stores.</td></tr>
+          <tr><td><code>cdp_screenshot</code></td><td>Take a screenshot (~2100 tokens). Prefer DDM. Use for CAPTCHAs/visual verification only.</td></tr>
+          <tr class="tools-group"><td colspan="2">File &amp; Agent Management</td></tr>
+          <tr><td><code>cdp_set_file</code></td><td>Set a file on <code>&lt;input type="file"&gt;</code> without the OS picker.</td></tr>
+          <tr><td><code>list_connected_agents</code></td><td>List connected browser agents and Chrome profiles.</td></tr>
+          <tr class="tools-group"><td colspan="2">Chrome Profile Provisioning</td></tr>
+          <tr><td><code>cdp_provision_launch</code></td><td>Launch Chrome with a user profile for OAuth/authenticated browsing.</td></tr>
+          <tr><td><code>cdp_provision_cleanup</code></td><td>Clean up provisioned Chrome instances.</td></tr>
+          <tr><td><code>list_provisioned_tabs</code></td><td>List tabs in provisioned Chrome (discover OAuth popups).</td></tr>
         </tbody>
       </table>
     </div>
@@ -12714,8 +12738,10 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
 
     function toggleTools() {
       var table = document.getElementById('tools-table');
+      var pipeline = document.getElementById('tools-pipeline');
       var arrow = document.getElementById('tools-arrow');
       table.classList.toggle('show');
+      pipeline.classList.toggle('show');
       arrow.classList.toggle('open');
     }
 
