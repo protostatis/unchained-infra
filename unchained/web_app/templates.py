@@ -2001,7 +2001,7 @@ body{
         <code id="install-cmd" style="color:var(--text)">Loading...</code>
         <button onclick="copyInstallCmd()" style="position:absolute;top:8px;right:8px;background:var(--accent);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer" id="copy-btn">Copy</button>
       </div>
-      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Link expires in 15 minutes. Requires Python 3.9+ and curl.</p>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Link expires in 15 minutes. Requires Python 3.8+ and curl.</p>
     </div>
   </div>
 
@@ -3255,7 +3255,7 @@ async function showTrialInstallCmd() {
   const isWin = _isWindows();
   document.getElementById('install-modal-title').textContent = 'Connect Your Browser';
   document.getElementById('install-modal-desc').textContent = isWin
-    ? 'Run this in PowerShell to connect Chrome (Python 3.9+ required):'
+    ? 'Run this in PowerShell to connect Chrome (Python 3.8+ required):'
     : 'Run this in your terminal to connect Chrome (Python 3 + curl required):';
   document.getElementById('install-modal-note').textContent = 'Link expires in 15 minutes. Only installs websockets \u2014 no API key needed.';
   const modal = document.getElementById('install-modal');
@@ -3657,7 +3657,7 @@ body{
       <div style="margin-top:10px;display:flex;gap:8px">
         <button onclick="copyInstallCmd()" style="background:#2f3140;border:1px solid #4a4d60;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer" id="copy-btn">Copy Command</button>
       </div>
-      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.9+ and curl.</p>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
     </div>
   </div>
 
@@ -3946,7 +3946,7 @@ async function showInstallCmd() {
   const isWin = _isWindows();
   document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
   document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
-  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.9+.' : 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.8+.' : 'Links expire in 15 minutes. Requires Python 3.8+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
@@ -7158,7 +7158,7 @@ body{
       <div class="modal-actions">
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
       </div>
-      <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.9+ and curl.</p>
+      <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
     </div>
   </div>
 
@@ -8419,7 +8419,7 @@ async function showInstallCmd() {
   const isWin = _isWindows();
   document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
   document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
-  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.9+.' : 'Links expire in 15 minutes. Requires Python 3.9+ and curl.';
+  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.8+.' : 'Links expire in 15 minutes. Requires Python 3.8+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
   const modal = document.getElementById('install-modal');
   modal.style.display = 'flex';
@@ -10222,7 +10222,7 @@ async function loadInstallCmd() {
   const descEl = document.getElementById('setup-connect-desc');
   const noteEl = document.getElementById('setup-connect-note');
   if (descEl) descEl.textContent = isWin ? 'Run this in PowerShell:' : 'Run this in your terminal:';
-  if (noteEl) noteEl.textContent = isWin ? 'Requires Python 3.9+. Link expires in 15 minutes.' : 'Requires Python 3 and curl. Link expires in 15 minutes.';
+  if (noteEl) noteEl.textContent = isWin ? 'Requires Python 3.8+. Link expires in 15 minutes.' : 'Requires Python 3.8+ and curl. Link expires in 15 minutes.';
   cmdEl.textContent = 'Generating link...';
   try {
     const r = await fetch('/trial/token', {method: 'POST'});
