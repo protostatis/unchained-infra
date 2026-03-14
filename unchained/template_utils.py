@@ -408,8 +408,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;border-radius:12px;overflow:hidden;background:#0a0c0f;}',
-      '#login .g_id_signin::after{content:\"\";position:absolute;inset:0;z-index:9;border-radius:12px;pointer-events:none;box-shadow:inset 4px 0 0 #0a0c0f,inset -7px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
+      '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;border-radius:12px;overflow:hidden;background:#0a0c0f;box-shadow:inset 4px 0 0 #0a0c0f,inset -7px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
       '#login .g_id_signin > div,#login .g_id_signin > div > div{position:relative !important;z-index:1 !important;width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;overflow:hidden !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
       '#login .g_id_signin iframe{position:relative !important;z-index:1 !important;display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:1 !important;}',
       '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
