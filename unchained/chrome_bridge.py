@@ -27,6 +27,7 @@ import shutil
 import signal
 import sys
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -66,12 +67,52 @@ def _pid_file(profile: str = "default") -> str:
 DEFAULT_RELAY_URL = "ws://127.0.0.1:8765/tunnel"
 DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
+DEFAULT_NEW_TAB_PATH = "/tab"
+_LOCAL_TAB_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
 MAX_BACKOFF = 60          # seconds
 
 VERSION = "0.1.0"
+
+
+def _configured_public_base_url() -> str:
+    """Return an explicit public base URL override, if configured."""
+    base_url = (
+        os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
+        or os.environ.get("UNCHAINED_API_URL", "").strip()
+    )
+    return base_url.rstrip("/")
+
+
+def _default_new_tab_url(relay_url: str = DEFAULT_RELAY_URL) -> str:
+    """Resolve the default branded new-tab URL for this bridge instance."""
+    configured = _configured_public_base_url()
+    if configured:
+        return f"{configured}{DEFAULT_NEW_TAB_PATH}"
+
+    parsed = urllib.parse.urlparse(relay_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname:
+        return "about:blank"
+    if hostname in _LOCAL_TAB_HOSTNAMES:
+        return f"http://{hostname}:8080{DEFAULT_NEW_TAB_PATH}"
+
+    scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
+    netloc = parsed.hostname or hostname
+    if parsed.port and not (
+        (scheme == "http" and parsed.port == 80)
+        or (scheme == "https" and parsed.port == 443)
+    ):
+        netloc = f"{netloc}:{parsed.port}"
+    return f"{scheme}://{netloc}{DEFAULT_NEW_TAB_PATH}"
+
+
+def _new_tab_request(host: str, port: int, target_url: str) -> urllib.request.Request:
+    """Build a CDP /json/new request with a safely encoded target URL."""
+    encoded = urllib.parse.quote(target_url, safe=':/?#[]@!$&\'()*+,;=-._~')
+    return urllib.request.Request(f"http://{host}:{port}/json/new?{encoded}", method="PUT")
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +319,13 @@ class Agent:
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
-        return _ensure_chrome(self.cdp_host, self.cdp_port, self.profile)
+        return _ensure_chrome(
+            self.cdp_host,
+            self.cdp_port,
+            self.profile,
+            self._headless,
+            relay_url=self.relay_url,
+        )
 
     def _cleanup_orphan_tabs(self):
         """Close all Chrome tabs except one (headless only).
@@ -689,6 +736,7 @@ class Agent:
             return
 
         # Launch Chrome with the copied profile (visible window for sign-in/ToS)
+        startup_url = _default_new_tab_url(self.relay_url)
         cmd = [
             chrome_bin,
             f"--user-data-dir={temp_dir}",
@@ -700,7 +748,7 @@ class Agent:
             "--no-default-browser-check",
             "--disable-extensions",
             "--window-size=1280,900",
-            "about:blank",
+            startup_url,
         ]
         print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -740,6 +788,13 @@ class Agent:
                 tabs = json.loads(resp.read())
             page_tabs = [t for t in tabs if t.get("type") == "page"]
             first_tab_id = page_tabs[0]["id"] if page_tabs else ""
+            if not first_tab_id:
+                with urllib.request.urlopen(
+                    _new_tab_request("127.0.0.1", prov_port, startup_url),
+                    timeout=3,
+                ) as resp:
+                    first_tab = json.loads(resp.read())
+                first_tab_id = first_tab.get("id", "")
         except Exception:
             first_tab_id = ""
 
@@ -1248,6 +1303,7 @@ def _ensure_chrome(
     profile: str = "default",
     headless: bool = False,
     extra_chrome_args: str = "",
+    relay_url: str = DEFAULT_RELAY_URL,
 ):
     """Launch Chrome with CDP if not already running."""
     url = f"http://{host}:{port}/json/version"
@@ -1275,13 +1331,14 @@ def _ensure_chrome(
     profile_dir = os.path.join(DATA_DIR, f"chrome_{profile}")
     os.makedirs(profile_dir, exist_ok=True)
 
+    startup_url = _default_new_tab_url(relay_url)
     cmd = [
         chrome_bin,
         f"--user-data-dir={profile_dir}",
         f"--remote-debugging-port={port}",
         "--no-first-run",
         "--no-default-browser-check",
-        "about:blank",  # Ensure at least one tab opens
+        startup_url,
     ]
     if headless:
         cmd.extend([
@@ -1315,10 +1372,10 @@ def _ensure_chrome(
                         tabs = json.loads(tr.read())
                     page_tabs = [t for t in tabs if t.get("type") == "page"]
                     if not page_tabs:
-                        # Create a blank tab via CDP
-                        req = urllib.request.Request(
-                            f"http://{host}:{port}/json/new", method="PUT")
-                        urllib.request.urlopen(req, timeout=3)
+                        urllib.request.urlopen(
+                            _new_tab_request(host, port, startup_url),
+                            timeout=3,
+                        )
                     print(f"[agent] Chrome started (PID {proc.pid}, profile={profile}, port={port})")
                     return True
         except Exception:
@@ -1355,6 +1412,7 @@ def cmd_start(config: dict):
         profile,
         config.get("chrome_headless", False),
         config.get("chrome_args", ""),
+        config["relay_url"],
     ):
         print("[agent] cannot start without Chrome CDP")
         return

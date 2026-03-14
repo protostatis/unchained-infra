@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.48"
+VERSION = "0.3.49"
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"

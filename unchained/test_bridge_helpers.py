@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 # Patch DATA_DIR before importing chrome_bridge so PID/port files go to a temp dir.
@@ -64,6 +65,37 @@ class TestParsePortFromCmdline(unittest.TestCase):
 
     def test_empty_cmdline_returns_default(self):
         self.assertEqual(cb._parse_port_from_cmdline(""), cb.DEFAULT_CDP_PORT)
+
+
+class TestDefaultNewTabUrl(unittest.TestCase):
+    def test_prefers_configured_public_base(self):
+        with mock.patch.dict(
+            os.environ,
+            {"UNCHAINED_PUBLIC_BASE_URL": "https://api.unchainedsky.com"},
+            clear=False,
+        ):
+            self.assertEqual(
+                cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
+                "https://api.unchainedsky.com/tab",
+            )
+
+    def test_uses_local_web_port_for_local_relay(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
+                "http://127.0.0.1:8080/tab",
+            )
+
+    def test_maps_public_wss_relay_to_https_tab_page(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("wss://api.unchainedsky.com/tunnel"),
+                "https://api.unchainedsky.com/tab",
+            )
 
 
 def _write_file(path: str, content: str):
@@ -142,6 +174,66 @@ class TestCheckPortConflict(unittest.TestCase):
         _write_file(os.path.join(_tmpdir, ".agent_port"), "9222")
         with mock.patch.object(cb, "_process_cmdline", return_value="python chrome_bridge.py start"):
             self.assertEqual(cb._check_port_conflict(9222, "other"), "default")
+
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes = b"{}"):
+        self.status = status
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class TestEnsureChrome(unittest.TestCase):
+    def test_launches_with_branded_tab_for_local_relay(self):
+        launched = {}
+
+        def _fake_popen(cmd, stdout=None, stderr=None):
+            launched["cmd"] = cmd
+            return mock.Mock(pid=12345)
+
+        urlopen_calls = 0
+
+        def _fake_urlopen(req, timeout=0):
+            nonlocal urlopen_calls
+            urlopen_calls += 1
+            target = req.full_url if hasattr(req, "full_url") else req
+            if urlopen_calls == 1:
+                raise urllib.error.URLError("not running")
+            if target.endswith("/json/version"):
+                return _FakeResponse(200, b"{}")
+            if target.endswith("/json"):
+                body = b'[{"id":"TAB_1","type":"page","url":"http://127.0.0.1:8080/tab"}]'
+                return _FakeResponse(200, body)
+            raise AssertionError(f"Unexpected urlopen target: {target}")
+
+        with (
+            mock.patch.object(cb, "_find_chrome_binary", return_value="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            mock.patch.object(cb.subprocess, "Popen", side_effect=_fake_popen),
+            mock.patch.object(cb.time, "sleep"),
+            mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen),
+            mock.patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            os.environ.pop("UNCHAINED_API_URL", None)
+            ok = cb._ensure_chrome(
+                "127.0.0.1",
+                9222,
+                "default",
+                False,
+                "",
+                "ws://127.0.0.1:8765/tunnel",
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:8080/tab")
 
 
 if __name__ == "__main__":
