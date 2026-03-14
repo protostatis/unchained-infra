@@ -434,7 +434,7 @@ def _is_local_host(host: str | None) -> bool:
     normalized = (host or "").strip().lower()
     if not normalized:
         return True
-    if normalized in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
+    if normalized in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "api.unchainedsky.com"}:
         return True
     if normalized.endswith(".localhost"):
         return True
@@ -574,10 +574,10 @@ Examples:
         sys.exit(1)
 
     agent_id = args.agent_id or os.environ.get("CDP_AGENT_ID")
-    relay_host = args.relay_host or os.environ.get("CDP_RELAY_HOST", "127.0.0.1")
+    relay_host = args.relay_host or os.environ.get("CDP_RELAY_HOST", "api.unchainedsky.com")
     relay_port = args.relay_port
     if relay_port is None:
-        relay_port = int(os.environ.get("CDP_RELAY_PORT", "8765"))
+        relay_port = int(os.environ.get("CDP_RELAY_PORT", "443"))
 
     base_config = BenchmarkConfig(
         agent_id=agent_id,
@@ -604,6 +604,14 @@ Examples:
     )
     if not _HAS_PROGRESS_CRITIC:
         print("  (progress_critic unavailable; running without progress scoring)")
+    _llm_judge_tasks = [t["id"] for t in tasks if t.get("eval_type") == "llm_judge"]
+    if _llm_judge_tasks and not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            f"  WARNING: {len(_llm_judge_tasks)} task(s) use llm_judge but ANTHROPIC_API_KEY "
+            f"is not set — these will fall back to a lenient heuristic: "
+            f"{', '.join(_llm_judge_tasks)}",
+            file=sys.stderr,
+        )
     if not base_config.agent_id:
         print("  (no agent id supplied; tasks will reuse the default tab)")
 

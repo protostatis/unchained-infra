@@ -19,7 +19,7 @@ from benchmark.runner import (
 class TestBenchmarkRunner(unittest.TestCase):
     def test_hard_task_count(self):
         tasks = load_tasks(difficulty="hard")
-        self.assertEqual(len(tasks), 13)
+        self.assertEqual(len(tasks), 14)
 
     def test_default_tab_id_is_injected(self):
         original = {"x": 10}

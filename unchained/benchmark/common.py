@@ -72,15 +72,17 @@ class TaskResult:
         tool_input: dict[str, Any] | None,
         *,
         call_signature: str | None = None,
+        output_preview: str | None = None,
     ):
         self.tool_calls += 1
-        self.tool_log.append(
-            {
-                "turn": self.tool_calls,
-                "tool": tool_name,
-                "input": json.dumps(tool_input or {}, ensure_ascii=False)[:400],
-            }
-        )
+        entry = {
+            "turn": self.tool_calls,
+            "tool": tool_name,
+            "input": json.dumps(tool_input or {}, ensure_ascii=False)[:400],
+        }
+        if output_preview is not None:
+            entry["output_preview"] = output_preview[:600]
+        self.tool_log.append(entry)
         sig = call_signature or f"{tool_name}:{json.dumps(tool_input or {}, sort_keys=True)}"
         self._recent_signatures.append(sig)
         if len(self._recent_signatures) > 6:
