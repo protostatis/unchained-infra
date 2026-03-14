@@ -76,7 +76,61 @@ screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
 - Wait at least 1 second between interactive actions (anti-bot protection).
 - If an action fails silently (DDM shows same page), try a different approach.
 - On the FIRST page of every new domain, run `intel_probe` right after ddm. If js_global >50%, use intel_stores → intel_find_paths → js_eval. If host_attrs >50%, use intel_extract. If data_testid >40%, use intel_extract with data_testid strategy. Otherwise stick with DDM. Skip probe on subsequent pages of the same domain.
-- Be concise — report findings, not process."""
+- Be concise — report findings, not process.
+
+## DDM vs JS Decision Rules
+
+| Task | Use DDM | Use JS |
+|------|---------|--------|
+| What's on this page? | `ddm` (default flags) | - |
+| Where is button/input X? | `ddm` (default flags) | - |
+| Get href for a link | `ddm` with "--at x,y" | - |
+| Read text at a position | `ddm` with "--at x,y" | - |
+| Read full page text | `ddm` with "--text" | - |
+| Find specific text | `ddm` with "--text --find keyword" | - |
+| Get all prices/titles/items | - | `js_eval` querySelectorAll().map() |
+| Fill a form field | `ddm` "--at" to find IDs | `js_eval` .value = |
+| Click a simple button | DDM coords → click tool | - |
+| Click SPA widgets | DDM to find it | `js_eval` .click() |
+| Read a table | - | `js_eval` querySelectorAll('th, td') |
+| Interact with web components | - | `js_eval` shadow DOM |
+| Verify action worked | `ddm` (default flags) | - |
+| Extract structured data | - | `intel_probe` then `js_eval` |
+
+## Per-Site-Type Quick Reference
+
+| Site Type | Best Approach |
+|-----------|---------------|
+| Link-heavy | DDM-only |
+| E-commerce | DDM orient + `intel_probe` + `js_eval` |
+| SPA with data store | `intel_stores` → `intel_find_paths` → `js_eval` |
+| SPA without data store | DDM for forms, `js_eval` for widgets |
+| Text-heavy | `ddm` with "--text --max 5000" |
+| Simple pages | Single `ddm` (default flags) |
+| data-testid rich | `intel_extract` with data_testid strategy |
+| Property / real estate | `ddm` with "--text --max 8000" |
+
+## Key Gotchas
+- SPA widgets such as date pickers often need `js_eval` with .click()
+- DDM is viewport-bound — scroll and remap below the fold
+- Cookie or login walls can hide the useful page text
+- ASP.NET postback forms may need `__doPostBack()`
+- CAPTCHAs often appear after the first submission
+- PDFs inside Chrome usually need a non-DDM path
+- Complex pages can hit the 50-element interactive cap
+
+## Page Intelligence — 8 Strategies
+
+| Strategy | Trigger signals | Example site |
+|----------|----------------|-------------|
+| `innerText` | No special signals | HN, Wikipedia, Craigslist |
+| `host_attrs` | shadow>50 + rich attrs | Reddit |
+| `js_global` | Known global >10KB | YouTube, Slickdeals |
+| `react_fiber` | React fiber on #root | React SPAs |
+| `data_testid` | testids >20 | Weather.com, GitHub |
+| `heading_hier` | iframes >2, news/media | CNN |
+| `img_alt` | Many images, no custom elements | Amazon |
+| `shadow_pierce` | Shadow roots, no rich attrs | Web components |"""
 
 # ---------------------------------------------------------------------------
 # Tool definitions for Claude API
