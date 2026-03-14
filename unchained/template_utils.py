@@ -501,11 +501,7 @@ _GSI_SAFARI_FIX_SNIPPET = r"""<script data-uc-gsi-safari-fix>
   if(document.getElementById('uc-gsi-safari-fix')) return;
   var style = document.createElement('style');
   style.id = 'uc-gsi-safari-fix';
-  style.textContent = [
-    '#login .g_id_signin{position:relative;display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;border-radius:12px;background:#0a0c0f;box-shadow:inset 4px 0 0 #0a0c0f,inset -7px 0 0 #0a0c0f,inset 0 2px 0 #0a0c0f,inset 0 -2px 0 #0a0c0f;}',
-    '#login .g_id_signin > div,#login .g_id_signin > div > div{position:relative !important;z-index:1 !important;width:min(100%,320px) !important;max-width:320px !important;border-radius:12px !important;background:transparent !important;border:0 !important;box-shadow:none !important;}',
-    '#login .g_id_signin iframe{position:relative !important;z-index:1 !important;display:block !important;width:min(100%,320px) !important;max-width:320px !important;margin:0 !important;border:0 !important;box-shadow:none !important;background:transparent !important;opacity:1 !important;}'
-  ].join('');
+  style.textContent = '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;}';
   if(document.head) document.head.appendChild(style);
 })();
 </script>"""
