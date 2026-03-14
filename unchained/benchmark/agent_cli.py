@@ -163,6 +163,9 @@ async def _run_task_claude(
         _build_system_prompt(),
         "--tools",
         "Bash",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--strict-mcp-config",
     ]
 
     start = time.monotonic()
@@ -201,18 +204,6 @@ async def _run_task_claude(
                 if etype == "assistant":
                     msg = event.get("message", {}) or {}
                     for block in msg.get("content", []):
-                        if block.get("type") == "tool_result":
-                            content = block.get("content", "")
-                            if isinstance(content, list):
-                                content = " ".join(
-                                    str(b.get("text", "")) for b in content if isinstance(b, dict)
-                                )
-                            preview = str(content)[:600] if content else None
-                            use_id = block.get("tool_use_id", "")
-                            log_idx = _tool_use_id_to_log_idx.get(use_id)
-                            if preview and log_idx is not None and log_idx < len(result.tool_log):
-                                result.tool_log[log_idx].setdefault("output_preview", preview)
-                            continue
                         if block.get("type") != "tool_use":
                             continue
                         tool_input = block.get("input", {}) or {}
@@ -232,6 +223,23 @@ async def _run_task_claude(
                         use_id = block.get("id", "")
                         if use_id:
                             _tool_use_id_to_log_idx[use_id] = len(result.tool_log) - 1
+                elif etype == "user":
+                    # Tool results arrive in user events (chat_agent_cli.py:1314)
+                    msg = event.get("message", {}) or {}
+                    for block in msg.get("content", []):
+                        if block.get("type") != "tool_result":
+                            continue
+                        content = block.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                b.get("text", "") for b in content
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        preview = str(content)[:600] if content else None
+                        use_id = block.get("tool_use_id", "")
+                        log_idx = _tool_use_id_to_log_idx.get(use_id)
+                        if preview and log_idx is not None and log_idx < len(result.tool_log):
+                            result.tool_log[log_idx].setdefault("output_preview", preview)
                 elif etype == "usage":
                     result.prompt_tokens += int(event.get("input_tokens", 0) or 0)
                     result.completion_tokens += int(event.get("output_tokens", 0) or 0)
@@ -370,7 +378,7 @@ async def _run_task_codex(
                         if text_bits:
                             response = "\n".join(text_bits).strip()
                     elif item_type in ("command_execution", "web_search_call"):
-                        output = str(item.get("output", "") or "")[:600]
+                        output = str(item.get("aggregated_output") or item.get("output") or "")[:600]
                         item_id = str(item.get("id", "") or "")
                         log_idx = _item_id_to_log_idx.get(item_id)
                         if output and log_idx is not None and log_idx < len(result.tool_log):
