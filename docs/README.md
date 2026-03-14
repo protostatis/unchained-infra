@@ -20,6 +20,8 @@ live at the repo root.
 - [roadmap.md](./roadmap.md): product and platform roadmap
 - [template-extraction-notes.md](./template-extraction-notes.md): current notes on
   reducing inline template duplication in `web.py`
+- [you-navigate-demo.md](./you-navigate-demo.md): local smoke test and guest-profile
+  setup for the "Unchained drives. You navigate." demo
 
 ## Specialized docs
 
