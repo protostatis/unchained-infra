@@ -53,6 +53,7 @@ directly since Chrome always runs on the same machine.
 Usage (called by Claude via Bash):
     python cdp_tool.py ddm --llm-2pass --cols 60
     python cdp_tool.py navigate https://example.com
+    python cdp_tool.py pdf
     python cdp_tool.py tabs
     python cdp_tool.py new-tab https://example.com
     python cdp_tool.py close-tab <tab_id>
@@ -109,7 +110,7 @@ def _chrome_tabs():
 def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
-        print("Commands: ddm, navigate, click, type, js, screenshot, intel, tabs, new-tab, close-tab")
+        print("Commands: ddm, navigate, click, type, js, screenshot, intel, pdf, tabs, new-tab, close-tab")
         print("Use --tab <id> to target a specific tab (default: auto = first tab)")
         sys.exit(1)
 
@@ -203,6 +204,8 @@ def main():
             result = cmd("screenshot", tab_id=tab_id)
         elif command == "intel":
             result = cmd("intel", tab_id=tab_id, flags=args or ["--probe"])
+        elif command == "pdf":
+            result = cmd("ddm", tab_id=tab_id, flags=["--pdf"] + args)
         else:
             print(f"Unknown command: {command}", file=sys.stderr)
             sys.exit(1)
