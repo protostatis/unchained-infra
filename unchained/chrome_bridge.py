@@ -81,30 +81,59 @@ VERSION = "0.1.0"
 
 def _configured_public_base_url() -> str:
     """Return an explicit public base URL override, if configured."""
-    base_url = (
-        os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
-        or os.environ.get("UNCHAINED_API_URL", "").strip()
-    )
+    # UNCHAINED_API_URL controls HTTP calls from the agent; do not reuse it as
+    # a browser navigation target. Startup tabs should only honor the dedicated
+    # public-base override or relay-derived allowlisted hosts.
+    base_url = os.environ.get("UNCHAINED_PUBLIC_BASE_URL", "").strip()
     if not base_url:
         return ""
     parsed = urllib.parse.urlparse(base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    hostname = (parsed.hostname or "").strip().lower()
+    if parsed.scheme not in {"http", "https"} or not hostname:
         logging.warning(
             "[agent] ignoring invalid public base URL %r; using relay-derived defaults",
             base_url,
         )
         return ""
-    netloc = _format_url_host(parsed.hostname)
+    if parsed.username or parsed.password:
+        logging.warning(
+            "[agent] ignoring public base URL with credentials %r; using relay-derived defaults",
+            base_url,
+        )
+        return ""
+    if _is_local_hostname(hostname):
+        scheme = parsed.scheme
+    elif _is_trusted_public_hostname(hostname):
+        if parsed.scheme != "https":
+            logging.warning(
+                "[agent] ignoring non-https public base URL %r; using relay-derived defaults",
+                base_url,
+            )
+            return ""
+        scheme = "https"
+    else:
+        logging.warning(
+            "[agent] ignoring untrusted public base URL host %r; using relay-derived defaults",
+            hostname,
+        )
+        return ""
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        logging.warning(
+            "[agent] stripping path/query/fragment from configured public base URL %r",
+            base_url,
+        )
+    netloc = _format_url_host(hostname)
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
-    path = parsed.path.rstrip("/")
-    return urllib.parse.urlunsplit((parsed.scheme, netloc, path, "", ""))
+    return urllib.parse.urlunsplit((scheme, netloc, "", "", ""))
 
 
 def _format_url_host(hostname: str) -> str:
     """Format a hostname for use in an absolute URL."""
     hostname = (hostname or "").strip()
-    if ":" in hostname and not hostname.startswith("["):
+    if hostname.startswith("[") and hostname.endswith("]"):
+        hostname = hostname[1:-1].strip()
+    if ":" in hostname:
         return f"[{hostname}]"
     return hostname
 
@@ -221,7 +250,27 @@ def _first_page_tab(host: str, port: int, startup_url: str) -> dict:
         retry_page_tabs = [t for t in retry_tabs if t.get("type") == "page"]
         if retry_page_tabs:
             return retry_page_tabs[0]
-        raise
+        raise RuntimeError("Chrome created a startup tab but it could not be discovered") from e
+
+
+def _wait_for_process_exit(proc, timeout_s: float) -> bool:
+    """Wait for a subprocess to exit without relying on a blocking wait when poll exists."""
+    poll = getattr(proc, "poll", None)
+    if callable(poll):
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                if poll() is not None:
+                    return True
+            except Exception:
+                break
+            time.sleep(0.05)
+        return False
+    try:
+        proc.wait(timeout=timeout_s)
+        return True
+    except Exception:
+        return False
 
 
 def _terminate_process(proc, label: str, prefix: str = "[agent]") -> bool:
@@ -230,18 +279,21 @@ def _terminate_process(proc, label: str, prefix: str = "[agent]") -> bool:
         return True
     try:
         proc.terminate()
-        proc.wait(timeout=5)
-        print(f"{prefix} {label} terminated")
-        return True
+        if _wait_for_process_exit(proc, 5):
+            print(f"{prefix} {label} terminated")
+            return True
     except Exception:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
+        pass
+    try:
+        proc.kill()
+        if _wait_for_process_exit(proc, 1):
             print(f"{prefix} {label} killed")
             return True
-        except Exception as e:
-            print(f"{prefix} Warning: failed to fully stop {label}: {e}")
-            return False
+    except Exception as e:
+        print(f"{prefix} Warning: failed to fully stop {label}: {e}")
+        return False
+    print(f"{prefix} Warning: failed to fully stop {label}")
+    return False
 
 
 # ---------------------------------------------------------------------------

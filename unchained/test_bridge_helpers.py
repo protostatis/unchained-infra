@@ -131,6 +131,34 @@ class TestDefaultNewTabUrl(unittest.TestCase):
                 "http://127.0.0.1:8088/tab",
             )
 
+    def test_ignores_api_url_for_browser_navigation(self):
+        with mock.patch.dict(
+            os.environ,
+            {"UNCHAINED_API_URL": "https://evil.example.com/private?token=secret", "WEB_PORT": "8088"},
+            clear=False,
+        ):
+            os.environ.pop("UNCHAINED_PUBLIC_BASE_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
+                "http://127.0.0.1:8088/tab",
+            )
+
+    def test_strips_path_query_and_fragment_from_configured_public_base(self):
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"UNCHAINED_PUBLIC_BASE_URL": "https://api.unchainedsky.com/custom/path?x=1#frag"},
+                clear=False,
+            ),
+            mock.patch.object(cb.logging, "warning") as mock_warning,
+        ):
+            os.environ.pop("UNCHAINED_API_URL", None)
+            self.assertEqual(
+                cb._default_new_tab_url("ws://127.0.0.1:8765/tunnel"),
+                "https://api.unchainedsky.com/tab",
+            )
+        mock_warning.assert_called_once()
+
 
 class TestWebPort(unittest.TestCase):
     def test_invalid_web_port_warns_and_falls_back(self):
@@ -148,6 +176,13 @@ class TestNewTabRequest(unittest.TestCase):
         self.assertEqual(
             req.full_url,
             "http://[::1]:9222/json/new?https%3A%2F%2Fexample.com%2Fa%3Fx%3D1%26y%3D2%23frag",
+        )
+
+    def test_preserves_already_bracketed_ipv6_hosts(self):
+        req = cb._new_tab_request("[::1]", 9222, "https://example.com/")
+        self.assertEqual(
+            req.full_url,
+            "http://[::1]:9222/json/new?https%3A%2F%2Fexample.com%2F",
         )
 
 
@@ -266,6 +301,24 @@ class _TrackedProc:
 
     def kill(self):
         self.kill_calls += 1
+
+
+class _PollingProc:
+    def __init__(self):
+        self.pid = 54321
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self._exited = False
+
+    def terminate(self):
+        self.terminate_calls += 1
+
+    def kill(self):
+        self.kill_calls += 1
+        self._exited = True
+
+    def poll(self):
+        return 0 if self._exited else None
 
 
 class TestEnsureChrome(unittest.TestCase):
@@ -405,6 +458,28 @@ class TestProvisionCleanup(unittest.TestCase):
         self.assertTrue(any("Provision Chrome killed" in str(call) for call in mock_print.call_args_list))
 
 
+class TestTerminateProcess(unittest.TestCase):
+    def test_kill_path_uses_poll_based_exit_confirmation(self):
+        proc = _PollingProc()
+        tick = {"now": 0.0}
+
+        def _fake_time():
+            tick["now"] += 0.2
+            return tick["now"]
+
+        with (
+            mock.patch.object(cb.time, "time", side_effect=_fake_time),
+            mock.patch.object(cb.time, "sleep"),
+            mock.patch("builtins.print") as mock_print,
+        ):
+            ok = cb._terminate_process(proc, "Chrome")
+
+        self.assertTrue(ok)
+        self.assertEqual(proc.terminate_calls, 1)
+        self.assertEqual(proc.kill_calls, 1)
+        self.assertTrue(any("Chrome killed" in str(call) for call in mock_print.call_args_list))
+
+
 class TestFirstPageTab(unittest.TestCase):
     def test_raises_when_tab_creation_fails(self):
         def _fake_urlopen(req, timeout=0):
@@ -441,6 +516,30 @@ class TestFirstPageTab(unittest.TestCase):
             tab = cb._first_page_tab("127.0.0.1", 9222, "http://127.0.0.1:8080/tab")
 
         self.assertEqual(tab["id"], "TAB_2")
+        mock_warning.assert_called_once()
+
+    def test_raises_runtime_error_when_created_tab_cannot_be_discovered(self):
+        calls = []
+
+        def _fake_urlopen(req, timeout=0):
+            del timeout
+            target = req.full_url if hasattr(req, "full_url") else req
+            calls.append(target)
+            if target.endswith("/json") and calls.count(target) == 1:
+                return _FakeResponse(200, b"[]")
+            if "/json/new?" in target:
+                return _FakeResponse(200, b"{not-json")
+            if target.endswith("/json") and calls.count(target) == 2:
+                return _FakeResponse(200, b"[]")
+            raise AssertionError(f"Unexpected urlopen target: {target}")
+
+        with (
+            mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen),
+            mock.patch.object(cb.logging, "warning") as mock_warning,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "could not be discovered"):
+                cb._first_page_tab("127.0.0.1", 9222, "http://127.0.0.1:8080/tab")
+
         mock_warning.assert_called_once()
 
 
