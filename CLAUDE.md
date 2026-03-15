@@ -57,6 +57,14 @@ ssh -i ~/.ssh/<deploy-key>.pem <deploy-user>@<prod-host> \
 - keep internal runbooks in the private workspace docs instead of this repo
 - treat `unchained/CLAUDE.md` as a public stub only
 
+## Analytics DB
+
+- Web analytics uses a dedicated `analytics.db` store, not `auth.db`
+- If `UNCHAINED_ANALYTICS_DB_PATH` is unset, the web app defaults to a sibling
+  `analytics.db` next to `UNCHAINED_DB_PATH`
+- Treat any `analytics_*` tables still present in `auth.db` as deprecated legacy
+  data; future analytics reviews should query `analytics.db`
+
 ## Agent Versioning
 
 When changing `chat_agent_cli.py`, `agent_package.py`, or any file in

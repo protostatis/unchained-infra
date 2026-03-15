@@ -68,7 +68,7 @@ _auth = Auth()
 
 
 def _resolve_analytics_db_path(auth_db_path: str) -> str:
-    """Use a dedicated analytics DB by default to isolate auth DB contention."""
+    """Use dedicated analytics.db; auth.db analytics tables are legacy only."""
     configured = os.environ.get("UNCHAINED_ANALYTICS_DB_PATH", "").strip()
     if configured:
         return configured
