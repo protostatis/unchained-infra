@@ -10,8 +10,6 @@ Use the public sources instead:
 - `docs/architecture.md` for public architecture notes
 - `uv run python cdp_tool.py --help` for packaged agent commands
 - `uv run python tools/oss_guard/check_private_imports.py` for open-core checks
-- `analytics.db` is the dedicated analytics store; `auth.db` analytics tables are
-  deprecated legacy data
 
 Detailed operator guidance lives only in the private workspace and the private
 core repo.
