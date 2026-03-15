@@ -144,7 +144,7 @@ _DEMO_PROMPT_LIMIT = 4
 # First-look guest flow — anonymous browsing before sign-up
 _FIRST_LOOK_GUEST_PROMPT_LIMIT = max(
     1,
-    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "2")),
+    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "5")),
 )
 _FIRST_LOOK_GUEST_COOKIE_MAX_AGE = 60 * 24 * 3600
 _FIRST_LOOK_GUEST_ID_COOKIE = "uc_fl_guest"
@@ -372,7 +372,7 @@ def _analytics_gate_type_from_request(request: web.Request | None) -> str:
     return _analytics_header_value(request, _ANALYTICS_GATE_TYPE_HEADER, 32)
 
 
-def _track_page_view(request: web.Request, auth_info: dict | None = None):
+def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: dict | None = None):
     route = request.path
     if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
         return
@@ -395,6 +395,7 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None):
         source="web",
         status_code=200,
         dedupe_ttl_s=5.0,
+        meta=meta,
     )
 
 
