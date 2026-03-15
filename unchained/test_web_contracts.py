@@ -172,7 +172,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("data.launch_ready", html)
         self.assertIn("data.missing.join(', ')", html)
         self.assertIn("safeLocalUrl", html)
-        self.assertIn("('launch_ready' in (data||{})) ? Boolean(data.launch_ready) : true", html)
+        self.assertIn("'launch_ready' in (data||{})", html)
+        self.assertIn("Boolean(data.launch_ready)", html)
+        self.assertIn("FALLBACK_LOCAL_URL", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
