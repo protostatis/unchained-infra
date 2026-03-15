@@ -204,6 +204,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("if(handshakeInFlight) return;", html)
         self.assertIn("Approval tab could not be opened.", html)
         self.assertIn("window.addEventListener('beforeunload'", html)
+        self.assertIn("credentials:'omit'", html)
+        self.assertIn("cache:'no-store'", html)
+        self.assertIn("referrerPolicy:'no-referrer'", html)
+        self.assertIn("about '+remainingSeconds+'s left", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
