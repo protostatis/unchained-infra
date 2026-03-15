@@ -162,7 +162,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
-    def test_research_desk_page_renders_phase2_status_contract(self):
+    def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
         html = _build_research_desk_html()
@@ -186,6 +186,32 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("visibilitychange", html)
         self.assertIn("requestId!==latestDeskRequestId", html)
         self.assertIn("opts.silent&&deskWasDetected", html)
+        self.assertIn('id="connect-local-desk"', html)
+        self.assertIn('id="create-local-mission"', html)
+        self.assertIn("latestDeskStatus?.handshake?.start_url", html)
+        self.assertIn("latestDeskStatus?.handshake?.actions?.mission_create_url", html)
+        self.assertIn("scheduleHandshakePoll(", html)
+        self.assertIn("Approve the request in the local desk tab", html)
+        self.assertIn("safeOptionalLocalUrl", html)
+        self.assertIn("sanitizeBearerToken", html)
+        self.assertIn("MAX_HANDSHAKE_POLL_ATTEMPTS = 40", html)
+        self.assertIn("new URL(statusUrl)", html)
+        self.assertIn("searchParams.set('request_id', requestId)", html)
+        self.assertIn("new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString()", html)
+        self.assertIn("'Authorization':'Bearer '+safeToken", html)
+        self.assertIn("let handshakeInFlight = false", html)
+        self.assertIn("AbortSignal.timeout(5000)", html)
+        self.assertIn("if(handshakeInFlight) return;", html)
+        self.assertIn("Approval tab could not be opened.", html)
+        self.assertIn("window.addEventListener('beforeunload'", html)
+        self.assertIn("credentials:'omit'", html)
+        self.assertIn("cache:'no-store'", html)
+        self.assertIn("referrerPolicy:'no-referrer'", html)
+        self.assertIn("about '+remainingSeconds+'s left", html)
+        self.assertIn("replace(/[^!-~]/g,'')", html)
+        self.assertIn("if(handshakeInFlight&&handshakePollTimer)", html)
+        self.assertIn("Local desk did not return a request ID.", html)
+        self.assertIn("const approvalWindow=window.open(", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
