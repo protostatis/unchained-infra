@@ -195,6 +195,8 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("safeOptionalLocalUrl", html)
         self.assertIn("sanitizeBearerToken", html)
         self.assertIn("MAX_HANDSHAKE_POLL_ATTEMPTS = 40", html)
+        self.assertIn("MISSION_WATCH_POLL_INTERVAL_MS = 2500", html)
+        self.assertIn("FIRST_LOOK_PROMPT_KEY", html)
         self.assertIn("new URL(statusUrl)", html)
         self.assertIn("searchParams.set('request_id', requestId)", html)
         self.assertIn("new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString()", html)
@@ -212,6 +214,15 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("if(handshakeInFlight&&handshakePollTimer)", html)
         self.assertIn("Local desk did not return a request ID.", html)
         self.assertIn("const approvalWindow=window.open(", html)
+        self.assertIn('id="mission-watch"', html)
+        self.assertIn("scheduleMissionWatch(statusUrl)", html)
+        self.assertIn("source_route:'/first-look'", html)
+
+    def test_first_look_template_renders_research_desk_handoff_markers(self):
+        self.assertIn("continueInResearchDesk()", web.HEADLESS_DEMO_HTML)
+        self.assertIn("FIRST_LOOK_PROMPT_KEY", web.HEADLESS_DEMO_HTML)
+        self.assertIn("rememberFirstLookPrompt(msg)", web.HEADLESS_DEMO_HTML)
+        self.assertIn("window.location.href = '/labs/research-desk' + suffix", web.HEADLESS_DEMO_HTML)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
