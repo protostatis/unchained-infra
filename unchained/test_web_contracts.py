@@ -199,6 +199,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("searchParams.set('request_id', requestId)", html)
         self.assertIn("new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString()", html)
         self.assertIn("'Authorization':'Bearer '+safeToken", html)
+        self.assertIn("let handshakeInFlight = false", html)
+        self.assertIn("AbortSignal.timeout(5000)", html)
+        self.assertIn("if(handshakeInFlight) return;", html)
+        self.assertIn("Approval tab could not be opened.", html)
+        self.assertIn("window.addEventListener('beforeunload'", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
