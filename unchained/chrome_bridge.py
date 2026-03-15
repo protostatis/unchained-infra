@@ -497,6 +497,9 @@ class Agent:
         self._last_pong = 0.0
         # Provision Chrome: temporary Chromes keyed by slot (4-char hex)
         self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, temp_dir, profile_dir_name}
+        # Tab leasing: prevent multiple channels from auto-resolving to the same tab
+        self._tab_leases: dict[int, str] = {}   # channel → Chrome tab ID
+        self._leased_tabs: set[str] = set()     # Chrome tab IDs currently leased
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
@@ -735,12 +738,12 @@ class Agent:
         channel = msg.get("channel", 0)
         tab_id = msg.get("tab_id", "")
         try:
-            ws_url = self._get_tab_ws_url(tab_id)
+            ws_url = self._get_tab_ws_url(tab_id, channel)
         except Exception:
             # Chrome may have closed — try to relaunch
             if self._relaunch_chrome():
                 try:
-                    ws_url = self._get_tab_ws_url(tab_id)
+                    ws_url = self._get_tab_ws_url(tab_id, channel)
                 except Exception as e2:
                     await self.ws.send(json.dumps({
                         "type": "ws_error",
@@ -768,6 +771,13 @@ class Agent:
                 "channel": channel,
                 "ws_url": ws_url,
             }))
+            # Record tab lease for auto-resolution isolation
+            if tab_id == "auto" or (tab_id.startswith("prov-") and
+                                     _parse_prov_tab_id(tab_id)[1] == "auto"):
+                resolved_tab_id = self._extract_tab_id_from_ws_url(ws_url)
+                if resolved_tab_id:
+                    self._tab_leases[channel] = resolved_tab_id
+                    self._leased_tabs.add(resolved_tab_id)
         except Exception as e:
             await self.ws.send(json.dumps({
                 "type": "ws_error",
@@ -775,11 +785,21 @@ class Agent:
                 "error": str(e),
             }))
 
-    def _get_tab_ws_url(self, tab_id: str) -> str:
+    @staticmethod
+    def _extract_tab_id_from_ws_url(ws_url: str) -> str:
+        """Extract Chrome tab ID from ws://host:port/devtools/page/<TAB_ID>."""
+        parts = ws_url.rsplit("/", 1)
+        return parts[-1] if len(parts) == 2 else ""
+
+    def _get_tab_ws_url(self, tab_id: str, channel: int = -1) -> str:
         """Look up a tab's WebSocket URL from local Chrome.
 
         If tab_id starts with 'prov-', route to the provision Chrome instead.
         New format: prov-{slot}-{real_id}  Old format: prov-{real_id}
+
+        When channel >= 0 and tab_id is 'auto', tab leasing prevents multiple
+        channels from resolving to the same tab.  A channel that already holds
+        a lease reuses its tab; tabs leased by *other* channels are skipped.
         """
         # Provision Chrome routing
         if tab_id.startswith("prov-") and self._prov_chromes:
@@ -798,9 +818,22 @@ class Agent:
                 tabs = json.loads(resp.read())
             page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
             if real_id == "auto":
+                # Reuse existing lease for this channel
+                if channel >= 0 and channel in self._tab_leases:
+                    leased_id = self._tab_leases[channel]
+                    leased_match = [t for t in page_tabs if t["id"] == leased_id]
+                    if leased_match:
+                        return leased_match[0]["webSocketDebuggerUrl"]
                 # Auto prefers page tabs; fall back to popup only if no pages
                 pages_only = [t for t in tabs if t.get("type") == "page"]
-                auto_tab = pages_only[0] if pages_only else (page_tabs[0] if page_tabs else None)
+                # Filter out tabs leased by other channels
+                if channel >= 0:
+                    available = [t for t in pages_only if t["id"] not in self._leased_tabs]
+                    available_all = [t for t in page_tabs if t["id"] not in self._leased_tabs]
+                else:
+                    available = pages_only
+                    available_all = page_tabs
+                auto_tab = available[0] if available else (available_all[0] if available_all else None)
                 if auto_tab:
                     return auto_tab["webSocketDebuggerUrl"]
             matches = [t for t in page_tabs if t["id"].startswith(real_id)]
@@ -817,19 +850,41 @@ class Agent:
             tabs = json.loads(resp.read())
         page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
         pages_only = [t for t in tabs if t.get("type") == "page"]
-        if tab_id == "auto" and not page_tabs:
-            # Chrome is running but has no page tabs — create one
+        if tab_id == "auto":
+            # Reuse existing lease for this channel
+            if channel >= 0 and channel in self._tab_leases:
+                leased_id = self._tab_leases[channel]
+                leased_match = [t for t in page_tabs if t["id"] == leased_id]
+                if leased_match:
+                    return leased_match[0]["webSocketDebuggerUrl"]
+            if not page_tabs:
+                # Chrome is running but has no page tabs — create one
+                new_req = urllib.request.Request(
+                    f"http://{self.cdp_host}:{self.cdp_port}/json/new",
+                    method="PUT")
+                with urllib.request.urlopen(new_req, timeout=3) as resp:
+                    new_tab = json.loads(resp.read())
+                print(f"[agent] auto-created tab (Chrome had 0 page tabs)")
+                return new_tab["webSocketDebuggerUrl"]
+            # Filter out tabs leased by other channels
+            if channel >= 0:
+                available = [t for t in pages_only if t["id"] not in self._leased_tabs]
+                available_all = [t for t in page_tabs if t["id"] not in self._leased_tabs]
+            else:
+                available = pages_only
+                available_all = page_tabs
+            if available:
+                return available[0]["webSocketDebuggerUrl"]
+            if available_all:
+                return available_all[0]["webSocketDebuggerUrl"]
+            # All tabs leased by other channels — create a new one
             new_req = urllib.request.Request(
                 f"http://{self.cdp_host}:{self.cdp_port}/json/new",
                 method="PUT")
             with urllib.request.urlopen(new_req, timeout=3) as resp:
                 new_tab = json.loads(resp.read())
-            print(f"[agent] auto-created tab (Chrome had 0 page tabs)")
+            print(f"[agent] auto-created tab (all existing tabs leased)")
             return new_tab["webSocketDebuggerUrl"]
-        if tab_id == "auto":
-            # Prefer page tabs; fall back to popup only if no pages exist
-            auto_tab = pages_only[0] if pages_only else page_tabs[0]
-            return auto_tab["webSocketDebuggerUrl"]
         matches = [t for t in page_tabs if t["id"].startswith(tab_id)]
         if len(matches) == 1:
             return matches[0]["webSocketDebuggerUrl"]
@@ -1153,6 +1208,10 @@ class Agent:
         ws = self.channels.pop(channel, None)
         if ws:
             await ws.close()
+        # Release tab lease
+        leased_tab_id = self._tab_leases.pop(channel, None)
+        if leased_tab_id:
+            self._leased_tabs.discard(leased_tab_id)
 
     async def _close_all_channels(self):
         """Close all open channels."""
