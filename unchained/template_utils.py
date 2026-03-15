@@ -9,6 +9,7 @@ import os
 _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 (function(){
   var ROUTE = window.location.pathname || '';
+  var _ref = (function(){ try{ return new URLSearchParams(location.search).get('ref') || ''; }catch(_e){ return ''; } })();
   var STORAGE_KEY = 'uc_analytics_session_id';
   var SESSION_HEADER = 'X-Unchained-Analytics-Session';
   var PAGE_VIEW_HEADER = 'X-Unchained-Analytics-Page-View';
@@ -143,6 +144,7 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
     var options = (opts && typeof opts === 'object') ? opts : {};
     EVENT_SEQ += 1;
     var meta = (options.meta && typeof options.meta === 'object') ? options.meta : {};
+    if(_ref && !meta.ref) meta.ref = _ref;
     return {
       event: eventName,
       event_id: 'ev-' + Date.now().toString(36) + '-' + EVENT_SEQ + '-' + randHex(5),

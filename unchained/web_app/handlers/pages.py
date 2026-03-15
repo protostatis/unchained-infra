@@ -282,7 +282,8 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
 async def handle_first_look_page(request: web.Request) -> web.Response:
     """Serve the headless first-look chat HTML page."""
     core = _core()
-    core._track_page_view(request)
+    ref = request.query.get('ref', '')
+    core._track_page_view(request, meta={'ref': ref} if ref else None)
     html = core.inject_google_client_id(core.HEADLESS_DEMO_HTML, core.GOOGLE_CLIENT_ID)
     resp = web.Response(text=html, content_type="text/html")
     _, guest_id, quota_count = core._first_look_guest_auth(request)
