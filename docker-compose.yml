@@ -57,6 +57,7 @@ services:
       - relay_data:/data
     environment:
       - UNCHAINED_DB_PATH=/data/auth.db
+      - UNCHAINED_ANALYTICS_DB_PATH=/data/analytics.db
       - RELAY_INTERNAL_URL=ws://relay:8765
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}

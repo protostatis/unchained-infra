@@ -27,7 +27,8 @@
                           │   │:8765│   │:8766 │    │ :8080  │                          │
                           │   └──┬──┘   └──────┘    └────┬───┘                          │
                           │      │                       │                              │
-                          │      │  shared volume: relay_data (/data/auth.db)           │
+                          │      │  shared volume: relay_data                            │
+                          │      │    (/data/auth.db, /data/analytics.db)              │
                           └──────┼───────────────────────┼──────────────────────────────┘
                                  │ WSS                   │ SSE/HTTP
                                  │                       │
@@ -59,7 +60,9 @@
 | **Web** | 8080 | Chat UI, Google OAuth login, SSE bridge to agents, download endpoint for agent package |
 | **Private Core** | 8770 | Proprietary execution service for CDP/DDM/intel operations (`/core/execute`) |
 
-All services share a `relay_data` volume containing `auth.db` (SQLite API key store).
+All services share a `relay_data` volume containing `auth.db` for auth/API-key
+state and `analytics.db` for web analytics and funnel data. Treat any
+`analytics_*` tables still present in `auth.db` as deprecated legacy state.
 
 ## Data Flow: Chat Message Lifecycle
 
@@ -152,6 +155,7 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `JWT_SECRET` | web | HMAC key for JWT signing |
 | `ALLOWED_EMAILS` | web | Comma-separated whitelist |
 | `UNCHAINED_DB_PATH` | all | Path to auth.db (default: `/data/auth.db`) |
+| `UNCHAINED_ANALYTICS_DB_PATH` | web | Path to dedicated analytics.db (default: sibling of `UNCHAINED_DB_PATH`, usually `/data/analytics.db`) |
 | `RELAY_INTERNAL_URL` | mcp, web | Internal WebSocket URL to relay |
 | `PRIVATE_CORE_URL` | relay, mcp, web, trial-agent | URL for private-core service |
 | `PRIVATE_CORE_TOKEN` | relay, mcp, web, trial-agent, private-core | Bearer token for public->private service auth |
