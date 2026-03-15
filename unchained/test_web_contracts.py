@@ -179,6 +179,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("POLL_INTERVAL_MS = 3000", html)
         self.assertIn("scheduleDeskProbe()", html)
         self.assertIn("renderMissingDeskState()", html)
+        self.assertIn("let deskLoadInFlight = false", html)
+        self.assertIn("document.hidden", html)
+        self.assertIn("visibilitychange", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
