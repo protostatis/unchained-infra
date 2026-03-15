@@ -143,7 +143,7 @@ _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
     if(!eventName) return null;
     var options = (opts && typeof opts === 'object') ? opts : {};
     EVENT_SEQ += 1;
-    var meta = (options.meta && typeof options.meta === 'object') ? options.meta : {};
+    var meta = (options.meta && typeof options.meta === 'object') ? Object.assign({}, options.meta) : {};
     if(_ref && !meta.ref) meta.ref = _ref;
     return {
       event: eventName,
