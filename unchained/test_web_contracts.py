@@ -162,7 +162,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
-    def test_research_desk_page_renders_phase2_status_contract(self):
+    def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
         html = _build_research_desk_html()
@@ -186,6 +186,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("visibilitychange", html)
         self.assertIn("requestId!==latestDeskRequestId", html)
         self.assertIn("opts.silent&&deskWasDetected", html)
+        self.assertIn('id="connect-local-desk"', html)
+        self.assertIn("latestDeskStatus?.handshake?.start_url", html)
+        self.assertIn("scheduleHandshakePoll(", html)
+        self.assertIn("Approve the request in the local desk tab", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
