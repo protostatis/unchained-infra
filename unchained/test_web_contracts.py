@@ -187,9 +187,12 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("requestId!==latestDeskRequestId", html)
         self.assertIn("opts.silent&&deskWasDetected", html)
         self.assertIn('id="connect-local-desk"', html)
+        self.assertIn('id="create-local-mission"', html)
         self.assertIn("latestDeskStatus?.handshake?.start_url", html)
+        self.assertIn("latestDeskStatus?.handshake?.actions?.mission_create_url", html)
         self.assertIn("scheduleHandshakePoll(", html)
         self.assertIn("Approve the request in the local desk tab", html)
+        self.assertIn("Authorization':'Bearer '+approvedHandshakeToken", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
