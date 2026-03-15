@@ -192,7 +192,13 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("latestDeskStatus?.handshake?.actions?.mission_create_url", html)
         self.assertIn("scheduleHandshakePoll(", html)
         self.assertIn("Approve the request in the local desk tab", html)
-        self.assertIn("Authorization':'Bearer '+approvedHandshakeToken", html)
+        self.assertIn("safeOptionalLocalUrl", html)
+        self.assertIn("sanitizeBearerToken", html)
+        self.assertIn("MAX_HANDSHAKE_POLL_ATTEMPTS = 40", html)
+        self.assertIn("new URL(statusUrl)", html)
+        self.assertIn("searchParams.set('request_id', requestId)", html)
+        self.assertIn("new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString()", html)
+        self.assertIn("'Authorization':'Bearer '+safeToken", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
