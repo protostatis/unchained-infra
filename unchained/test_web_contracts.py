@@ -208,6 +208,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("cache:'no-store'", html)
         self.assertIn("referrerPolicy:'no-referrer'", html)
         self.assertIn("about '+remainingSeconds+'s left", html)
+        self.assertIn("replace(/[^!-~]/g,'')", html)
+        self.assertIn("if(handshakeInFlight&&handshakePollTimer)", html)
+        self.assertIn("Local desk did not return a request ID.", html)
+        self.assertIn("const approvalWindow=window.open(", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
