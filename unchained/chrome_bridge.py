@@ -778,6 +778,9 @@ class Agent:
             # The ws_url returned by _get_tab_ws_url always contains the real
             # Chrome tab ID (even for newly-created tabs), so extracting it
             # here covers both the "reuse existing" and "create new" branches.
+            # No race with concurrent opens: all code runs on the asyncio
+            # event loop, so _get_tab_ws_url + lease write is atomic from
+            # the perspective of other coroutines (no await between them).
             if tab_id == "auto" or (tab_id.startswith("prov-") and
                                      _parse_prov_tab_id(tab_id)[1] == "auto"):
                 resolved_tab_id = self._extract_tab_id_from_ws_url(ws_url)
@@ -796,12 +799,17 @@ class Agent:
         """Extract Chrome tab ID from ws://host:port/devtools/page/<TAB_ID>.
 
         Returns empty string on malformed input (caller guards with
-        ``if resolved_tab_id:``).
+        ``if resolved_tab_id:``).  Logs a warning so lease-recording
+        failures are visible in agent output.
         """
         if "/devtools/" not in ws_url:
+            print(f"[agent] warning: cannot extract tab ID from ws_url (no /devtools/): {ws_url!r}")
             return ""
         parts = ws_url.rsplit("/", 1)
-        return parts[-1] if len(parts) == 2 and parts[-1] else ""
+        tab_id = parts[-1] if len(parts) == 2 and parts[-1] else ""
+        if not tab_id:
+            print(f"[agent] warning: cannot extract tab ID from ws_url (empty segment): {ws_url!r}")
+        return tab_id
 
     def _get_tab_ws_url(self, tab_id: str, channel: int = -1) -> str:
         """Look up a tab's WebSocket URL from local Chrome.
@@ -851,7 +859,7 @@ class Agent:
                 auto_tab = available[0] if available else (available_all[0] if available_all else None)
                 if auto_tab:
                     return auto_tab["webSocketDebuggerUrl"]
-                # All provisioned tabs leased — create a new one
+                # No available provisioned tabs (all leased or none exist) — create one
                 try:
                     new_req = urllib.request.Request(
                         f"http://127.0.0.1:{prov_port}/json/new",
