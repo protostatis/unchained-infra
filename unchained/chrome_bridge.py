@@ -906,7 +906,10 @@ class Agent:
                     raise RuntimeError(f"Chrome has 0 page tabs and /json/new failed: {e}")
                 print(f"[agent] auto-created tab (Chrome had 0 page tabs)")
                 return new_tab["webSocketDebuggerUrl"]
-            # Filter out tabs leased by other channels
+            # Filter out tabs leased by other channels.  Stale entries in
+            # _leased_tabs (from externally-closed tabs) are harmless here:
+            # the closed tab won't appear in pages_only/page_tabs, so the
+            # stale ID simply doesn't match anything and is a no-op filter.
             if channel >= 0:
                 available = [t for t in pages_only if t["id"] not in self._leased_tabs]
                 available_all = [t for t in page_tabs if t["id"] not in self._leased_tabs]
