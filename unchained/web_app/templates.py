@@ -5522,9 +5522,11 @@ function resetLivePreview() {
 
 function rememberFirstLookPrompt(prompt) {
   try {
+    // Intentionally same-origin readable: this is a lightweight local handoff, not a secret store.
     const text = String(prompt || '').trim();
     if (text) localStorage.setItem(FIRST_LOOK_PROMPT_KEY, text);
-    if (sessionId) localStorage.setItem(FIRST_LOOK_SESSION_KEY, sessionId);
+    const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
+    if (activeSessionId) localStorage.setItem(FIRST_LOOK_SESSION_KEY, activeSessionId);
   } catch(e) {}
 }
 
@@ -5533,9 +5535,10 @@ function continueInResearchDesk() {
   const current = input ? String(input.value || '').trim() : '';
   const prompt = current || (localStorage.getItem(FIRST_LOOK_PROMPT_KEY) || '').trim();
   if (prompt) rememberFirstLookPrompt(prompt);
+  const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
   const qs = new URLSearchParams();
   if (prompt) qs.set('prompt', prompt);
-  if (sessionId) qs.set('session_id', sessionId);
+  if (activeSessionId) qs.set('session_id', activeSessionId);
   const suffix = qs.toString() ? ('?' + qs.toString()) : '';
   window.location.href = '/labs/research-desk' + suffix;
 }
