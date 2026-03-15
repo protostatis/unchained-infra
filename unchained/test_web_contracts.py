@@ -195,6 +195,14 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("safeOptionalLocalUrl", html)
         self.assertIn("sanitizeBearerToken", html)
         self.assertIn("MAX_HANDSHAKE_POLL_ATTEMPTS = 40", html)
+        self.assertIn("MISSION_WATCH_POLL_INTERVAL_MS = 2500", html)
+        self.assertIn("MAX_MISSION_WATCH_ATTEMPTS = 20", html)
+        self.assertIn("MAX_IDENTICAL_MISSION_STATES = 6", html)
+        self.assertIn("FIRST_LOOK_PROMPT_KEY", html)
+        self.assertIn("MAX_HANDOFF_PROMPT_CHARS = 4000", html)
+        self.assertIn("SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/", html)
+        self.assertIn("normalizeHandoffPrompt", html)
+        self.assertIn("normalizeSourceSessionId", html)
         self.assertIn("new URL(statusUrl)", html)
         self.assertIn("searchParams.set('request_id', requestId)", html)
         self.assertIn("new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString()", html)
@@ -212,6 +220,21 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("if(handshakeInFlight&&handshakePollTimer)", html)
         self.assertIn("Local desk did not return a request ID.", html)
         self.assertIn("const approvalWindow=window.open(", html)
+        self.assertIn('id="mission-watch"', html)
+        self.assertIn("scheduleMissionWatch(statusUrl)", html)
+        self.assertIn("source_route:'/first-look'", html)
+        self.assertIn("const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'')", html)
+        self.assertIn("link.href='#';link.classList.add('disabled')", html)
+        self.assertIn("Mission watch timed out.", html)
+        self.assertIn("Mission watch paused because the local state stopped changing.", html)
+
+    def test_first_look_template_renders_research_desk_handoff_markers(self):
+        self.assertIn("continueInResearchDesk()", web.HEADLESS_DEMO_HTML)
+        self.assertIn("FIRST_LOOK_PROMPT_KEY", web.HEADLESS_DEMO_HTML)
+        self.assertIn("rememberFirstLookPrompt(msg)", web.HEADLESS_DEMO_HTML)
+        self.assertIn("typeof sessionId !== 'undefined'", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Intentionally same-origin readable", web.HEADLESS_DEMO_HTML)
+        self.assertIn("window.location.href = '/labs/research-desk' + suffix", web.HEADLESS_DEMO_HTML)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(

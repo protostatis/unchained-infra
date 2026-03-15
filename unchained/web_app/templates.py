@@ -5465,6 +5465,7 @@ body{
                   onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
         <button id="sendbtn" onclick="doSend()">&#9654;</button>
         <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
+        <button id="deskbtn" onclick="continueInResearchDesk()" title="Continue this prompt in Research Desk">&#11014;</button>
       </div>
     </div>
 
@@ -5499,6 +5500,8 @@ let _userName = '';
 let _userPicture = '';
 let _livePreviewHasFrame = false;
 let _isAuthenticatedUser = false;
+const FIRST_LOOK_PROMPT_KEY = 'unchained_first_look_last_prompt';
+const FIRST_LOOK_SESSION_KEY = 'unchained_first_look_last_session';
 
 function setLiveStatus(text) {
   const el = document.getElementById('live-status');
@@ -5515,6 +5518,29 @@ function resetLivePreview() {
   if (ph) ph.style.display = 'flex';
   _livePreviewHasFrame = false;
   setLiveStatus('Waiting for first page load...');
+}
+
+function rememberFirstLookPrompt(prompt) {
+  try {
+    // Intentionally same-origin readable: this is a lightweight local handoff, not a secret store.
+    const text = String(prompt || '').trim();
+    if (text) localStorage.setItem(FIRST_LOOK_PROMPT_KEY, text);
+    const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
+    if (activeSessionId) localStorage.setItem(FIRST_LOOK_SESSION_KEY, activeSessionId);
+  } catch(e) {}
+}
+
+function continueInResearchDesk() {
+  const input = document.getElementById('msginput');
+  const current = input ? String(input.value || '').trim() : '';
+  const prompt = current || (localStorage.getItem(FIRST_LOOK_PROMPT_KEY) || '').trim();
+  if (prompt) rememberFirstLookPrompt(prompt);
+  const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
+  const qs = new URLSearchParams();
+  if (prompt) qs.set('prompt', prompt);
+  if (activeSessionId) qs.set('session_id', activeSessionId);
+  const suffix = qs.toString() ? ('?' + qs.toString()) : '';
+  window.location.href = '/labs/research-desk' + suffix;
 }
 
 function updateLivePreview(imageB64, note) {
@@ -6158,6 +6184,7 @@ async function doSend() {
   if (mn) mn.style.display = 'block';
 
   addUserBubble(msg);
+  rememberFirstLookPrompt(msg);
   const bubble = addAsstBubble();
   resetLivePreview();
 
