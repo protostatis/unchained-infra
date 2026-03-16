@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -460,19 +461,24 @@ class TestProvisionCleanup(unittest.TestCase):
 
 
 class TestProvisionStateRecovery(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        os.makedirs(cb.PROVISION_STATE_DIR, exist_ok=True)
-        for name in os.listdir(cb.PROVISION_STATE_DIR):
+    def _clear_state_dir(self):
+        try:
+            names = os.listdir(cb.PROVISION_STATE_DIR)
+        except OSError:
+            return
+        for name in names:
             if name.endswith(".json"):
                 os.remove(os.path.join(cb.PROVISION_STATE_DIR, name))
+
+    def setUp(self):
+        os.makedirs(cb.PROVISION_STATE_DIR, exist_ok=True)
+        self._clear_state_dir()
         self._temp_dirs: list[str] = []
 
     def tearDown(self):
         for path in self._temp_dirs:
             cb.shutil.rmtree(path, ignore_errors=True)
-        for name in os.listdir(cb.PROVISION_STATE_DIR):
-            if name.endswith(".json"):
-                os.remove(os.path.join(cb.PROVISION_STATE_DIR, name))
+        self._clear_state_dir()
 
     async def test_cleanup_recovers_persisted_slot_when_tracking_lost(self):
         slot = "ab12"
@@ -503,6 +509,59 @@ class TestProvisionStateRecovery(unittest.IsolatedAsyncioTestCase):
         sent = json.loads(agent.ws.send.call_args[0][0])
         self.assertEqual(sent["body"]["status"], "cleaned_up")
         self.assertEqual(sent["body"]["cleaned"], 1)
+
+    def test_reconcile_mismatch_prunes_state_without_killing_reused_pid(self):
+        slot = "ef56"
+        temp_dir = tempfile.mkdtemp(dir=_tmpdir, prefix="prov_mismatch_")
+        self._temp_dirs.append(temp_dir)
+        cb._write_prov_state(slot, {
+            "pid": 4545,
+            "port": 10003,
+            "temp_dir": temp_dir,
+            "profile_dir_name": "Profile 8",
+        })
+
+        agent = cb.Agent(relay_url="ws://127.0.0.1:8765/tunnel")
+        agent.running = True
+
+        with (
+            mock.patch.object(cb, "_classify_prov_pid", return_value="mismatch"),
+            mock.patch.object(cb, "_terminate_pid") as mock_terminate_pid,
+            mock.patch("builtins.print"),
+        ):
+            agent._reconcile_prov_chromes()
+
+        mock_terminate_pid.assert_not_called()
+        self.assertNotIn(slot, agent._prov_chromes)
+        self.assertFalse(os.path.exists(cb._prov_state_path(slot)))
+        self.assertFalse(os.path.isdir(temp_dir))
+
+    def test_reconcile_cleans_stale_not_ready_slots(self):
+        slot = "aa77"
+        temp_dir = tempfile.mkdtemp(dir=_tmpdir, prefix="prov_not_ready_")
+        self._temp_dirs.append(temp_dir)
+        cb._write_prov_state(slot, {
+            "pid": 4646,
+            "port": 10004,
+            "temp_dir": temp_dir,
+            "profile_dir_name": "Profile 9",
+            "ready": False,
+            "launched_at": time.time() - cb.PROVISION_STARTUP_STALE_TTL - 1,
+        })
+
+        agent = cb.Agent(relay_url="ws://127.0.0.1:8765/tunnel")
+        agent.running = True
+
+        with (
+            mock.patch.object(cb, "_terminate_pid", return_value=True) as mock_terminate_pid,
+            mock.patch("builtins.print"),
+        ):
+            agent._reconcile_prov_chromes()
+
+        mock_terminate_pid.assert_called_once_with(4646, "Provision Chrome", prefix="[agent:prov]")
+        self.assertNotIn(slot, agent._prov_chromes)
+        self.assertFalse(os.path.exists(cb._prov_state_path(slot)))
+        self.assertFalse(os.path.isdir(temp_dir))
 
     async def test_status_recovers_persisted_slot_when_memory_tracking_is_empty(self):
         slot = "cd34"

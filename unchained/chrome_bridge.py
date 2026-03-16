@@ -76,6 +76,10 @@ DEFAULT_WEB_PORT = 8080
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
 MAX_BACKOFF = 60          # seconds
+PROVISION_LAUNCH_READY_TIMEOUT = 15  # seconds
+PROVISION_RECONCILE_DEBOUNCE = 0.5   # seconds
+PROVISION_STARTUP_STALE_TTL = PROVISION_LAUNCH_READY_TIMEOUT + 15  # seconds
+PROVISION_SLOT_ALLOCATION_ATTEMPTS = 1000
 
 VERSION = "0.1.0"
 
@@ -298,7 +302,12 @@ def _wait_for_pid_exit(pid: int, timeout_s: float) -> bool:
 
 
 def _terminate_pid(pid: int, label: str, prefix: str = "[agent]") -> bool:
-    """Terminate a process by PID when the original Popen handle is gone."""
+    """Terminate a process by PID when the original Popen handle is gone.
+
+    This is best-effort only. We validate recovered PIDs against their saved
+    command line before calling this helper, but a narrow PID-reuse race still
+    exists between validation and signal delivery.
+    """
     if pid <= 0 or not _pid_is_running(pid):
         return True
     try:
@@ -405,6 +414,7 @@ def _write_prov_state(slot: str, prov: dict):
         "profile_dir_name": prov.get("profile_dir_name", ""),
         "copy_mode": prov.get("copy_mode", ""),
         "launched_at": prov.get("launched_at", time.time()),
+        "ready": bool(prov.get("ready", True)),
     }
     tmp_path = f"{_prov_state_path(slot)}.tmp.{os.getpid()}"
     with open(tmp_path, "w") as f:
@@ -643,11 +653,17 @@ class Agent:
         # share the same namespace; collision is astronomically unlikely.
         self._tab_leases: dict[int, str] = {}   # channel → Chrome tab ID
         self._leased_tabs: set[str] = set()     # Chrome tab IDs currently leased
+        self._last_prov_reconcile_ts = 0.0
 
     def _reconcile_prov_chromes(self, force: bool = False):
         """Reload persisted provision slots and prune stale metadata."""
-        if not force and not (self.running or self.agent_id):
+        if not force and not self.running:
             return
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_prov_reconcile_ts) < PROVISION_RECONCILE_DEBOUNCE:
+            return
+        self._last_prov_reconcile_ts = now_mono
+        now_wall = time.time()
         for slot in _list_prov_state_slots():
             state = _read_prov_state(slot)
             if not state:
@@ -657,9 +673,23 @@ class Agent:
             port = int(state.get("port") or 0)
             temp_dir = state.get("temp_dir", "")
             profile_dir_name = state.get("profile_dir_name", "")
+            ready = bool(state.get("ready", True))
+            launched_at = float(state.get("launched_at") or 0)
             if pid <= 0 or port <= 0:
                 _remove_prov_state(slot)
                 continue
+            if not ready:
+                age = (now_wall - launched_at) if launched_at else (PROVISION_STARTUP_STALE_TTL + 1)
+                if age > PROVISION_STARTUP_STALE_TTL:
+                    self._prov_chromes.pop(slot, None)
+                    self._cleanup_single_prov(
+                        {
+                            "pid": pid,
+                            "temp_dir": temp_dir,
+                        },
+                        slot=slot,
+                    )
+                    continue
             status = _classify_prov_pid(pid, temp_dir, port)
             if status == "alive":
                 prov = self._prov_chromes.get(slot)
@@ -670,12 +700,14 @@ class Agent:
                         "pid": pid,
                         "temp_dir": temp_dir,
                         "profile_dir_name": profile_dir_name,
+                        "ready": ready,
                     }
                 else:
                     prov.setdefault("pid", pid)
                     prov.setdefault("port", port)
                     prov.setdefault("temp_dir", temp_dir)
                     prov.setdefault("profile_dir_name", profile_dir_name)
+                    prov["ready"] = ready
                 continue
             self._prov_chromes.pop(slot, None)
             if status == "mismatch":
@@ -1021,6 +1053,8 @@ class Agent:
                 prov = next(iter(self._prov_chromes.values()))
             else:
                 raise RuntimeError(f"Provision Chrome slot '{slot}' not found")
+            if not prov.get("ready", True):
+                raise RuntimeError(f"Provision Chrome slot '{slot}' is still starting up")
             prov_port = prov["port"]
             url = f"http://127.0.0.1:{prov_port}/json"
             req = urllib.request.Request(url)
@@ -1155,10 +1189,18 @@ class Agent:
             return
 
         # Generate a unique slot for this provision Chrome
-        while True:
+        for _ in range(PROVISION_SLOT_ALLOCATION_ATTEMPTS):
             slot = os.urandom(2).hex()
             if slot not in self._prov_chromes and not os.path.exists(_prov_state_path(slot)):
                 break
+        else:
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 500,
+                "body": {"error": "Provision slot space exhausted"},
+            }))
+            return
 
         # Copy profile to temp dir (same logic as signup_agent._copy_chrome_profile)
         temp_dir = os.path.join(DATA_DIR, f"prov_tmp_{slot}_{os.getpid()}_{int(time.time())}")
@@ -1235,6 +1277,7 @@ class Agent:
             "profile_dir_name": profile_dir_name,
             "copy_mode": copy_mode,
             "launched_at": time.time(),
+            "ready": False,
         }
         try:
             _write_prov_state(slot, prov_state)
@@ -1251,7 +1294,7 @@ class Agent:
         # Wait for Chrome CDP to be ready
         version_url = f"http://127.0.0.1:{prov_port}/json/version"
         ready = False
-        for _ in range(15):
+        for _ in range(PROVISION_LAUNCH_READY_TIMEOUT):
             time.sleep(1)
             try:
                 with urllib.request.urlopen(version_url, timeout=2) as resp:
@@ -1293,7 +1336,12 @@ class Agent:
             "pid": proc.pid,
             "temp_dir": temp_dir,
             "profile_dir_name": profile_dir_name,
+            "ready": True,
         }
+        try:
+            _write_prov_state(slot, {**prov_state, "ready": True})
+        except Exception as e:
+            print(f"[agent:prov] Warning: failed to update ready state for slot {slot}: {e}")
 
         prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
         print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
@@ -1364,6 +1412,8 @@ class Agent:
 
         slots = {}
         for slot, prov in self._prov_chromes.items():
+            if not prov.get("ready", True):
+                continue
             port = prov["port"]
             profile_dir = prov.get("profile_dir_name", "")
             tabs_info = []
