@@ -3,6 +3,7 @@ _parse_port_from_cmdline, _check_port_conflict."""
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -456,6 +457,95 @@ class TestProvisionCleanup(unittest.TestCase):
         self.assertEqual(proc.kill_calls, 1)
         self.assertEqual(proc.wait_calls, 1)
         self.assertTrue(any("Provision Chrome killed" in str(call) for call in mock_print.call_args_list))
+
+
+class TestProvisionStateRecovery(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        os.makedirs(cb.PROVISION_STATE_DIR, exist_ok=True)
+        for name in os.listdir(cb.PROVISION_STATE_DIR):
+            if name.endswith(".json"):
+                os.remove(os.path.join(cb.PROVISION_STATE_DIR, name))
+        self._temp_dirs: list[str] = []
+
+    def tearDown(self):
+        for path in self._temp_dirs:
+            cb.shutil.rmtree(path, ignore_errors=True)
+        for name in os.listdir(cb.PROVISION_STATE_DIR):
+            if name.endswith(".json"):
+                os.remove(os.path.join(cb.PROVISION_STATE_DIR, name))
+
+    async def test_cleanup_recovers_persisted_slot_when_tracking_lost(self):
+        slot = "ab12"
+        temp_dir = tempfile.mkdtemp(dir=_tmpdir, prefix="prov_recover_")
+        self._temp_dirs.append(temp_dir)
+        cb._write_prov_state(slot, {
+            "pid": 4242,
+            "port": 10001,
+            "temp_dir": temp_dir,
+            "profile_dir_name": "Profile 5",
+        })
+
+        agent = cb.Agent(relay_url="ws://127.0.0.1:8765/tunnel")
+        agent.running = True
+        agent.ws = mock.AsyncMock()
+
+        with (
+            mock.patch.object(cb, "_classify_prov_pid", return_value="alive"),
+            mock.patch.object(cb, "_terminate_pid", return_value=True) as mock_terminate_pid,
+            mock.patch("builtins.print"),
+        ):
+            await agent._handle_provision_cleanup(req_id="r-recover", path=f"/provision-cleanup?slot={slot}")
+
+        mock_terminate_pid.assert_called_once_with(4242, "Provision Chrome", prefix="[agent:prov]")
+        self.assertEqual(agent._prov_chromes, {})
+        self.assertFalse(os.path.exists(cb._prov_state_path(slot)))
+        self.assertFalse(os.path.isdir(temp_dir))
+        sent = json.loads(agent.ws.send.call_args[0][0])
+        self.assertEqual(sent["body"]["status"], "cleaned_up")
+        self.assertEqual(sent["body"]["cleaned"], 1)
+
+    async def test_status_recovers_persisted_slot_when_memory_tracking_is_empty(self):
+        slot = "cd34"
+        temp_dir = tempfile.mkdtemp(dir=_tmpdir, prefix="prov_status_")
+        self._temp_dirs.append(temp_dir)
+        cb._write_prov_state(slot, {
+            "pid": 4343,
+            "port": 10002,
+            "temp_dir": temp_dir,
+            "profile_dir_name": "Profile 7",
+        })
+
+        agent = cb.Agent(relay_url="ws://127.0.0.1:8765/tunnel")
+        agent.running = True
+        agent.ws = mock.AsyncMock()
+
+        tabs = [
+            {
+                "id": "AAA111BBB222CCC333DDD444EEE555FF",
+                "type": "page",
+                "title": "Recovered tab",
+                "url": "https://x.com/i/flow/login",
+            },
+        ]
+
+        def _fake_urlopen(req, timeout=0):
+            del timeout
+            target = req.full_url if hasattr(req, "full_url") else req
+            if target == "http://127.0.0.1:10002/json":
+                return _FakeResponse(200, json.dumps(tabs).encode())
+            raise AssertionError(f"Unexpected urlopen target: {target}")
+
+        with (
+            mock.patch.object(cb, "_classify_prov_pid", return_value="alive"),
+            mock.patch.object(cb.urllib.request, "urlopen", side_effect=_fake_urlopen),
+        ):
+            await agent._handle_provision_status(req_id="r-status")
+
+        sent = json.loads(agent.ws.send.call_args[0][0])
+        slots = sent["body"]["slots"]
+        self.assertIn(slot, slots)
+        self.assertEqual(slots[slot]["profile"], "Profile 7")
+        self.assertEqual(slots[slot]["tabs"][0]["tab_id"], "prov-cd34-AAA111BBB222CCC333DDD444EEE555FF")
 
 
 class TestTerminateProcess(unittest.TestCase):
