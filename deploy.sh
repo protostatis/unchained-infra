@@ -88,6 +88,7 @@ echo "==> Uploading Python modules..."
     unchained/private_core_contracts.py \
     unchained/private_core_engine.py \
     unchained/private_core_server.py \
+    unchained/editable_helpers.js \
     unchained/api.py \
     unchained/mcp_server.py \
     unchained/orchestrator.py \
@@ -175,6 +176,7 @@ if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" == "1" ]]; then
         "unchained/cdp.py"
         "unchained/ddm.py"
         "unchained/intel.py"
+        "unchained/editable_helpers.js"
         "unchained/private_core_engine.py"
         "unchained/private_core_server.py"
         "unchained/private_core_contracts.py"

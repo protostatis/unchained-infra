@@ -16,6 +16,7 @@ COPY unchained/private_core_client.py .
 COPY unchained/private_core_contracts.py .
 COPY unchained/private_core_server.py .
 COPY unchained/private_core_engine.py .
+COPY unchained/editable_helpers.js .
 COPY unchained/api.py .
 COPY unchained/mcp_server.py .
 COPY unchained/orchestrator.py .

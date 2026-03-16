@@ -13,6 +13,7 @@ for f in \
   cdp.py \
   ddm.py \
   intel.py \
+  editable_helpers.js \
   private_core_engine.py \
   private_core_server.py \
   private_core_contracts.py \
