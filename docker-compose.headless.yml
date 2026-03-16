@@ -7,7 +7,8 @@ services:
       "python", "chrome_bridge.py", "start",
       "--relay", "${UNCHAINED_RELAY_URL:?UNCHAINED_RELAY_URL_required}",
       "--profile", "${CDP_PROFILE:-ec2-headless}",
-      "--headless"
+      "--headless",
+      "--stealth"
     ]
     volumes:
       - headless_data:/data

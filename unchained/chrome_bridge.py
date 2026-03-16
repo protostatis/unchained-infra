@@ -10,6 +10,7 @@ Usage:
     uv run chrome_bridge.py start                          # Connect to default relay
     uv run chrome_bridge.py start --daemon                 # Start detached (survives terminal close)
     uv run chrome_bridge.py start --headless               # Launch local Chrome headless
+    uv run chrome_bridge.py start --headless --stealth     # Headless with stealth flags
     uv run chrome_bridge.py start --relay ws://host:8765/tunnel  # Custom relay
     uv run chrome_bridge.py start --key uk_live_xxx        # With API key
     uv run chrome_bridge.py status                         # Show connection state
@@ -1606,6 +1607,7 @@ def _load_config() -> dict:
         "cdp_port": DEFAULT_CDP_PORT,
         "profile": "default",
         "chrome_headless": False,
+        "chrome_stealth": False,
         "chrome_args": "",
         "daemon": False,
     }
@@ -1632,6 +1634,10 @@ def _load_config() -> dict:
         "1", "true", "yes", "on",
     ):
         config["chrome_headless"] = True
+    if os.environ.get("UNCHAINED_CHROME_STEALTH", "").lower() in (
+        "1", "true", "yes", "on",
+    ):
+        config["chrome_stealth"] = True
     if os.environ.get("UNCHAINED_CHROME_ARGS"):
         config["chrome_args"] = os.environ["UNCHAINED_CHROME_ARGS"]
     return config
@@ -1661,6 +1667,9 @@ def _parse_args(args: list[str], config: dict) -> dict:
             i += 1
         elif args[i] == "--no-headless":
             config["chrome_headless"] = False
+            i += 1
+        elif args[i] == "--stealth":
+            config["chrome_stealth"] = True
             i += 1
         elif args[i] in ("--daemon", "-d"):
             config["daemon"] = True
@@ -1853,6 +1862,7 @@ def _ensure_chrome(
     port: int,
     profile: str = "default",
     headless: bool = False,
+    stealth: bool = False,
     extra_chrome_args: str = "",
     relay_url: str = DEFAULT_RELAY_URL,
 ):
@@ -1899,6 +1909,12 @@ def _ensure_chrome(
             "--mute-audio",
             "--hide-scrollbars",
             "--window-size=1920,1080",
+        ])
+    if stealth:
+        cmd.extend([
+            "--disable-blink-features=AutomationControlled",
+            "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         ])
         # Root-run Chromium still needs --no-sandbox; non-root containers do not.
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -1972,6 +1988,7 @@ def cmd_start(config: dict):
         cdp_port,
         profile,
         config.get("chrome_headless", False),
+        config.get("chrome_stealth", False),
         config.get("chrome_args", ""),
         relay_url,
     ):
