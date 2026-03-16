@@ -5451,10 +5451,10 @@ body{
             <div class="hint-title">Try it &mdash; ask the agent anything</div>
           <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
           <div class="hint-examples">
-            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City. Screenshot the forecast.')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
-            <div class="hint-item" onclick="fillMsg('Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>
+            <div class="hint-item" onclick="fillMsg('Research &quot;best budget podcast mic for small rooms&quot; across YouTube, Reddit, and review sites. Pull out the products that keep coming up, the common objections, and 5 cited takeaways I can use for a script.')"><span class="hint-emoji">&#127908;</span> Build a cited creator brief</div>
+            <div class="hint-item" onclick="fillMsg('Search YouTube for &quot;morning routine productivity&quot;. Compare the top 8 videos by title pattern, runtime, and hook style. Give me 5 packaging patterns worth testing and include links.')"><span class="hint-emoji">&#127909;</span> Tear down winning YouTube hooks</div>
+            <div class="hint-item" onclick="fillMsg('Open Zillow homes for sale in 60657. Compare the first 5 listings under $900k by price, price per square foot, and days on market. Tell me which one looks overpriced.')"><span class="hint-emoji">&#127968;</span> Sanity-check a listing price</div>
+            <div class="hint-item" onclick="fillMsg('Find three Chicago med spas with Google ratings above 4.7, visible pricing, and online booking. Return the best shortlist with links and pricing notes.')"><span class="hint-emoji">&#128205;</span> Run a local market sweep</div>
           </div>
           <div class="hint-footer">Free to try &mdash; no setup needed</div>
         </div>
@@ -5732,7 +5732,7 @@ async function maybeAutoPrompt() {
   }
   if (!lastAgentConnected) return;
   // Type the auto-prompt with animation
-  const prompt = 'Go to Hacker News and find the top 3 trending stories right now. Take a screenshot so I can see the page.';
+  const prompt = 'Research "best budget podcast mic for small rooms" across YouTube, Reddit, and review sites. Pull out the products that keep coming up, the common objections, and 5 cited takeaways I can use for a script.';
   const input = document.getElementById('msginput');
   hideHints();
   for (let i = 0; i < prompt.length; i++) {
@@ -5750,10 +5750,10 @@ function showHintsIfEmpty() {
     '<div class="hint-title">Try it &mdash; ask the agent anything</div>' +
     '<div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>' +
     '<div class="hint-examples">' +
-    '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower. Take a screenshot so I can see the page.\')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>' +
-    '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City. Screenshot the forecast.\')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>' +
-    '<div class="hint-item" onclick="fillMsg(\'Open Hacker News and list the top 5 stories right now. Take a screenshot of the page.\')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>' +
-    '<div class="hint-item" onclick="fillMsg(\'Search for the best rated noise-cancelling headphones on rtings.com. Screenshot the results.\')"><span class="hint-emoji">&#127911;</span> Find top headphones on rtings.com</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Research &quot;best budget podcast mic for small rooms&quot; across YouTube, Reddit, and review sites. Pull out the products that keep coming up, the common objections, and 5 cited takeaways I can use for a script.\')"><span class="hint-emoji">&#127908;</span> Build a cited creator brief</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Search YouTube for &quot;morning routine productivity&quot;. Compare the top 8 videos by title pattern, runtime, and hook style. Give me 5 packaging patterns worth testing and include links.\')"><span class="hint-emoji">&#127909;</span> Tear down winning YouTube hooks</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Open Zillow homes for sale in 60657. Compare the first 5 listings under $900k by price, price per square foot, and days on market. Tell me which one looks overpriced.\')"><span class="hint-emoji">&#127968;</span> Sanity-check a listing price</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Find three Chicago med spas with Google ratings above 4.7, visible pricing, and online booking. Return the best shortlist with links and pricing notes.\')"><span class="hint-emoji">&#128205;</span> Run a local market sweep</div>' +
     '</div>' +
     '<div class="hint-footer">Free to try &mdash; no setup needed</div>' +
     '</div>';
