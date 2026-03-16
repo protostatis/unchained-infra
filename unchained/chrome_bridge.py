@@ -1910,15 +1910,30 @@ def _ensure_chrome(
             "--hide-scrollbars",
             "--window-size=1920,1080",
         ])
-    if stealth:
-        cmd.extend([
-            "--disable-blink-features=AutomationControlled",
-            "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-            " (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        ])
         # Root-run Chromium still needs --no-sandbox; non-root containers do not.
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             cmd.append("--no-sandbox")
+    if stealth:
+        if not headless:
+            print("[agent] WARNING: --stealth is intended for headless mode; "
+                  "it will override your browser's user-agent")
+        # Derive UA version from the Chrome binary to avoid a stale hardcoded string.
+        ua_version = "131.0.0.0"
+        try:
+            ver_out = subprocess.check_output(
+                [chrome_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5,
+            ).decode().strip()
+            # e.g. "Chromium 131.0.6778.139" or "Google Chrome 131.0.6778.139"
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
+            if m:
+                ua_version = m.group(1)
+        except Exception:
+            pass
+        cmd.extend([
+            "--disable-blink-features=AutomationControlled",
+            f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+            f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
+        ])
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
