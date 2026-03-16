@@ -5537,7 +5537,7 @@ function continueInResearchDesk() {
   if (prompt) rememberFirstLookPrompt(prompt);
   const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
   const qs = new URLSearchParams();
-  if (prompt) qs.set('prompt', prompt);
+  if (prompt) qs.set('prompt', prompt.slice(0, 500));
   if (activeSessionId) qs.set('session_id', activeSessionId);
   const suffix = qs.toString() ? ('?' + qs.toString()) : '';
   window.location.href = '/labs/research-desk' + suffix;
