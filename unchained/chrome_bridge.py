@@ -46,6 +46,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 AGENT_PID_FILE = os.path.join(DATA_DIR, ".agent_pid")  # legacy default
 AGENT_CONFIG_FILE = os.path.join(DATA_DIR, "agent.json")
+PROVISION_STATE_DIR = os.path.join(DATA_DIR, "provision_slots")
 
 
 def _sanitize_profile(name: str) -> str:
@@ -75,6 +76,10 @@ DEFAULT_WEB_PORT = 8080
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
 MAX_BACKOFF = 60          # seconds
+PROVISION_LAUNCH_READY_TIMEOUT = 15  # seconds
+PROVISION_RECONCILE_DEBOUNCE = 0.5   # seconds
+PROVISION_STARTUP_STALE_TTL = PROVISION_LAUNCH_READY_TIMEOUT + 15  # seconds
+PROVISION_SLOT_ALLOCATION_ATTEMPTS = 1000
 
 VERSION = "0.1.0"
 
@@ -273,6 +278,75 @@ def _wait_for_process_exit(proc, timeout_s: float) -> bool:
         return False
 
 
+def _pid_is_running(pid: int) -> bool:
+    """Return True when the pid exists."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _wait_for_pid_exit(pid: int, timeout_s: float) -> bool:
+    """Wait for a PID to disappear."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not _pid_is_running(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_is_running(pid)
+
+
+def _terminate_pid(pid: int, label: str, prefix: str = "[agent]") -> bool:
+    """Terminate a process by PID when the original Popen handle is gone.
+
+    This is best-effort only. We validate recovered PIDs against their saved
+    command line before calling this helper, but a narrow PID-reuse race still
+    exists between validation and signal delivery.
+    """
+    if pid <= 0 or not _pid_is_running(pid):
+        return True
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+        if _wait_for_pid_exit(pid, 5):
+            print(f"{prefix} {label} terminated")
+            return True
+    except Exception:
+        pass
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        else:
+            os.kill(pid, signal.SIGKILL)
+        if _wait_for_pid_exit(pid, 1):
+            print(f"{prefix} {label} killed")
+            return True
+    except Exception as e:
+        print(f"{prefix} Warning: failed to fully stop {label}: {e}")
+        return False
+    print(f"{prefix} Warning: failed to fully stop {label}")
+    return False
+
+
 def _terminate_process(proc, label: str, prefix: str = "[agent]") -> bool:
     """Terminate a subprocess and confirm exit when possible."""
     if not proc:
@@ -294,6 +368,82 @@ def _terminate_process(proc, label: str, prefix: str = "[agent]") -> bool:
         return False
     print(f"{prefix} Warning: failed to fully stop {label}")
     return False
+
+
+def _prov_state_path(slot: str) -> str:
+    """Return the persisted metadata file for a provision slot."""
+    return os.path.join(PROVISION_STATE_DIR, f"{slot}.json")
+
+
+def _list_prov_state_slots() -> list[str]:
+    """Return persisted provision slot IDs."""
+    try:
+        names = os.listdir(PROVISION_STATE_DIR)
+    except OSError:
+        return []
+    slots = []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        slot = name[:-5]
+        if re.fullmatch(r"[0-9a-f]{4}", slot):
+            slots.append(slot)
+    return sorted(slots)
+
+
+def _read_prov_state(slot: str) -> dict | None:
+    """Load persisted metadata for a provision slot."""
+    try:
+        with open(_prov_state_path(slot)) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _write_prov_state(slot: str, prov: dict):
+    """Persist metadata needed to recover a provisioned Chrome after reconnect."""
+    os.makedirs(PROVISION_STATE_DIR, exist_ok=True)
+    payload = {
+        "slot": slot,
+        "pid": int(prov.get("pid") or 0),
+        "port": int(prov.get("port") or 0),
+        "temp_dir": prov.get("temp_dir", ""),
+        "profile_dir_name": prov.get("profile_dir_name", ""),
+        "copy_mode": prov.get("copy_mode", ""),
+        "launched_at": prov.get("launched_at", time.time()),
+        "ready": bool(prov.get("ready", True)),
+    }
+    tmp_path = f"{_prov_state_path(slot)}.tmp.{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump(payload, f)
+    os.replace(tmp_path, _prov_state_path(slot))
+
+
+def _remove_prov_state(slot: str):
+    """Delete persisted metadata for a provision slot."""
+    try:
+        os.remove(_prov_state_path(slot))
+    except OSError:
+        pass
+
+
+def _classify_prov_pid(pid: int, temp_dir: str, port: int) -> str:
+    """Return alive/dead/mismatch for a persisted provisioned Chrome PID."""
+    if not _pid_is_running(pid):
+        return "dead"
+    cmdline = _process_cmdline(pid)
+    if not cmdline:
+        return "alive"
+    temp_marker = os.path.basename((temp_dir or "").rstrip(os.sep))
+    port_marker = f"--remote-debugging-port={port}" if port else ""
+    if temp_marker and temp_marker not in cmdline:
+        return "mismatch"
+    if port_marker and port_marker not in cmdline:
+        return "mismatch"
+    return "alive"
 
 
 # ---------------------------------------------------------------------------
@@ -496,13 +646,80 @@ class Agent:
         self._backoff = 1
         self._last_pong = 0.0
         # Provision Chrome: temporary Chromes keyed by slot (4-char hex)
-        self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, temp_dir, profile_dir_name}
+        self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, pid, temp_dir, profile_dir_name}
         # Tab leasing: prevent multiple channels from auto-resolving to the same tab.
         # All mutations happen on the asyncio event loop (single-threaded), so no
         # lock is needed.  Tab IDs are Chrome UUIDs — main and provisioned Chrome
         # share the same namespace; collision is astronomically unlikely.
         self._tab_leases: dict[int, str] = {}   # channel → Chrome tab ID
         self._leased_tabs: set[str] = set()     # Chrome tab IDs currently leased
+        self._last_prov_reconcile_ts = 0.0
+
+    def _reconcile_prov_chromes(self, force: bool = False):
+        """Reload persisted provision slots and prune stale metadata."""
+        if not force and not self.running:
+            return
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_prov_reconcile_ts) < PROVISION_RECONCILE_DEBOUNCE:
+            return
+        self._last_prov_reconcile_ts = now_mono
+        now_wall = time.time()
+        for slot in _list_prov_state_slots():
+            state = _read_prov_state(slot)
+            if not state:
+                _remove_prov_state(slot)
+                continue
+            pid = int(state.get("pid") or 0)
+            port = int(state.get("port") or 0)
+            temp_dir = state.get("temp_dir", "")
+            profile_dir_name = state.get("profile_dir_name", "")
+            ready = bool(state.get("ready", True))
+            launched_at = float(state.get("launched_at") or 0)
+            if pid <= 0 or port <= 0:
+                _remove_prov_state(slot)
+                continue
+            if not ready:
+                age = (now_wall - launched_at) if launched_at else (PROVISION_STARTUP_STALE_TTL + 1)
+                if age > PROVISION_STARTUP_STALE_TTL:
+                    self._prov_chromes.pop(slot, None)
+                    self._cleanup_single_prov(
+                        {
+                            "pid": pid,
+                            "temp_dir": temp_dir,
+                        },
+                        slot=slot,
+                    )
+                    continue
+            status = _classify_prov_pid(pid, temp_dir, port)
+            if status == "alive":
+                prov = self._prov_chromes.get(slot)
+                if not prov:
+                    self._prov_chromes[slot] = {
+                        "port": port,
+                        "process": None,
+                        "pid": pid,
+                        "temp_dir": temp_dir,
+                        "profile_dir_name": profile_dir_name,
+                        "ready": ready,
+                    }
+                else:
+                    prov.setdefault("pid", pid)
+                    prov.setdefault("port", port)
+                    prov.setdefault("temp_dir", temp_dir)
+                    prov.setdefault("profile_dir_name", profile_dir_name)
+                    prov["ready"] = ready
+                continue
+            self._prov_chromes.pop(slot, None)
+            if status == "mismatch":
+                print(f"[agent:prov] Warning: dropping stale provision state for slot {slot} (PID {pid} reused)")
+            self._cleanup_single_prov(
+                {
+                    "pid": 0,
+                    "temp_dir": temp_dir,
+                },
+                slot=slot,
+                kill_process=False,
+            )
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
@@ -567,6 +784,7 @@ class Agent:
             self.ws = ws
             self._backoff = 1  # reset on successful connect
             await self._authenticate()
+            self._reconcile_prov_chromes(force=True)
             print(f"[agent] authenticated as {self.agent_id}")
             if self._headless:
                 self._cleanup_orphan_tabs()
@@ -664,6 +882,8 @@ class Agent:
             return
 
         # Proxy /prov/{slot}/{path} requests to the provision Chrome's port
+        if path.startswith("/prov/"):
+            self._reconcile_prov_chromes()
         if path.startswith("/prov/") and self._prov_chromes:
             # Parse: /prov/{slot}/{chrome_path}
             prov_parts = path.split("/", 3)  # ['', 'prov', slot, chrome_path]
@@ -822,6 +1042,8 @@ class Agent:
         a lease reuses its tab; tabs leased by *other* channels are skipped.
         """
         # Provision Chrome routing
+        if tab_id.startswith("prov-"):
+            self._reconcile_prov_chromes()
         if tab_id.startswith("prov-") and self._prov_chromes:
             slot, real_id = _parse_prov_tab_id(tab_id)
             # Look up by slot; backward compat: if no slot and exactly one prov Chrome, use it
@@ -831,6 +1053,8 @@ class Agent:
                 prov = next(iter(self._prov_chromes.values()))
             else:
                 raise RuntimeError(f"Provision Chrome slot '{slot}' not found")
+            if not prov.get("ready", True):
+                raise RuntimeError(f"Provision Chrome slot '{slot}' is still starting up")
             prov_port = prov["port"]
             url = f"http://127.0.0.1:{prov_port}/json"
             req = urllib.request.Request(url)
@@ -965,7 +1189,18 @@ class Agent:
             return
 
         # Generate a unique slot for this provision Chrome
-        slot = os.urandom(2).hex()
+        for _ in range(PROVISION_SLOT_ALLOCATION_ATTEMPTS):
+            slot = os.urandom(2).hex()
+            if slot not in self._prov_chromes and not os.path.exists(_prov_state_path(slot)):
+                break
+        else:
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 500,
+                "body": {"error": "Provision slot space exhausted"},
+            }))
+            return
 
         # Copy profile to temp dir (same logic as signup_agent._copy_chrome_profile)
         temp_dir = os.path.join(DATA_DIR, f"prov_tmp_{slot}_{os.getpid()}_{int(time.time())}")
@@ -1034,11 +1269,32 @@ class Agent:
         ]
         print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        prov_state = {
+            "port": prov_port,
+            "process": proc,
+            "pid": proc.pid,
+            "temp_dir": temp_dir,
+            "profile_dir_name": profile_dir_name,
+            "copy_mode": copy_mode,
+            "launched_at": time.time(),
+            "ready": False,
+        }
+        try:
+            _write_prov_state(slot, prov_state)
+        except Exception as e:
+            self._cleanup_single_prov(prov_state, slot=slot)
+            await self.ws.send(json.dumps({
+                "type": "http_response",
+                "req_id": req_id,
+                "status": 500,
+                "body": {"error": f"Failed to persist provision state: {e}"},
+            }))
+            return
 
         # Wait for Chrome CDP to be ready
         version_url = f"http://127.0.0.1:{prov_port}/json/version"
         ready = False
-        for _ in range(15):
+        for _ in range(PROVISION_LAUNCH_READY_TIMEOUT):
             time.sleep(1)
             try:
                 with urllib.request.urlopen(version_url, timeout=2) as resp:
@@ -1049,12 +1305,7 @@ class Agent:
                 pass
 
         if not ready:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            self._cleanup_single_prov(prov_state, slot=slot)
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
@@ -1069,7 +1320,7 @@ class Agent:
             if not first_tab_id:
                 raise RuntimeError("Provision Chrome returned no page tab id")
         except Exception as e:
-            self._cleanup_single_prov({"process": proc, "temp_dir": temp_dir})
+            self._cleanup_single_prov(prov_state, slot=slot)
             await self.ws.send(json.dumps({
                 "type": "http_response",
                 "req_id": req_id,
@@ -1082,9 +1333,15 @@ class Agent:
         self._prov_chromes[slot] = {
             "port": prov_port,
             "process": proc,
+            "pid": proc.pid,
             "temp_dir": temp_dir,
             "profile_dir_name": profile_dir_name,
+            "ready": True,
         }
+        try:
+            _write_prov_state(slot, {**prov_state, "ready": True})
+        except Exception as e:
+            print(f"[agent:prov] Warning: failed to update ready state for slot {slot}: {e}")
 
         prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
         print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
@@ -1102,6 +1359,7 @@ class Agent:
         If path contains ?slot=<hex>, clean up only that slot.
         If no slot specified, clean up ALL provision Chromes.
         """
+        self._reconcile_prov_chromes()
         slot = ""
         if "?" in path:
             import urllib.parse
@@ -1123,13 +1381,13 @@ class Agent:
             # Specific slot requested — clean only that one (no-op if already gone)
             prov = self._prov_chromes.pop(slot, None)
             if prov:
-                self._cleanup_single_prov(prov)
+                self._cleanup_single_prov(prov, slot=slot)
                 cleaned = 1
         else:
             # No slot — clean up all provisioned Chromes.
             while self._prov_chromes:
-                _, prov = self._prov_chromes.popitem()
-                self._cleanup_single_prov(prov)
+                slot, prov = self._prov_chromes.popitem()
+                self._cleanup_single_prov(prov, slot=slot)
                 cleaned += 1
 
         status = "cleaned_up" if cleaned else "nothing_to_clean"
@@ -1142,6 +1400,7 @@ class Agent:
 
     async def _handle_provision_status(self, req_id):
         """Return all provisioned Chrome slots with their tabs (prov-prefixed IDs)."""
+        self._reconcile_prov_chromes()
         if not self._prov_chromes:
             await self.ws.send(json.dumps({
                 "type": "http_response",
@@ -1153,6 +1412,8 @@ class Agent:
 
         slots = {}
         for slot, prov in self._prov_chromes.items():
+            if not prov.get("ready", True):
+                continue
             port = prov["port"]
             profile_dir = prov.get("profile_dir_name", "")
             tabs_info = []
@@ -1185,11 +1446,15 @@ class Agent:
             "body": {"slots": slots},
         }))
 
-    def _cleanup_single_prov(self, prov: dict):
+    def _cleanup_single_prov(self, prov: dict, slot: str = "", kill_process: bool = True):
         """Kill one provision Chrome process and delete its temp dir."""
-        proc = prov.get("process")
-        if proc:
-            _terminate_process(proc, "Provision Chrome", prefix="[agent:prov]")
+        if kill_process:
+            proc = prov.get("process")
+            pid = int(prov.get("pid") or getattr(proc, "pid", 0) or 0)
+            if proc:
+                _terminate_process(proc, "Provision Chrome", prefix="[agent:prov]")
+            elif pid:
+                _terminate_pid(pid, "Provision Chrome", prefix="[agent:prov]")
 
         temp_dir = prov.get("temp_dir", "")
         if temp_dir and os.path.isdir(temp_dir):
@@ -1198,12 +1463,16 @@ class Agent:
                 print(f"[agent:prov] Cleaned up {temp_dir}")
             except Exception as e:
                 print(f"[agent:prov] Warning: failed to clean up {temp_dir}: {e}")
+        if slot:
+            _remove_prov_state(slot)
 
-    def _cleanup_all_prov_chromes(self):
+    def _cleanup_all_prov_chromes(self, include_persisted: bool = False):
         """Kill all provision Chromes and clean up temp dirs."""
+        if include_persisted:
+            self._reconcile_prov_chromes(force=True)
         for slot in list(self._prov_chromes):
             prov = self._prov_chromes.pop(slot)
-            self._cleanup_single_prov(prov)
+            self._cleanup_single_prov(prov, slot=slot)
 
     async def _handle_ws_send(self, msg: dict):
         """Forward a CDP message from relay to Chrome."""
@@ -1320,7 +1589,7 @@ class Agent:
         print("[agent] stopping...")
         self.running = False
         await self._close_all_channels()
-        self._cleanup_all_prov_chromes()
+        self._cleanup_all_prov_chromes(include_persisted=True)
         if self.ws:
             await self.ws.close()
 
