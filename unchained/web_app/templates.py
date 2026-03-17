@@ -5655,6 +5655,9 @@ async function checkApproval() {
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
+      _userName = data.name || _userName || 'Unchained';
+      _userPicture = data.picture || '';
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       showMain();
