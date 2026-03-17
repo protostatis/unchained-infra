@@ -5423,6 +5423,9 @@ body{
 }
 .quota-box h2{font-size:22px;color:var(--accent);margin-bottom:8px}
 .quota-box .quota-sub{color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6}
+.quota-why-free{
+  margin:-12px 0 24px;color:#c9cfdb;font-size:13px;line-height:1.6;
+}
 .quota-grid{
   display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;text-align:left;
 }

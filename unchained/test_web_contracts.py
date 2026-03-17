@@ -262,6 +262,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             "On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson.",
             web.HEADLESS_DEMO_HTML,
         )
+        self.assertNotIn("set up an API key", web.HEADLESS_DEMO_HTML)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
