@@ -2577,6 +2577,7 @@ async function loadHistory() {
         appendText(bubble, msg.content);
       }
     }
+    showClaudeUpgradeCard();
   } catch(e) {}
 }
 
@@ -5368,6 +5369,48 @@ body{
   letter-spacing:0.5px;text-transform:uppercase;
 }
 
+.upgrade-card{
+  align-self:stretch;padding:18px 20px;border:1px solid rgba(255,255,255,0.08);
+  border-radius:16px;background:linear-gradient(135deg, rgba(233,69,96,0.16), rgba(17,17,25,0.96));
+  box-shadow:0 18px 40px rgba(0,0,0,0.24);
+}
+.upgrade-card h3{
+  margin:0 0 8px;font-size:19px;color:var(--text);letter-spacing:0.2px;
+}
+.upgrade-card p{
+  margin:0;color:#d6dbea;font-size:13px;line-height:1.6;
+}
+.upgrade-card .upgrade-prompt{
+  margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);
+  color:#f0f2f8;font-size:12px;font-family:var(--mono);
+}
+.upgrade-card .upgrade-list{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;
+}
+.upgrade-card .upgrade-item{
+  padding:12px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;background:rgba(8,10,15,0.3);
+}
+.upgrade-card .upgrade-item strong{
+  display:block;margin-bottom:4px;font-size:13px;color:var(--text);
+}
+.upgrade-card .upgrade-item span{
+  color:var(--muted);font-size:12px;line-height:1.5;
+}
+.upgrade-card .upgrade-actions{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;flex-wrap:wrap;
+}
+.upgrade-card .upgrade-why{
+  flex:1;min-width:220px;color:#c7cedf;font-size:12px;line-height:1.5;
+}
+.upgrade-card .upgrade-cta{
+  display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;border-radius:10px;
+  background:var(--accent);color:#fff;text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.2px;
+}
+.upgrade-card .upgrade-cta:hover{opacity:0.92;box-shadow:0 0 18px rgba(233,69,96,0.28)}
+@media(max-width:720px){
+  .upgrade-card .upgrade-list{grid-template-columns:1fr}
+}
+
 /* === Quota modal === */
 #quota-modal{
   display:none;position:fixed;inset:0;z-index:200;
@@ -5883,7 +5926,12 @@ async function doNewChat() {
 
 checkSession();
 function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 function autoGrow(el) {
@@ -5908,6 +5956,41 @@ function fillMsg(text) {
   input.value = text;
   input.focus();
   autoGrow(input);
+}
+
+function removeClaudeUpgradeCard() {
+  document.querySelectorAll('.upgrade-card').forEach((el) => el.remove());
+}
+
+function upgradePromptPreview(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return '';
+  const clipped = text.length > 140 ? text.slice(0, 137) + '...' : text;
+  return '<div class="upgrade-prompt">Continue this task in your browser: ' + esc(clipped) + '</div>';
+}
+
+function showClaudeUpgradeCard() {
+  if (_isAuthenticatedUser) return;
+  const chat = document.getElementById('chat');
+  if (!chat) return;
+  removeClaudeUpgradeCard();
+  const prompt = currentFirstLookPrompt();
+  const card = document.createElement('div');
+  card.className = 'upgrade-card';
+  card.innerHTML =
+    '<h3>Want to run this with your Claude?</h3>' +
+    '<p>Switch from the shared demo browser to your own Claude and browser for free. Login only creates your personal connection key.</p>' +
+    upgradePromptPreview(prompt) +
+    '<div class="upgrade-list">' +
+      '<div class="upgrade-item"><strong>Your current Chrome profile</strong><span>Use your existing sessions and logged-in sites.</span></div>' +
+      '<div class="upgrade-item"><strong>Clean guest profile</strong><span>Start in a fresh browser if you want an isolated run.</span></div>' +
+    '</div>' +
+    '<div class="upgrade-actions">' +
+      '<div class="upgrade-why">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>' +
+      '<a class="upgrade-cta" href="/local" onclick="return handoffFirstLookToClaude();">Connect Claude Free</a>' +
+    '</div>';
+  chat.appendChild(card);
+  scrollToBottom();
 }
 
 function hideHints() {
@@ -7906,6 +7989,7 @@ function showHintsIfEmpty() {
 
 async function doNewChat() {
   if (sending) return;
+  removeClaudeUpgradeCard();
   document.getElementById('chat').innerHTML = '';
   showHintsIfEmpty();
   try {
@@ -8385,6 +8469,7 @@ async function doSend() {
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
+  removeClaudeUpgradeCard();
   input.value = '';
   input.style.height = 'auto';
 
@@ -8476,6 +8561,7 @@ async function doSend() {
             _turnCount = 0;
             _navTrail = [];
             renderNavTrail();
+            showClaudeUpgradeCard();
           }
         }
       }
