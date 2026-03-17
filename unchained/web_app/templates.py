@@ -5528,9 +5528,9 @@ body{
             <div class="hint-panel accent"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>
           </div>
           <div class="hint-examples">
-            <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
-            <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
-            <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
+            <div class="hint-item" onclick="fillMsg('On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year.')"><span class="hint-emoji">&#128187;</span> Compare three computing pioneers on Wikipedia</div>
+            <div class="hint-item" onclick="fillMsg('Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer.')"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</div>
+            <div class="hint-item" onclick="fillMsg('Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first.')"><span class="hint-emoji">&#128240;</span> Group the top Hacker News stories into themes</div>
           </div>
           <div class="hint-note">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>
           <div class="hint-actions"><a class="hint-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a></div>
@@ -5865,7 +5865,7 @@ async function maybeAutoPrompt() {
   }
   if (!lastAgentConnected) return;
   // Type the auto-prompt with animation
-  const prompt = 'Go to Wikipedia and find out when the Eiffel Tower, the Statue of Liberty, and the Golden Gate Bridge were each completed. Compare their heights and tell me which one took the longest to build.';
+  const prompt = 'On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year.';
   const input = document.getElementById('msginput');
   hideHints();
   for (let i = 0; i < prompt.length; i++) {
@@ -5890,9 +5890,9 @@ function showHintsIfEmpty() {
     '<div class="hint-panel accent"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>' +
     '</div>' +
     '<div class="hint-examples">' +
-    '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower\')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>' +
-    '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City\')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>' +
-    '<div class="hint-item" onclick="fillMsg(\'Open Hacker News and list the top 5 stories right now\')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year.\')"><span class="hint-emoji">&#128187;</span> Compare three computing pioneers on Wikipedia</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer.\')"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</div>' +
+    '<div class="hint-item" onclick="fillMsg(\'Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first.\')"><span class="hint-emoji">&#128240;</span> Group the top Hacker News stories into themes</div>' +
     '</div>' +
     '<div class="hint-note">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>' +
     '<div class="hint-actions"><a class="hint-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a></div>' +
