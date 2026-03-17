@@ -243,6 +243,13 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Intentionally same-origin readable", web.HEADLESS_DEMO_HTML)
         self.assertIn("prompt.slice(0, 500)", web.HEADLESS_DEMO_HTML)
         self.assertIn("window.location.href = '/labs/research-desk' + suffix", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Compare three computing pioneers on Wikipedia", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Pick the better outdoor coffee day in NYC", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Group the top Hacker News stories into themes", web.HEADLESS_DEMO_HTML)
+        self.assertIn(
+            "On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson.",
+            web.HEADLESS_DEMO_HTML,
+        )
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
