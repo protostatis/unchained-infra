@@ -5349,6 +5349,9 @@ body{
 }
 .quota-box h2{font-size:22px;color:var(--accent);margin-bottom:8px}
 .quota-box .quota-sub{color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6}
+.quota-why-free{
+  margin:-12px 0 24px;color:#c9cfdb;font-size:13px;line-height:1.6;
+}
 .quota-grid{
   display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;text-align:left;
 }
@@ -5375,16 +5378,17 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>First look limit reached</h2>
-    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>Switch from the shared demo to your Claude</h2>
+    <p class="quota-sub">You've used your 2 shared demo runs. Continue free to generate your personal connection key and use Claude on your own browser.</p>
+    <p class="quota-why-free">Why free? You already bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</p>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
-      <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
-      <div class="quota-item"><strong>Your 2FA</strong><span>Works with authenticator apps and hardware keys.</span></div>
-      <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
+      <div class="quota-item"><strong>Your Claude plan</strong><span>Use your existing Claude Pro or Max plan instead of the shared demo model.</span></div>
+      <div class="quota-item"><strong>Your browser choice</strong><span>Run tasks in your current Chrome profile or start fresh in a clean guest profile.</span></div>
+      <div class="quota-item"><strong>Your data stays with you</strong><span>Your browser session and site access stay under your control.</span></div>
+      <div class="quota-item"><strong>Login only connects</strong><span>Authentication just creates your personal connection key. No credit card and no extra API billing from Unchained.</span></div>
     </div>
-    <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
+    <a href="/local" class="quota-cta">Use this with Claude &rarr;</a>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
 
@@ -5427,14 +5431,14 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a href="/trial">Free Tier</a>
+      <a id="first-look-upgrade-link" href="/local">Use with Claude</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
-      <a href="/scheduler">Scheduler</a>
-      <a href="#" onclick="doDisconnect();return false">Logout</a>
+      <a id="first-look-scheduler-link" href="/scheduler">Scheduler</a>
+      <a id="first-look-logout-link" href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>Shared demo browser:</strong> limited public-site access on our EC2 browser. <a href="/local">Use your own Claude</a> on your own browser for free. Why free? You bring Claude, browser, and data; Unchained only provides the extraction layer.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -5446,14 +5450,14 @@ body{
 
       <div id="chat">
           <div id="chat-hints">
-            <div class="hint-title">Try it &mdash; ask the agent anything</div>
-          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+            <div class="hint-title">Try the shared demo on public sites</div>
+          <div class="hint-sub">This runs on our shared EC2 browser and works best on a small set of reliable public sites. After that, continue free to use your own Claude on your own browser.</div>
           <div class="hint-examples">
             <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
             <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
             <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
           </div>
-          <div class="hint-footer">Free to try &mdash; no setup needed</div>
+          <div class="hint-footer">Shared demo &mdash; free to try</div>
         </div>
       </div>
 
@@ -5466,13 +5470,13 @@ body{
     </div>
 
     <aside id="live-pane">
-      <div id="live-pane-head">Live Browser</div>
+      <div id="live-pane-head">Shared Demo Browser</div>
       <div id="live-window">
         <div id="live-window-bar">
           <span class="dot red"></span>
           <span class="dot yellow"></span>
           <span class="dot green"></span>
-          <span class="title">headless-chrome</span>
+          <span class="title">shared-demo-chrome</span>
         </div>
         <div id="live-canvas-wrap">
           <img id="live-image" alt="Headless browser live preview">
@@ -5672,8 +5676,21 @@ let _forcedFirstLookModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
-  el.textContent = 'headless agent';
+  el.textContent = _isAuthenticatedUser ? 'your browser mode' : 'shared demo browser';
   el.className = 'status online';
+}
+
+function updateFirstLookNav() {
+  const upgrade = document.getElementById('first-look-upgrade-link');
+  const scheduler = document.getElementById('first-look-scheduler-link');
+  const logout = document.getElementById('first-look-logout-link');
+  const liveHead = document.getElementById('live-pane-head');
+  const liveTitle = document.querySelector('#live-window-bar .title');
+  if (upgrade) upgrade.textContent = _isAuthenticatedUser ? 'Open Claude' : 'Use with Claude';
+  if (scheduler) scheduler.style.display = _isAuthenticatedUser ? 'block' : 'none';
+  if (logout) logout.style.display = _isAuthenticatedUser ? 'block' : 'none';
+  if (liveHead) liveHead.textContent = _isAuthenticatedUser ? 'Your Browser' : 'Shared Demo Browser';
+  if (liveTitle) liveTitle.textContent = _isAuthenticatedUser ? 'your-browser' : 'shared-demo-chrome';
 }
 
 function showMain() {
@@ -5681,6 +5698,7 @@ function showMain() {
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
   document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
+  updateFirstLookNav();
   resetLivePreview();
   try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
@@ -5771,14 +5789,14 @@ function showHintsIfEmpty() {
   if (document.getElementById('chat-hints')) return;
   document.getElementById('chat').innerHTML =
     '<div id="chat-hints">' +
-    '<div class="hint-title">Try it &mdash; ask the agent anything</div>' +
-    '<div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>' +
+    '<div class="hint-title">Try the shared demo on public sites</div>' +
+    '<div class="hint-sub">This runs on our shared EC2 browser and works best on a small set of reliable public sites. After that, continue free to use your own Claude on your own browser.</div>' +
     '<div class="hint-examples">' +
     '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower\')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City\')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Open Hacker News and list the top 5 stories right now\')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>' +
     '</div>' +
-    '<div class="hint-footer">Free to try &mdash; no setup needed</div>' +
+    '<div class="hint-footer">Shared demo &mdash; free to try</div>' +
     '</div>';
 }
 

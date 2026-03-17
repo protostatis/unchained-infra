@@ -243,6 +243,14 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Intentionally same-origin readable", web.HEADLESS_DEMO_HTML)
         self.assertIn("prompt.slice(0, 500)", web.HEADLESS_DEMO_HTML)
         self.assertIn("window.location.href = '/labs/research-desk' + suffix", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Shared demo browser", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Try the shared demo on public sites", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Use this with Claude", web.HEADLESS_DEMO_HTML)
+        self.assertIn(
+            "Why free? You bring Claude, browser, and data; Unchained only provides the extraction layer.",
+            web.HEADLESS_DEMO_HTML,
+        )
+        self.assertNotIn("set up an API key", web.HEADLESS_DEMO_HTML)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
