@@ -5426,7 +5426,7 @@ body{
       <div class="quota-item"><strong>Your data stays with you</strong><span>Your browser session and site access stay under your control.</span></div>
       <div class="quota-item"><strong>Why free</strong><span>You bring Claude, your browser, and your data. Unchained only provides the extraction layer.</span></div>
     </div>
-    <a href="/local" class="quota-cta" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free &rarr;</a>
+    <a href="/local" class="quota-cta" onclick="return handoffFirstLookToClaude();">Connect Claude Free &rarr;</a>
     <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
@@ -5578,7 +5578,7 @@ function currentFirstLookPrompt() {
 function handoffFirstLookToClaude() {
   const prompt = currentFirstLookPrompt();
   if (prompt) rememberFirstLookPrompt(prompt);
-  window.location.href = '/local';
+  return true;
 }
 
 function continueInResearchDesk() {
@@ -5660,6 +5660,9 @@ async function checkApproval() {
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
+      _userName = data.name || _userName || 'Unchained';
+      _userPicture = data.picture || '';
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       showMain();
@@ -5863,7 +5866,12 @@ async function doNewChat() {
 
 checkSession();
 function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 function autoGrow(el) {
@@ -5919,7 +5927,7 @@ function showClaudeUpgradeCard() {
     '</div>' +
     '<div class="upgrade-actions">' +
       '<div class="upgrade-why">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>' +
-      '<a class="upgrade-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a>' +
+      '<a class="upgrade-cta" href="/local" onclick="return handoffFirstLookToClaude();">Connect Claude Free</a>' +
     '</div>';
   chat.appendChild(card);
   scrollToBottom();
