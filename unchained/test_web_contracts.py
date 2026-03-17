@@ -246,6 +246,8 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Shared demo browser", web.HEADLESS_DEMO_HTML)
         self.assertIn("Try the shared demo on public sites", web.HEADLESS_DEMO_HTML)
         self.assertIn("Use this with Claude", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Use Claude on your own browser", web.HEADLESS_DEMO_HTML)
+        self.assertIn("works best on a small set of reliable public sites", web.HEADLESS_DEMO_HTML)
         self.assertIn(
             "Why free? You bring Claude, browser, and data; Unchained only provides the extraction layer.",
             web.HEADLESS_DEMO_HTML,

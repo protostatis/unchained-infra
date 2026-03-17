@@ -5378,7 +5378,7 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>Switch from the shared demo to your Claude</h2>
+    <h2>Use Claude on your own browser</h2>
     <p class="quota-sub">You've used your 2 shared demo runs. Continue free to generate your personal connection key and use Claude on your own browser.</p>
     <p class="quota-why-free">Why free? You already bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</p>
     <div class="quota-grid">
@@ -5609,6 +5609,9 @@ async function checkApproval() {
     const data = await r.json();
     if (data.authenticated) {
       agentId = data.agent_id;
+      _isAuthenticatedUser = true;
+      _userName = data.name || _userName || 'Unchained';
+      _userPicture = data.picture || '';
       demoPromptCount = data.demo_prompt_count || 0;
       demoUnlimited = !!data.demo_unlimited;
       showMain();
