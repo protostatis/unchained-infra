@@ -243,6 +243,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Intentionally same-origin readable", web.HEADLESS_DEMO_HTML)
         self.assertIn("prompt.slice(0, 500)", web.HEADLESS_DEMO_HTML)
         self.assertIn("window.location.href = '/labs/research-desk' + suffix", web.HEADLESS_DEMO_HTML)
+        self.assertIn("showClaudeUpgradeCard()", web.HEADLESS_DEMO_HTML)
+        self.assertIn("removeClaudeUpgradeCard()", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Connect Claude Free", web.HEADLESS_DEMO_HTML)
+        self.assertIn("Want to run this with your Claude?", web.HEADLESS_DEMO_HTML)
+        self.assertIn("currentFirstLookPrompt()", web.HEADLESS_DEMO_HTML)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(

@@ -2577,6 +2577,7 @@ async function loadHistory() {
         appendText(bubble, msg.content);
       }
     }
+    showClaudeUpgradeCard();
   } catch(e) {}
 }
 
@@ -5337,6 +5338,48 @@ body{
   letter-spacing:0.5px;text-transform:uppercase;
 }
 
+.upgrade-card{
+  align-self:stretch;padding:18px 20px;border:1px solid rgba(255,255,255,0.08);
+  border-radius:16px;background:linear-gradient(135deg, rgba(233,69,96,0.16), rgba(17,17,25,0.96));
+  box-shadow:0 18px 40px rgba(0,0,0,0.24);
+}
+.upgrade-card h3{
+  margin:0 0 8px;font-size:19px;color:var(--text);letter-spacing:0.2px;
+}
+.upgrade-card p{
+  margin:0;color:#d6dbea;font-size:13px;line-height:1.6;
+}
+.upgrade-card .upgrade-prompt{
+  margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);
+  color:#f0f2f8;font-size:12px;font-family:var(--mono);
+}
+.upgrade-card .upgrade-list{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;
+}
+.upgrade-card .upgrade-item{
+  padding:12px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;background:rgba(8,10,15,0.3);
+}
+.upgrade-card .upgrade-item strong{
+  display:block;margin-bottom:4px;font-size:13px;color:var(--text);
+}
+.upgrade-card .upgrade-item span{
+  color:var(--muted);font-size:12px;line-height:1.5;
+}
+.upgrade-card .upgrade-actions{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;flex-wrap:wrap;
+}
+.upgrade-card .upgrade-why{
+  flex:1;min-width:220px;color:#c7cedf;font-size:12px;line-height:1.5;
+}
+.upgrade-card .upgrade-cta{
+  display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;border-radius:10px;
+  background:var(--accent);color:#fff;text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.2px;
+}
+.upgrade-card .upgrade-cta:hover{opacity:0.92;box-shadow:0 0 18px rgba(233,69,96,0.28)}
+@media(max-width:720px){
+  .upgrade-card .upgrade-list{grid-template-columns:1fr}
+}
+
 /* === Quota modal === */
 #quota-modal{
   display:none;position:fixed;inset:0;z-index:200;
@@ -5375,16 +5418,16 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>First look limit reached</h2>
-    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>Run this with your Claude</h2>
+    <p class="quota-sub">You've used your 2 shared demo runs. Continue free to generate your personal connection key and move this task into your own browser.</p>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
-      <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
-      <div class="quota-item"><strong>Your 2FA</strong><span>Works with authenticator apps and hardware keys.</span></div>
-      <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
+      <div class="quota-item"><strong>Your Claude plan</strong><span>Use your existing Claude Pro or Max plan instead of the shared demo model.</span></div>
+      <div class="quota-item"><strong>Your browser</strong><span>Continue in your current Chrome profile or start fresh in a clean guest profile.</span></div>
+      <div class="quota-item"><strong>Your data stays with you</strong><span>Your browser session and site access stay under your control.</span></div>
+      <div class="quota-item"><strong>Why free</strong><span>You bring Claude, your browser, and your data. Unchained only provides the extraction layer.</span></div>
     </div>
-    <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
+    <a href="/local" class="quota-cta" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free &rarr;</a>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
 
@@ -5427,14 +5470,14 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a href="/trial">Free Tier</a>
+      <a href="/local">Connect Claude Free</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:none"><strong>Shared demo browser:</strong> limited public-site access on our EC2 browser. After a result, you can continue free with your own Claude and browser.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -5524,6 +5567,18 @@ function rememberFirstLookPrompt(prompt) {
     const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
     if (activeSessionId) localStorage.setItem(FIRST_LOOK_SESSION_KEY, activeSessionId);
   } catch(e) {}
+}
+
+function currentFirstLookPrompt() {
+  const input = document.getElementById('msginput');
+  const current = input ? String(input.value || '').trim() : '';
+  return current || (localStorage.getItem(FIRST_LOOK_PROMPT_KEY) || '').trim();
+}
+
+function handoffFirstLookToClaude() {
+  const prompt = currentFirstLookPrompt();
+  if (prompt) rememberFirstLookPrompt(prompt);
+  window.location.href = '/local';
 }
 
 function continueInResearchDesk() {
@@ -5833,6 +5888,41 @@ function fillMsg(text) {
   input.value = text;
   input.focus();
   autoGrow(input);
+}
+
+function removeClaudeUpgradeCard() {
+  document.querySelectorAll('.upgrade-card').forEach((el) => el.remove());
+}
+
+function upgradePromptPreview(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return '';
+  const clipped = text.length > 140 ? text.slice(0, 137) + '...' : text;
+  return '<div class="upgrade-prompt">Continue this task in your browser: ' + esc(clipped) + '</div>';
+}
+
+function showClaudeUpgradeCard() {
+  if (_isAuthenticatedUser) return;
+  const chat = document.getElementById('chat');
+  if (!chat) return;
+  removeClaudeUpgradeCard();
+  const prompt = currentFirstLookPrompt();
+  const card = document.createElement('div');
+  card.className = 'upgrade-card';
+  card.innerHTML =
+    '<h3>Want to run this with your Claude?</h3>' +
+    '<p>Switch from the shared demo browser to your own Claude and browser for free. Login only creates your personal connection key.</p>' +
+    upgradePromptPreview(prompt) +
+    '<div class="upgrade-list">' +
+      '<div class="upgrade-item"><strong>Your current Chrome profile</strong><span>Use your existing sessions and logged-in sites.</span></div>' +
+      '<div class="upgrade-item"><strong>Clean guest profile</strong><span>Start in a fresh browser if you want an isolated run.</span></div>' +
+    '</div>' +
+    '<div class="upgrade-actions">' +
+      '<div class="upgrade-why">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>' +
+      '<a class="upgrade-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a>' +
+    '</div>';
+  chat.appendChild(card);
+  scrollToBottom();
 }
 
 function hideHints() {
@@ -7831,6 +7921,7 @@ function showHintsIfEmpty() {
 
 async function doNewChat() {
   if (sending) return;
+  removeClaudeUpgradeCard();
   document.getElementById('chat').innerHTML = '';
   showHintsIfEmpty();
   try {
@@ -8310,6 +8401,7 @@ async function doSend() {
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
+  removeClaudeUpgradeCard();
   input.value = '';
   input.style.height = 'auto';
 
@@ -8401,6 +8493,7 @@ async function doSend() {
             _turnCount = 0;
             _navTrail = [];
             renderNavTrail();
+            showClaudeUpgradeCard();
           }
         }
       }
