@@ -5322,8 +5322,28 @@ body{
   display:flex;flex-direction:column;align-items:center;
   justify-content:flex-start;height:100%;padding-top:24px;text-align:center;
 }
+.hint-badge{
+  display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border-radius:999px;
+  border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);
+  color:#cfd5e4;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+}
 .hint-title{font-size:20px;font-weight:600;color:var(--accent);margin-bottom:8px}
 .hint-sub{color:var(--muted);font-size:13px;margin-bottom:16px;max-width:380px;line-height:1.5}
+.hint-panels{
+  display:grid;grid-template-columns:1fr;gap:10px;width:100%;max-width:380px;margin-bottom:14px;
+}
+.hint-panel{
+  padding:14px;border:1px solid #333;border-radius:14px;background:rgba(255,255,255,0.03);text-align:left;
+}
+.hint-panel.accent{
+  border-color:rgba(233,69,96,0.35);background:rgba(233,69,96,0.08);
+}
+.hint-panel strong{
+  display:block;margin-bottom:6px;color:var(--text);font-size:13px;
+}
+.hint-panel span{
+  color:var(--muted);font-size:12px;line-height:1.6;
+}
 .hint-examples{display:flex;flex-direction:column;gap:8px;width:100%;max-width:380px}
 .hint-item{
   padding:10px 14px;border:1px solid #333;border-radius:10px;
@@ -5332,6 +5352,17 @@ body{
 }
 .hint-item:hover{border-color:var(--accent)}
 .hint-emoji{font-size:18px;flex-shrink:0}
+.hint-actions{
+  display:flex;justify-content:center;width:100%;margin-top:16px;
+}
+.hint-cta{
+  display:inline-flex;align-items:center;justify-content:center;padding:12px 18px;border-radius:10px;
+  background:var(--accent);color:#fff;text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.2px;
+}
+.hint-cta:hover{opacity:0.92;box-shadow:0 0 18px rgba(233,69,96,0.28)}
+.hint-note{
+  margin:14px 0 4px;max-width:380px;color:#c7cedf;font-size:12px;line-height:1.6;
+}
 .hint-footer{
   margin-top:20px;font-size:11px;color:var(--muted);
   letter-spacing:0.5px;text-transform:uppercase;
@@ -5375,16 +5406,16 @@ body{
 <!-- Quota modal -->
 <div id="quota-modal">
   <div class="quota-box">
-    <h2>First look limit reached</h2>
-    <p class="quota-sub">You've used your 2 free first look interactions. Connect your own browser for unlimited access &mdash; it's even better:</p>
+    <h2>Shared demo complete</h2>
+    <p class="quota-sub">You've used your 2 shared demo runs. Continue free to generate your personal connection key and move into the real product mode.</p>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
-      <div class="quota-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
-      <div class="quota-item"><strong>Your 2FA</strong><span>Works with authenticator apps and hardware keys.</span></div>
-      <div class="quota-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
+      <div class="quota-item"><strong>Shared demo browser</strong><span>Public EC2 browser with a limited set of reliable public sites.</span></div>
+      <div class="quota-item"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>
+      <div class="quota-item"><strong>Why free</strong><span>You bring Claude, your browser, and your data. Unchained only provides the extraction layer.</span></div>
+      <div class="quota-item"><strong>Login only connects</strong><span>Authentication just creates your personal connection key. No credit card and no extra API billing from Unchained.</span></div>
     </div>
-    <a href="/trial" class="quota-cta">Set up your browser &rarr;</a>
-    <button class="quota-dismiss" onclick="dismissQuota()">Stay on first look</button>
+    <a href="/local" class="quota-cta" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free &rarr;</a>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
 
@@ -5427,14 +5458,14 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a href="/trial">Free Tier</a>
+      <a id="first-look-upgrade-link" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
-      <a href="/scheduler">Scheduler</a>
-      <a href="#" onclick="doDisconnect();return false">Logout</a>
+      <a id="first-look-scheduler-link" href="/scheduler">Scheduler</a>
+      <a id="first-look-logout-link" href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
   </div>
 
-  <div id="model-notice" style="display:none"><strong>First look mode:</strong> Uses lightweight free models. Results may vary &mdash; <a href="/trial">try the free tier</a> for your own browser, or <a href="/setup">set up an API key</a>.</div>
+  <div id="model-notice" style="display:block"><strong>Shared demo browser:</strong> two runs on selected public sites. <a href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a> to use your own browser and your existing Claude plan.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -5446,14 +5477,21 @@ body{
 
       <div id="chat">
           <div id="chat-hints">
-            <div class="hint-title">Try it &mdash; ask the agent anything</div>
-          <div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>
+            <div class="hint-badge">2 shared demo runs &middot; selected public sites</div>
+            <div class="hint-title">Shared demo first. Your Claude next.</div>
+          <div class="hint-sub">Use the public sandbox to watch the agent browse in real time. Then connect your own Claude for free to run on your own browser.</div>
+          <div class="hint-panels">
+            <div class="hint-panel"><strong>Shared demo browser</strong><span>Runs on our EC2 browser and works best on a small set of reliable public sites.</span></div>
+            <div class="hint-panel accent"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>
+          </div>
           <div class="hint-examples">
             <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
             <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
             <div class="hint-item" onclick="fillMsg('Open Hacker News and list the top 5 stories right now')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>
           </div>
-          <div class="hint-footer">Free to try &mdash; no setup needed</div>
+          <div class="hint-note">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>
+          <div class="hint-actions"><a class="hint-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a></div>
+          <div class="hint-footer">Shared demo browser on selected public sites only</div>
         </div>
       </div>
 
@@ -5466,13 +5504,13 @@ body{
     </div>
 
     <aside id="live-pane">
-      <div id="live-pane-head">Live Browser</div>
+      <div id="live-pane-head">Shared Demo Browser</div>
       <div id="live-window">
         <div id="live-window-bar">
           <span class="dot red"></span>
           <span class="dot yellow"></span>
           <span class="dot green"></span>
-          <span class="title">headless-chrome</span>
+          <span class="title">shared-demo-chrome</span>
         </div>
         <div id="live-canvas-wrap">
           <img id="live-image" alt="Headless browser live preview">
@@ -5524,6 +5562,18 @@ function rememberFirstLookPrompt(prompt) {
     const activeSessionId = (typeof sessionId !== 'undefined' && sessionId) ? sessionId : '';
     if (activeSessionId) localStorage.setItem(FIRST_LOOK_SESSION_KEY, activeSessionId);
   } catch(e) {}
+}
+
+function currentFirstLookPrompt() {
+  const input = document.getElementById('msginput');
+  const current = input ? String(input.value || '').trim() : '';
+  return current || (localStorage.getItem(FIRST_LOOK_PROMPT_KEY) || '').trim();
+}
+
+function handoffFirstLookToClaude() {
+  const prompt = currentFirstLookPrompt();
+  if (prompt) rememberFirstLookPrompt(prompt);
+  window.location.href = '/local';
 }
 
 function continueInResearchDesk() {
@@ -5672,8 +5722,23 @@ let _forcedFirstLookModel = '';
 
 function updateAgentStatusUI(connected) {
   const el = document.getElementById('agentstatus');
-  el.textContent = 'headless agent';
+  el.textContent = _isAuthenticatedUser ? 'your browser mode' : 'shared demo browser';
   el.className = 'status online';
+}
+
+function updateFirstLookChromeUI() {
+  const notice = document.getElementById('model-notice');
+  const upgrade = document.getElementById('first-look-upgrade-link');
+  const scheduler = document.getElementById('first-look-scheduler-link');
+  const logout = document.getElementById('first-look-logout-link');
+  const liveHead = document.getElementById('live-pane-head');
+  const liveTitle = document.querySelector('#live-window-bar .title');
+  if (notice) notice.style.display = _isAuthenticatedUser ? 'none' : 'block';
+  if (upgrade) upgrade.textContent = _isAuthenticatedUser ? 'Open Claude' : 'Connect Claude Free';
+  if (scheduler) scheduler.style.display = _isAuthenticatedUser ? 'block' : 'none';
+  if (logout) logout.style.display = _isAuthenticatedUser ? 'block' : 'none';
+  if (liveHead) liveHead.textContent = _isAuthenticatedUser ? 'Your Browser' : 'Shared Demo Browser';
+  if (liveTitle) liveTitle.textContent = _isAuthenticatedUser ? 'your-browser' : 'shared-demo-chrome';
 }
 
 function showMain() {
@@ -5681,6 +5746,7 @@ function showMain() {
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
   document.getElementById('agentlabel').textContent = _userName || (_isAuthenticatedUser ? 'Unchained' : 'Guest');
+  updateFirstLookChromeUI();
   resetLivePreview();
   try { localStorage.setItem('unchained_last_route', '/first-look'); } catch(e){}
   sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
@@ -5718,7 +5784,6 @@ async function loadHistory() {
     }
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
-      maybeAutoPrompt();
       return;
     }
     hideHints();
@@ -5771,14 +5836,21 @@ function showHintsIfEmpty() {
   if (document.getElementById('chat-hints')) return;
   document.getElementById('chat').innerHTML =
     '<div id="chat-hints">' +
-    '<div class="hint-title">Try it &mdash; ask the agent anything</div>' +
-    '<div class="hint-sub">An AI agent will open a real browser, navigate pages, read content, and report back &mdash; all in real time. Pick a prompt below or type your own.</div>' +
+    '<div class="hint-badge">2 shared demo runs &middot; selected public sites</div>' +
+    '<div class="hint-title">Shared demo first. Your Claude next.</div>' +
+    '<div class="hint-sub">Use the public sandbox to watch the agent browse in real time. Then connect your own Claude for free to run on your own browser.</div>' +
+    '<div class="hint-panels">' +
+    '<div class="hint-panel"><strong>Shared demo browser</strong><span>Runs on our EC2 browser and works best on a small set of reliable public sites.</span></div>' +
+    '<div class="hint-panel accent"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>' +
+    '</div>' +
     '<div class="hint-examples">' +
     '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower\')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City\')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Open Hacker News and list the top 5 stories right now\')"><span class="hint-emoji">&#128240;</span> List the top 5 Hacker News stories</div>' +
     '</div>' +
-    '<div class="hint-footer">Free to try &mdash; no setup needed</div>' +
+    '<div class="hint-note">Why free? You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</div>' +
+    '<div class="hint-actions"><a class="hint-cta" href="/local" onclick="handoffFirstLookToClaude();return false;">Connect Claude Free</a></div>' +
+    '<div class="hint-footer">Shared demo browser on selected public sites only</div>' +
     '</div>';
 }
 
