@@ -5759,7 +5759,9 @@ async function maybeAutoPrompt() {
   hideHints();
   for (let i = 0; i < prompt.length; i++) {
     input.value = prompt.slice(0, i + 1);
-    await new Promise(r => setTimeout(r, 25 + Math.random() * 20));
+    autoGrow(input);
+    input.scrollTop = input.scrollHeight;
+    await new Promise(r => setTimeout(r, 12 + Math.random() * 10));
   }
   await new Promise(r => setTimeout(r, 400));
   doSend();
