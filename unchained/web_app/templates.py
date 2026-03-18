@@ -7990,6 +7990,11 @@ function showHintsIfEmpty() {
     '</div></div>';
 }
 
+function removeClaudeUpgradeCard() {
+  document.querySelectorAll('.upgrade-card').forEach(function(el) { el.remove(); });
+}
+function showClaudeUpgradeCard() {}
+
 async function doNewChat() {
   if (sending) return;
   removeClaudeUpgradeCard();
