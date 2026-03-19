@@ -904,8 +904,10 @@ claude_sessions: dict[str, str] = {}
 # Map chat session_id → codex thread/session id for exec resume continuity
 codex_sessions: dict[str, str] = {}
 
-# Track which sessions already received context injection (per-session flag)
-_context_injected: set[str] = set()
+# Track which (session_id, lane) pairs already received context injection.
+# Keyed by (sid, "claude") or (sid, "codex") so a fresh Codex thread after
+# a Claude turn (or after a Codex model switch) still gets its own injection.
+_context_injected: set[tuple[str, str]] = set()
 
 # Track active subprocesses and tasks for cancel support
 active_procs: dict[str, asyncio.subprocess.Process] = {}
@@ -1032,13 +1034,13 @@ async def handle_message_claude(
 
     # Context fallback: if no resume session but slot has history, inject summary
     effective_text = user_text
-    if not is_resume and sid not in _context_injected:
+    if not is_resume and (sid, "claude") not in _context_injected:
         data = _load_chat()
         prev_msgs = data.get("messages", [])
         # Exclude the message we just appended (last one)
         prev_msgs = prev_msgs[:-1] if prev_msgs else []
         if prev_msgs:
-            _context_injected.add(sid)
+            _context_injected.add((sid, "claude"))
             # Format last 20 messages as context
             history_lines = []
             for m in prev_msgs[-20:]:
@@ -1500,16 +1502,17 @@ async def handle_message_codex(
             log.info("  Codex model switched (%s → %s), starting fresh session", saved_model, codex_model)
             codex_sessions.pop(sid, None)
             codex_sid = None
+            _context_injected.discard((sid, "codex"))
     is_resume = bool(codex_sid)
 
     # Context fallback: if no resume session but slot has history, inject summary
     history_context = ""
-    if not is_resume and sid not in _context_injected:
+    if not is_resume and (sid, "codex") not in _context_injected:
         data = _load_chat()
         prev_msgs = data.get("messages", [])
         prev_msgs = prev_msgs[:-1] if prev_msgs else []
         if prev_msgs:
-            _context_injected.add(sid)
+            _context_injected.add((sid, "codex"))
             history_lines = []
             for m in prev_msgs[-20:]:
                 role = m.get("role", "unknown")
