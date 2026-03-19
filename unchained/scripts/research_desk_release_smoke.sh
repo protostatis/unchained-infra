@@ -7,20 +7,35 @@ RESULTS_DIR="${RESULTS_DIR:-benchmark/results}"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ARTIFACT_PATH="${RESULTS_DIR%/}/research-desk-release-smoke-${STAMP}.json"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/research-desk-release-smoke.XXXXXX")"
+HOSTED_HTML_PATH="${TMP_DIR}/hosted.html"
+FIRST_LOOK_HTML_PATH="${TMP_DIR}/first-look.html"
+LOCAL_STATUS_PATH="${TMP_DIR}/local-status.json"
+
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
 
 mkdir -p "$RESULTS_DIR"
 
-HOSTED_HTML="$(curl -fsSL "${HOSTED_BASE%/}/labs/research-desk")"
-FIRST_LOOK_HTML="$(curl -fsSL "${HOSTED_BASE%/}/first-look")"
-LOCAL_STATUS_JSON="$(curl -fsSL "${LOCAL_BASE%/}/web/research-desk/status")"
+curl -fsSL "${HOSTED_BASE%/}/labs/research-desk" -o "${HOSTED_HTML_PATH}"
+curl -fsSL "${HOSTED_BASE%/}/first-look" -o "${FIRST_LOOK_HTML_PATH}"
+curl -fsSL "${LOCAL_BASE%/}/web/research-desk/status" -o "${LOCAL_STATUS_PATH}"
 
-/usr/bin/python3 - "$ARTIFACT_PATH" "$HOSTED_BASE" "$LOCAL_BASE" "$HOSTED_HTML" "$FIRST_LOOK_HTML" "$LOCAL_STATUS_JSON" <<'PY'
+/usr/bin/python3 - "$ARTIFACT_PATH" "$HOSTED_BASE" "$LOCAL_BASE" "$HOSTED_HTML_PATH" "$FIRST_LOOK_HTML_PATH" "$LOCAL_STATUS_PATH" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 
-artifact_path, hosted_base, local_base, hosted_html, first_look_html, local_status_json = sys.argv[1:]
-status = json.loads(local_status_json)
+artifact_path, hosted_base, local_base, hosted_html_path, first_look_html_path, local_status_path = sys.argv[1:]
+
+with open(hosted_html_path, "r", encoding="utf-8") as handle:
+    hosted_html = handle.read()
+with open(first_look_html_path, "r", encoding="utf-8") as handle:
+    first_look_html = handle.read()
+with open(local_status_path, "r", encoding="utf-8") as handle:
+    status = json.load(handle)
 
 checks = {
     "hosted_has_connect_button": 'id="connect-local-desk"' in hosted_html,
@@ -55,6 +70,8 @@ with open(artifact_path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 
 print(artifact_path)
+if not payload["ok"]:
+    sys.exit(1)
 PY
 
 echo "Wrote ${ARTIFACT_PATH}"
