@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOSTED_BASE="${HOSTED_BASE:-https://unchainedsky.com}"
 LOCAL_BASE="${LOCAL_BASE:-http://127.0.0.1:8766}"
-RESULTS_DIR="${RESULTS_DIR:-benchmark/results}"
+RESULTS_DIR="${RESULTS_DIR:-${REPO_ROOT}/benchmark/results}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+CURL_FLAGS=(--fail --silent --show-error --location --connect-timeout 5 --max-time 20)
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ARTIFACT_PATH="${RESULTS_DIR%/}/research-desk-release-smoke-${STAMP}.json"
@@ -19,11 +23,11 @@ trap cleanup EXIT
 
 mkdir -p "$RESULTS_DIR"
 
-curl -fsSL "${HOSTED_BASE%/}/labs/research-desk" -o "${HOSTED_HTML_PATH}"
-curl -fsSL "${HOSTED_BASE%/}/first-look" -o "${FIRST_LOOK_HTML_PATH}"
-curl -fsSL "${LOCAL_BASE%/}/web/research-desk/status" -o "${LOCAL_STATUS_PATH}"
+curl "${CURL_FLAGS[@]}" "${HOSTED_BASE%/}/labs/research-desk" -o "${HOSTED_HTML_PATH}"
+curl "${CURL_FLAGS[@]}" "${HOSTED_BASE%/}/first-look" -o "${FIRST_LOOK_HTML_PATH}"
+curl "${CURL_FLAGS[@]}" "${LOCAL_BASE%/}/web/research-desk/status" -o "${LOCAL_STATUS_PATH}"
 
-/usr/bin/python3 - "$ARTIFACT_PATH" "$HOSTED_BASE" "$LOCAL_BASE" "$HOSTED_HTML_PATH" "$FIRST_LOOK_HTML_PATH" "$LOCAL_STATUS_PATH" <<'PY'
+"${PYTHON_BIN}" - "$ARTIFACT_PATH" "$HOSTED_BASE" "$LOCAL_BASE" "$HOSTED_HTML_PATH" "$FIRST_LOOK_HTML_PATH" "$LOCAL_STATUS_PATH" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone

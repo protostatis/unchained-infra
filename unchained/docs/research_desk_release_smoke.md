@@ -35,3 +35,6 @@ After the script passes:
 
 - The automated script is a release smoke, not a full browser E2E test.
 - The browser pass is still required because the localhost approval flow and Mission actions are interactive.
+- If the script fails, inspect the generated JSON artifact first:
+  - `checks` shows which hosted/local surface failed
+  - `local_summary` shows the provider, bridge agent, and capsule count the script observed
