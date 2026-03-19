@@ -19,6 +19,10 @@ The script writes a JSON artifact under `benchmark/results/` and checks:
 - local `/web/research-desk/status` reports the launch URL
 - local handshake and action URLs are present
 
+Optional:
+
+- override `RESULTS_DIR=/some/path` if you want artifacts outside the repo default
+
 ## Manual browser pass
 
 After the script passes:
@@ -38,3 +42,4 @@ After the script passes:
 - If the script fails, inspect the generated JSON artifact first:
   - `checks` shows which hosted/local surface failed
   - `local_summary` shows the provider, bridge agent, and capsule count the script observed
+  - `failure` appears when the script aborts before the normal HTML/JSON checks complete
