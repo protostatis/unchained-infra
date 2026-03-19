@@ -184,6 +184,41 @@ def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():
     print("  packaged cdp_tool.py defaults blank new-tab to /tab")
 
 
+def test_packaged_cdp_tool_supports_enter_submission_helpers():
+    from agent_package import build_update_zip
+
+    zip_bytes = build_update_zip()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        cdp_tool = zf.read("unchained-agent/unchained/cdp_tool.py").decode()
+
+    assert 'elif command == "press_enter":' in cdp_tool
+    assert 'elif command == "submit_form":' in cdp_tool
+    print("  packaged cdp_tool.py supports press_enter and submit_form")
+
+
+def test_cdp_tool_decodes_newline_aliases_for_type_command():
+    from agent_package import build_update_zip
+
+    zip_bytes = build_update_zip()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        cdp_tool_source = zf.read("unchained-agent/unchained/cdp_tool.py").decode()
+
+    module_ast = ast.parse(cdp_tool_source)
+    helper_node = next(
+        node for node in module_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_decode_type_text_arg"
+    )
+    helper_module = ast.Module(body=[helper_node], type_ignores=[])
+    namespace = {}
+    exec(compile(helper_module, "packaged_cdp_tool.py", "exec"), namespace)
+    decode = namespace["_decode_type_text_arg"]
+
+    assert decode("/n") == "\n"
+    assert decode(r"\n") == "\n"
+    assert decode(r"hello\nworld") == "hello\nworld"
+    assert decode("https://example.com/n") == "https://example.com/n"
+
+
 def test_runtime_dockerfile_copies_scheduler_files():
     repo_root = Path(__file__).resolve().parent.parent
     dockerfile = (repo_root / "Dockerfile").read_text()

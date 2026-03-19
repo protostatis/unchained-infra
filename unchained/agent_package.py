@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.53"
+VERSION = "0.3.54"
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.46 is the first packaged client version that reliably includes the
@@ -55,6 +55,9 @@ directly since Chrome always runs on the same machine.
 Usage (called by Claude via Bash):
     python cdp_tool.py ddm --llm-2pass --cols 60
     python cdp_tool.py navigate https://example.com
+    python cdp_tool.py type "search query"
+    python cdp_tool.py press_enter
+    python cdp_tool.py submit_form
     python cdp_tool.py pdf
     python cdp_tool.py tabs
     python cdp_tool.py new-tab https://example.com
@@ -109,10 +112,26 @@ def _chrome_tabs():
     return [t for t in tabs if t.get("type") == "page"]
 
 
+def _decode_type_text_arg(text):
+    """Decode common newline escape aliases used by CLI agents."""
+    aliases = {
+        "/n": "\n",
+        "/r": "\r",
+        "/r/n": "\r\n",
+        "/rn": "\r\n",
+        r"\n": "\n",
+        r"\r": "\r",
+        r"\r\n": "\r\n",
+    }
+    if text in aliases:
+        return aliases[text]
+    return text.replace(r"\r\n", "\r\n").replace(r"\n", "\n").replace(r"\r", "\r")
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
-        print("Commands: ddm, navigate, click, type, js, screenshot, intel, pdf, tabs, new-tab, close-tab")
+        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf, tabs, new-tab, close-tab")
         print("Use --tab <id> to target a specific tab (default: auto = first tab)")
         sys.exit(1)
 
@@ -196,7 +215,11 @@ def main():
             if not args:
                 print("Usage: cdp_tool.py type <text>", file=sys.stderr)
                 sys.exit(1)
-            result = cmd("type", tab_id=tab_id, text=" ".join(args))
+            result = cmd("type", tab_id=tab_id, text=_decode_type_text_arg(" ".join(args)))
+        elif command == "press_enter":
+            result = cmd("press_enter", tab_id=tab_id)
+        elif command == "submit_form":
+            result = cmd("submit_form", tab_id=tab_id)
         elif command == "js":
             if not args:
                 print("Usage: cdp_tool.py js <expression>", file=sys.stderr)
