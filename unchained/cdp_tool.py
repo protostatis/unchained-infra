@@ -12,6 +12,8 @@ Usage:
     uv run python cdp_tool.py navigate https://example.com
     uv run python cdp_tool.py click 500 300
     uv run python cdp_tool.py type "search query"
+    uv run python cdp_tool.py press_enter
+    uv run python cdp_tool.py submit_form
     uv run python cdp_tool.py js "document.title"
     uv run python cdp_tool.py screenshot
     uv run python cdp_tool.py intel --probe
@@ -37,10 +39,26 @@ RELAY_PORT = int(os.environ.get("CDP_RELAY_PORT", "443"))
 TAB_ID = os.environ.get("CDP_TAB_ID", "auto")
 
 
+def _decode_type_text_arg(text: str) -> str:
+    """Decode common newline escape aliases used by CLI agents."""
+    aliases = {
+        "/n": "\n",
+        "/r": "\r",
+        "/r/n": "\r\n",
+        "/rn": "\r\n",
+        r"\n": "\n",
+        r"\r": "\r",
+        r"\r\n": "\r\n",
+    }
+    if text in aliases:
+        return aliases[text]
+    return text.replace(r"\r\n", "\r\n").replace(r"\n", "\n").replace(r"\r", "\r")
+
+
 async def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
-        print("Commands: ddm, navigate, click, type, js, screenshot, intel, pdf")
+        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf")
         print("Use --tab <id> to target a specific tab (default: auto = first tab)")
         sys.exit(1)
 
@@ -86,7 +104,20 @@ async def main():
                 print("Usage: cdp_tool.py type <text>", file=sys.stderr)
                 sys.exit(1)
             result = await cloud_tools.type_text(
-                AGENT_ID, tab_id, " ".join(args), RELAY_HOST, RELAY_PORT)
+                AGENT_ID,
+                tab_id,
+                _decode_type_text_arg(" ".join(args)),
+                RELAY_HOST,
+                RELAY_PORT,
+            )
+
+        elif cmd == "press_enter":
+            result = await cloud_tools.press_enter(
+                AGENT_ID, tab_id, RELAY_HOST, RELAY_PORT)
+
+        elif cmd == "submit_form":
+            result = await cloud_tools.submit_form(
+                AGENT_ID, tab_id, RELAY_HOST, RELAY_PORT)
 
         elif cmd == "js":
             if not args:

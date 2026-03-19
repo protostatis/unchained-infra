@@ -751,6 +751,8 @@ uv run python cdp_tool.py ddm --js "expression"         # Execute JS on page, re
 uv run python cdp_tool.py navigate https://example.com  # Go to URL (returns page layout — no ddm needed)
 uv run python cdp_tool.py click 500 300                 # Click at coordinates (returns page layout — no ddm needed)
 uv run python cdp_tool.py type "search query"           # Type into focused input (click first!)
+uv run python cdp_tool.py press_enter                   # Press Enter in the focused element
+uv run python cdp_tool.py submit_form                   # Submit the focused form
 uv run python cdp_tool.py js "document.title"           # Run JavaScript on page
 uv run python cdp_tool.py intel --probe                 # Page fingerprint + Bayesian strategy ranking
 uv run python cdp_tool.py intel --extract               # Extract structured data (auto strategy)
@@ -814,6 +816,7 @@ This checks the server for a newer version, downloads code updates, and prints
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
 - navigate and click already return DDM page layout — do NOT call ddm separately after them. Only call ddm after type, or for --text, --at, --find, --js flags.
 - Click input fields before typing.
+- To submit a search or form, use `press_enter` or `submit_form` instead of typing `\\n` or `/n`.
 - SPA widgets: CDP clicks often fail — use `js` with .click() instead.
 - DDM only sees current viewport — scroll + remap for content below fold.
 - Be concise — report findings, not process.
@@ -857,6 +860,8 @@ Use CDP tools via Bash:
 - uv run python cdp_tool.py navigate "https://example.com"
 - uv run python cdp_tool.py click X Y
 - uv run python cdp_tool.py type "text here"
+- uv run python cdp_tool.py press_enter
+- uv run python cdp_tool.py submit_form
 - uv run python cdp_tool.py js "document.title"
 - uv run python cdp_tool.py intel --probe
 
@@ -865,6 +870,7 @@ IMPORTANT shell rules:
 - Always double-quote URLs: uv run python cdp_tool.py navigate "https://site.com/path?a=1&b=2"
 - Always double-quote text arguments: uv run python cdp_tool.py type "my search query"
 - Never use newlines inside commands — keep each command on one line.
+- To submit a search or form, use `press_enter` or `submit_form` instead of typing `\\n` or `/n`.
 
 Never answer factual browser tasks from memory when tool use is available.
 """
