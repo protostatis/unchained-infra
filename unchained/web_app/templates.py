@@ -1771,7 +1771,7 @@ body{
   background:var(--surface);border-top:1px solid #333;flex-shrink:0;
 }
 #msginput{
-  flex:1;min-height:44px;max-height:120px;padding:10px 12px;
+  flex:1;min-width:0;min-height:44px;max-height:120px;padding:10px 12px;
   border:1px solid #444;border-radius:12px;
   background:var(--bg);color:var(--text);
   font-size:15px;font-family:-apple-system,system-ui,sans-serif;
@@ -3546,7 +3546,7 @@ body{
   background:var(--surface);border-top:1px solid #333;flex-shrink:0;
 }
 #msginput{
-  flex:1;min-height:44px;max-height:120px;padding:10px 12px;
+  flex:1;min-width:0;min-height:44px;max-height:120px;padding:10px 12px;
   border:1px solid #444;border-radius:12px;
   background:var(--bg);color:var(--text);
   font-size:15px;font-family:-apple-system,system-ui,sans-serif;
@@ -5296,7 +5296,7 @@ body{
   background:var(--surface);border-top:1px solid #333;flex-shrink:0;
 }
 #msginput{
-  flex:1;min-height:44px;max-height:120px;padding:10px 12px;
+  flex:1;min-width:0;min-height:44px;max-height:120px;padding:10px 12px;
   border:1px solid #444;border-radius:12px;
   background:var(--bg);color:var(--text);
   font-size:15px;font-family:-apple-system,system-ui,sans-serif;
@@ -7008,7 +7008,7 @@ body{
   flex-shrink:0;
 }
 #msginput{
-  flex:1;
+  flex:1;min-width:0;
   min-height:44px;
   max-height:120px;
   padding:10px 12px;
@@ -8978,7 +8978,7 @@ HEADLESS_DEMO_HTML = _apply_modern_chat_theme(HEADLESS_DEMO_HTML)
 
 _SIDEBAR_STYLE = """<style id="sidebar-panel">
 #app-shell{display:none;height:100dvh}
-#app-shell #main{height:auto;flex:1;min-height:0}
+#app-shell #main{height:auto;flex:1;min-height:0;min-width:0}
 #sidebar{width:260px;flex-shrink:0;background:var(--surface,#11161d);border-right:1px solid var(--line,#2a3341);display:flex;flex-direction:column;overflow:hidden}
 .sidebar-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line,#2a3341)}
 .sidebar-title{font-size:15px;font-weight:600;color:var(--text,#edf2f7);letter-spacing:0.5px}
