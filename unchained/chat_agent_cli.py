@@ -876,7 +876,7 @@ Never answer factual browser tasks from memory when tool use is available.
 """
 
 
-def _build_codex_prompt(user_text: str, *, is_resume: bool, scheduler_armed: bool = False) -> str:
+def _build_codex_prompt(user_text: str, *, is_resume: bool, scheduler_armed: bool = False, history_context: str = "") -> str:
     """Build Codex input text with browser-agent instructions."""
     req = (user_text or "").strip()
     if not req:
@@ -889,10 +889,12 @@ def _build_codex_prompt(user_text: str, *, is_resume: bool, scheduler_armed: boo
             "[/AGENT REMINDER]\n\n"
             f"User request:\n{req}\n"
         )
+    history_block = f"\n{history_context}\n" if history_context else ""
     return (
         "[SYSTEM PROMPT]\n"
         f"{_claude_system_prompt(scheduler_armed=scheduler_armed)}\n"
-        "[/SYSTEM PROMPT]\n\n"
+        "[/SYSTEM PROMPT]\n"
+        f"{history_block}\n"
         f"User request:\n{req}\n"
     )
 
@@ -1499,6 +1501,29 @@ async def handle_message_codex(
             codex_sessions.pop(sid, None)
             codex_sid = None
     is_resume = bool(codex_sid)
+
+    # Context fallback: if no resume session but slot has history, inject summary
+    history_context = ""
+    if not is_resume and sid not in _context_injected:
+        data = _load_chat()
+        prev_msgs = data.get("messages", [])
+        prev_msgs = prev_msgs[:-1] if prev_msgs else []
+        if prev_msgs:
+            _context_injected.add(sid)
+            history_lines = []
+            for m in prev_msgs[-20:]:
+                role = m.get("role", "unknown")
+                content = m.get("content", "")
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                history_lines.append(f"[{role}]: {content}")
+            history_context = (
+                "[Previous conversation context — the session was restarted, "
+                "here is the recent history for continuity]\n"
+                + "\n".join(history_lines)
+            )
+            log.info("  Injected %d previous messages as context (codex)", len(prev_msgs[-20:]))
+
     log.info(
         "  Calling Codex CLI (model=%s, effort=%s)%s...",
         codex_model,
@@ -1559,7 +1584,7 @@ async def handle_message_codex(
     )
     active_procs[sid] = proc
 
-    codex_input = _build_codex_prompt(user_text, is_resume=is_resume, scheduler_armed=scheduler_armed)
+    codex_input = _build_codex_prompt(user_text, is_resume=is_resume, scheduler_armed=scheduler_armed, history_context=history_context)
     proc.stdin.write(codex_input.encode())
     await proc.stdin.drain()
     proc.stdin.close()
