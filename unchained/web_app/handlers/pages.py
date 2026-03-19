@@ -161,6 +161,7 @@ def _build_research_desk_html() -> str:
     function normalizeSourceSessionId(value){const text=String(value||'').trim();return SESSION_ID_RE.test(text)?text:'';}
     function watchStageIndex(data){const stage=String(data?.stage||'planning');if(Boolean(data?.lab_ready)||stage==='analysis') return 4;const idx=WATCH_STAGE_ORDER.findIndex((item)=>item[0]===stage);return idx>=0 ? idx : 0;}
     function statCard(label, value, hint){const card=document.createElement('div');card.className='watch-stat';const title=document.createElement('strong');title.textContent=label;const primary=document.createElement('em');primary.textContent=value;const sub=document.createElement('small');sub.textContent=hint;card.appendChild(title);card.appendChild(primary);card.appendChild(sub);return card;}
+    function finiteNumber(value, fallback){const num=Number(value);return Number.isFinite(num) ? num : fallback;}
     function currentPromptFromContext(){try{const qs=new URLSearchParams(window.location.search);const prompt=normalizeHandoffPrompt(qs.get('prompt')||'');if(prompt){try{const next=new URL(window.location.href);next.searchParams.delete('prompt');next.searchParams.delete('session_id');window.history.replaceState({},'',next.pathname+(next.searchParams.toString()?('?'+next.searchParams.toString()):''));}catch(_err){}return prompt;}return normalizeHandoffPrompt(window.localStorage.getItem(FIRST_LOOK_PROMPT_KEY)||'');}catch(_err){return '';}}
     function currentSourceSessionId(){try{const qs=new URLSearchParams(window.location.search);const value=normalizeSourceSessionId(qs.get('session_id')||'');if(value) return value;return normalizeSourceSessionId(window.localStorage.getItem(FIRST_LOOK_SESSION_KEY)||'');}catch(_err){return '';}}
     function computeMissionAdvanceReady(){return Boolean(approvedHandshakeToken)&&Boolean(missionWatchVisible)&&Boolean(missionCanAdvance)&&Boolean(safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_advance_url));}
@@ -201,24 +202,30 @@ def _build_research_desk_html() -> str:
       copy.textContent=String(data.blocked_reason||(data.advance_busy ? ('Running '+String(data.active_action_kind||data.autopilot_next_label||'next step')+' in the local desk.') : '')||data.autopilot_next_label||data.next_step||'Mission is progressing in the local desk.');
       stageRail.innerHTML='';
       const activeStageIndex=watchStageIndex(data);
+      const rowCount=finiteNumber(data.primary_row_count, 0);
+      const reviewedPageCount=finiteNumber(data.reviewed_page_count, 0);
+      const acceptedLikeFraction=finiteNumber(data.accepted_like_fraction, -1);
+      const qaLabel=acceptedLikeFraction >= 0 ? (Math.round(acceptedLikeFraction*100)+'%') : 'pending';
+      const qaHint=reviewedPageCount > 0 ? ('Reviewed '+reviewedPageCount+' pages') : 'No reviewed pages yet';
+      const statusHint=String(data.blocked_reason||'').trim() || 'Hosted watch is live';
       WATCH_STAGE_ORDER.forEach((item, idx)=>{const stage=document.createElement('div');stage.className='stage-step '+(idx<activeStageIndex?'done':(idx===activeStageIndex?'active':'pending'));const label=document.createElement('strong');label.textContent=item[1];const detail=document.createElement('span');if(idx===activeStageIndex){detail.textContent=String(data.autopilot_next_label||data.next_step||data.readiness_status||'Current step');}else if(idx<activeStageIndex){detail.textContent='Completed';}else{detail.textContent='Waiting';}stage.appendChild(label);stage.appendChild(detail);stageRail.appendChild(stage);});
       stats.innerHTML='';
       stats.appendChild(statCard('Object', String(data.primary_object_name||'pending'), String(data.readiness_status||'planned')));
-      stats.appendChild(statCard('Rows', String(Number(data.primary_row_count||0)), String(data.advance_busy ? 'Local step still running' : 'Shaped rows so far')));
-      stats.appendChild(statCard('QA', data.accepted_like_fraction ? (Math.round(Number(data.accepted_like_fraction||0)*100)+'%') : 'pending', String(data.reviewed_page_count ? ('Reviewed '+Number(data.reviewed_page_count||0)+' pages') : 'No reviewed pages yet')));
-      stats.appendChild(statCard('Status', String(data.advance_busy ? 'running' : 'idle'), String(data.blocked ? (data.blocked_reason||'Blocked') : 'Hosted watch is live')));
+      stats.appendChild(statCard('Rows', String(rowCount), String(data.advance_busy ? 'Local step still running' : 'Shaped rows so far')));
+      stats.appendChild(statCard('QA', qaLabel, qaHint));
+      stats.appendChild(statCard('Status', String(data.advance_busy ? 'running' : 'idle'), statusHint));
       stats.appendChild(statCard('Next', String(data.autopilot_next_label||'Open local desk'), String(data.autopilot_next_stage||data.stage||'planning')));
       const qaCounts=Object.entries(data.qa_status_counts||{}).filter((entry)=>Number(entry[1]||0)>0).slice(0,3).map((entry)=>String(entry[0])+': '+String(entry[1]));
-      stats.appendChild(statCard('Reviewed', String(Number(data.reviewed_page_count||0)), qaCounts.length ? qaCounts.join(' · ') : 'Waiting for reviewed pages'));
+      stats.appendChild(statCard('Reviewed', String(reviewedPageCount), qaCounts.length ? qaCounts.join(' · ') : 'Waiting for reviewed pages'));
       meta.innerHTML='';
       const badges=[
         String(data.stage||'planning'),
         String(data.readiness_status||'planned'),
         String(data.primary_object_name||'object pending'),
         String(data.advance_busy ? 'running' : 'idle'),
-        String((Number(data.primary_row_count||0))+' rows'),
-        String(data.reviewed_page_count ? ('pages '+Number(data.reviewed_page_count||0)) : 'pages pending'),
-        String(data.accepted_like_fraction ? ('qa '+Math.round(Number(data.accepted_like_fraction||0)*100)+'%') : 'qa pending'),
+        String(rowCount+' rows'),
+        String(reviewedPageCount > 0 ? ('pages '+reviewedPageCount) : 'pages pending'),
+        String(acceptedLikeFraction >= 0 ? ('qa '+Math.round(acceptedLikeFraction*100)+'%') : 'qa pending'),
       ];
       badges.forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});
       const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'');
