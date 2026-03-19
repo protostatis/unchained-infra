@@ -202,10 +202,10 @@ def _build_research_desk_html() -> str:
         String(data.accepted_like_fraction ? ('qa '+Math.round(Number(data.accepted_like_fraction||0)*100)+'%') : 'qa pending'),
       ];
       badges.forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});
-      const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||data.lab_url_abs||data.mission_url_abs||data.capsule_url_abs||'');
-      const preferredLabel=String(data.preferred_open_label||'Open Current Best View');
       const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'');
       const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'');
+      const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||(Boolean(data.lab_ready)?labUrl:'')||missionUrl||'#');
+      const preferredLabel=String(data.preferred_open_label||(Boolean(data.lab_ready)&&Boolean(labUrl)?'Open Lab Notes':'Open Mission'));
       setMissionWatchLink(preferredLink, preferredUrl||'#', preferredLabel, Boolean(preferredUrl));
       setMissionWatchLink(missionLink, missionUrl||'#', 'Open Mission', Boolean(missionUrl));
       setMissionWatchLink(labLink, labUrl||'#', 'Open Lab Notes', Boolean(labUrl)&&Boolean(data.lab_ready));
