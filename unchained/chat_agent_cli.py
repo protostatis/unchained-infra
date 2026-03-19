@@ -1035,20 +1035,21 @@ async def handle_message_claude(
     # Context fallback: if no resume session but slot has history, inject summary
     effective_text = user_text
     if not is_resume and (sid, "claude") not in _context_injected:
+        _context_injected.add((sid, "claude"))
         data = _load_chat()
         prev_msgs = data.get("messages", [])
         # Exclude the message we just appended (last one)
         prev_msgs = prev_msgs[:-1] if prev_msgs else []
         if prev_msgs:
-            _context_injected.add((sid, "claude"))
-            # Format last 20 messages as context
+            # Format last 20 messages as context; strip brackets from content
+            # to prevent bracket-tagged prompt fragments from confusing the model.
             history_lines = []
             for m in prev_msgs[-20:]:
                 role = m.get("role", "unknown")
-                content = m.get("content", "")
+                content = m.get("content", "").replace("[", "(").replace("]", ")")
                 if len(content) > 300:
                     content = content[:300] + "..."
-                history_lines.append(f"[{role}]: {content}")
+                history_lines.append(f"{role}: {content}")
             history_summary = "\n".join(history_lines)
             effective_text = (
                 f"[Previous conversation context — the session was restarted, "
@@ -1508,18 +1509,20 @@ async def handle_message_codex(
     # Context fallback: if no resume session but slot has history, inject summary
     history_context = ""
     if not is_resume and (sid, "codex") not in _context_injected:
+        _context_injected.add((sid, "codex"))
         data = _load_chat()
         prev_msgs = data.get("messages", [])
         prev_msgs = prev_msgs[:-1] if prev_msgs else []
         if prev_msgs:
-            _context_injected.add((sid, "codex"))
+            # Strip brackets from content to prevent bracket-tagged prompt
+            # fragments in history from confusing the model.
             history_lines = []
             for m in prev_msgs[-20:]:
                 role = m.get("role", "unknown")
-                content = m.get("content", "")
+                content = m.get("content", "").replace("[", "(").replace("]", ")")
                 if len(content) > 300:
                     content = content[:300] + "..."
-                history_lines.append(f"[{role}]: {content}")
+                history_lines.append(f"{role}: {content}")
             history_context = (
                 "[Previous conversation context — the session was restarted, "
                 "here is the recent history for continuity]\n"
