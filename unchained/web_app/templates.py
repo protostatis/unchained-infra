@@ -9278,8 +9278,14 @@ def _inject_sidebar(html: str) -> str:
     html = html.replace(
         "document.getElementById('main').style.display = 'flex';",
         "document.getElementById('app-shell').style.display = 'flex';\n"
-        "  document.getElementById('main').style.display = 'flex';\n"
-        "  loadSidebarHistory();",
+        "  document.getElementById('main').style.display = 'flex';",
+    )
+    # 6b. Load sidebar after model selector is initialized (loadHistory runs
+    #     after model setup in showMain, so sidebar gets the correct model).
+    html = html.replace(
+        "  loadHistory();\n}",
+        "  loadHistory();\n  loadSidebarHistory();\n}",
+        1,
     )
     html = html.replace(
         "document.getElementById('main').style.display = 'none';",
