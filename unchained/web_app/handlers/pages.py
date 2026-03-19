@@ -107,6 +107,7 @@ def _build_research_desk_html() -> str:
           <p id="mission-watch-copy" class="muted">Create a local Mission from the current first-look prompt to watch it progress here.</p>
           <div id="mission-watch-meta" class="watch-meta"></div>
           <div class="actions" style="margin-top:12px">
+            <a id="mission-watch-preferred-link" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Current Best View</a>
             <a id="mission-watch-mission-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Mission</a>
             <a id="mission-watch-lab-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Lab Notes</a>
             <button id="run-local-next-step" class="btn secondary disabled" type="button" aria-disabled="true">Run Next Step</button>
@@ -163,10 +164,11 @@ def _build_research_desk_html() -> str:
       const title=document.getElementById('mission-watch-title');
       const copy=document.getElementById('mission-watch-copy');
       const meta=document.getElementById('mission-watch-meta');
+      const preferredLink=document.getElementById('mission-watch-preferred-link');
       const missionLink=document.getElementById('mission-watch-mission-link');
       const labLink=document.getElementById('mission-watch-lab-link');
       const nextButton=document.getElementById('run-local-next-step');
-      if(!card||!title||!copy||!meta||!missionLink||!labLink||!nextButton) return;
+      if(!card||!title||!copy||!meta||!preferredLink||!missionLink||!labLink||!nextButton) return;
       if(!data||!data.ok){
         missionWatchVisible=false;
         missionCanAdvance=false;
@@ -175,6 +177,7 @@ def _build_research_desk_html() -> str:
         missionWatchAttempts=0;
         missionWatchStableCount=0;
         missionWatchLastSignature='';
+        setMissionWatchLink(preferredLink, '#', 'Open Current Best View', false);
         setMissionWatchLink(missionLink, '#', 'Open Mission', false);
         setMissionWatchLink(labLink, '#', 'Open Lab Notes', false);
         nextButton.classList.add('disabled');
@@ -199,8 +202,11 @@ def _build_research_desk_html() -> str:
         String(data.accepted_like_fraction ? ('qa '+Math.round(Number(data.accepted_like_fraction||0)*100)+'%') : 'qa pending'),
       ];
       badges.forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});
+      const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||data.lab_url_abs||data.mission_url_abs||data.capsule_url_abs||'');
+      const preferredLabel=String(data.preferred_open_label||'Open Current Best View');
       const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'');
       const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'');
+      setMissionWatchLink(preferredLink, preferredUrl||'#', preferredLabel, Boolean(preferredUrl));
       setMissionWatchLink(missionLink, missionUrl||'#', 'Open Mission', Boolean(missionUrl));
       setMissionWatchLink(labLink, labUrl||'#', 'Open Lab Notes', Boolean(labUrl)&&Boolean(data.lab_ready));
       const nextReady=computeMissionAdvanceReady();
@@ -209,7 +215,7 @@ def _build_research_desk_html() -> str:
       nextButton.disabled=!nextReady;
       nextButton.textContent=String(data.autopilot_next_label||'Run Next Step');
     }
-    function scheduleMissionWatch(url){if(missionWatchTimer) window.clearTimeout(missionWatchTimer);const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){missionWatchUrl='';missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';return;}if(missionWatchUrl!==safeUrl){missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';}missionWatchUrl=safeUrl;if(missionWatchAttempts>=MAX_MISSION_WATCH_ATTEMPTS){setConnectNote('Mission watch timed out. Open the local desk to continue from there.');return;}missionWatchTimer=window.setTimeout(async()=>{missionWatchTimer=null;missionWatchAttempts+=1;try{const resp=await fetch(safeUrl,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){if(resp.status>=500&&missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');return;}const data=await resp.json();renderMissionWatch(data);if(!data.ok) return;const readiness=String(data.readiness_status||'');const signature=[String(data.stage||''),readiness,String(data.primary_row_count||0),String(data.next_step||''),String(data.autopilot_next_label||''),String(data.advance_busy||false)].join('|');if(data.advance_busy){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');scheduleMissionWatch(safeUrl);return;}if(signature===missionWatchLastSignature){missionWatchStableCount+=1;}else{missionWatchLastSignature=signature;missionWatchStableCount=0;}if(['final_ready','blocked'].includes(readiness)) return;if(missionWatchStableCount>=MAX_IDENTICAL_MISSION_STATES){setConnectNote('Mission watch paused because the local state stopped changing. Open the local desk to continue.');return;}scheduleMissionWatch(safeUrl);}catch(_err){if(missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');}},MISSION_WATCH_POLL_INTERVAL_MS);}
+    function scheduleMissionWatch(url){if(missionWatchTimer) window.clearTimeout(missionWatchTimer);const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){missionWatchUrl='';missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';return;}if(missionWatchUrl!==safeUrl){missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';}missionWatchUrl=safeUrl;if(missionWatchAttempts>=MAX_MISSION_WATCH_ATTEMPTS){setConnectNote('Mission watch timed out. Open the local desk to continue from there.');return;}missionWatchTimer=window.setTimeout(async()=>{missionWatchTimer=null;missionWatchAttempts+=1;try{const resp=await fetch(safeUrl,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){if(resp.status>=500&&missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');return;}const data=await resp.json();renderMissionWatch(data);if(!data.ok) return;const readiness=String(data.readiness_status||'');const signature=[String(data.stage||''),readiness,String(data.primary_row_count||0),String(data.next_step||''),String(data.autopilot_next_label||''),String(data.advance_busy||false)].join('|');if(Boolean(data.lab_ready)){setConnectNote('This mission is ready for Lab Notes. Continue there or keep the local desk open for deeper analysis.');}else if(data.advance_busy){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');scheduleMissionWatch(safeUrl);return;}if(signature===missionWatchLastSignature){missionWatchStableCount+=1;}else{missionWatchLastSignature=signature;missionWatchStableCount=0;}if(['final_ready','blocked'].includes(readiness)) return;if(missionWatchStableCount>=MAX_IDENTICAL_MISSION_STATES){setConnectNote('Mission watch paused because the local state stopped changing. Open the local desk to continue.');return;}scheduleMissionWatch(safeUrl);}catch(_err){if(missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');}},MISSION_WATCH_POLL_INTERVAL_MS);}
     function setLaunchReady(ready, href){const link=document.getElementById('open-local-desk');if(!link) return;link.href=safeLocalUrl(href);link.classList.toggle('disabled', !ready);link.setAttribute('aria-disabled', ready ? 'false' : 'true');if(ready){link.removeAttribute('tabindex');}else{link.setAttribute('tabindex','-1');}}
     function setConnectReady(ready){const button=document.getElementById('connect-local-desk');if(!button) return;const enabled=Boolean(ready)&&!handshakeInFlight;button.classList.toggle('disabled', !enabled);button.setAttribute('aria-disabled', enabled ? 'false' : 'true');button.disabled=!enabled;}
     function setMissionCreateReady(ready){const button=document.getElementById('create-local-mission');if(!button) return;button.classList.toggle('disabled', !ready);button.setAttribute('aria-disabled', ready ? 'false' : 'true');button.disabled=!ready;}
