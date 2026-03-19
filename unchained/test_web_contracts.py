@@ -242,6 +242,16 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("if(resp.status===429&&data.error==='advance_busy')", html)
         self.assertIn("Mission watch timed out.", html)
         self.assertIn("Mission watch paused because the local state stopped changing.", html)
+        self.assertIn("const HANDSHAKE_TOKEN_KEY = 'research-desk-handshake-token'", html)
+        self.assertIn("const PENDING_HANDSHAKE_KEY = 'research-desk-pending-handshake'", html)
+        self.assertIn("const MISSION_WATCH_STATE_KEY = 'research-desk-mission-watch-state'", html)
+        self.assertIn("function restoreStoredDeskSession()", html)
+        self.assertIn("persistPendingHandshake(statusUrl,String(data.request_id))", html)
+        self.assertIn("persistApprovedHandshake(data.session_token, data.token_expires_at_epoch)", html)
+        self.assertIn("persistMissionWatchState(statusUrl, null)", html)
+        self.assertIn("Local desk looks offline right now. The last mission snapshot is still shown below while this page keeps retrying.", html)
+        self.assertIn("Resuming the pending local approval check from your last hosted session...", html)
+        self.assertIn("restoreStoredDeskSession();", html)
 
     def test_first_look_template_renders_research_desk_handoff_markers(self):
         self.assertIn("continueInResearchDesk()", web.HEADLESS_DEMO_HTML)
