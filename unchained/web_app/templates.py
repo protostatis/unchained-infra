@@ -436,9 +436,29 @@ body::before{
   padding:12px 28px;border-radius:8px;
   background:var(--accent);color:#fff;font-size:14px;font-weight:600;
   text-decoration:none;letter-spacing:0.5px;transition:all 0.2s;
-  margin-top:24px;
+  margin-top:24px;cursor:pointer;
 }
 .mock-cta:hover{opacity:0.9;box-shadow:0 0 20px var(--accent-glow)}
+.mock-replay{
+  display:none;align-items:center;gap:8px;
+  padding:10px 24px;border-radius:8px;cursor:pointer;
+  background:transparent;color:var(--accent);font-size:14px;font-weight:600;
+  border:1px solid var(--accent);letter-spacing:0.5px;transition:all 0.2s;
+  margin-top:12px;
+}
+.mock-replay:hover{background:var(--accent);color:#fff;box-shadow:0 0 20px var(--accent-glow)}
+.mock-replay.visible{display:inline-flex}
+.mock-chat .bubble.asst table{
+  width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:13px;
+}
+.mock-chat .bubble.asst table th{
+  text-align:left;padding:6px 8px;border-bottom:2px solid #3a4a6e;color:var(--accent);font-weight:600;
+}
+.mock-chat .bubble.asst table td{
+  padding:5px 8px;border-bottom:1px solid #2a3a5e;
+}
+.mock-chat .bubble.asst table tr:last-child td{border-bottom:none}
+.mock-chat .bubble.asst .best-price{color:#4ade80;font-weight:700}
 
 /* ── Footer ── */
 .footer{
@@ -478,10 +498,11 @@ body::before{
 <div class="mock-section" id="mock-section">
   <div class="mock-header">
     <h2>Watch it work</h2>
-    <p>See the agent browse the web, read pages, and extract information &mdash; in real time.</p>
+    <p>See the agent search multiple sites, compare results, and deliver structured answers &mdash; in real time.</p>
   </div>
   <div class="mock-chat" id="mock-chat"></div>
   <a href="/demo" class="mock-cta">Try it yourself &rarr;</a>
+  <button class="mock-replay" id="mock-replay" onclick="playMock()">&#8635; Replay demo</button>
 </div>
 
 <!-- Get Started -->
@@ -1503,91 +1524,134 @@ body::before{
 </div>
 
 <script>
-// ── Haiku morph — 3 stages ──
-// Line 3 finishes fading in at ~2.5s. Then:
-//   4.5s → stage 2 (poetic → bridging)
-//   8.5s → stage 3 (bridging → clear)
-var poem = document.getElementById('poem');
-setTimeout(function(){ poem.classList.add('stage-2'); }, 4500);
-setTimeout(function(){ poem.classList.remove('stage-2'); poem.classList.add('stage-3'); }, 8500);
-
-// ── Mock interaction (same as v1) ──
-var mockPlayed = false;
+// Mock interaction — flight comparison demo
+var mockTimers = [];
 function playMock() {
-  if (mockPlayed) return;
-  mockPlayed = true;
+  // Clear any running timers
+  mockTimers.forEach(function(t){ clearTimeout(t); });
+  mockTimers = [];
   var chat = document.getElementById('mock-chat');
   chat.innerHTML = '';
+  var replayBtn = document.getElementById('mock-replay');
+  if (replayBtn) replayBtn.classList.remove('visible');
 
   function reveal(el){ requestAnimationFrame(function(){ el.classList.add('show'); }); }
+  function markDone(stepsId){
+    var steps = document.getElementById(stepsId);
+    if(!steps) return;
+    var prev = steps.querySelector('.action-step:last-child .as-dot');
+    if(prev){prev.className='as-dot done';prev.textContent='\u2713';}
+  }
+  function addStep(stepsId, emoji, label, desc){
+    var steps = document.getElementById(stepsId);
+    var s = document.createElement('div');
+    s.className = 'action-step';
+    s.innerHTML =
+      '<span class="as-emoji">' + emoji + '</span>' +
+      '<span class="as-label">' + label + '</span>' +
+      '<span class="as-desc">' + desc + '</span>' +
+      '<span class="as-dot running">\u25CF</span>';
+    steps.appendChild(s);
+  }
+  function drawFlightCanvas(id, site, results) {
+    var c = document.createElement('canvas');
+    c.width = 640; c.height = 280;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, 640, 280);
+    // Header bar
+    ctx.fillStyle = site.color; ctx.fillRect(0, 0, 640, 36);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(site.name, 16, 24);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '12px sans-serif';
+    ctx.fillText('NYC \u2192 Tokyo \u00B7 Apr 2026 \u00B7 Round trip', 200, 24);
+    // Find lowest-price row index
+    var lowestIdx = 0;
+    var lowestVal = Infinity;
+    for (var j = 0; j < results.length; j++) {
+      var num = parseFloat(results[j].price.replace(/[^0-9.]/g, ''));
+      if (num < lowestVal) { lowestVal = num; lowestIdx = j; }
+    }
+    // Flight results
+    for (var i = 0; i < results.length; i++) {
+      var y = 52 + i * 56;
+      ctx.fillStyle = i === lowestIdx ? '#1a2332' : '#111820';
+      ctx.fillRect(8, y - 8, 624, 48);
+      ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(results[i].airline, 20, y + 10);
+      ctx.fillStyle = '#8b949e'; ctx.font = '11px sans-serif';
+      ctx.fillText(results[i].route, 20, y + 28);
+      ctx.fillText(results[i].duration, 340, y + 10);
+      ctx.fillStyle = results[i].stops === 'Nonstop' ? '#3fb950' : '#d29922';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(results[i].stops, 340, y + 28);
+      ctx.fillStyle = i === lowestIdx ? '#3fb950' : '#c9d1d9';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.fillText(results[i].price, 530, y + 18);
+    }
+    var imgDiv = document.createElement('div');
+    imgDiv.className = 'as-screenshot';
+    imgDiv.innerHTML = '<img src="' + c.toDataURL('image/png') + '">';
+    var ag = document.getElementById(id);
+    ag.querySelector('.ag-steps').after(imgDiv);
+  }
 
   var timeline = [
     {delay:0, fn:function(){
       var b = document.createElement('div');
       b.className = 'bubble user';
-      b.textContent = 'Go to Hacker News and find the top 3 trending stories right now';
+      b.textContent = 'Find me the cheapest direct flight from NYC to Tokyo in April. Compare Google Flights and Kayak.';
       chat.appendChild(b);
       reveal(b);
+      chat.scrollTop = chat.scrollHeight;
     }},
+    // === Site 1: Google Flights ===
     {delay:900, fn:function(){
       var asst = document.createElement('div');
       asst.className = 'bubble asst';
       asst.id = 'mock-asst';
       var ag = document.createElement('div');
       ag.className = 'action-group';
-      ag.id = 'mock-ag';
+      ag.id = 'mock-ag1';
       ag.innerHTML =
         '<div class="ag-header">' +
           '<span class="ag-emoji">\uD83C\uDF10</span>' +
-          '<span class="ag-site">news.ycombinator.com</span>' +
+          '<span class="ag-site">google.com/travel/flights</span>' +
           '<span class="ag-count"></span>' +
           '<span class="ag-dot running">\u25CF</span>' +
         '</div>' +
-        '<div class="ag-steps" id="mock-steps">' +
+        '<div class="ag-steps" id="mock-steps1">' +
           '<div class="action-step">' +
             '<span class="as-emoji">\uD83C\uDF10</span>' +
             '<span class="as-label">Navigate</span>' +
-            '<span class="as-desc">news.ycombinator.com</span>' +
+            '<span class="as-desc">google.com/travel/flights</span>' +
             '<span class="as-dot running">\u25CF</span>' +
           '</div>' +
         '</div>';
       asst.appendChild(ag);
       chat.appendChild(asst);
       reveal(asst); reveal(ag);
+      chat.scrollTop = chat.scrollHeight;
     }},
-    {delay:2100, fn:function(){
-      var steps = document.getElementById('mock-steps');
-      var prev = steps.querySelector('.action-step:last-child .as-dot');
-      if(prev){prev.className='as-dot done';prev.textContent='\u2713';}
-      var s = document.createElement('div');
-      s.className = 'action-step';
-      s.innerHTML =
-        '<span class="as-emoji">\uD83D\uDC41</span>' +
-        '<span class="as-label">Look</span>' +
-        '<span class="as-desc">map layout</span>' +
-        '<span class="as-dot running">\u25CF</span>';
-      steps.appendChild(s);
+    {delay:2000, fn:function(){
+      markDone('mock-steps1');
+      addStep('mock-steps1', '\uD83D\uDC41', 'Look', 'map layout');
+      chat.scrollTop = chat.scrollHeight;
     }},
-    {delay:2800, fn:function(){
-      var steps = document.getElementById('mock-steps');
-      var prev = steps.querySelector('.action-step:last-child .as-dot');
-      if(prev){prev.className='as-dot done';prev.textContent='\u2713';}
-      var s = document.createElement('div');
-      s.className = 'action-step';
-      s.innerHTML =
-        '<span class="as-emoji">\uD83D\uDCF7</span>' +
-        '<span class="as-label">Screenshot</span>' +
-        '<span class="as-desc">capture page</span>' +
-        '<span class="as-dot running">\u25CF</span>';
-      steps.appendChild(s);
-      var c = document.createElement('canvas');
-      c.width = 640; c.height = 360;
-      var ctx = c.getContext('2d');
-      ctx.fillStyle = '#f6f6ef'; ctx.fillRect(0, 0, 640, 360);
-      ctx.fillStyle = '#ff6600'; ctx.fillRect(0, 0, 640, 28);
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
-      ctx.fillText('Y', 8, 19);
-      ctx.fillStyle = '#000'; ctx.font = 'bold 12px sans-serif';
+    {delay:2700, fn:function(){
+      markDone('mock-steps1');
+      addStep('mock-steps1', '\u2328', 'Type', 'NYC to Tokyo, April 2026');
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:3500, fn:function(){
+      markDone('mock-steps1');
+      addStep('mock-steps1', '\uD83D\uDCF7', 'Screenshot', 'capture results');
+      chat.scrollTop = chat.scrollHeight;
+      drawFlightCanvas('mock-ag1', {name: 'Google Flights', color: '#1a73e8'}, [
+        {airline: 'ANA (All Nippon)', route: 'JFK \u2192 NRT', duration: '14h 10m', stops: 'Nonstop', price: '$1,247'},
+        {airline: 'Japan Airlines', route: 'JFK \u2192 HND', duration: '14h 35m', stops: 'Nonstop', price: '$1,312'},
+        {airline: 'United Airlines', route: 'EWR \u2192 NRT', duration: '14h 25m', stops: 'Nonstop', price: '$1,389'},
+        {airline: 'Delta Air Lines', route: 'JFK \u2192 HND', duration: '14h 50m', stops: 'Nonstop', price: '$1,456'},
+      ]);
       ctx.fillText('Hacker News', 28, 19);
       ctx.fillStyle = '#888'; ctx.font = '11px sans-serif';
       ctx.fillText('new | past | comments | ask | show | jobs | submit', 140, 18);
@@ -1627,53 +1691,125 @@ function playMock() {
         '<span class="as-label">Analyze</span>' +
         '<span class="as-desc">probe page type</span>' +
         '<span class="as-dot running">\u25CF</span>';
-      steps.appendChild(s);
     }},
     {delay:4500, fn:function(){
-      var steps = document.getElementById('mock-steps');
-      var prev = steps.querySelector('.action-step:last-child .as-dot');
-      if(prev){prev.className='as-dot done';prev.textContent='\u2713';}
-      var s = document.createElement('div');
-      s.className = 'action-step';
-      s.innerHTML =
-        '<span class="as-emoji">\uD83D\uDC41</span>' +
-        '<span class="as-label">Look</span>' +
-        '<span class="as-desc">read text</span>' +
-        '<span class="as-dot running">\u25CF</span>';
-      steps.appendChild(s);
-      var ct = document.getElementById('mock-ag').querySelector('.ag-count');
-      if(ct) ct.textContent = '5 steps';
+      markDone('mock-steps1');
+      addStep('mock-steps1', '\uD83D\uDD2C', 'Extract', 'read flight prices');
+      chat.scrollTop = chat.scrollHeight;
     }},
-    {delay:6200, fn:function(){
-      document.querySelectorAll('#mock-ag .as-dot').forEach(function(d){
+    {delay:5200, fn:function(){
+      document.querySelectorAll('#mock-ag1 .as-dot').forEach(function(d){
         d.className='as-dot done';d.textContent='\u2713';
       });
-      var gd = document.querySelector('#mock-ag .ag-dot');
+      var gd = document.querySelector('#mock-ag1 .ag-dot');
       if(gd){gd.className='ag-dot done';gd.textContent='\u2713';}
-      var ct = document.getElementById('mock-ag').querySelector('.ag-count');
+      var ct = document.querySelector('#mock-ag1 .ag-count');
       if(ct) ct.textContent = '5 steps';
+      chat.scrollTop = chat.scrollHeight;
+    }},
+
+    // === Site 2: Kayak ===
+    {delay:5800, fn:function(){
+      var asst = document.getElementById('mock-asst');
+      var ag = document.createElement('div');
+      ag.className = 'action-group';
+      ag.id = 'mock-ag2';
+      ag.innerHTML =
+        '<div class="ag-header">' +
+          '<span class="ag-emoji">\uD83C\uDF10</span>' +
+          '<span class="ag-site">kayak.com/flights</span>' +
+          '<span class="ag-count"></span>' +
+          '<span class="ag-dot running">\u25CF</span>' +
+        '</div>' +
+        '<div class="ag-steps" id="mock-steps2">' +
+          '<div class="action-step">' +
+            '<span class="as-emoji">\uD83C\uDF10</span>' +
+            '<span class="as-label">Navigate</span>' +
+            '<span class="as-desc">kayak.com/flights</span>' +
+            '<span class="as-dot running">\u25CF</span>' +
+          '</div>' +
+        '</div>';
+      asst.appendChild(ag);
+      reveal(ag);
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:6800, fn:function(){
+      markDone('mock-steps2');
+      addStep('mock-steps2', '\uD83D\uDC41', 'Look', 'map layout');
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:7400, fn:function(){
+      markDone('mock-steps2');
+      addStep('mock-steps2', '\u2328', 'Type', 'NYC to Tokyo, April 2026');
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:8200, fn:function(){
+      markDone('mock-steps2');
+      addStep('mock-steps2', '\uD83D\uDCF7', 'Screenshot', 'capture results');
+      chat.scrollTop = chat.scrollHeight;
+      drawFlightCanvas('mock-ag2', {name: 'Kayak', color: '#ff690f'}, [
+        {airline: 'ANA (All Nippon)', route: 'JFK \u2192 NRT', duration: '14h 10m', stops: 'Nonstop', price: '$1,198'},
+        {airline: 'Japan Airlines', route: 'JFK \u2192 HND', duration: '14h 35m', stops: 'Nonstop', price: '$1,295'},
+        {airline: 'United Airlines', route: 'EWR \u2192 NRT', duration: '14h 25m', stops: 'Nonstop', price: '$1,410'},
+        {airline: 'Delta Air Lines', route: 'JFK \u2192 HND', duration: '14h 50m', stops: 'Nonstop', price: '$1,478'},
+      ]);
+    }},
+    {delay:9200, fn:function(){
+      markDone('mock-steps2');
+      addStep('mock-steps2', '\uD83D\uDD2C', 'Extract', 'read flight prices');
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:9900, fn:function(){
+      document.querySelectorAll('#mock-ag2 .as-dot').forEach(function(d){
+        d.className='as-dot done';d.textContent='\u2713';
+      });
+      var gd = document.querySelector('#mock-ag2 .ag-dot');
+      if(gd){gd.className='ag-dot done';gd.textContent='\u2713';}
+      var ct = document.querySelector('#mock-ag2 .ag-count');
+      if(ct) ct.textContent = '5 steps';
+      chat.scrollTop = chat.scrollHeight;
+    }},
+
+    // === Final comparison answer ===
+    {delay:10800, fn:function(){
       var asst = document.getElementById('mock-asst');
       var txt = document.createElement('span');
       txt.className = 'text rendered';
       txt.style.display = 'block';
       txt.style.marginTop = '8px';
       txt.innerHTML =
-        '<p>Here are the top 3 stories on Hacker News right now:</p>' +
-        '<p><strong>1. Show HN: I built an open-source browser agent</strong> \u2014 352 points, 128 comments</p>' +
-        '<p><strong>2. The death of the cookie: what comes next</strong> \u2014 287 points, 94 comments</p>' +
-        '<p><strong>3. Why SQLite is so great for edge computing</strong> \u2014 241 points, 67 comments</p>';
+        '<p>Here are the cheapest nonstop flights from NYC to Tokyo in April, compared across both sites:</p>' +
+        '<table>' +
+          '<tr><th>Airline</th><th>Route</th><th>Google Flights</th><th>Kayak</th></tr>' +
+          '<tr><td>ANA</td><td>JFK \u2192 NRT</td><td>$1,247</td><td class="best-price">$1,198 \u2605</td></tr>' +
+          '<tr><td>JAL</td><td>JFK \u2192 HND</td><td>$1,312</td><td class="best-price">$1,295</td></tr>' +
+          '<tr><td>United</td><td>EWR \u2192 NRT</td><td class="best-price">$1,389</td><td>$1,410</td></tr>' +
+          '<tr><td>Delta</td><td>JFK \u2192 HND</td><td class="best-price">$1,456</td><td>$1,478</td></tr>' +
+        '</table>' +
+        '<p><strong>Best deal: ANA via Kayak at $1,198</strong> (nonstop JFK \u2192 NRT, 14h 10m). That\u2019s $49 cheaper than the same flight on Google Flights.</p>';
       asst.appendChild(txt);
       chat.scrollTop = chat.scrollHeight;
+      // Show replay button
+      var replayBtn = document.getElementById('mock-replay');
+      if (replayBtn) replayBtn.classList.add('visible');
     }},
   ];
 
-  timeline.forEach(function(t){ setTimeout(t.fn, t.delay); });
+  timeline.forEach(function(t){
+    mockTimers.push(setTimeout(t.fn, t.delay));
+  });
 }
 
 if ('IntersectionObserver' in window) {
-  new IntersectionObserver(function(entries) {
-    entries.forEach(function(e) { if (e.isIntersecting) playMock(); });
-  }, {threshold: 0.3}).observe(document.getElementById('mock-section'));
+  var mockObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (e.isIntersecting) {
+        mockObserver.disconnect();
+        playMock();
+      }
+    });
+  }, {threshold: 0.3});
+  mockObserver.observe(document.getElementById('mock-section'));
 }
 </script>
 </body>
