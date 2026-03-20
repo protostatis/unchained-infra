@@ -270,8 +270,11 @@ async def cdp_scroll(direction: str = "down", amount: int = 500,
 
     Args:
         direction: "up", "down", "left", or "right"
-        amount: pixels to scroll (default 500, roughly one viewport height)
+        amount: pixels to scroll (default 500, roughly one viewport height, max 50000)
     """
+    if direction not in ("up", "down", "left", "right"):
+        return f"Invalid direction: {direction!r}. Use up, down, left, or right."
+    amount = max(1, min(amount, 50000))
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.scroll(aid, tab_id, direction, amount)
 
@@ -309,22 +312,27 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
-async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str | Image:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 
-    Returns PNG image. Use sparingly (~2100 tokens) — prefer DDM (~500 tokens).
-    Falls back to DDM text if screenshot fails.
+    Returns PNG image content. Use sparingly (~2100 tokens) — prefer
+    DDM for page understanding (~500 tokens).
+    Only use for: CAPTCHAs, visual state, image verification.
     """
     aid = _resolve_agent(profile=agent_id)
     try:
         png_b64 = await cloud_tools.screenshot(aid, tab_id)
         return Image(data=base64.b64decode(png_b64, validate=True), format="png")
-    except Exception as exc:
+    except Exception:
         try:
             ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
-            return f"Screenshot failed ({exc}). Falling back to DDM text:\n\n{ddm_text}"
+            raise RuntimeError(
+                f"Screenshot unavailable. Page text via DDM:\n\n{ddm_text}"
+            )
+        except RuntimeError:
+            raise
         except Exception:
-            raise exc
+            raise RuntimeError("Screenshot failed and DDM fallback also failed.")
 
 
 @mcp.tool()
