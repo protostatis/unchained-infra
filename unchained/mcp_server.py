@@ -256,11 +256,21 @@ async def cdp_navigate(url: str,
 
 
 @mcp.tool()
-async def cdp_click(x: int, y: int,
+async def cdp_click(x: int = 0, y: int = 0,
+                    element_id: str = "", label: str = "",
                     tab_id: str = "auto", agent_id: str = "") -> str:
-    """Click at pixel coordinates. Get coordinates from DDM output."""
+    """Click an element by coordinates, DDM element ID, or label.
+
+    Three click modes:
+    - Coordinates: cdp_click(x=500, y=300)
+    - Element ID from DDM: cdp_click(element_id="B3")
+    - Label text: cdp_click(label="Notifications")
+
+    Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
+    """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.click(aid, tab_id, x, y)
+    return await cloud_tools.click(aid, tab_id, x, y,
+                                   element_id=element_id, label=label)
 
 
 @mcp.tool()

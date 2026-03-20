@@ -40,8 +40,11 @@ async def navigate(agent_id: str, tab_id: str, url: str, relay_host: str = "127.
     return await _client().navigate(agent_id, tab_id, url, relay_host, relay_port)
 
 
-async def click(agent_id: str, tab_id: str, x: int, y: int, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
-    return await _client().click(agent_id, tab_id, x, y, relay_host, relay_port)
+async def click(agent_id: str, tab_id: str, x: int = 0, y: int = 0,
+                relay_host: str = "127.0.0.1", relay_port: int = 8765,
+                element_id: str = "", label: str = "") -> str:
+    return await _client().click(agent_id, tab_id, x, y, relay_host, relay_port,
+                                 element_id=element_id, label=label)
 
 
 async def scroll(agent_id: str, tab_id: str, direction: str = "down", amount: int = 500, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:

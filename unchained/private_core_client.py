@@ -203,9 +203,10 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def click(self, agent_id: str, tab_id: str, x: int, y: int, relay_host: str, relay_port: int) -> str:
-        return await self.execute(
-            OP_CLICK,
+    async def click(self, agent_id: str, tab_id: str, x: int = 0, y: int = 0,
+                    relay_host: str = "127.0.0.1", relay_port: int = 8765,
+                    element_id: str = "", label: str = "") -> str:
+        kwargs = dict(
             agent_id=agent_id,
             tab_id=tab_id,
             x=x,
@@ -213,6 +214,11 @@ class PrivateCoreClient:
             relay_host=relay_host,
             relay_port=relay_port,
         )
+        if element_id:
+            kwargs["element_id"] = element_id
+        if label:
+            kwargs["label"] = label
+        return await self.execute(OP_CLICK, **kwargs)
 
     async def scroll(self, agent_id: str, tab_id: str, direction: str, amount: int, relay_host: str, relay_port: int) -> str:
         return await self.execute(
