@@ -52,8 +52,10 @@ def _build_research_desk_html() -> str:
     .status-shell,.capsule-list{display:grid;gap:12px}.status-card,.capsule-card,.watch-card{border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.02)}
     .status-card strong{display:block;margin-bottom:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent2)}
     .capsule-card h3,.watch-card h3{margin:0 0 6px;font-size:20px}.capsule-meta,.watch-meta{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.status-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.muted-note{margin-top:12px;font-size:13px;color:var(--muted)}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:6px}
+    .stage-rail{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:12px 0}.stage-step{border:1px solid var(--line);border-radius:14px;padding:10px 8px;background:rgba(255,255,255,0.02);min-height:62px}.stage-step strong,.watch-stat strong{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase}.stage-step span{display:block;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.3}.stage-step.done{border-color:rgba(123,224,184,0.34);background:rgba(123,224,184,0.08)}.stage-step.done strong{color:var(--accent)}.stage-step.active{border-color:rgba(244,197,92,0.48);background:rgba(244,197,92,0.10)}.stage-step.active strong{color:var(--accent2)}.watch-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}.watch-stat{border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(255,255,255,0.02)}.watch-stat em{display:block;margin-top:6px;color:var(--text);font-style:normal;font-size:18px;line-height:1.1}.watch-stat small{display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.35}
     .watch-card{display:none}.watch-card.visible{display:block}
-    @media (max-width:900px){.hero,.grid{grid-template-columns:1fr}}
+    @media (max-width:900px){.hero,.grid{grid-template-columns:1fr}.stage-rail,.watch-stats{grid-template-columns:1fr 1fr}}
+    @media (max-width:640px){.stage-rail,.watch-stats{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -105,8 +107,11 @@ def _build_research_desk_html() -> str:
           <strong style="display:block;margin-bottom:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Current handoff</strong>
           <h3 id="mission-watch-title">No hosted mission yet.</h3>
           <p id="mission-watch-copy" class="muted">Create a local Mission from the current first-look prompt to watch it progress here.</p>
+          <div id="mission-watch-stage-rail" class="stage-rail"></div>
+          <div id="mission-watch-stats" class="watch-stats"></div>
           <div id="mission-watch-meta" class="watch-meta"></div>
           <div class="actions" style="margin-top:12px">
+            <a id="mission-watch-preferred-link" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Current Best View</a>
             <a id="mission-watch-mission-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Mission</a>
             <a id="mission-watch-lab-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Lab Notes</a>
             <button id="run-local-next-step" class="btn secondary disabled" type="button" aria-disabled="true">Run Next Step</button>
@@ -135,6 +140,7 @@ def _build_research_desk_html() -> str:
     const PENDING_HANDSHAKE_KEY = 'research-desk-pending-handshake';
     const MISSION_WATCH_URL_KEY = 'research-desk-mission-watch-url';
     const MISSION_WATCH_STATE_KEY = 'research-desk-mission-watch-state';
+    const WATCH_STAGE_ORDER = [['planning','Mission'],['scouting','Scout'],['capturing','Gather'],['shaping','Shape'],['analysis','Lab Notes']];
     const MAX_HANDOFF_PROMPT_CHARS = 4000;
     const MAX_URL_PROMPT_CHARS = 500;
     const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
@@ -169,6 +175,9 @@ def _build_research_desk_html() -> str:
     function setSessionValue(key, value){try{if(value===undefined||value===null||String(value)===''){window.sessionStorage.removeItem(key);}else{window.sessionStorage.setItem(key, String(value));}}catch(_err){}}
     function sessionJson(key){try{const raw=window.sessionStorage.getItem(key);return raw ? JSON.parse(raw) : null;}catch(_err){return null;}}
     function setSessionJson(key, value){try{if(!value){window.sessionStorage.removeItem(key);}else{window.sessionStorage.setItem(key, JSON.stringify(value));}}catch(_err){}}
+    function watchStageIndex(data){const stage=String(data?.stage||'planning');if(Boolean(data?.lab_ready)||stage==='analysis') return 4;const idx=WATCH_STAGE_ORDER.findIndex((item)=>item[0]===stage);return idx>=0 ? idx : 0;}
+    function statCard(label, value, hint){const card=document.createElement('div');card.className='watch-stat';const title=document.createElement('strong');title.textContent=label;const primary=document.createElement('em');primary.textContent=value;const sub=document.createElement('small');sub.textContent=hint;card.appendChild(title);card.appendChild(primary);card.appendChild(sub);return card;}
+    function finiteNumber(value, fallback){const num=Number(value);return Number.isFinite(num) ? num : fallback;}
     function currentPromptFromContext(){try{const qs=new URLSearchParams(window.location.search);const prompt=normalizeHandoffPrompt(qs.get('prompt')||'');if(prompt){try{const next=new URL(window.location.href);next.searchParams.delete('prompt');next.searchParams.delete('session_id');window.history.replaceState({},'',next.pathname+(next.searchParams.toString()?('?'+next.searchParams.toString()):''));}catch(_err){}return prompt;}return normalizeHandoffPrompt(window.localStorage.getItem(FIRST_LOOK_PROMPT_KEY)||'');}catch(_err){return '';}}
     function currentSourceSessionId(){try{const qs=new URLSearchParams(window.location.search);const value=normalizeSourceSessionId(qs.get('session_id')||'');if(value) return value;return normalizeSourceSessionId(window.localStorage.getItem(FIRST_LOOK_SESSION_KEY)||'');}catch(_err){return '';}}
     function computeMissionAdvanceReady(){return Boolean(approvedHandshakeToken)&&Boolean(missionWatchVisible)&&Boolean(missionCanAdvance)&&Boolean(safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_advance_url));}
@@ -187,11 +196,14 @@ def _build_research_desk_html() -> str:
       const card=document.getElementById('mission-watch');
       const title=document.getElementById('mission-watch-title');
       const copy=document.getElementById('mission-watch-copy');
+      const stageRail=document.getElementById('mission-watch-stage-rail');
+      const stats=document.getElementById('mission-watch-stats');
       const meta=document.getElementById('mission-watch-meta');
+      const preferredLink=document.getElementById('mission-watch-preferred-link');
       const missionLink=document.getElementById('mission-watch-mission-link');
       const labLink=document.getElementById('mission-watch-lab-link');
       const nextButton=document.getElementById('run-local-next-step');
-      if(!card||!title||!copy||!meta||!missionLink||!labLink||!nextButton) return;
+      if(!card||!title||!copy||!stageRail||!stats||!meta||!preferredLink||!missionLink||!labLink||!nextButton) return;
       if(!data||!data.ok){
         missionWatchVisible=false;
         missionCanAdvance=false;
@@ -201,6 +213,9 @@ def _build_research_desk_html() -> str:
         missionWatchAttempts=0;
         missionWatchStableCount=0;
         missionWatchLastSignature='';
+        stageRail.innerHTML='';
+        stats.innerHTML='';
+        setMissionWatchLink(preferredLink, '#', 'Open Current Best View', false);
         setMissionWatchLink(missionLink, '#', 'Open Mission', false);
         setMissionWatchLink(labLink, '#', 'Open Lab Notes', false);
         nextButton.classList.add('disabled');
@@ -214,19 +229,39 @@ def _build_research_desk_html() -> str:
       card.classList.add('visible');
       title.textContent=String(data.capsule_name||'mission');
       copy.textContent=String(data.blocked_reason||(data.advance_busy ? ('Running '+String(data.active_action_kind||data.autopilot_next_label||'next step')+' in the local desk.') : '')||data.autopilot_next_label||data.next_step||'Mission is progressing in the local desk.');
+      stageRail.innerHTML='';
+      const activeStageIndex=watchStageIndex(data);
+      const rowCount=finiteNumber(data.primary_row_count, 0);
+      const reviewedPageCount=finiteNumber(data.reviewed_page_count, 0);
+      const acceptedLikeFraction=finiteNumber(data.accepted_like_fraction, -1);
+      const qaLabel=acceptedLikeFraction >= 0 ? (Math.round(acceptedLikeFraction*100)+'%') : 'pending';
+      const qaHint=reviewedPageCount > 0 ? ('Reviewed '+reviewedPageCount+' pages') : 'No reviewed pages yet';
+      const statusHint=String(data.blocked_reason||'').trim() || 'Hosted watch is live';
+      WATCH_STAGE_ORDER.forEach((item, idx)=>{const stage=document.createElement('div');stage.className='stage-step '+(idx<activeStageIndex?'done':(idx===activeStageIndex?'active':'pending'));const label=document.createElement('strong');label.textContent=item[1];const detail=document.createElement('span');if(idx===activeStageIndex){detail.textContent=String(data.autopilot_next_label||data.next_step||data.readiness_status||'Current step');}else if(idx<activeStageIndex){detail.textContent='Completed';}else{detail.textContent='Waiting';}stage.appendChild(label);stage.appendChild(detail);stageRail.appendChild(stage);});
+      stats.innerHTML='';
+      stats.appendChild(statCard('Object', String(data.primary_object_name||'pending'), String(data.readiness_status||'planned')));
+      stats.appendChild(statCard('Rows', String(rowCount), String(data.advance_busy ? 'Local step still running' : 'Shaped rows so far')));
+      stats.appendChild(statCard('QA', qaLabel, qaHint));
+      stats.appendChild(statCard('Status', String(data.advance_busy ? 'running' : 'idle'), statusHint));
+      stats.appendChild(statCard('Next', String(data.autopilot_next_label||'Open local desk'), String(data.autopilot_next_stage||data.stage||'planning')));
+      const qaCounts=Object.entries(data.qa_status_counts||{}).filter((entry)=>Number(entry[1]||0)>0).slice(0,3).map((entry)=>String(entry[0])+': '+String(entry[1]));
+      stats.appendChild(statCard('Reviewed', String(reviewedPageCount), qaCounts.length ? qaCounts.join(' · ') : 'Waiting for reviewed pages'));
       meta.innerHTML='';
       const badges=[
         String(data.stage||'planning'),
         String(data.readiness_status||'planned'),
         String(data.primary_object_name||'object pending'),
         String(data.advance_busy ? 'running' : 'idle'),
-        String((Number(data.primary_row_count||0))+' rows'),
-        String(data.reviewed_page_count ? ('pages '+Number(data.reviewed_page_count||0)) : 'pages pending'),
-        String(data.accepted_like_fraction ? ('qa '+Math.round(Number(data.accepted_like_fraction||0)*100)+'%') : 'qa pending'),
+        String(rowCount+' rows'),
+        String(reviewedPageCount > 0 ? ('pages '+reviewedPageCount) : 'pages pending'),
+        String(acceptedLikeFraction >= 0 ? ('qa '+Math.round(acceptedLikeFraction*100)+'%') : 'qa pending'),
       ];
       badges.forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});
       const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'');
       const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'');
+      const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||(Boolean(data.lab_ready)?labUrl:'')||missionUrl||'');
+      const preferredLabel=String(data.preferred_open_label||(Boolean(data.lab_ready)&&Boolean(labUrl)?'Open Lab Notes':'Open Mission'));
+      setMissionWatchLink(preferredLink, preferredUrl||'#', preferredLabel, Boolean(preferredUrl));
       setMissionWatchLink(missionLink, missionUrl||'#', 'Open Mission', Boolean(missionUrl));
       setMissionWatchLink(labLink, labUrl||'#', 'Open Lab Notes', Boolean(labUrl)&&Boolean(data.lab_ready));
       const nextReady=computeMissionAdvanceReady();
@@ -235,7 +270,7 @@ def _build_research_desk_html() -> str:
       nextButton.disabled=!nextReady;
       nextButton.textContent=String(data.autopilot_next_label||'Run Next Step');
     }
-    function scheduleMissionWatch(url){if(missionWatchTimer) window.clearTimeout(missionWatchTimer);const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){clearMissionWatchState(false);return;}if(missionWatchUrl!==safeUrl){missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';}persistMissionWatchState(safeUrl, null);if(missionWatchAttempts>=MAX_MISSION_WATCH_ATTEMPTS){setConnectNote('Mission watch timed out. Open the local desk to continue from there.');return;}missionWatchTimer=window.setTimeout(async()=>{missionWatchTimer=null;missionWatchAttempts+=1;try{const resp=await fetch(safeUrl,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){if(resp.status>=500&&missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');return;}const data=await resp.json();renderMissionWatch(data);if(!data.ok){clearMissionWatchState(false);return;}persistMissionWatchState(safeUrl, data);const readiness=String(data.readiness_status||'');const signature=[String(data.stage||''),readiness,String(data.primary_row_count||0),String(data.next_step||''),String(data.autopilot_next_label||''),String(data.advance_busy||false)].join('|');if(data.advance_busy){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');scheduleMissionWatch(safeUrl);return;}if(signature===missionWatchLastSignature){missionWatchStableCount+=1;}else{missionWatchLastSignature=signature;missionWatchStableCount=0;}if(['final_ready','blocked'].includes(readiness)) return;if(missionWatchStableCount>=MAX_IDENTICAL_MISSION_STATES){setConnectNote('Mission watch paused because the local state stopped changing. Open the local desk to continue.');return;}scheduleMissionWatch(safeUrl);}catch(_err){if(missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');}},MISSION_WATCH_POLL_INTERVAL_MS);}
+    function scheduleMissionWatch(url){if(missionWatchTimer) window.clearTimeout(missionWatchTimer);const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){clearMissionWatchState(false);return;}if(missionWatchUrl!==safeUrl){missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';}persistMissionWatchState(safeUrl, null);if(missionWatchAttempts>=MAX_MISSION_WATCH_ATTEMPTS){setConnectNote('Mission watch timed out. Open the local desk to continue from there.');return;}missionWatchTimer=window.setTimeout(async()=>{missionWatchTimer=null;missionWatchAttempts+=1;try{const resp=await fetch(safeUrl,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){if(resp.status>=500&&missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');return;}const data=await resp.json();renderMissionWatch(data);if(!data.ok){clearMissionWatchState(false);return;}persistMissionWatchState(safeUrl, data);const readiness=String(data.readiness_status||'');const signature=[String(data.stage||''),readiness,String(data.primary_row_count||0),String(data.next_step||''),String(data.autopilot_next_label||''),String(data.advance_busy||false)].join('|');if(Boolean(data.lab_ready)){/* Keep polling after Lab Notes becomes ready so the links and next-step state stay fresh while the local desk settles. */setConnectNote('This mission is ready for Lab Notes. Continue there or keep the local desk open for deeper analysis.');}else if(data.advance_busy){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');scheduleMissionWatch(safeUrl);return;}if(signature===missionWatchLastSignature){missionWatchStableCount+=1;}else{missionWatchLastSignature=signature;missionWatchStableCount=0;}if(['final_ready','blocked'].includes(readiness)) return;if(missionWatchStableCount>=MAX_IDENTICAL_MISSION_STATES){setConnectNote('Mission watch paused because the local state stopped changing. Open the local desk to continue.');return;}scheduleMissionWatch(safeUrl);}catch(_err){if(missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');}},MISSION_WATCH_POLL_INTERVAL_MS);}
     function setLaunchReady(ready, href){const link=document.getElementById('open-local-desk');if(!link) return;link.href=safeLocalUrl(href);link.classList.toggle('disabled', !ready);link.setAttribute('aria-disabled', ready ? 'false' : 'true');if(ready){link.removeAttribute('tabindex');}else{link.setAttribute('tabindex','-1');}}
     function setConnectReady(ready){const button=document.getElementById('connect-local-desk');if(!button) return;const enabled=Boolean(ready)&&!handshakeInFlight;button.classList.toggle('disabled', !enabled);button.setAttribute('aria-disabled', enabled ? 'false' : 'true');button.disabled=!enabled;}
     function setMissionCreateReady(ready){const button=document.getElementById('create-local-mission');if(!button) return;button.classList.toggle('disabled', !ready);button.setAttribute('aria-disabled', ready ? 'false' : 'true');button.disabled=!ready;}
