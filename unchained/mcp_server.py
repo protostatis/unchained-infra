@@ -268,6 +268,8 @@ async def cdp_click(x: int = 0, y: int = 0,
 
     Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
     """
+    if not element_id and not label and x == 0 and y == 0:
+        return "Error: provide x/y coordinates, element_id, or label."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.click(aid, tab_id, x, y,
                                    element_id=element_id, label=label)
@@ -282,6 +284,9 @@ async def cdp_scroll(direction: str = "down", amount: int = 500,
         direction: "up", "down", "left", or "right"
         amount: pixels to scroll (default 500, roughly one viewport height)
     """
+    if direction not in ("up", "down", "left", "right"):
+        return f"Invalid direction: {direction!r}. Use up, down, left, or right."
+    amount = max(1, min(amount, 50000))
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.scroll(aid, tab_id, direction, amount)
 
@@ -325,6 +330,8 @@ async def cdp_key_press(key: str, modifiers: int = 0,
     Use for keyboard shortcuts (Ctrl+A, Escape to close), arrow-key navigation
     in dropdowns, Tab to move between form fields, etc.
     """
+    if not (0 <= modifiers <= 15):
+        return "Invalid modifiers: must be 0-15 (1=Alt, 2=Ctrl, 4=Meta, 8=Shift)."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.key_press(aid, tab_id, key, modifiers)
 
@@ -350,7 +357,7 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
-async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str | Image:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 
     Returns PNG image. Use sparingly (~2100 tokens) — prefer DDM (~500 tokens).
@@ -360,12 +367,14 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str | Imag
     try:
         png_b64 = await cloud_tools.screenshot(aid, tab_id)
         return Image(data=base64.b64decode(png_b64, validate=True), format="png")
-    except Exception as exc:
+    except Exception:
         try:
             ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
-            return f"Screenshot failed ({exc}). Falling back to DDM text:\n\n{ddm_text}"
+            raise RuntimeError(f"Screenshot failed. DDM text fallback:\n\n{ddm_text}")
+        except RuntimeError:
+            raise
         except Exception:
-            raise exc
+            raise RuntimeError("Screenshot failed and DDM fallback also failed.")
 
 
 @mcp.tool()
