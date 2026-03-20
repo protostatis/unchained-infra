@@ -19,6 +19,7 @@ logs/
 
 # Benchmark results
 unchained/benchmark/results/*.jsonl
+unchained/benchmark/results/*.json
 unchained/bench_results_*.json
 
 # Installers / signing artifacts
