@@ -316,6 +316,27 @@ body::before{
 .card.setup .step-num,.card.sdk .step-num{background:rgba(251,191,36,0.1);color:#fbbf24}
 .card.codex .step-num{background:rgba(45,212,191,0.12);color:#2dd4bf}
 
+/* -- More Options Toggle -- */
+.more-toggle-btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  margin:32px auto 0;padding:8px 0;
+  background:none;border:none;cursor:pointer;
+  font-size:14px;color:var(--muted);letter-spacing:0.5px;
+  transition:color 0.2s;
+}
+.more-toggle-btn:hover{color:var(--text)}
+.more-toggle-btn .arrow{
+  display:inline-block;transition:transform 0.3s;font-size:12px;
+}
+.more-toggle-btn.expanded .arrow{transform:rotate(180deg)}
+.more-cards-wrap{
+  max-height:0;overflow:hidden;
+  transition:max-height 0.5s ease;
+}
+.more-cards-wrap.open{
+  max-height:3000px;
+}
+
 .card-btn{
   display:inline-flex;align-items:center;justify-content:center;
   padding:11px 24px;border-radius:8px;
@@ -509,6 +530,15 @@ body::before{
       <a href="/trial" class="card-btn">Start Free &#8594;</a>
     </div>
 
+  </div>
+
+  <button class="more-toggle-btn" id="moreToggleBtn" onclick="toggleMoreCards()">
+    More ways to get started <span class="arrow">&#9660;</span>
+  </button>
+
+  <div class="more-cards-wrap" id="moreCardsWrap">
+    <div class="cards" style="padding-top:24px">
+
     <!-- Section: SDK Agent Lanes -->
     <div class="section-label">API Agent Lanes &mdash; provision an API key once, then chat</div>
 
@@ -622,6 +652,7 @@ body::before{
       <a href="/mcp" class="card-btn">Set Up MCP &#8594;</a>
     </div>
 
+    </div>
   </div>
 </div>
 
@@ -654,6 +685,17 @@ body::before{
 </div>
 
 <script>
+// More options toggle
+function toggleMoreCards(){
+  var wrap=document.getElementById('moreCardsWrap');
+  var btn=document.getElementById('moreToggleBtn');
+  var open=wrap.classList.toggle('open');
+  btn.classList.toggle('expanded',open);
+  btn.innerHTML=open
+    ? 'Show less <span class="arrow">&#9660;</span>'
+    : 'More ways to get started <span class="arrow">&#9660;</span>';
+}
+
 // Mock interaction — renders real action-group DOM structure
 var mockPlayed = false;
 function playMock() {
