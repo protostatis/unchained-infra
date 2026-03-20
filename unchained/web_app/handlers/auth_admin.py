@@ -1504,6 +1504,17 @@ async def handle_admin_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_landing_v2(request: web.Request) -> web.Response:
+    """GET /landing-v2 — admin-only A/B test variant of the landing page."""
+    if not is_admin(request):
+        raise web.HTTPNotFound()
+    core = _core()
+    core._track_page_view(request)
+    from web_app.templates import LANDING_V2_HTML
+    html = LANDING_V2_HTML.replace("__CONTACT_EMAIL__", core.CONTACT_EMAIL)
+    return web.Response(text=html, content_type="text/html")
+
+
 def _scheduler_api_auth(core, request: web.Request) -> tuple[dict | None, web.Response | None]:
     auth_info = core._authenticate(request)
     if auth_info is None:
