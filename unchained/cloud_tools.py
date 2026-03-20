@@ -56,6 +56,10 @@ async def press_enter(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1",
     return await _client().press_enter(agent_id, tab_id, relay_host, relay_port)
 
 
+async def key_press(agent_id: str, tab_id: str, key: str, modifiers: int = 0, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+    return await _client().key_press(agent_id, tab_id, key, modifiers, relay_host, relay_port)
+
+
 async def submit_form(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
     return await _client().submit_form(agent_id, tab_id, relay_host, relay_port)
 

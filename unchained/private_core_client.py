@@ -17,6 +17,7 @@ from private_core_contracts import (
     OP_CLICK,
     OP_CLOSE_TAB,
     OP_CREATE_TAB,
+    OP_KEY_PRESS,
     OP_NAVIGATE,
     OP_PRESS_ENTER,
     OP_PROVISION_CLEANUP,
@@ -134,7 +135,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status")]:
+        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -239,6 +240,17 @@ class PrivateCoreClient:
             OP_PRESS_ENTER,
             agent_id=agent_id,
             tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def key_press(self, agent_id: str, tab_id: str, key: str, modifiers: int, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_KEY_PRESS,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            key=key,
+            modifiers=modifiers,
             relay_host=relay_host,
             relay_port=relay_port,
         )

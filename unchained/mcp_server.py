@@ -289,6 +289,37 @@ async def cdp_type(text: str,
 
 
 @mcp.tool()
+async def cdp_press_enter(tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press Enter on the currently focused element.
+
+    Use after typing into a search box or form field to submit.
+    Click the target input first (cdp_click) to ensure it has focus.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.press_enter(aid, tab_id)
+
+
+@mcp.tool()
+async def cdp_key_press(key: str, modifiers: int = 0,
+                        tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press a keyboard key with optional modifier keys.
+
+    Args:
+        key: Key name. Special keys: Enter, Tab, Escape, Backspace, Delete,
+             ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Home, End,
+             PageUp, PageDown. Single characters (a-z, 0-9) also accepted.
+        modifiers: Bitmask for modifier keys (sum values to combine):
+             0=none, 1=Alt, 2=Ctrl, 4=Meta/Cmd, 8=Shift.
+             Example: Ctrl+Shift = 2+8 = 10.
+
+    Use for keyboard shortcuts (Ctrl+A, Escape to close), arrow-key navigation
+    in dropdowns, Tab to move between form fields, etc.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.key_press(aid, tab_id, key, modifiers)
+
+
+@mcp.tool()
 async def js_eval(expression: str,
                   tab_id: str = "auto", agent_id: str = "") -> str:
     """Execute JavaScript on the page and return the result.

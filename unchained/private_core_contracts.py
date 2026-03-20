@@ -13,6 +13,7 @@ OP_NAVIGATE = "navigate"
 OP_CLICK = "click"
 OP_TYPE_TEXT = "type_text"
 OP_PRESS_ENTER = "press_enter"
+OP_KEY_PRESS = "key_press"
 OP_SUBMIT_FORM = "submit_form"
 OP_SCREENSHOT = "screenshot"
 OP_CREATE_TAB = "create_tab"
@@ -32,6 +33,7 @@ PRIVATE_CORE_OPS = {
     OP_CLICK,
     OP_TYPE_TEXT,
     OP_PRESS_ENTER,
+    OP_KEY_PRESS,
     OP_SUBMIT_FORM,
     OP_SCREENSHOT,
     OP_CREATE_TAB,
