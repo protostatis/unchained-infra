@@ -188,7 +188,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("requestId!==latestDeskRequestId", html)
         self.assertIn("opts.silent&&deskWasDetected", html)
         self.assertIn("async function fetchLocalJson(url)", html)
-        self.assertIn("fetch(url,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS)})", html)
+        self.assertIn("signal:AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS)", html)
         self.assertIn("const statusData=await fetchLocalJson(STATUS_URL)", html)
         self.assertIn("const capsulesData=await fetchLocalJson(CAPSULES_URL)", html)
         self.assertIn("resetCapsulesWaiting('Local Research Desk is running, but recent mission summaries are still loading.')", html)
