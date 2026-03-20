@@ -32,6 +32,7 @@ from private_core_contracts import (
     OP_SET_FILE,
     OP_SUBMIT_FORM,
     OP_TYPE_TEXT,
+    OP_WAIT_READY,
     PRIVATE_CORE_OPS,
 )
 
@@ -135,7 +136,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press")]:
+        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -321,6 +322,17 @@ class PrivateCoreClient:
             tab_id=tab_id,
             selector=selector,
             file_path=file_path,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def wait_ready(self, agent_id: str, tab_id: str, strategy: str = "both",
+                         relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_WAIT_READY,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            strategy=strategy,
             relay_host=relay_host,
             relay_port=relay_port,
         )

@@ -23,6 +23,7 @@ OP_PROVISION_STATUS = "provision_status"
 OP_CLOSE_TAB = "close_tab"
 OP_SCROLL = "scroll"
 OP_SET_FILE = "set_file"
+OP_WAIT_READY = "wait_ready"
 
 PRIVATE_CORE_OPS = {
     OP_RUN_DDM,
@@ -43,6 +44,7 @@ PRIVATE_CORE_OPS = {
     OP_CLOSE_TAB,
     OP_SCROLL,
     OP_SET_FILE,
+    OP_WAIT_READY,
 }
 
 DEFAULT_PRIVATE_CORE_PORT = 8770

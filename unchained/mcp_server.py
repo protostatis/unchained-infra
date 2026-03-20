@@ -256,6 +256,18 @@ async def cdp_navigate(url: str,
 
 
 @mcp.tool()
+async def cdp_wait_ready(strategy: str = "both",
+                         tab_id: str = "auto", agent_id: str = "") -> str:
+    """Wait for page to finish loading.
+
+    Args:
+        strategy: "dom" (DOM stability), "network" (network idle), "both" (default)
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.wait_ready(aid, tab_id, strategy)
+
+
+@mcp.tool()
 async def cdp_click(x: int = 0, y: int = 0,
                     element_id: str = "", label: str = "",
                     tab_id: str = "auto", agent_id: str = "") -> str:
