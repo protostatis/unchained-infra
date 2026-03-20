@@ -296,16 +296,22 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
-async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
+async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> str | Image:
     """Take a screenshot of the current page.
 
-    Returns PNG image content. Use sparingly (~2100 tokens) — prefer
-    DDM for page understanding (~500 tokens).
-    Only use for: CAPTCHAs, visual state, image verification.
+    Returns PNG image. Use sparingly (~2100 tokens) — prefer DDM (~500 tokens).
+    Falls back to DDM text if screenshot fails.
     """
     aid = _resolve_agent(profile=agent_id)
-    png_b64 = await cloud_tools.screenshot(aid, tab_id)
-    return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    try:
+        png_b64 = await cloud_tools.screenshot(aid, tab_id)
+        return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    except Exception as exc:
+        try:
+            ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
+            return f"Screenshot failed ({exc}). Falling back to DDM text:\n\n{ddm_text}"
+        except Exception:
+            raise exc
 
 
 @mcp.tool()
