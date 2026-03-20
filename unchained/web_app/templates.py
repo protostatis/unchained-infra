@@ -858,8 +858,8 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <title>Unchained</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Cormorant+Garamond:ital,wght@0,400;1,400&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
 :root{
   --bg:#0a0a0f;--surface:#111119;--subtle:#222;
   --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
@@ -1634,17 +1634,6 @@ if ('IntersectionObserver' in window) {
     entries.forEach(function(e) { if (e.isIntersecting) playMock(); });
   }, {threshold: 0.3}).observe(document.getElementById('mock-section'));
 }
-
-(function(){
-  fetch('/auth/me').then(function(r){return r.json()}).then(function(d){
-    if (!d.authenticated) return;
-    var btn = document.getElementById('hero-enter');
-    if (!btn) return;
-    var last = localStorage.getItem('unchained_last_route') || '/demo';
-    btn.href = last;
-    btn.style.display = '';
-  }).catch(function(){});
-})();
 </script>
 </body>
 </html>"""
