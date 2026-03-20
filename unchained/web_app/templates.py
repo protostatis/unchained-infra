@@ -331,10 +331,7 @@ body::before{
 .more-toggle-btn.expanded .arrow{transform:rotate(180deg)}
 .more-cards-wrap{
   max-height:0;overflow:hidden;
-  transition:max-height 0.5s ease;
-}
-.more-cards-wrap.open{
-  max-height:3000px;
+  transition:max-height 0.4s ease;
 }
 
 .card-btn{
@@ -532,8 +529,8 @@ body::before{
 
   </div>
 
-  <button class="more-toggle-btn" id="moreToggleBtn" onclick="toggleMoreCards()">
-    More ways to get started <span class="arrow">&#9660;</span>
+  <button class="more-toggle-btn" id="moreToggleBtn" onclick="toggleMoreCards()" aria-expanded="false" aria-controls="moreCardsWrap">
+    <span class="toggle-label">More ways to get started</span> <span class="arrow">&#9660;</span>
   </button>
 
   <div class="more-cards-wrap" id="moreCardsWrap">
@@ -689,11 +686,13 @@ body::before{
 function toggleMoreCards(){
   var wrap=document.getElementById('moreCardsWrap');
   var btn=document.getElementById('moreToggleBtn');
+  var label=btn.querySelector('.toggle-label');
   var open=wrap.classList.toggle('open');
   btn.classList.toggle('expanded',open);
-  btn.innerHTML=open
-    ? 'Show less <span class="arrow">&#9660;</span>'
-    : 'More ways to get started <span class="arrow">&#9660;</span>';
+  btn.setAttribute('aria-expanded',open);
+  label.textContent=open?'Show less':'More ways to get started';
+  if(open){wrap.style.maxHeight=wrap.scrollHeight+'px'}
+  else{wrap.style.maxHeight='0'}
 }
 
 // Mock interaction — renders real action-group DOM structure
