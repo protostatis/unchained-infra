@@ -259,6 +259,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     key_hash = auth_info["key_hash"]
     session_id = body.get("session_id", "")
     model = body.get("model", "")
+    slot = body.get("slot")
     if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     core._trace(
@@ -548,6 +549,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "message": message,
             "req_id": req_id,
         }
+        if slot is not None:
+            ws_msg["slot"] = slot
         if scheduler_armed:
             ws_msg["scheduler_armed"] = True
             ws_msg["scheduler_grant_id"] = scheduler_grant_id

@@ -1995,6 +1995,15 @@ async def main():
                     user_text = msg["message"]
                     msg_model = msg.get("model", "")
                     msg_tab_id = msg.get("tab_id", "auto")
+                    # Sync active slot from the UI so messages go to the
+                    # conversation the user is actually viewing.
+                    msg_slot = msg.get("slot")
+                    if msg_slot is not None and msg_slot in (1, 2, 3):
+                        meta = _load_meta()
+                        if meta.get("active_slot") != msg_slot:
+                            meta["active_slot"] = msg_slot
+                            _save_meta(meta)
+                            log.info("[%s] Synced active slot to %s from user_message", sid, msg_slot)
                     msg_scheduler_armed = bool(msg.get("scheduler_armed"))
                     msg_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
                     msg_req_id = str(msg.get("req_id", "") or "").strip()

@@ -3104,6 +3104,7 @@ async function doSend() {
         agent_id: agentId,
         session_id: sessionId,
         model: model,
+        slot: activeSlot,
       }),
       signal: _cancelCtrl.signal,
     });
@@ -4492,6 +4493,7 @@ async function doSend() {
       agent_id: agentId,
       session_id: sessionId,
       model: currentModel(),
+      slot: activeSlot,
     };
     const profilePath = currentProfilePath();
     if (profilePath) {
@@ -8509,6 +8511,7 @@ async function doSend() {
       agent_id: agentId,
       session_id: sessionId,
       model: model,
+      slot: activeSlot,
     };
     const profilePath = currentProfilePath();
     if (profilePath) {
