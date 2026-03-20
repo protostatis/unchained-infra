@@ -24,12 +24,14 @@ from private_core_contracts import (
     OP_PROVISION_CLEANUP,
     OP_PROVISION_LAUNCH,
     OP_PROVISION_STATUS,
+    OP_GET_COOKIES,
     OP_RUN_CDP_COMMAND,
     OP_RUN_DDM,
     OP_RUN_INTEL,
     OP_RUN_JS,
     OP_SCREENSHOT,
     OP_SCROLL,
+    OP_SET_COOKIES,
     OP_SET_FILE,
     OP_SET_TAB_ALIAS,
     OP_SUBMIT_FORM,
@@ -138,7 +140,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready"), (OP_SET_TAB_ALIAS, "set_tab_alias"), (OP_LIST_TAB_ALIASES, "list_tab_aliases")]:
+        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready"), (OP_SET_TAB_ALIAS, "set_tab_alias"), (OP_LIST_TAB_ALIASES, "list_tab_aliases"), (OP_SET_COOKIES, "set_cookies"), (OP_GET_COOKIES, "get_cookies")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -352,6 +354,29 @@ class PrivateCoreClient:
             OP_LIST_TAB_ALIASES,
             agent_id=agent_id,
         )
+
+    async def set_cookies(self, agent_id: str, tab_id: str, cookies: list,
+                          relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_SET_COOKIES,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            cookies=cookies,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def get_cookies(self, agent_id: str, tab_id: str, urls: list | None = None,
+                          relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        kwargs = dict(
+            agent_id=agent_id,
+            tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+        if urls is not None:
+            kwargs["urls"] = urls
+        return await self.execute(OP_GET_COOKIES, **kwargs)
 
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:
         return await self.execute(

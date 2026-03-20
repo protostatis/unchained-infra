@@ -103,5 +103,15 @@ async def list_tab_aliases(agent_id: str) -> str:
     return await _client().list_tab_aliases(agent_id)
 
 
+async def set_cookies(agent_id: str, tab_id: str, cookies: list,
+                      relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+    return await _client().set_cookies(agent_id, tab_id, cookies, relay_host, relay_port)
+
+
+async def get_cookies(agent_id: str, tab_id: str, urls: list | None = None,
+                      relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+    return await _client().get_cookies(agent_id, tab_id, urls, relay_host, relay_port)
+
+
 async def close_tab(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> bool:
     return await _client().close_tab(agent_id, tab_id, relay_host, relay_port)

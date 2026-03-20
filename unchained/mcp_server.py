@@ -413,6 +413,36 @@ async def cdp_list_tab_aliases(agent_id: str = "") -> str:
 
 
 @mcp.tool()
+async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = "") -> str:
+    """Inject cookies for authentication.
+
+    Args:
+        cookies: JSON array string. Each cookie needs name, value, domain.
+                 Optional: path, secure, httpOnly, sameSite, expires.
+    Example: '[{"name":"session","value":"abc123","domain":".example.com"}]'
+    """
+    import json as _json
+    aid = _resolve_agent(profile=agent_id)
+    try:
+        cookie_list = _json.loads(cookies)
+    except _json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+    return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
+
+
+@mcp.tool()
+async def cdp_get_cookies(urls: str = "", tab_id: str = "auto", agent_id: str = "") -> str:
+    """Get cookies from the browser for session saving.
+
+    Args:
+        urls: Optional comma-separated URLs to filter by domain. Empty = current page.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    url_list = [u.strip() for u in urls.split(",") if u.strip()] if urls else None
+    return await cloud_tools.get_cookies(aid, tab_id, url_list)
+
+
+@mcp.tool()
 async def list_connected_agents(agent_id: str = "") -> str:
     """List all connected browser agents with their IDs and profiles.
 

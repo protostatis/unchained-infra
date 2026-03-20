@@ -22,6 +22,8 @@ OP_PROVISION_CLEANUP = "provision_cleanup"
 OP_PROVISION_STATUS = "provision_status"
 OP_CLOSE_TAB = "close_tab"
 OP_SCROLL = "scroll"
+OP_SET_COOKIES = "set_cookies"
+OP_GET_COOKIES = "get_cookies"
 OP_SET_FILE = "set_file"
 OP_WAIT_READY = "wait_ready"
 OP_SET_TAB_ALIAS = "set_tab_alias"
@@ -45,6 +47,8 @@ PRIVATE_CORE_OPS = {
     OP_PROVISION_STATUS,
     OP_CLOSE_TAB,
     OP_SCROLL,
+    OP_SET_COOKIES,
+    OP_GET_COOKIES,
     OP_SET_FILE,
     OP_WAIT_READY,
     OP_SET_TAB_ALIAS,
