@@ -45,6 +45,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/scheduler/agent/upsert", "web_app.handlers.auth_admin:handle_scheduler_agent_upsert"),
     ("POST", "/web/scheduler/agent/delete", "web_app.handlers.auth_admin:handle_scheduler_agent_delete"),
     ("GET", "/admin", "web_app.handlers.auth_admin:handle_admin_page"),
+    ("GET", "/landing-v2", "web_app.handlers.auth_admin:handle_landing_v2"),
     ("GET", "/admin/users", "web_app.handlers.auth_admin:handle_admin_users"),
     ("GET", "/admin/analytics/funnel", "web_app.handlers.analytics:handle_admin_analytics_funnel"),
     ("GET", "/admin/pending", "web_app.handlers.auth_admin:handle_admin_pending"),
