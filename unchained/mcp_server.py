@@ -256,11 +256,51 @@ async def cdp_navigate(url: str,
 
 
 @mcp.tool()
-async def cdp_click(x: int, y: int,
-                    tab_id: str = "auto", agent_id: str = "") -> str:
-    """Click at pixel coordinates. Get coordinates from DDM output."""
+async def cdp_wait_ready(strategy: str = "both",
+                         tab_id: str = "auto", agent_id: str = "") -> str:
+    """Wait for page to finish loading.
+
+    Args:
+        strategy: "dom" (DOM stability), "network" (network idle), "both" (default)
+    """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.click(aid, tab_id, x, y)
+    return await cloud_tools.wait_ready(aid, tab_id, strategy)
+
+
+@mcp.tool()
+async def cdp_click(x: int = 0, y: int = 0,
+                    element_id: str = "", label: str = "",
+                    tab_id: str = "auto", agent_id: str = "") -> str:
+    """Click an element by coordinates, DDM element ID, or label.
+
+    Three click modes:
+    - Coordinates: cdp_click(x=500, y=300)
+    - Element ID from DDM: cdp_click(element_id="B3")
+    - Label text: cdp_click(label="Notifications")
+
+    Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
+    """
+    if not element_id and not label and x == 0 and y == 0:
+        return "Error: provide x/y coordinates, element_id, or label."
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.click(aid, tab_id, x, y,
+                                   element_id=element_id, label=label)
+
+
+@mcp.tool()
+async def cdp_scroll(direction: str = "down", amount: int = 500,
+                     tab_id: str = "auto", agent_id: str = "") -> str:
+    """Scroll the page. Returns updated page layout.
+
+    Args:
+        direction: "up", "down", "left", or "right"
+        amount: pixels to scroll (default 500, roughly one viewport height)
+    """
+    if direction not in ("up", "down", "left", "right"):
+        return f"Invalid direction: {direction!r}. Use up, down, left, or right."
+    amount = max(1, min(amount, 50000))
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.scroll(aid, tab_id, direction, amount)
 
 
 @mcp.tool()
@@ -273,6 +313,39 @@ async def cdp_type(text: str,
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.type_text(aid, tab_id, text)
+
+
+@mcp.tool()
+async def cdp_press_enter(tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press Enter on the currently focused element.
+
+    Use after typing into a search box or form field to submit.
+    Click the target input first (cdp_click) to ensure it has focus.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.press_enter(aid, tab_id)
+
+
+@mcp.tool()
+async def cdp_key_press(key: str, modifiers: int = 0,
+                        tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press a keyboard key with optional modifier keys.
+
+    Args:
+        key: Key name. Special keys: Enter, Tab, Escape, Backspace, Delete,
+             ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Home, End,
+             PageUp, PageDown. Single characters (a-z, 0-9) also accepted.
+        modifiers: Bitmask for modifier keys (sum values to combine):
+             0=none, 1=Alt, 2=Ctrl, 4=Meta/Cmd, 8=Shift.
+             Example: Ctrl+Shift = 2+8 = 10.
+
+    Use for keyboard shortcuts (Ctrl+A, Escape to close), arrow-key navigation
+    in dropdowns, Tab to move between form fields, etc.
+    """
+    if not (0 <= modifiers <= 15):
+        return "Invalid modifiers: must be 0-15 (1=Alt, 2=Ctrl, 4=Meta, 8=Shift)."
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.key_press(aid, tab_id, key, modifiers)
 
 
 @mcp.tool()
@@ -299,13 +372,21 @@ async def js_eval(expression: str,
 async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 
-    Returns PNG image content. Use sparingly (~2100 tokens) — prefer
-    DDM for page understanding (~500 tokens).
-    Only use for: CAPTCHAs, visual state, image verification.
+    Returns PNG image. Use sparingly (~2100 tokens) — prefer DDM (~500 tokens).
+    Falls back to DDM text if screenshot fails.
     """
     aid = _resolve_agent(profile=agent_id)
-    png_b64 = await cloud_tools.screenshot(aid, tab_id)
-    return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    try:
+        png_b64 = await cloud_tools.screenshot(aid, tab_id)
+        return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    except Exception:
+        try:
+            ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
+            raise RuntimeError(f"Screenshot failed. DDM text fallback:\n\n{ddm_text}")
+        except RuntimeError:
+            raise
+        except Exception:
+            raise RuntimeError("Screenshot failed and DDM fallback also failed.")
 
 
 @mcp.tool()
@@ -319,6 +400,55 @@ async def cdp_set_file(selector: str, file_path: str,
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.set_file(aid, tab_id, selector, file_path)
+
+
+@mcp.tool()
+async def cdp_set_tab_alias(alias: str, tab_id: str,
+                            agent_id: str = "") -> str:
+    """Name a tab for easy reference. Use the alias anywhere tab_id is accepted.
+
+    Example: cdp_set_tab_alias(alias="reddit", tab_id="3C96B...") then
+             cdp_click(x=100, y=200, tab_id="reddit")
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.set_tab_alias(aid, alias, tab_id)
+
+
+@mcp.tool()
+async def cdp_list_tab_aliases(agent_id: str = "") -> str:
+    """List all named tab aliases."""
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.list_tab_aliases(aid)
+
+
+@mcp.tool()
+async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = "") -> str:
+    """Inject cookies for authentication.
+
+    Args:
+        cookies: JSON array string. Each cookie needs name, value, domain.
+                 Optional: path, secure, httpOnly, sameSite, expires.
+    Example: '[{"name":"session","value":"abc123","domain":".example.com"}]'
+    """
+    import json as _json
+    aid = _resolve_agent(profile=agent_id)
+    try:
+        cookie_list = _json.loads(cookies)
+    except _json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+    return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
+
+
+@mcp.tool()
+async def cdp_get_cookies(urls: str = "", tab_id: str = "auto", agent_id: str = "") -> str:
+    """Get cookies from the browser for session saving.
+
+    Args:
+        urls: Optional comma-separated URLs to filter by domain. Empty = current page.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    url_list = [u.strip() for u in urls.split(",") if u.strip()] if urls else None
+    return await cloud_tools.get_cookies(aid, tab_id, url_list)
 
 
 @mcp.tool()
