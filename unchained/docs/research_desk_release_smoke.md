@@ -22,6 +22,7 @@ The script writes a JSON artifact under `benchmark/results/` and checks:
 Optional:
 
 - override `RESULTS_DIR=/some/path` if you want artifacts outside the repo default
+- the smoke script writes only JSON artifacts; raw HTML/JSON fetches stay in a temp directory and are deleted automatically
 
 ## Manual browser pass
 
@@ -43,3 +44,4 @@ After the script passes:
   - `checks` shows which hosted/local surface failed
   - `local_summary` shows the provider, bridge agent, and capsule count the script observed
   - `failure` appears when the script aborts before the normal HTML/JSON checks complete
+- The automated check logic lives in `scripts/research_desk_release_smoke.py`, while `scripts/research_desk_release_smoke.sh` handles fetches, temp files, and shell failure reporting.
