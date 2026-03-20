@@ -484,7 +484,7 @@ body::before{
   </div>
   <div class="mock-chat" id="mock-chat"></div>
   <a href="/demo" class="mock-cta">Try it yourself &rarr;</a>
-  <button class="mock-replay" id="mock-replay" onclick="playMock(true)">&#8635; Replay demo</button>
+  <button class="mock-replay" id="mock-replay" onclick="playMock()">&#8635; Replay demo</button>
 </div>
 
 <!-- Get Started -->
@@ -677,7 +677,7 @@ body::before{
 <script>
 // Mock interaction — flight comparison demo
 var mockTimers = [];
-function playMock(isReplay) {
+function playMock() {
   // Clear any running timers
   mockTimers.forEach(function(t){ clearTimeout(t); });
   mockTimers = [];
@@ -715,10 +715,17 @@ function playMock(isReplay) {
     ctx.fillText(site.name, 16, 24);
     ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '12px sans-serif';
     ctx.fillText('NYC \u2192 Tokyo \u00B7 Apr 2026 \u00B7 Round trip', 200, 24);
+    // Find lowest-price row index
+    var lowestIdx = 0;
+    var lowestVal = Infinity;
+    for (var j = 0; j < results.length; j++) {
+      var num = parseFloat(results[j].price.replace(/[^0-9.]/g, ''));
+      if (num < lowestVal) { lowestVal = num; lowestIdx = j; }
+    }
     // Flight results
     for (var i = 0; i < results.length; i++) {
       var y = 52 + i * 56;
-      ctx.fillStyle = i === 0 ? '#1a2332' : '#111820';
+      ctx.fillStyle = i === lowestIdx ? '#1a2332' : '#111820';
       ctx.fillRect(8, y - 8, 624, 48);
       ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 13px sans-serif';
       ctx.fillText(results[i].airline, 20, y + 10);
@@ -728,7 +735,7 @@ function playMock(isReplay) {
       ctx.fillStyle = results[i].stops === 'Nonstop' ? '#3fb950' : '#d29922';
       ctx.font = '11px sans-serif';
       ctx.fillText(results[i].stops, 340, y + 28);
-      ctx.fillStyle = i === 0 ? '#3fb950' : '#c9d1d9';
+      ctx.fillStyle = i === lowestIdx ? '#3fb950' : '#c9d1d9';
       ctx.font = 'bold 15px sans-serif';
       ctx.fillText(results[i].price, 530, y + 18);
     }
@@ -747,6 +754,7 @@ function playMock(isReplay) {
       b.textContent = 'Find me the cheapest direct flight from NYC to Tokyo in April. Compare Google Flights and Kayak.';
       chat.appendChild(b);
       reveal(b);
+      chat.scrollTop = chat.scrollHeight;
     }},
     // === Site 1: Google Flights ===
     {delay:900, fn:function(){
@@ -774,18 +782,22 @@ function playMock(isReplay) {
       asst.appendChild(ag);
       chat.appendChild(asst);
       reveal(asst); reveal(ag);
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:2000, fn:function(){
       markDone('mock-steps1');
       addStep('mock-steps1', '\uD83D\uDC41', 'Look', 'map layout');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:2700, fn:function(){
       markDone('mock-steps1');
       addStep('mock-steps1', '\u2328', 'Type', 'NYC to Tokyo, April 2026');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:3500, fn:function(){
       markDone('mock-steps1');
       addStep('mock-steps1', '\uD83D\uDCF7', 'Screenshot', 'capture results');
+      chat.scrollTop = chat.scrollHeight;
       drawFlightCanvas('mock-ag1', {name: 'Google Flights', color: '#1a73e8'}, [
         {airline: 'ANA (All Nippon)', route: 'JFK \u2192 NRT', duration: '14h 10m', stops: 'Nonstop', price: '$1,247'},
         {airline: 'Japan Airlines', route: 'JFK \u2192 HND', duration: '14h 35m', stops: 'Nonstop', price: '$1,312'},
@@ -796,6 +808,7 @@ function playMock(isReplay) {
     {delay:4500, fn:function(){
       markDone('mock-steps1');
       addStep('mock-steps1', '\uD83D\uDD2C', 'Extract', 'read flight prices');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:5200, fn:function(){
       document.querySelectorAll('#mock-ag1 .as-dot').forEach(function(d){
@@ -805,6 +818,7 @@ function playMock(isReplay) {
       if(gd){gd.className='ag-dot done';gd.textContent='\u2713';}
       var ct = document.querySelector('#mock-ag1 .ag-count');
       if(ct) ct.textContent = '5 steps';
+      chat.scrollTop = chat.scrollHeight;
     }},
 
     // === Site 2: Kayak ===
@@ -835,14 +849,17 @@ function playMock(isReplay) {
     {delay:6800, fn:function(){
       markDone('mock-steps2');
       addStep('mock-steps2', '\uD83D\uDC41', 'Look', 'map layout');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:7400, fn:function(){
       markDone('mock-steps2');
       addStep('mock-steps2', '\u2328', 'Type', 'NYC to Tokyo, April 2026');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:8200, fn:function(){
       markDone('mock-steps2');
       addStep('mock-steps2', '\uD83D\uDCF7', 'Screenshot', 'capture results');
+      chat.scrollTop = chat.scrollHeight;
       drawFlightCanvas('mock-ag2', {name: 'Kayak', color: '#ff690f'}, [
         {airline: 'ANA (All Nippon)', route: 'JFK \u2192 NRT', duration: '14h 10m', stops: 'Nonstop', price: '$1,198'},
         {airline: 'Japan Airlines', route: 'JFK \u2192 HND', duration: '14h 35m', stops: 'Nonstop', price: '$1,295'},
@@ -853,6 +870,7 @@ function playMock(isReplay) {
     {delay:9200, fn:function(){
       markDone('mock-steps2');
       addStep('mock-steps2', '\uD83D\uDD2C', 'Extract', 'read flight prices');
+      chat.scrollTop = chat.scrollHeight;
     }},
     {delay:9900, fn:function(){
       document.querySelectorAll('#mock-ag2 .as-dot').forEach(function(d){
@@ -862,6 +880,7 @@ function playMock(isReplay) {
       if(gd){gd.className='ag-dot done';gd.textContent='\u2713';}
       var ct = document.querySelector('#mock-ag2 .ag-count');
       if(ct) ct.textContent = '5 steps';
+      chat.scrollTop = chat.scrollHeight;
     }},
 
     // === Final comparison answer ===
@@ -896,15 +915,15 @@ function playMock(isReplay) {
 
 // Auto-play on scroll via IntersectionObserver
 if ('IntersectionObserver' in window) {
-  var mockHasAutoPlayed = false;
-  new IntersectionObserver(function(entries) {
+  var mockObserver = new IntersectionObserver(function(entries) {
     entries.forEach(function(e) {
-      if (e.isIntersecting && !mockHasAutoPlayed) {
-        mockHasAutoPlayed = true;
-        playMock(false);
+      if (e.isIntersecting) {
+        mockObserver.disconnect();
+        playMock();
       }
     });
-  }, {threshold: 0.3}).observe(document.getElementById('mock-section'));
+  }, {threshold: 0.3});
+  mockObserver.observe(document.getElementById('mock-section'));
 }
 
 // Show "Enter" button only for logged-in users, pointing to last route
