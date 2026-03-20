@@ -140,7 +140,18 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready"), (OP_SET_TAB_ALIAS, "set_tab_alias"), (OP_LIST_TAB_ALIASES, "list_tab_aliases"), (OP_SET_COOKIES, "set_cookies"), (OP_GET_COOKIES, "get_cookies")]:
+        _optional_ops = [
+            (OP_SET_FILE, "set_file"),
+            (OP_PROVISION_STATUS, "provision_status"),
+            (OP_SCROLL, "scroll"),
+            (OP_KEY_PRESS, "key_press"),
+            (OP_WAIT_READY, "wait_ready"),
+            (OP_SET_TAB_ALIAS, "set_tab_alias"),
+            (OP_LIST_TAB_ALIASES, "list_tab_aliases"),
+            (OP_SET_COOKIES, "set_cookies"),
+            (OP_GET_COOKIES, "get_cookies"),
+        ]
+        for op_name, fn_name in _optional_ops:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn

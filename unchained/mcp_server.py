@@ -17,6 +17,7 @@ Claude Code connects:
 
 import base64
 import hashlib
+import json
 import os
 import re
 import sys
@@ -263,12 +264,14 @@ async def cdp_wait_ready(strategy: str = "both",
     Args:
         strategy: "dom" (DOM stability), "network" (network idle), "both" (default)
     """
+    if strategy not in ("dom", "network", "both"):
+        return f"Invalid strategy: {strategy!r}. Use dom, network, or both."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.wait_ready(aid, tab_id, strategy)
 
 
 @mcp.tool()
-async def cdp_click(x: int = 0, y: int = 0,
+async def cdp_click(x: int | None = None, y: int | None = None,
                     element_id: str = "", label: str = "",
                     tab_id: str = "auto", agent_id: str = "") -> str:
     """Click an element by coordinates, DDM element ID, or label.
@@ -280,10 +283,10 @@ async def cdp_click(x: int = 0, y: int = 0,
 
     Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
     """
-    if not element_id and not label and x == 0 and y == 0:
+    if not element_id and not label and x is None and y is None:
         return "Error: provide x/y coordinates, element_id, or label."
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.click(aid, tab_id, x, y,
+    return await cloud_tools.click(aid, tab_id, x or 0, y or 0,
                                    element_id=element_id, label=label)
 
 
@@ -342,8 +345,15 @@ async def cdp_key_press(key: str, modifiers: int = 0,
     Use for keyboard shortcuts (Ctrl+A, Escape to close), arrow-key navigation
     in dropdowns, Tab to move between form fields, etc.
     """
+    _SPECIAL_KEYS = frozenset({
+        "Enter", "Tab", "Escape", "Backspace", "Delete",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Space", "Home", "End", "PageUp", "PageDown",
+    })
     if not (0 <= modifiers <= 15):
         return "Invalid modifiers: must be 0-15 (1=Alt, 2=Ctrl, 4=Meta, 8=Shift)."
+    if key not in _SPECIAL_KEYS and len(key) != 1:
+        return f"Invalid key: {key!r}. Use a special key name or single character."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.key_press(aid, tab_id, key, modifiers)
 
@@ -380,13 +390,12 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
         png_b64 = await cloud_tools.screenshot(aid, tab_id)
         return Image(data=base64.b64decode(png_b64, validate=True), format="png")
     except Exception:
+        # Screenshot failed — try DDM text as fallback context
         try:
             ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
-            raise RuntimeError(f"Screenshot failed. DDM text fallback:\n\n{ddm_text}")
-        except RuntimeError:
-            raise
         except Exception:
             raise RuntimeError("Screenshot failed and DDM fallback also failed.")
+        raise RuntimeError(f"Screenshot unavailable. Page text via DDM:\n\n{ddm_text}")
 
 
 @mcp.tool()
@@ -410,6 +419,13 @@ async def cdp_set_tab_alias(alias: str, tab_id: str,
     Example: cdp_set_tab_alias(alias="reddit", tab_id="3C96B...") then
              cdp_click(x=100, y=200, tab_id="reddit")
     """
+    alias = alias.strip()
+    if not alias:
+        return "Alias cannot be empty."
+    if len(alias) > 64:
+        return "Alias too long (max 64 characters)."
+    if alias.lower() == "auto":
+        return "Cannot use 'auto' as an alias — it is reserved."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.set_tab_alias(aid, alias, tab_id)
 
@@ -430,12 +446,16 @@ async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = ""
                  Optional: path, secure, httpOnly, sameSite, expires.
     Example: '[{"name":"session","value":"abc123","domain":".example.com"}]'
     """
-    import json as _json
     aid = _resolve_agent(profile=agent_id)
     try:
-        cookie_list = _json.loads(cookies)
-    except _json.JSONDecodeError as e:
+        cookie_list = json.loads(cookies)
+    except json.JSONDecodeError as e:
         return f"Invalid JSON: {e}"
+    if not isinstance(cookie_list, list):
+        return "cookies must be a JSON array of cookie objects."
+    for c in cookie_list:
+        if not isinstance(c, dict) or not all(k in c for k in ("name", "value", "domain")):
+            return "Each cookie must have 'name', 'value', and 'domain' fields."
     return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
 
 
