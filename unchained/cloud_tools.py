@@ -44,6 +44,10 @@ async def click(agent_id: str, tab_id: str, x: int, y: int, relay_host: str = "1
     return await _client().click(agent_id, tab_id, x, y, relay_host, relay_port)
 
 
+async def scroll(agent_id: str, tab_id: str, direction: str = "down", amount: int = 500, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+    return await _client().scroll(agent_id, tab_id, direction, amount, relay_host, relay_port)
+
+
 async def type_text(agent_id: str, tab_id: str, text: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
     return await _client().type_text(agent_id, tab_id, text, relay_host, relay_port)
 

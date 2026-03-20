@@ -20,6 +20,7 @@ OP_PROVISION_LAUNCH = "provision_launch"
 OP_PROVISION_CLEANUP = "provision_cleanup"
 OP_PROVISION_STATUS = "provision_status"
 OP_CLOSE_TAB = "close_tab"
+OP_SCROLL = "scroll"
 OP_SET_FILE = "set_file"
 
 PRIVATE_CORE_OPS = {
@@ -38,6 +39,7 @@ PRIVATE_CORE_OPS = {
     OP_PROVISION_CLEANUP,
     OP_PROVISION_STATUS,
     OP_CLOSE_TAB,
+    OP_SCROLL,
     OP_SET_FILE,
 }
 

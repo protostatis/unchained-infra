@@ -264,6 +264,19 @@ async def cdp_click(x: int, y: int,
 
 
 @mcp.tool()
+async def cdp_scroll(direction: str = "down", amount: int = 500,
+                     tab_id: str = "auto", agent_id: str = "") -> str:
+    """Scroll the page. Returns updated page layout.
+
+    Args:
+        direction: "up", "down", "left", or "right"
+        amount: pixels to scroll (default 500, roughly one viewport height)
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.scroll(aid, tab_id, direction, amount)
+
+
+@mcp.tool()
 async def cdp_type(text: str,
                    tab_id: str = "auto", agent_id: str = "") -> str:
     """Type text into the currently focused element.

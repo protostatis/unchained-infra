@@ -27,6 +27,7 @@ from private_core_contracts import (
     OP_RUN_INTEL,
     OP_RUN_JS,
     OP_SCREENSHOT,
+    OP_SCROLL,
     OP_SET_FILE,
     OP_SUBMIT_FORM,
     OP_TYPE_TEXT,
@@ -133,7 +134,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status")]:
+        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -208,6 +209,17 @@ class PrivateCoreClient:
             tab_id=tab_id,
             x=x,
             y=y,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def scroll(self, agent_id: str, tab_id: str, direction: str, amount: int, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_SCROLL,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            direction=direction,
+            amount=amount,
             relay_host=relay_host,
             relay_port=relay_port,
         )
