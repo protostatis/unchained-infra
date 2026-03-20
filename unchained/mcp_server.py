@@ -286,7 +286,7 @@ async def cdp_click(x: int | None = None, y: int | None = None,
     if not element_id and not label and x is None and y is None:
         return "Error: provide x/y coordinates, element_id, or label."
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.click(aid, tab_id, x or 0, y or 0,
+    return await cloud_tools.click(aid, tab_id, 0 if x is None else x, 0 if y is None else y,
                                    element_id=element_id, label=label)
 
 
@@ -390,12 +390,14 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
         png_b64 = await cloud_tools.screenshot(aid, tab_id)
         return Image(data=base64.b64decode(png_b64, validate=True), format="png")
     except Exception:
-        # Screenshot failed — try DDM text as fallback context
+        # Screenshot failed — try DDM text as fallback context for the agent.
+        # Truncate to avoid leaking excessive page content in error messages.
         try:
             ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
         except Exception:
             raise RuntimeError("Screenshot failed and DDM fallback also failed.")
-        raise RuntimeError(f"Screenshot unavailable. Page text via DDM:\n\n{ddm_text}")
+        truncated = ddm_text[:4000] + ("..." if len(ddm_text) > 4000 else "")
+        raise RuntimeError(f"Screenshot unavailable. Page text via DDM:\n\n{truncated}")
 
 
 @mcp.tool()
