@@ -394,6 +394,25 @@ async def cdp_set_file(selector: str, file_path: str,
 
 
 @mcp.tool()
+async def cdp_set_tab_alias(alias: str, tab_id: str,
+                            agent_id: str = "") -> str:
+    """Name a tab for easy reference. Use the alias anywhere tab_id is accepted.
+
+    Example: cdp_set_tab_alias(alias="reddit", tab_id="3C96B...") then
+             cdp_click(x=100, y=200, tab_id="reddit")
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.set_tab_alias(aid, alias, tab_id)
+
+
+@mcp.tool()
+async def cdp_list_tab_aliases(agent_id: str = "") -> str:
+    """List all named tab aliases."""
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.list_tab_aliases(aid)
+
+
+@mcp.tool()
 async def list_connected_agents(agent_id: str = "") -> str:
     """List all connected browser agents with their IDs and profiles.
 

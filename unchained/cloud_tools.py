@@ -95,5 +95,13 @@ async def wait_ready(agent_id: str, tab_id: str, strategy: str = "both", relay_h
     return await _client().wait_ready(agent_id, tab_id, strategy, relay_host, relay_port)
 
 
+async def set_tab_alias(agent_id: str, alias: str, tab_id: str) -> str:
+    return await _client().set_tab_alias(agent_id, alias, tab_id)
+
+
+async def list_tab_aliases(agent_id: str) -> str:
+    return await _client().list_tab_aliases(agent_id)
+
+
 async def close_tab(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> bool:
     return await _client().close_tab(agent_id, tab_id, relay_host, relay_port)

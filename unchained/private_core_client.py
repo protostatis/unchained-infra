@@ -18,6 +18,7 @@ from private_core_contracts import (
     OP_CLOSE_TAB,
     OP_CREATE_TAB,
     OP_KEY_PRESS,
+    OP_LIST_TAB_ALIASES,
     OP_NAVIGATE,
     OP_PRESS_ENTER,
     OP_PROVISION_CLEANUP,
@@ -30,6 +31,7 @@ from private_core_contracts import (
     OP_SCREENSHOT,
     OP_SCROLL,
     OP_SET_FILE,
+    OP_SET_TAB_ALIAS,
     OP_SUBMIT_FORM,
     OP_TYPE_TEXT,
     OP_WAIT_READY,
@@ -136,7 +138,7 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready")]:
+        for op_name, fn_name in [(OP_SCROLL, "scroll"), (OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status"), (OP_KEY_PRESS, "key_press"), (OP_WAIT_READY, "wait_ready"), (OP_SET_TAB_ALIAS, "set_tab_alias"), (OP_LIST_TAB_ALIASES, "list_tab_aliases")]:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -335,6 +337,20 @@ class PrivateCoreClient:
             strategy=strategy,
             relay_host=relay_host,
             relay_port=relay_port,
+        )
+
+    async def set_tab_alias(self, agent_id: str, alias: str, tab_id: str) -> str:
+        return await self.execute(
+            OP_SET_TAB_ALIAS,
+            agent_id=agent_id,
+            alias=alias,
+            tab_id=tab_id,
+        )
+
+    async def list_tab_aliases(self, agent_id: str) -> str:
+        return await self.execute(
+            OP_LIST_TAB_ALIASES,
+            agent_id=agent_id,
         )
 
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:
