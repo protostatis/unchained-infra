@@ -287,24 +287,6 @@ class Relay:
                     chrome_path = f"{chrome_path}?{query}"
                 result = await self.http_proxy(agent_id, method, chrome_path)
                 return self._json_response(result.get("status", 200), "OK", result)
-        # POST /api/agents/<id>/overlay — send overlay message to agent bridge
-        if path.startswith("/api/agents/") and path.endswith("/overlay"):
-            parts = path.split("/")
-            if len(parts) == 5:
-                agent_id = parts[3]
-                _, _, reason = self._authorize_headers(request.headers, agent_id)
-                if reason is not None:
-                    return self._auth_error_response(reason, agent_id)
-                agent_ws = self.agents.get(agent_id)
-                if not agent_ws:
-                    return self._json_response(404, "Not Found", {"error": "agent not connected"})
-                try:
-                    body = request.body.decode() if request.body else "{}"
-                    msg = json.loads(body)
-                    await agent_ws.send(json.dumps(msg))
-                    return self._json_response(200, "OK", {"ok": True})
-                except Exception as e:
-                    return self._json_response(500, "Error", {"error": str(e)})
         return None  # proceed with WebSocket upgrade
 
     async def _route(self, ws: ServerConnection):
@@ -423,23 +405,6 @@ class Relay:
                     except Exception:
                         pass
                     break
-        elif t == "overlay_followup":
-            # Forward overlay follow-up to the web service via /core/overlay-followup
-            # The web server handles it as a chat message for the session.
-            session_id = msg.get("session_id", "")
-            message = msg.get("message", "")
-            if session_id and message:
-                print(f"[relay] overlay follow-up from {agent_id}: {message[:60]}")
-                import aiohttp
-                try:
-                    async with aiohttp.ClientSession() as sess:
-                        await sess.post(
-                            "http://web:8080/web/overlay-followup",
-                            json={"session_id": session_id, "message": message, "agent_id": agent_id},
-                            timeout=aiohttp.ClientTimeout(total=5),
-                        )
-                except Exception as e:
-                    print(f"[relay] overlay follow-up forward failed: {e}")
         elif t in ("ws_recv", "ws_opened", "ws_error", "ws_closed"):
             # Forward to the client that owns this channel
             channel = msg.get("channel", 0)

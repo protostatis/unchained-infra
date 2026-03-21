@@ -1,10 +1,8 @@
-"""Overlay copilot server-side helpers (v3 — bridge-based).
+"""Overlay copilot — follow-up routing.
 
-The overlay panel is injected and managed by chrome_bridge locally.
-The server only:
-1. Sends overlay_inject to the bridge on chat turn start
-2. Sends overlay_event for each chat event (bridge pushes via CDP)
-3. Receives overlay_followup from bridge (via relay HTTP forward)
+Events are pushed and follow-ups polled via direct CDP in chat_stream.py.
+This module only handles follow-up routing to the agent and the HTTP
+endpoint for bridge-originated follow-ups (legacy, kept for compat).
 """
 
 from __future__ import annotations
@@ -18,41 +16,6 @@ from aiohttp import web
 
 from web_app.core import get_core as _core
 
-
-# ---------------------------------------------------------------------------
-# Broadcast (called from chat_stream SSE loop)
-# ---------------------------------------------------------------------------
-
-def broadcast_to_overlay(session_id: str, event: dict) -> None:
-    """Send an event to the overlay via the bridge (relay HTTP API)."""
-    core = _core()
-    overlay = core._overlay_sessions.get(session_id)
-    if not overlay or not overlay.injected:
-        if overlay and len(overlay.pending_events) < 50:
-            overlay.pending_events.append(event)
-        return
-
-    async def _push():
-        try:
-            import aiohttp
-            relay_host, relay_port = core._parse_relay()
-            url = f"http://{relay_host}:{relay_port}/api/agents/{overlay.agent_id}/overlay"
-            async with aiohttp.ClientSession() as sess:
-                await sess.post(url, json={
-                    "type": "overlay_event",
-                    "session_id": session_id,
-                    "event": event,
-                }, headers=core._relay_auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=5))
-        except Exception:
-            pass
-
-    asyncio.create_task(_push())
-
-
-# ---------------------------------------------------------------------------
-# Follow-up routing
-# ---------------------------------------------------------------------------
 
 async def _route_followup(core, session_id: str, message: str) -> None:
     """Route a follow-up from the overlay through the normal chat path."""
@@ -94,15 +57,16 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         core._response_queues.pop(session_id, None)
         return
 
-    # Drain responses — broadcast to overlay via bridge
+    # Drain responses and push to overlay via CDP
     async def _drain():
         try:
+            from web_app.handlers.chat_stream import _broadcast_overlay
             while True:
                 try:
                     evt = await asyncio.wait_for(q.get(), timeout=120)
                 except asyncio.TimeoutError:
                     break
-                broadcast_to_overlay(session_id, evt)
+                _broadcast_overlay(session_id, evt)
                 if evt.get("type") in ("done", "error"):
                     break
         except Exception:
@@ -111,12 +75,8 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     asyncio.create_task(_drain())
 
 
-# ---------------------------------------------------------------------------
-# HTTP endpoint for bridge follow-ups (relay forwards these)
-# ---------------------------------------------------------------------------
-
 async def handle_overlay_followup(request: web.Request) -> web.Response:
-    """POST /web/overlay-followup — receive follow-up from bridge via relay."""
+    """POST /web/overlay-followup — receive follow-up from relay."""
     core = _core()
     try:
         body = await request.json()

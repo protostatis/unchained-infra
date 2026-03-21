@@ -20,25 +20,39 @@ _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 
 
 # ---------------------------------------------------------------------------
-# Overlay copilot v2
+# Overlay copilot — direct CDP, no bridge/WS/relay involvement
 # ---------------------------------------------------------------------------
 
 
 def _broadcast_overlay(session_id: str, event: dict) -> None:
-    """Push an event to the overlay WS subscriber for a session."""
-    try:
-        from web_app.handlers.overlay_ws import broadcast_to_overlay
-        broadcast_to_overlay(session_id, event)
-    except Exception:
-        pass
+    """Push an event to the overlay via CDP Runtime.evaluate."""
+    core = _core()
+    overlay = core._overlay_sessions.get(session_id)
+    if not overlay or not overlay.injected:
+        if overlay and len(overlay.pending_events) < 50:
+            overlay.pending_events.append(event)
+        return
+
+    evt_json = json.dumps(event, separators=(",", ":"))
+    js = f"(window.__uc_overlay_push && window.__uc_overlay_push({evt_json}))"
+
+    async def _push():
+        try:
+            import cloud_tools
+            relay_host, relay_port = core._parse_relay()
+            await cloud_tools.run_js(
+                overlay.agent_id, overlay.tab_id, js, relay_host, relay_port)
+        except Exception:
+            pass
+    asyncio.create_task(_push())
 
 
 def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                      prompt_text: str, user_id: str = "", slot: int | None = None) -> None:
-    """Send overlay_inject to the bridge via the agent WS.
+    """Inject the overlay panel via direct CDP and start outbox poller.
 
-    The bridge handles injection locally via direct CDP — no server-side
-    CDP calls, no CSP issues, no tab confusion.
+    Uses cloud_tools.run_js() — same path as DDM, click, navigate.
+    No bridge handlers, no relay HTTP, no chat_agent_cli involvement.
     """
     if not tab_id or tab_id == "auto":
         return
@@ -49,23 +63,17 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
         from web_state import OverlaySessionState
 
         nonce = secrets.token_hex(16)
-        # Build overlay JS (bridge injects it locally)
         overlay_js = build_overlay_js(
-            token="",  # no token needed — CDP is the transport
-            relay_host="",
             session_id=session_id,
             prompt_text=prompt_text[:500],
             nonce=nonce,
         )
         bootstrap_js = build_overlay_bootstrap_js(
-            token="",
-            relay_host="",
             session_id=session_id,
             prompt_text=prompt_text[:500],
             nonce=nonce,
         )
 
-        # Create or update overlay state
         overlay = core._overlay_sessions.get(session_id)
         if not overlay:
             overlay = OverlaySessionState(
@@ -81,41 +89,60 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
             overlay.tab_id = tab_id
             if slot is not None:
                 overlay.slot = slot
-        # Send to bridge via relay HTTP API (bridge connects to relay, not chat WS)
-        import asyncio
-        async def _send_and_activate():
+
+        async def _inject_and_poll():
             try:
-                import aiohttp
+                import cloud_tools
                 relay_host, relay_port = core._parse_relay()
-                url = f"http://{relay_host}:{relay_port}/api/agents/{agent_id}/overlay"
-                async with aiohttp.ClientSession() as sess:
-                    resp = await sess.post(url, json={
-                        "type": "overlay_inject",
-                        "session_id": session_id,
-                        "tab_id": tab_id,
-                        "overlay_js": overlay_js,
-                        "bootstrap_js": bootstrap_js,
-                        "nonce": nonce,
-                        "prompt": prompt_text[:500],
-                    }, headers=core._relay_auth_headers(),
-                    timeout=aiohttp.ClientTimeout(total=10))
-                    if resp.status != 200:
-                        print(f"[overlay] Relay returned {resp.status} for overlay_inject")
-                        return
-                # Wait for bridge to inject before marking active
-                await asyncio.sleep(2)
+
+                # Inject overlay JS via CDP
+                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                # Persist across navigations
+                await cloud_tools.run_cdp_command(
+                    agent_id, tab_id,
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    {"source": bootstrap_js},
+                    relay_host, relay_port,
+                )
                 overlay.injected = True
-                # Drain any events buffered during injection
-                from web_app.handlers.overlay_ws import broadcast_to_overlay
+
+                # Drain buffered events
                 for evt in overlay.pending_events:
-                    broadcast_to_overlay(session_id, evt)
+                    _broadcast_overlay(session_id, evt)
                 overlay.pending_events.clear()
-                print(f"[overlay] Overlay active for {session_id}")
+                print(f"[overlay] Injected for {session_id} on tab {tab_id[:12]}")
+
+                # Poll outbox for follow-ups (500ms)
+                while True:
+                    await asyncio.sleep(0.5)
+                    o = core._overlay_sessions.get(session_id)
+                    if not o or not o.injected:
+                        break
+                    try:
+                        raw = await cloud_tools.run_js(
+                            agent_id, tab_id,
+                            "(function(){var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
+                            relay_host, relay_port,
+                        )
+                        if raw and raw != "[]":
+                            from web_app.handlers.overlay_ws import _route_followup
+                            msgs = json.loads(raw)
+                            for msg in msgs:
+                                if msg.get("type") != "user_followup":
+                                    continue
+                                if msg.get("nonce") != nonce:
+                                    continue
+                                text = str(msg.get("message", "")).strip()
+                                if text and len(text) <= 4000:
+                                    await _route_followup(core, session_id, text)
+                    except Exception:
+                        pass
             except Exception as e:
-                print(f"[overlay] Failed to send overlay_inject: {e}")
-        asyncio.create_task(_send_and_activate())
+                print(f"[overlay] Injection failed: {e}")
+
+        asyncio.create_task(_inject_and_poll())
     except Exception as e:
-        print(f"[overlay] Injection setup failed: {e}")
+        print(f"[overlay] Setup failed: {e}")
 
 
 def _normalize_profile_path(raw: object) -> str:
