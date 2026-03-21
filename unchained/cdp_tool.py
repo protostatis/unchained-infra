@@ -82,8 +82,10 @@ async def main():
     # the same provision slot so the agent doesn't fall back to the
     # default/guest Chrome.
     if tab_id == "auto" and TAB_ID.startswith("prov-"):
+        # TAB_ID format: prov-{slot}-{real_id}
+        # split("-", 2) → ["prov", slot, real_id]
         parts = TAB_ID.split("-", 2)
-        if len(parts) >= 2:
+        if len(parts) >= 3 and parts[1]:
             tab_id = f"prov-{parts[1]}-auto"
 
     try:
