@@ -18,6 +18,7 @@ from chat_agent_cli import (
     _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
     _research_desk_launcher_prefix,
     _research_desk_package_url,
+    _research_desk_python_binary,
 )
 import web
 
@@ -280,6 +281,18 @@ class TestLocalChatTemplate(unittest.TestCase):
 
 
 class TestResearchDeskInstallHelpers(unittest.TestCase):
+    def test_research_desk_python_binary_avoids_agent_venv_for_user_install(self):
+        def fake_which(name, path=None):
+            self.assertEqual(name, "python3")
+            if path == "/usr/bin":
+                return "/usr/bin/python3"
+            return "/tmp/agent-venv/bin/python3"
+
+        with patch("chat_agent_cli.shutil.which", side_effect=fake_which):
+            with patch("chat_agent_cli.sys.prefix", "/tmp/agent-venv"):
+                with patch("chat_agent_cli.sys.base_prefix", "/usr"):
+                    self.assertEqual(_research_desk_python_binary(), "/usr/bin/python3")
+
     def test_research_desk_package_url_rejects_invalid_override(self):
         with patch.dict(
             os.environ,
