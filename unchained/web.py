@@ -1397,6 +1397,7 @@ async def handle_robots_txt(request: web.Request) -> web.Response:
         "Disallow: /auth/\n"
         "Disallow: /chat/ws\n"
         "Disallow: /install/\n"
+        "Disallow: /trial/\n"
         "\n"
         "Sitemap: https://unchainedsky.com/sitemap.xml\n"
     )
@@ -1414,7 +1415,6 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/", "1.0", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
-        ("https://unchainedsky.com/trial", "0.8", "weekly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
         ("https://unchainedsky.com/use/flight-comparison", "0.8", "monthly"),
         ("https://unchainedsky.com/use/competitor-monitoring", "0.8", "monthly"),
@@ -1448,7 +1448,12 @@ async def handle_google_verification(request: web.Request) -> web.Response:
     """GET /google83c650022d8db556.html — Google Search Console verification."""
     del request
     return web.Response(
-        text="google-site-verification: google83c650022d8db556.html",
+        text=(
+            "<!DOCTYPE html><html><head>"
+            '<meta name="google-site-verification"'
+            ' content="google83c650022d8db556" />'
+            "</head><body></body></html>"
+        ),
         content_type="text/html",
         headers={"Cache-Control": "public, max-age=86400"},
     )
