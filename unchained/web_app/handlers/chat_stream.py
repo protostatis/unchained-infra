@@ -280,18 +280,24 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
     finally:
-        if core._chat_agents.get(agent_id) is ws:
+        is_current = core._chat_agents.get(agent_id) is ws
+        if is_current:
             del core._chat_agents[agent_id]
-        core._chat_agent_caps.pop(agent_id, None)
-        core._chat_agent_users.pop(agent_id, None)
-        agent_sessions = [
-            sid
-            for sid, aid in list(core._session_agent_map.items())
-            if aid == agent_id
-        ]
-        for sid in agent_sessions:
-            asyncio.create_task(core._close_session_tab(sid))
-        print(f"[chat] Agent {agent_id} disconnected, cleaning {len(agent_sessions)} session tabs")
+            core._chat_agent_caps.pop(agent_id, None)
+            core._chat_agent_users.pop(agent_id, None)
+        agent_sessions = []
+        if is_current:
+            agent_sessions = [
+                sid
+                for sid, aid in list(core._session_agent_map.items())
+                if aid == agent_id
+            ]
+            for sid in agent_sessions:
+                asyncio.create_task(core._close_session_tab(sid))
+        if is_current:
+            print(f"[chat] Agent {agent_id} disconnected, cleaning {len(agent_sessions)} session tabs")
+        else:
+            print(f"[chat] Agent {agent_id} stale connection closed (superseded by reconnect)")
 
     return ws
 

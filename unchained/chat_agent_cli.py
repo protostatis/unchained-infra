@@ -1974,7 +1974,11 @@ async def main():
     while True:
         try:
             print(f"Connecting to {SERVER} ...")
-            ws = await websockets.connect(SERVER, ping_interval=20, ping_timeout=30)
+            ws = await asyncio.wait_for(
+                websockets.connect(SERVER, ping_interval=20, ping_timeout=20,
+                                   close_timeout=5),
+                timeout=15,
+            )
             await ws.send(json.dumps({
                 "key": KEY,
                 "capabilities": {
@@ -1984,7 +1988,7 @@ async def main():
                     "remote_update": True,
                 },
             }))
-            resp = json.loads(await ws.recv())
+            resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             assert resp["type"] == "auth_ok", f"Auth failed: {resp}"
             print("Authenticated. Waiting for messages...")
 
