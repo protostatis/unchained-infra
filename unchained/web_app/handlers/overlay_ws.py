@@ -123,7 +123,14 @@ def _drain_replay_buffer(session_id: str, q: asyncio.Queue) -> None:
 # ---------------------------------------------------------------------------
 
 async def _route_followup(core, session_id: str, message: str) -> None:
-    """Route a follow-up message from the overlay into the agent WS."""
+    """Route a follow-up message from the overlay into the agent WS.
+
+    Sends the message to the agent and sets up a response queue.
+    Events are broadcast to overlay subscribers via the existing
+    chat_stream WS handler (agent responses go to response_queues,
+    which chat_stream broadcasts). This function does NOT block
+    waiting for the response — it fires and returns immediately.
+    """
     import uuid
     agent_id = core._session_agents.get(session_id)
     if not agent_id:
@@ -135,13 +142,6 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         return
 
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
-    # Signal current turn to end so the agent picks up the new message
-    old_q = core._response_queues.get(session_id)
-    if old_q is not None:
-        await old_q.put({"type": "done"})
-
-    q: asyncio.Queue = asyncio.Queue()
-    core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
 
     ws_msg = {
@@ -159,23 +159,31 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         print(f"[overlay] follow-up routed to agent {agent_id}: {message[:60]}")
     except Exception as e:
         print(f"[overlay] follow-up send failed: {e}")
-        core._response_queues.pop(session_id, None)
         return
 
-    # Broadcast agent responses to overlay subscribers
-    try:
-        while True:
-            try:
-                evt = await asyncio.wait_for(q.get(), timeout=120)
-            except asyncio.TimeoutError:
-                break
-            broadcast_to_overlay(session_id, evt)
-            if evt.get("type") in ("done", "error"):
-                break
-    finally:
-        if core._response_queues.get(session_id) is q:
-            core._response_queues.pop(session_id, None)
-            core._response_req_ids.pop(session_id, None)
+    # Agent responses arrive on the response_queues[session_id] via
+    # the chat WS handler. If no SSE consumer is active (parent browser
+    # closed), we need a background task to drain and broadcast them.
+    async def _drain_responses():
+        q = core._response_queues.get(session_id)
+        if q is None:
+            q = asyncio.Queue()
+            core._response_queues[session_id] = q
+        try:
+            while True:
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=120)
+                except asyncio.TimeoutError:
+                    break
+                broadcast_to_overlay(session_id, evt)
+                if evt.get("type") == "error":
+                    break
+                if evt.get("type") == "done":
+                    break  # turn done, but don't clean up — stay ready
+        except Exception:
+            pass
+
+    asyncio.create_task(_drain_responses())
 
 
 # ---------------------------------------------------------------------------
