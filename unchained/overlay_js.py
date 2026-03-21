@@ -346,8 +346,7 @@ OVERLAY_JS_TEMPLATE = r"""
         var preview = String(msg.data || msg.result || '').substring(0, 120);
         if (preview) addMsg('tool', '  \u2192 ' + preview);
       } else if (t === 'done') {
-        addMsg('status', 'Session ended');
-        dot.className = 'uc-dot';
+        addMsg('status', 'Ready for follow-up');
       } else if (t === 'error') {
         addMsg('status', 'Error: ' + (msg.data || msg.message || 'unknown'));
         dot.className = 'uc-dot error';

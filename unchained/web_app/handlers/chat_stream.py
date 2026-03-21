@@ -753,14 +753,18 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._response_queues.pop(session_id, None)
             core._session_agents.pop(session_id, None)
             core._response_req_ids.pop(session_id, None)
-            core._overlay_injected.pop(session_id, None)
-            core._overlay_subscribers.pop(session_id, None)
-            try:
-                from web_app.handlers.overlay_ws import _replay_buffers
-                _replay_buffers.pop(session_id, None)
-            except Exception:
-                pass
+            # Keep overlay_injected and overlay_subscribers alive across
+            # turns — the overlay panel persists and accepts follow-ups.
+            # They clean up when the overlay WS itself disconnects.
             if not stream_completed:
+                # Only clean overlay state on abnormal disconnect
+                core._overlay_injected.pop(session_id, None)
+                core._overlay_subscribers.pop(session_id, None)
+                try:
+                    from web_app.handlers.overlay_ws import _replay_buffers
+                    _replay_buffers.pop(session_id, None)
+                except Exception:
+                    pass
                 asyncio.create_task(core._close_session_tab(session_id))
         if scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
