@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.58"  # overlay v3: bridge-based local CDP injection
+VERSION = "0.3.59"  # fix --tab auto within provisioned Chrome
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
