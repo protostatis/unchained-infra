@@ -268,8 +268,16 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("const RESEARCH_DESK_INSTALL_AUTHENTICATED = false;", html)
         self.assertIn("Sign In to Install Research Desk", html)
         self.assertIn("Sign in to unchainedsky.com first, then install Research Desk through your local client.", html)
+        self.assertIn("Sign in first, then use <strong>Sign In to Install Research Desk</strong> above", html)
         self.assertIn("RESEARCH_DESK_INSTALL_AUTHENTICATED?'Install / Update Research Desk':'Sign In to Install Research Desk'", html)
         self.assertIn("window.location.href=RESEARCH_DESK_SIGN_IN_URL", html)
+        self.assertIn('const RESEARCH_DESK_SIGN_IN_URL = "/trial";', html)
+
+    def test_research_desk_page_normalizes_sign_in_url(self):
+        from web_app.handlers.pages import _build_research_desk_html
+
+        html = _build_research_desk_html(authenticated=False, sign_in_url="https://evil.example.com")
+        self.assertIn('const RESEARCH_DESK_SIGN_IN_URL = "/trial";', html)
         self.assertIn("const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'')", html)
         self.assertIn("const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'')", html)
         self.assertIn("const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||(Boolean(data.lab_ready)?labUrl:'')||missionUrl||'')", html)

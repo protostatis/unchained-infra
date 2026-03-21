@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -33,9 +34,31 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
+def _safe_research_desk_sign_in_url(value: str) -> str:
+    text = str(value or "/trial").strip()
+    if not text:
+        return "/trial"
+    parts = urlsplit(text)
+    if parts.scheme or parts.netloc:
+        return "/trial"
+    if not text.startswith("/") or text.startswith("//"):
+        return "/trial"
+    return text
+
+
 def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial") -> str:
     auth_literal = "true" if authenticated else "false"
-    sign_in_url_literal = json.dumps(sign_in_url)
+    install_label = (
+        "Install / Update Research Desk"
+        if authenticated
+        else "Sign In to Install Research Desk"
+    )
+    install_card_copy = (
+        "Use <strong>Install / Update Research Desk</strong> above to install the package onto this machine through the already-running local client."
+        if authenticated
+        else "Sign in first, then use <strong>Sign In to Install Research Desk</strong> above to install the package onto this machine through the already-running local client."
+    )
+    sign_in_url_literal = json.dumps(_safe_research_desk_sign_in_url(sign_in_url))
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -75,7 +98,7 @@ def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial
           <span class="pill">pyreplab backed</span>
         </div>
         <div class="actions">
-          <button id="install-local-research-desk" class="btn secondary" type="button">Install / Update Research Desk</button>
+          <button id="install-local-research-desk" class="btn secondary" type="button">__RESEARCH_DESK_INSTALL_LABEL__</button>
           <a class="btn secondary" href="/install">Install Local Agent</a>
           <a id="open-local-desk" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Local Desk</a>
           <button id="connect-local-desk" class="btn secondary disabled" type="button" aria-disabled="true">Connect to Local Desk</button>
@@ -89,7 +112,7 @@ def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial
         <div class="eyebrow">Local Setup</div>
         <div class="status-shell">
           <div class="status-card"><strong>1. Install the local agent</strong><p>Use <a href="/install" style="color:var(--accent)">the installer flow</a> if the Unchained local client is not installed on this machine yet.</p></div>
-          <div class="status-card"><strong>2. Install Research Desk</strong><p>Use <strong>Install / Update Research Desk</strong> above to install the package onto this machine through the already-running local client.</p></div>
+          <div class="status-card"><strong>2. Install Research Desk</strong><p>__RESEARCH_DESK_INSTALL_CARD_COPY__</p></div>
           <div class="status-card"><strong>3. Start the browser bridge</strong><p>Run <code>python3 -m unchained_pyreplab bridge-start</code> on this machine.</p></div>
           <div class="status-card"><strong>4. Start Research Desk</strong><p>Run <code>python3 -m unchained_pyreplab serve --open --reload</code>.</p></div>
           <div class="status-card"><strong>5. Return here</strong><p>This page probes <code>127.0.0.1:8766</code> for the local status and recent mission summaries.</p></div>
@@ -316,6 +339,8 @@ def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial
 </html>"""
     return (
         html.replace("__RESEARCH_DESK_INSTALL_AUTHENTICATED__", auth_literal)
+        .replace("__RESEARCH_DESK_INSTALL_LABEL__", install_label)
+        .replace("__RESEARCH_DESK_INSTALL_CARD_COPY__", install_card_copy)
         .replace("__RESEARCH_DESK_SIGN_IN_URL__", sign_in_url_literal)
     )
 
