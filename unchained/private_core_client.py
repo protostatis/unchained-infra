@@ -17,28 +17,36 @@ from private_core_contracts import (
     OP_CLICK,
     OP_CLOSE_TAB,
     OP_CREATE_TAB,
-    OP_KEY_PRESS,
-    OP_LIST_TAB_ALIASES,
     OP_NAVIGATE,
     OP_PRESS_ENTER,
     OP_PROVISION_CLEANUP,
     OP_PROVISION_LAUNCH,
-    OP_PROVISION_STATUS,
-    OP_GET_COOKIES,
     OP_RUN_CDP_COMMAND,
     OP_RUN_DDM,
     OP_RUN_INTEL,
     OP_RUN_JS,
     OP_SCREENSHOT,
-    OP_SCROLL,
-    OP_SET_COOKIES,
     OP_SET_FILE,
-    OP_SET_TAB_ALIAS,
     OP_SUBMIT_FORM,
     OP_TYPE_TEXT,
-    OP_WAIT_READY,
     PRIVATE_CORE_OPS,
 )
+
+# New ops — import with fallback for staggered deploys where the private-core
+# overlay may not yet include these constants.
+def _safe_import_op(name: str, default: str) -> str:
+    """Import an OP constant from contracts, falling back to string literal."""
+    import private_core_contracts as _c
+    return getattr(_c, name, default)
+
+OP_KEY_PRESS = _safe_import_op("OP_KEY_PRESS", "key_press")
+OP_SCROLL = _safe_import_op("OP_SCROLL", "scroll")
+OP_WAIT_READY = _safe_import_op("OP_WAIT_READY", "wait_ready")
+OP_SET_TAB_ALIAS = _safe_import_op("OP_SET_TAB_ALIAS", "set_tab_alias")
+OP_LIST_TAB_ALIASES = _safe_import_op("OP_LIST_TAB_ALIASES", "list_tab_aliases")
+OP_SET_COOKIES = _safe_import_op("OP_SET_COOKIES", "set_cookies")
+OP_GET_COOKIES = _safe_import_op("OP_GET_COOKIES", "get_cookies")
+OP_PROVISION_STATUS = _safe_import_op("OP_PROVISION_STATUS", "provision_status")
 
 
 class PrivateCoreError(RuntimeError):

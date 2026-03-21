@@ -17,7 +17,8 @@ class TestCloudToolsBoundary(unittest.IsolatedAsyncioTestCase):
             out = await cloud_tools.click("agent", "auto", 100, 200)
 
         self.assertIn("Clicked BUTTON", out)
-        fake.click.assert_awaited_once_with("agent", "auto", 100, 200, "127.0.0.1", 8765)
+        fake.click.assert_awaited_once_with("agent", "auto", 100, 200, "127.0.0.1", 8765,
+                                                  element_id="", label="")
 
     async def test_run_ddm_delegates_to_private_core_client(self):
         fake = _FakeClient()
