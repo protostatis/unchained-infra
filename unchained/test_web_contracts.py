@@ -269,6 +269,8 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("/web/chat/update-client", html)
         self.assertIn("if(resp.status===409&&Boolean(data.update_required))", html)
         self.assertIn("Updating it to at least", html)
+        self.assertIn("if(updateResult.kind==='already_current')", html)
+        self.assertIn("The local client is already current. Retrying Research Desk install now...", html)
         self.assertIn("Waiting for the local client to finish updating and reconnect before retrying Research Desk install...", html)
         self.assertIn("The local client update started, but Research Desk install could not be retried automatically yet.", html)
         self.assertIn("Preparing Research Desk...", html)

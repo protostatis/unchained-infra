@@ -233,6 +233,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     @patch("web._authenticate")
     async def test_chat_install_research_desk_requires_local_client_update_first(self, mock_auth, mock_agent_request):
         from web_app.handlers.chat_flow import handle_chat_install_research_desk
+        from web_app.handlers.chat_flow import _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION
 
         mock_auth.return_value = {
             "user_id": "u-test",
@@ -255,8 +256,11 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["update_required"])
         self.assertTrue(data["update_supported"])
         self.assertEqual(data["client_version"], "0.3.62")
-        self.assertEqual(data["required_client_version"], "0.3.63")
-        self.assertIn("Update it to at least 0.3.63", data["error"])
+        self.assertEqual(data["required_client_version"], _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION)
+        self.assertIn(
+            "Update it to at least {version}".format(version=_RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION),
+            data["error"],
+        )
         mock_agent_request.assert_not_awaited()
 
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
