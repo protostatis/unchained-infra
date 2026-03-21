@@ -106,39 +106,56 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                         pass
                     overlay.bootstrap_id = ""
 
-                # Bypass CSP so the overlay WS can connect.
-                # setBypassCSP only takes effect after a navigation,
-                # so we set it, then reload the page. The bootstrap
-                # script (addScriptToEvaluateOnNewDocument) will inject
-                # the overlay on the reloaded page with CSP disabled.
-                await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.setBypassCSP", {"enabled": True},
-                    relay_host, relay_port,
-                )
-                # Register bootstrap BEFORE reload so it fires on the new page
+                # Inject overlay JS directly (uses fetch polling, not WS,
+                # so CSP doesn't block it)
+                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                # Persist across navigations
                 result = await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.addScriptToEvaluateOnNewDocument",
                     {"source": bootstrap_js},
                     relay_host, relay_port,
                 )
-                # Store identifier for cleanup
                 if isinstance(result, dict) and result.get("identifier"):
                     overlay.bootstrap_id = result["identifier"]
-                # Reload the page so CSP bypass takes effect and
-                # the bootstrap script injects the overlay with WS.
-                await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.reload", {},
-                    relay_host, relay_port,
-                )
-                import asyncio as _aio
-                await _aio.sleep(1.5)  # wait for page to reload
                 overlay.injected = True
+                # Drain any events buffered before injection
+                for evt in overlay.pending_events:
+                    from web_app.handlers.overlay_ws import broadcast_to_overlay as _bo
+                    _bo(session_id, evt)
+                overlay.pending_events.clear()
                 print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
+                # Start outbox poller for follow-up messages from overlay
+                asyncio.create_task(_poll_outbox(
+                    core, session_id, agent_id, tab_id, relay_host, relay_port))
             except Exception as e:
                 print(f"[overlay] Injection failed: {e}")
+
+        async def _poll_outbox(core, sid, aid, tid, rh, rp):
+            """Poll the overlay's JS outbox for follow-up messages."""
+            import cloud_tools as _ct
+            import json as _j
+            while True:
+                await asyncio.sleep(2)
+                o = core._overlay_sessions.get(sid)
+                if not o or not o.injected:
+                    break
+                try:
+                    raw = await _ct.run_js(
+                        aid, tid,
+                        "(function(){var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
+                        rh, rp,
+                    )
+                    if raw and raw != "[]":
+                        msgs = _j.loads(raw)
+                        for msg in msgs:
+                            if msg.get("type") == "user_followup":
+                                text = str(msg.get("message", "")).strip()
+                                if text and len(text) <= 4000:
+                                    from web_app.handlers.overlay_ws import _route_followup
+                                    await _route_followup(core, sid, text)
+                except Exception:
+                    pass  # tab may have navigated
 
         import asyncio
         asyncio.create_task(_inject())

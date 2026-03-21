@@ -80,24 +80,35 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
 # ---------------------------------------------------------------------------
 
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
-    """Push an event to the overlay WS subscriber for a session.
+    """Push an event to the overlay via CDP Runtime.evaluate.
 
-    If no subscriber is connected yet (WS hasn't completed auth),
-    buffer events on the overlay state for replay on connect.
+    Calls window.__uc_overlay_push(evt) in the browser tab.
+    No WebSocket or network connection needed — bypasses all CSP.
     """
     core = _core()
     overlay = core._overlay_sessions.get(session_id)
-    if not overlay:
-        return
-    if not overlay.subscriber:
-        # Buffer for replay when WS connects (cap at 50)
-        if len(overlay.pending_events) < 50:
+    if not overlay or not overlay.injected:
+        # Buffer events before overlay is injected
+        if overlay and len(overlay.pending_events) < 50:
             overlay.pending_events.append(event)
         return
-    try:
-        overlay.subscriber.put_nowait(event)
-    except asyncio.QueueFull:
-        pass
+
+    import json as _json
+    evt_json = _json.dumps(event, separators=(",", ":"))
+    js = f"(window.__uc_overlay_push && window.__uc_overlay_push({evt_json}))"
+
+    async def _push():
+        try:
+            import cloud_tools
+            relay_host, relay_port = core._parse_relay()
+            await cloud_tools.run_js(
+                overlay.agent_id, overlay.tab_id, js,
+                relay_host, relay_port,
+            )
+        except Exception:
+            pass  # best effort — overlay may have navigated
+
+    asyncio.create_task(_push())
 
 
 # ---------------------------------------------------------------------------

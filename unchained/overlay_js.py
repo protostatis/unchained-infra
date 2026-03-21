@@ -244,8 +244,9 @@ OVERLAY_JS_TEMPLATE = r"""
   sendBtn.textContent = 'Send';
   function sendFollowup() {
     var text = input.value.trim();
-    if (!text || !ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify({type: 'user_followup', message: text}));
+    if (!text) return;
+    // Push to outbox — server polls via CDP Runtime.evaluate
+    window.__uc_overlay_outbox.push({type: 'user_followup', message: text});
     addMsg('status', 'You: ' + text);
     input.value = '';
   }
@@ -310,81 +311,36 @@ OVERLAY_JS_TEMPLATE = r"""
     log.scrollTop = log.scrollHeight;
   }
 
-  // --- WebSocket ---
-  var ws = null;
-  var reconnectTimer = null;
-  var reconnectDelay = 1000;
-  var noReconnect = false;
-  // Always use wss when not localhost to avoid sending token in plaintext
-  var isLocal = CFG.host === 'localhost' || CFG.host.indexOf('127.0.0.1') === 0;
-  var wsProto = (location.protocol === 'https:' || !isLocal) ? 'wss' : 'ws';
-
-  function connect() {
-    try {
-      ws = new WebSocket(wsProto + '://' + CFG.host + '/overlay/ws');
-    } catch (e) {
-      dot.className = 'uc-dot error';
-      return;
+  // --- Event receiver via CDP Runtime.evaluate (no network needed) ---
+  // The server pushes events by calling window.__uc_overlay_push(evt)
+  // via CDP. This bypasses all CSP restrictions.
+  dot.className = 'uc-dot connected';
+  window.__uc_overlay_push = function(evt) {
+    if (!evt || !evt.type) return;
+    var t = evt.type;
+    if (t === 'text') {
+      var working = log.querySelector('.uc-working');
+      if (working) working.remove();
+      addMsg('assistant', evt.data || '');
+    } else if (t === 'tool_use' || t === 'tool_result') {
+      if (!log.querySelector('.uc-working')) {
+        var w = document.createElement('div');
+        w.className = 'uc-msg status uc-working';
+        w.textContent = 'Working\u2026';
+        log.appendChild(w);
+        log.scrollTop = log.scrollHeight;
+      }
+    } else if (t === 'done') {
+      var w2 = log.querySelector('.uc-working');
+      if (w2) w2.remove();
+      addMsg('status', 'Ready for follow-up');
+    } else if (t === 'error') {
+      addMsg('status', 'Error: ' + (evt.data || evt.message || 'unknown'));
     }
-    ws.onopen = function() {
-      ws.send(JSON.stringify({type: 'auth', token: CFG.token}));
-    };
-    ws.onmessage = function(e) {
-      var msg;
-      try { msg = JSON.parse(e.data); } catch (_) { return; }
-      var t = msg.type || '';
-      if (t === 'auth_ok') {
-        dot.className = 'uc-dot connected';
-        reconnectDelay = 1000; // reset backoff on success
-        addMsg('status', 'Connected to session');
-        return;
-      }
-      if (t === 'text') {
-        // Remove any "working..." indicator before showing response
-        var working = log.querySelector('.uc-working');
-        if (working) working.remove();
-        addMsg('assistant', msg.data || '');
-      } else if (t === 'tool_use' || t === 'tool_result') {
-        // Show a single "working..." indicator, no tool details
-        if (!log.querySelector('.uc-working')) {
-          var w = document.createElement('div');
-          w.className = 'uc-msg status uc-working';
-          w.textContent = 'Working\u2026';
-          log.appendChild(w);
-          log.scrollTop = log.scrollHeight;
-        }
-      } else if (t === 'done') {
-        var w2 = log.querySelector('.uc-working');
-        if (w2) w2.remove();
-        addMsg('status', 'Ready for follow-up');
-      } else if (t === 'error') {
-        addMsg('status', 'Error: ' + (msg.data || msg.message || 'unknown'));
-        dot.className = 'uc-dot error';
-      }
-    };
-    ws.onclose = function() {
-      dot.className = 'uc-dot';
-      if (!noReconnect && !reconnectTimer) {
-        reconnectTimer = setTimeout(function() {
-          reconnectTimer = null;
-          connect();
-        }, reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-      }
-    };
-    ws.onerror = function() {
-      dot.className = 'uc-dot error';
-    };
-  }
-  connect();
+  };
+  // Follow-up sender via CDP — server polls window.__uc_overlay_outbox
+  window.__uc_overlay_outbox = [];
   window.__uc_overlay_creating = false;
-
-  // Cleanup on unload
-  window.addEventListener('beforeunload', function() {
-    noReconnect = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (ws) { try { ws.close(); } catch(_){} }
-  });
 })();
 """.strip()
 
