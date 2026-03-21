@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from aiohttp import web
 
 
@@ -33,6 +35,7 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
 
 def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial") -> str:
     auth_literal = "true" if authenticated else "false"
+    sign_in_url_literal = json.dumps(sign_in_url)
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -128,7 +131,7 @@ def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial
   </main>
   <script>
     const RESEARCH_DESK_INSTALL_AUTHENTICATED = __RESEARCH_DESK_INSTALL_AUTHENTICATED__;
-    const RESEARCH_DESK_SIGN_IN_URL = '__RESEARCH_DESK_SIGN_IN_URL__';
+    const RESEARCH_DESK_SIGN_IN_URL = __RESEARCH_DESK_SIGN_IN_URL__;
     const FALLBACK_LOCAL_URL = 'http://127.0.0.1:8766/';
     const STATUS_URL = FALLBACK_LOCAL_URL + 'web/research-desk/status';
     const CAPSULES_URL = FALLBACK_LOCAL_URL + 'web/research-desk/capsules?limit=8';
@@ -313,7 +316,7 @@ def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial
 </html>"""
     return (
         html.replace("__RESEARCH_DESK_INSTALL_AUTHENTICATED__", auth_literal)
-        .replace("__RESEARCH_DESK_SIGN_IN_URL__", sign_in_url)
+        .replace("__RESEARCH_DESK_SIGN_IN_URL__", sign_in_url_literal)
     )
 
 
