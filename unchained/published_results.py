@@ -331,11 +331,14 @@ def publish_result(
     for m in asst_msgs:
         if _is_query_blacklisted(m["content"]):
             return None
-    result_text = asst_msgs[-1]["content"]
+    # Combine ALL assistant text for PII check — intermediate responses
+    # may contain PII even if the final answer is clean
+    all_asst_text = "\n\n".join(m["content"] for m in asst_msgs)
     # LLM-based PII guard — blocks if content contains personal data
-    if not _pii_guard(query, result_text):
+    if not _pii_guard(query, all_asst_text):
         log.info("Publish blocked by PII guard: %s", query[:80])
         return None
+    result_text = asst_msgs[-1]["content"]
     result_html = _messages_to_html(messages)
     slug = _slugify(query)
 
