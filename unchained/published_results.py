@@ -1,0 +1,266 @@
+"""Published results storage for shareable task output pages.
+
+Each published result becomes a public page at /r/<slug> with SEO meta tags,
+JSON-LD structured data, and OG tags. Bots index these pages and distribute
+them across search, AI training, and social preview networks.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import threading
+import time
+from html import escape
+
+
+_DB_PATH = os.environ.get(
+    "UNCHAINED_RESULTS_DB_PATH", "/data/published_results.db"
+)
+_lock = threading.Lock()
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS published_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT UNIQUE NOT NULL,
+            query TEXT NOT NULL,
+            result_html TEXT NOT NULL,
+            result_text TEXT NOT NULL,
+            meta_json TEXT,
+            created_at REAL NOT NULL,
+            user_id TEXT,
+            session_id TEXT,
+            view_count INTEGER DEFAULT 0
+        )"""
+    )
+    return conn
+
+
+def _slugify(text: str) -> str:
+    """Generate a URL-friendly slug from query text."""
+    text = text.lower().strip()
+    # Remove common filler words for cleaner slugs
+    for word in ("go to", "can you", "please", "find me", "i want",
+                 "search for", "look up", "tell me", "show me"):
+        text = text.replace(word, "")
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"\s+", "-", text.strip())
+    text = re.sub(r"-+", "-", text).strip("-")
+    # Truncate to reasonable length
+    if len(text) > 80:
+        text = text[:80].rsplit("-", 1)[0]
+    # Add short hash for uniqueness
+    h = hashlib.md5(f"{text}-{time.time()}".encode()).hexdigest()[:6]
+    return f"{text}-{h}" if text else h
+
+
+def _extract_visible_messages(session_data: dict) -> list[dict]:
+    """Extract user/assistant messages from a session, stripping tool calls."""
+    raw = session_data.get("messages", [])
+    msgs = []
+    for m in raw:
+        role = m.get("role")
+        if role == "user":
+            content = m.get("content", "")
+            if content:
+                msgs.append({"role": "user", "content": content})
+        elif role == "assistant":
+            if m.get("tool_calls") and not m.get("content"):
+                continue
+            content = m.get("content") or ""
+            if not content:
+                continue
+            # Strip leaked tool-call JSON
+            content = re.sub(
+                r"(?is)<tool_call\b.*?</tool_call>", "", content
+            )
+            content = re.sub(r"\n{3,}", "\n\n", content).strip()
+            if content:
+                msgs.append({"role": "assistant", "content": content})
+    return msgs
+
+
+def _messages_to_html(messages: list[dict]) -> str:
+    """Convert messages to chat bubble HTML."""
+    parts = []
+    for m in messages:
+        role = m["role"]
+        content = escape(m["content"])
+        # Convert markdown tables to HTML tables
+        content = _md_to_html(content)
+        css_class = "user" if role == "user" else "asst"
+        parts.append(f'<div class="bubble {css_class}">{content}</div>')
+    return "\n".join(parts)
+
+
+def _md_to_html(text: str) -> str:
+    """Minimal markdown to HTML for display in result pages."""
+    # Bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    # Headers
+    text = re.sub(r"^### (.+)$", r"<h4>\1</h4>", text, flags=re.MULTILINE)
+    text = re.sub(r"^## (.+)$", r"<h3>\1</h3>", text, flags=re.MULTILINE)
+    # Simple table conversion
+    lines = text.split("\n")
+    in_table = False
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if "|" in stripped and stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if all(re.match(r"^[-:]+$", c) for c in cells):
+                continue  # separator row
+            if not in_table:
+                out.append("<table>")
+                tag = "th"
+                in_table = True
+            else:
+                tag = "td"
+            row = "".join(f"<{tag}>{c}</{tag}>" for c in cells)
+            out.append(f"<tr>{row}</tr>")
+        else:
+            if in_table:
+                out.append("</table>")
+                in_table = False
+            out.append(line)
+    if in_table:
+        out.append("</table>")
+    text = "\n".join(out)
+    # List items
+    text = re.sub(
+        r"^[-*] (.+)$", r"<li>\1</li>", text, flags=re.MULTILINE
+    )
+    # Paragraphs for remaining text blocks
+    text = re.sub(r"\n\n+", "</p><p>", text)
+    if not text.startswith("<"):
+        text = f"<p>{text}</p>"
+    return text
+
+
+def publish_result(
+    session_data: dict,
+    *,
+    user_id: str = "",
+    session_id: str = "",
+) -> str | None:
+    """Publish a completed task as a public result page. Returns the slug."""
+    messages = _extract_visible_messages(session_data)
+    if not messages:
+        return None
+    user_msgs = [m for m in messages if m["role"] == "user"]
+    asst_msgs = [m for m in messages if m["role"] == "assistant"]
+    if not user_msgs or not asst_msgs:
+        return None
+
+    query = user_msgs[0]["content"]
+    result_text = asst_msgs[-1]["content"]
+    result_html = _messages_to_html(messages)
+    slug = _slugify(query)
+
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                """INSERT INTO published_results
+                   (slug, query, result_html, result_text, meta_json,
+                    created_at, user_id, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    slug,
+                    query,
+                    result_html,
+                    result_text,
+                    json.dumps({"message_count": len(messages)}),
+                    time.time(),
+                    user_id,
+                    session_id,
+                ),
+            )
+            conn.commit()
+            return slug
+        except sqlite3.IntegrityError:
+            # Slug collision — add more hash
+            h = hashlib.md5(f"{slug}-{time.time()}".encode()).hexdigest()[:8]
+            slug = f"{slug}-{h}"
+            conn.execute(
+                """INSERT INTO published_results
+                   (slug, query, result_html, result_text, meta_json,
+                    created_at, user_id, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    slug,
+                    query,
+                    result_html,
+                    result_text,
+                    json.dumps({"message_count": len(messages)}),
+                    time.time(),
+                    user_id,
+                    session_id,
+                ),
+            )
+            conn.commit()
+            return slug
+        finally:
+            conn.close()
+
+
+def get_result(slug: str) -> dict | None:
+    """Load a published result by slug. Returns dict or None."""
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                """SELECT slug, query, result_html, result_text,
+                          meta_json, created_at, view_count
+                   FROM published_results WHERE slug = ?""",
+                (slug,),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "UPDATE published_results SET view_count = view_count + 1 WHERE slug = ?",
+                (slug,),
+            )
+            conn.commit()
+            return {
+                "slug": row[0],
+                "query": row[1],
+                "result_html": row[2],
+                "result_text": row[3],
+                "meta": json.loads(row[4]) if row[4] else {},
+                "created_at": row[5],
+                "view_count": row[6],
+            }
+        finally:
+            conn.close()
+
+
+def list_results(limit: int = 50) -> list[dict]:
+    """List recent published results for sitemap generation."""
+    with _lock:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """SELECT slug, query, created_at, view_count
+                   FROM published_results
+                   ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "slug": r[0],
+                    "query": r[1],
+                    "created_at": r[2],
+                    "view_count": r[3],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()

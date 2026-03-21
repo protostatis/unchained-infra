@@ -456,6 +456,75 @@ async def handle_use_case_price_tracking(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_published_result(request: web.Request) -> web.Response:
+    """Serve a published result page (public, no auth)."""
+    from published_results import get_result
+    from html import escape
+    core = _core()
+    slug = request.match_info.get("slug", "")
+    result = get_result(slug)
+    if not result:
+        raise web.HTTPNotFound()
+    core._track_page_view(request)
+    query = result["query"]
+    result_text = result["result_text"]
+    # Truncate description for meta tags
+    desc = result_text[:200].replace('"', "&quot;").replace("\n", " ")
+    title_text = escape(query[:80])
+    import time
+    created = time.strftime("%Y-%m-%d", time.gmtime(result["created_at"]))
+    html = core.PUBLISHED_RESULT_HTML.replace(
+        "__RESULT_TITLE__", title_text
+    ).replace(
+        "__RESULT_DESC__", desc
+    ).replace(
+        "__RESULT_SLUG__", slug
+    ).replace(
+        "__RESULT_HTML__", result["result_html"]
+    ).replace(
+        "__RESULT_DATE__", created
+    ).replace(
+        "__RESULT_VIEWS__", str(result["view_count"])
+    ).replace(
+        "__CONTACT_EMAIL__", core.CONTACT_EMAIL
+    )
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_publish_result(request: web.Request) -> web.Response:
+    """POST /web/publish-result — publish a session as a shareable page."""
+    from published_results import publish_result
+    import json as _json
+    core = _core()
+    auth_info = core._authenticate(request)
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return web.json_response({"error": "session_id required"}, status=400)
+    # Load session data
+    session_path = core._trial_session_path(session_id)
+    try:
+        with open(session_path) as f:
+            session_data = _json.load(f)
+    except FileNotFoundError:
+        return web.json_response({"error": "Session not found"}, status=404)
+    user_id = ""
+    if auth_info:
+        user_id = auth_info.get("email", auth_info.get("key_hash", ""))
+    slug = publish_result(
+        session_data, user_id=user_id, session_id=session_id
+    )
+    if not slug:
+        return web.json_response(
+            {"error": "No publishable content in session"}, status=400
+        )
+    return web.json_response({
+        "slug": slug,
+        "url": f"https://unchainedsky.com/r/{slug}",
+    })
+
+
 async def handle_privacy_page(request: web.Request) -> web.Response:
     """Serve public privacy policy page (required for OAuth provider submissions)."""
     core = _core()
