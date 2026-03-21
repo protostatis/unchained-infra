@@ -737,7 +737,33 @@ def _spawn_remote_update() -> tuple[bool, str]:
 
 def _research_desk_python_binary() -> str:
     python3_bin = shutil.which("python3")
+    current_prefix = os.path.realpath(getattr(sys, "prefix", "") or "")
+    base_prefix = os.path.realpath(getattr(sys, "base_prefix", "") or "")
+    use_python3_bin = True
     if python3_bin:
+        candidate = os.path.realpath(python3_bin)
+        if not current_prefix or current_prefix == base_prefix or not candidate.startswith(
+            current_prefix + os.sep
+        ):
+            return python3_bin
+        log.info(
+            "[research-desk-install] ignoring venv python3 for --user install: %s",
+            python3_bin,
+        )
+        use_python3_bin = False
+    if current_prefix and current_prefix != base_prefix:
+        base_python = shutil.which("python3", path=os.path.join(base_prefix, "bin"))
+        if base_python:
+            return base_python
+        fallback_candidates = [
+            os.path.join(base_prefix, "bin", "python3"),
+            os.path.join(base_prefix, "python3"),
+            "/usr/bin/python3",
+        ]
+        for candidate in fallback_candidates:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    if python3_bin and use_python3_bin:
         return python3_bin
     return sys.executable
 
