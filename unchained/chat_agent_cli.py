@@ -26,11 +26,13 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import shutil
 import sys
 import tempfile
 import time
+from urllib.parse import urlparse
 import uuid
 
 sys.path.insert(0, os.path.expanduser("~/Projects/unchained/unchained"))
@@ -742,16 +744,44 @@ def _research_desk_python_binary() -> str:
 
 def _research_desk_launcher_prefix() -> str:
     python_bin = _research_desk_python_binary()
-    if os.path.basename(python_bin) == "python3":
+    if os.path.basename(python_bin) == "python3" and " " not in python_bin:
         return "python3 -m unchained_pyreplab"
-    return f'"{python_bin}" -m unchained_pyreplab'
+    return f"{shlex.quote(python_bin)} -m unchained_pyreplab"
+
+
+_DEFAULT_RESEARCH_DESK_PACKAGE_URL = (
+    "https://github.com/protostatis/unchained_pyreplab/archive/"
+    "ac3d8164f9bacb4d674615c7e46ac9e370f2dc3a.zip"
+)
+_RESEARCH_DESK_PACKAGE_URL_RE = re.compile(
+    r"^/protostatis/unchained_pyreplab/archive/"
+    r"(?:refs/tags/[A-Za-z0-9._-]+|[0-9a-f]{7,40})\.zip$"
+)
+
+
+def _is_allowed_research_desk_package_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "github.com"
+        and bool(_RESEARCH_DESK_PACKAGE_URL_RE.match(parsed.path))
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _research_desk_package_url() -> str:
-    return (
-        os.environ.get("UNCHAINED_RESEARCH_DESK_PACKAGE_URL", "").strip()
-        or "https://github.com/protostatis/unchained_pyreplab/archive/refs/heads/main.zip"
+    override = os.environ.get("UNCHAINED_RESEARCH_DESK_PACKAGE_URL", "").strip()
+    if not override:
+        return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
+    if _is_allowed_research_desk_package_url(override):
+        return override
+    log.warning(
+        "[research-desk-install] ignoring invalid package override: %s",
+        override,
     )
+    return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
 
 
 def _remote_research_desk_install_supported() -> bool:

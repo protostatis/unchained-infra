@@ -13,6 +13,12 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from agent_package import VERSION
+from chat_agent_cli import (
+    _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
+    _research_desk_launcher_prefix,
+    _research_desk_package_url,
+)
 import web
 
 
@@ -88,8 +94,6 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     async def test_chat_status_marks_current_client_as_not_outdated(
         self, mock_auth, mock_check_relay
     ):
-        from agent_package import VERSION
-
         mock_auth.return_value = {
             "user_id": "u-test",
             "agent_id": "claude-updated",
@@ -147,7 +151,6 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web._authenticate")
     async def test_chat_update_client_rejects_current_client(self, mock_auth, mock_agent_request):
-        from agent_package import VERSION
         from web_app.handlers.chat_flow import handle_chat_update_client
 
         mock_auth.return_value = {
@@ -274,6 +277,35 @@ class TestLocalChatTemplate(unittest.TestCase):
             "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
             web.CLAUDE_CHAT_HTML,
         )
+
+
+class TestResearchDeskInstallHelpers(unittest.TestCase):
+    def test_research_desk_package_url_rejects_invalid_override(self):
+        with patch.dict(
+            os.environ,
+            {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": "https://evil.example.com/pkg.zip"},
+            clear=False,
+        ):
+            self.assertEqual(_research_desk_package_url(), _DEFAULT_RESEARCH_DESK_PACKAGE_URL)
+
+    def test_research_desk_package_url_accepts_pinned_github_archive(self):
+        override = (
+            "https://github.com/protostatis/unchained_pyreplab/archive/"
+            "refs/tags/v0.1.0.zip"
+        )
+        with patch.dict(
+            os.environ,
+            {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": override},
+            clear=False,
+        ):
+            self.assertEqual(_research_desk_package_url(), override)
+
+    def test_research_desk_launcher_prefix_quotes_spaced_python_paths(self):
+        with patch("chat_agent_cli._research_desk_python_binary", return_value="/tmp/odd path/python3"):
+            self.assertEqual(
+                _research_desk_launcher_prefix(),
+                "'/tmp/odd path/python3' -m unchained_pyreplab",
+            )
 
 
 if __name__ == "__main__":
