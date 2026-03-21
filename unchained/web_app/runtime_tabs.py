@@ -38,11 +38,8 @@ async def close_session_tab(session_id: str):
     Skips cleanup if an overlay copilot session is active on this tab.
     """
     core = _core()
-    # Don't close the tab if the overlay is still using it
-    overlay = core._overlay_sessions.get(session_id)
-    if overlay and overlay.injected:
-        print(f"[tabs] Skipping cleanup for {session_id} — overlay is active")
-        return
+    # Clear overlay state — the tab is being closed
+    core._overlay_sessions.pop(session_id, None)
     tab_id = core._session_tabs.pop(session_id, None)
     agent_id = core._session_agent_map.pop(session_id, None)
     core._session_last_active.pop(session_id, None)
