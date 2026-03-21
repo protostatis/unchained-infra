@@ -99,6 +99,7 @@ echo "==> Uploading Python modules..."
     unchained/web_cmd.py \
     unchained/web_state.py \
     unchained/overlay_js.py \
+    unchained/cdp_tool_packaged.py \
     unchained/analytics.py \
     unchained/provision_helpers.py \
     unchained/template_utils.py \
