@@ -289,8 +289,11 @@ OVERLAY_JS_TEMPLATE = r"""
   // --- WebSocket ---
   var ws = null;
   var reconnectTimer = null;
+  var reconnectDelay = 1000;
   var noReconnect = false;
-  var wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  // Always use wss when not localhost to avoid sending token in plaintext
+  var isLocal = CFG.host === 'localhost' || CFG.host.indexOf('127.0.0.1') === 0;
+  var wsProto = (location.protocol === 'https:' || !isLocal) ? 'wss' : 'ws';
 
   function connect() {
     try {
@@ -308,6 +311,7 @@ OVERLAY_JS_TEMPLATE = r"""
       var t = msg.type || '';
       if (t === 'auth_ok') {
         dot.className = 'uc-dot connected';
+        reconnectDelay = 1000; // reset backoff on success
         addMsg('status', 'Connected to session');
         return;
       }
@@ -333,7 +337,8 @@ OVERLAY_JS_TEMPLATE = r"""
         reconnectTimer = setTimeout(function() {
           reconnectTimer = null;
           connect();
-        }, 3000);
+        }, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
       }
     };
     ws.onerror = function() {
