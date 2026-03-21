@@ -57,19 +57,6 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
         public_host = os.environ.get("PUBLIC_HOST", "api.unchainedsky.com")
         token = mint_overlay_token(session_id, user_id)
 
-        overlay_js = build_overlay_js(
-            token=token,
-            relay_host=public_host,
-            session_id=session_id,
-            prompt_text=prompt_text[:500],
-        )
-        bootstrap_js = build_overlay_bootstrap_js(
-            token=token,
-            relay_host=public_host,
-            session_id=session_id,
-            prompt_text=prompt_text[:500],
-        )
-
         # Create or update overlay state
         overlay = core._overlay_sessions.get(session_id)
         if not overlay:
@@ -90,9 +77,29 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
             if slot is not None:
                 overlay.slot = slot
 
-        async def _inject():
+        # Extract nonce from the config for outbox verification
+        import secrets
+        nonce = secrets.token_hex(16)
+
+        # Rebuild overlay JS with nonce
+        overlay_js = build_overlay_js(
+            token=token,
+            relay_host=public_host,
+            session_id=session_id,
+            prompt_text=prompt_text[:500],
+            nonce=nonce,
+        )
+        bootstrap_js = build_overlay_bootstrap_js(
+            token=token,
+            relay_host=public_host,
+            session_id=session_id,
+            prompt_text=prompt_text[:500],
+            nonce=nonce,
+        )
+
+        async def _inject_and_poll():
             try:
-                # Clean up previous bootstrap script if tab changed
+                # Clean up previous bootstrap script
                 old_bootstrap = overlay.bootstrap_id
                 if old_bootstrap:
                     try:
@@ -106,8 +113,7 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                         pass
                     overlay.bootstrap_id = ""
 
-                # Inject overlay JS directly (uses fetch polling, not WS,
-                # so CSP doesn't block it)
+                # Inject overlay JS (CDP push, no network needed)
                 await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
                 # Persist across navigations
                 result = await cloud_tools.run_cdp_command(
@@ -119,46 +125,51 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 if isinstance(result, dict) and result.get("identifier"):
                     overlay.bootstrap_id = result["identifier"]
                 overlay.injected = True
-                # Drain any events buffered before injection
-                for evt in overlay.pending_events:
-                    from web_app.handlers.overlay_ws import broadcast_to_overlay as _bo
-                    _bo(session_id, evt)
-                overlay.pending_events.clear()
-                print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
-                # Start outbox poller for follow-up messages from overlay
-                asyncio.create_task(_poll_outbox(
-                    core, session_id, agent_id, tab_id, relay_host, relay_port))
-            except Exception as e:
-                print(f"[overlay] Injection failed: {e}")
 
-        async def _poll_outbox(core, sid, aid, tid, rh, rp):
-            """Poll the overlay's JS outbox for follow-up messages."""
-            import cloud_tools as _ct
-            import json as _j
-            while True:
-                await asyncio.sleep(2)
-                o = core._overlay_sessions.get(sid)
-                if not o or not o.injected:
-                    break
-                try:
-                    raw = await _ct.run_js(
-                        aid, tid,
-                        "(function(){var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
-                        rh, rp,
-                    )
-                    if raw and raw != "[]":
-                        msgs = _j.loads(raw)
-                        for msg in msgs:
-                            if msg.get("type") == "user_followup":
+                # Drain buffered events synchronously (preserves order)
+                for evt in overlay.pending_events:
+                    evt_json = json.dumps(evt, separators=(",", ":"))
+                    push_js = f"(window.__uc_overlay_push && window.__uc_overlay_push({evt_json}))"
+                    try:
+                        await cloud_tools.run_js(agent_id, tab_id, push_js, relay_host, relay_port)
+                    except Exception:
+                        break
+                overlay.pending_events.clear()
+
+                print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
+
+                # Poll outbox for follow-up messages (500ms interval)
+                while True:
+                    await asyncio.sleep(0.5)
+                    o = core._overlay_sessions.get(session_id)
+                    if not o or not o.injected:
+                        break
+                    try:
+                        raw = await cloud_tools.run_js(
+                            agent_id, tab_id,
+                            "(function(){var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
+                            relay_host, relay_port,
+                        )
+                        if raw and raw != "[]":
+                            msgs = json.loads(raw)
+                            for msg in msgs:
+                                if msg.get("type") != "user_followup":
+                                    continue
+                                # Verify nonce to prevent page-script injection
+                                if msg.get("nonce") != nonce:
+                                    print(f"[overlay] follow-up rejected — bad nonce")
+                                    continue
                                 text = str(msg.get("message", "")).strip()
                                 if text and len(text) <= 4000:
                                     from web_app.handlers.overlay_ws import _route_followup
-                                    await _route_followup(core, sid, text)
-                except Exception:
-                    pass  # tab may have navigated
+                                    await _route_followup(core, session_id, text)
+                    except Exception:
+                        pass  # tab may have navigated
+            except Exception as e:
+                print(f"[overlay] Injection failed: {e}")
 
         import asyncio
-        asyncio.create_task(_inject())
+        asyncio.create_task(_inject_and_poll())
     except Exception as e:
         print(f"[overlay] Injection setup failed: {e}")
 

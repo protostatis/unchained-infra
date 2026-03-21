@@ -245,8 +245,8 @@ OVERLAY_JS_TEMPLATE = r"""
   function sendFollowup() {
     var text = input.value.trim();
     if (!text) return;
-    // Push to outbox — server polls via CDP Runtime.evaluate
-    window.__uc_overlay_outbox.push({type: 'user_followup', message: text});
+    // Push to outbox with nonce — server verifies nonce on poll
+    window.__uc_overlay_outbox.push({type: 'user_followup', message: text, nonce: CFG.nonce});
     addMsg('status', 'You: ' + text);
     input.value = '';
   }
@@ -314,8 +314,8 @@ OVERLAY_JS_TEMPLATE = r"""
   // --- Event receiver via CDP Runtime.evaluate (no network needed) ---
   // The server pushes events by calling window.__uc_overlay_push(evt)
   // via CDP. This bypasses all CSP restrictions.
-  dot.className = 'uc-dot connected';
   window.__uc_overlay_push = function(evt) {
+    dot.className = 'uc-dot connected';  // green on first event
     if (!evt || !evt.type) return;
     var t = evt.type;
     if (t === 'text') {
@@ -355,22 +355,21 @@ def build_overlay_js(
     relay_host: str,
     session_id: str,
     prompt_text: str,
+    nonce: str = "",
 ) -> str:
     """Return injection-ready JS with runtime values substituted.
 
     Config is embedded as a single JSON.parse() call to avoid any
     placeholder-collision or double-substitution risks.
-
-    Note: the HMAC token is visible in the injected JS source (and
-    therefore to DevTools, extensions, or page scripts). This is an
-    accepted limitation of client-side token injection; the token is
-    short-lived (1 hour) and session-scoped.
     """
+    import secrets
+    nonce = nonce or secrets.token_hex(16)
     cfg = json.dumps({
         "token": token,
         "host": relay_host,
         "sessionId": session_id,
         "prompt": prompt_text,
+        "nonce": nonce,
     }, separators=(",", ":"))
     # Escape for embedding inside a JS single-quoted string
     cfg_escaped = cfg.replace("\\", "\\\\").replace("'", "\\'")
@@ -402,6 +401,7 @@ def build_overlay_bootstrap_js(
     relay_host: str,
     session_id: str,
     prompt_text: str,
+    nonce: str = "",
 ) -> str:
     """Return bootstrap JS that re-injects the overlay on navigation."""
     full_js = build_overlay_js(
@@ -409,5 +409,6 @@ def build_overlay_bootstrap_js(
         relay_host=relay_host,
         session_id=session_id,
         prompt_text=prompt_text,
+        nonce=nonce,
     )
     return OVERLAY_BOOTSTRAP_TEMPLATE.replace("%%FULL_OVERLAY_JS%%", full_js)
