@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
 import threading
 import time
 from html import escape
+
+log = logging.getLogger(__name__)
 
 
 _DB_PATH = os.environ.get(
@@ -67,6 +70,89 @@ def _slugify(text: str) -> str:
     # Add short hash for uniqueness
     h = hashlib.md5(f"{text}-{time.time()}".encode()).hexdigest()[:6]
     return f"{text}-{h}" if text else h
+
+
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+_PII_GUARD_MODEL = os.environ.get(
+    "PII_GUARD_MODEL", "google/gemini-2.0-flash-001"
+)
+
+_PII_PROMPT = """You are a PII (personally identifiable information) classifier.
+Your job is to determine if the following content contains private or
+personally identifiable information that should NOT be published on a
+public website.
+
+Flag as UNSAFE if the content contains ANY of:
+- Real phone numbers, email addresses, or mailing addresses
+- Real full names of private individuals (public figures are OK)
+- Social security numbers, credit card numbers, bank account numbers
+- Order IDs, booking references, tracking numbers
+- Medical, legal, or financial details tied to a real person
+- Login credentials, API keys, tokens
+- Private dashboard data (account balances, earnings, personal metrics)
+- Real property addresses tied to a specific owner
+
+Flag as SAFE if the content is:
+- General research (Wikipedia, news, public data)
+- Price comparisons from public websites
+- Flight/hotel searches (no booking confirmations)
+- Public business information
+- Product reviews or comparisons
+- Example/demo data that isn't tied to a real person
+
+Respond with ONLY one word: SAFE or UNSAFE"""
+
+
+def _pii_guard(query: str, result_text: str) -> bool:
+    """Check content for PII via OpenRouter LLM call.
+
+    Returns True if content is safe to publish, False if it contains PII.
+    Defaults to False (block) on any error.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        log.warning("PII guard: no OPENROUTER_API_KEY, blocking publish")
+        return False
+
+    content = f"USER QUERY:\n{query}\n\nASSISTANT RESPONSE:\n{result_text[:3000]}"
+    messages = [
+        {"role": "system", "content": _PII_PROMPT},
+        {"role": "user", "content": content},
+    ]
+    try:
+        import httpx
+        resp = httpx.post(
+            _OPENROUTER_URL,
+            json={
+                "model": _PII_GUARD_MODEL,
+                "messages": messages,
+                "max_tokens": 10,
+                "temperature": 0.0,
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://unchainedsky.com",
+                "X-Title": "Unchained PII Guard",
+            },
+            timeout=15.0,
+        )
+        if not resp.is_success:
+            log.warning("PII guard: API error %d, blocking", resp.status_code)
+            return False
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            log.warning("PII guard: no choices in response, blocking")
+            return False
+        answer = choices[0].get("message", {}).get("content", "").strip().upper()
+        if answer == "SAFE":
+            return True
+        log.info("PII guard: classified as %s, blocking", answer)
+        return False
+    except Exception as e:
+        log.warning("PII guard: exception %s, blocking", e)
+        return False
 
 
 def _extract_visible_messages(session_data: dict) -> list[dict]:
@@ -246,6 +332,10 @@ def publish_result(
         if _is_query_blacklisted(m["content"]):
             return None
     result_text = asst_msgs[-1]["content"]
+    # LLM-based PII guard — blocks if content contains personal data
+    if not _pii_guard(query, result_text):
+        log.info("Publish blocked by PII guard: %s", query[:80])
+        return None
     result_html = _messages_to_html(messages)
     slug = _slugify(query)
 
