@@ -231,6 +231,36 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
 
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web._authenticate")
+    async def test_chat_install_research_desk_requires_local_client_update_first(self, mock_auth, mock_agent_request):
+        from web_app.handlers.chat_flow import handle_chat_install_research_desk
+
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-oldinstall",
+            "key_hash": "oldinstall",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agents["claude-oldinstall"] = SimpleNamespace(closed=False)
+        web._chat_agent_caps["claude-oldinstall"] = {
+            "client_version": "0.3.62",
+            "remote_update": True,
+            "remote_research_desk_install": True,
+        }
+
+        response = await handle_chat_install_research_desk(SimpleNamespace())
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertTrue(data["update_required"])
+        self.assertTrue(data["update_supported"])
+        self.assertEqual(data["client_version"], "0.3.62")
+        self.assertEqual(data["required_client_version"], "0.3.63")
+        self.assertIn("Update it to at least 0.3.63", data["error"])
+        mock_agent_request.assert_not_awaited()
+
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web._authenticate")
     async def test_chat_install_research_desk_starts_remote_helper(self, mock_auth, mock_agent_request):
         from web_app.handlers.chat_flow import handle_chat_install_research_desk
 
@@ -243,7 +273,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         }
         web._chat_agents["claude-install"] = SimpleNamespace(closed=False)
         web._chat_agent_caps["claude-install"] = {
-            "client_version": "0.3.45",
+            "client_version": "0.3.63",
             "remote_update": True,
             "remote_research_desk_install": True,
         }
