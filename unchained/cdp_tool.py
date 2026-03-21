@@ -78,6 +78,14 @@ async def main():
             i += 1
     args = filtered
 
+    # When the session uses a provisioned Chrome, keep "auto" within
+    # the same provision slot so the agent doesn't fall back to the
+    # default/guest Chrome.
+    if tab_id == "auto" and TAB_ID.startswith("prov-"):
+        parts = TAB_ID.split("-", 2)
+        if len(parts) >= 2:
+            tab_id = f"prov-{parts[1]}-auto"
+
     try:
         if cmd == "ddm":
             flags = args if args else ["--llm-2pass", "--cols", "60"]
