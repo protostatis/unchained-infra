@@ -108,13 +108,18 @@ def _pii_guard(query: str, result_text: str) -> bool:
 
     Returns True if content is safe to publish, False if it contains PII.
     Defaults to False (block) on any error.
+
+    This is a synchronous call. The publish handler should offload to an
+    executor (asyncio.to_thread or loop.run_in_executor) to avoid blocking
+    the event loop.
     """
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         log.warning("PII guard: no OPENROUTER_API_KEY, blocking publish")
         return False
 
-    content = f"USER QUERY:\n{query}\n\nASSISTANT RESPONSE:\n{result_text[:3000]}"
+    # Send full content (up to 8000 chars) — Gemini Flash handles large contexts
+    content = f"USER QUERY:\n{query}\n\nASSISTANT RESPONSE:\n{result_text[:8000]}"
     messages = [
         {"role": "system", "content": _PII_PROMPT},
         {"role": "user", "content": content},
@@ -171,9 +176,19 @@ def _extract_visible_messages(session_data: dict) -> list[dict]:
             content = m.get("content") or ""
             if not content:
                 continue
-            # Strip leaked tool-call JSON
+            # Strip leaked tool-call XML tags
             content = re.sub(
                 r"(?is)<tool_call\b.*?</tool_call>", "", content
+            )
+            # Strip raw JSON tool-call payloads (nested braces possible)
+            content = re.sub(
+                r'\{[^{}]*"(?:name|function)"\s*:[^{}]*"arguments"\s*:[^}]*\}',
+                "", content
+            )
+            # Also strip any remaining JSON-like tool blocks with nested content
+            content = re.sub(
+                r'\{"(?:name|function|type)"\s*:.*?\}(?:\s*\})*',
+                "", content, flags=re.DOTALL
             )
             content = re.sub(r"\n{3,}", "\n\n", content).strip()
             if content:

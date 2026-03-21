@@ -526,8 +526,10 @@ async def handle_publish_result(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.json_response({"error": "Session not found"}, status=404)
     user_id = auth_info.get("email", auth_info.get("key_hash", ""))
-    slug = publish_result(
-        session_data, user_id=user_id, session_id=session_id
+    # Offload to thread — publish_result does sync SQLite + sync HTTP (PII guard)
+    import asyncio
+    slug = await asyncio.to_thread(
+        publish_result, session_data, user_id=user_id, session_id=session_id
     )
     if not slug:
         return web.json_response(
