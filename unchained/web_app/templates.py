@@ -4264,10 +4264,12 @@ async function doSend() {
 // --- Overlay follow-up sync ---
 // Poll for events from overlay follow-ups and append them to the chat.
 let _overlayPollTimer = null;
+let _overlayPolling = false;
 function _startOverlayPoll() {
   if (_overlayPollTimer) return;
   _overlayPollTimer = setInterval(async () => {
-    if (sending || !sessionId) return;
+    if (_overlayPolling || sending || !sessionId) return;
+    _overlayPolling = true;
     try {
       const r = await fetch('/web/chat/overlay-events?session_id=' + encodeURIComponent(sessionId));
       if (!r.ok) return;
@@ -4286,12 +4288,14 @@ function _startOverlayPoll() {
           chat.appendChild(bubble);
         } else if (evt.type === 'text' && bubble) {
           appendText(bubble, evt.data);
+        } else if (evt.type === 'error' && bubble) {
+          appendText(bubble, 'Error: ' + (evt.data || 'unknown'));
         } else if (evt.type === 'done') {
           bubble = null;
         }
       }
       scrollToBottom();
-    } catch {}
+    } catch {} finally { _overlayPolling = false; }
   }, 3000);
 }
 function _stopOverlayPoll() {
