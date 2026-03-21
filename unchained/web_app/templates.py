@@ -1284,19 +1284,10 @@ body::before{
 }
 .footer-links a:hover{color:var(--accent)}
 
-/* ── Admin badge ── */
-.admin-badge{
-  position:fixed;top:12px;right:12px;z-index:100;
-  padding:4px 10px;border-radius:4px;
-  background:rgba(233,69,96,0.15);border:1px solid rgba(233,69,96,0.3);
-  color:var(--accent);font-size:10px;font-weight:600;
-  letter-spacing:1px;text-transform:uppercase;
-}
+
 </style>
 </head>
 <body>
-
-<div class="admin-badge">V2 &mdash; Haiku Morph</div>
 
 <!-- Hero -->
 <div class="hero">
@@ -1522,6 +1513,22 @@ body::before{
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
 </div>
+
+<script>
+// Haiku morph — cycle through 3 stages every 6s
+(function(){
+  var poem = document.getElementById('poem');
+  if (!poem) return;
+  var stages = ['', 'stage-2', 'stage-3'];
+  var idx = 0;
+  // Start first morph after initial fade-in (4s)
+  setTimeout(function cycle(){
+    idx = (idx + 1) % stages.length;
+    poem.className = 'poem' + (stages[idx] ? ' ' + stages[idx] : '');
+    setTimeout(cycle, 6000);
+  }, 4000);
+})();
+</script>
 
 <script>
 // Mock interaction — flight comparison demo
