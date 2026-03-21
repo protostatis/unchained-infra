@@ -293,6 +293,24 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                 with patch("chat_agent_cli.sys.base_prefix", "/usr"):
                     self.assertEqual(_research_desk_python_binary(), "/usr/bin/python3")
 
+    def test_research_desk_python_binary_uses_fallback_candidate_when_base_lookup_misses(self):
+        def fake_which(name, path=None):
+            self.assertEqual(name, "python3")
+            return "/tmp/agent-venv/bin/python3" if path is None else None
+
+        with patch("chat_agent_cli.shutil.which", side_effect=fake_which):
+            with patch("chat_agent_cli.sys.prefix", "/tmp/agent-venv"):
+                with patch("chat_agent_cli.sys.base_prefix", "/usr"):
+                    with patch(
+                        "chat_agent_cli.os.path.isfile",
+                        side_effect=lambda p: p == "/usr/bin/python3",
+                    ):
+                        with patch(
+                            "chat_agent_cli.os.access",
+                            side_effect=lambda p, mode: p == "/usr/bin/python3",
+                        ):
+                            self.assertEqual(_research_desk_python_binary(), "/usr/bin/python3")
+
     def test_research_desk_package_url_rejects_invalid_override(self):
         with patch.dict(
             os.environ,
