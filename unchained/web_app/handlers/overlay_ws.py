@@ -24,7 +24,7 @@ from web_app.core import get_core as _core
 # ---------------------------------------------------------------------------
 
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
-    """Send an event to the overlay via the bridge's agent WS."""
+    """Send an event to the overlay via the bridge (relay HTTP API)."""
     core = _core()
     overlay = core._overlay_sessions.get(session_id)
     if not overlay or not overlay.injected:
@@ -32,17 +32,18 @@ def broadcast_to_overlay(session_id: str, event: dict) -> None:
             overlay.pending_events.append(event)
         return
 
-    agent_ws = core._chat_agents.get(overlay.agent_id)
-    if not agent_ws or agent_ws.closed:
-        return
-
     async def _push():
         try:
-            await agent_ws.send_json({
-                "type": "overlay_event",
-                "session_id": session_id,
-                "event": event,
-            })
+            import aiohttp
+            relay_host, relay_port = core._parse_relay()
+            url = f"http://{relay_host}:{relay_port}/api/agents/{overlay.agent_id}/overlay"
+            async with aiohttp.ClientSession() as sess:
+                await sess.post(url, json={
+                    "type": "overlay_event",
+                    "session_id": session_id,
+                    "event": event,
+                }, headers=core._relay_auth_headers(),
+                timeout=aiohttp.ClientTimeout(total=5))
         except Exception:
             pass
 

@@ -287,6 +287,24 @@ class Relay:
                     chrome_path = f"{chrome_path}?{query}"
                 result = await self.http_proxy(agent_id, method, chrome_path)
                 return self._json_response(result.get("status", 200), "OK", result)
+        # POST /api/agents/<id>/overlay — send overlay message to agent bridge
+        if path.startswith("/api/agents/") and path.endswith("/overlay"):
+            parts = path.split("/")
+            if len(parts) == 5:
+                agent_id = parts[3]
+                _, _, reason = self._authorize_headers(request.headers, agent_id)
+                if reason is not None:
+                    return self._auth_error_response(reason, agent_id)
+                agent_ws = self.agents.get(agent_id)
+                if not agent_ws:
+                    return self._json_response(404, "Not Found", {"error": "agent not connected"})
+                try:
+                    body = request.body.decode() if request.body else "{}"
+                    msg = json.loads(body)
+                    await agent_ws.send(json.dumps(msg))
+                    return self._json_response(200, "OK", {"ok": True})
+                except Exception as e:
+                    return self._json_response(500, "Error", {"error": str(e)})
         return None  # proceed with WebSocket upgrade
 
     async def _route(self, ws: ServerConnection):
