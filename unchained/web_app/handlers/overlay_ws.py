@@ -124,6 +124,7 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     ws_msg = {
         "type": "user_message",
         "session_id": session_id,
+        "agent_id": overlay.agent_id,  # CDP agent for correct profile
         "message": message,
         "req_id": req_id,
     }
