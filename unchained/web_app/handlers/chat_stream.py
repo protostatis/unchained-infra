@@ -106,14 +106,43 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                         pass
                     overlay.bootstrap_id = ""
 
-                # Bypass CSP so the overlay WS can connect
+                # Bypass CSP for future navigations
                 await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.setBypassCSP", {"enabled": True},
                     relay_host, relay_port,
                 )
-                # Inject overlay JS
-                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                # Inject overlay JS in an isolated world to bypass current page CSP.
+                # Page CSP only applies to the main world; isolated worlds are exempt.
+                frame_tree = await cloud_tools.run_cdp_command(
+                    agent_id, tab_id,
+                    "Page.getFrameTree", {},
+                    relay_host, relay_port,
+                )
+                frame_id = ""
+                if isinstance(frame_tree, dict):
+                    ft = frame_tree.get("frameTree", frame_tree)
+                    frame_id = ft.get("frame", {}).get("id", "")
+                if frame_id:
+                    world = await cloud_tools.run_cdp_command(
+                        agent_id, tab_id,
+                        "Page.createIsolatedWorld",
+                        {"frameId": frame_id, "worldName": "unchained_overlay"},
+                        relay_host, relay_port,
+                    )
+                    context_id = world.get("executionContextId") if isinstance(world, dict) else None
+                    if context_id:
+                        await cloud_tools.run_cdp_command(
+                            agent_id, tab_id,
+                            "Runtime.evaluate",
+                            {"expression": overlay_js, "contextId": context_id},
+                            relay_host, relay_port,
+                        )
+                    else:
+                        # Fallback to main world
+                        await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                else:
+                    await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
                 # Persist across navigations within this tab
                 result = await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
