@@ -249,8 +249,14 @@ async def run_agent_on_tasks(
     parallel_tasks: int = 1,
     keep_tabs: bool = False,
 ) -> list[dict]:
-    """Run all tasks for one agent with optional task-level parallelism."""
-    parallel_tasks = max(1, min(parallel_tasks, len(tasks)))
+    """Run all tasks for one agent with optional task-level parallelism.
+
+    parallel_tasks=0 means one tab per task (all tasks simultaneously).
+    """
+    if parallel_tasks <= 0:
+        parallel_tasks = len(tasks)
+    else:
+        parallel_tasks = max(1, min(parallel_tasks, len(tasks)))
     controller = BenchmarkBrowser(base_config)
     results_by_index: list[dict | None] = [None] * len(tasks)
     save_lock = asyncio.Lock()

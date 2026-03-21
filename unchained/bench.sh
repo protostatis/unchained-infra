@@ -25,7 +25,7 @@ RELAY_HOST=127.0.0.1
 RELAY_PORT=8765
 BENCH_PROFILE=${BENCH_PROFILE:-bench_haiku}
 BENCH_CDP_PORT=${BENCH_CDP_PORT:-9344}
-PARALLEL=${PARALLEL:-8}
+PARALLEL=${PARALLEL:-0}  # 0 = auto (one tab per task)
 
 # --- Validate API key ---
 if [ -z "${BENCH_API_KEY:-}" ]; then
