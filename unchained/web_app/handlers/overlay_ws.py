@@ -258,12 +258,28 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
             await writer_task
         except asyncio.CancelledError:
             pass
-        # Clear subscriber and trigger deferred tab cleanup
+        # Clear subscriber
         if overlay.subscriber is q:
             overlay.subscriber = None
-        # If no active SSE stream, clean up the session tab now
-        if not core._response_queues.get(session_id):
-            core._overlay_sessions.pop(session_id, None)
-            asyncio.create_task(core._close_session_tab(session_id))
+
+        # Deferred tab cleanup: only if no active SSE stream AND we
+        # just cleared the last subscriber. Check both conditions
+        # before any mutations.
+        should_cleanup = (
+            overlay.subscriber is None
+            and not core._response_queues.get(session_id)
+        )
+        if should_cleanup:
+            async def _deferred_cleanup():
+                try:
+                    await core._close_session_tab(session_id)
+                except Exception as e:
+                    print(f"[overlay] deferred tab cleanup failed for {session_id}: {e}")
+                finally:
+                    # Remove overlay state only after tab close completes
+                    core._overlay_sessions.pop(session_id, None)
+            task = asyncio.create_task(_deferred_cleanup())
+            # Prevent GC before completion
+            task.add_done_callback(lambda t: None)
 
     return ws
