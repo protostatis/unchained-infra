@@ -751,8 +751,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         # Only clean up if we still own the queue (a new turn may have replaced it)
         if core._response_queues.get(session_id) is q:
             core._response_queues.pop(session_id, None)
-            core._session_agents.pop(session_id, None)
             core._response_req_ids.pop(session_id, None)
+            # Keep session_agents alive if overlay is connected — follow-ups
+            # need it to route messages to the agent.
+            has_overlay = bool(core._overlay_subscribers.get(session_id))
+            if not has_overlay:
+                core._session_agents.pop(session_id, None)
             # Keep overlay_injected and overlay_subscribers alive across
             # turns — the overlay panel persists and accepts follow-ups.
             # They clean up when the overlay WS itself disconnects.
