@@ -1538,13 +1538,37 @@ body::before{
   </div>
 </div>
 
-<!-- Case Study -->
+<!-- Use Cases -->
 <div class="getstarted" style="padding-top:0">
   <div class="gs-header">
     <h2>See It In Action</h2>
-    <p>Real conversations, real results. See what the agent can do end-to-end.</p>
+    <p>Real conversations, real results. See what the agent can do.</p>
   </div>
   <div class="cards">
+    <div class="card demo">
+      <div class="card-badge">Use Case</div>
+      <div class="card-title">Apartment Hunting</div>
+      <div class="card-desc">Search Zillow, Apartments.com, and Craigslist with your exact criteria. Get a ranked shortlist in seconds.</div>
+      <a href="/use/apartment-hunting" class="card-btn">See How &#8594;</a>
+    </div>
+    <div class="card demo">
+      <div class="card-badge">Use Case</div>
+      <div class="card-title">Flight Price Comparison</div>
+      <div class="card-desc">Compare flights across Google Flights, Kayak, and airline sites. Find savings you&rsquo;d miss manually.</div>
+      <a href="/use/flight-comparison" class="card-btn">See How &#8594;</a>
+    </div>
+    <div class="card demo">
+      <div class="card-badge">Use Case</div>
+      <div class="card-title">Competitor Monitoring</div>
+      <div class="card-desc">Track competitor pricing, new features, and reviews. Get a structured weekly briefing automatically.</div>
+      <a href="/use/competitor-monitoring" class="card-btn">See How &#8594;</a>
+    </div>
+    <div class="card demo">
+      <div class="card-badge">Use Case</div>
+      <div class="card-title">Price Tracking</div>
+      <div class="card-desc">Compare prices across Amazon, Best Buy, Walmart, and more. Set alerts for price drops.</div>
+      <a href="/use/price-tracking" class="card-btn">See How &#8594;</a>
+    </div>
     <div class="card demo" style="grid-column:1/-1">
       <div class="card-badge">Case Study</div>
       <div class="card-title">Rental Relisting on Zillow</div>
@@ -1558,9 +1582,11 @@ body::before{
   <div class="footer-links">
     <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
     <a href="/mcp">MCP</a>
-    <a href="/setup">API Setup</a>
-    <a href="https://github.com/protostatis/unchained-infra" target="_blank" rel="noopener noreferrer">Infra GitHub</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -2227,9 +2253,10 @@ a:hover{text-decoration:underline}
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/first-look">Demo</a>
-    <a href="/trial">Free Tier</a>
-    <a href="/mcp">MCP</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
@@ -2244,8 +2271,8 @@ a:hover{text-decoration:underline}
 # ---------------------------------------------------------------------------
 
 _USE_CASE_CSS = r"""
-*{margin:0;padding:0;box-sizing:border-box}
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
 :root{
   --bg:#0a0a0f;--surface:#111119;--subtle:#222;
   --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
@@ -2387,9 +2414,11 @@ _USE_CASE_FOOTER = r"""
 <div class="footer">
   <div class="footer-links">
     <a href="/">Home</a>
-    <a href="/first-look">Demo</a>
-    <a href="/trial">Free Tier</a>
-    <a href="/mcp">MCP</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
+    <a href="/case-study/zillow-rental">Case Study</a>
     <a href="mailto:__CONTACT_EMAIL__">Contact</a>
   </div>
   <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
