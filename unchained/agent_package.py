@@ -14,9 +14,11 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.56"
+VERSION = "0.3.57"
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
+# 0.3.57 is the first packaged client version that advertises the
+# one-click Research Desk install capability to the hosted page.
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"
