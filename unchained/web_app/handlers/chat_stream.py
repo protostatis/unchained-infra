@@ -667,9 +667,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
     core._session_agents[session_id] = routing_agent_id
 
-    # --- Inject overlay copilot into the task browser (if tab is available) ---
-    if tab_id and not guest_mode:
-        _maybe_inject_overlay(core, session_id, cdp_agent_id, tab_id, message, user_id=auth_info.get("user_id", ""))
+    # --- Inject overlay copilot into the task browser ---
+    # For /local sessions tab_id may be None (agent uses "auto" internally).
+    # Use "auto" as fallback so the overlay reaches the agent's default tab.
+    overlay_tab = tab_id or "auto"
+    if not guest_mode and not is_openrouter:
+        _maybe_inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message, user_id=auth_info.get("user_id", ""))
 
     resp = web.StreamResponse(
         status=200,
