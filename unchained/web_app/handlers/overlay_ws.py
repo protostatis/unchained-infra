@@ -178,7 +178,8 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     # Re-inject overlay on the agent's current tab (may have changed).
     try:
         from web_app.handlers.chat_stream import _maybe_inject_overlay
-        _maybe_inject_overlay(core, session_id, agent_id, "auto", message)
+        overlay_tab = core._session_tabs.get(session_id) or "auto"
+        _maybe_inject_overlay(core, session_id, agent_id, overlay_tab, message)
     except Exception as e:
         print(f"[overlay] re-inject on follow-up failed: {e}")
 
