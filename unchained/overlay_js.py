@@ -355,15 +355,14 @@ def build_overlay_js(
     relay_host: str,
     session_id: str,
     prompt_text: str,
-    nonce: str = "",
+    nonce: str,
 ) -> str:
     """Return injection-ready JS with runtime values substituted.
 
     Config is embedded as a single JSON.parse() call to avoid any
     placeholder-collision or double-substitution risks.
+    Nonce is required — callers must generate one via secrets.token_hex().
     """
-    import secrets
-    nonce = nonce or secrets.token_hex(16)
     cfg = json.dumps({
         "token": token,
         "host": relay_host,
@@ -401,7 +400,7 @@ def build_overlay_bootstrap_js(
     relay_host: str,
     session_id: str,
     prompt_text: str,
-    nonce: str = "",
+    nonce: str,
 ) -> str:
     """Return bootstrap JS that re-injects the overlay on navigation."""
     full_js = build_overlay_js(

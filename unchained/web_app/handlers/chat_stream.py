@@ -124,9 +124,9 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 )
                 if isinstance(result, dict) and result.get("identifier"):
                     overlay.bootstrap_id = result["identifier"]
-                overlay.injected = True
 
-                # Drain buffered events synchronously (preserves order)
+                # Drain buffered events synchronously BEFORE marking injected
+                # (prevents concurrent broadcast_to_overlay from interleaving)
                 for evt in overlay.pending_events:
                     evt_json = json.dumps(evt, separators=(",", ":"))
                     push_js = f"(window.__uc_overlay_push && window.__uc_overlay_push({evt_json}))"
@@ -135,6 +135,7 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                     except Exception:
                         break
                 overlay.pending_events.clear()
+                overlay.injected = True
 
                 print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
 
@@ -155,7 +156,6 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                             for msg in msgs:
                                 if msg.get("type") != "user_followup":
                                     continue
-                                # Verify nonce to prevent page-script injection
                                 if msg.get("nonce") != nonce:
                                     print(f"[overlay] follow-up rejected — bad nonce")
                                     continue
@@ -163,13 +163,16 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                                 if text and len(text) <= 4000:
                                     from web_app.handlers.overlay_ws import _route_followup
                                     await _route_followup(core, session_id, text)
-                    except Exception:
-                        pass  # tab may have navigated
+                    except Exception as e:
+                        print(f"[overlay] outbox poll: {e}")  # debug — don't swallow silently
             except Exception as e:
                 print(f"[overlay] Injection failed: {e}")
 
         import asyncio
-        asyncio.create_task(_inject_and_poll())
+        # Cancel previous poll task if re-injecting
+        if overlay.poll_task and not overlay.poll_task.done():
+            overlay.poll_task.cancel()
+        overlay.poll_task = asyncio.create_task(_inject_and_poll())
     except Exception as e:
         print(f"[overlay] Injection setup failed: {e}")
 
