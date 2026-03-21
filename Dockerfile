@@ -26,6 +26,7 @@ COPY unchained/intel.py .
 COPY unchained/web.py .
 COPY unchained/web_cmd.py .
 COPY unchained/web_state.py .
+COPY unchained/overlay_js.py .
 COPY unchained/analytics.py .
 COPY unchained/provision_helpers.py .
 COPY unchained/template_utils.py .
