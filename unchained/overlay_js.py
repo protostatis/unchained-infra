@@ -35,13 +35,8 @@ OVERLAY_JS_TEMPLATE = r"""
   // Closed shadow — DDM's _collectAll checks el.shadowRoot which returns null
   var shadow = host.attachShadow({mode: 'closed'});
 
-  // --- Config (injected at build time) ---
-  var CFG = {
-    token: '%%TOKEN%%',
-    host: '%%RELAY_HOST%%',
-    sessionId: '%%SESSION_ID%%',
-    prompt: '%%PROMPT_TEXT%%'
-  };
+  // --- Config (injected at build time via JSON.parse) ---
+  var CFG = JSON.parse('%%CFG_JSON%%');
 
   // --- Styles ---
   var style = document.createElement('style');
@@ -361,17 +356,6 @@ OVERLAY_JS_TEMPLATE = r"""
 # Builder
 # ---------------------------------------------------------------------------
 
-def _js_escape(value: str) -> str:
-    """Escape a string for safe embedding in a JS single-quoted literal."""
-    return (
-        value
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace("\n", "\\n")
-        .replace("\r", "")
-    )
-
-
 def build_overlay_js(
     *,
     token: str,
@@ -379,13 +363,25 @@ def build_overlay_js(
     session_id: str,
     prompt_text: str,
 ) -> str:
-    """Return injection-ready JS with runtime values substituted."""
-    js = OVERLAY_JS_TEMPLATE
-    js = js.replace("%%TOKEN%%", _js_escape(token))
-    js = js.replace("%%RELAY_HOST%%", _js_escape(relay_host))
-    js = js.replace("%%SESSION_ID%%", _js_escape(session_id))
-    js = js.replace("%%PROMPT_TEXT%%", _js_escape(prompt_text))
-    return js
+    """Return injection-ready JS with runtime values substituted.
+
+    Config is embedded as a single JSON.parse() call to avoid any
+    placeholder-collision or double-substitution risks.
+
+    Note: the HMAC token is visible in the injected JS source (and
+    therefore to DevTools, extensions, or page scripts). This is an
+    accepted limitation of client-side token injection; the token is
+    short-lived (1 hour) and session-scoped.
+    """
+    cfg = json.dumps({
+        "token": token,
+        "host": relay_host,
+        "sessionId": session_id,
+        "prompt": prompt_text,
+    }, separators=(",", ":"))
+    # Escape for embedding inside a JS single-quoted string
+    cfg_escaped = cfg.replace("\\", "\\\\").replace("'", "\\'")
+    return OVERLAY_JS_TEMPLATE.replace("%%CFG_JSON%%", cfg_escaped)
 
 
 # ---------------------------------------------------------------------------
