@@ -133,6 +133,9 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     if overlay.slot is not None:
         ws_msg["slot"] = overlay.slot
 
+    # Keep the provisioned tab alive — refresh last-active timestamp
+    core._session_last_active[session_id] = time.time()
+
     try:
         await agent_ws.send_json(ws_msg)
         print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
