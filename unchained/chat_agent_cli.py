@@ -29,6 +29,7 @@ import re
 import shlex
 import signal
 import shutil
+import socket
 import sys
 import tempfile
 import time
@@ -579,6 +580,113 @@ def _run_logged(cmd: list[str], *, cwd: str) -> int:
     return proc.returncode
 
 
+def _localhost_port_open(host: str, port: int, *, timeout_seconds: float = 0.75) -> bool:
+    """Return True when a local TCP port accepts a connection."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            return True
+    except OSError:
+        return False
+
+
+def _spawn_detached(cmd: list[str], *, cwd: str) -> None:
+    """Start a background process detached from the current terminal."""
+    kwargs: dict[str, object] = {
+        "cwd": cwd,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        flags = 0
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(cmd, **kwargs)
+
+
+_RESEARCH_DESK_LOCAL_HOST = "127.0.0.1"
+_RESEARCH_DESK_LOCAL_PORT = 8766
+_RESEARCH_DESK_BRIDGE_PORT = 9333
+_RESEARCH_DESK_BOOTSTRAP_TIMEOUT_SECONDS = 12.0
+_RESEARCH_DESK_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.5
+
+
+def _wait_for_local_port(host: str, port: int, *, timeout_seconds: float) -> bool:
+    """Poll until a local TCP port opens or the timeout expires."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if _localhost_port_open(host, port):
+            return True
+        time.sleep(_RESEARCH_DESK_BOOTSTRAP_POLL_INTERVAL_SECONDS)
+    return _localhost_port_open(host, port)
+
+
+def _ensure_research_desk_bridge_running(python_bin: str) -> None:
+    """Start the default Research Desk bridge unless it is already reachable."""
+    if _localhost_port_open(_RESEARCH_DESK_LOCAL_HOST, _RESEARCH_DESK_BRIDGE_PORT):
+        log.info(
+            "[research-desk-install] bridge already reachable on %s:%s",
+            _RESEARCH_DESK_LOCAL_HOST,
+            _RESEARCH_DESK_BRIDGE_PORT,
+        )
+        return
+    bridge_dir = os.path.join(_agent_root(), "unchained")
+    bridge_cmd = [python_bin, "-m", "unchained_pyreplab", "bridge-start", "--daemon"]
+    if os.path.isfile(os.path.join(bridge_dir, "chrome_bridge.py")):
+        bridge_cmd.extend(["--bridge-dir", bridge_dir])
+    log.info("[research-desk-install] starting bridge: %s", shlex.join(bridge_cmd))
+    rc = _run_logged(bridge_cmd, cwd=_agent_root())
+    if rc != 0:
+        raise SystemExit(rc)
+    if not _wait_for_local_port(
+        _RESEARCH_DESK_LOCAL_HOST,
+        _RESEARCH_DESK_BRIDGE_PORT,
+        timeout_seconds=_RESEARCH_DESK_BOOTSTRAP_TIMEOUT_SECONDS,
+    ):
+        log.error(
+            "[research-desk-install] bridge did not become reachable on %s:%s",
+            _RESEARCH_DESK_LOCAL_HOST,
+            _RESEARCH_DESK_BRIDGE_PORT,
+        )
+        raise SystemExit(1)
+
+
+def _ensure_research_desk_server_running(python_bin: str) -> None:
+    """Start the local Research Desk web server unless it is already serving."""
+    if _localhost_port_open(_RESEARCH_DESK_LOCAL_HOST, _RESEARCH_DESK_LOCAL_PORT):
+        log.info(
+            "[research-desk-install] local desk already reachable on %s:%s",
+            _RESEARCH_DESK_LOCAL_HOST,
+            _RESEARCH_DESK_LOCAL_PORT,
+        )
+        return
+    serve_cmd = [
+        python_bin,
+        "-m",
+        "unchained_pyreplab",
+        "serve",
+        "--host",
+        _RESEARCH_DESK_LOCAL_HOST,
+        "--port",
+        str(_RESEARCH_DESK_LOCAL_PORT),
+    ]
+    log.info("[research-desk-install] starting local desk: %s", shlex.join(serve_cmd))
+    _spawn_detached(serve_cmd, cwd=_agent_root())
+    if not _wait_for_local_port(
+        _RESEARCH_DESK_LOCAL_HOST,
+        _RESEARCH_DESK_LOCAL_PORT,
+        timeout_seconds=_RESEARCH_DESK_BOOTSTRAP_TIMEOUT_SECONDS,
+    ):
+        log.error(
+            "[research-desk-install] local desk did not become reachable on %s:%s",
+            _RESEARCH_DESK_LOCAL_HOST,
+            _RESEARCH_DESK_LOCAL_PORT,
+        )
+        raise SystemExit(1)
+
+
 def _terminate_windows_runtime(helper_pid: int):
     """Stop current chat/bridge processes without touching Startup autostart."""
     cmd = (
@@ -815,7 +923,7 @@ def _remote_research_desk_install_supported() -> bool:
 
 
 def _run_research_desk_install_helper():
-    """Detached helper that installs or upgrades the Research Desk package."""
+    """Detached helper that installs and bootstraps Research Desk locally."""
     python_bin = _research_desk_python_binary()
     package_url = _research_desk_package_url()
     install_cmd = [python_bin, "-m", "pip", "install", "--user", "--upgrade", package_url]
@@ -828,7 +936,15 @@ def _run_research_desk_install_helper():
     if rc != 0:
         log.error("[research-desk-install] install command failed with exit code %s", rc)
         raise SystemExit(rc)
-    log.info("[research-desk-install] install completed")
+    setup_cmd = [python_bin, "-m", "unchained_pyreplab", "setup"]
+    log.info("[research-desk-install] running setup: %s", shlex.join(setup_cmd))
+    rc = _run_logged(setup_cmd, cwd=_agent_root())
+    if rc != 0:
+        log.error("[research-desk-install] setup command failed with exit code %s", rc)
+        raise SystemExit(rc)
+    _ensure_research_desk_bridge_running(python_bin)
+    _ensure_research_desk_server_running(python_bin)
+    log.info("[research-desk-install] install and bootstrap completed")
 
 
 def _spawn_remote_research_desk_install() -> tuple[bool, str, str]:
