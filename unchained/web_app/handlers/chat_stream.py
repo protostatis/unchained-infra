@@ -41,14 +41,15 @@ def _broadcast_overlay(session_id: str, event: dict) -> None:
 
 
 def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, prompt_text: str, user_id: str = "") -> None:
-    """Inject the overlay copilot into the task browser if not already present.
+    """Inject the overlay copilot into the task browser.
+
+    Re-injects on every turn — the overlay JS safely removes any
+    previous instance before creating a new one. This ensures the
+    overlay reappears after tab changes, disconnects, or navigation
+    that cleared the addScriptToEvaluateOnNewDocument state.
 
     Must be called from a running asyncio event loop (uses create_task).
     """
-    injected = core._overlay_injected.get(session_id)
-    if injected and injected == (agent_id, tab_id):
-        return  # already injected for this session + tab
-
     try:
         import cloud_tools
         from overlay_js import build_overlay_js, build_overlay_bootstrap_js
