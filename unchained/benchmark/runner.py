@@ -253,10 +253,11 @@ async def run_agent_on_tasks(
 
     parallel_tasks=0 means one tab per task (all tasks simultaneously).
     """
+    _MAX_PARALLEL = 64  # Safety cap — Chrome can't handle unlimited tabs
     if parallel_tasks <= 0:
-        parallel_tasks = len(tasks)
+        parallel_tasks = min(len(tasks), _MAX_PARALLEL)
     else:
-        parallel_tasks = max(1, min(parallel_tasks, len(tasks)))
+        parallel_tasks = max(1, min(parallel_tasks, len(tasks), _MAX_PARALLEL))
     controller = BenchmarkBrowser(base_config)
     results_by_index: list[dict | None] = [None] * len(tasks)
     save_lock = asyncio.Lock()

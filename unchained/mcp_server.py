@@ -404,7 +404,12 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
             page_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
         except Exception:
             raise RuntimeError("Screenshot failed. Could not retrieve page text either.") from screenshot_exc
-        truncated = page_text[:4000] + ("..." if len(page_text) > 4000 else "")
+        # Truncate at last newline boundary to avoid cutting mid-line
+        if len(page_text) > 4000:
+            cut = page_text[:4000].rfind("\n")
+            truncated = page_text[:cut if cut > 0 else 4000] + "\n[truncated]"
+        else:
+            truncated = page_text
         raise RuntimeError(
             f"Screenshot failed. Page text fallback:\n\n{truncated}"
         ) from screenshot_exc

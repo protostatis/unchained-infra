@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
@@ -159,7 +160,6 @@ class BenchmarkBrowser:
     async def create_tab(self, url: str = "about:blank", retries: int = 3) -> str:
         if not self.config.agent_id:
             raise RuntimeError("agent_id is required to allocate benchmark tabs")
-        import asyncio as _asyncio
         last_error = None
         for attempt in range(retries):
             tab_id = ""
@@ -192,7 +192,7 @@ class BenchmarkBrowser:
             if attempt < retries - 1:
                 wait = 2 ** attempt  # 1s, 2s backoff
                 print(f"[create_tab] retry {attempt + 1}/{retries} in {wait}s (last error: {last_error})")
-                await _asyncio.sleep(wait)
+                await asyncio.sleep(wait)
         raise RuntimeError(f"create_tab failed after {retries} attempts: {last_error}")
 
     async def close_tab(self, tab_id: str):
