@@ -291,6 +291,8 @@ async def cdp_click(x: int | None = None, y: int | None = None,
         return "Error: provide x/y coordinates, element_id, or label."
     if modes > 1:
         return "Error: use only one click mode — coordinates, element_id, or label."
+    if has_coords and (x is None or y is None):
+        return "Error: both x and y are required for coordinate clicks."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.click(aid, tab_id, 0 if x is None else x, 0 if y is None else y,
                                    element_id=element_id, label=label)
@@ -468,6 +470,12 @@ async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = ""
             return f"Cookie at index {i} is not an object."
         if not all(k in c for k in ("name", "value", "domain")):
             return f"Cookie at index {i} missing required field(s). Need: name, value, domain."
+        domain = c["domain"]
+        if not isinstance(domain, str) or not domain.strip():
+            return f"Cookie at index {i} has empty or invalid domain."
+        # Block overly broad domains that could affect all sites
+        if domain in (".", ".com", ".org", ".net", ".io", ".co"):
+            return f"Cookie at index {i} has overly broad domain '{domain}'."
     return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
 
 
