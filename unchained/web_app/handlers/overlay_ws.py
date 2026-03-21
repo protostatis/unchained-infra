@@ -161,12 +161,14 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         print(f"[overlay] follow-up send failed: {e}")
         return
 
-    # Re-inject overlay on the agent's current tab (may have changed)
+    # Re-inject overlay on the agent's current tab (may have changed).
+    # _maybe_inject_overlay is sync (fires create_task internally).
+    # Inline import avoids circular import with chat_stream.
     try:
         from web_app.handlers.chat_stream import _maybe_inject_overlay
         _maybe_inject_overlay(core, session_id, agent_id, "auto", message)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[overlay] re-inject on follow-up failed: {e}")
 
     # Agent responses arrive on the response_queues[session_id] via
     # the chat WS handler. If no SSE consumer is active (parent browser
