@@ -160,6 +160,7 @@ class BenchmarkBrowser:
         if not self.config.agent_id:
             raise RuntimeError("agent_id is required to allocate benchmark tabs")
         import asyncio as _asyncio
+        last_error = None
         for attempt in range(retries):
             tab_id = ""
             if self.config.private_core_url:
@@ -174,8 +175,8 @@ class BenchmarkBrowser:
                     )
                     if isinstance(cdp_result, dict):
                         tab_id = str(cdp_result.get("targetId", "") or "")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    last_error = exc
             if not tab_id:
                 try:
                     tab_id = await self.client.create_tab(
@@ -184,15 +185,15 @@ class BenchmarkBrowser:
                         self.config.relay_host,
                         self.config.relay_port,
                     ) or ""
-                except Exception:
-                    pass
+                except Exception as exc:
+                    last_error = exc
             if tab_id:
                 return tab_id
             if attempt < retries - 1:
                 wait = 2 ** attempt  # 1s, 2s backoff
-                print(f"[create_tab] retry {attempt + 1}/{retries} in {wait}s...")
+                print(f"[create_tab] retry {attempt + 1}/{retries} in {wait}s (last error: {last_error})")
                 await _asyncio.sleep(wait)
-        raise RuntimeError("create_tab returned no tab id")
+        raise RuntimeError(f"create_tab failed after {retries} attempts: {last_error}")
 
     async def close_tab(self, tab_id: str):
         if not self.config.agent_id or not tab_id:

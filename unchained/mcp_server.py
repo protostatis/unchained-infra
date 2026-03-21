@@ -276,15 +276,21 @@ async def cdp_click(x: int | None = None, y: int | None = None,
                     tab_id: str = "auto", agent_id: str = "") -> str:
     """Click an element by coordinates, DDM element ID, or label.
 
-    Three click modes:
+    Exactly one click mode must be used:
     - Coordinates: cdp_click(x=500, y=300)
     - Element ID from DDM: cdp_click(element_id="B3")
     - Label text: cdp_click(label="Notifications")
 
     Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
     """
-    if not element_id and not label and x is None and y is None:
+    has_coords = x is not None or y is not None
+    has_element = bool(element_id)
+    has_label = bool(label)
+    modes = sum([has_coords, has_element, has_label])
+    if modes == 0:
         return "Error: provide x/y coordinates, element_id, or label."
+    if modes > 1:
+        return "Error: use only one click mode — coordinates, element_id, or label."
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.click(aid, tab_id, 0 if x is None else x, 0 if y is None else y,
                                    element_id=element_id, label=label)
@@ -297,11 +303,11 @@ async def cdp_scroll(direction: str = "down", amount: int = 500,
 
     Args:
         direction: "up", "down", "left", or "right"
-        amount: pixels to scroll (default 500, roughly one viewport height)
+        amount: pixels to scroll (default 500, roughly one viewport height, max 5000)
     """
     if direction not in ("up", "down", "left", "right"):
         return f"Invalid direction: {direction!r}. Use up, down, left, or right."
-    amount = max(1, min(amount, 50000))
+    amount = max(1, min(amount, 5000))
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.scroll(aid, tab_id, direction, amount)
 
@@ -382,22 +388,24 @@ async def js_eval(expression: str,
 async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 
-    Returns PNG image. Use sparingly (~2100 tokens) — prefer DDM (~500 tokens).
-    Falls back to DDM text if screenshot fails.
+    Returns PNG image content. Use sparingly (~2100 tokens) — prefer
+    DDM for page understanding (~500 tokens).
+    Only use for: CAPTCHAs, visual state, image verification.
     """
     aid = _resolve_agent(profile=agent_id)
     try:
         png_b64 = await cloud_tools.screenshot(aid, tab_id)
         return Image(data=base64.b64decode(png_b64, validate=True), format="png")
-    except Exception:
-        # Screenshot failed — try DDM text as fallback context for the agent.
-        # Truncate to avoid leaking excessive page content in error messages.
+    except Exception as screenshot_exc:
+        # Screenshot failed — try page text as fallback context.
         try:
-            ddm_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
+            page_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
         except Exception:
-            raise RuntimeError("Screenshot failed and DDM fallback also failed.")
-        truncated = ddm_text[:4000] + ("..." if len(ddm_text) > 4000 else "")
-        raise RuntimeError(f"Screenshot unavailable. Page text via DDM:\n\n{truncated}")
+            raise RuntimeError("Screenshot failed. Could not retrieve page text either.") from screenshot_exc
+        truncated = page_text[:4000] + ("..." if len(page_text) > 4000 else "")
+        raise RuntimeError(
+            f"Screenshot failed. Page text fallback:\n\n{truncated}"
+        ) from screenshot_exc
 
 
 @mcp.tool()
@@ -451,13 +459,15 @@ async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = ""
     aid = _resolve_agent(profile=agent_id)
     try:
         cookie_list = json.loads(cookies)
-    except json.JSONDecodeError as e:
-        return f"Invalid JSON: {e}"
+    except json.JSONDecodeError:
+        return "Invalid JSON. Expected an array of cookie objects."
     if not isinstance(cookie_list, list):
         return "cookies must be a JSON array of cookie objects."
-    for c in cookie_list:
-        if not isinstance(c, dict) or not all(k in c for k in ("name", "value", "domain")):
-            return "Each cookie must have 'name', 'value', and 'domain' fields."
+    for i, c in enumerate(cookie_list):
+        if not isinstance(c, dict):
+            return f"Cookie at index {i} is not an object."
+        if not all(k in c for k in ("name", "value", "domain")):
+            return f"Cookie at index {i} missing required field(s). Need: name, value, domain."
     return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
 
 
