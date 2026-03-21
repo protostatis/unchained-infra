@@ -412,7 +412,6 @@ class Relay:
             message = msg.get("message", "")
             if session_id and message:
                 print(f"[relay] overlay follow-up from {agent_id}: {message[:60]}")
-                # Forward to web via internal HTTP
                 import aiohttp
                 try:
                     async with aiohttp.ClientSession() as sess:

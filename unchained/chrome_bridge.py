@@ -1502,6 +1502,24 @@ class Agent:
     _overlay_session: dict = {}  # session_id → {tab_id, nonce, prompt}
     _overlay_poll_task: dict = {}  # session_id → asyncio.Task
 
+    async def _cdp_send_recv(self, chrome_ws, msg_id: int, method: str, params: dict, timeout: float = 5.0):
+        """Send a CDP command and wait for the matching response by ID.
+
+        Discards interleaved domain events (no 'id' field) to avoid
+        consuming stale events meant for other handlers.
+        """
+        await chrome_ws.send(json.dumps({"id": msg_id, "method": method, "params": params}))
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
+            raw = await asyncio.wait_for(chrome_ws.recv(), timeout=remaining)
+            resp = json.loads(raw)
+            if resp.get("id") == msg_id:
+                return resp
+            # Discard domain events (no id) and mismatched responses
+
     async def _handle_overlay_inject(self, msg: dict):
         """Inject the overlay copilot panel into a local Chrome tab."""
         session_id = msg.get("session_id", "")
@@ -1533,21 +1551,11 @@ class Agent:
             }
 
             # Inject overlay JS
-            await chrome_ws.send(json.dumps({
-                "id": 1,
-                "method": "Runtime.evaluate",
-                "params": {"expression": overlay_js},
-            }))
-            await chrome_ws.recv()  # consume result
+            await self._cdp_send_recv(chrome_ws, 1, "Runtime.evaluate", {"expression": overlay_js})
 
             # Register bootstrap for navigation persistence
             if bootstrap_js:
-                await chrome_ws.send(json.dumps({
-                    "id": 2,
-                    "method": "Page.addScriptToEvaluateOnNewDocument",
-                    "params": {"source": bootstrap_js},
-                }))
-                await chrome_ws.recv()
+                await self._cdp_send_recv(chrome_ws, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": bootstrap_js})
 
             log.info("[overlay] Injected overlay for %s on tab %s", session_id, tab_id[:12])
 
@@ -1568,12 +1576,7 @@ class Agent:
         try:
             evt_json = json.dumps(event, separators=(",", ":"))
             js = f"(window.__uc_overlay_push && window.__uc_overlay_push({evt_json}))"
-            await chrome_ws.send(json.dumps({
-                "id": 99,
-                "method": "Runtime.evaluate",
-                "params": {"expression": js},
-            }))
-            await asyncio.wait_for(chrome_ws.recv(), timeout=5)
+            await self._cdp_send_recv(chrome_ws, 99, "Runtime.evaluate", {"expression": js})
         except Exception:
             pass  # tab may have navigated
 
@@ -1583,17 +1586,14 @@ class Agent:
         try:
             while True:
                 await asyncio.sleep(0.5)
-                if not self.ws or not chrome_ws.open:
+                if not self.ws or chrome_ws.closed:
                     break
                 try:
-                    await chrome_ws.send(json.dumps({
-                        "id": 100,
-                        "method": "Runtime.evaluate",
-                        "params": {"expression": poll_js, "returnByValue": True},
-                    }))
-                    resp = await asyncio.wait_for(chrome_ws.recv(), timeout=5)
-                    data = json.loads(resp)
-                    raw = data.get("result", {}).get("result", {}).get("value", "[]")
+                    resp = await self._cdp_send_recv(
+                        chrome_ws, 100, "Runtime.evaluate",
+                        {"expression": poll_js, "returnByValue": True},
+                    )
+                    raw = (resp or {}).get("result", {}).get("result", {}).get("value", "[]")
                     if raw and raw != "[]":
                         msgs = json.loads(raw)
                         for m in msgs:

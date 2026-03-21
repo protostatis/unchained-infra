@@ -81,13 +81,11 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
             overlay.tab_id = tab_id
             if slot is not None:
                 overlay.slot = slot
-        overlay.injected = True
-
         # Send to bridge via agent WS
         agent_ws = core._chat_agents.get(agent_id)
         if agent_ws and not agent_ws.closed:
             import asyncio
-            async def _send():
+            async def _send_and_activate():
                 try:
                     await agent_ws.send_json({
                         "type": "overlay_inject",
@@ -98,10 +96,18 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                         "nonce": nonce,
                         "prompt": prompt_text[:500],
                     })
-                    print(f"[overlay] Sent overlay_inject to bridge for {session_id}")
+                    # Wait for bridge to inject before marking active
+                    await asyncio.sleep(2)
+                    overlay.injected = True
+                    # Drain any events buffered during injection
+                    from web_app.handlers.overlay_ws import broadcast_to_overlay
+                    for evt in overlay.pending_events:
+                        broadcast_to_overlay(session_id, evt)
+                    overlay.pending_events.clear()
+                    print(f"[overlay] Overlay active for {session_id}")
                 except Exception as e:
                     print(f"[overlay] Failed to send overlay_inject: {e}")
-            asyncio.create_task(_send())
+            asyncio.create_task(_send_and_activate())
         else:
             print(f"[overlay] No agent WS for {agent_id} — overlay not injected")
     except Exception as e:
