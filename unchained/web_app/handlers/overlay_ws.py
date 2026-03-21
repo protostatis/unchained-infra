@@ -161,6 +161,13 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         print(f"[overlay] follow-up send failed: {e}")
         return
 
+    # Re-inject overlay on the agent's current tab (may have changed)
+    try:
+        from web_app.handlers.chat_stream import _maybe_inject_overlay
+        _maybe_inject_overlay(core, session_id, agent_id, "auto", message)
+    except Exception:
+        pass
+
     # Agent responses arrive on the response_queues[session_id] via
     # the chat WS handler. If no SSE consumer is active (parent browser
     # closed), we need a background task to drain and broadcast them.
