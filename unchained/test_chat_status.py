@@ -353,11 +353,32 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                 _ensure_research_desk_server_running("/usr/bin/python3")
         mock_spawn.assert_not_called()
 
+    def test_research_desk_bridge_start_uses_timeout(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=False):
+            with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                    with patch("chat_agent_cli.os.path.isfile", return_value=False):
+                        with patch("chat_agent_cli._run_logged", return_value=0) as mock_run:
+                            _ensure_research_desk_bridge_running("/usr/bin/python3")
+        self.assertEqual(mock_run.call_args.kwargs.get("timeout_seconds"), 20.0)
+
+    def test_research_desk_server_start_logs_detached_output(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=False):
+            with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                    with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+                        _ensure_research_desk_server_running("/usr/bin/python3")
+        self.assertEqual(
+            mock_spawn.call_args.kwargs.get("log_path"),
+            os.path.join(os.path.expanduser("~/.unchained"), "research-desk-serve.log"),
+        )
+
     def test_research_desk_install_helper_runs_setup_and_bootstrap(self):
         commands: list[list[str]] = []
 
-        def fake_run_logged(cmd, *, cwd):
+        def fake_run_logged(cmd, *, cwd, timeout_seconds=None):
             del cwd
+            del timeout_seconds
             commands.append(list(cmd))
             return 0
 
@@ -414,6 +435,7 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                 "8766",
             ],
             cwd=ANY,
+            log_path=os.path.join(os.path.expanduser("~/.unchained"), "research-desk-serve.log"),
         )
 
 
