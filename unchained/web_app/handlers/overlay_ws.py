@@ -80,6 +80,8 @@ def broadcast_to_overlay(session_id: str, event: dict) -> None:
     """Push an event to all overlay WS subscribers for a session.
 
     Safe to call from sync or async context — Queue.put_nowait is used.
+    Note: index-based dead-queue cleanup is safe because this runs in
+    a single-threaded asyncio event loop (no concurrent mutation).
     """
     core = _core()
     subscribers = core._overlay_subscribers.get(session_id)
