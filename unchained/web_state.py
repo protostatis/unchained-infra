@@ -29,6 +29,7 @@ class OverlaySessionState:
     subscriber: asyncio.Queue | None = None  # at most ONE active WS
     injected: bool = False
     bootstrap_id: str = ""  # Page.addScriptToEvaluateOnNewDocument identifier
+    pending_events: list = field(default_factory=list)  # buffered before WS connects (max 50)
 
 
 @dataclass
