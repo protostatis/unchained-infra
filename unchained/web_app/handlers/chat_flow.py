@@ -345,6 +345,52 @@ async def handle_chat_update_client(request: web.Request) -> web.Response:
     )
 
 
+async def handle_chat_install_research_desk(request: web.Request) -> web.Response:
+    """POST /web/chat/install-research-desk — ask the local client to install Research Desk."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    agent_id = str(auth_info.get("agent_id", "") or "").strip()
+    if not agent_id:
+        return web.json_response({"error": "agent_id required"}, status=400)
+    ws = core._chat_agents.get(agent_id)
+    if ws is None or ws.closed:
+        return web.json_response({"error": "Your local client is offline."}, status=503)
+
+    caps = core._chat_agent_caps.get(agent_id, {})
+    if not bool(caps.get("remote_research_desk_install")):
+        return web.json_response(
+            {
+                "error": (
+                    "This local client package does not support one-click Research Desk install yet. "
+                    "Run the Research Desk install steps manually, then retry."
+                )
+            },
+            status=409,
+        )
+
+    resp = await agent_request(agent_id, {"type": "install_research_desk"}, timeout=4)
+    if not resp:
+        return web.json_response(
+            {"error": "Timed out waiting for the local client to start the Research Desk install."},
+            status=504,
+        )
+    if resp.get("type") == "install_research_desk_ok":
+        return web.json_response(
+            {
+                "ok": True,
+                "status": str(resp.get("status") or "installing"),
+                "launcher_prefix": str(resp.get("launcher_prefix") or "python3 -m unchained_pyreplab"),
+            }
+        )
+    return web.json_response(
+        {"error": str(resp.get("error") or "Local Research Desk install failed to start.")},
+        status=500,
+    )
+
+
 async def handle_chat_history(request: web.Request) -> web.Response:
     """GET /web/chat/history — proxy to agent for local chat history."""
     core = _core()

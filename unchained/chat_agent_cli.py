@@ -26,11 +26,13 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import shutil
 import sys
 import tempfile
 import time
+from urllib.parse import urlparse
 import uuid
 
 sys.path.insert(0, os.path.expanduser("~/Projects/unchained/unchained"))
@@ -731,6 +733,102 @@ def _spawn_remote_update() -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
     return True, ""
+
+
+def _research_desk_python_binary() -> str:
+    python3_bin = shutil.which("python3")
+    if python3_bin:
+        return python3_bin
+    return sys.executable
+
+
+def _research_desk_launcher_prefix() -> str:
+    python_bin = _research_desk_python_binary()
+    if os.path.basename(python_bin) == "python3" and " " not in python_bin:
+        return "python3 -m unchained_pyreplab"
+    return f"{shlex.quote(python_bin)} -m unchained_pyreplab"
+
+
+_DEFAULT_RESEARCH_DESK_PACKAGE_URL = (
+    "https://github.com/protostatis/unchained_pyreplab/archive/"
+    "ac3d8164f9bacb4d674615c7e46ac9e370f2dc3a.zip"
+)
+_RESEARCH_DESK_PACKAGE_URL_RE = re.compile(
+    r"^/protostatis/unchained_pyreplab/archive/"
+    r"(?:refs/tags/[A-Za-z0-9._-]+|[0-9a-f]{7,40})\.zip$"
+)
+
+
+def _is_allowed_research_desk_package_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "github.com"
+        and bool(_RESEARCH_DESK_PACKAGE_URL_RE.match(parsed.path))
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _research_desk_package_url() -> str:
+    override = os.environ.get("UNCHAINED_RESEARCH_DESK_PACKAGE_URL", "").strip()
+    if not override:
+        return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
+    if _is_allowed_research_desk_package_url(override):
+        return override
+    log.warning(
+        "[research-desk-install] ignoring invalid package override: %s",
+        override,
+    )
+    return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
+
+
+def _remote_research_desk_install_supported() -> bool:
+    return bool(_research_desk_python_binary())
+
+
+def _run_research_desk_install_helper():
+    """Detached helper that installs or upgrades the Research Desk package."""
+    python_bin = _research_desk_python_binary()
+    package_url = _research_desk_package_url()
+    install_cmd = [python_bin, "-m", "pip", "install", "--user", "--upgrade", package_url]
+    log.info(
+        "[research-desk-install] helper starting (python=%s package=%s)",
+        python_bin,
+        package_url,
+    )
+    rc = _run_logged(install_cmd, cwd=_agent_root())
+    if rc != 0:
+        log.error("[research-desk-install] install command failed with exit code %s", rc)
+        raise SystemExit(rc)
+    log.info("[research-desk-install] install completed")
+
+
+def _spawn_remote_research_desk_install() -> tuple[bool, str, str]:
+    """Launch a detached helper that installs Research Desk locally."""
+    helper_env = dict(os.environ)
+    helper_env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    helper_env.setdefault("PYTHONUTF8", "1")
+    helper_cmd = [sys.executable, os.path.abspath(__file__), "--research-desk-install-helper"]
+    kwargs = {
+        "cwd": _agent_root(),
+        "env": helper_env,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        flags = 0
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(helper_cmd, **kwargs)
+    except Exception as e:
+        return False, str(e), ""
+    return True, "", _research_desk_launcher_prefix()
 
 
 SYSTEM_PROMPT = f"""You are an autonomous browser agent controlling a real Chrome browser via CDP tools.
@@ -1982,6 +2080,7 @@ async def main():
                     "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
                     "client_version": _local_version(),
                     "remote_update": True,
+                    "remote_research_desk_install": _remote_research_desk_install_supported(),
                 },
             }))
             resp = json.loads(await ws.recv())
@@ -2162,6 +2261,22 @@ async def main():
                             "req_id": req_id,
                             "error": err or "Could not start update helper.",
                         }))
+                elif msg.get("type") == "install_research_desk":
+                    req_id = msg.get("req_id", "")
+                    ok, err, launcher_prefix = _spawn_remote_research_desk_install()
+                    if ok:
+                        await ws.send(json.dumps({
+                            "type": "install_research_desk_ok",
+                            "req_id": req_id,
+                            "status": "installing",
+                            "launcher_prefix": launcher_prefix,
+                        }))
+                    else:
+                        await ws.send(json.dumps({
+                            "type": "install_research_desk_error",
+                            "req_id": req_id,
+                            "error": err or "Could not start Research Desk install helper.",
+                        }))
 
         except Exception as e:
             log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
@@ -2204,5 +2319,7 @@ def _run():
 if __name__ == "__main__":
     if "--self-update-helper" in sys.argv[1:]:
         _run_self_update_helper()
+    elif "--research-desk-install-helper" in sys.argv[1:]:
+        _run_research_desk_install_helper()
     else:
         _run()

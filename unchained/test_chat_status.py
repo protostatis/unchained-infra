@@ -13,6 +13,12 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from agent_package import VERSION
+from chat_agent_cli import (
+    _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
+    _research_desk_launcher_prefix,
+    _research_desk_package_url,
+)
 import web
 
 
@@ -99,7 +105,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         web._chat_agents["claude-updated"] = SimpleNamespace(closed=False)
         web._chat_agent_users["claude-updated"] = "u-test"
         web._chat_agent_caps["claude-updated"] = {
-            "client_version": "0.3.46",
+            "client_version": VERSION,
             "remote_update": True,
         }
 
@@ -108,7 +114,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         data = json.loads(response.body.decode())
 
         self.assertTrue(data["client_connected"])
-        self.assertEqual(data["client_version"], "0.3.46")
+        self.assertEqual(data["client_version"], VERSION)
         self.assertTrue(data["client_update_supported"])
         self.assertFalse(data["client_outdated"])
         self.assertFalse(data["client_update_required"])
@@ -145,7 +151,6 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web._authenticate")
     async def test_chat_update_client_rejects_current_client(self, mock_auth, mock_agent_request):
-        from agent_package import VERSION
         from web_app.handlers.chat_flow import handle_chat_update_client
 
         mock_auth.return_value = {
@@ -194,6 +199,64 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["ok"])
         mock_agent_request.assert_awaited_once()
 
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_install_research_desk_requires_supported_client(self, mock_auth, mock_agent_request):
+        from web_app.handlers.chat_flow import handle_chat_install_research_desk
+
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-nosupport",
+            "key_hash": "nosupport",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agents["claude-nosupport"] = SimpleNamespace(closed=False)
+        web._chat_agent_caps["claude-nosupport"] = {
+            "client_version": "0.3.45",
+            "remote_update": True,
+            "remote_research_desk_install": False,
+        }
+
+        response = await handle_chat_install_research_desk(SimpleNamespace())
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertIn("does not support", data["error"])
+        mock_agent_request.assert_not_awaited()
+
+    @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_install_research_desk_starts_remote_helper(self, mock_auth, mock_agent_request):
+        from web_app.handlers.chat_flow import handle_chat_install_research_desk
+
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-install",
+            "key_hash": "install",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agents["claude-install"] = SimpleNamespace(closed=False)
+        web._chat_agent_caps["claude-install"] = {
+            "client_version": "0.3.45",
+            "remote_update": True,
+            "remote_research_desk_install": True,
+        }
+        mock_agent_request.return_value = {
+            "type": "install_research_desk_ok",
+            "status": "installing",
+            "launcher_prefix": "python3 -m unchained_pyreplab",
+        }
+
+        response = await handle_chat_install_research_desk(SimpleNamespace())
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["launcher_prefix"], "python3 -m unchained_pyreplab")
+        mock_agent_request.assert_awaited_once()
+
 
 class TestLocalChatTemplate(unittest.TestCase):
     """Protect local-chat status markers in the exported HTML."""
@@ -214,6 +277,35 @@ class TestLocalChatTemplate(unittest.TestCase):
             "else if (clientUpdateSawDisconnect || !data.client_outdated) {",
             web.CLAUDE_CHAT_HTML,
         )
+
+
+class TestResearchDeskInstallHelpers(unittest.TestCase):
+    def test_research_desk_package_url_rejects_invalid_override(self):
+        with patch.dict(
+            os.environ,
+            {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": "https://evil.example.com/pkg.zip"},
+            clear=False,
+        ):
+            self.assertEqual(_research_desk_package_url(), _DEFAULT_RESEARCH_DESK_PACKAGE_URL)
+
+    def test_research_desk_package_url_accepts_pinned_github_archive(self):
+        override = (
+            "https://github.com/protostatis/unchained_pyreplab/archive/"
+            "refs/tags/v0.1.0.zip"
+        )
+        with patch.dict(
+            os.environ,
+            {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": override},
+            clear=False,
+        ):
+            self.assertEqual(_research_desk_package_url(), override)
+
+    def test_research_desk_launcher_prefix_quotes_spaced_python_paths(self):
+        with patch("chat_agent_cli._research_desk_python_binary", return_value="/tmp/odd path/python3"):
+            self.assertEqual(
+                _research_desk_launcher_prefix(),
+                "'/tmp/odd path/python3' -m unchained_pyreplab",
+            )
 
 
 if __name__ == "__main__":
