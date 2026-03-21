@@ -355,8 +355,10 @@ class Relay:
                 msg = json.loads(raw)
                 await self._handle_agent_message(agent_id, msg)
 
-        except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
-            pass
+        except asyncio.TimeoutError:
+            print(f"[relay] agent {agent_id} timed out")
+        except websockets.exceptions.ConnectionClosed as exc:
+            print(f"[relay] agent {agent_id} connection closed: code={exc.code} reason={exc.reason!r}")
         finally:
             if agent_id:
                 self.agents.pop(agent_id, None)
@@ -381,10 +383,13 @@ class Relay:
             # Respond to heartbeat
             agent_ws = self.agents.get(agent_id)
             if agent_ws:
-                await agent_ws.send(json.dumps({
-                    "type": "pong",
-                    "ts": msg.get("ts", time.time()),
-                }))
+                try:
+                    await agent_ws.send(json.dumps({
+                        "type": "pong",
+                        "ts": msg.get("ts", time.time()),
+                    }))
+                except Exception:
+                    pass  # Connection closing — don't kill the message loop
         elif t == "http_response":
             # Resolve pending HTTP proxy future
             req_id = msg.get("req_id")
