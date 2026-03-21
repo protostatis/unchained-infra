@@ -1388,12 +1388,11 @@ async def handle_robots_txt(request: web.Request) -> web.Response:
     body = (
         "User-agent: *\n"
         "Allow: /\n"
-        "Disallow: /admin\n"
+        "Disallow: /admin/\n"
         "Disallow: /web/\n"
         "Disallow: /auth/\n"
         "Disallow: /chat/ws\n"
         "Disallow: /install/\n"
-        "Disallow: /trial/\n"
         "\n"
         "Sitemap: https://unchainedsky.com/sitemap.xml\n"
     )

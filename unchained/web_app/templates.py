@@ -925,7 +925,7 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <meta property="og:title" content="Unchained — Browser Automation with Raw CDP">
 <meta property="og:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
 <meta property="og:site_name" content="Unchained">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Unchained — Browser Automation with Raw CDP">
 <meta name="twitter:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
