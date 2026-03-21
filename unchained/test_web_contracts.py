@@ -89,6 +89,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/labs/x-manager/run"),
             ("GET", "/web/chat/status"),
             ("POST", "/web/chat/update-client"),
+            ("POST", "/web/chat/install-research-desk"),
             ("GET", "/web/chat/history"),
             ("POST", "/web/chat/new"),
             ("GET", "/web/chat/slots"),
@@ -171,8 +172,12 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("data.local_urls?.home", html)
         self.assertIn("data.launch_ready", html)
         self.assertIn("data.missing.join(', ')", html)
+        self.assertIn('id="install-local-research-desk"', html)
+        self.assertIn("Install / Update Research Desk", html)
         self.assertIn('href="/install">Install Local Agent</a>', html)
-        self.assertIn("Use <a href=\"/install\" style=\"color:var(--accent)\">the installer flow</a>", html)
+        self.assertIn("If the Unchained local client is not installed yet", html)
+        self.assertIn("python3 -m unchained_pyreplab bridge-start", html)
+        self.assertIn("python3 -m unchained_pyreplab serve --open --reload", html)
         self.assertIn("safeLocalUrl", html)
         self.assertIn("'launch_ready' in (data||{})", html)
         self.assertIn("Boolean(data.launch_ready)", html)
@@ -182,7 +187,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("POLL_INTERVAL_MS = 3000", html)
         self.assertIn("scheduleDeskProbe()", html)
         self.assertIn("renderMissingDeskState()", html)
-        self.assertIn("chip('install: /install')", html)
+        self.assertIn("chip('agent install: /install')", html)
         self.assertIn("let deskLoadInFlight = false", html)
         self.assertIn("let latestDeskRequestId = 0", html)
         self.assertIn("let deskWasDetected = false", html)
@@ -191,6 +196,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("requestId!==latestDeskRequestId", html)
         self.assertIn("opts.silent&&deskWasDetected", html)
         self.assertIn("Install or start the local desk, then click Check Again.", html)
+        self.assertIn("RESEARCH_DESK_LAUNCHER_FALLBACK = 'python3 -m unchained_pyreplab'", html)
         self.assertIn("async function fetchLocalJson(url)", html)
         self.assertIn("signal:AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS)", html)
         self.assertIn("const statusData=await fetchLocalJson(STATUS_URL)", html)
@@ -262,6 +268,8 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("String(reviewedPageCount > 0 ? ('pages '+reviewedPageCount) : 'pages pending')", html)
         self.assertIn("latestDeskStatus?.handshake?.actions?.mission_advance_url", html)
         self.assertIn("setMissionAdvanceReady", html)
+        self.assertIn("fetch('/web/chat/install-research-desk',{method:'POST',credentials:'include',cache:'no-store'})", html)
+        self.assertIn("Research Desk install started. When it finishes, run `'+launcherPrefix+' setup`", html)
         self.assertIn("requested_scope:'mission:create mission:advance'", html)
         self.assertIn("document.getElementById('run-local-next-step')?.addEventListener('click'", html)
         self.assertIn("This mission is ready for Lab Notes. Continue there or keep the local desk open for deeper analysis.", html)
