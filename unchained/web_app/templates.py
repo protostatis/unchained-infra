@@ -917,17 +917,20 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unchained — Browser Automation with Raw Chrome DevTools Protocol</title>
-<meta name="description" content="Control your browser with AI. Unchained gives Claude, Gemini, and Codex direct access to Chrome via raw CDP — no Puppeteer, no Playwright, no wrappers.">
+<title>Unchained — AI Browser Agent for Everyday Web Tasks</title>
+<meta name="description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you — using your real browser, your real logins, no copy-paste.">
 <link rel="canonical" href="https://unchainedsky.com/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://unchainedsky.com/">
-<meta property="og:title" content="Unchained — Browser Automation with Raw CDP">
-<meta property="og:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
+<meta property="og:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta property="og:description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you — using your real browser.">
 <meta property="og:site_name" content="Unchained">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Unchained — Browser Automation with Raw CDP">
-<meta name="twitter:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
+<meta name="twitter:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta name="twitter:description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you.">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Unchained","url":"https://unchainedsky.com","applicationCategory":"BrowserApplication","operatingSystem":"macOS, Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"AI browser agent that searches, compares, and monitors the web for you. Works with your real browser and your real logins."}
+</script>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Cormorant+Garamond:ital,wght@0,400;1,400&display=swap');
@@ -2234,6 +2237,546 @@ a:hover{text-decoration:underline}
 
 </body>
 </html>"""
+
+
+# ---------------------------------------------------------------------------
+# Shared CSS for use-case landing pages
+# ---------------------------------------------------------------------------
+
+_USE_CASE_CSS = r"""
+*{margin:0;padding:0;box-sizing:border-box}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+:root{
+  --bg:#0a0a0f;--surface:#111119;--subtle:#222;
+  --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
+  --text:#e8e8ec;--muted:#666;
+}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow-x:hidden;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;z-index:0;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.hero{
+  position:relative;z-index:1;
+  max-width:800px;margin:0 auto;padding:120px 24px 80px;
+  text-align:center;
+}
+.hero-back{
+  display:inline-block;margin-bottom:32px;
+  font-size:13px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;
+  text-decoration:none;
+}
+.hero-back:hover{color:var(--accent);text-decoration:none}
+.hero h1{
+  font-size:clamp(28px,5vw,44px);font-weight:700;
+  line-height:1.2;margin-bottom:20px;
+}
+.hero h1 span{color:var(--accent)}
+.hero .subtitle{
+  font-size:clamp(16px,2.5vw,20px);
+  color:var(--muted);line-height:1.6;max-width:560px;margin:0 auto;
+}
+.segment{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:0 24px 64px;
+}
+.segment-label{
+  font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;
+  color:var(--accent);margin-bottom:12px;
+}
+.segment h2{
+  font-size:clamp(20px,3.5vw,28px);font-weight:600;margin-bottom:24px;
+}
+.chat{
+  background:#1a1a2e;border:1px solid var(--subtle);
+  border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px;
+  margin-bottom:24px;
+}
+.bubble{
+  max-width:88%;padding:12px 16px;border-radius:14px;
+  font-size:14px;line-height:1.6;word-break:break-word;
+}
+.bubble.user{
+  align-self:flex-end;background:#2a1a3e;border:1px solid #3a2a5e;
+  border-bottom-right-radius:4px;color:#eee;
+}
+.bubble.asst{
+  align-self:flex-start;background:#1e2a3e;border:1px solid #2a3a5e;
+  border-bottom-left-radius:4px;color:#eee;
+}
+.bubble table{
+  width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;
+}
+.bubble th,.bubble td{
+  text-align:left;padding:6px 10px;border-bottom:1px solid #2a3a5e;
+}
+.bubble th{color:var(--accent);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+.bubble ul,.bubble ol{margin:8px 0 8px 18px}
+.bubble li{margin:4px 0;font-size:13px;line-height:1.5}
+.bubble strong{font-weight:600}
+.callout{
+  display:flex;align-items:center;gap:14px;
+  background:var(--surface);border:1px solid var(--subtle);
+  border-left:3px solid var(--accent);
+  border-radius:0 12px 12px 0;padding:16px 20px;
+  margin-bottom:24px;
+}
+.callout-icon{font-size:24px;flex-shrink:0}
+.callout-text{font-size:14px;font-weight:500;letter-spacing:0.3px}
+.cta-section{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:40px 24px 100px;
+  text-align:center;
+}
+.cta-section h2{
+  font-size:clamp(22px,4vw,32px);font-weight:600;margin-bottom:12px;
+}
+.cta-section p{
+  color:var(--muted);font-size:15px;line-height:1.7;margin-bottom:32px;
+}
+.cta-buttons{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.cta-btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:14px 32px;border-radius:8px;
+  font-size:15px;font-weight:600;letter-spacing:0.5px;
+  text-decoration:none;transition:all 0.2s;
+}
+.cta-btn:hover{text-decoration:none}
+.cta-btn.primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.cta-btn.primary:hover{box-shadow:0 0 30px var(--accent-glow);opacity:0.9}
+.cta-btn.secondary{background:transparent;color:var(--text);border:1px solid #444}
+.cta-btn.secondary:hover{border-color:#666}
+.footer{
+  position:relative;z-index:1;
+  text-align:center;padding:0 24px 48px;
+  color:var(--muted);font-size:12px;letter-spacing:1px;
+}
+.footer-links{display:flex;gap:24px;justify-content:center;margin-bottom:16px}
+.footer-links a{color:var(--muted);text-decoration:none;font-size:13px;letter-spacing:0.5px;transition:color 0.15s}
+.footer-links a:hover{color:var(--accent)}
+@media(max-width:640px){
+  .hero{padding:80px 16px 48px}
+  .segment{padding:0 16px 48px}
+  .bubble{max-width:95%;font-size:13px}
+  .bubble table{font-size:11px}
+  .bubble th,.bubble td{padding:4px 6px}
+  .cta-buttons{flex-direction:column;align-items:center}
+}
+"""
+
+_USE_CASE_FOOTER = r"""
+<div class="cta-section">
+  <h2>Your browser agent, ready when you are</h2>
+  <p>Works with your real browser, your real logins, and your real data. No screenshots, no copy-paste&mdash;just tell it what to do.</p>
+  <div class="cta-buttons">
+    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="footer-links">
+    <a href="/">Home</a>
+    <a href="/first-look">Demo</a>
+    <a href="/trial">Free Tier</a>
+    <a href="/mcp">MCP</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
+  </div>
+  <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
+</div>
+
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Use Case: Apartment Hunting
+# ---------------------------------------------------------------------------
+
+USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Apartment Search Assistant &mdash; Unchained</title>
+<meta name="description" content="Find your next apartment in seconds. Unchained searches Zillow, Apartments.com, and Craigslist with your exact criteria and delivers a ranked shortlist.">
+<link rel="canonical" href="https://unchainedsky.com/use/apartment-hunting">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/use/apartment-hunting">
+<meta property="og:title" content="AI Apartment Search Assistant &mdash; Unchained">
+<meta property="og:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="AI Apartment Search Assistant &mdash; Unchained">
+<meta name="twitter:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HowTo","name":"Find an apartment with AI","description":"Use Unchained to search rental listings across multiple sites with your exact criteria.","step":[{"@type":"HowToStep","name":"Tell the agent what you need","text":"Describe your budget, neighborhood, bedrooms, and must-haves in plain English."},{"@type":"HowToStep","name":"Agent searches listing sites","text":"Unchained browses Zillow, Apartments.com, and Craigslist in real time."},{"@type":"HowToStep","name":"Get a ranked shortlist","text":"Review a comparison table with prices, features, and direct links."}]}
+</script>
+<style>""" + _USE_CASE_CSS + r"""</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>AI <span>Apartment Search</span> Assistant</h1>
+  <p class="subtitle">Describe what you want. The agent searches Zillow, Apartments.com, and Craigslist&mdash;and delivers a ranked shortlist in seconds.</p>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Describe Your Criteria</h2>
+  <div class="chat">
+    <div class="bubble user">Find me a 2BR apartment in downtown Chicago under $2,000/mo. Must have in-unit laundry and allow cats.</div>
+    <div class="bubble asst">
+      <p>I&rsquo;ll search Zillow, Apartments.com, and Craigslist for 2BR units in downtown Chicago under $2,000 with in-unit laundry and cat-friendly policies. Searching now&hellip;</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128269;</div>
+    <div class="callout-text">Natural language&mdash;no filters to configure, no forms to fill out. Just say what you need.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Get a Ranked Comparison</h2>
+  <div class="chat">
+    <div class="bubble asst">
+      <strong>Top matches across 3 sites:</strong>
+      <table>
+        <tr><th>Address</th><th>Rent</th><th>Sqft</th><th>Highlights</th></tr>
+        <tr><td>1420 S Michigan Ave #2F</td><td>$1,850</td><td>950</td><td>In-unit W/D, cat OK, gym, rooftop</td></tr>
+        <tr><td>800 S Wells St #1204</td><td>$1,925</td><td>880</td><td>In-unit W/D, cat OK, doorman, pool</td></tr>
+        <tr><td>1515 S Prairie Ave #3B</td><td>$1,775</td><td>910</td><td>In-unit W/D, 2 cats OK, parking incl</td></tr>
+        <tr><td>233 E 13th St #5A</td><td>$1,990</td><td>1,020</td><td>In-unit W/D, cat OK, balcony, new reno</td></tr>
+      </table>
+      <p>All 4 match your criteria. The <strong>1515 S Prairie</strong> unit is the best value at $1,775 with parking included. Want me to dig deeper on any of these?</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128200;</div>
+    <div class="callout-text">Compares results from multiple sites side-by-side&mdash;something no single listing site can do.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Drill Down on Favorites</h2>
+  <div class="chat">
+    <div class="bubble user">Tell me more about 1515 S Prairie. What&rsquo;s the neighborhood like? Is parking garage or outdoor?</div>
+    <div class="bubble asst">
+      <p><strong>1515 S Prairie Ave #3B</strong></p>
+      <ul>
+        <li><strong>Neighborhood:</strong> South Loop&mdash;walk score 92, transit score 88. Steps from Grant Park and the lakefront trail.</li>
+        <li><strong>Parking:</strong> Indoor heated garage, assigned spot included in rent.</li>
+        <li><strong>Building:</strong> 2019 build, 6 floors, secured entry, package room.</li>
+        <li><strong>Lease:</strong> 12-month, available May 1. Application fee $50.</li>
+      </ul>
+      <p>This is well below comparable units in the area ($1,900&ndash;$2,200). The listing has been up for 3 days&mdash;likely to move fast.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#127968;</div>
+    <div class="callout-text">Goes beyond the listing&mdash;pulls neighborhood data, building details, and market context in one step.</div>
+  </div>
+</div>
+
+""" + _USE_CASE_FOOTER
+
+
+# ---------------------------------------------------------------------------
+# Use Case: Flight Price Comparison
+# ---------------------------------------------------------------------------
+
+USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Flight Price Comparison &mdash; Unchained</title>
+<meta name="description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds. Unchained finds the cheapest options and shows tradeoffs.">
+<link rel="canonical" href="https://unchainedsky.com/use/flight-comparison">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/use/flight-comparison">
+<meta property="og:title" content="AI Flight Price Comparison &mdash; Unchained">
+<meta property="og:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="AI Flight Price Comparison &mdash; Unchained">
+<meta name="twitter:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HowTo","name":"Compare flight prices with AI","description":"Use Unchained to search multiple flight booking sites and find the best deal.","step":[{"@type":"HowToStep","name":"Tell the agent your trip","text":"Describe your dates, destination, and preferences."},{"@type":"HowToStep","name":"Agent searches booking sites","text":"Unchained checks Google Flights and airline sites in real time."},{"@type":"HowToStep","name":"Get ranked options with tradeoffs","text":"Review a comparison showing price, duration, stops, and recommendations."}]}
+</script>
+<style>""" + _USE_CASE_CSS + r"""</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>AI <span>Flight Price</span> Comparison</h1>
+  <p class="subtitle">Tell it where you&rsquo;re going. The agent searches Google Flights, Kayak, and airline sites&mdash;and ranks the best options with tradeoffs.</p>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Describe Your Trip</h2>
+  <div class="chat">
+    <div class="bubble user">Find the cheapest round-trip flights from Chicago to Tokyo, departing mid-June, returning early July. Flexible on dates by a few days.</div>
+    <div class="bubble asst">
+      <p>Searching Google Flights for ORD &rarr; TYO/NRT/HND, mid-June to early July, with flexible dates. Checking nonstop and 1-stop options&hellip;</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#9992;&#65039;</div>
+    <div class="callout-text">No forms, no date pickers, no airport codes. Describe your trip in plain English.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Compare Options with Tradeoffs</h2>
+  <div class="chat">
+    <div class="bubble asst">
+      <strong>Best round-trip options (ORD &rarr; NRT):</strong>
+      <table>
+        <tr><th>Airline</th><th>Price</th><th>Stops</th><th>Duration</th><th>Dates</th></tr>
+        <tr><td>EVA Air</td><td>$1,462</td><td>1 (TPE)</td><td>18h 20m</td><td>Jun 14 &ndash; Jul 2</td></tr>
+        <tr><td>ANA</td><td>$1,680</td><td>Nonstop</td><td>13h 10m</td><td>Jun 16 &ndash; Jul 3</td></tr>
+        <tr><td>United</td><td>$2,121</td><td>Nonstop</td><td>13h 25m</td><td>Jun 15 &ndash; Jul 1</td></tr>
+        <tr><td>JAL</td><td>$1,538</td><td>1 (DFW)</td><td>17h 45m</td><td>Jun 13 &ndash; Jul 4</td></tr>
+      </table>
+      <p><strong>Best deal:</strong> EVA Air at $1,462&mdash;saves $659 vs. nonstop United. The layover in Taipei is 2h 15m (short, same terminal).</p>
+      <p><strong>Best nonstop:</strong> ANA at $1,680&mdash;$441 cheaper than United for similar flight time.</p>
+      <p><strong>Flexible date tip:</strong> Shifting departure to Jun 11 (Wednesday) drops EVA to $871.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128176;</div>
+    <div class="callout-text">Finds savings you&rsquo;d miss manually&mdash;like shifting departure by 3 days to save $591.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Get Booking Recommendations</h2>
+  <div class="chat">
+    <div class="bubble user">I want the ANA nonstop. Where should I book it?</div>
+    <div class="bubble asst">
+      <p>I checked ANA&rsquo;s direct site, Google Flights, and Kayak for the same itinerary:</p>
+      <ul>
+        <li><strong>ANA direct:</strong> $1,680 &mdash; includes seat selection, 2 checked bags, full cancellation within 24h</li>
+        <li><strong>Google Flights &rarr; ANA:</strong> $1,680 &mdash; same price, redirects to ANA site</li>
+        <li><strong>Kayak &rarr; Priceline:</strong> $1,644 &mdash; $36 cheaper but basic fare, no seat selection, 1 bag only</li>
+      </ul>
+      <p><strong>Recommendation:</strong> Book direct on ANA. The $36 Kayak savings isn&rsquo;t worth losing seat selection and a checked bag on a 13-hour flight.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#127919;</div>
+    <div class="callout-text">Compares not just prices but fare classes, baggage policies, and cancellation terms&mdash;so you book with confidence.</div>
+  </div>
+</div>
+
+""" + _USE_CASE_FOOTER
+
+
+# ---------------------------------------------------------------------------
+# Use Case: Competitor Monitoring
+# ---------------------------------------------------------------------------
+
+USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automated Competitor Monitoring with AI &mdash; Unchained</title>
+<meta name="description" content="Monitor your competitors automatically. Unchained checks pricing, new features, and market changes weekly and delivers a briefing.">
+<link rel="canonical" href="https://unchainedsky.com/use/competitor-monitoring">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/use/competitor-monitoring">
+<meta property="og:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
+<meta property="og:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
+<meta name="twitter:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HowTo","name":"Monitor competitors with AI","description":"Use Unchained to automatically track competitor pricing, features, and market positioning.","step":[{"@type":"HowToStep","name":"Name your competitors","text":"Tell the agent which businesses or products to track."},{"@type":"HowToStep","name":"Agent checks their sites","text":"Unchained visits competitor pages, pricing pages, and review sites."},{"@type":"HowToStep","name":"Get a structured briefing","text":"Review changes in pricing, new features, and customer sentiment."}]}
+</script>
+<style>""" + _USE_CASE_CSS + r"""</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>Automated <span>Competitor Monitoring</span></h1>
+  <p class="subtitle">Name your competitors. The agent checks their pricing, features, and reviews&mdash;and delivers a structured briefing you can act on.</p>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Define What to Track</h2>
+  <div class="chat">
+    <div class="bubble user">I run a med spa in Austin. Monitor my top 3 competitors: Westlake Dermatology, Skin Laundry, and Ever Clinic. Check their pricing, new services, and Google reviews weekly.</div>
+    <div class="bubble asst">
+      <p>Got it. I&rsquo;ll check these three competitors across their websites and Google Business profiles. Running the first scan now&hellip;</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128203;</div>
+    <div class="callout-text">No dashboard to configure. Describe what matters to your business and the agent handles the rest.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Get a Competitive Briefing</h2>
+  <div class="chat">
+    <div class="bubble asst">
+      <strong>Weekly Competitor Report &mdash; Austin Med Spas</strong>
+      <table>
+        <tr><th>Competitor</th><th>Botox (per unit)</th><th>Google Rating</th><th>Recent Change</th></tr>
+        <tr><td>Westlake Derm</td><td>$15</td><td>4.8 (312 reviews)</td><td>Added CoolSculpting Elite</td></tr>
+        <tr><td>Skin Laundry</td><td>$13</td><td>4.5 (89 reviews)</td><td>Summer promo: 20% off facials</td></tr>
+        <tr><td>Ever Clinic</td><td>$14</td><td>4.7 (156 reviews)</td><td>New location in South Austin</td></tr>
+      </table>
+      <p><strong>Key insights:</strong></p>
+      <ul>
+        <li>Skin Laundry undercuts on Botox ($13 vs. your $14)&mdash;but their Google rating is notably lower</li>
+        <li>Westlake added CoolSculpting Elite&mdash;consider whether to add or differentiate</li>
+        <li>Ever Clinic&rsquo;s South Austin location may compete for your zip codes</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128202;</div>
+    <div class="callout-text">Pulls pricing, ratings, and recent changes from live websites&mdash;not cached databases.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Schedule It to Run Automatically</h2>
+  <div class="chat">
+    <div class="bubble user">Perfect. Run this every Monday at 8am and email me the results.</div>
+    <div class="bubble asst">
+      <p>Scheduled. Every Monday at 8:00 AM CT, I&rsquo;ll:</p>
+      <ul>
+        <li>Visit all 3 competitor sites and Google Business listings</li>
+        <li>Compare pricing, services, and review trends</li>
+        <li>Flag anything that changed since last week</li>
+        <li>Email the briefing to your inbox</li>
+      </ul>
+      <p>You can also ask me to add competitors or change what I track anytime.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128260;</div>
+    <div class="callout-text">Set it and forget it. The agent runs on a schedule&mdash;no manual check-ins needed.</div>
+  </div>
+</div>
+
+""" + _USE_CASE_FOOTER
+
+
+# ---------------------------------------------------------------------------
+# Use Case: Price Tracking
+# ---------------------------------------------------------------------------
+
+USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Price Tracker &mdash; Compare Prices Across Sites &mdash; Unchained</title>
+<meta name="description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Unchained finds the best deal and tracks price drops for you.">
+<link rel="canonical" href="https://unchainedsky.com/use/price-tracking">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/use/price-tracking">
+<meta property="og:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
+<meta property="og:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
+<meta name="twitter:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"HowTo","name":"Compare prices across stores with AI","description":"Use Unchained to search multiple retailers and find the lowest price on any product.","step":[{"@type":"HowToStep","name":"Tell the agent what you want to buy","text":"Name the product or paste a link."},{"@type":"HowToStep","name":"Agent checks multiple retailers","text":"Unchained searches Amazon, Best Buy, Walmart, and other stores."},{"@type":"HowToStep","name":"Get the best deal","text":"See a comparison table and set up price drop alerts."}]}
+</script>
+<style>""" + _USE_CASE_CSS + r"""</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1>AI <span>Price Tracker</span></h1>
+  <p class="subtitle">Name what you want to buy. The agent checks Amazon, Best Buy, Walmart, and more&mdash;finds the best deal and watches for price drops.</p>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 1</div>
+  <h2>Name the Product</h2>
+  <div class="chat">
+    <div class="bubble user">I want the Sony WH-1000XM5 headphones. Find me the best price right now.</div>
+    <div class="bubble asst">
+      <p>Checking Amazon, Best Buy, Walmart, B&amp;H Photo, and Sony direct for the WH-1000XM5&hellip;</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128269;</div>
+    <div class="callout-text">Searches live retailer sites&mdash;not cached price databases that may be days behind.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 2</div>
+  <h2>Compare Across Retailers</h2>
+  <div class="chat">
+    <div class="bubble asst">
+      <strong>Sony WH-1000XM5 &mdash; current prices:</strong>
+      <table>
+        <tr><th>Store</th><th>Price</th><th>Shipping</th><th>Notes</th></tr>
+        <tr><td>Amazon</td><td>$278</td><td>Free (Prime)</td><td>Black &amp; Silver in stock</td></tr>
+        <tr><td>Best Buy</td><td>$279.99</td><td>Free</td><td>Open-box from $229</td></tr>
+        <tr><td>Walmart</td><td>$278</td><td>Free</td><td>3rd-party seller</td></tr>
+        <tr><td>B&amp;H Photo</td><td>$278</td><td>Free</td><td>No tax in most states</td></tr>
+        <tr><td>Sony Direct</td><td>$299.99</td><td>Free</td><td>Includes 1-year extended warranty</td></tr>
+      </table>
+      <p><strong>Best deal:</strong> B&amp;H Photo at $278 with no tax in most states. If you want the lowest absolute price, Best Buy open-box at $229 is $49 cheaper.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128176;</div>
+    <div class="callout-text">Catches details you&rsquo;d miss&mdash;like open-box deals, tax savings, and third-party seller flags.</div>
+  </div>
+</div>
+
+<div class="segment">
+  <div class="segment-label">Step 3</div>
+  <h2>Set a Price Drop Alert</h2>
+  <div class="chat">
+    <div class="bubble user">I&rsquo;m not in a rush. Let me know if it drops below $250 anywhere.</div>
+    <div class="bubble asst">
+      <p>Price alert set. I&rsquo;ll check Amazon, Best Buy, and B&amp;H daily. If the WH-1000XM5 drops below $250 at any of them, I&rsquo;ll notify you immediately with a direct link.</p>
+      <p>Historical note: this model has hit $248 twice in the last 6 months (Black Friday and a 1-day Amazon Lightning deal). A sub-$250 price is realistic within 4&ndash;6 weeks.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <div class="callout-icon">&#128276;</div>
+    <div class="callout-text">Monitors prices over time&mdash;so you don&rsquo;t have to keep checking manually.</div>
+  </div>
+</div>
+
+""" + _USE_CASE_FOOTER
 
 
 # ---------------------------------------------------------------------------

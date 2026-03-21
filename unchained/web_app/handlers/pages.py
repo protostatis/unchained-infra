@@ -420,6 +420,42 @@ async def handle_case_study_zillow(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_use_case_apartment(request: web.Request) -> web.Response:
+    """Serve apartment hunting use-case page (public, no auth)."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.USE_CASE_APARTMENT_HTML.replace("__CONTACT_EMAIL__", core.CONTACT_EMAIL)
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_use_case_flights(request: web.Request) -> web.Response:
+    """Serve flight comparison use-case page (public, no auth)."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.USE_CASE_FLIGHTS_HTML.replace("__CONTACT_EMAIL__", core.CONTACT_EMAIL)
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_use_case_competitor(request: web.Request) -> web.Response:
+    """Serve competitor monitoring use-case page (public, no auth)."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.USE_CASE_COMPETITOR_HTML.replace("__CONTACT_EMAIL__", core.CONTACT_EMAIL)
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_use_case_price_tracking(request: web.Request) -> web.Response:
+    """Serve price tracking use-case page (public, no auth)."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.USE_CASE_PRICE_TRACKING_HTML.replace("__CONTACT_EMAIL__", core.CONTACT_EMAIL)
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
 async def handle_privacy_page(request: web.Request) -> web.Response:
     """Serve public privacy policy page (required for OAuth provider submissions)."""
     core = _core()
