@@ -112,18 +112,24 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 overlay.pending_events.clear()
                 print(f"[overlay] Injected for {session_id} on tab {tab_id[:12]}")
 
-                # Poll outbox for follow-ups (500ms)
+                # Poll outbox for follow-ups (500ms) + re-inject if overlay lost
                 while True:
                     await asyncio.sleep(0.5)
                     o = core._overlay_sessions.get(session_id)
                     if not o or not o.injected:
                         break
                     try:
+                        # Check if overlay exists + drain outbox in one call
                         raw = await cloud_tools.run_js(
                             agent_id, tab_id,
-                            "(function(){var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
+                            "(function(){if(!document.getElementById('__uc_overlay_host'))return '__REINJECT__';"
+                            "var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
                             relay_host, relay_port,
                         )
+                        if raw == "__REINJECT__":
+                            # Overlay lost (navigation cleared DOM) — re-inject
+                            await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                            continue
                         if raw and raw != "[]":
                             from web_app.handlers.overlay_ws import _route_followup
                             msgs = json.loads(raw)
