@@ -69,6 +69,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/labs/you-navigate/run", "web_app.handlers.x_manager_demo:handle_x_manager_demo_run"),
     ("POST", "/web/labs/x-manager/run", "web_app.handlers.x_manager_demo:handle_x_manager_demo_run"),
     ("GET", "/chat/ws", "web_app.handlers.chat_stream:handle_chat_ws"),
+    ("GET", "/overlay/ws", "web_app.handlers.overlay_ws:handle_overlay_ws"),
     ("POST", "/web/chat", "web_app.handlers.chat_stream:handle_chat_msg"),
     ("POST", "/web/chat/cancel", "web_app.handlers.chat_stream:handle_chat_cancel"),
     ("GET", "/web/chat/status", "web_app.handlers.chat_flow:handle_chat_status"),

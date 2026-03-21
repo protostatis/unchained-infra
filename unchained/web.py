@@ -682,6 +682,11 @@ _gemini_cleanup_task: asyncio.Task | None = None
 _scheduler_turn_grants = _state.scheduler_turn_grants  # grant_id -> {user_id, session_id, expires_at}
 _SCHEDULER_TURN_GRANT_TTL = 5 * 60
 
+# Overlay copilot state
+_overlay_subscribers = _state.overlay_subscribers  # session_id -> [Queue, ...]
+_overlay_tokens = _state.overlay_tokens  # token -> {session_id, user_id, exp}
+_overlay_injected = _state.overlay_injected  # session_id -> (agent_id, tab_id)
+
 # Per-user Codex agent process management (sdk + cli modes)
 _codex_sdk_procs: dict[str, subprocess.Popen] = {}   # agent_id → subprocess
 _codex_sdk_log_fhs: dict[str, object] = {}           # agent_id → log file handle

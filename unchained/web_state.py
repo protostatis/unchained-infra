@@ -35,3 +35,7 @@ class ChatRuntimeState:
     scheduler_turn_grants: dict[str, dict[str, object]] = field(default_factory=dict)
     pending_provision: dict[str, tuple[str, str, float]] = field(default_factory=dict)
     provision_cooldowns: dict[str, float] = field(default_factory=dict)
+    # Overlay copilot state
+    overlay_subscribers: dict[str, list[asyncio.Queue]] = field(default_factory=dict)
+    overlay_tokens: dict[str, dict] = field(default_factory=dict)
+    overlay_injected: dict[str, tuple[str, str]] = field(default_factory=dict)
