@@ -40,6 +40,14 @@ def _connect() -> sqlite3.Connection:
             view_count INTEGER DEFAULT 0
         )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS publish_blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT UNIQUE NOT NULL,
+            reason TEXT,
+            created_at REAL NOT NULL
+        )"""
+    )
     return conn
 
 
@@ -144,6 +152,77 @@ def _md_to_html(text: str) -> str:
     return text
 
 
+def _ensure_blacklist_table(conn: sqlite3.Connection) -> None:
+    """Create the publish_blacklist table if it doesn't exist."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS publish_blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT UNIQUE NOT NULL,
+            reason TEXT,
+            created_at REAL NOT NULL
+        )"""
+    )
+
+
+def add_blacklist_term(term: str, reason: str = "") -> None:
+    """Add a term to the publish blacklist."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ensure_blacklist_table(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO publish_blacklist (term, reason, created_at) VALUES (?, ?, ?)",
+                (term.lower().strip(), reason, time.time()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def remove_blacklist_term(term: str) -> None:
+    """Remove a term from the publish blacklist."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ensure_blacklist_table(conn)
+            conn.execute(
+                "DELETE FROM publish_blacklist WHERE term = ?",
+                (term.lower().strip(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def list_blacklist_terms() -> list[dict]:
+    """List all blacklisted terms."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ensure_blacklist_table(conn)
+            rows = conn.execute(
+                "SELECT term, reason, created_at FROM publish_blacklist ORDER BY term"
+            ).fetchall()
+            return [{"term": r[0], "reason": r[1], "created_at": r[2]} for r in rows]
+        finally:
+            conn.close()
+
+
+def _is_query_blacklisted(text: str) -> bool:
+    """Return True if text contains any blacklisted term from the database."""
+    with _lock:
+        conn = _connect()
+        try:
+            _ensure_blacklist_table(conn)
+            terms = conn.execute(
+                "SELECT term FROM publish_blacklist"
+            ).fetchall()
+        finally:
+            conn.close()
+    lower = text.lower()
+    return any(t[0] in lower for t in terms)
+
+
 def publish_result(
     session_data: dict,
     *,
@@ -160,6 +239,12 @@ def publish_result(
         return None
 
     query = user_msgs[0]["content"]
+    if _is_query_blacklisted(query):
+        return None
+    # Also check assistant responses for blacklisted content
+    for m in asst_msgs:
+        if _is_query_blacklisted(m["content"]):
+            return None
     result_text = asst_msgs[-1]["content"]
     result_html = _messages_to_html(messages)
     slug = _slugify(query)
