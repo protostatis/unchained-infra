@@ -112,7 +112,7 @@ p{
 </html>
 """
 
-LANDING_HTML = r"""<!DOCTYPE html>
+LANDING_V1_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -909,7 +909,7 @@ if ('IntersectionObserver' in window) {
 
 
 # ---------------------------------------------------------------------------
-# HTML — Landing V2: Haiku Morph variant (admin-only A/B test)
+# HTML — Landing V2: Haiku Morph (promoted to main landing page)
 # ---------------------------------------------------------------------------
 
 LANDING_V2_HTML = r"""<!DOCTYPE html>
@@ -1814,6 +1814,10 @@ if ('IntersectionObserver' in window) {
 </script>
 </body>
 </html>"""
+
+# Promote V2 (haiku morph) as the main landing page.
+# V1 preserved as LANDING_V1_HTML for rollback.
+LANDING_HTML = LANDING_V2_HTML
 
 
 # ---------------------------------------------------------------------------
