@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
@@ -156,31 +157,43 @@ class BenchmarkBrowser:
         if close_fn is not None:
             await close_fn()
 
-    async def create_tab(self, url: str = "about:blank") -> str:
+    async def create_tab(self, url: str = "about:blank", retries: int = 3) -> str:
         if not self.config.agent_id:
             raise RuntimeError("agent_id is required to allocate benchmark tabs")
-        tab_id = ""
-        if self.config.private_core_url:
-            cdp_result = await self.client.run_cdp_command(
-                self.config.agent_id,
-                "auto",
-                "Target.createTarget",
-                {"url": url},
-                self.config.relay_host,
-                self.config.relay_port,
-            )
-            if isinstance(cdp_result, dict):
-                tab_id = str(cdp_result.get("targetId", "") or "")
-        if not tab_id:
-            tab_id = await self.client.create_tab(
-                self.config.agent_id,
-                url,
-                self.config.relay_host,
-                self.config.relay_port,
-            ) or ""
-        if not tab_id:
-            raise RuntimeError("create_tab returned no tab id")
-        return tab_id
+        last_error = None
+        for attempt in range(retries):
+            tab_id = ""
+            if self.config.private_core_url:
+                try:
+                    cdp_result = await self.client.run_cdp_command(
+                        self.config.agent_id,
+                        "auto",
+                        "Target.createTarget",
+                        {"url": url},
+                        self.config.relay_host,
+                        self.config.relay_port,
+                    )
+                    if isinstance(cdp_result, dict):
+                        tab_id = str(cdp_result.get("targetId", "") or "")
+                except Exception as exc:
+                    last_error = exc
+            if not tab_id:
+                try:
+                    tab_id = await self.client.create_tab(
+                        self.config.agent_id,
+                        url,
+                        self.config.relay_host,
+                        self.config.relay_port,
+                    ) or ""
+                except Exception as exc:
+                    last_error = exc
+            if tab_id:
+                return tab_id
+            if attempt < retries - 1:
+                wait = 2 ** attempt  # 1s, 2s backoff
+                print(f"[create_tab] retry {attempt + 1}/{retries} in {wait}s (last error: {last_error})")
+                await asyncio.sleep(wait)
+        raise RuntimeError(f"create_tab failed after {retries} attempts: {last_error}")
 
     async def close_tab(self, tab_id: str):
         if not self.config.agent_id or not tab_id:

@@ -17,6 +17,7 @@ Claude Code connects:
 
 import base64
 import hashlib
+import json
 import os
 import re
 import sys
@@ -256,11 +257,61 @@ async def cdp_navigate(url: str,
 
 
 @mcp.tool()
-async def cdp_click(x: int, y: int,
-                    tab_id: str = "auto", agent_id: str = "") -> str:
-    """Click at pixel coordinates. Get coordinates from DDM output."""
+async def cdp_wait_ready(strategy: str = "both",
+                         tab_id: str = "auto", agent_id: str = "") -> str:
+    """Wait for page to finish loading.
+
+    Args:
+        strategy: "dom" (DOM stability), "network" (network idle), "both" (default)
+    """
+    if strategy not in ("dom", "network", "both"):
+        return f"Invalid strategy: {strategy!r}. Use dom, network, or both."
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.click(aid, tab_id, x, y)
+    return await cloud_tools.wait_ready(aid, tab_id, strategy)
+
+
+@mcp.tool()
+async def cdp_click(x: int | None = None, y: int | None = None,
+                    element_id: str = "", label: str = "",
+                    tab_id: str = "auto", agent_id: str = "") -> str:
+    """Click an element by coordinates, DDM element ID, or label.
+
+    Exactly one click mode must be used:
+    - Coordinates: cdp_click(x=500, y=300)
+    - Element ID from DDM: cdp_click(element_id="B3")
+    - Label text: cdp_click(label="Notifications")
+
+    Element IDs and labels come from DDM output (e.g. B1:"Submit" at grid(14,8) px(400,300)).
+    """
+    has_coords = x is not None or y is not None
+    has_element = bool(element_id)
+    has_label = bool(label)
+    modes = sum([has_coords, has_element, has_label])
+    if modes == 0:
+        return "Error: provide x/y coordinates, element_id, or label."
+    if modes > 1:
+        return "Error: use only one click mode — coordinates, element_id, or label."
+    if has_coords and (x is None or y is None):
+        return "Error: both x and y are required for coordinate clicks."
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.click(aid, tab_id, 0 if x is None else x, 0 if y is None else y,
+                                   element_id=element_id, label=label)
+
+
+@mcp.tool()
+async def cdp_scroll(direction: str = "down", amount: int = 500,
+                     tab_id: str = "auto", agent_id: str = "") -> str:
+    """Scroll the page. Returns updated page layout.
+
+    Args:
+        direction: "up", "down", "left", or "right"
+        amount: pixels to scroll (default 500, roughly one viewport height, max 5000)
+    """
+    if direction not in ("up", "down", "left", "right"):
+        return f"Invalid direction: {direction!r}. Use up, down, left, or right."
+    amount = max(1, min(amount, 5000))
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.scroll(aid, tab_id, direction, amount)
 
 
 @mcp.tool()
@@ -273,6 +324,46 @@ async def cdp_type(text: str,
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.type_text(aid, tab_id, text)
+
+
+@mcp.tool()
+async def cdp_press_enter(tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press Enter on the currently focused element.
+
+    Use after typing into a search box or form field to submit.
+    Click the target input first (cdp_click) to ensure it has focus.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.press_enter(aid, tab_id)
+
+
+@mcp.tool()
+async def cdp_key_press(key: str, modifiers: int = 0,
+                        tab_id: str = "auto", agent_id: str = "") -> str:
+    """Press a keyboard key with optional modifier keys.
+
+    Args:
+        key: Key name. Special keys: Enter, Tab, Escape, Backspace, Delete,
+             ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Home, End,
+             PageUp, PageDown. Single characters (a-z, 0-9) also accepted.
+        modifiers: Bitmask for modifier keys (sum values to combine):
+             0=none, 1=Alt, 2=Ctrl, 4=Meta/Cmd, 8=Shift.
+             Example: Ctrl+Shift = 2+8 = 10.
+
+    Use for keyboard shortcuts (Ctrl+A, Escape to close), arrow-key navigation
+    in dropdowns, Tab to move between form fields, etc.
+    """
+    _SPECIAL_KEYS = frozenset({
+        "Enter", "Tab", "Escape", "Backspace", "Delete",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Space", "Home", "End", "PageUp", "PageDown",
+    })
+    if not (0 <= modifiers <= 15):
+        return "Invalid modifiers: must be 0-15 (1=Alt, 2=Ctrl, 4=Meta, 8=Shift)."
+    if key not in _SPECIAL_KEYS and len(key) != 1:
+        return f"Invalid key: {key!r}. Use a special key name or single character."
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.key_press(aid, tab_id, key, modifiers)
 
 
 @mcp.tool()
@@ -304,8 +395,24 @@ async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     Only use for: CAPTCHAs, visual state, image verification.
     """
     aid = _resolve_agent(profile=agent_id)
-    png_b64 = await cloud_tools.screenshot(aid, tab_id)
-    return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    try:
+        png_b64 = await cloud_tools.screenshot(aid, tab_id)
+        return Image(data=base64.b64decode(png_b64, validate=True), format="png")
+    except Exception as screenshot_exc:
+        # Screenshot failed — try page text as fallback context.
+        try:
+            page_text = await cloud_tools.run_ddm(aid, tab_id, ["--text"])
+        except Exception:
+            raise RuntimeError("Screenshot failed. Could not retrieve page text either.") from screenshot_exc
+        # Truncate at last newline boundary to avoid cutting mid-line
+        if len(page_text) > 4000:
+            cut = page_text[:4000].rfind("\n")
+            truncated = page_text[:cut if cut > 0 else 4000] + "\n[truncated]"
+        else:
+            truncated = page_text
+        raise RuntimeError(
+            f"Screenshot failed. Page text fallback:\n\n{truncated}"
+        ) from screenshot_exc
 
 
 @mcp.tool()
@@ -319,6 +426,74 @@ async def cdp_set_file(selector: str, file_path: str,
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.set_file(aid, tab_id, selector, file_path)
+
+
+@mcp.tool()
+async def cdp_set_tab_alias(alias: str, tab_id: str,
+                            agent_id: str = "") -> str:
+    """Name a tab for easy reference. Use the alias anywhere tab_id is accepted.
+
+    Example: cdp_set_tab_alias(alias="reddit", tab_id="3C96B...") then
+             cdp_click(x=100, y=200, tab_id="reddit")
+    """
+    alias = alias.strip()
+    if not alias:
+        return "Alias cannot be empty."
+    if len(alias) > 64:
+        return "Alias too long (max 64 characters)."
+    if alias.lower() == "auto":
+        return "Cannot use 'auto' as an alias — it is reserved."
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.set_tab_alias(aid, alias, tab_id)
+
+
+@mcp.tool()
+async def cdp_list_tab_aliases(agent_id: str = "") -> str:
+    """List all named tab aliases."""
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.list_tab_aliases(aid)
+
+
+@mcp.tool()
+async def cdp_set_cookies(cookies: str, tab_id: str = "auto", agent_id: str = "") -> str:
+    """Inject cookies for authentication.
+
+    Args:
+        cookies: JSON array string. Each cookie needs name, value, domain.
+                 Optional: path, secure, httpOnly, sameSite, expires.
+    Example: '[{"name":"session","value":"abc123","domain":".example.com"}]'
+    """
+    aid = _resolve_agent(profile=agent_id)
+    try:
+        cookie_list = json.loads(cookies)
+    except json.JSONDecodeError:
+        return "Invalid JSON. Expected an array of cookie objects."
+    if not isinstance(cookie_list, list):
+        return "cookies must be a JSON array of cookie objects."
+    for i, c in enumerate(cookie_list):
+        if not isinstance(c, dict):
+            return f"Cookie at index {i} is not an object."
+        if not all(k in c for k in ("name", "value", "domain")):
+            return f"Cookie at index {i} missing required field(s). Need: name, value, domain."
+        domain = c["domain"]
+        if not isinstance(domain, str) or not domain.strip():
+            return f"Cookie at index {i} has empty or invalid domain."
+        # Block overly broad domains that could affect all sites
+        if domain in (".", ".com", ".org", ".net", ".io", ".co"):
+            return f"Cookie at index {i} has overly broad domain '{domain}'."
+    return await cloud_tools.set_cookies(aid, tab_id, cookie_list)
+
+
+@mcp.tool()
+async def cdp_get_cookies(urls: str = "", tab_id: str = "auto", agent_id: str = "") -> str:
+    """Get cookies from the browser for session saving.
+
+    Args:
+        urls: Optional comma-separated URLs to filter by domain. Empty = current page.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    url_list = [u.strip() for u in urls.split(",") if u.strip()] if urls else None
+    return await cloud_tools.get_cookies(aid, tab_id, url_list)
 
 
 @mcp.tool()

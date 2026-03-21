@@ -21,7 +21,6 @@ from private_core_contracts import (
     OP_PRESS_ENTER,
     OP_PROVISION_CLEANUP,
     OP_PROVISION_LAUNCH,
-    OP_PROVISION_STATUS,
     OP_RUN_CDP_COMMAND,
     OP_RUN_DDM,
     OP_RUN_INTEL,
@@ -32,6 +31,22 @@ from private_core_contracts import (
     OP_TYPE_TEXT,
     PRIVATE_CORE_OPS,
 )
+
+# New ops — import with fallback for staggered deploys where the private-core
+# overlay may not yet include these constants.
+def _safe_import_op(name: str, default: str) -> str:
+    """Import an OP constant from contracts, falling back to string literal."""
+    import private_core_contracts as _c
+    return getattr(_c, name, default)
+
+OP_KEY_PRESS = _safe_import_op("OP_KEY_PRESS", "key_press")
+OP_SCROLL = _safe_import_op("OP_SCROLL", "scroll")
+OP_WAIT_READY = _safe_import_op("OP_WAIT_READY", "wait_ready")
+OP_SET_TAB_ALIAS = _safe_import_op("OP_SET_TAB_ALIAS", "set_tab_alias")
+OP_LIST_TAB_ALIASES = _safe_import_op("OP_LIST_TAB_ALIASES", "list_tab_aliases")
+OP_SET_COOKIES = _safe_import_op("OP_SET_COOKIES", "set_cookies")
+OP_GET_COOKIES = _safe_import_op("OP_GET_COOKIES", "get_cookies")
+OP_PROVISION_STATUS = _safe_import_op("OP_PROVISION_STATUS", "provision_status")
 
 
 class PrivateCoreError(RuntimeError):
@@ -133,7 +148,18 @@ class PrivateCoreClient:
             OP_CLOSE_TAB: engine.close_tab,
         }
         # Ops that may not yet exist in the engine (safe for staggered deploys)
-        for op_name, fn_name in [(OP_SET_FILE, "set_file"), (OP_PROVISION_STATUS, "provision_status")]:
+        _optional_ops = [
+            (OP_SET_FILE, "set_file"),
+            (OP_PROVISION_STATUS, "provision_status"),
+            (OP_SCROLL, "scroll"),
+            (OP_KEY_PRESS, "key_press"),
+            (OP_WAIT_READY, "wait_ready"),
+            (OP_SET_TAB_ALIAS, "set_tab_alias"),
+            (OP_LIST_TAB_ALIASES, "list_tab_aliases"),
+            (OP_SET_COOKIES, "set_cookies"),
+            (OP_GET_COOKIES, "get_cookies"),
+        ]
+        for op_name, fn_name in _optional_ops:
             fn = getattr(engine, fn_name, None)
             if fn is not None:
                 dispatch[op_name] = fn
@@ -201,13 +227,30 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def click(self, agent_id: str, tab_id: str, x: int, y: int, relay_host: str, relay_port: int) -> str:
-        return await self.execute(
-            OP_CLICK,
+    async def click(self, agent_id: str, tab_id: str, x: int = 0, y: int = 0,
+                    relay_host: str = "127.0.0.1", relay_port: int = 8765,
+                    element_id: str = "", label: str = "") -> str:
+        kwargs = dict(
             agent_id=agent_id,
             tab_id=tab_id,
             x=x,
             y=y,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+        if element_id:
+            kwargs["element_id"] = element_id
+        if label:
+            kwargs["label"] = label
+        return await self.execute(OP_CLICK, **kwargs)
+
+    async def scroll(self, agent_id: str, tab_id: str, direction: str, amount: int, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_SCROLL,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            direction=direction,
+            amount=amount,
             relay_host=relay_host,
             relay_port=relay_port,
         )
@@ -227,6 +270,17 @@ class PrivateCoreClient:
             OP_PRESS_ENTER,
             agent_id=agent_id,
             tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def key_press(self, agent_id: str, tab_id: str, key: str, modifiers: int, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_KEY_PRESS,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            key=key,
+            modifiers=modifiers,
             relay_host=relay_host,
             relay_port=relay_port,
         )
@@ -294,6 +348,54 @@ class PrivateCoreClient:
             relay_host=relay_host,
             relay_port=relay_port,
         )
+
+    async def wait_ready(self, agent_id: str, tab_id: str, strategy: str = "both",
+                         relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_WAIT_READY,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            strategy=strategy,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def set_tab_alias(self, agent_id: str, alias: str, tab_id: str) -> str:
+        return await self.execute(
+            OP_SET_TAB_ALIAS,
+            agent_id=agent_id,
+            alias=alias,
+            tab_id=tab_id,
+        )
+
+    async def list_tab_aliases(self, agent_id: str) -> str:
+        return await self.execute(
+            OP_LIST_TAB_ALIASES,
+            agent_id=agent_id,
+        )
+
+    async def set_cookies(self, agent_id: str, tab_id: str, cookies: list,
+                          relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_SET_COOKIES,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            cookies=cookies,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def get_cookies(self, agent_id: str, tab_id: str, urls: list | None = None,
+                          relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        kwargs = dict(
+            agent_id=agent_id,
+            tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+        if urls is not None:
+            kwargs["urls"] = urls
+        return await self.execute(OP_GET_COOKIES, **kwargs)
 
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:
         return await self.execute(
