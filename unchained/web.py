@@ -684,7 +684,6 @@ _SCHEDULER_TURN_GRANT_TTL = 5 * 60
 
 # Overlay copilot state
 _overlay_subscribers = _state.overlay_subscribers  # session_id -> [Queue, ...]
-_overlay_tokens = _state.overlay_tokens  # token -> {session_id, user_id, exp}
 _overlay_injected = _state.overlay_injected  # session_id -> (agent_id, tab_id)
 
 # Per-user Codex agent process management (sdk + cli modes)

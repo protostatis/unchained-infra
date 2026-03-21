@@ -27,9 +27,17 @@ from web_app.core import get_core as _core
 _TOKEN_TTL = 3600  # 1 hour
 
 
+def _require_secret(secret: str = "") -> str:
+    """Resolve the HMAC secret, raising if absent."""
+    secret = secret or os.environ.get("JWT_SECRET", "")
+    if not secret:
+        raise RuntimeError("JWT_SECRET is not configured — overlay tokens cannot be signed")
+    return secret
+
+
 def mint_overlay_token(session_id: str, user_id: str, secret: str = "") -> str:
     """Create a short-lived HMAC-signed token scoped to one session."""
-    secret = secret or os.environ.get("JWT_SECRET", "")
+    secret = _require_secret(secret)
     payload = json.dumps({
         "session_id": session_id,
         "user_id": user_id,
@@ -43,6 +51,8 @@ def mint_overlay_token(session_id: str, user_id: str, secret: str = "") -> str:
 def validate_overlay_token(token: str, secret: str = "") -> dict | None:
     """Validate and decode an overlay token. Returns {session_id, user_id} or None."""
     secret = secret or os.environ.get("JWT_SECRET", "")
+    if not secret:
+        return None  # refuse to validate without a signing key
     try:
         raw = base64.urlsafe_b64decode(token.encode()).decode()
         obj = json.loads(raw)
@@ -99,8 +109,8 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
     # --- Auth handshake ---
     try:
         auth_msg = await asyncio.wait_for(ws.receive_json(), timeout=10)
-    except (asyncio.TimeoutError, TypeError):
-        await ws.close(code=4001, message=b"auth timeout")
+    except Exception:
+        await ws.close(code=4001, message=b"auth timeout or malformed")
         return ws
 
     token_str = auth_msg.get("token", "")
@@ -113,9 +123,13 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
     session_id = token_data["session_id"]
     await ws.send_json({"type": "auth_ok", "session_id": session_id})
 
-    # --- Subscribe to session events ---
+    # --- Subscribe to session events (cap at 5 per session) ---
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
     subs = core._overlay_subscribers.setdefault(session_id, [])
+    if len(subs) >= 5:
+        await ws.send_json({"type": "error", "data": "too many overlay connections for this session"})
+        await ws.close(code=4008, message=b"subscriber limit")
+        return ws
     subs.append(q)
 
     async def _writer():
@@ -125,10 +139,7 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
                 try:
                     evt = await asyncio.wait_for(q.get(), timeout=15)
                 except asyncio.TimeoutError:
-                    try:
-                        await ws.send_str(": keepalive\n")
-                    except Exception:
-                        break
+                    # aiohttp heartbeat=30 handles WS ping/pong; just loop
                     continue
                 try:
                     await ws.send_json(evt)
@@ -158,6 +169,10 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
                 break
     finally:
         writer_task.cancel()
+        try:
+            await writer_task
+        except asyncio.CancelledError:
+            pass
         # Remove our queue from the subscriber list
         try:
             subs = core._overlay_subscribers.get(session_id, [])
