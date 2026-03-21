@@ -75,6 +75,13 @@ def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, pro
 
         async def _inject():
             try:
+                # Bypass CSP so the overlay WS can connect to our domain
+                await cloud_tools.run_cdp_command(
+                    agent_id, tab_id,
+                    "Page.setBypassCSP",
+                    {"enabled": True},
+                    relay_host, relay_port,
+                )
                 await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
                 await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
@@ -748,6 +755,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._response_req_ids.pop(session_id, None)
             core._overlay_injected.pop(session_id, None)
             core._overlay_subscribers.pop(session_id, None)
+            try:
+                from web_app.handlers.overlay_ws import _replay_buffers
+                _replay_buffers.pop(session_id, None)
+            except Exception:
+                pass
             if not stream_completed:
                 asyncio.create_task(core._close_session_tab(session_id))
         if scheduler_grant_id:

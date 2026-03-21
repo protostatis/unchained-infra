@@ -247,14 +247,19 @@ OVERLAY_JS_TEMPLATE = r"""
     addMsg('status', 'You: ' + text);
     input.value = '';
   }
-  sendBtn.addEventListener('click', sendFollowup);
+  sendBtn.addEventListener('click', function(e) { e.stopPropagation(); sendFollowup(); });
+  // Stop ALL key events from leaking to the page (prevents typing in page inputs)
+  ['keydown', 'keyup', 'keypress'].forEach(function(evt) {
+    input.addEventListener(evt, function(e) { e.stopPropagation(); });
+  });
   input.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      e.stopPropagation();
       sendFollowup();
     }
   });
+  // Prevent click-through to page when interacting with input
+  inputArea.addEventListener('mousedown', function(e) { e.stopPropagation(); });
   inputArea.appendChild(input);
   inputArea.appendChild(sendBtn);
   body.appendChild(inputArea);
