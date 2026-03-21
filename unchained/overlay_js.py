@@ -338,14 +338,22 @@ OVERLAY_JS_TEMPLATE = r"""
         return;
       }
       if (t === 'text') {
+        // Remove any "working..." indicator before showing response
+        var working = log.querySelector('.uc-working');
+        if (working) working.remove();
         addMsg('assistant', msg.data || '');
-      } else if (t === 'tool_use') {
-        var tool = msg.tool || msg.name || 'tool';
-        addMsg('tool', '\u25B6 ' + tool);
-      } else if (t === 'tool_result') {
-        var preview = String(msg.data || msg.result || '').substring(0, 120);
-        if (preview) addMsg('tool', '  \u2192 ' + preview);
+      } else if (t === 'tool_use' || t === 'tool_result') {
+        // Show a single "working..." indicator, no tool details
+        if (!log.querySelector('.uc-working')) {
+          var w = document.createElement('div');
+          w.className = 'uc-msg status uc-working';
+          w.textContent = 'Working\u2026';
+          log.appendChild(w);
+          log.scrollTop = log.scrollHeight;
+        }
       } else if (t === 'done') {
+        var w2 = log.querySelector('.uc-working');
+        if (w2) w2.remove();
         addMsg('status', 'Ready for follow-up');
       } else if (t === 'error') {
         addMsg('status', 'Error: ' + (msg.data || msg.message || 'unknown'));
