@@ -1062,6 +1062,16 @@ body::before{
 }
 .scroll-hint span{animation:bounce 2s ease-in-out infinite;font-size:16px;line-height:1}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+.more-toggle-btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  margin:32px auto 0;padding:8px 0;
+  background:none;border:none;cursor:pointer;
+  font-size:14px;color:var(--muted);letter-spacing:0.5px;transition:color 0.2s;
+}
+.more-toggle-btn:hover{color:var(--text)}
+.more-toggle-btn .arrow{display:inline-block;transition:transform 0.3s;font-size:12px}
+.more-toggle-btn.expanded .arrow{transform:rotate(180deg)}
+.more-cards-wrap{max-height:0;overflow:hidden;transition:max-height 0.4s ease}
 
 /* ── Get Started ── */
 .getstarted{
@@ -1370,6 +1380,12 @@ body::before{
       <a href="/trial" class="card-btn">Start Free &#8594;</a>
     </div>
 
+    <button class="more-toggle-btn" id="moreToggleBtn" onclick="toggleMoreCards()" aria-expanded="false" aria-controls="moreCardsWrap">
+      <span class="toggle-label">More ways to get started</span> <span class="arrow">&#9660;</span>
+    </button>
+
+    <div class="more-cards-wrap" id="moreCardsWrap">
+
     <!-- Section: SDK Agent Lanes -->
     <div class="section-label">API Agent Lanes &mdash; provision an API key once, then chat</div>
 
@@ -1483,6 +1499,8 @@ body::before{
       <a href="/mcp" class="card-btn">Set Up MCP &#8594;</a>
     </div>
 
+    </div><!-- /more-cards-wrap -->
+
   </div>
 </div>
 
@@ -1515,6 +1533,19 @@ body::before{
 </div>
 
 <script>
+// Toggle more cards
+function toggleMoreCards(){
+  var wrap=document.getElementById('moreCardsWrap');
+  var btn=document.getElementById('moreToggleBtn');
+  var label=btn.querySelector('.toggle-label');
+  var open=wrap.classList.toggle('open');
+  btn.classList.toggle('expanded',open);
+  btn.setAttribute('aria-expanded',open);
+  label.textContent=open?'Show less':'More ways to get started';
+  if(open){wrap.style.maxHeight=wrap.scrollHeight+'px'}
+  else{wrap.style.maxHeight='0'}
+}
+
 // Haiku morph — cycle through 3 stages every 6s
 (function(){
   var poem = document.getElementById('poem');
