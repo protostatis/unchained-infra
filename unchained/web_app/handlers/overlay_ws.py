@@ -87,15 +87,11 @@ def broadcast_to_overlay(session_id: str, event: dict) -> None:
     subscribers = core._overlay_subscribers.get(session_id)
     if not subscribers:
         return
-    dead: list[int] = []
-    for i, q in enumerate(subscribers):
+    for q in subscribers:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
-            dead.append(i)
-    # Remove dead queues (reverse order to preserve indices)
-    for i in reversed(dead):
-        subscribers.pop(i)
+            pass  # skip event for slow client, don't evict
 
 
 # ---------------------------------------------------------------------------
