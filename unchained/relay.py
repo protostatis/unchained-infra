@@ -405,6 +405,24 @@ class Relay:
                     except Exception:
                         pass
                     break
+        elif t == "overlay_followup":
+            # Forward overlay follow-up to the web service via /core/overlay-followup
+            # The web server handles it as a chat message for the session.
+            session_id = msg.get("session_id", "")
+            message = msg.get("message", "")
+            if session_id and message:
+                print(f"[relay] overlay follow-up from {agent_id}: {message[:60]}")
+                # Forward to web via internal HTTP
+                import aiohttp
+                try:
+                    async with aiohttp.ClientSession() as sess:
+                        await sess.post(
+                            "http://web:8080/web/overlay-followup",
+                            json={"session_id": session_id, "message": message, "agent_id": agent_id},
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        )
+                except Exception as e:
+                    print(f"[relay] overlay follow-up forward failed: {e}")
         elif t in ("ws_recv", "ws_opened", "ws_error", "ws_closed"):
             # Forward to the client that owns this channel
             channel = msg.get("channel", 0)

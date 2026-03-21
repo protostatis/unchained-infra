@@ -35,39 +35,34 @@ def _broadcast_overlay(session_id: str, event: dict) -> None:
 
 def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                      prompt_text: str, user_id: str = "", slot: int | None = None) -> None:
-    """Inject the overlay copilot into a concrete browser tab.
+    """Send overlay_inject to the bridge via the agent WS.
 
-    Only injects when tab_id is a real tab (not "auto"). Creates or updates
-    OverlaySessionState. Cleans up any previous bootstrap script before
-    re-injecting.
-
-    Must be called from a running asyncio event loop (uses create_task).
+    The bridge handles injection locally via direct CDP — no server-side
+    CDP calls, no CSP issues, no tab confusion.
     """
-    # Never inject on "auto" — we need a concrete tab to avoid cross-profile bleed
     if not tab_id or tab_id == "auto":
         return
 
     try:
-        import cloud_tools
+        import secrets
         from overlay_js import build_overlay_js, build_overlay_bootstrap_js
-        from web_app.handlers.overlay_ws import mint_overlay_token
         from web_state import OverlaySessionState
 
-        relay_host, relay_port = core._parse_relay()
-        public_host = os.environ.get("PUBLIC_HOST", "api.unchainedsky.com")
-        token = mint_overlay_token(session_id, user_id)
-
+        nonce = secrets.token_hex(16)
+        # Build overlay JS (bridge injects it locally)
         overlay_js = build_overlay_js(
-            token=token,
-            relay_host=public_host,
+            token="",  # no token needed — CDP is the transport
+            relay_host="",
             session_id=session_id,
             prompt_text=prompt_text[:500],
+            nonce=nonce,
         )
         bootstrap_js = build_overlay_bootstrap_js(
-            token=token,
-            relay_host=public_host,
+            token="",
+            relay_host="",
             session_id=session_id,
             prompt_text=prompt_text[:500],
+            nonce=nonce,
         )
 
         # Create or update overlay state
@@ -79,69 +74,36 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 tab_id=tab_id,
                 user_id=user_id,
                 slot=slot,
-                token=token,
             )
             core._overlay_sessions[session_id] = overlay
         else:
             overlay.agent_id = agent_id
             overlay.tab_id = tab_id
-            overlay.user_id = user_id
-            overlay.token = token
             if slot is not None:
                 overlay.slot = slot
+        overlay.injected = True
 
-        async def _inject():
-            try:
-                # Clean up previous bootstrap script if tab changed
-                old_bootstrap = overlay.bootstrap_id
-                if old_bootstrap:
-                    try:
-                        await cloud_tools.run_cdp_command(
-                            agent_id, tab_id,
-                            "Page.removeScriptToEvaluateOnNewDocument",
-                            {"identifier": old_bootstrap},
-                            relay_host, relay_port,
-                        )
-                    except Exception:
-                        pass
-                    overlay.bootstrap_id = ""
-
-                # Bypass CSP so the overlay WS can connect.
-                # setBypassCSP only takes effect after a navigation,
-                # so we set it, then reload the page. The bootstrap
-                # script (addScriptToEvaluateOnNewDocument) will inject
-                # the overlay on the reloaded page with CSP disabled.
-                await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.setBypassCSP", {"enabled": True},
-                    relay_host, relay_port,
-                )
-                # Register bootstrap BEFORE reload so it fires on the new page
-                result = await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.addScriptToEvaluateOnNewDocument",
-                    {"source": bootstrap_js},
-                    relay_host, relay_port,
-                )
-                # Store identifier for cleanup
-                if isinstance(result, dict) and result.get("identifier"):
-                    overlay.bootstrap_id = result["identifier"]
-                # Reload the page so CSP bypass takes effect and
-                # the bootstrap script injects the overlay with WS.
-                await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.reload", {},
-                    relay_host, relay_port,
-                )
-                import asyncio as _aio
-                await _aio.sleep(1.5)  # wait for page to reload
-                overlay.injected = True
-                print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
-            except Exception as e:
-                print(f"[overlay] Injection failed: {e}")
-
-        import asyncio
-        asyncio.create_task(_inject())
+        # Send to bridge via agent WS
+        agent_ws = core._chat_agents.get(agent_id)
+        if agent_ws and not agent_ws.closed:
+            import asyncio
+            async def _send():
+                try:
+                    await agent_ws.send_json({
+                        "type": "overlay_inject",
+                        "session_id": session_id,
+                        "tab_id": tab_id,
+                        "overlay_js": overlay_js,
+                        "bootstrap_js": bootstrap_js,
+                        "nonce": nonce,
+                        "prompt": prompt_text[:500],
+                    })
+                    print(f"[overlay] Sent overlay_inject to bridge for {session_id}")
+                except Exception as e:
+                    print(f"[overlay] Failed to send overlay_inject: {e}")
+            asyncio.create_task(_send())
+        else:
+            print(f"[overlay] No agent WS for {agent_id} — overlay not injected")
     except Exception as e:
         print(f"[overlay] Injection setup failed: {e}")
 
@@ -797,9 +759,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         if core._response_queues.get(session_id) is q:
             core._response_queues.pop(session_id, None)
             core._response_req_ids.pop(session_id, None)
-            # Keep session_agents alive if overlay has an active subscriber
+            # Keep session_agents alive if overlay is active
             overlay = core._overlay_sessions.get(session_id)
-            has_overlay = overlay and overlay.subscriber is not None
+            has_overlay = overlay and overlay.injected
             if not has_overlay:
                 core._session_agents.pop(session_id, None)
             if not stream_completed:
