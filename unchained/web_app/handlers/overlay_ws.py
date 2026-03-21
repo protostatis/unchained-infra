@@ -222,13 +222,19 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
     session_id = token_data["session_id"]
     await ws.send_json({"type": "auth_ok", "session_id": session_id})
 
-    # --- Subscribe to session events (cap at 5 per session) ---
+    # --- Subscribe to session events ---
+    # Each re-injection creates a new overlay + WS. Evict old stale
+    # subscribers by sending them a done signal, then replace with the
+    # new one. Only the most recent overlay instance matters.
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
     subs = core._overlay_subscribers.setdefault(session_id, [])
-    if len(subs) >= 5:
-        await ws.send_json({"type": "error", "data": "too many overlay connections for this session"})
-        await ws.close(code=4008, message=b"subscriber limit")
-        return ws
+    # Signal old subscribers to stop
+    for old_q in subs:
+        try:
+            old_q.put_nowait({"type": "done"})
+        except asyncio.QueueFull:
+            pass
+    subs.clear()
     subs.append(q)
     # Replay any events that were broadcast before this WS connected
     _drain_replay_buffer(session_id, q)
