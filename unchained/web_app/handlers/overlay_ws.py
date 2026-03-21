@@ -258,8 +258,12 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
             await writer_task
         except asyncio.CancelledError:
             pass
-        # Clear subscriber (don't delete overlay state — session may still be active)
+        # Clear subscriber and trigger deferred tab cleanup
         if overlay.subscriber is q:
             overlay.subscriber = None
+        # If no active SSE stream, clean up the session tab now
+        if not core._response_queues.get(session_id):
+            core._overlay_sessions.pop(session_id, None)
+            asyncio.create_task(core._close_session_tab(session_id))
 
     return ws
