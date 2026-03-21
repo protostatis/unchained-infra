@@ -95,6 +95,66 @@ def broadcast_to_overlay(session_id: str, event: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Follow-up routing
+# ---------------------------------------------------------------------------
+
+async def _route_followup(core, session_id: str, message: str) -> None:
+    """Route a follow-up message from the overlay into the agent WS."""
+    import uuid
+    agent_id = core._session_agents.get(session_id)
+    if not agent_id:
+        print(f"[overlay] follow-up dropped — no agent for session {session_id}")
+        return
+    agent_ws = core._chat_agents.get(agent_id)
+    if agent_ws is None or agent_ws.closed:
+        print(f"[overlay] follow-up dropped — agent {agent_id} not connected")
+        return
+
+    req_id = f"overlay-{uuid.uuid4().hex[:8]}"
+    # Signal current turn to end so the agent picks up the new message
+    old_q = core._response_queues.get(session_id)
+    if old_q is not None:
+        await old_q.put({"type": "done"})
+
+    q: asyncio.Queue = asyncio.Queue()
+    core._response_queues[session_id] = q
+    core._response_req_ids[session_id] = req_id
+
+    ws_msg = {
+        "type": "user_message",
+        "session_id": session_id,
+        "message": message,
+        "req_id": req_id,
+    }
+    tab_id = core._session_tabs.get(session_id)
+    if tab_id:
+        ws_msg["tab_id"] = tab_id
+
+    try:
+        await agent_ws.send_json(ws_msg)
+        print(f"[overlay] follow-up routed to agent {agent_id}: {message[:60]}")
+    except Exception as e:
+        print(f"[overlay] follow-up send failed: {e}")
+        core._response_queues.pop(session_id, None)
+        return
+
+    # Broadcast agent responses to overlay subscribers
+    try:
+        while True:
+            try:
+                evt = await asyncio.wait_for(q.get(), timeout=120)
+            except asyncio.TimeoutError:
+                break
+            broadcast_to_overlay(session_id, evt)
+            if evt.get("type") in ("done", "error"):
+                break
+    finally:
+        if core._response_queues.get(session_id) is q:
+            core._response_queues.pop(session_id, None)
+            core._response_req_ids.pop(session_id, None)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket handler
 # ---------------------------------------------------------------------------
 
@@ -160,8 +220,9 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
                     continue
                 msg_type = data.get("type", "")
                 if msg_type == "user_followup":
-                    # Phase 2: route follow-up back into chat system
-                    print(f"[overlay] follow-up from session {session_id}: {str(data.get('message', ''))[:80]}")
+                    followup_text = str(data.get("message", "")).strip()
+                    if followup_text:
+                        await _route_followup(core, session_id, followup_text)
                 # Other message types can be added here
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
