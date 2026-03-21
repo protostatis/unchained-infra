@@ -1071,7 +1071,17 @@ body::before{
 .more-toggle-btn:hover{color:var(--text)}
 .more-toggle-btn .arrow{display:inline-block;transition:transform 0.3s;font-size:12px}
 .more-toggle-btn.expanded .arrow{transform:rotate(180deg)}
-.more-cards-wrap{max-height:0;overflow:hidden;transition:max-height 0.4s ease}
+.more-toggle-btn{grid-column:1/-1}
+.more-cards-wrap{
+  grid-column:1/-1;
+  max-height:0;overflow:hidden;transition:max-height 0.4s ease;
+}
+.more-cards-wrap .more-cards-inner{
+  display:grid;grid-template-columns:1fr 1fr;gap:24px;
+}
+@media(max-width:640px){.more-cards-wrap .more-cards-inner{grid-template-columns:1fr}}
+.more-cards-inner .section-label{grid-column:1/-1}
+.more-cards-inner .sdk-row{grid-column:1/-1}
 
 /* ── Get Started ── */
 .getstarted{
@@ -1385,6 +1395,7 @@ body::before{
     </button>
 
     <div class="more-cards-wrap" id="moreCardsWrap">
+    <div class="more-cards-inner">
 
     <!-- Section: SDK Agent Lanes -->
     <div class="section-label">API Agent Lanes &mdash; provision an API key once, then chat</div>
@@ -1499,6 +1510,7 @@ body::before{
       <a href="/mcp" class="card-btn">Set Up MCP &#8594;</a>
     </div>
 
+    </div><!-- /more-cards-inner -->
     </div><!-- /more-cards-wrap -->
 
   </div>
