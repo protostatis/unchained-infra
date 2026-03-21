@@ -3565,6 +3565,7 @@ function showMain() {
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
+  _startOverlayPoll();
 }
 
 async function checkAgentStatus() {
