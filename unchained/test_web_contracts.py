@@ -166,7 +166,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
-        html = _build_research_desk_html()
+        html = _build_research_desk_html(authenticated=True)
         self.assertIn("data.provider?.browser_client", html)
         self.assertIn("data.trial?.status", html)
         self.assertIn("data.local_urls?.home", html)
@@ -258,6 +258,18 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("const qaCounts=Object.entries(data.qa_status_counts||{})", html)
         self.assertIn("scheduleMissionWatch(statusUrl)", html)
         self.assertIn("source_route:'/first-look'", html)
+        self.assertIn("const RESEARCH_DESK_INSTALL_AUTHENTICATED = true;", html)
+        self.assertIn("window.location.href=RESEARCH_DESK_SIGN_IN_URL", html)
+
+    def test_research_desk_page_renders_guest_install_state(self):
+        from web_app.handlers.pages import _build_research_desk_html
+
+        html = _build_research_desk_html(authenticated=False)
+        self.assertIn("const RESEARCH_DESK_INSTALL_AUTHENTICATED = false;", html)
+        self.assertIn("Sign In to Install Research Desk", html)
+        self.assertIn("Sign in to unchainedsky.com first, then install Research Desk through your local client.", html)
+        self.assertIn("RESEARCH_DESK_INSTALL_AUTHENTICATED?'Install / Update Research Desk':'Sign In to Install Research Desk'", html)
+        self.assertIn("window.location.href=RESEARCH_DESK_SIGN_IN_URL", html)
         self.assertIn("const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'')", html)
         self.assertIn("const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'')", html)
         self.assertIn("const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||(Boolean(data.lab_ready)?labUrl:'')||missionUrl||'')", html)
@@ -301,7 +313,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("missionWatchUrl='';", html)
         self.assertIn("This accepts same-origin script access in exchange for tab-scoped recovery.", html)
         self.assertIn("Resuming the pending local approval check from your last hosted session...", html)
-        self.assertIn("if(existingPrompt&&!sessionRestored){setConnectNote('Ready to hand off the current first-look prompt into your local desk once the connection is approved.');}", html)
+        self.assertIn("if(existingPrompt&&!sessionRestored&&RESEARCH_DESK_INSTALL_AUTHENTICATED){setConnectNote('Ready to hand off the current first-look prompt into your local desk once the connection is approved.');}", html)
         self.assertIn("restoreStoredDeskSession();", html)
 
     def test_first_look_template_renders_research_desk_handoff_markers(self):
