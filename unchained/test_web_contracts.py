@@ -262,6 +262,18 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("source_route:'/first-look'", html)
         self.assertIn("const RESEARCH_DESK_INSTALL_AUTHENTICATED = true;", html)
         self.assertIn("window.location.href=RESEARCH_DESK_SIGN_IN_URL", html)
+        self.assertIn("const INSTALL_UPDATE_RETRY_INTERVAL_MS = 5000;", html)
+        self.assertIn("const MAX_INSTALL_UPDATE_RETRIES = 12;", html)
+        self.assertIn("async function requestResearchDeskInstall()", html)
+        self.assertIn("async function requestLocalClientUpdate()", html)
+        self.assertIn("/web/chat/update-client", html)
+        self.assertIn("if(resp.status===409&&Boolean(data.update_required))", html)
+        self.assertIn("Updating it to at least", html)
+        self.assertIn("if(updateResult.kind==='already_current')", html)
+        self.assertIn("The local client is already current. Retrying Research Desk install now...", html)
+        self.assertIn("Waiting for the local client to finish updating and reconnect before retrying Research Desk install...", html)
+        self.assertIn("The local client update started, but Research Desk install could not be retried automatically yet.", html)
+        self.assertIn("Preparing Research Desk...", html)
 
     def test_research_desk_page_renders_guest_install_state(self):
         from web_app.handlers.pages import _build_research_desk_html

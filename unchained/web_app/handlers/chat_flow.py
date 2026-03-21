@@ -42,6 +42,23 @@ def _client_version_status(caps: dict | None) -> dict:
     }
 
 
+_RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION = "0.3.63"
+
+
+def _research_desk_install_requires_update(caps: dict | None) -> dict:
+    """Return whether the connected client is new enough for bootstrap install."""
+    caps = caps or {}
+    local_version = str(caps.get("client_version", "") or "").strip()
+    local_t = _parse_version_tuple(local_version) if local_version else (0, 0, 0)
+    required_t = _parse_version_tuple(_RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION)
+    return {
+        "client_version": local_version,
+        "required_client_version": _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION,
+        "update_supported": bool(caps.get("remote_update")),
+        "update_required": (not local_version) or local_t < required_t,
+    }
+
+
 async def check_relay_agent(agent_id: str) -> bool:
     """Quick check if an agent is connected to the relay via HTTP API."""
     core = _core()
@@ -367,6 +384,30 @@ async def handle_chat_install_research_desk(request: web.Request) -> web.Respons
                     "This local client package does not support one-click Research Desk install yet. "
                     "Run the Research Desk install steps manually, then retry."
                 )
+            },
+            status=409,
+        )
+    install_version = _research_desk_install_requires_update(caps)
+    if bool(install_version.get("update_required")):
+        client_version = str(install_version.get("client_version") or "unknown").strip() or "unknown"
+        required_version = str(install_version.get("required_client_version") or _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION)
+        if bool(install_version.get("update_supported")):
+            error = (
+                "Your local client is still on {client_version}. Update it to at least {required_version}, "
+                "then retry Research Desk install."
+            ).format(client_version=client_version, required_version=required_version)
+        else:
+            error = (
+                "Your local client is still on {client_version} and cannot self-update here. "
+                "Run the installer or update script until it reaches at least {required_version}, then retry."
+            ).format(client_version=client_version, required_version=required_version)
+        return web.json_response(
+            {
+                "error": error,
+                "update_required": True,
+                "update_supported": bool(install_version.get("update_supported")),
+                "client_version": client_version,
+                "required_client_version": required_version,
             },
             status=409,
         )
