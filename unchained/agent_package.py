@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.59"  # fix --tab auto within provisioned Chrome
+VERSION = "0.3.60"  # add cdp_tool.py to package + fix --tab auto
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -33,6 +33,7 @@ _PACKAGE_FILES = {
     "scheduled_jobs.json": "scheduled_jobs.example.json",
     "unchained/auth.py": "auth.py",
     "unchained/nudge.py": "nudge.py",
+    "unchained/cdp_tool.py": "cdp_tool.py",
 }
 
 _REQUIREMENTS = """\
