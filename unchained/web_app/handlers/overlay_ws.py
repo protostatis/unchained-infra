@@ -194,8 +194,9 @@ async def _route_followup(core, session_id: str, message: str) -> None:
                 except asyncio.TimeoutError:
                     break
                 broadcast_to_overlay(session_id, evt)
-                # Also buffer for parent /local UI
-                notify.append(evt)
+                # Buffer relevant events for parent /local UI
+                if evt.get("type") in ("text", "done", "error"):
+                    notify.append(evt)
                 if evt.get("type") == "error":
                     break
                 if evt.get("type") == "done":
@@ -223,6 +224,11 @@ async def handle_overlay_events(request: web.Request) -> web.Response:
 
     session_id = request.query.get("session_id", "")
     if not session_id:
+        return web.json_response({"events": []})
+
+    # Ownership check — session IDs embed the key hash: s-{agent_id}-{key_hash}-{rand}
+    key_hash = auth_info.get("key_hash", "")
+    if key_hash and f"-{key_hash}-" not in session_id:
         return web.json_response({"events": []})
 
     buf = _parent_notify.pop(session_id, None)
