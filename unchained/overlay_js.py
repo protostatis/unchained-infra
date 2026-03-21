@@ -171,11 +171,15 @@ OVERLAY_JS_TEMPLATE = r"""
     '  background: #21262D;',
     '  border: 1px solid #30363D;',
     '  border-radius: 6px;',
-    '  color: #8B949E;',
+    '  color: #E6EDF3;',
     '  font-size: 12px;',
     '  padding: 6px 10px;',
-    '  cursor: not-allowed;',
-    '  opacity: 0.5;',
+    '  cursor: pointer;',
+    '}',
+    '.uc-send:hover { background: #30363D; }',
+    '.uc-input:focus {',
+    '  border-color: #F57A4B;',
+    '  color: #E6EDF3;',
     '}',
   ].join('\n');
   shadow.appendChild(style);
@@ -226,18 +230,31 @@ OVERLAY_JS_TEMPLATE = r"""
   log.className = 'uc-log';
   body.appendChild(log);
 
-  // Input area (Phase 2 stub)
+  // Input area
   var inputArea = document.createElement('div');
   inputArea.className = 'uc-input-area';
   var input = document.createElement('textarea');
   input.className = 'uc-input';
   input.rows = 1;
-  input.placeholder = 'Follow-up input coming soon...';
-  input.disabled = true;
+  input.placeholder = 'Send a follow-up...';
   var sendBtn = document.createElement('button');
   sendBtn.className = 'uc-send';
   sendBtn.textContent = 'Send';
-  sendBtn.disabled = true;
+  function sendFollowup() {
+    var text = input.value.trim();
+    if (!text || !ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({type: 'user_followup', message: text}));
+    addMsg('status', 'You: ' + text);
+    input.value = '';
+  }
+  sendBtn.addEventListener('click', sendFollowup);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      sendFollowup();
+    }
+  });
   inputArea.appendChild(input);
   inputArea.appendChild(sendBtn);
   body.appendChild(inputArea);

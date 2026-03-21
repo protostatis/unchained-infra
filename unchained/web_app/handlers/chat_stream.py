@@ -55,17 +55,20 @@ def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, pro
         from web_app.handlers.overlay_ws import mint_overlay_token
 
         relay_host, relay_port = core._parse_relay()
+        # The overlay JS runs in the user's browser — it needs the public
+        # hostname for its WebSocket, not the internal Docker relay address.
+        public_host = os.environ.get("PUBLIC_HOST", "api.unchainedsky.com")
         token = mint_overlay_token(session_id, user_id)
 
         overlay_js = build_overlay_js(
             token=token,
-            relay_host=relay_host,
+            relay_host=public_host,
             session_id=session_id,
             prompt_text=prompt_text[:500],
         )
         bootstrap_js = build_overlay_bootstrap_js(
             token=token,
-            relay_host=relay_host,
+            relay_host=public_host,
             session_id=session_id,
             prompt_text=prompt_text[:500],
         )
