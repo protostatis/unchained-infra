@@ -1351,7 +1351,7 @@ body::before{
 <div class="getstarted">
   <div class="gs-header">
     <h2>Get Started</h2>
-    <p>No API key? Start free in 30 seconds. Have an API key? Provision once and get full model power.</p>
+    <p>No API key? Start free in 30 seconds. Have a Claude Pro/Max or ChatGPT Plus plan? Use your existing subscription via CLI. Or provision an API key for full model power.</p>
   </div>
   <div class="cards">
 
@@ -1398,14 +1398,14 @@ body::before{
     <div class="more-cards-inner">
 
     <!-- Section: SDK Agent Lanes -->
-    <div class="section-label">API Agent Lanes &mdash; provision an API key once, then chat</div>
+    <div class="section-label">API Agent Lanes &mdash; provision a key once, or use CLI with your Pro/Plus plan</div>
 
     <div class="sdk-row">
     <!-- Gemini SDK -->
     <div class="card sdk">
       <div class="card-badge">Gemini API &mdash; FREE TRIAL</div>
       <div class="card-title">Gemini API</div>
-      <div class="card-desc">Provision a Gemini API key once via your Chrome browser. Full Gemini model capability &mdash; auto-provisioned in ~30 seconds.</div>
+      <div class="card-desc">Provision a Gemini API key once via your Chrome browser. Full Gemini model capability &mdash; auto-provisioned in ~30 seconds. Free tier available.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Terminal (curl)</span>
@@ -1423,7 +1423,7 @@ body::before{
     <div class="card sdk">
       <div class="card-badge">Claude API</div>
       <div class="card-title">Claude API</div>
-      <div class="card-desc">Provision an Anthropic API key once. Full Claude model capability &mdash; auto-provisioned or paste manually.</div>
+      <div class="card-desc">Provision an Anthropic API key once. Full Claude model capability (Sonnet, Opus, Haiku) &mdash; auto-provisioned or paste manually. Separate from Pro/Max subscription plans.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Anthropic account</span>
@@ -1441,7 +1441,7 @@ body::before{
     <div class="card sdk">
       <div class="card-badge">Codex API</div>
       <div class="card-title">Codex API</div>
-      <div class="card-desc">Provision an OpenAI API key once. Model routing optimized for Codex &mdash; auto-provisioned or paste manually.</div>
+      <div class="card-desc">Provision an OpenAI API key once. Full GPT-4o/o1/Codex model access &mdash; auto-provisioned or paste manually. Separate from ChatGPT Plus subscription plans.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Terminal (curl)</span>
@@ -1463,7 +1463,7 @@ body::before{
     <div class="card local">
       <div class="card-badge">&#128187; Local</div>
       <div class="card-title">Claude CLI</div>
-      <div class="card-desc">Run Claude Code on your local machine. Full Claude power (Sonnet, Opus, Haiku) with direct browser control via CDP. Works with Claude Pro, Max, or API.</div>
+      <div class="card-desc">Run Claude Code on your local machine. Works with Claude Pro, Max, or API plans &mdash; no separate API key needed for Pro/Max subscribers. Full Claude power (Sonnet, Opus, Haiku) with direct browser control.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Claude CLI</span>
@@ -1480,7 +1480,7 @@ body::before{
     <div class="card local">
       <div class="card-badge">&#128187; Local</div>
       <div class="card-title">Codex CLI</div>
-      <div class="card-desc">Run Codex CLI on your local machine. No key provisioning needed &mdash; just install, login, and use Codex CLI models in chat.</div>
+      <div class="card-desc">Run Codex CLI on your local machine. Works with ChatGPT Plus or API plans &mdash; no separate API key needed for Plus subscribers. Just install, login, and chat.</div>
       <div class="card-reqs">
         <span class="req">Chrome</span>
         <span class="req">Codex CLI</span>
