@@ -1071,6 +1071,12 @@ body::before{
 .more-toggle-btn:hover{color:var(--text)}
 .more-toggle-btn .arrow{display:inline-block;transition:transform 0.3s;font-size:12px}
 .more-toggle-btn.expanded .arrow{transform:rotate(180deg)}
+.plan-hint{
+  grid-column:1/-1;
+  text-align:center;padding:16px 0 0;
+  font-size:14px;color:var(--muted);line-height:1.6;
+}
+.plan-hint strong{color:var(--text);font-weight:500}
 .more-toggle-btn{grid-column:1/-1}
 .more-cards-wrap{
   grid-column:1/-1;
@@ -1390,6 +1396,9 @@ body::before{
       <a href="/trial" class="card-btn">Start Free &#8594;</a>
     </div>
 
+    <div class="plan-hint">
+      Already have <strong>Claude Pro/Max</strong> or <strong>ChatGPT Plus</strong>? Use your existing plan via CLI below &mdash; no API key needed.
+    </div>
     <button class="more-toggle-btn" id="moreToggleBtn" onclick="toggleMoreCards()" aria-expanded="false" aria-controls="moreCardsWrap">
       <span class="toggle-label">More ways to get started</span> <span class="arrow">&#9660;</span>
     </button>
