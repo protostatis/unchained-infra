@@ -7,7 +7,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -16,9 +16,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from agent_package import VERSION
 from chat_agent_cli import (
     _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
+    _ensure_research_desk_bridge_running,
+    _ensure_research_desk_server_running,
     _research_desk_launcher_prefix,
     _research_desk_package_url,
     _research_desk_python_binary,
+    _run_research_desk_install_helper,
 )
 import web
 
@@ -337,6 +340,103 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                 _research_desk_launcher_prefix(),
                 "'/tmp/odd path/python3' -m unchained_pyreplab",
             )
+
+    def test_research_desk_bridge_start_skips_when_default_port_is_live(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=True):
+            with patch("chat_agent_cli._run_logged") as mock_run:
+                _ensure_research_desk_bridge_running("/usr/bin/python3")
+        mock_run.assert_not_called()
+
+    def test_research_desk_server_start_skips_when_local_port_is_live(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=True):
+            with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+                _ensure_research_desk_server_running("/usr/bin/python3")
+        mock_spawn.assert_not_called()
+
+    def test_research_desk_bridge_start_uses_timeout(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=False):
+            with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                    with patch("chat_agent_cli.os.path.isfile", return_value=False):
+                        with patch("chat_agent_cli._run_logged", return_value=0) as mock_run:
+                            _ensure_research_desk_bridge_running("/usr/bin/python3")
+        self.assertEqual(mock_run.call_args.kwargs.get("timeout_seconds"), 20.0)
+
+    def test_research_desk_server_start_logs_detached_output(self):
+        with patch("chat_agent_cli._localhost_port_open", return_value=False):
+            with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                    with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+                        _ensure_research_desk_server_running("/usr/bin/python3")
+        self.assertEqual(
+            mock_spawn.call_args.kwargs.get("log_path"),
+            os.path.join(os.path.expanduser("~/.unchained"), "research-desk-serve.log"),
+        )
+
+    def test_research_desk_install_helper_runs_setup_and_bootstrap(self):
+        commands: list[list[str]] = []
+
+        def fake_run_logged(cmd, *, cwd, timeout_seconds=None):
+            del cwd
+            del timeout_seconds
+            commands.append(list(cmd))
+            return 0
+
+        with patch("chat_agent_cli._research_desk_python_binary", return_value="/usr/bin/python3"):
+            with patch(
+                "chat_agent_cli._research_desk_package_url",
+                return_value="https://github.com/protostatis/unchained_pyreplab/archive/refs/tags/v0.1.0.zip",
+            ):
+                with patch("chat_agent_cli._run_logged", side_effect=fake_run_logged):
+                    with patch("chat_agent_cli._localhost_port_open", return_value=False):
+                        with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                            with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+                                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                                    with patch(
+                                        "chat_agent_cli.os.path.isfile",
+                                        side_effect=lambda path: path == "/tmp/unchained-agent/unchained/chrome_bridge.py",
+                                    ):
+                                        _run_research_desk_install_helper()
+
+        self.assertEqual(
+            commands[0],
+            [
+                "/usr/bin/python3",
+                "-m",
+                "pip",
+                "install",
+                "--user",
+                "--upgrade",
+                "https://github.com/protostatis/unchained_pyreplab/archive/refs/tags/v0.1.0.zip",
+            ],
+        )
+        self.assertEqual(commands[1], ["/usr/bin/python3", "-m", "unchained_pyreplab", "setup"])
+        self.assertEqual(
+            commands[2],
+            [
+                "/usr/bin/python3",
+                "-m",
+                "unchained_pyreplab",
+                "bridge-start",
+                "--daemon",
+                "--bridge-dir",
+                "/tmp/unchained-agent/unchained",
+            ],
+        )
+        mock_spawn.assert_called_once_with(
+            [
+                "/usr/bin/python3",
+                "-m",
+                "unchained_pyreplab",
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8766",
+            ],
+            cwd=ANY,
+            log_path=os.path.join(os.path.expanduser("~/.unchained"), "research-desk-serve.log"),
+        )
 
 
 if __name__ == "__main__":
