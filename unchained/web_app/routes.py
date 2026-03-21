@@ -16,6 +16,9 @@ RouteSpec = tuple[str, str, str]
 
 ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/favicon.svg", "handle_favicon"),
+    ("GET", "/robots.txt", "handle_robots_txt"),
+    ("GET", "/sitemap.xml", "handle_sitemap_xml"),
+    ("GET", "/google83c650022d8db556.html", "handle_google_verification"),
     ("GET", "/", "handle_index"),
     ("GET", "/tab", "web_app.handlers.pages:handle_tab_page"),
     ("GET", "/mcp-guide", "web_app.handlers.pages:handle_mcp_guide_page"),
@@ -60,6 +63,10 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/demo", "web_app.handlers.pages:handle_demo_page"),
     ("GET", "/mcp", "web_app.handlers.pages:handle_mcp_page"),
     ("GET", "/case-study/zillow-rental", "web_app.handlers.pages:handle_case_study_zillow"),
+    ("GET", "/use/apartment-hunting", "web_app.handlers.pages:handle_use_case_apartment"),
+    ("GET", "/use/flight-comparison", "web_app.handlers.pages:handle_use_case_flights"),
+    ("GET", "/use/competitor-monitoring", "web_app.handlers.pages:handle_use_case_competitor"),
+    ("GET", "/use/price-tracking", "web_app.handlers.pages:handle_use_case_price_tracking"),
     ("GET", "/labs/research-desk", "web_app.handlers.pages:handle_research_desk_page"),
     ("GET", "/labs/you-navigate", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),
     ("GET", "/labs/x-manager", "web_app.handlers.x_manager_demo:handle_x_manager_demo_page"),

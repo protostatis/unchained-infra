@@ -46,6 +46,10 @@ from web_app.templates import (
     ADMIN_HTML,
     BRANDED_TAB_HTML,
     CASE_STUDY_ZILLOW_HTML,
+    USE_CASE_APARTMENT_HTML,
+    USE_CASE_FLIGHTS_HTML,
+    USE_CASE_COMPETITOR_HTML,
+    USE_CASE_PRICE_TRACKING_HTML,
     CHAT_CLAUDE_SDK_HTML,
     CHAT_CODEX_HTML,
     CHAT_GEMINI_HTML,
@@ -1378,6 +1382,79 @@ async def handle_favicon(request: web.Request) -> web.Response:
     return web.Response(
         text=svg,
         content_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_robots_txt(request: web.Request) -> web.Response:
+    """GET /robots.txt — search engine crawl directives."""
+    del request
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /admin/\n"
+        "Disallow: /web/\n"
+        "Disallow: /auth/\n"
+        "Disallow: /chat/ws\n"
+        "Disallow: /install/\n"
+        "Disallow: /trial/\n"
+        "\n"
+        "Sitemap: https://unchainedsky.com/sitemap.xml\n"
+    )
+    return web.Response(
+        text=body,
+        content_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_sitemap_xml(request: web.Request) -> web.Response:
+    """GET /sitemap.xml — list public pages for search engines."""
+    del request
+    pages = [
+        ("https://unchainedsky.com/", "1.0", "weekly"),
+        ("https://unchainedsky.com/first-look", "0.9", "weekly"),
+        ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
+        ("https://unchainedsky.com/use/flight-comparison", "0.8", "monthly"),
+        ("https://unchainedsky.com/use/competitor-monitoring", "0.8", "monthly"),
+        ("https://unchainedsky.com/use/price-tracking", "0.8", "monthly"),
+        ("https://unchainedsky.com/mcp", "0.7", "monthly"),
+        ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
+        ("https://unchainedsky.com/privacy", "0.3", "yearly"),
+    ]
+    urls = "\n".join(
+        f"  <url>\n"
+        f"    <loc>{loc}</loc>\n"
+        f"    <priority>{pri}</priority>\n"
+        f"    <changefreq>{freq}</changefreq>\n"
+        f"  </url>"
+        for loc, pri, freq in pages
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>\n"
+    )
+    return web.Response(
+        text=xml,
+        content_type="application/xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_google_verification(request: web.Request) -> web.Response:
+    """GET /google83c650022d8db556.html — Google Search Console verification."""
+    del request
+    return web.Response(
+        text=(
+            "<!DOCTYPE html><html><head>"
+            '<meta name="google-site-verification"'
+            ' content="google83c650022d8db556" />'
+            "</head><body></body></html>"
+        ),
+        content_type="text/html",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
