@@ -82,6 +82,11 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
 _replay_buffers: dict[str, collections.deque] = {}
 _REPLAY_BUFFER_MAX = 50
 
+# Events from overlay follow-ups, buffered for the parent /local UI to poll.
+# Keyed by session_id, each entry is a deque of events.
+_parent_notify: dict[str, collections.deque] = {}
+_PARENT_NOTIFY_MAX = 200
+
 
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
     """Push an event to all overlay WS subscribers for a session.
@@ -173,6 +178,10 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     # Agent responses arrive on the response_queues[session_id] via
     # the chat WS handler. If no SSE consumer is active (parent browser
     # closed), we need a background task to drain and broadcast them.
+    # Buffer the user's follow-up for the parent /local UI
+    notify = _parent_notify.setdefault(session_id, collections.deque(maxlen=_PARENT_NOTIFY_MAX))
+    notify.append({"type": "overlay_user", "data": message})
+
     async def _drain_responses():
         q = core._response_queues.get(session_id)
         if q is None:
@@ -185,14 +194,42 @@ async def _route_followup(core, session_id: str, message: str) -> None:
                 except asyncio.TimeoutError:
                     break
                 broadcast_to_overlay(session_id, evt)
+                # Also buffer for parent /local UI
+                notify.append(evt)
                 if evt.get("type") == "error":
                     break
                 if evt.get("type") == "done":
-                    break  # turn done, but don't clean up — stay ready
+                    break
         except Exception:
             pass
 
     asyncio.create_task(_drain_responses())
+
+
+# ---------------------------------------------------------------------------
+# Parent /local UI poll endpoint
+# ---------------------------------------------------------------------------
+
+async def handle_overlay_events(request: web.Request) -> web.Response:
+    """GET /web/chat/overlay-events — return pending overlay follow-up events.
+
+    The /local UI polls this to pick up messages from overlay follow-ups.
+    Returns events and clears the buffer.
+    """
+    core = _core()
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    session_id = request.query.get("session_id", "")
+    if not session_id:
+        return web.json_response({"events": []})
+
+    buf = _parent_notify.pop(session_id, None)
+    if not buf:
+        return web.json_response({"events": []})
+
+    return web.json_response({"events": list(buf)})
 
 
 # ---------------------------------------------------------------------------
