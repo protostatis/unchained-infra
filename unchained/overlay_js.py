@@ -21,7 +21,9 @@ OVERLAY_JS_TEMPLATE = r"""
   'use strict';
   var HOST_ID = '__uc_overlay_host';
 
-  // Remove previous instance if re-injected
+  // Prevent duplicate overlays from concurrent injections
+  if (window.__uc_overlay_creating) return;
+  window.__uc_overlay_creating = true;
   var old = document.getElementById(HOST_ID);
   if (old) old.remove();
 
@@ -375,6 +377,7 @@ OVERLAY_JS_TEMPLATE = r"""
     };
   }
   connect();
+  window.__uc_overlay_creating = false;
 
   // Cleanup on unload
   window.addEventListener('beforeunload', function() {

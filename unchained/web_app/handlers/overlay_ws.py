@@ -77,15 +77,24 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
 # ---------------------------------------------------------------------------
 
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
-    """Push an event to the overlay WS subscriber for a session."""
+    """Push an event to the overlay WS subscriber for a session.
+
+    If no subscriber is connected yet (WS hasn't completed auth),
+    buffer events on the overlay state for replay on connect.
+    """
     core = _core()
     overlay = core._overlay_sessions.get(session_id)
-    if not overlay or not overlay.subscriber:
+    if not overlay:
+        return
+    if not overlay.subscriber:
+        # Buffer for replay when WS connects (cap at 50)
+        if len(overlay.pending_events) < 50:
+            overlay.pending_events.append(event)
         return
     try:
         overlay.subscriber.put_nowait(event)
     except asyncio.QueueFull:
-        pass  # skip for slow client
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +206,14 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
         except asyncio.QueueFull:
             pass
     overlay.subscriber = q
+
+    # Drain any events buffered before this WS connected
+    for evt in overlay.pending_events:
+        try:
+            q.put_nowait(evt)
+        except asyncio.QueueFull:
+            break
+    overlay.pending_events.clear()
 
     # --- Writer: forward events from queue to WS ---
     async def _writer():
