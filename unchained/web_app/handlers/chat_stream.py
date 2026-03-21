@@ -670,8 +670,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._response_queues.pop(session_id, None)
             return web.json_response({"error": f"Failed to launch selected profile: {e}"}, status=502)
     elif tab_id and str(tab_id).startswith("prov-"):
-        await core._close_session_tab(session_id)
-        tab_id = None
+        # Keep the provisioned tab if the profile selector wasn't explicitly
+        # cleared. A stale/empty profile_path just means the user didn't
+        # re-select — not that they want to switch back to guest.
+        pass
 
     try:
         ws_msg = {
