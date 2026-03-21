@@ -294,7 +294,8 @@ OVERLAY_JS_TEMPLATE = r"""
   // --- WebSocket ---
   var ws = null;
   var reconnectTimer = null;
-  var wsProto = (location.protocol === 'https:' || CFG.host.indexOf('localhost') === -1) ? 'wss' : 'ws';
+  var noReconnect = false;
+  var wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
 
   function connect() {
     try {
@@ -333,7 +334,7 @@ OVERLAY_JS_TEMPLATE = r"""
     };
     ws.onclose = function() {
       dot.className = 'uc-dot';
-      if (!reconnectTimer) {
+      if (!noReconnect && !reconnectTimer) {
         reconnectTimer = setTimeout(function() {
           reconnectTimer = null;
           connect();
@@ -348,8 +349,8 @@ OVERLAY_JS_TEMPLATE = r"""
 
   // Cleanup on unload
   window.addEventListener('beforeunload', function() {
+    noReconnect = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = -1; // prevent reconnect
     if (ws) { try { ws.close(); } catch(_){} }
   });
 })();
@@ -394,19 +395,6 @@ def build_overlay_js(
 OVERLAY_BOOTSTRAP_TEMPLATE = r"""
 (function() {
   'use strict';
-  var KEY = '__uc_overlay_cfg_v1';
-  var stored = null;
-  try { stored = sessionStorage.getItem(KEY); } catch(_){}
-  if (!stored) {
-    // First injection — store config
-    var cfg = {
-      token: '%%TOKEN%%',
-      host: '%%RELAY_HOST%%',
-      sessionId: '%%SESSION_ID%%',
-      prompt: '%%PROMPT_TEXT%%'
-    };
-    try { sessionStorage.setItem(KEY, JSON.stringify(cfg)); } catch(_){}
-  }
   // Re-inject the full overlay after a short delay (let page DOM settle)
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() {
@@ -433,10 +421,4 @@ def build_overlay_bootstrap_js(
         session_id=session_id,
         prompt_text=prompt_text,
     )
-    bootstrap = OVERLAY_BOOTSTRAP_TEMPLATE
-    bootstrap = bootstrap.replace("%%TOKEN%%", _js_escape(token))
-    bootstrap = bootstrap.replace("%%RELAY_HOST%%", _js_escape(relay_host))
-    bootstrap = bootstrap.replace("%%SESSION_ID%%", _js_escape(session_id))
-    bootstrap = bootstrap.replace("%%PROMPT_TEXT%%", _js_escape(prompt_text))
-    bootstrap = bootstrap.replace("%%FULL_OVERLAY_JS%%", full_js)
-    return bootstrap
+    return OVERLAY_BOOTSTRAP_TEMPLATE.replace("%%FULL_OVERLAY_JS%%", full_js)
