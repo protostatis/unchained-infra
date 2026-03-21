@@ -20,44 +20,40 @@ _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 
 
 # ---------------------------------------------------------------------------
-# Overlay copilot helpers
+# Overlay copilot v2
 # ---------------------------------------------------------------------------
-
-_overlay_import_warned = False
 
 
 def _broadcast_overlay(session_id: str, event: dict) -> None:
-    """Push an event to all overlay WS subscribers for a session."""
-    global _overlay_import_warned
+    """Push an event to the overlay WS subscriber for a session."""
     try:
         from web_app.handlers.overlay_ws import broadcast_to_overlay
         broadcast_to_overlay(session_id, event)
-    except ImportError:
-        if not _overlay_import_warned:
-            _overlay_import_warned = True
-            print("[overlay] WARNING: overlay_ws module not available — overlay broadcast disabled")
     except Exception:
         pass
 
 
-def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, prompt_text: str, user_id: str = "") -> None:
-    """Inject the overlay copilot into the task browser.
+def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
+                     prompt_text: str, user_id: str = "", slot: int | None = None) -> None:
+    """Inject the overlay copilot into a concrete browser tab.
 
-    Re-injects on every turn — the overlay JS safely removes any
-    previous instance before creating a new one. This ensures the
-    overlay reappears after tab changes, disconnects, or navigation
-    that cleared the addScriptToEvaluateOnNewDocument state.
+    Only injects when tab_id is a real tab (not "auto"). Creates or updates
+    OverlaySessionState. Cleans up any previous bootstrap script before
+    re-injecting.
 
     Must be called from a running asyncio event loop (uses create_task).
     """
+    # Never inject on "auto" — we need a concrete tab to avoid cross-profile bleed
+    if not tab_id or tab_id == "auto":
+        return
+
     try:
         import cloud_tools
         from overlay_js import build_overlay_js, build_overlay_bootstrap_js
         from web_app.handlers.overlay_ws import mint_overlay_token
+        from web_state import OverlaySessionState
 
         relay_host, relay_port = core._parse_relay()
-        # The overlay JS runs in the user's browser — it needs the public
-        # hostname for its WebSocket, not the internal Docker relay address.
         public_host = os.environ.get("PUBLIC_HOST", "api.unchainedsky.com")
         token = mint_overlay_token(session_id, user_id)
 
@@ -74,31 +70,69 @@ def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, pro
             prompt_text=prompt_text[:500],
         )
 
+        # Create or update overlay state
+        overlay = core._overlay_sessions.get(session_id)
+        if not overlay:
+            overlay = OverlaySessionState(
+                session_id=session_id,
+                agent_id=agent_id,
+                tab_id=tab_id,
+                user_id=user_id,
+                slot=slot,
+                token=token,
+            )
+            core._overlay_sessions[session_id] = overlay
+        else:
+            overlay.agent_id = agent_id
+            overlay.tab_id = tab_id
+            overlay.user_id = user_id
+            overlay.token = token
+            if slot is not None:
+                overlay.slot = slot
+
         async def _inject():
             try:
-                # Bypass CSP so the overlay WS can connect to our domain
+                # Clean up previous bootstrap script if tab changed
+                old_bootstrap = overlay.bootstrap_id
+                if old_bootstrap:
+                    try:
+                        await cloud_tools.run_cdp_command(
+                            agent_id, tab_id,
+                            "Page.removeScriptToEvaluateOnNewDocument",
+                            {"identifier": old_bootstrap},
+                            relay_host, relay_port,
+                        )
+                    except Exception:
+                        pass
+                    overlay.bootstrap_id = ""
+
+                # Bypass CSP so the overlay WS can connect
                 await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
-                    "Page.setBypassCSP",
-                    {"enabled": True},
+                    "Page.setBypassCSP", {"enabled": True},
                     relay_host, relay_port,
                 )
+                # Inject overlay JS
                 await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
-                await cloud_tools.run_cdp_command(
+                # Persist across navigations within this tab
+                result = await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.addScriptToEvaluateOnNewDocument",
                     {"source": bootstrap_js},
                     relay_host, relay_port,
                 )
-                core._overlay_injected[session_id] = (agent_id, tab_id)
-                print(f"[overlay] Injected copilot overlay for session {session_id}")
+                # Store identifier for cleanup
+                if isinstance(result, dict) and result.get("identifier"):
+                    overlay.bootstrap_id = result["identifier"]
+                overlay.injected = True
+                print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
             except Exception as e:
-                print(f"[overlay] Failed to inject overlay: {e}")
+                print(f"[overlay] Injection failed: {e}")
 
         import asyncio
         asyncio.create_task(_inject())
     except Exception as e:
-        print(f"[overlay] Overlay injection setup failed: {e}")
+        print(f"[overlay] Injection setup failed: {e}")
 
 
 def _normalize_profile_path(raw: object) -> str:
@@ -639,10 +673,6 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         }
         if slot is not None:
             ws_msg["slot"] = slot
-            # Store slot for overlay follow-ups to resume same conversation
-            if not hasattr(core, '_session_slots'):
-                core._session_slots = {}
-            core._session_slots[session_id] = slot
         if scheduler_armed:
             ws_msg["scheduler_armed"] = True
             ws_msg["scheduler_grant_id"] = scheduler_grant_id
@@ -689,11 +719,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._session_agents[session_id] = routing_agent_id
 
     # --- Inject overlay copilot into the task browser ---
-    # For /local sessions tab_id may be None (agent uses "auto" internally).
-    # Use "auto" as fallback so the overlay reaches the agent's default tab.
-    overlay_tab = tab_id or "auto"
-    if not guest_mode and not is_openrouter:
-        _maybe_inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message, user_id=auth_info.get("user_id", ""))
+    # Only inject when we have a concrete tab_id (not None/"auto")
+    if tab_id and not guest_mode and not is_openrouter:
+        _inject_overlay(core, session_id, cdp_agent_id, tab_id, message,
+                        user_id=auth_info.get("user_id", ""), slot=slot)
 
     resp = web.StreamResponse(
         status=200,
@@ -757,23 +786,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         if core._response_queues.get(session_id) is q:
             core._response_queues.pop(session_id, None)
             core._response_req_ids.pop(session_id, None)
-            # Keep session_agents alive if overlay is connected — follow-ups
-            # need it to route messages to the agent.
-            has_overlay = bool(core._overlay_subscribers.get(session_id))
+            # Keep session_agents alive if overlay has an active subscriber
+            overlay = core._overlay_sessions.get(session_id)
+            has_overlay = overlay and overlay.subscriber is not None
             if not has_overlay:
                 core._session_agents.pop(session_id, None)
-            # Keep overlay_injected and overlay_subscribers alive across
-            # turns — the overlay panel persists and accepts follow-ups.
-            # They clean up when the overlay WS itself disconnects.
             if not stream_completed:
-                # Only clean overlay state on abnormal disconnect
-                core._overlay_injected.pop(session_id, None)
-                core._overlay_subscribers.pop(session_id, None)
-                try:
-                    from web_app.handlers.overlay_ws import _replay_buffers
-                    _replay_buffers.pop(session_id, None)
-                except Exception:
-                    pass
+                # Abnormal disconnect — clean up overlay state too
+                core._overlay_sessions.pop(session_id, None)
                 asyncio.create_task(core._close_session_tab(session_id))
         if scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)

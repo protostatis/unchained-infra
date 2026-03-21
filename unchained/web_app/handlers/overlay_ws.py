@@ -1,20 +1,20 @@
-"""Overlay copilot WebSocket handler.
+"""Overlay copilot WebSocket handler (v2).
 
-The overlay JS running inside the agent-controlled browser tab connects
-here to receive real-time chat events and (in Phase 2) send follow-up
-prompts back to the agent.
+Thin WS handler — the overlay JS connects here to receive events
+and send follow-ups. All state lives in OverlaySessionState on core.
+Follow-ups are routed through the normal chat message path.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import collections
 import hashlib
 import hmac
 import json
 import os
 import time
+import uuid
 
 from aiohttp import web
 
@@ -29,7 +29,6 @@ _TOKEN_TTL = 3600  # 1 hour
 
 
 def _require_secret(secret: str = "") -> str:
-    """Resolve the HMAC secret, raising if absent."""
     secret = secret or os.environ.get("JWT_SECRET", "")
     if not secret:
         raise RuntimeError("JWT_SECRET is not configured — overlay tokens cannot be signed")
@@ -53,7 +52,7 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
     """Validate and decode an overlay token. Returns {session_id, user_id} or None."""
     secret = secret or os.environ.get("JWT_SECRET", "")
     if not secret:
-        return None  # refuse to validate without a signing key
+        return None
     try:
         raw = base64.urlsafe_b64decode(token.encode()).decode()
         obj = json.loads(raw)
@@ -74,73 +73,33 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Broadcast helper (called from chat_stream.py)
+# Broadcast (called from chat_stream SSE loop)
 # ---------------------------------------------------------------------------
-
-# Per-session ring buffer for events sent before any overlay WS connects.
-# Replayed to new subscribers on connect so they don't miss early events.
-_replay_buffers: dict[str, collections.deque] = {}
-_REPLAY_BUFFER_MAX = 50
-
-# Events from overlay follow-ups, buffered for the parent /local UI to poll.
-# Keyed by session_id, each entry is a deque of events.
-_parent_notify: dict[str, collections.deque] = {}
-_PARENT_NOTIFY_MAX = 200
-
 
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
-    """Push an event to all overlay WS subscribers for a session.
-
-    If no subscribers exist yet, events are buffered (up to 50) so the
-    overlay can replay them when it connects.
-    """
+    """Push an event to the overlay WS subscriber for a session."""
     core = _core()
-    subscribers = core._overlay_subscribers.get(session_id)
-    if not subscribers:
-        # No overlay connected yet — buffer for replay
-        buf = _replay_buffers.get(session_id)
-        if buf is None:
-            buf = collections.deque(maxlen=_REPLAY_BUFFER_MAX)
-            _replay_buffers[session_id] = buf
-        buf.append(event)
+    overlay = core._overlay_sessions.get(session_id)
+    if not overlay or not overlay.subscriber:
         return
-    for q in subscribers:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            pass  # skip event for slow client, don't evict
-
-
-def _drain_replay_buffer(session_id: str, q: asyncio.Queue) -> None:
-    """Replay buffered events to a newly connected overlay subscriber."""
-    buf = _replay_buffers.pop(session_id, None)
-    if not buf:
-        return
-    for event in buf:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            break
+    try:
+        overlay.subscriber.put_nowait(event)
+    except asyncio.QueueFull:
+        pass  # skip for slow client
 
 
 # ---------------------------------------------------------------------------
-# Follow-up routing
+# Follow-up routing (through normal chat path)
 # ---------------------------------------------------------------------------
 
 async def _route_followup(core, session_id: str, message: str) -> None:
-    """Route a follow-up message from the overlay into the agent WS.
-
-    Sends the message to the agent and sets up a response queue.
-    Events are broadcast to overlay subscribers via the existing
-    chat_stream WS handler (agent responses go to response_queues,
-    which chat_stream broadcasts). This function does NOT block
-    waiting for the response — it fires and returns immediately.
-    """
-    import uuid
-    agent_id = core._session_agents.get(session_id)
-    if not agent_id:
-        print(f"[overlay] follow-up dropped — no agent for session {session_id}")
+    """Route a follow-up from the overlay through the normal chat message path."""
+    overlay = core._overlay_sessions.get(session_id)
+    if not overlay:
+        print(f"[overlay] follow-up dropped — no overlay state for {session_id}")
         return
+
+    agent_id = core._session_agents.get(session_id) or overlay.agent_id
     agent_ws = core._chat_agents.get(agent_id)
     if agent_ws is None or agent_ws.closed:
         print(f"[overlay] follow-up dropped — agent {agent_id} not connected")
@@ -148,7 +107,7 @@ async def _route_followup(core, session_id: str, message: str) -> None:
 
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
 
-    # Create the response queue BEFORE sending so no events are lost
+    # Create response queue BEFORE sending so no events are lost
     q: asyncio.Queue = asyncio.Queue()
     core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
@@ -159,35 +118,21 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         "message": message,
         "req_id": req_id,
     }
-    tab_id = core._session_tabs.get(session_id)
-    if tab_id:
-        ws_msg["tab_id"] = tab_id
-    # Include slot so the agent resumes the same conversation
-    slot = getattr(core, '_session_slots', {}).get(session_id)
-    if slot is not None:
-        ws_msg["slot"] = slot
+    if overlay.tab_id:
+        ws_msg["tab_id"] = overlay.tab_id
+    if overlay.slot is not None:
+        ws_msg["slot"] = overlay.slot
 
     try:
         await agent_ws.send_json(ws_msg)
-        print(f"[overlay] follow-up routed to agent {agent_id}: {message[:60]}")
+        print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
     except Exception as e:
         print(f"[overlay] follow-up send failed: {e}")
         core._response_queues.pop(session_id, None)
         return
 
-    # Re-inject overlay on the agent's current tab (may have changed).
-    try:
-        from web_app.handlers.chat_stream import _maybe_inject_overlay
-        overlay_tab = core._session_tabs.get(session_id) or "auto"
-        _maybe_inject_overlay(core, session_id, agent_id, overlay_tab, message)
-    except Exception as e:
-        print(f"[overlay] re-inject on follow-up failed: {e}")
-
-    # Buffer the user's follow-up for the parent /local UI
-    notify = _parent_notify.setdefault(session_id, collections.deque(maxlen=_PARENT_NOTIFY_MAX))
-    notify.append({"type": "overlay_user", "data": message})
-
-    async def _drain_responses():
+    # Drain responses in background — broadcast to overlay subscriber
+    async def _drain():
         try:
             while True:
                 try:
@@ -195,48 +140,12 @@ async def _route_followup(core, session_id: str, message: str) -> None:
                 except asyncio.TimeoutError:
                     break
                 broadcast_to_overlay(session_id, evt)
-                # Buffer relevant events for parent /local UI
-                if evt.get("type") in ("text", "done", "error"):
-                    notify.append(evt)
-                if evt.get("type") == "error":
-                    break
-                if evt.get("type") == "done":
+                if evt.get("type") in ("done", "error"):
                     break
         except Exception:
             pass
 
-    asyncio.create_task(_drain_responses())
-
-
-# ---------------------------------------------------------------------------
-# Parent /local UI poll endpoint
-# ---------------------------------------------------------------------------
-
-async def handle_overlay_events(request: web.Request) -> web.Response:
-    """GET /web/chat/overlay-events — return pending overlay follow-up events.
-
-    The /local UI polls this to pick up messages from overlay follow-ups.
-    Returns events and clears the buffer.
-    """
-    core = _core()
-    auth_info = core._authenticate(request)
-    if auth_info is None:
-        return web.json_response({"error": "Not authenticated"}, status=401)
-
-    session_id = request.query.get("session_id", "")
-    if not session_id:
-        return web.json_response({"events": []})
-
-    # Ownership check — session IDs embed the key hash: s-{agent_id}-{key_hash}-{rand}
-    key_hash = auth_info.get("key_hash", "")
-    if key_hash and f"-{key_hash}-" not in session_id:
-        return web.json_response({"events": []})
-
-    buf = _parent_notify.pop(session_id, None)
-    if not buf:
-        return web.json_response({"events": []})
-
-    return web.json_response({"events": list(buf)})
+    asyncio.create_task(_drain())
 
 
 # ---------------------------------------------------------------------------
@@ -244,60 +153,63 @@ async def handle_overlay_events(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
-    """GET /overlay/ws -- overlay copilot WebSocket."""
+    """GET /overlay/ws — overlay copilot WebSocket (v2)."""
     core = _core()
     ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)
 
-    # --- Auth handshake ---
+    # --- Auth ---
     try:
         auth_msg = await asyncio.wait_for(ws.receive_json(), timeout=10)
     except Exception:
-        await ws.close(code=4001, message=b"auth timeout or malformed")
+        await ws.close(code=4001, message=b"auth timeout")
         return ws
 
-    token_str = auth_msg.get("token", "")
-    token_data = validate_overlay_token(token_str)
+    token_data = validate_overlay_token(auth_msg.get("token", ""))
     if not token_data:
-        await ws.send_json({"type": "error", "data": "invalid or expired overlay token"})
+        await ws.send_json({"type": "error", "data": "invalid or expired token"})
         await ws.close(code=4003, message=b"invalid token")
         return ws
 
     session_id = token_data["session_id"]
-    await ws.send_json({"type": "auth_ok", "session_id": session_id})
+    overlay = core._overlay_sessions.get(session_id)
 
-    # --- Subscribe to session events ---
-    # Each re-injection creates a new overlay + WS. Evict old stale
-    # subscribers by sending them a done signal, then replace with the
-    # new one. Only the most recent overlay instance matters.
+    # Create overlay state if it doesn't exist yet (first connect)
+    if not overlay:
+        from web_state import OverlaySessionState
+        overlay = OverlaySessionState(
+            session_id=session_id,
+            agent_id="",
+            tab_id="",
+            user_id=token_data.get("user_id", ""),
+            token=auth_msg.get("token", ""),
+        )
+        core._overlay_sessions[session_id] = overlay
+
+    await ws.send_json({"type": "auth_ok"})
+
+    # --- Subscribe: replace any previous subscriber ---
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
-    subs = core._overlay_subscribers.setdefault(session_id, [])
-    # Signal old subscribers to stop
-    for old_q in subs:
+    old_q = overlay.subscriber
+    if old_q is not None:
         try:
             old_q.put_nowait({"type": "done"})
         except asyncio.QueueFull:
             pass
-    subs.clear()
-    subs.append(q)
-    # Replay any events that were broadcast before this WS connected
-    _drain_replay_buffer(session_id, q)
+    overlay.subscriber = q
 
+    # --- Writer: forward events from queue to WS ---
     async def _writer():
-        """Forward events from the queue to the overlay WS."""
         try:
             while not ws.closed:
                 try:
                     evt = await asyncio.wait_for(q.get(), timeout=15)
                 except asyncio.TimeoutError:
-                    # aiohttp heartbeat=30 handles WS ping/pong; just loop
                     continue
                 try:
                     await ws.send_json(evt)
                 except Exception:
                     break
-                # Don't break on "done" — it's a turn completion, not
-                # session end. The overlay stays alive for follow-ups.
                 if evt.get("type") == "error":
                     break
         except asyncio.CancelledError:
@@ -305,7 +217,7 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
 
     writer_task = asyncio.create_task(_writer())
 
-    # --- Read incoming messages from the overlay ---
+    # --- Reader: handle incoming messages ---
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
@@ -313,12 +225,10 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
                     continue
-                msg_type = data.get("type", "")
-                if msg_type == "user_followup":
-                    followup_text = str(data.get("message", "")).strip()
-                    if followup_text:
-                        await _route_followup(core, session_id, followup_text)
-                # Other message types can be added here
+                if data.get("type") == "user_followup":
+                    text = str(data.get("message", "")).strip()
+                    if text and len(text) <= 4000:
+                        await _route_followup(core, session_id, text)
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
     finally:
@@ -327,13 +237,8 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
             await writer_task
         except asyncio.CancelledError:
             pass
-        # Remove our queue from the subscriber list
-        try:
-            subs = core._overlay_subscribers.get(session_id, [])
-            subs[:] = [s for s in subs if s is not q]
-            if not subs:
-                core._overlay_subscribers.pop(session_id, None)
-        except Exception:
-            pass
+        # Clear subscriber (don't delete overlay state — session may still be active)
+        if overlay.subscriber is q:
+            overlay.subscriber = None
 
     return ws
