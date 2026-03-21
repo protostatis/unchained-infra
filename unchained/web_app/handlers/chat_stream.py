@@ -19,6 +19,77 @@ from web_app.core import get_core as _core
 _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 
 
+# ---------------------------------------------------------------------------
+# Overlay copilot helpers
+# ---------------------------------------------------------------------------
+
+_overlay_import_warned = False
+
+
+def _broadcast_overlay(session_id: str, event: dict) -> None:
+    """Push an event to all overlay WS subscribers for a session."""
+    global _overlay_import_warned
+    try:
+        from web_app.handlers.overlay_ws import broadcast_to_overlay
+        broadcast_to_overlay(session_id, event)
+    except ImportError:
+        if not _overlay_import_warned:
+            _overlay_import_warned = True
+            print("[overlay] WARNING: overlay_ws module not available — overlay broadcast disabled")
+    except Exception:
+        pass
+
+
+def _maybe_inject_overlay(core, session_id: str, agent_id: str, tab_id: str, prompt_text: str, user_id: str = "") -> None:
+    """Inject the overlay copilot into the task browser if not already present.
+
+    Must be called from a running asyncio event loop (uses create_task).
+    """
+    injected = core._overlay_injected.get(session_id)
+    if injected and injected == (agent_id, tab_id):
+        return  # already injected for this session + tab
+
+    try:
+        import cloud_tools
+        from overlay_js import build_overlay_js, build_overlay_bootstrap_js
+        from web_app.handlers.overlay_ws import mint_overlay_token
+
+        relay_host, relay_port = core._parse_relay()
+        token = mint_overlay_token(session_id, user_id)
+
+        overlay_js = build_overlay_js(
+            token=token,
+            relay_host=relay_host,
+            session_id=session_id,
+            prompt_text=prompt_text[:500],
+        )
+        bootstrap_js = build_overlay_bootstrap_js(
+            token=token,
+            relay_host=relay_host,
+            session_id=session_id,
+            prompt_text=prompt_text[:500],
+        )
+
+        async def _inject():
+            try:
+                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                await cloud_tools.run_cdp_command(
+                    agent_id, tab_id,
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    {"source": bootstrap_js},
+                    relay_host, relay_port,
+                )
+                core._overlay_injected[session_id] = (agent_id, tab_id)
+                print(f"[overlay] Injected copilot overlay for session {session_id}")
+            except Exception as e:
+                print(f"[overlay] Failed to inject overlay: {e}")
+
+        import asyncio
+        asyncio.create_task(_inject())
+    except Exception as e:
+        print(f"[overlay] Overlay injection setup failed: {e}")
+
+
 def _normalize_profile_path(raw: object) -> str:
     """Normalize optional profile path from client payloads."""
     return str(raw or "").strip()
@@ -596,6 +667,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
     core._session_agents[session_id] = routing_agent_id
 
+    # --- Inject overlay copilot into the task browser (if tab is available) ---
+    if tab_id and not guest_mode:
+        _maybe_inject_overlay(core, session_id, cdp_agent_id, tab_id, message, user_id=auth_info.get("user_id", ""))
+
     resp = web.StreamResponse(
         status=200,
         headers={
@@ -647,6 +722,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             except (ConnectionResetError, Exception):
                 break
 
+            # Broadcast to overlay copilot subscribers
+            _broadcast_overlay(session_id, evt)
+
             if evt.get("type") == "done" or evt.get("type") == "error":
                 stream_completed = True
                 break
@@ -656,6 +734,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             core._response_queues.pop(session_id, None)
             core._session_agents.pop(session_id, None)
             core._response_req_ids.pop(session_id, None)
+            core._overlay_injected.pop(session_id, None)
+            core._overlay_subscribers.pop(session_id, None)
             if not stream_completed:
                 asyncio.create_task(core._close_session_tab(session_id))
         if scheduler_grant_id:
