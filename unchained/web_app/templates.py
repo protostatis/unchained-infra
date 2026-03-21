@@ -3565,7 +3565,7 @@ function showMain() {
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
-  _startOverlayPoll();
+
 }
 
 async function checkAgentStatus() {
@@ -4117,7 +4117,7 @@ async function doSend() {
   input.style.height = 'auto';
 
   sending = true;
-  _stopOverlayPoll();
+
   document.getElementById('sendbtn').style.display = 'none';
   document.getElementById('cancelbtn').style.display = 'block';
   const slotbar = document.getElementById('slotbar');
@@ -4258,49 +4258,8 @@ async function doSend() {
     _navTrail = [];
     renderNavTrail();
     maybeShowUpgrade();
-    _startOverlayPoll();
+  
   }
-}
-
-// --- Overlay follow-up sync ---
-// Poll for events from overlay follow-ups and append them to the chat.
-let _overlayPollTimer = null;
-let _overlayPolling = false;
-function _startOverlayPoll() {
-  if (_overlayPollTimer) return;
-  _overlayPollTimer = setInterval(async () => {
-    if (_overlayPolling || sending || !sessionId) return;
-    _overlayPolling = true;
-    try {
-      const r = await fetch('/web/chat/overlay-events?session_id=' + encodeURIComponent(sessionId));
-      if (!r.ok) return;
-      const data = await r.json();
-      if (!data.events || data.events.length === 0) return;
-      const chat = document.getElementById('chat');
-      let bubble = null;
-      for (const evt of data.events) {
-        if (evt.type === 'overlay_user') {
-          const userBub = document.createElement('div');
-          userBub.className = 'bubble user';
-          userBub.textContent = evt.data;
-          chat.appendChild(userBub);
-          bubble = document.createElement('div');
-          bubble.className = 'bubble asst';
-          chat.appendChild(bubble);
-        } else if (evt.type === 'text' && bubble) {
-          appendText(bubble, evt.data);
-        } else if (evt.type === 'error' && bubble) {
-          appendText(bubble, 'Error: ' + (evt.data || 'unknown'));
-        } else if (evt.type === 'done') {
-          bubble = null;
-        }
-      }
-      scrollToBottom();
-    } catch {} finally { _overlayPolling = false; }
-  }, 3000);
-}
-function _stopOverlayPoll() {
-  if (_overlayPollTimer) { clearInterval(_overlayPollTimer); _overlayPollTimer = null; }
 }
 
 let _upgradeDismissed = false;
@@ -8918,7 +8877,7 @@ function showMain() {
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
-  _startOverlayPoll();
+
 }
 
 async function checkAgentStatus() {
@@ -9552,46 +9511,6 @@ async function doCancel() {
   if (_cancelCtrl) _cancelCtrl.abort();
 }
 
-// --- Overlay follow-up sync (CLAUDE_CHAT / /local) ---
-let _olPollTimer = null;
-let _olPolling = false;
-function _startOverlayPoll() {
-  if (_olPollTimer) return;
-  _olPollTimer = setInterval(async () => {
-    if (_olPolling || sending || !sessionId) return;
-    _olPolling = true;
-    try {
-      const r = await fetch('/web/chat/overlay-events?session_id=' + encodeURIComponent(sessionId));
-      if (!r.ok) return;
-      const data = await r.json();
-      if (!data.events || data.events.length === 0) return;
-      const chat = document.getElementById('chat');
-      let bubble = null;
-      for (const evt of data.events) {
-        if (evt.type === 'overlay_user') {
-          const ub = document.createElement('div');
-          ub.className = 'bubble user';
-          ub.textContent = evt.data;
-          chat.appendChild(ub);
-          bubble = document.createElement('div');
-          bubble.className = 'bubble asst';
-          chat.appendChild(bubble);
-        } else if (evt.type === 'text' && bubble) {
-          appendText(bubble, evt.data);
-        } else if (evt.type === 'error' && bubble) {
-          appendText(bubble, 'Error: ' + (evt.data || 'unknown'));
-        } else if (evt.type === 'done') {
-          bubble = null;
-        }
-      }
-      scrollToBottom();
-    } catch {} finally { _olPolling = false; }
-  }, 3000);
-}
-function _stopOverlayPoll() {
-  if (_olPollTimer) { clearInterval(_olPollTimer); _olPollTimer = null; }
-}
-
 async function doSend() {
   if (sending) return;
   const input = document.getElementById('msginput');
@@ -9602,7 +9521,7 @@ async function doSend() {
   input.style.height = 'auto';
 
   sending = true;
-  _stopOverlayPoll();
+
   document.getElementById('sendbtn').style.display = 'none';
   document.getElementById('cancelbtn').style.display = 'block';
   const slotbar = document.getElementById('slotbar');
@@ -9716,7 +9635,7 @@ async function doSend() {
     _turnCount = 0;
     _navTrail = [];
     renderNavTrail();
-    _startOverlayPoll();
+  
   }
 }
 
