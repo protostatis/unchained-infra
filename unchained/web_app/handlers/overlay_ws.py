@@ -147,6 +147,10 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         return
 
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
+
+    # Create the response queue BEFORE sending so no events are lost
+    q: asyncio.Queue = asyncio.Queue()
+    core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
 
     ws_msg = {
@@ -158,35 +162,31 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     tab_id = core._session_tabs.get(session_id)
     if tab_id:
         ws_msg["tab_id"] = tab_id
+    # Include slot so the agent resumes the same conversation
+    slot = getattr(core, '_session_slots', {}).get(session_id)
+    if slot is not None:
+        ws_msg["slot"] = slot
 
     try:
         await agent_ws.send_json(ws_msg)
         print(f"[overlay] follow-up routed to agent {agent_id}: {message[:60]}")
     except Exception as e:
         print(f"[overlay] follow-up send failed: {e}")
+        core._response_queues.pop(session_id, None)
         return
 
     # Re-inject overlay on the agent's current tab (may have changed).
-    # _maybe_inject_overlay is sync (fires create_task internally).
-    # Inline import avoids circular import with chat_stream.
     try:
         from web_app.handlers.chat_stream import _maybe_inject_overlay
         _maybe_inject_overlay(core, session_id, agent_id, "auto", message)
     except Exception as e:
         print(f"[overlay] re-inject on follow-up failed: {e}")
 
-    # Agent responses arrive on the response_queues[session_id] via
-    # the chat WS handler. If no SSE consumer is active (parent browser
-    # closed), we need a background task to drain and broadcast them.
     # Buffer the user's follow-up for the parent /local UI
     notify = _parent_notify.setdefault(session_id, collections.deque(maxlen=_PARENT_NOTIFY_MAX))
     notify.append({"type": "overlay_user", "data": message})
 
     async def _drain_responses():
-        q = core._response_queues.get(session_id)
-        if q is None:
-            q = asyncio.Queue()
-            core._response_queues[session_id] = q
         try:
             while True:
                 try:
