@@ -917,7 +917,17 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unchained</title>
+<title>Unchained — Browser Automation with Raw Chrome DevTools Protocol</title>
+<meta name="description" content="Control your browser with AI. Unchained gives Claude, Gemini, and Codex direct access to Chrome via raw CDP — no Puppeteer, no Playwright, no wrappers.">
+<link rel="canonical" href="https://unchainedsky.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/">
+<meta property="og:title" content="Unchained — Browser Automation with Raw CDP">
+<meta property="og:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
+<meta property="og:site_name" content="Unchained">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Unchained — Browser Automation with Raw CDP">
+<meta name="twitter:description" content="Control your browser with AI. Give Claude, Gemini, and Codex direct access to Chrome via raw Chrome DevTools Protocol.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Cormorant+Garamond:ital,wght@0,400;1,400&display=swap');

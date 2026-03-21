@@ -1382,6 +1382,71 @@ async def handle_favicon(request: web.Request) -> web.Response:
     )
 
 
+async def handle_robots_txt(request: web.Request) -> web.Response:
+    """GET /robots.txt — search engine crawl directives."""
+    del request
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /admin\n"
+        "Disallow: /web/\n"
+        "Disallow: /auth/\n"
+        "Disallow: /chat/ws\n"
+        "Disallow: /install/\n"
+        "Disallow: /trial/\n"
+        "\n"
+        "Sitemap: https://unchainedsky.com/sitemap.xml\n"
+    )
+    return web.Response(
+        text=body,
+        content_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_sitemap_xml(request: web.Request) -> web.Response:
+    """GET /sitemap.xml — list public pages for search engines."""
+    del request
+    pages = [
+        ("https://unchainedsky.com/", "1.0", "weekly"),
+        ("https://unchainedsky.com/first-look", "0.9", "weekly"),
+        ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/trial", "0.8", "weekly"),
+        ("https://unchainedsky.com/mcp", "0.7", "monthly"),
+        ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
+        ("https://unchainedsky.com/privacy", "0.3", "yearly"),
+    ]
+    urls = "\n".join(
+        f"  <url>\n"
+        f"    <loc>{loc}</loc>\n"
+        f"    <priority>{pri}</priority>\n"
+        f"    <changefreq>{freq}</changefreq>\n"
+        f"  </url>"
+        for loc, pri, freq in pages
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>\n"
+    )
+    return web.Response(
+        text=xml,
+        content_type="application/xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+async def handle_google_verification(request: web.Request) -> web.Response:
+    """GET /google83c650022d8db556.html — Google Search Console verification."""
+    del request
+    return web.Response(
+        text="google-site-verification: google83c650022d8db556.html",
+        content_type="text/html",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 async def handle_index(request: web.Request) -> web.Response:
     del request
     html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
