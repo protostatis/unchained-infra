@@ -106,44 +106,17 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                         pass
                     overlay.bootstrap_id = ""
 
-                # Bypass CSP for future navigations
+                # Bypass CSP so the overlay WS can connect.
+                # setBypassCSP only takes effect after a navigation,
+                # so we set it, then reload the page. The bootstrap
+                # script (addScriptToEvaluateOnNewDocument) will inject
+                # the overlay on the reloaded page with CSP disabled.
                 await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.setBypassCSP", {"enabled": True},
                     relay_host, relay_port,
                 )
-                # Inject overlay JS in an isolated world to bypass current page CSP.
-                # Page CSP only applies to the main world; isolated worlds are exempt.
-                frame_tree = await cloud_tools.run_cdp_command(
-                    agent_id, tab_id,
-                    "Page.getFrameTree", {},
-                    relay_host, relay_port,
-                )
-                frame_id = ""
-                if isinstance(frame_tree, dict):
-                    ft = frame_tree.get("frameTree", frame_tree)
-                    frame_id = ft.get("frame", {}).get("id", "")
-                if frame_id:
-                    world = await cloud_tools.run_cdp_command(
-                        agent_id, tab_id,
-                        "Page.createIsolatedWorld",
-                        {"frameId": frame_id, "worldName": "unchained_overlay"},
-                        relay_host, relay_port,
-                    )
-                    context_id = world.get("executionContextId") if isinstance(world, dict) else None
-                    if context_id:
-                        await cloud_tools.run_cdp_command(
-                            agent_id, tab_id,
-                            "Runtime.evaluate",
-                            {"expression": overlay_js, "contextId": context_id},
-                            relay_host, relay_port,
-                        )
-                    else:
-                        # Fallback to main world
-                        await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
-                else:
-                    await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
-                # Persist across navigations within this tab
+                # Register bootstrap BEFORE reload so it fires on the new page
                 result = await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.addScriptToEvaluateOnNewDocument",
@@ -153,6 +126,15 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 # Store identifier for cleanup
                 if isinstance(result, dict) and result.get("identifier"):
                     overlay.bootstrap_id = result["identifier"]
+                # Reload the page so CSP bypass takes effect and
+                # the bootstrap script injects the overlay with WS.
+                await cloud_tools.run_cdp_command(
+                    agent_id, tab_id,
+                    "Page.reload", {},
+                    relay_host, relay_port,
+                )
+                import asyncio as _aio
+                await _aio.sleep(1.5)  # wait for page to reload
                 overlay.injected = True
                 print(f"[overlay] Injected overlay for {session_id} on tab {tab_id[:12]}")
             except Exception as e:
