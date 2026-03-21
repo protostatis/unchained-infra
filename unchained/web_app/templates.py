@@ -2287,7 +2287,7 @@ PUBLISHED_RESULT_HTML = r"""<!DOCTYPE html>
 <meta name="twitter:title" content="__RESULT_TITLE__ &mdash; Unchained">
 <meta name="twitter:description" content="__RESULT_DESC__">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"Article","headline":"__RESULT_TITLE__","datePublished":"__RESULT_DATE__","publisher":{"@type":"Organization","name":"Unchained","url":"https://unchainedsky.com"},"description":"__RESULT_DESC__"}
+{"@context":"https://schema.org","@type":"Article","headline":"__RESULT_TITLE_JSON__","datePublished":"__RESULT_DATE__","publisher":{"@type":"Organization","name":"Unchained","url":"https://unchainedsky.com"},"description":"__RESULT_DESC_JSON__"}
 </script>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>

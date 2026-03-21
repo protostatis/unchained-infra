@@ -227,10 +227,28 @@ def _md_to_html(text: str) -> str:
     if in_table:
         out.append("</table>")
     text = "\n".join(out)
-    # List items
-    text = re.sub(
-        r"^[-*] (.+)$", r"<li>\1</li>", text, flags=re.MULTILINE
-    )
+    # List items — wrap runs of list items in <ul>
+    def _wrap_lists(t: str) -> str:
+        lines = t.split("\n")
+        result = []
+        in_list = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^[-*] ", stripped):
+                if not in_list:
+                    result.append("<ul>")
+                    in_list = True
+                item = re.sub(r"^[-*] ", "", stripped)
+                result.append(f"<li>{item}</li>")
+            else:
+                if in_list:
+                    result.append("</ul>")
+                    in_list = False
+                result.append(line)
+        if in_list:
+            result.append("</ul>")
+        return "\n".join(result)
+    text = _wrap_lists(text)
     # Paragraphs for remaining text blocks
     text = re.sub(r"\n\n+", "</p><p>", text)
     if not text.startswith("<"):
@@ -238,24 +256,11 @@ def _md_to_html(text: str) -> str:
     return text
 
 
-def _ensure_blacklist_table(conn: sqlite3.Connection) -> None:
-    """Create the publish_blacklist table if it doesn't exist."""
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS publish_blacklist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            term TEXT UNIQUE NOT NULL,
-            reason TEXT,
-            created_at REAL NOT NULL
-        )"""
-    )
-
-
 def add_blacklist_term(term: str, reason: str = "") -> None:
     """Add a term to the publish blacklist."""
     with _lock:
         conn = _connect()
         try:
-            _ensure_blacklist_table(conn)
             conn.execute(
                 "INSERT OR IGNORE INTO publish_blacklist (term, reason, created_at) VALUES (?, ?, ?)",
                 (term.lower().strip(), reason, time.time()),
@@ -270,7 +275,6 @@ def remove_blacklist_term(term: str) -> None:
     with _lock:
         conn = _connect()
         try:
-            _ensure_blacklist_table(conn)
             conn.execute(
                 "DELETE FROM publish_blacklist WHERE term = ?",
                 (term.lower().strip(),),
@@ -285,7 +289,6 @@ def list_blacklist_terms() -> list[dict]:
     with _lock:
         conn = _connect()
         try:
-            _ensure_blacklist_table(conn)
             rows = conn.execute(
                 "SELECT term, reason, created_at FROM publish_blacklist ORDER BY term"
             ).fetchall()
@@ -299,7 +302,6 @@ def _is_query_blacklisted(text: str) -> bool:
     with _lock:
         conn = _connect()
         try:
-            _ensure_blacklist_table(conn)
             terms = conn.execute(
                 "SELECT term FROM publish_blacklist"
             ).fetchall()
@@ -325,10 +327,8 @@ def publish_result(
         return None
 
     query = user_msgs[0]["content"]
-    if _is_query_blacklisted(query):
-        return None
-    # Also check assistant responses for blacklisted content
-    for m in asst_msgs:
+    # Check ALL visible messages against blacklist (not just first user msg)
+    for m in messages:
         if _is_query_blacklisted(m["content"]):
             return None
     # Combine ALL assistant text for PII check — intermediate responses

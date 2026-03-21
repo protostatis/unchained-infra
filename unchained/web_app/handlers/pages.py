@@ -458,25 +458,36 @@ async def handle_use_case_price_tracking(request: web.Request) -> web.Response:
 
 async def handle_published_result(request: web.Request) -> web.Response:
     """Serve a published result page (public, no auth)."""
-    from published_results import get_result
+    import re as _re
+    import time as _time
     from html import escape
+    from published_results import get_result
     core = _core()
     slug = request.match_info.get("slug", "")
+    # Validate slug format
+    if not slug or not _re.fullmatch(r"[a-z0-9-]{1,120}", slug):
+        raise web.HTTPNotFound()
     result = get_result(slug)
     if not result:
         raise web.HTTPNotFound()
     core._track_page_view(request)
     query = result["query"]
     result_text = result["result_text"]
-    # Truncate description for meta tags
-    desc = result_text[:200].replace('"', "&quot;").replace("\n", " ")
+    # Escape for HTML meta attributes
     title_text = escape(query[:80])
-    import time
-    created = time.strftime("%Y-%m-%d", time.gmtime(result["created_at"]))
+    desc_html = escape(result_text[:200]).replace("\n", " ")
+    # Escape for JSON-LD (must be valid JSON string content)
+    title_json = json.dumps(query[:80])[1:-1]  # strip outer quotes
+    desc_json = json.dumps(result_text[:200].replace("\n", " "))[1:-1]
+    created = _time.strftime("%Y-%m-%d", _time.gmtime(result["created_at"]))
     html = core.PUBLISHED_RESULT_HTML.replace(
         "__RESULT_TITLE__", title_text
     ).replace(
-        "__RESULT_DESC__", desc
+        "__RESULT_TITLE_JSON__", title_json
+    ).replace(
+        "__RESULT_DESC__", desc_html
+    ).replace(
+        "__RESULT_DESC_JSON__", desc_json
     ).replace(
         "__RESULT_SLUG__", slug
     ).replace(
@@ -494,24 +505,27 @@ async def handle_published_result(request: web.Request) -> web.Response:
 
 async def handle_publish_result(request: web.Request) -> web.Response:
     """POST /web/publish-result — publish a session as a shareable page."""
+    import re as _re
     from published_results import publish_result
-    import json as _json
     core = _core()
     auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Authentication required"}, status=401)
     body = await request.json()
     session_id = body.get("session_id", "")
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
+    # Validate session_id format to prevent path traversal
+    if not _re.fullmatch(r"[a-zA-Z0-9_.-]{8,80}", session_id):
+        return web.json_response({"error": "Invalid session_id"}, status=400)
     # Load session data
     session_path = core._trial_session_path(session_id)
     try:
         with open(session_path) as f:
-            session_data = _json.load(f)
+            session_data = json.load(f)
     except FileNotFoundError:
         return web.json_response({"error": "Session not found"}, status=404)
-    user_id = ""
-    if auth_info:
-        user_id = auth_info.get("email", auth_info.get("key_hash", ""))
+    user_id = auth_info.get("email", auth_info.get("key_hash", ""))
     slug = publish_result(
         session_data, user_id=user_id, session_id=session_id
     )
