@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import hashlib
 import hmac
 import json
@@ -76,22 +77,45 @@ def validate_overlay_token(token: str, secret: str = "") -> dict | None:
 # Broadcast helper (called from chat_stream.py)
 # ---------------------------------------------------------------------------
 
+# Per-session ring buffer for events sent before any overlay WS connects.
+# Replayed to new subscribers on connect so they don't miss early events.
+_replay_buffers: dict[str, collections.deque] = {}
+_REPLAY_BUFFER_MAX = 50
+
+
 def broadcast_to_overlay(session_id: str, event: dict) -> None:
     """Push an event to all overlay WS subscribers for a session.
 
-    Safe to call from sync or async context — Queue.put_nowait is used.
-    Note: index-based dead-queue cleanup is safe because this runs in
-    a single-threaded asyncio event loop (no concurrent mutation).
+    If no subscribers exist yet, events are buffered (up to 50) so the
+    overlay can replay them when it connects.
     """
     core = _core()
     subscribers = core._overlay_subscribers.get(session_id)
     if not subscribers:
+        # No overlay connected yet — buffer for replay
+        buf = _replay_buffers.get(session_id)
+        if buf is None:
+            buf = collections.deque(maxlen=_REPLAY_BUFFER_MAX)
+            _replay_buffers[session_id] = buf
+        buf.append(event)
         return
     for q in subscribers:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
             pass  # skip event for slow client, don't evict
+
+
+def _drain_replay_buffer(session_id: str, q: asyncio.Queue) -> None:
+    """Replay buffered events to a newly connected overlay subscriber."""
+    buf = _replay_buffers.pop(session_id, None)
+    if not buf:
+        return
+    for event in buf:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            break
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +213,8 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
         await ws.close(code=4008, message=b"subscriber limit")
         return ws
     subs.append(q)
+    # Replay any events that were broadcast before this WS connected
+    _drain_replay_buffer(session_id, q)
 
     async def _writer():
         """Forward events from the queue to the overlay WS."""
