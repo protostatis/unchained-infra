@@ -16,21 +16,18 @@ from typing import TextIO
 
 @dataclass
 class OverlaySessionState:
-    """All overlay copilot state for one chat session.
+    """Overlay copilot state for one chat session (v3 — bridge-based).
 
-    Single source of truth — replaces the scattered dicts from v1.
+    The bridge handles injection and event pushing locally via CDP.
+    The server only tracks session state for routing.
     """
     session_id: str
     agent_id: str
     tab_id: str  # concrete tab ID, never "auto"
     user_id: str
     slot: int | None = None
-    token: str = ""
-    subscriber: asyncio.Queue | None = None  # at most ONE active WS
     injected: bool = False
-    bootstrap_id: str = ""  # Page.addScriptToEvaluateOnNewDocument identifier
-    pending_events: list = field(default_factory=list)  # buffered before injection (max 50)
-    poll_task: object | None = None  # asyncio.Task for outbox poller
+    pending_events: list = field(default_factory=list)  # buffered before bridge injection
 
 
 @dataclass

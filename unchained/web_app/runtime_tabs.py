@@ -40,7 +40,7 @@ async def close_session_tab(session_id: str):
     core = _core()
     # Don't close the tab if the overlay is still using it
     overlay = core._overlay_sessions.get(session_id)
-    if overlay and overlay.subscriber is not None:
+    if overlay and overlay.injected:
         print(f"[tabs] Skipping cleanup for {session_id} — overlay is active")
         return
     tab_id = core._session_tabs.pop(session_id, None)
