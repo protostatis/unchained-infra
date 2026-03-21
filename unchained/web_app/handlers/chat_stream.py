@@ -639,6 +639,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         }
         if slot is not None:
             ws_msg["slot"] = slot
+            # Store slot for overlay follow-ups to resume same conversation
+            if not hasattr(core, '_session_slots'):
+                core._session_slots = {}
+            core._session_slots[session_id] = slot
         if scheduler_armed:
             ws_msg["scheduler_armed"] = True
             ws_msg["scheduler_grant_id"] = scheduler_grant_id
