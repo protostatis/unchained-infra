@@ -14,7 +14,7 @@ import io
 import os
 import zipfile
 
-VERSION = "0.3.61"  # package client cdp_tool.py with --tab auto fix
+VERSION = "0.3.62"  # fix tabs/new-tab to use provisioned Chrome port
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

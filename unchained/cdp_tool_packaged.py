@@ -16,6 +16,8 @@ Usage (called by Claude via Bash):
     python cdp_tool.py new-tab https://example.com
     python cdp_tool.py close-tab <tab_id>
 """
+from __future__ import annotations
+
 
 import json
 import os
@@ -29,6 +31,33 @@ DEFAULT_NEW_TAB_PATH = "/tab"
 TAB_ID = os.environ.get("CDP_TAB_ID", "auto")
 CDP_HOST = os.environ.get("CDP_HOST", "127.0.0.1")
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
+DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
+                          os.path.join(os.path.expanduser("~"), ".unchained"))
+
+
+def _resolve_cdp_port():
+    """Return the CDP port for the active Chrome.
+
+    When running with a provisioned profile (CDP_TAB_ID starts with prov-),
+    read the provisioned Chrome's port from its state file instead of using
+    the default port (9222).
+    """
+    if not TAB_ID.startswith("prov-"):
+        return CDP_PORT
+    parts = TAB_ID.split("-", 2)
+    if len(parts) < 3:
+        return CDP_PORT
+    slot = parts[1]
+    state_file = os.path.join(DATA_DIR, "provision_slots", f"{slot}.json")
+    try:
+        with open(state_file) as f:
+            state = json.loads(f.read())
+        port = int(state.get("port", 0))
+        if port > 0:
+            return port
+    except Exception:
+        pass
+    return CDP_PORT
 
 
 def cmd(action, **kwargs):
@@ -59,7 +88,8 @@ def cmd(action, **kwargs):
 
 def _chrome_tabs():
     """List page tabs from local Chrome's HTTP API."""
-    req = urllib.request.Request(f"http://{CDP_HOST}:{CDP_PORT}/json")
+    port = _resolve_cdp_port()
+    req = urllib.request.Request(f"http://{CDP_HOST}:{port}/json")
     with urllib.request.urlopen(req, timeout=5) as resp:
         tabs = json.loads(resp.read())
     return [t for t in tabs if t.get("type") == "page"]
@@ -128,7 +158,7 @@ def main():
         elif command == "new-tab":
             url = args[0] if args else f"{API_URL.rstrip('/')}{DEFAULT_NEW_TAB_PATH}"
             req = urllib.request.Request(
-                f"http://{CDP_HOST}:{CDP_PORT}/json/new?{url}", method="PUT")
+                f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/new?{url}", method="PUT")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 tab_info = json.loads(resp.read())
             new_id = tab_info["id"][:12]
