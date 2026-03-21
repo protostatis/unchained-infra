@@ -368,6 +368,13 @@ OVERLAY_JS_TEMPLATE = r"""
   }
   connect();
 
+  // Re-attach if SPA navigation removes the host from the DOM
+  setInterval(function() {
+    if (!document.getElementById(HOST_ID)) {
+      document.documentElement.appendChild(host);
+    }
+  }, 2000);
+
   // Cleanup on unload
   window.addEventListener('beforeunload', function() {
     noReconnect = true;
