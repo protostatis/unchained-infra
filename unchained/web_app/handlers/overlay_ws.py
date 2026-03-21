@@ -229,7 +229,9 @@ async def handle_overlay_ws(request: web.Request) -> web.WebSocketResponse:
                     await ws.send_json(evt)
                 except Exception:
                     break
-                if evt.get("type") in ("done", "error"):
+                # Don't break on "done" — it's a turn completion, not
+                # session end. The overlay stays alive for follow-ups.
+                if evt.get("type") == "error":
                     break
         except asyncio.CancelledError:
             pass
