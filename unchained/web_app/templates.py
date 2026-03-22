@@ -2267,6 +2267,185 @@ a:hover{text-decoration:underline}
 
 
 # ---------------------------------------------------------------------------
+# HTML — Published Result Page
+# ---------------------------------------------------------------------------
+
+PUBLISHED_RESULT_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__RESULT_TITLE__ &mdash; Unchained</title>
+<meta name="description" content="__RESULT_DESC__">
+<link rel="canonical" href="https://unchainedsky.com/r/__RESULT_SLUG__">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://unchainedsky.com/r/__RESULT_SLUG__">
+<meta property="og:title" content="__RESULT_TITLE__ &mdash; Unchained">
+<meta property="og:description" content="__RESULT_DESC__">
+<meta property="og:site_name" content="Unchained">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="__RESULT_TITLE__ &mdash; Unchained">
+<meta name="twitter:description" content="__RESULT_DESC__">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Article","headline":"__RESULT_TITLE_JSON__","datePublished":"__RESULT_DATE__","publisher":{"@type":"Organization","name":"Unchained","url":"https://unchainedsky.com"},"description":"__RESULT_DESC_JSON__"}
+</script>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--surface:#111119;--subtle:#222;
+  --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
+  --text:#e8e8ec;--muted:#666;
+}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow-x:hidden;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;z-index:0;
+}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.hero{
+  position:relative;z-index:1;
+  max-width:800px;margin:0 auto;padding:100px 24px 40px;
+  text-align:center;
+}
+.hero-back{
+  display:inline-block;margin-bottom:24px;
+  font-size:13px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;
+  text-decoration:none;
+}
+.hero-back:hover{color:var(--accent);text-decoration:none}
+.hero h1{
+  font-size:clamp(22px,4vw,36px);font-weight:600;
+  line-height:1.3;margin-bottom:16px;
+}
+.hero h1 span{color:var(--accent)}
+.meta-line{
+  font-size:13px;color:var(--muted);letter-spacing:0.5px;
+}
+.result-chat{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:0 24px 48px;
+}
+.chat{
+  background:#1a1a2e;border:1px solid var(--subtle);
+  border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px;
+}
+.bubble{
+  max-width:88%;padding:12px 16px;border-radius:14px;
+  font-size:14px;line-height:1.6;word-break:break-word;
+}
+.bubble.user{
+  align-self:flex-end;background:#2a1a3e;border:1px solid #3a2a5e;
+  border-bottom-right-radius:4px;color:#eee;
+}
+.bubble.asst{
+  align-self:flex-start;background:#1e2a3e;border:1px solid #2a3a5e;
+  border-bottom-left-radius:4px;color:#eee;
+}
+.bubble table{
+  width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;
+}
+.bubble th,.bubble td{
+  text-align:left;padding:6px 10px;border-bottom:1px solid #2a3a5e;
+}
+.bubble th{color:var(--accent);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+.bubble ul,.bubble ol{margin:8px 0 8px 18px}
+.bubble li{margin:4px 0;font-size:13px;line-height:1.5}
+.bubble strong{font-weight:600}
+.bubble h3,.bubble h4{margin:12px 0 8px;font-size:15px;font-weight:600}
+.bubble p{margin:6px 0}
+.cta-section{
+  position:relative;z-index:1;
+  max-width:720px;margin:0 auto;padding:40px 24px 80px;
+  text-align:center;
+}
+.cta-section h2{
+  font-size:clamp(20px,3.5vw,28px);font-weight:600;margin-bottom:12px;
+}
+.cta-section p{
+  color:var(--muted);font-size:15px;line-height:1.7;margin-bottom:28px;
+}
+.cta-buttons{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.cta-btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:14px 32px;border-radius:8px;
+  font-size:15px;font-weight:600;letter-spacing:0.5px;
+  text-decoration:none;transition:all 0.2s;
+}
+.cta-btn:hover{text-decoration:none}
+.cta-btn.primary{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.cta-btn.primary:hover{box-shadow:0 0 30px var(--accent-glow);opacity:0.9}
+.cta-btn.secondary{background:transparent;color:var(--text);border:1px solid #444}
+.cta-btn.secondary:hover{border-color:#666}
+.footer{
+  position:relative;z-index:1;
+  text-align:center;padding:0 24px 48px;
+  color:var(--muted);font-size:12px;letter-spacing:1px;
+}
+.footer-links{display:flex;gap:24px;justify-content:center;margin-bottom:16px;flex-wrap:wrap}
+.footer-links a{color:var(--muted);text-decoration:none;font-size:13px;letter-spacing:0.5px;transition:color 0.15s}
+.footer-links a:hover{color:var(--accent)}
+@media(max-width:640px){
+  .hero{padding:80px 16px 32px}
+  .result-chat{padding:0 16px 32px}
+  .bubble{max-width:95%;font-size:13px}
+  .bubble table{font-size:11px}
+  .bubble th,.bubble td{padding:4px 6px}
+  .cta-buttons{flex-direction:column;align-items:center}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <a href="/" class="hero-back">&larr; Unchained</a>
+  <h1><span>__RESULT_TITLE__</span></h1>
+  <p class="meta-line">Generated by AI browser agent &middot; __RESULT_DATE__ &middot; __RESULT_VIEWS__ views</p>
+</div>
+
+<div class="result-chat">
+  <div class="chat">
+    __RESULT_HTML__
+  </div>
+</div>
+
+<div class="cta-section">
+  <h2>Try it yourself</h2>
+  <p>Unchained is a free AI browser agent. Tell it what you need and it browses the web for you&mdash;using your real browser, your real logins.</p>
+  <div class="cta-buttons">
+    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="footer-links">
+    <a href="/">Home</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
+    <a href="/case-study/zillow-rental">Case Study</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
+  </div>
+  <div>UNCHAINED &mdash; YOUR BROWSER. YOUR DATA. NO WALLS.</div>
+</div>
+
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
 # Shared CSS for use-case landing pages
 # ---------------------------------------------------------------------------
 

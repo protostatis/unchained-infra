@@ -466,6 +466,88 @@ async def handle_use_case_price_tracking(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_published_result(request: web.Request) -> web.Response:
+    """Serve a published result page (public, no auth)."""
+    import re as _re
+    import time as _time
+    from html import escape
+    from published_results import get_result
+    core = _core()
+    slug = request.match_info.get("slug", "")
+    # Validate slug format
+    if not slug or not _re.fullmatch(r"[a-z0-9-]{1,120}", slug):
+        raise web.HTTPNotFound()
+    result = get_result(slug)
+    if not result:
+        raise web.HTTPNotFound()
+    core._track_page_view(request)
+    query = result["query"]
+    result_text = result["result_text"]
+    # Escape for HTML meta attributes
+    title_text = escape(query[:80])
+    desc_html = escape(result_text[:200]).replace("\n", " ")
+    # Escape for JSON-LD (must be valid JSON string content + escape </ for script safety)
+    title_json = json.dumps(query[:80])[1:-1].replace("</", r"<\/")
+    desc_json = json.dumps(result_text[:200].replace("\n", " "))[1:-1].replace("</", r"<\/")
+    created = _time.strftime("%Y-%m-%d", _time.gmtime(result["created_at"]))
+    # Single-pass substitution to prevent double-replacement if result_html
+    # contains placeholder strings like __RESULT_TITLE__
+    import re as _re
+    _subs = {
+        "__RESULT_TITLE__": title_text,
+        "__RESULT_TITLE_JSON__": title_json,
+        "__RESULT_DESC__": desc_html,
+        "__RESULT_DESC_JSON__": desc_json,
+        "__RESULT_SLUG__": slug,
+        "__RESULT_HTML__": result["result_html"],
+        "__RESULT_DATE__": created,
+        "__RESULT_VIEWS__": str(result["view_count"]),
+        "__CONTACT_EMAIL__": core.CONTACT_EMAIL,
+    }
+    _pattern = _re.compile("|".join(_re.escape(k) for k in _subs))
+    html = _pattern.sub(lambda m: _subs[m.group(0)], core.PUBLISHED_RESULT_HTML)
+    html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_publish_result(request: web.Request) -> web.Response:
+    """POST /web/publish-result — publish a session as a shareable page."""
+    import re as _re
+    from published_results import publish_result
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return web.json_response({"error": "session_id required"}, status=400)
+    # Validate session_id format to prevent path traversal
+    if not _re.fullmatch(r"[a-zA-Z0-9_.-]{8,80}", session_id):
+        return web.json_response({"error": "Invalid session_id"}, status=400)
+    # Load session data
+    session_path = core._trial_session_path(session_id)
+    try:
+        with open(session_path) as f:
+            session_data = json.load(f)
+    except FileNotFoundError:
+        return web.json_response({"error": "Session not found"}, status=404)
+    user_id = auth_info.get("email", auth_info.get("key_hash", ""))
+    # Offload to thread — publish_result does sync SQLite + sync HTTP (PII guard)
+    import asyncio
+    slug = await asyncio.to_thread(
+        publish_result, session_data, user_id=user_id, session_id=session_id
+    )
+    if not slug:
+        return web.json_response(
+            {"error": "No publishable content in session"}, status=400
+        )
+    return web.json_response({
+        "slug": slug,
+        "url": f"https://unchainedsky.com/r/{slug}",
+    })
+
+
 async def handle_privacy_page(request: web.Request) -> web.Response:
     """Serve public privacy policy page (required for OAuth provider submissions)."""
     core = _core()

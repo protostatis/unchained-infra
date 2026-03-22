@@ -50,6 +50,7 @@ from web_app.templates import (
     USE_CASE_FLIGHTS_HTML,
     USE_CASE_COMPETITOR_HTML,
     USE_CASE_PRICE_TRACKING_HTML,
+    PUBLISHED_RESULT_HTML,
     CHAT_CLAUDE_SDK_HTML,
     CHAT_CODEX_HTML,
     CHAT_GEMINI_HTML,
@@ -1411,6 +1412,12 @@ async def handle_robots_txt(request: web.Request) -> web.Response:
 async def handle_sitemap_xml(request: web.Request) -> web.Response:
     """GET /sitemap.xml — list public pages for search engines."""
     del request
+    # Include published results dynamically
+    try:
+        from published_results import list_results
+        published = list_results(limit=500)
+    except Exception:
+        published = []
     pages = [
         ("https://unchainedsky.com/", "1.0", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
@@ -1423,6 +1430,13 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
         ("https://unchainedsky.com/privacy", "0.3", "yearly"),
     ]
+    # Append published result pages
+    for r in published:
+        pages.append((
+            f"https://unchainedsky.com/r/{r['slug']}",
+            "0.5",
+            "monthly",
+        ))
     urls = "\n".join(
         f"  <url>\n"
         f"    <loc>{loc}</loc>\n"

@@ -101,6 +101,7 @@ echo "==> Uploading Python modules..."
     unchained/overlay_js.py \
     unchained/cdp_tool_packaged.py \
     unchained/analytics.py \
+    unchained/published_results.py \
     unchained/provision_helpers.py \
     unchained/template_utils.py \
     unchained/agent_package.py \

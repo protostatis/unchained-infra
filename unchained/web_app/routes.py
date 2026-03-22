@@ -62,6 +62,8 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/first-look", "web_app.handlers.pages:handle_first_look_page"),
     ("GET", "/demo", "web_app.handlers.pages:handle_demo_page"),
     ("GET", "/mcp", "web_app.handlers.pages:handle_mcp_page"),
+    ("GET", "/r/{slug}", "web_app.handlers.pages:handle_published_result"),
+    ("POST", "/web/publish-result", "web_app.handlers.pages:handle_publish_result"),
     ("GET", "/case-study/zillow-rental", "web_app.handlers.pages:handle_case_study_zillow"),
     ("GET", "/use/apartment-hunting", "web_app.handlers.pages:handle_use_case_apartment"),
     ("GET", "/use/flight-comparison", "web_app.handlers.pages:handle_use_case_flights"),
