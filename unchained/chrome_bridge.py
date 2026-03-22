@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import platform
+import random
 import re
 import shlex
 import shutil
@@ -71,6 +72,72 @@ def _pid_file(profile: str = "default") -> str:
 DEFAULT_RELAY_URL = "ws://127.0.0.1:8765/tunnel"
 DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
+
+# --- Stealth fingerprint overrides (injected via CDP on every new tab) ---
+# GPU strings rotated per-tab to avoid fingerprint clustering.
+_WEBGL_GPUS = [
+    ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)"),
+    ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)"),
+    ("Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.6)"),
+    ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti, OpenGL 4.6)"),
+    ("Google Inc. (Apple)", "ANGLE (Apple, Apple M1, OpenGL 4.1)"),
+]
+
+
+def _build_stealth_js() -> str:
+    """Build stealth JS with a randomly selected GPU string."""
+    vendor, renderer = random.choice(_WEBGL_GPUS)
+    v_js = json.dumps(vendor)   # properly escaped JS string literal
+    r_js = json.dumps(renderer)
+    # Screen
+    js = (
+        'Object.defineProperty(screen,"width",{get:()=>1920});'
+        'Object.defineProperty(screen,"height",{get:()=>1080});'
+        'Object.defineProperty(screen,"availWidth",{get:()=>1920});'
+        'Object.defineProperty(screen,"availHeight",{get:()=>1040});'
+    )
+    # Navigator
+    js += (
+        'Object.defineProperty(navigator,"deviceMemory",{get:()=>8});'
+        'Object.defineProperty(navigator,"hardwareConcurrency",{get:()=>8});'
+        'Object.defineProperty(navigator,"webdriver",{get:()=>undefined});'
+    )
+    # WebGL — fake context when headless returns null, override when real
+    js += (
+        'const _gc=HTMLCanvasElement.prototype.getContext;'
+        'HTMLCanvasElement.prototype.getContext=function(t,a){'
+        'const c=_gc.call(this,t,a);'
+        'if(t==="webgl"||t==="webgl2"||t==="experimental-webgl"){'
+        'if(!c)return{getExtension:n=>n==="WEBGL_debug_renderer_info"'
+        '?{UNMASKED_VENDOR_WEBGL:0x9245,UNMASKED_RENDERER_WEBGL:0x9246}:null,'
+        f'getParameter:p=>p===0x9245?{v_js}'
+        f':p===0x9246?{r_js}:0,'
+        'getSupportedExtensions:()=>["WEBGL_debug_renderer_info"],'
+        'drawingBufferWidth:300,drawingBufferHeight:150,canvas:this};'
+        'const _ge=c.getExtension.bind(c);const _gp=c.getParameter.bind(c);'
+        'c.getExtension=n=>n==="WEBGL_debug_renderer_info"'
+        '?{UNMASKED_VENDOR_WEBGL:0x9245,UNMASKED_RENDERER_WEBGL:0x9246}:_ge(n);'
+        f'c.getParameter=p=>p===0x9245?{v_js}'
+        f':p===0x9246?{r_js}:_gp(p)'
+        '}return c};'
+    )
+    # chrome.runtime stub
+    js += (
+        'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
+        'window.chrome.runtime.connect=function(){};'
+        'window.chrome.runtime.sendMessage=function(){}}'
+    )
+    # Notification + media devices
+    js += (
+        'Object.defineProperty(Notification,"permission",{get:()=>"default"});'
+        'if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){'
+        'navigator.mediaDevices.enumerateDevices=async()=>['
+        '{deviceId:"",kind:"audioinput",label:"",groupId:""},'
+        '{deviceId:"",kind:"videoinput",label:"",groupId:""},'
+        '{deviceId:"",kind:"audiooutput",label:"",groupId:""}]}'
+    )
+    return js
+
 DEFAULT_NEW_TAB_PATH = "/tab"
 DEFAULT_WEB_PORT = 8080
 
@@ -632,13 +699,21 @@ class Agent:
                  cdp_host: str = DEFAULT_CDP_HOST,
                  cdp_port: int = DEFAULT_CDP_PORT,
                  profile: str = "default",
-                 headless: bool = False):
+                 headless: bool = False,
+                 stealth: bool = False):
+        """
+        Args:
+            stealth: Enable CDP fingerprint injection. Auto-enabled when
+                     *headless* is True (pass ``stealth=False`` explicitly
+                     to suppress injection in headless mode).
+        """
         self.relay_url = relay_url
         self.api_key = api_key
         self.cdp_host = cdp_host
         self.cdp_port = cdp_port
         self.profile = profile
         self._headless = headless
+        self._stealth = stealth or headless
         self.ws = None
         self.channels: dict[int, websockets.WebSocketClientProtocol] = {}
         self._channel_tasks: dict[int, asyncio.Task] = {}
@@ -985,6 +1060,11 @@ class Agent:
         try:
             chrome_ws = await websockets.connect(ws_url,
                                                  max_size=50 * 1024 * 1024)
+            try:
+                await self._inject_stealth(chrome_ws)
+            except Exception as e:
+                # Best-effort: stealth failure should not block tab usage.
+                print(f"[agent] stealth inject failed (non-fatal): {e}")
             self.channels[channel] = chrome_ws
             # Start background task to forward Chrome → relay
             task = asyncio.create_task(
@@ -1014,6 +1094,43 @@ class Agent:
                 "channel": channel,
                 "error": str(e),
             }))
+
+    async def _inject_stealth(self, chrome_ws):
+        """Inject stealth fingerprint overrides into a Chrome tab.
+
+        Called before ``self.channels[channel]`` is assigned — the forwarding
+        loop has not started yet, so any unsolicited CDP events drained by
+        ``_cdp()`` would not have reached the relay anyway.
+
+        ``Page.addScriptToEvaluateOnNewDocument`` only affects future
+        navigations, not the already-loaded document in the tab.
+
+        Raises on failure so the caller can close the orphaned websocket.
+        """
+        if not self._stealth:
+            return
+        # High range avoids collision with relay-forwarded CDP message IDs.
+        sid = random.randint(2**28, 2**30)
+
+        async def _cdp(method, params=None):
+            nonlocal sid
+            sid += 1
+            await chrome_ws.send(json.dumps(
+                {"id": sid, "method": method, "params": params or {}}))
+            # Drain until we get our response — skip unsolicited CDP events.
+            while True:
+                raw = await asyncio.wait_for(chrome_ws.recv(), timeout=5)
+                msg = json.loads(raw)
+                if msg.get("id") == sid:
+                    return msg
+
+        await _cdp("Emulation.setDeviceMetricsOverride", {
+            "width": 1920, "height": 1080, "deviceScaleFactor": 1,
+            "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
+        })
+        await _cdp("Page.addScriptToEvaluateOnNewDocument", {
+            "source": _build_stealth_js(),
+        })
 
     @staticmethod
     def _extract_tab_id_from_ws_url(ws_url: str) -> str:
@@ -2018,6 +2135,7 @@ def cmd_start(config: dict):
         cdp_port=config["cdp_port"],
         profile=config["profile"],
         headless=config.get("chrome_headless", False),
+        stealth=config.get("chrome_stealth", False),
     )
 
     import atexit
