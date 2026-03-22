@@ -11,6 +11,7 @@ import io
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -522,6 +523,18 @@ def test_research_desk_vendor_manifest_script_matches_current_manifest():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_research_desk_vendor_versions_are_kept_in_sync():
+    repo_root = Path(__file__).resolve().parent.parent
+    pyproject_text = (repo_root / "research_desk_vendor" / "pyproject.toml").read_text(encoding="utf-8")
+    setup_text = (repo_root / "research_desk_vendor" / "setup.py").read_text(encoding="utf-8")
+    script_text = (repo_root / "deploy" / "rebuild_research_desk_vendor_manifest.py").read_text(encoding="utf-8")
+    pyproject_version = re.search(r'^version = "([^"]+)"$', pyproject_text, flags=re.MULTILINE)
+    setup_version = re.search(r'^\s*version="([^"]+)",$', setup_text, flags=re.MULTILINE)
+    manifest_version = re.search(r'^VERSION = "([^"]+)"$', script_text, flags=re.MULTILINE)
+    assert pyproject_version and setup_version and manifest_version
+    assert pyproject_version.group(1) == setup_version.group(1) == manifest_version.group(1)
 
 
 def test_research_desk_zip_installs_with_system_pip_metadata():

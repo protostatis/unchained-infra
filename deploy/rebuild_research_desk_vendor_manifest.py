@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -15,7 +16,23 @@ MANIFEST_PATH = VENDOR_ROOT / "manifest.json"
 VERSION = "0.1.0"
 
 
+def _read_declared_versions() -> tuple[str, str]:
+    pyproject_text = (VENDOR_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    setup_text = (VENDOR_ROOT / "setup.py").read_text(encoding="utf-8")
+    pyproject_match = re.search(r'^version = "([^"]+)"$', pyproject_text, flags=re.MULTILINE)
+    setup_match = re.search(r'^\s*version="([^"]+)",$', setup_text, flags=re.MULTILINE)
+    if not pyproject_match or not setup_match:
+        raise RuntimeError("Could not parse vendored Research Desk versions")
+    return pyproject_match.group(1), setup_match.group(1)
+
+
 def build_manifest() -> dict[str, object]:
+    pyproject_version, setup_version = _read_declared_versions()
+    if pyproject_version != VERSION or setup_version != VERSION:
+        raise RuntimeError(
+            "Vendored Research Desk version drift detected: "
+            f"manifest={VERSION} pyproject={pyproject_version} setup.py={setup_version}"
+        )
     files: dict[str, str] = {}
     for rel in ROOT_FILES:
         path = VENDOR_ROOT / rel
