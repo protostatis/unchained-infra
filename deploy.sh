@@ -152,10 +152,20 @@ fi
 
 # Upload vendored Research Desk package source for /web/research-desk/files.
 echo "==> Uploading Research Desk vendor tree..."
-"${SSH_CMD[@]}" "rm -rf $REMOTE_DIR/research_desk_vendor && mkdir -p $REMOTE_DIR"
-"${SCP_CMD[@]}" -r \
-    research_desk_vendor \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
+"${SSH_CMD[@]}" "rm -rf $REMOTE_DIR/research_desk_vendor && mkdir -p $REMOTE_DIR/research_desk_vendor/unchained_pyreplab"
+"${SCP_CMD[@]}" \
+    research_desk_vendor/manifest.json \
+    research_desk_vendor/README.md \
+    research_desk_vendor/pyproject.toml \
+    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/research_desk_vendor/"
+shopt -s nullglob
+RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)
+shopt -u nullglob
+if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -gt 0 ]]; then
+    "${SCP_CMD[@]}" \
+        "${RESEARCH_DESK_VENDOR_FILES[@]}" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DIR/research_desk_vendor/unchained_pyreplab/"
+fi
 
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."

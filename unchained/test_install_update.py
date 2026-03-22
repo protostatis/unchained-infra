@@ -355,14 +355,20 @@ def test_deploy_script_uploads_research_desk_vendor_tree():
     deploy_script = (repo_root / "deploy.sh").read_text()
     assert 'echo "==> Uploading Research Desk vendor tree..."' in deploy_script
     assert "rm -rf $REMOTE_DIR/research_desk_vendor" in deploy_script
-    assert '"${SCP_CMD[@]}" -r \\' in deploy_script
-    assert "research_desk_vendor" in deploy_script
+    assert "mkdir -p $REMOTE_DIR/research_desk_vendor/unchained_pyreplab" in deploy_script
+    assert "research_desk_vendor/manifest.json" in deploy_script
+    assert "research_desk_vendor/README.md" in deploy_script
+    assert "research_desk_vendor/pyproject.toml" in deploy_script
+    assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
 
 
 def test_research_desk_package_image_smoke_script_checks_built_image():
     repo_root = Path(__file__).resolve().parent.parent
     smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
-    assert 'docker build -t "${IMAGE_TAG}" .' in smoke_script
+    assert 'TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/research-desk-package-image-smoke.XXXXXX")"' in smoke_script
+    assert 'cp research_desk_vendor/manifest.json "${TMP_DIR}/research_desk_vendor/"' in smoke_script
+    assert 'cp research_desk_vendor/unchained_pyreplab/*.py "${TMP_DIR}/research_desk_vendor/unchained_pyreplab/"' in smoke_script
+    assert 'docker build -t "${IMAGE_TAG}" "${TMP_DIR}"' in smoke_script
     assert 'docker run --rm "${IMAGE_TAG}" python - <<\'PY\'' in smoke_script
     assert "build_research_desk_zip()" in smoke_script
 
