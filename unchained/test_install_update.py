@@ -446,6 +446,18 @@ def test_research_desk_package_image_smoke_script_checks_built_image():
     assert "build_research_desk_zip()" in smoke_script
 
 
+def test_research_desk_install_helper_smoke_script_is_local_only():
+    repo_root = Path(__file__).resolve().parent.parent
+    smoke_script = (repo_root / "deploy" / "research_desk_install_helper_smoke.py").read_text()
+    assert 'UNCHAINED_RESEARCH_DESK_PACKAGE_URL' in smoke_script
+    assert 'UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL' in smoke_script
+    assert 'PYTHONUSERBASE' in smoke_script
+    assert '--research-desk-install-helper' in smoke_script
+    assert 'browser-open.log' in smoke_script
+    assert '/web/research-desk/files' in smoke_script
+    assert 'api.unchainedsky.com' not in smoke_script
+
+
 def test_research_desk_package_image_smoke_script_runs_with_fake_docker():
     repo_root = Path(__file__).resolve().parent.parent
     script_path = repo_root / "deploy" / "research_desk_package_image_smoke.sh"
