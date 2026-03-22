@@ -16,6 +16,7 @@ RouteSpec = tuple[str, str, str]
 
 ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/favicon.svg", "handle_favicon"),
+    ("GET", "/og-image.png", "handle_og_image"),
     ("GET", "/robots.txt", "handle_robots_txt"),
     ("GET", "/sitemap.xml", "handle_sitemap_xml"),
     ("GET", "/google83c650022d8db556.html", "handle_google_verification"),

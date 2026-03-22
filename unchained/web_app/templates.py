@@ -924,10 +924,12 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/">
 <meta property="og:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
 <meta property="og:description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you — using your real browser.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta property="og:site_name" content="Unchained">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
 <meta name="twitter:description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Unchained","url":"https://unchainedsky.com","applicationCategory":"BrowserApplication","operatingSystem":"macOS, Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"AI browser agent that searches, compares, and monitors the web for you. Works with your real browser and your real logins."}
 </script>
@@ -2282,10 +2284,12 @@ PUBLISHED_RESULT_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/r/__RESULT_SLUG__">
 <meta property="og:title" content="__RESULT_TITLE__ &mdash; Unchained">
 <meta property="og:description" content="__RESULT_DESC__">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta property="og:site_name" content="Unchained">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="__RESULT_TITLE__ &mdash; Unchained">
 <meta name="twitter:description" content="__RESULT_DESC__">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article","headline":"__RESULT_TITLE_JSON__","datePublished":"__RESULT_DATE__","publisher":{"@type":"Organization","name":"Unchained","url":"https://unchainedsky.com"},"description":"__RESULT_DESC_JSON__"}
 </script>
@@ -2623,9 +2627,11 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/apartment-hunting">
 <meta property="og:title" content="AI Apartment Search Assistant &mdash; Unchained">
 <meta property="og:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI Apartment Search Assistant &mdash; Unchained">
 <meta name="twitter:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"HowTo","name":"Find an apartment with AI","description":"Use Unchained to search rental listings across multiple sites with your exact criteria.","step":[{"@type":"HowToStep","name":"Tell the agent what you need","text":"Describe your budget, neighborhood, bedrooms, and must-haves in plain English."},{"@type":"HowToStep","name":"Agent searches listing sites","text":"Unchained browses Zillow, Apartments.com, and Craigslist in real time."},{"@type":"HowToStep","name":"Get a ranked shortlist","text":"Review a comparison table with prices, features, and direct links."}]}
@@ -2718,9 +2724,11 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/flight-comparison">
 <meta property="og:title" content="AI Flight Price Comparison &mdash; Unchained">
 <meta property="og:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI Flight Price Comparison &mdash; Unchained">
 <meta name="twitter:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"HowTo","name":"Compare flight prices with AI","description":"Use Unchained to search multiple flight booking sites and find the best deal.","step":[{"@type":"HowToStep","name":"Tell the agent your trip","text":"Describe your dates, destination, and preferences."},{"@type":"HowToStep","name":"Agent searches booking sites","text":"Unchained checks Google Flights and airline sites in real time."},{"@type":"HowToStep","name":"Get ranked options with tradeoffs","text":"Review a comparison showing price, duration, stops, and recommendations."}]}
@@ -2814,9 +2822,11 @@ USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/competitor-monitoring">
 <meta property="og:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
 <meta property="og:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
 <meta name="twitter:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"HowTo","name":"Monitor competitors with AI","description":"Use Unchained to automatically track competitor pricing, features, and market positioning.","step":[{"@type":"HowToStep","name":"Name your competitors","text":"Tell the agent which businesses or products to track."},{"@type":"HowToStep","name":"Agent checks their sites","text":"Unchained visits competitor pages, pricing pages, and review sites."},{"@type":"HowToStep","name":"Get a structured briefing","text":"Review changes in pricing, new features, and customer sentiment."}]}
@@ -2913,9 +2923,11 @@ USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/price-tracking">
 <meta property="og:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
 <meta property="og:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
 <meta name="twitter:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"HowTo","name":"Compare prices across stores with AI","description":"Use Unchained to search multiple retailers and find the lowest price on any product.","step":[{"@type":"HowToStep","name":"Tell the agent what you want to buy","text":"Name the product or paste a link."},{"@type":"HowToStep","name":"Agent checks multiple retailers","text":"Unchained searches Amazon, Best Buy, Walmart, and other stores."},{"@type":"HowToStep","name":"Get the best deal","text":"See a comparison table and set up price drop alerts."}]}
