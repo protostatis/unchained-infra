@@ -13,6 +13,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
+
 INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
 PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
@@ -27,6 +31,10 @@ fi
 # Note: accept the host key manually first time with: ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST"
 SSH_CMD=(ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST")
 SCP_CMD=(scp "${SSH_OPTS[@]}")
+
+remote_bash() {
+    "${SSH_CMD[@]}" bash -s -- "$@"
+}
 
 FORCE_BUILD=false
 if [[ "${1:-}" == "--build" ]]; then
@@ -69,78 +77,52 @@ done
 
 # Upload top-level files
 echo "==> Uploading config files..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir"
+EOF
 "${SCP_CMD[@]}" \
-    Dockerfile \
-    docker-compose.yml \
-    Caddyfile \
+    "${TOP_LEVEL_CONTEXT_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
 
 # Upload Python modules
 echo "==> Uploading Python modules..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/benchmark"
-"${SCP_CMD[@]}" \
-    unchained/relay.py \
-    unchained/rate_limit.py \
-    unchained/auth.py \
-    unchained/analytics.py \
-    unchained/cloud_tools.py \
-    unchained/private_core_client.py \
-    unchained/private_core_contracts.py \
-    unchained/private_core_engine.py \
-    unchained/private_core_server.py \
-    unchained/editable_helpers.js \
-    unchained/api.py \
-    unchained/mcp_server.py \
-    unchained/orchestrator.py \
-    unchained/cdp.py \
-    unchained/ddm.py \
-    unchained/intel.py \
-    unchained/web.py \
-    unchained/web_cmd.py \
-    unchained/web_state.py \
-    unchained/overlay_js.py \
-    unchained/cdp_tool_packaged.py \
-    unchained/analytics.py \
-    unchained/published_results.py \
-    unchained/provision_helpers.py \
-    unchained/template_utils.py \
-    unchained/agent_package.py \
-    unchained/chrome_bridge.py \
-    unchained/chat_agent_cli.py \
-    unchained/chat_agent_openrouter.py \
-    unchained/chat_agent_gemini.py \
-    unchained/chat_agent_codex.py \
-    unchained/chat_agent_sdk.py \
-    unchained/context_compact.py \
-    unchained/scheduler_agent.py \
-    unchained/scheduler_tool.py \
-    unchained/signup_agent.py \
-    unchained/nudge.py \
-    unchained/reflex.py \
-    unchained/pyproject.toml \
-    unchained/CLAUDE.md \
-    unchained/scheduled_tasks.py \
-    unchained/scheduled_jobs.example.json \
-    unchained/favicon.svg \
-    unchained/og-image.png \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/benchmark"
+EOF
+UNCHAINED_UPLOAD_FILES=()
+for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do
+    UNCHAINED_UPLOAD_FILES+=("unchained/$rel")
+done
+"${SCP_CMD[@]}" "${UNCHAINED_UPLOAD_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/"
 
-"${SCP_CMD[@]}" \
-    unchained/benchmark/__init__.py \
-    unchained/benchmark/progress_critic.py \
-    unchained/benchmark/intermediate_goal.py \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
+BENCHMARK_UPLOAD_FILES=()
+for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do
+    BENCHMARK_UPLOAD_FILES+=("unchained/benchmark/$rel")
+done
+"${SCP_CMD[@]}" "${BENCHMARK_UPLOAD_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
 
 # Upload modular web_app package extracted from web.py
 echo "==> Uploading web_app package..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/web_app/handlers"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/web_app/handlers"
+EOF
 "${SCP_CMD[@]}" -r \
     unchained/web_app/* \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/web_app/"
 
 # Upload native installer assets
 echo "==> Uploading installer assets..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/installers"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/installers"
+EOF
 shopt -s nullglob
 INSTALLER_FILES=(unchained/installers/*)
 shopt -u nullglob
@@ -150,27 +132,113 @@ if [[ "${#INSTALLER_FILES[@]}" -gt 0 ]]; then
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/installers/"
 fi
 
+# Upload vendored Research Desk package source for /web/research-desk/files.
+echo "==> Uploading Research Desk vendor tree..."
+RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES=()
+for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do
+    vendor_path="research_desk_vendor/$rel"
+    if [[ ! -f "$vendor_path" ]]; then
+        echo "ERROR: missing Research Desk vendor file: $vendor_path" >&2
+        exit 1
+    fi
+    RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES+=("$vendor_path")
+done
+shopt -s nullglob
+RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)
+shopt -u nullglob
+if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then
+    echo "ERROR: Research Desk vendor package has no Python files" >&2
+    exit 1
+fi
+REMOTE_VENDOR_STAGE="$(
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+stage_dir="$(mktemp -d "$remote_dir/research_desk_vendor.stage.XXXXXX")"
+mkdir -p "$stage_dir/unchained_pyreplab"
+printf '%s\n' "$stage_dir"
+EOF
+)"
+"${SCP_CMD[@]}" \
+    "${RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES[@]}" \
+    "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/"
+"${SCP_CMD[@]}" \
+    "${RESEARCH_DESK_VENDOR_FILES[@]}" \
+    "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/unchained_pyreplab/"
+remote_bash "$REMOTE_VENDOR_STAGE" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+test -s "$stage_dir/manifest.json"
+test -s "$stage_dir/README.md"
+test -s "$stage_dir/pyproject.toml"
+find "$stage_dir/unchained_pyreplab" -maxdepth 1 -type f -name '*.py' | grep -q .
+EOF
+remote_bash "$REMOTE_DIR" "$REMOTE_VENDOR_STAGE" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+stage_dir="$2"
+live_dir="$remote_dir/research_desk_vendor"
+backup_dir="$(mktemp -d "$remote_dir/research_desk_vendor.prev.XXXXXX")"
+rmdir "$backup_dir"
+restore_live_dir() {
+    if [[ ! -e "$live_dir" && -e "$backup_dir" ]]; then
+        mv "$backup_dir" "$live_dir"
+    fi
+    rm -rf "$stage_dir"
+}
+trap restore_live_dir EXIT
+if [[ -e "$live_dir" ]]; then
+    mv "$live_dir" "$backup_dir"
+fi
+mv "$stage_dir" "$live_dir"
+rm -rf "$backup_dir"
+trap - EXIT
+EOF
+
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then
-    "${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose build --no-cache && docker compose up -d"
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+docker compose build --no-cache
+docker compose up -d
+EOF
 else
-    "${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose up -d --build"
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+docker compose up -d --build
+EOF
 fi
 
 # Refresh Caddy after upstream containers are recreated.
 # This avoids stale/no-such-host upstream resolution windows after deploys.
 echo "==> Restarting Caddy reverse proxy..."
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml restart caddy"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" restart caddy
+EOF
 
 # Show status
 echo ""
 echo "==> Container status:"
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml ps"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" ps
+EOF
 
 echo ""
 echo "==> Relay logs (last 5):"
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml logs relay --tail 5"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" logs relay --tail 5
+EOF
 
 # Restore overlaid private-core files back to committed/public state.
 echo ""

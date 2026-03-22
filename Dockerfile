@@ -69,6 +69,8 @@ RUN pip install --no-cache-dir \
     cryptography>=42.0 \
     pypdf>=4.0
 
+COPY research_desk_vendor/ research_desk_vendor/
+
 ENV PYTHONUNBUFFERED=1
 ENV HOME=/home/unchained
 

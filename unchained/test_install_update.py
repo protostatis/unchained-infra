@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -343,6 +344,124 @@ def test_runtime_dockerfile_copies_scheduler_files():
     assert "COPY unchained/scheduler_agent.py ." in dockerfile
     assert "COPY research_desk_vendor/ research_desk_vendor/" in dockerfile
     print("  Dockerfile copies scheduler runtime files")
+
+
+def test_runtime_dockerfile_copies_research_desk_vendor_tree():
+    repo_root = Path(__file__).resolve().parent.parent
+    dockerfile = (repo_root / "Dockerfile").read_text()
+    assert "COPY research_desk_vendor/ research_desk_vendor/" in dockerfile
+    assert dockerfile.index("RUN pip install --no-cache-dir") < dockerfile.index(
+        "COPY research_desk_vendor/ research_desk_vendor/"
+    )
+
+
+def test_runtime_context_helper_lists_research_desk_vendor_roots():
+    repo_root = Path(__file__).resolve().parent.parent
+    helper = (repo_root / "deploy" / "runtime_context_files.sh").read_text()
+    assert 'TOP_LEVEL_CONTEXT_FILES=(' in helper
+    assert 'UNCHAINED_RUNTIME_FILES=(' in helper
+    assert 'BENCHMARK_CONTEXT_FILES=(' in helper
+    assert 'RESEARCH_DESK_VENDOR_ROOT_FILES=(' in helper
+    assert '"manifest.json"' in helper
+    assert '"README.md"' in helper
+    assert '"pyproject.toml"' in helper
+
+
+def test_runtime_context_helper_references_existing_files():
+    repo_root = Path(__file__).resolve().parent.parent
+    script = """
+source "$1/deploy/runtime_context_files.sh"
+for rel in "${TOP_LEVEL_CONTEXT_FILES[@]}"; do test -f "$1/$rel"; done
+for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do test -f "$1/unchained/$rel"; done
+for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do test -f "$1/unchained/benchmark/$rel"; done
+for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do test -f "$1/research_desk_vendor/$rel"; done
+"""
+    subprocess.run(
+        ["bash", "-c", script, "bash", str(repo_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_deploy_script_uploads_research_desk_vendor_tree():
+    repo_root = Path(__file__).resolve().parent.parent
+    deploy_script = (repo_root / "deploy.sh").read_text()
+    assert 'cd "$SCRIPT_DIR"' in deploy_script
+    assert 'source "$SCRIPT_DIR/deploy/runtime_context_files.sh"' in deploy_script
+    assert "remote_bash()" in deploy_script
+    assert 'remote_bash "$REMOTE_DIR" <<\'EOF\'' in deploy_script
+    assert 'echo "==> Uploading Research Desk vendor tree..."' in deploy_script
+    assert 'RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES=()' in deploy_script
+    assert 'if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then' in deploy_script
+    assert 'REMOTE_VENDOR_STAGE="$(' in deploy_script
+    assert 'backup_dir="$(mktemp -d "$remote_dir/research_desk_vendor.prev.XXXXXX")"' in deploy_script
+    assert 'trap restore_live_dir EXIT' in deploy_script
+    assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
+
+
+def test_research_desk_package_image_smoke_script_checks_built_image():
+    repo_root = Path(__file__).resolve().parent.parent
+    smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
+    assert 'source "${SCRIPT_DIR}/runtime_context_files.sh"' in smoke_script
+    assert 'TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/research-desk-package-image-smoke.XXXXXX")"' in smoke_script
+    assert 'for rel in "${TOP_LEVEL_CONTEXT_FILES[@]}"; do' in smoke_script
+    assert 'for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do' in smoke_script
+    assert 'cp -R unchained/web_app "${TMP_DIR}/unchained/"' in smoke_script
+    assert 'for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do' in smoke_script
+    assert 'if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then' in smoke_script
+    assert 'docker build -t "${IMAGE_TAG}" "${TMP_DIR}"' in smoke_script
+    assert 'docker run --rm "${IMAGE_TAG}" python - <<\'PY\'' in smoke_script
+    assert "build_research_desk_zip()" in smoke_script
+
+
+def test_research_desk_package_image_smoke_script_runs_with_fake_docker():
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "deploy" / "research_desk_package_image_smoke.sh"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        marker_path = tmp_path / "docker-marker.json"
+        docker_path = fake_bin / "docker"
+        docker_path.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+marker="${FAKE_DOCKER_MARKER:?}"
+if [[ "$1" == "build" ]]; then
+  context="${@: -1}"
+  test -f "$context/Dockerfile"
+  test -f "$context/research_desk_vendor/manifest.json"
+  test -f "$context/research_desk_vendor/README.md"
+  test -f "$context/research_desk_vendor/pyproject.toml"
+  test -f "$context/unchained/agent_package.py"
+  test -d "$context/unchained/web_app"
+  printf '{"build_context":"%s"}\\n' "$context" >"$marker"
+  exit 0
+fi
+if [[ "$1" == "run" ]]; then
+  exit 0
+fi
+echo "unexpected docker args: $*" >&2
+exit 1
+""",
+            encoding="utf-8",
+        )
+        docker_path.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        env["FAKE_DOCKER_MARKER"] = str(marker_path)
+        subprocess.run(
+            ["bash", str(script_path)],
+            cwd=repo_root,
+            check=True,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert marker_path.is_file()
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        assert payload["build_context"]
 
 
 def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
