@@ -3,6 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="unchained-pyreplab",
+    # Keep this in sync with RESEARCH_DESK_VERSION in unchained/agent_package.py.
     version="0.1.0",
     description="Local toy V1 for browser-to-lab workflows with Unchained MCP and pyreplab",
     long_description=(open("README.md", encoding="utf-8").read()),

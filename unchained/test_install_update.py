@@ -511,6 +511,11 @@ exit 1
 def test_research_desk_zip_installs_with_system_pip_metadata():
     from agent_package import build_research_desk_zip
 
+    python_bin = shutil.which(
+        "python3",
+        path=os.pathsep.join(["/usr/local/bin", "/opt/homebrew/bin", os.defpath]),
+    ) or sys.executable
+
     zip_bytes = build_research_desk_zip()
     with tempfile.TemporaryDirectory() as tmpdir:
         zip_path = Path(tmpdir) / "research-desk.zip"
@@ -518,7 +523,7 @@ def test_research_desk_zip_installs_with_system_pip_metadata():
         zip_path.write_bytes(zip_bytes)
         result = subprocess.run(
             [
-                "/usr/bin/python3",
+                python_bin,
                 "-m",
                 "pip",
                 "install",
