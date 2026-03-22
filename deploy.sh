@@ -150,6 +150,13 @@ if [[ "${#INSTALLER_FILES[@]}" -gt 0 ]]; then
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/installers/"
 fi
 
+# Upload research_desk_vendor package
+echo "==> Uploading research_desk_vendor..."
+"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/research_desk_vendor"
+"${SCP_CMD[@]}" -r \
+    research_desk_vendor/* \
+    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/research_desk_vendor/"
+
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then
