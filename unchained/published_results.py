@@ -50,6 +50,9 @@ def _connect() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass  # column already exists
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_query_hash ON published_results(query_hash)"
+    )
+    conn.execute(
         """CREATE TABLE IF NOT EXISTS publish_blacklist (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             term TEXT UNIQUE NOT NULL,
