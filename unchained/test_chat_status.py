@@ -18,6 +18,7 @@ from chat_agent_cli import (
     _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
     _ensure_research_desk_bridge_running,
     _ensure_research_desk_server_running,
+    _open_research_desk_local,
     _research_desk_launcher_prefix,
     _research_desk_package_url,
     _research_desk_python_binary,
@@ -277,7 +278,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         }
         web._chat_agents["claude-install"] = SimpleNamespace(closed=False)
         web._chat_agent_caps["claude-install"] = {
-            "client_version": "0.3.63",
+            "client_version": "0.3.64",
             "remote_update": True,
             "remote_research_desk_install": True,
         }
@@ -346,6 +347,25 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                             "chat_agent_cli.os.access",
                             side_effect=lambda p, mode: p == "/usr/bin/python3",
                         ):
+                            self.assertEqual(_research_desk_python_binary(), "/usr/bin/python3")
+
+    def test_research_desk_python_binary_ignores_venv_symlink_path(self):
+        def fake_which(name, path=None):
+            self.assertEqual(name, "python3")
+            if path == "/usr/bin":
+                return "/usr/bin/python3"
+            return "/tmp/agent-venv/bin/python3"
+
+        def fake_realpath(path):
+            if path == "/tmp/agent-venv/bin/python3":
+                return "/usr/bin/python3"
+            return path
+
+        with patch("chat_agent_cli.shutil.which", side_effect=fake_which):
+            with patch("chat_agent_cli.os.path.realpath", side_effect=fake_realpath):
+                with patch("chat_agent_cli.os.path.abspath", side_effect=lambda p: p):
+                    with patch("chat_agent_cli.sys.prefix", "/tmp/agent-venv"):
+                        with patch("chat_agent_cli.sys.base_prefix", "/usr"):
                             self.assertEqual(_research_desk_python_binary(), "/usr/bin/python3")
 
     def test_research_desk_package_url_rejects_invalid_override(self):
@@ -425,12 +445,13 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                     with patch("chat_agent_cli._localhost_port_open", return_value=False):
                         with patch("chat_agent_cli._wait_for_local_port", return_value=True):
                             with patch("chat_agent_cli._spawn_detached") as mock_spawn:
-                                with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
-                                    with patch(
-                                        "chat_agent_cli.os.path.isfile",
-                                        side_effect=lambda path: path == "/tmp/unchained-agent/unchained/chrome_bridge.py",
-                                    ):
-                                        _run_research_desk_install_helper()
+                                with patch("chat_agent_cli._open_research_desk_local") as mock_open:
+                                    with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                                        with patch(
+                                            "chat_agent_cli.os.path.isfile",
+                                            side_effect=lambda path: path == "/tmp/unchained-agent/unchained/chrome_bridge.py",
+                                        ):
+                                            _run_research_desk_install_helper()
 
         self.assertEqual(
             commands[0],
@@ -471,6 +492,13 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
             cwd=ANY,
             log_path=os.path.join(os.path.expanduser("~/.unchained"), "research-desk-serve.log"),
         )
+        mock_open.assert_called_once_with()
+
+    def test_open_research_desk_local_uses_platform_launcher(self):
+        with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+            with patch("chat_agent_cli.sys.platform", "darwin"):
+                _open_research_desk_local()
+        mock_spawn.assert_called_once_with(["open", "http://127.0.0.1:8766/"], cwd=ANY)
 
 
 if __name__ == "__main__":
