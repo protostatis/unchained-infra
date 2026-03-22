@@ -341,6 +341,7 @@ def test_runtime_dockerfile_copies_scheduler_files():
     dockerfile = (repo_root / "Dockerfile").read_text()
     assert "COPY unchained/scheduler_tool.py ." in dockerfile
     assert "COPY unchained/scheduler_agent.py ." in dockerfile
+    assert "COPY research_desk_vendor/ research_desk_vendor/" in dockerfile
     print("  Dockerfile copies scheduler runtime files")
 
 
