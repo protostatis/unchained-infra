@@ -476,29 +476,26 @@ async def handle_published_result(request: web.Request) -> web.Response:
     # Escape for HTML meta attributes
     title_text = escape(query[:80])
     desc_html = escape(result_text[:200]).replace("\n", " ")
-    # Escape for JSON-LD (must be valid JSON string content)
-    title_json = json.dumps(query[:80])[1:-1]  # strip outer quotes
-    desc_json = json.dumps(result_text[:200].replace("\n", " "))[1:-1]
+    # Escape for JSON-LD (must be valid JSON string content + escape </ for script safety)
+    title_json = json.dumps(query[:80])[1:-1].replace("</", r"<\/")
+    desc_json = json.dumps(result_text[:200].replace("\n", " "))[1:-1].replace("</", r"<\/")
     created = _time.strftime("%Y-%m-%d", _time.gmtime(result["created_at"]))
-    html = core.PUBLISHED_RESULT_HTML.replace(
-        "__RESULT_TITLE__", title_text
-    ).replace(
-        "__RESULT_TITLE_JSON__", title_json
-    ).replace(
-        "__RESULT_DESC__", desc_html
-    ).replace(
-        "__RESULT_DESC_JSON__", desc_json
-    ).replace(
-        "__RESULT_SLUG__", slug
-    ).replace(
-        "__RESULT_HTML__", result["result_html"]
-    ).replace(
-        "__RESULT_DATE__", created
-    ).replace(
-        "__RESULT_VIEWS__", str(result["view_count"])
-    ).replace(
-        "__CONTACT_EMAIL__", core.CONTACT_EMAIL
-    )
+    # Single-pass substitution to prevent double-replacement if result_html
+    # contains placeholder strings like __RESULT_TITLE__
+    import re as _re
+    _subs = {
+        "__RESULT_TITLE__": title_text,
+        "__RESULT_TITLE_JSON__": title_json,
+        "__RESULT_DESC__": desc_html,
+        "__RESULT_DESC_JSON__": desc_json,
+        "__RESULT_SLUG__": slug,
+        "__RESULT_HTML__": result["result_html"],
+        "__RESULT_DATE__": created,
+        "__RESULT_VIEWS__": str(result["view_count"]),
+        "__CONTACT_EMAIL__": core.CONTACT_EMAIL,
+    }
+    _pattern = _re.compile("|".join(_re.escape(k) for k in _subs))
+    html = _pattern.sub(lambda m: _subs[m.group(0)], core.PUBLISHED_RESULT_HTML)
     html = core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
