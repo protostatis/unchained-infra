@@ -63,20 +63,18 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-# Words stripped from slugs — filler, implementation detail, instructions
+# Words stripped from slugs — filler and instruction verbs only.
+# Keep proper nouns (google, amazon, etc.) to preserve meaning.
 _SLUG_STOP_WORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "it", "its", "that", "this",
     "go", "can", "you", "please", "find", "me", "i", "want", "search",
     "look", "up", "tell", "show", "get", "give", "make", "do", "take",
     "use", "using", "check", "open", "navigate", "visit",
-    # Implementation detail — don't leak where we got the data
-    "wikipedia", "google", "flights", "zillow", "redfin", "amazon",
-    "youtube", "hacker", "news", "reddit", "craigslist",
+    # URL fragments
     "com", "www", "http", "https", "org", "net",
     # Instruction fragments
-    "right", "now", "currently", "today", "tonight", "next", "month",
-    "summarize", "compare", "list", "screenshot", "each",
+    "right", "now", "currently", "screenshot", "each",
 }
 
 
@@ -98,8 +96,12 @@ def _slugify(text: str) -> str:
 
 
 def _query_hash(query: str) -> str:
-    """Normalized hash of a query for deduplication."""
-    normalized = re.sub(r"[^a-z0-9]", "", query.lower())
+    """Normalized hash of a query for deduplication.
+
+    Preserves special characters (C++ != C#) but normalizes whitespace
+    and case so "Find Flights" and "find  flights" match.
+    """
+    normalized = re.sub(r"\s+", " ", query.lower().strip())
     return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
 
