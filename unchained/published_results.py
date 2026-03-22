@@ -34,6 +34,7 @@ def _connect() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             slug TEXT UNIQUE NOT NULL,
             query TEXT NOT NULL,
+            query_hash TEXT,
             result_html TEXT NOT NULL,
             result_text TEXT NOT NULL,
             meta_json TEXT,
@@ -43,6 +44,11 @@ def _connect() -> sqlite3.Connection:
             view_count INTEGER DEFAULT 0
         )"""
     )
+    # Add query_hash column if upgrading from older schema
+    try:
+        conn.execute("ALTER TABLE published_results ADD COLUMN query_hash TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute(
         """CREATE TABLE IF NOT EXISTS publish_blacklist (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -397,14 +403,14 @@ def publish_result(
         conn = _connect()
         try:
             existing = conn.execute(
-                "SELECT slug FROM published_results WHERE meta_json LIKE ?",
-                (f'%"qhash":"{qhash}"%',),
+                "SELECT slug FROM published_results WHERE query_hash = ?",
+                (qhash,),
             ).fetchone()
         finally:
             conn.close()
     if existing:
         log.info("Publish skipped (duplicate): %s -> %s", query[:60], existing[0])
-        return existing[0]  # return existing slug instead of creating duplicate
+        return existing[0]
     # Combine ALL assistant text for PII check
     all_asst_text = "\n\n".join(m["content"] for m in asst_msgs)
     # LLM-based PII guard — blocks if content contains personal data
@@ -419,15 +425,16 @@ def publish_result(
         try:
             conn.execute(
                 """INSERT INTO published_results
-                   (slug, query, result_html, result_text, meta_json,
-                    created_at, user_id, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (slug, query, query_hash, result_html, result_text,
+                    meta_json, created_at, user_id, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     slug,
                     query,
+                    qhash,
                     result_html,
                     result_text,
-                    json.dumps({"message_count": len(messages), "qhash": qhash}),
+                    json.dumps({"message_count": len(messages)}),
                     time.time(),
                     user_id,
                     session_id,
@@ -441,15 +448,16 @@ def publish_result(
             slug = f"{slug}-{h}"
             conn.execute(
                 """INSERT INTO published_results
-                   (slug, query, result_html, result_text, meta_json,
-                    created_at, user_id, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (slug, query, query_hash, result_html, result_text,
+                    meta_json, created_at, user_id, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     slug,
                     query,
+                    qhash,
                     result_html,
                     result_text,
-                    json.dumps({"message_count": len(messages), "qhash": qhash}),
+                    json.dumps({"message_count": len(messages)}),
                     time.time(),
                     user_id,
                     session_id,
