@@ -350,24 +350,42 @@ def test_runtime_dockerfile_copies_research_desk_vendor_tree():
     assert "COPY research_desk_vendor/ research_desk_vendor/" in dockerfile
 
 
+def test_runtime_context_helper_lists_research_desk_vendor_roots():
+    repo_root = Path(__file__).resolve().parent.parent
+    helper = (repo_root / "deploy" / "runtime_context_files.sh").read_text()
+    assert 'TOP_LEVEL_CONTEXT_FILES=(' in helper
+    assert 'UNCHAINED_RUNTIME_FILES=(' in helper
+    assert 'BENCHMARK_CONTEXT_FILES=(' in helper
+    assert 'RESEARCH_DESK_VENDOR_ROOT_FILES=(' in helper
+    assert '"manifest.json"' in helper
+    assert '"README.md"' in helper
+    assert '"pyproject.toml"' in helper
+
+
 def test_deploy_script_uploads_research_desk_vendor_tree():
     repo_root = Path(__file__).resolve().parent.parent
     deploy_script = (repo_root / "deploy.sh").read_text()
+    assert 'cd "$SCRIPT_DIR"' in deploy_script
+    assert 'source "$SCRIPT_DIR/deploy/runtime_context_files.sh"' in deploy_script
+    assert '"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR"' in deploy_script
     assert 'echo "==> Uploading Research Desk vendor tree..."' in deploy_script
-    assert "rm -rf $REMOTE_DIR/research_desk_vendor" in deploy_script
-    assert "mkdir -p $REMOTE_DIR/research_desk_vendor/unchained_pyreplab" in deploy_script
-    assert "research_desk_vendor/manifest.json" in deploy_script
-    assert "research_desk_vendor/README.md" in deploy_script
-    assert "research_desk_vendor/pyproject.toml" in deploy_script
+    assert 'if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then' in deploy_script
+    assert 'REMOTE_VENDOR_STAGE="$REMOTE_DIR/research_desk_vendor.stage.$$"' in deploy_script
+    assert 'REMOTE_VENDOR_BACKUP="$REMOTE_DIR/research_desk_vendor.prev.$$"' in deploy_script
+    assert "mv '$REMOTE_VENDOR_STAGE' '$REMOTE_DIR/research_desk_vendor'" in deploy_script
     assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
 
 
 def test_research_desk_package_image_smoke_script_checks_built_image():
     repo_root = Path(__file__).resolve().parent.parent
     smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
+    assert 'source "${SCRIPT_DIR}/runtime_context_files.sh"' in smoke_script
     assert 'TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/research-desk-package-image-smoke.XXXXXX")"' in smoke_script
-    assert 'cp research_desk_vendor/manifest.json "${TMP_DIR}/research_desk_vendor/"' in smoke_script
-    assert 'cp research_desk_vendor/unchained_pyreplab/*.py "${TMP_DIR}/research_desk_vendor/unchained_pyreplab/"' in smoke_script
+    assert 'for rel in "${TOP_LEVEL_CONTEXT_FILES[@]}"; do' in smoke_script
+    assert 'for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do' in smoke_script
+    assert 'cp -R unchained/web_app "${TMP_DIR}/unchained/"' in smoke_script
+    assert 'for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do' in smoke_script
+    assert 'if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then' in smoke_script
     assert 'docker build -t "${IMAGE_TAG}" "${TMP_DIR}"' in smoke_script
     assert 'docker run --rm "${IMAGE_TAG}" python - <<\'PY\'' in smoke_script
     assert "build_research_desk_zip()" in smoke_script

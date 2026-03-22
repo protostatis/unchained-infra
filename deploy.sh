@@ -13,6 +13,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
+
 INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
 PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
@@ -69,67 +73,25 @@ done
 
 # Upload top-level files
 echo "==> Uploading config files..."
+"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR"
 "${SCP_CMD[@]}" \
-    Dockerfile \
-    docker-compose.yml \
-    Caddyfile \
+    "${TOP_LEVEL_CONTEXT_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
 
 # Upload Python modules
 echo "==> Uploading Python modules..."
 "${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/benchmark"
-"${SCP_CMD[@]}" \
-    unchained/relay.py \
-    unchained/rate_limit.py \
-    unchained/auth.py \
-    unchained/analytics.py \
-    unchained/cloud_tools.py \
-    unchained/private_core_client.py \
-    unchained/private_core_contracts.py \
-    unchained/private_core_engine.py \
-    unchained/private_core_server.py \
-    unchained/editable_helpers.js \
-    unchained/api.py \
-    unchained/mcp_server.py \
-    unchained/orchestrator.py \
-    unchained/cdp.py \
-    unchained/ddm.py \
-    unchained/intel.py \
-    unchained/web.py \
-    unchained/web_cmd.py \
-    unchained/web_state.py \
-    unchained/overlay_js.py \
-    unchained/cdp_tool_packaged.py \
-    unchained/analytics.py \
-    unchained/published_results.py \
-    unchained/provision_helpers.py \
-    unchained/template_utils.py \
-    unchained/agent_package.py \
-    unchained/chrome_bridge.py \
-    unchained/chat_agent_cli.py \
-    unchained/chat_agent_openrouter.py \
-    unchained/chat_agent_gemini.py \
-    unchained/chat_agent_codex.py \
-    unchained/chat_agent_sdk.py \
-    unchained/context_compact.py \
-    unchained/scheduler_agent.py \
-    unchained/scheduler_tool.py \
-    unchained/signup_agent.py \
-    unchained/nudge.py \
-    unchained/reflex.py \
-    unchained/pyproject.toml \
-    unchained/CLAUDE.md \
-    unchained/scheduled_tasks.py \
-    unchained/scheduled_jobs.example.json \
-    unchained/favicon.svg \
-    unchained/og-image.png \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/"
+UNCHAINED_UPLOAD_FILES=()
+for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do
+    UNCHAINED_UPLOAD_FILES+=("unchained/$rel")
+done
+"${SCP_CMD[@]}" "${UNCHAINED_UPLOAD_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/"
 
-"${SCP_CMD[@]}" \
-    unchained/benchmark/__init__.py \
-    unchained/benchmark/progress_critic.py \
-    unchained/benchmark/intermediate_goal.py \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
+BENCHMARK_UPLOAD_FILES=()
+for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do
+    BENCHMARK_UPLOAD_FILES+=("unchained/benchmark/$rel")
+done
+"${SCP_CMD[@]}" "${BENCHMARK_UPLOAD_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/"
 
 # Upload modular web_app package extracted from web.py
 echo "==> Uploading web_app package..."
@@ -152,20 +114,32 @@ fi
 
 # Upload vendored Research Desk package source for /web/research-desk/files.
 echo "==> Uploading Research Desk vendor tree..."
-"${SSH_CMD[@]}" "rm -rf $REMOTE_DIR/research_desk_vendor && mkdir -p $REMOTE_DIR/research_desk_vendor/unchained_pyreplab"
+for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do
+    if [[ ! -f "research_desk_vendor/$rel" ]]; then
+        echo "ERROR: missing Research Desk vendor file: research_desk_vendor/$rel" >&2
+        exit 1
+    fi
+done
+shopt -s nullglob
+RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)
+shopt -u nullglob
+if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then
+    echo "ERROR: Research Desk vendor package has no Python files" >&2
+    exit 1
+fi
+REMOTE_VENDOR_STAGE="$REMOTE_DIR/research_desk_vendor.stage.$$"
+REMOTE_VENDOR_BACKUP="$REMOTE_DIR/research_desk_vendor.prev.$$"
+"${SSH_CMD[@]}" "rm -rf '$REMOTE_VENDOR_STAGE' '$REMOTE_VENDOR_BACKUP' && mkdir -p '$REMOTE_VENDOR_STAGE/unchained_pyreplab'"
 "${SCP_CMD[@]}" \
     research_desk_vendor/manifest.json \
     research_desk_vendor/README.md \
     research_desk_vendor/pyproject.toml \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/research_desk_vendor/"
-shopt -s nullglob
-RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)
-shopt -u nullglob
-if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -gt 0 ]]; then
-    "${SCP_CMD[@]}" \
-        "${RESEARCH_DESK_VENDOR_FILES[@]}" \
-        "$EC2_USER@$EC2_HOST:$REMOTE_DIR/research_desk_vendor/unchained_pyreplab/"
-fi
+    "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/"
+"${SCP_CMD[@]}" \
+    "${RESEARCH_DESK_VENDOR_FILES[@]}" \
+    "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/unchained_pyreplab/"
+"${SSH_CMD[@]}" "test -s '$REMOTE_VENDOR_STAGE/manifest.json' && test -s '$REMOTE_VENDOR_STAGE/README.md' && test -s '$REMOTE_VENDOR_STAGE/pyproject.toml' && find '$REMOTE_VENDOR_STAGE/unchained_pyreplab' -maxdepth 1 -type f -name '*.py' | grep -q ."
+"${SSH_CMD[@]}" "rm -rf '$REMOTE_VENDOR_BACKUP' && if [ -d '$REMOTE_DIR/research_desk_vendor' ]; then mv '$REMOTE_DIR/research_desk_vendor' '$REMOTE_VENDOR_BACKUP'; fi && mv '$REMOTE_VENDOR_STAGE' '$REMOTE_DIR/research_desk_vendor' && rm -rf '$REMOTE_VENDOR_BACKUP'"
 
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
