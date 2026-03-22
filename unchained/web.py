@@ -1399,7 +1399,10 @@ async def handle_og_image(request: web.Request) -> web.Response:
         if og_path.exists():
             _og_image_cache = og_path.read_bytes()
         else:
-            return web.Response(status=404)
+            _og_image_cache = b""
+            log.warning("og-image.png not found at %s", og_path)
+    if not _og_image_cache:
+        return web.Response(status=404)
     return web.Response(
         body=_og_image_cache,
         content_type="image/png",
