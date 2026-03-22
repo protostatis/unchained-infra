@@ -376,7 +376,7 @@ for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do test -f "$1/unchained/benchmark/$
 for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do test -f "$1/research_desk_vendor/$rel"; done
 """
     subprocess.run(
-        ["bash", "-lc", script, "bash", str(repo_root)],
+        ["bash", "-c", script, "bash", str(repo_root)],
         check=True,
         capture_output=True,
         text=True,
