@@ -186,12 +186,14 @@ def test_build_research_desk_zip_contains_installable_source_tree():
         names = zf.namelist()
         assert f"{prefix}/pyproject.toml" in names
         assert f"{prefix}/README.md" in names
+        assert f"{prefix}/setup.py" in names
         assert f"{prefix}/manifest.json" in names
         assert f"{prefix}/unchained_pyreplab/__init__.py" in names
         pyproject = zf.read(f"{prefix}/pyproject.toml").decode()
         assert 'name = "unchained-pyreplab"' in pyproject
         manifest = json.loads(zf.read(f"{prefix}/manifest.json").decode())
         assert "pyproject.toml" in manifest["files"]
+        assert "setup.py" in manifest["files"]
         assert "unchained_pyreplab/capsule_runtime.py" in manifest["files"]
         package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
         assert "Local browser-to-lab prototype" in package_init
@@ -393,6 +395,7 @@ def test_runtime_context_helper_lists_research_desk_vendor_roots():
     assert '"manifest.json"' in helper
     assert '"README.md"' in helper
     assert '"pyproject.toml"' in helper
+    assert '"setup.py"' in helper
 
 
 def test_runtime_context_helper_references_existing_files():
@@ -462,6 +465,7 @@ if [[ "$1" == "build" ]]; then
   test -f "$context/research_desk_vendor/manifest.json"
   test -f "$context/research_desk_vendor/README.md"
   test -f "$context/research_desk_vendor/pyproject.toml"
+  test -f "$context/research_desk_vendor/setup.py"
   test -f "$context/unchained/agent_package.py"
   test -d "$context/unchained/web_app"
   printf '{"build_context":"%s"}\\n' "$context" >"$marker"
@@ -490,6 +494,34 @@ exit 1
         assert marker_path.is_file()
         payload = json.loads(marker_path.read_text(encoding="utf-8"))
         assert payload["build_context"]
+
+
+def test_research_desk_zip_installs_with_system_pip_metadata():
+    from agent_package import build_research_desk_zip
+
+    zip_bytes = build_research_desk_zip()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = Path(tmpdir) / "research-desk.zip"
+        target_dir = Path(tmpdir) / "site-packages"
+        zip_path.write_bytes(zip_bytes)
+        result = subprocess.run(
+            [
+                "/usr/bin/python3",
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                "--target",
+                str(target_dir),
+                str(zip_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Successfully installed unchained-pyreplab-0.1.0" in result.stdout
+        assert (target_dir / "unchained_pyreplab" / "__init__.py").exists()
 
 
 def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
