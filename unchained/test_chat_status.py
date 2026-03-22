@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from agent_package import VERSION
 from chat_agent_cli import (
-    _DEFAULT_RESEARCH_DESK_PACKAGE_URL,
+    _download_research_desk_package,
     _ensure_research_desk_bridge_running,
     _ensure_research_desk_server_running,
     _open_research_desk_local,
@@ -278,7 +279,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         }
         web._chat_agents["claude-install"] = SimpleNamespace(closed=False)
         web._chat_agent_caps["claude-install"] = {
-            "client_version": "0.3.64",
+            "client_version": "0.3.65",
             "remote_update": True,
             "remote_research_desk_install": True,
         }
@@ -374,19 +375,51 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
             {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": "https://evil.example.com/pkg.zip"},
             clear=False,
         ):
-            self.assertEqual(_research_desk_package_url(), _DEFAULT_RESEARCH_DESK_PACKAGE_URL)
+            self.assertEqual(
+                _research_desk_package_url(),
+                "https://api.unchainedsky.com/web/research-desk/files",
+            )
 
-    def test_research_desk_package_url_accepts_pinned_github_archive(self):
-        override = (
-            "https://github.com/protostatis/unchained_pyreplab/archive/"
-            "refs/tags/v0.1.0.zip"
-        )
+    def test_research_desk_package_url_accepts_hosted_override(self):
+        override = "https://api.unchainedsky.com/web/research-desk/files"
         with patch.dict(
             os.environ,
             {"UNCHAINED_RESEARCH_DESK_PACKAGE_URL": override},
             clear=False,
         ):
             self.assertEqual(_research_desk_package_url(), override)
+
+    def test_download_research_desk_package_uses_bearer_auth(self):
+        response = io.BytesIO(b"zip-bytes")
+
+        class FakeResponse:
+            def __enter__(self):
+                return response
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        requests = []
+
+        def fake_urlopen(req, timeout):
+            requests.append((req.full_url, req.get_header("Authorization"), timeout))
+            response.seek(0)
+            return FakeResponse()
+
+        with patch("chat_agent_cli.KEY", "uc_live_test"):
+            with patch("chat_agent_cli.urllib.request.urlopen", side_effect=fake_urlopen):
+                path = _download_research_desk_package(
+                    "https://api.unchainedsky.com/web/research-desk/files"
+                )
+        try:
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"zip-bytes")
+        finally:
+            os.unlink(path)
+        self.assertEqual(
+            requests,
+            [("https://api.unchainedsky.com/web/research-desk/files", "Bearer uc_live_test", 30)],
+        )
 
     def test_research_desk_launcher_prefix_quotes_spaced_python_paths(self):
         with patch("chat_agent_cli._research_desk_python_binary", return_value="/tmp/odd path/python3"):
@@ -439,19 +472,20 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
         with patch("chat_agent_cli._research_desk_python_binary", return_value="/usr/bin/python3"):
             with patch(
                 "chat_agent_cli._research_desk_package_url",
-                return_value="https://github.com/protostatis/unchained_pyreplab/archive/refs/tags/v0.1.0.zip",
+                return_value="https://api.unchainedsky.com/web/research-desk/files",
             ):
                 with patch("chat_agent_cli._run_logged", side_effect=fake_run_logged):
-                    with patch("chat_agent_cli._localhost_port_open", return_value=False):
-                        with patch("chat_agent_cli._wait_for_local_port", return_value=True):
-                            with patch("chat_agent_cli._spawn_detached") as mock_spawn:
-                                with patch("chat_agent_cli._open_research_desk_local") as mock_open:
-                                    with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
-                                        with patch(
-                                            "chat_agent_cli.os.path.isfile",
-                                            side_effect=lambda path: path == "/tmp/unchained-agent/unchained/chrome_bridge.py",
-                                        ):
-                                            _run_research_desk_install_helper()
+                    with patch("chat_agent_cli._download_research_desk_package", return_value="/tmp/research-desk.zip"):
+                        with patch("chat_agent_cli._localhost_port_open", return_value=False):
+                            with patch("chat_agent_cli._wait_for_local_port", return_value=True):
+                                with patch("chat_agent_cli._spawn_detached") as mock_spawn:
+                                    with patch("chat_agent_cli._open_research_desk_local") as mock_open:
+                                        with patch("chat_agent_cli._agent_root", return_value="/tmp/unchained-agent"):
+                                            with patch(
+                                                "chat_agent_cli.os.path.isfile",
+                                                side_effect=lambda path: path == "/tmp/unchained-agent/unchained/chrome_bridge.py",
+                                            ):
+                                                _run_research_desk_install_helper()
 
         self.assertEqual(
             commands[0],
@@ -462,7 +496,7 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
                 "install",
                 "--user",
                 "--upgrade",
-                "https://github.com/protostatis/unchained_pyreplab/archive/refs/tags/v0.1.0.zip",
+                "/tmp/research-desk.zip",
             ],
         )
         self.assertEqual(commands[1], ["/usr/bin/python3", "-m", "unchained_pyreplab", "setup"])

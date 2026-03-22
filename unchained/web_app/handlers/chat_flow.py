@@ -42,7 +42,7 @@ def _client_version_status(caps: dict | None) -> dict:
     }
 
 
-_RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION = "0.3.64"
+_RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION = "0.3.65"
 
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:

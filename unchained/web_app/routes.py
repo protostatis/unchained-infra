@@ -114,6 +114,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/trial/{token}", "web_app.handlers.install_flow:handle_trial_script"),
     ("GET", "/web/agent/version", "handle_agent_version"),
     ("GET", "/web/agent/files", "handle_agent_files"),
+    ("GET", "/web/research-desk/files", "handle_research_desk_files"),
     ("GET", "/web/provision/profiles", "web_app.handlers.provision:handle_provision_profiles"),
     ("POST", "/web/provision/start", "web_app.handlers.provision:handle_provision_start"),
     ("GET", "/web/provision/status", "web_app.handlers.provision:handle_provision_status"),

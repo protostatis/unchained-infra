@@ -12,9 +12,10 @@ Usage (from web.py):
 
 import io
 import os
+from pathlib import Path
 import zipfile
 
-VERSION = "0.3.64"  # one-click Research Desk install bootstraps and opens the local desk
+VERSION = "0.3.65"  # one-click Research Desk install fetches a hosted package artifact
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -22,6 +23,10 @@ VERSION = "0.3.64"  # one-click Research Desk install bootstraps and opens the l
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"
+RESEARCH_DESK_VERSION = "0.1.0"
+_RESEARCH_DESK_VENDOR_DIR = (
+    Path(__file__).resolve().parent.parent / "research_desk_vendor"
+)
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
@@ -2074,4 +2079,22 @@ def build_update_zip() -> bytes:
 
         _add_source_files(zf, src_dir, "unchained-agent")
 
+    return buf.getvalue()
+
+
+def build_research_desk_zip() -> bytes:
+    """Build an installable ZIP snapshot for the Research Desk package."""
+    if not _RESEARCH_DESK_VENDOR_DIR.is_dir():
+        raise FileNotFoundError(
+            f"Research Desk vendor tree missing: {_RESEARCH_DESK_VENDOR_DIR}"
+        )
+
+    buf = io.BytesIO()
+    prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(_RESEARCH_DESK_VENDOR_DIR.rglob("*")):
+            if path.is_dir():
+                continue
+            rel_path = path.relative_to(_RESEARCH_DESK_VENDOR_DIR).as_posix()
+            zf.write(path, f"{prefix}/{rel_path}")
     return buf.getvalue()

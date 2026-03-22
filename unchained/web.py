@@ -1512,6 +1512,22 @@ async def handle_agent_files(request: web.Request) -> web.Response:
     )
 
 
+async def handle_research_desk_files(request: web.Request) -> web.Response:
+    """GET /web/research-desk/files — download an installable Research Desk ZIP."""
+    auth_info = _authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    from agent_package import build_research_desk_zip
+
+    zip_bytes = build_research_desk_zip()
+    return web.Response(
+        body=zip_bytes,
+        content_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=unchained-pyreplab.zip"},
+    )
+
+
 from web_app.handlers.auth_admin import (
     handle_admin_approve,
     handle_admin_page,

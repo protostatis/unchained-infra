@@ -172,6 +172,25 @@ def test_build_update_zip_no_env_no_start():
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh; stop.sh included)")
 
 
+def test_build_research_desk_zip_contains_installable_source_tree():
+    from agent_package import RESEARCH_DESK_VERSION, build_research_desk_zip
+
+    zip_bytes = build_research_desk_zip()
+    assert len(zip_bytes) > 0
+
+    prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = zf.namelist()
+        assert f"{prefix}/pyproject.toml" in names
+        assert f"{prefix}/README.md" in names
+        assert f"{prefix}/unchained_pyreplab/__init__.py" in names
+        pyproject = zf.read(f"{prefix}/pyproject.toml").decode()
+        assert 'name = "unchained-pyreplab"' in pyproject
+        package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
+        assert "Local browser-to-lab prototype" in package_init
+    print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
+
+
 def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():
     from agent_package import build_update_zip
 
@@ -576,6 +595,7 @@ def test_web_imports():
         handle_download_installer,
         handle_agent_version,
         handle_agent_files,
+        handle_research_desk_files,
     )
     assert callable(handle_install_token)
     assert callable(handle_install_bootstrap)
@@ -589,6 +609,7 @@ def test_web_imports():
     assert callable(handle_download_installer)
     assert callable(handle_agent_version)
     assert callable(handle_agent_files)
+    assert callable(handle_research_desk_files)
     print("  All install/update handlers importable")
 
 
@@ -620,6 +641,7 @@ def test_web_routes_registered():
         assert ("GET", "/web/download-installer") in routes, "download-installer route not registered"
         assert ("GET", "/web/agent/version") in routes, "agent version route not registered"
         assert ("GET", "/web/agent/files") in routes, "agent files route not registered"
+        assert ("GET", "/web/research-desk/files") in routes, "research desk files route not registered"
     else:
         # Backward compatibility for older code where routes lived directly in main().
         import inspect
@@ -643,6 +665,7 @@ def test_web_routes_registered():
         assert "/web/download-installer" in source, "download-installer route not registered"
         assert "/web/agent/version" in source, "agent version route not registered"
         assert "/web/agent/files" in source, "agent files route not registered"
+        assert "/web/research-desk/files" in source, "research desk files route not registered"
     print("  All install/update routes registered")
 
 
