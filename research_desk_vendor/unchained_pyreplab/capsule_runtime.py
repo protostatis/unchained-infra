@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
+from urllib.parse import urlparse
 
 try:
     import pandas as _pd
@@ -44,7 +46,49 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+_VALID_TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _ensure_within_root(path: Path, root: Path) -> Path:
+    resolved_root = root.resolve()
+    resolved_path = path.resolve()
+    if resolved_path != resolved_root and resolved_root not in resolved_path.parents:
+        raise ValueError(f"Path escapes capsule root: {path}")
+    return resolved_path
+
+
+def _validated_capsule_relpath(root: Path, relative: str, *, expected_prefix: str) -> Path:
+    rel = Path(str(relative or "").strip())
+    if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"Invalid capsule relative path: {relative}")
+    if rel.parts[0] != expected_prefix or rel.suffix != ".jsonl":
+        raise ValueError(f"Unexpected capsule table path: {relative}")
+    return _ensure_within_root(root / rel, root)
+
+
+def _validate_table_name(name: str) -> str:
+    clean = str(name or "").strip()
+    if not clean or not _VALID_TABLE_NAME_RE.fullmatch(clean):
+        raise ValueError(f"Invalid table name: {name}")
+    return clean
+
+
+def _validate_followup_url(url: str) -> str:
+    clean = str(url or "").strip()
+    parsed = urlparse(clean)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(f"Invalid followup URL: {url}")
+    return clean
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any], *, root: Optional[Path] = None) -> None:
+    if root is not None:
+        _ensure_within_root(path, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
@@ -150,6 +194,7 @@ class Capsule:
         return _read_json(self.path / "capture_brief.json", {})
 
     def table(self, name: str) -> Any:
+        name = _validate_table_name(name)
         manifest = self.object_manifest()
         for item in manifest.get("objects", []):
             if not isinstance(item, dict):
@@ -158,7 +203,11 @@ class Capsule:
                 continue
             rel = item.get("table_path")
             if isinstance(rel, str) and rel:
-                return _to_table(_read_jsonl(self.path / rel))
+                return _to_table(
+                    _read_jsonl(
+                        _validated_capsule_relpath(self.path, rel, expected_prefix="tables")
+                    )
+                )
         if name == "pages":
             return _to_table(_read_jsonl(self.path / "tables" / "pages.jsonl"))
         if name == "source_index":
@@ -171,7 +220,11 @@ class Capsule:
             return _to_table(self.pending_followups())
         if name == "followup_results":
             return _to_table(self.followup_results())
-        generic_table_path = self.path / "tables" / f"{name}.jsonl"
+        generic_table_path = _validated_capsule_relpath(
+            self.path,
+            f"tables/{name}.jsonl",
+            expected_prefix="tables",
+        )
         if generic_table_path.exists():
             return _to_table(_read_jsonl(generic_table_path))
         raise KeyError(f"Unknown table: {name}")
@@ -228,11 +281,15 @@ class Capsule:
             "created_at": _now_iso(),
             "status": "pending",
             "kind": kind,
-            "url": url,
+            "url": _validate_followup_url(url),
             "page_id": page_id or "",
             "instruction": instruction,
         }
-        _append_jsonl(self.path / "followups" / "pending_followups.jsonl", payload)
+        _append_jsonl(
+            self.path / "followups" / "pending_followups.jsonl",
+            payload,
+            root=self.path,
+        )
         return payload
 
 

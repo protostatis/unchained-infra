@@ -44,7 +44,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+def _ensure_within_root(path: Path, root: Path) -> Path:
+    resolved_root = root.resolve()
+    resolved_path = path.resolve()
+    if resolved_path != resolved_root and resolved_root not in resolved_path.parents:
+        raise ValueError(f"Path escapes capsule root: {path}")
+    return resolved_path
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any], *, root: Optional[Path] = None) -> None:
+    if root is not None:
+        _ensure_within_root(path, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
@@ -632,7 +642,7 @@ class LabSession:
         row = dict(payload)
         row.setdefault("turn_id", self._next_turn_id())
         row.setdefault("created_at", _now_iso())
-        _append_jsonl(self.turns_path, row)
+        _append_jsonl(self.turns_path, row, root=self.capsule_dir)
         return row
 
     def _invalidate_if_capsule_changed(self) -> None:

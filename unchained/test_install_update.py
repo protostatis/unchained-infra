@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import io
+import importlib.util
 import json
 import os
 import shutil
@@ -184,9 +185,13 @@ def test_build_research_desk_zip_contains_installable_source_tree():
         names = zf.namelist()
         assert f"{prefix}/pyproject.toml" in names
         assert f"{prefix}/README.md" in names
+        assert f"{prefix}/manifest.json" in names
         assert f"{prefix}/unchained_pyreplab/__init__.py" in names
         pyproject = zf.read(f"{prefix}/pyproject.toml").decode()
         assert 'name = "unchained-pyreplab"' in pyproject
+        manifest = json.loads(zf.read(f"{prefix}/manifest.json").decode())
+        assert "pyproject.toml" in manifest["files"]
+        assert "unchained_pyreplab/capsule_runtime.py" in manifest["files"]
         package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
         assert "Local browser-to-lab prototype" in package_init
     print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
@@ -215,6 +220,73 @@ def test_handle_research_desk_files_serves_zip_attachment():
     assert response.body == b"zip-bytes"
     assert response.content_type == "application/zip"
     assert response.headers["Content-Disposition"] == "attachment; filename=unchained-pyreplab.zip"
+
+
+def _load_vendor_capsule_runtime():
+    vendor_path = (
+        Path(__file__).resolve().parent.parent
+        / "research_desk_vendor"
+        / "unchained_pyreplab"
+        / "capsule_runtime.py"
+    )
+    spec = importlib.util.spec_from_file_location("vendor_capsule_runtime", vendor_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_vendor_capsule_runtime_rejects_table_traversal():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        (capsule_dir / "object_manifest.json").write_text(
+            json.dumps({"objects": []}),
+            encoding="utf-8",
+        )
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.table("../evil")
+        except ValueError as exc:
+            assert "Invalid table name" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for invalid table name")
+
+
+def test_vendor_capsule_runtime_rejects_manifest_table_path_escape():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        (capsule_dir / "object_manifest.json").write_text(
+            json.dumps(
+                {
+                    "objects": [
+                        {"name": "safe_table", "table_path": "../escape.jsonl"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.table("safe_table")
+        except ValueError as exc:
+            assert "Invalid capsule relative path" in str(exc) or "Unexpected capsule table path" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for escaped table path")
+
+
+def test_vendor_capsule_runtime_rejects_invalid_followup_url():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.request_followup(url="javascript:alert(1)", instruction="retry")
+        except ValueError as exc:
+            assert "Invalid followup URL" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for invalid followup URL")
 
 
 def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():

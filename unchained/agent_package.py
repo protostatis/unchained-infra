@@ -11,6 +11,8 @@ Usage (from web.py):
 """
 
 import io
+import json
+import hashlib
 import os
 from pathlib import Path
 import zipfile
@@ -29,6 +31,7 @@ _RESEARCH_DESK_VENDOR_DIR = (
 )
 _RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md")
 _RESEARCH_DESK_VENDOR_PACKAGE_DIR = "unchained_pyreplab"
+_RESEARCH_DESK_VENDOR_MANIFEST = "manifest.json"
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
@@ -2091,22 +2094,37 @@ def build_research_desk_zip() -> bytes:
             f"Research Desk vendor tree missing: {_RESEARCH_DESK_VENDOR_DIR}"
         )
 
+    manifest_path = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_files = manifest.get("files", {})
+    if not isinstance(manifest_files, dict) or not manifest_files:
+        raise ValueError("Research Desk vendor manifest is missing file hashes")
+
+    expected_paths = set(_RESEARCH_DESK_VENDOR_ROOT_FILES)
+    package_dir = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_PACKAGE_DIR
+    if not package_dir.is_dir():
+        raise FileNotFoundError(
+            f"Research Desk vendor package missing: {package_dir}"
+        )
+    actual_package_paths = {
+        path.relative_to(_RESEARCH_DESK_VENDOR_DIR).as_posix()
+        for path in sorted(package_dir.glob("*.py"))
+        if path.is_file() and not path.is_symlink()
+    }
+    expected_paths.update(actual_package_paths)
+    if set(manifest_files) != expected_paths:
+        raise ValueError("Research Desk vendor manifest does not match vendored file set")
+
     buf = io.BytesIO()
     prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel_name in _RESEARCH_DESK_VENDOR_ROOT_FILES:
+        zf.write(manifest_path, f"{prefix}/{_RESEARCH_DESK_VENDOR_MANIFEST}")
+        for rel_name in sorted(expected_paths):
             path = _RESEARCH_DESK_VENDOR_DIR / rel_name
             if not path.is_file() or path.is_symlink():
                 raise FileNotFoundError(f"Research Desk vendor file missing: {path}")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if manifest_files.get(rel_name) != digest:
+                raise ValueError(f"Research Desk vendor hash mismatch: {rel_name}")
             zf.write(path, f"{prefix}/{rel_name}")
-        package_dir = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_PACKAGE_DIR
-        if not package_dir.is_dir():
-            raise FileNotFoundError(
-                f"Research Desk vendor package missing: {package_dir}"
-            )
-        for path in sorted(package_dir.glob("*.py")):
-            if not path.is_file() or path.is_symlink():
-                raise FileNotFoundError(f"Research Desk vendor module missing: {path}")
-            rel_path = path.relative_to(_RESEARCH_DESK_VENDOR_DIR).as_posix()
-            zf.write(path, f"{prefix}/{rel_path}")
     return buf.getvalue()
