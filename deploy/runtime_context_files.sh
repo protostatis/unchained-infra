@@ -62,4 +62,5 @@ RESEARCH_DESK_VENDOR_ROOT_FILES=(
     "manifest.json"
     "README.md"
     "pyproject.toml"
+    "setup.py"
 )

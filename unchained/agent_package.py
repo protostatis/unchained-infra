@@ -27,7 +27,7 @@ VERSION = "0.3.65"  # one-click Research Desk install fetches a hosted package a
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"
 RESEARCH_DESK_VERSION = "0.1.0"
-_RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md")
+_RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md", "setup.py")
 _RESEARCH_DESK_VENDOR_PACKAGE_DIR = "unchained_pyreplab"
 _RESEARCH_DESK_VENDOR_MANIFEST = "manifest.json"
 

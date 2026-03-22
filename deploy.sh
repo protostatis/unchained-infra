@@ -171,6 +171,7 @@ stage_dir="$1"
 test -s "$stage_dir/manifest.json"
 test -s "$stage_dir/README.md"
 test -s "$stage_dir/pyproject.toml"
+test -s "$stage_dir/setup.py"
 find "$stage_dir/unchained_pyreplab" -maxdepth 1 -type f -name '*.py' | grep -q .
 EOF
 remote_bash "$REMOTE_DIR" "$REMOTE_VENDOR_STAGE" <<'EOF'
