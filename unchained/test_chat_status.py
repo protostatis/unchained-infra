@@ -389,22 +389,54 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
         ):
             self.assertEqual(_research_desk_package_url(), override)
 
-    def test_download_research_desk_package_uses_bearer_auth(self):
-        response = io.BytesIO(b"zip-bytes")
+    def test_research_desk_package_url_rejects_local_override_without_opt_in(self):
+        override = "http://127.0.0.1:8088/web/research-desk/files"
+        with patch.dict(
+            os.environ,
+            {
+                "UNCHAINED_RESEARCH_DESK_PACKAGE_URL": override,
+                "UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL": "0",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                _research_desk_package_url(),
+                "https://api.unchainedsky.com/web/research-desk/files",
+            )
 
+    def test_research_desk_package_url_accepts_local_override_with_opt_in(self):
+        override = "http://127.0.0.1:8088/web/research-desk/files"
+        with patch.dict(
+            os.environ,
+            {
+                "UNCHAINED_RESEARCH_DESK_PACKAGE_URL": override,
+                "UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL": "1",
+            },
+            clear=False,
+        ):
+            self.assertEqual(_research_desk_package_url(), override)
+
+    def test_download_research_desk_package_uses_bearer_auth(self):
         class FakeResponse:
+            headers = {"Content-Type": "application/zip"}
+
+            def __init__(self, payload: bytes):
+                self._payload = io.BytesIO(payload)
+
             def __enter__(self):
-                return response
+                return self
 
             def __exit__(self, exc_type, exc, tb):
                 return False
+
+            def read(self, size: int = -1) -> bytes:
+                return self._payload.read(size)
 
         requests = []
 
         def fake_urlopen(req, timeout):
             requests.append((req.full_url, req.get_header("Authorization"), timeout))
-            response.seek(0)
-            return FakeResponse()
+            return FakeResponse(b"zip-bytes")
 
         with patch("chat_agent_cli.KEY", "uc_live_test"):
             with patch("chat_agent_cli.urllib.request.urlopen", side_effect=fake_urlopen):
@@ -420,6 +452,32 @@ class TestResearchDeskInstallHelpers(unittest.TestCase):
             requests,
             [("https://api.unchainedsky.com/web/research-desk/files", "Bearer uc_live_test", 30)],
         )
+
+    def test_download_research_desk_package_rejects_oversized_payload(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/zip"}
+
+            def __init__(self, payload: bytes):
+                self._payload = io.BytesIO(payload)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, size: int = -1) -> bytes:
+                return self._payload.read(size)
+
+        with patch("chat_agent_cli.KEY", "uc_live_test"):
+            with patch(
+                "chat_agent_cli.urllib.request.urlopen",
+                return_value=FakeResponse(b"x" * (20 * 1024 * 1024 + 1)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "size limit"):
+                    _download_research_desk_package(
+                        "https://api.unchainedsky.com/web/research-desk/files"
+                    )
 
     def test_research_desk_launcher_prefix_quotes_spaced_python_paths(self):
         with patch("chat_agent_cli._research_desk_python_binary", return_value="/tmp/odd path/python3"):

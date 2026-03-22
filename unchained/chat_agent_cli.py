@@ -948,20 +948,36 @@ def _research_desk_launcher_prefix() -> str:
 
 _RESEARCH_DESK_PACKAGE_PATH = "/web/research-desk/files"
 _RESEARCH_DESK_PACKAGE_URL_RE = re.compile(r"^/web/research-desk/files$")
+_RESEARCH_DESK_PACKAGE_MAX_BYTES = 20 * 1024 * 1024
+_RESEARCH_DESK_PACKAGE_ALLOWED_NETLOCS = {
+    "api.unchainedsky.com",
+    "unchainedsky.com",
+}
+_RESEARCH_DESK_PACKAGE_ALLOWED_LOCAL_NETLOCS = {
+    "127.0.0.1:8080",
+    "127.0.0.1:8088",
+    "localhost:8080",
+    "localhost:8088",
+}
+
+
+def _allow_local_research_desk_package_url() -> bool:
+    # Local package serving is only for explicit dev flows; production install
+    # should always fetch the hosted artifact over HTTPS.
+    return os.environ.get("UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL", "").strip() == "1"
 
 
 def _is_allowed_research_desk_package_url(value: str) -> bool:
     parsed = urlparse(value)
     return (
-        parsed.scheme == "https"
-        and parsed.netloc in {
-            "api.unchainedsky.com",
-            "unchainedsky.com",
-            "127.0.0.1:8080",
-            "127.0.0.1:8088",
-            "localhost:8080",
-            "localhost:8088",
-        }
+        (
+            (parsed.scheme == "https" and parsed.netloc in _RESEARCH_DESK_PACKAGE_ALLOWED_NETLOCS)
+            or (
+                _allow_local_research_desk_package_url()
+                and parsed.scheme == "http"
+                and parsed.netloc in _RESEARCH_DESK_PACKAGE_ALLOWED_LOCAL_NETLOCS
+            )
+        )
         and bool(_RESEARCH_DESK_PACKAGE_URL_RE.match(parsed.path))
         and not parsed.params
         and not parsed.query
@@ -987,15 +1003,30 @@ def _research_desk_package_url() -> str:
 
 
 def _download_research_desk_package(package_url: str) -> str:
+    if not _is_allowed_research_desk_package_url(package_url):
+        raise RuntimeError(f"Refusing unsupported Research Desk package URL: {package_url}")
     req = urllib.request.Request(
         package_url,
         headers={"Authorization": f"Bearer {KEY}"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
+        content_type = str(resp.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+        if content_type and content_type != "application/zip":
+            raise RuntimeError(
+                f"Unexpected Research Desk package content type: {content_type}"
+            )
         fd, temp_path = tempfile.mkstemp(prefix="research-desk-", suffix=".zip")
         try:
             with os.fdopen(fd, "wb") as f:
-                f.write(resp.read())
+                total = 0
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _RESEARCH_DESK_PACKAGE_MAX_BYTES:
+                        raise RuntimeError("Research Desk package exceeded size limit")
+                    f.write(chunk)
         except Exception:
             os.unlink(temp_path)
             raise

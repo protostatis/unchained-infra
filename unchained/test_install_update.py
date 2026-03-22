@@ -5,6 +5,7 @@ and chat_agent_cli.py version checking.
 """
 from __future__ import annotations
 
+import asyncio
 import ast
 import io
 import json
@@ -189,6 +190,31 @@ def test_build_research_desk_zip_contains_installable_source_tree():
         package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
         assert "Local browser-to-lab prototype" in package_init
     print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
+
+
+def test_handle_research_desk_files_requires_auth():
+    from web import handle_research_desk_files
+
+    with mock.patch("web._authenticate", return_value=None):
+        response = asyncio.run(handle_research_desk_files(mock.Mock()))
+
+    assert response.status == 401
+    payload = json.loads(response.body.decode())
+    assert payload["error"] == "Not authenticated"
+
+
+def test_handle_research_desk_files_serves_zip_attachment():
+    from web import handle_research_desk_files
+
+    request = mock.Mock()
+    with mock.patch("web._authenticate", return_value={"user_id": "u-test"}):
+        with mock.patch("agent_package.build_research_desk_zip", return_value=b"zip-bytes"):
+            response = asyncio.run(handle_research_desk_files(request))
+
+    assert response.status == 200
+    assert response.body == b"zip-bytes"
+    assert response.content_type == "application/zip"
+    assert response.headers["Content-Disposition"] == "attachment; filename=unchained-pyreplab.zip"
 
 
 def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():

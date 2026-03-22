@@ -27,6 +27,8 @@ RESEARCH_DESK_VERSION = "0.1.0"
 _RESEARCH_DESK_VENDOR_DIR = (
     Path(__file__).resolve().parent.parent / "research_desk_vendor"
 )
+_RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md")
+_RESEARCH_DESK_VENDOR_PACKAGE_DIR = "unchained_pyreplab"
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
@@ -2092,9 +2094,19 @@ def build_research_desk_zip() -> bytes:
     buf = io.BytesIO()
     prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(_RESEARCH_DESK_VENDOR_DIR.rglob("*")):
-            if path.is_dir():
-                continue
+        for rel_name in _RESEARCH_DESK_VENDOR_ROOT_FILES:
+            path = _RESEARCH_DESK_VENDOR_DIR / rel_name
+            if not path.is_file() or path.is_symlink():
+                raise FileNotFoundError(f"Research Desk vendor file missing: {path}")
+            zf.write(path, f"{prefix}/{rel_name}")
+        package_dir = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_PACKAGE_DIR
+        if not package_dir.is_dir():
+            raise FileNotFoundError(
+                f"Research Desk vendor package missing: {package_dir}"
+            )
+        for path in sorted(package_dir.glob("*.py")):
+            if not path.is_file() or path.is_symlink():
+                raise FileNotFoundError(f"Research Desk vendor module missing: {path}")
             rel_path = path.relative_to(_RESEARCH_DESK_VENDOR_DIR).as_posix()
             zf.write(path, f"{prefix}/{rel_path}")
     return buf.getvalue()
