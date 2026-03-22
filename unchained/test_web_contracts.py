@@ -303,7 +303,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("latestDeskStatus?.handshake?.actions?.mission_advance_url", html)
         self.assertIn("setMissionAdvanceReady", html)
         self.assertIn("fetch('/web/chat/install-research-desk',{method:'POST',credentials:'include',cache:'no-store'})", html)
-        self.assertIn("Research Desk install started. The local client is running `'+launcherPrefix+' setup`, starting the browser bridge, and starting the local desk automatically.", html)
+        self.assertIn("Research Desk install started. The local client is running `'+launcherPrefix+' setup`, starting the browser bridge, starting the local desk automatically, and opening it locally when ready.", html)
         self.assertIn("requested_scope:'mission:create mission:advance'", html)
         self.assertIn("document.getElementById('run-local-next-step')?.addEventListener('click'", html)
         self.assertIn("This mission is ready for Lab Notes. Continue there or keep the local desk open for deeper analysis.", html)

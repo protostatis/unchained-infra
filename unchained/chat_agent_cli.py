@@ -636,10 +636,21 @@ _RESEARCH_DESK_BRIDGE_PORT = 9333
 _RESEARCH_DESK_BOOTSTRAP_TIMEOUT_SECONDS = 12.0
 _RESEARCH_DESK_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.5
 _RESEARCH_DESK_BRIDGE_START_TIMEOUT_SECONDS = 20.0
+_RESEARCH_DESK_AUTO_OPEN_URL = f"http://{_RESEARCH_DESK_LOCAL_HOST}:{_RESEARCH_DESK_LOCAL_PORT}/"
 
 
 def _research_desk_bootstrap_log_path(name: str) -> str:
     return os.path.join(_log_dir, name)
+
+
+def _path_within_prefix(path: str, prefix: str) -> bool:
+    if not path or not prefix:
+        return False
+    abs_path = os.path.abspath(path)
+    real_path = os.path.realpath(path)
+    prefix = os.path.realpath(prefix)
+    prefix_sep = prefix + os.sep
+    return abs_path.startswith(prefix_sep) or real_path.startswith(prefix_sep)
 
 
 def _wait_for_local_port(host: str, port: int, *, timeout_seconds: float) -> bool:
@@ -722,6 +733,19 @@ def _ensure_research_desk_server_running(python_bin: str) -> None:
             _RESEARCH_DESK_LOCAL_PORT,
         )
         raise SystemExit(1)
+
+
+def _open_research_desk_local() -> None:
+    """Open the local Research Desk in the user's default browser."""
+    url = _RESEARCH_DESK_AUTO_OPEN_URL
+    try:
+        if os.name == "nt":
+            os.startfile(url)  # type: ignore[attr-defined]
+            return
+        open_cmd = ["open", url] if sys.platform == "darwin" else ["xdg-open", url]
+        _spawn_detached(open_cmd, cwd=_agent_root())
+    except Exception as exc:
+        log.warning("[research-desk-install] could not auto-open local desk: %s", exc)
 
 
 def _terminate_windows_runtime(helper_pid: int):
@@ -886,9 +910,10 @@ def _research_desk_python_binary() -> str:
     base_prefix = os.path.realpath(getattr(sys, "base_prefix", "") or "")
     use_python3_bin = True
     if python3_bin:
-        candidate = os.path.realpath(python3_bin)
-        if not current_prefix or current_prefix == base_prefix or not candidate.startswith(
-            current_prefix + os.sep
+        if (
+            not current_prefix
+            or current_prefix == base_prefix
+            or not _path_within_prefix(python3_bin, current_prefix)
         ):
             return python3_bin
         log.info(
@@ -981,6 +1006,7 @@ def _run_research_desk_install_helper():
         raise SystemExit(rc)
     _ensure_research_desk_bridge_running(python_bin)
     _ensure_research_desk_server_running(python_bin)
+    _open_research_desk_local()
     log.info("[research-desk-install] install and bootstrap completed")
 
 
