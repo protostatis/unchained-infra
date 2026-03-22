@@ -924,6 +924,7 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/">
 <meta property="og:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
 <meta property="og:description" content="Tell Unchained what you need online. It searches, compares, and monitors the web for you — using your real browser.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta property="og:site_name" content="Unchained">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
@@ -2282,6 +2283,7 @@ PUBLISHED_RESULT_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/r/__RESULT_SLUG__">
 <meta property="og:title" content="__RESULT_TITLE__ &mdash; Unchained">
 <meta property="og:description" content="__RESULT_DESC__">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta property="og:site_name" content="Unchained">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="__RESULT_TITLE__ &mdash; Unchained">
@@ -2623,6 +2625,7 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/apartment-hunting">
 <meta property="og:title" content="AI Apartment Search Assistant &mdash; Unchained">
 <meta property="og:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="AI Apartment Search Assistant &mdash; Unchained">
 <meta name="twitter:description" content="Find your next apartment in seconds. Search Zillow, Apartments.com, and Craigslist with your exact criteria.">
@@ -2718,6 +2721,7 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/flight-comparison">
 <meta property="og:title" content="AI Flight Price Comparison &mdash; Unchained">
 <meta property="og:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="AI Flight Price Comparison &mdash; Unchained">
 <meta name="twitter:description" content="Compare flight prices across Google Flights, Kayak, and airline sites in seconds.">
@@ -2814,6 +2818,7 @@ USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/competitor-monitoring">
 <meta property="og:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
 <meta property="og:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Automated Competitor Monitoring with AI &mdash; Unchained">
 <meta name="twitter:description" content="Monitor your competitors automatically. Get weekly briefings on pricing, features, and market changes.">
@@ -2913,6 +2918,7 @@ USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
 <meta property="og:url" content="https://unchainedsky.com/use/price-tracking">
 <meta property="og:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
 <meta property="og:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="AI Price Tracker &mdash; Compare Prices Across Sites">
 <meta name="twitter:description" content="Compare prices across Amazon, Best Buy, Walmart, and more in seconds. Find the best deal automatically.">

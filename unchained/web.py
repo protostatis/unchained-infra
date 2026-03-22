@@ -1387,6 +1387,26 @@ async def handle_favicon(request: web.Request) -> web.Response:
     )
 
 
+_og_image_cache: bytes | None = None
+
+
+async def handle_og_image(request: web.Request) -> web.Response:
+    """GET /og-image.png — branded Open Graph image for social sharing."""
+    global _og_image_cache
+    del request
+    if _og_image_cache is None:
+        og_path = Path(__file__).with_name("og-image.png")
+        if og_path.exists():
+            _og_image_cache = og_path.read_bytes()
+        else:
+            return web.Response(status=404)
+    return web.Response(
+        body=_og_image_cache,
+        content_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
 async def handle_robots_txt(request: web.Request) -> web.Response:
     """GET /robots.txt — search engine crawl directives."""
     del request

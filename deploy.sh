@@ -122,6 +122,7 @@ echo "==> Uploading Python modules..."
     unchained/scheduled_tasks.py \
     unchained/scheduled_jobs.example.json \
     unchained/favicon.svg \
+    unchained/og-image.png \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/"
 
 "${SCP_CMD[@]}" \
