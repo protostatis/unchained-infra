@@ -54,22 +54,62 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# Words stripped from slugs — filler, implementation detail, instructions
+_SLUG_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "its", "that", "this",
+    "go", "can", "you", "please", "find", "me", "i", "want", "search",
+    "look", "up", "tell", "show", "get", "give", "make", "do", "take",
+    "use", "using", "check", "open", "navigate", "visit",
+    # Implementation detail — don't leak where we got the data
+    "wikipedia", "google", "flights", "zillow", "redfin", "amazon",
+    "youtube", "hacker", "news", "reddit", "craigslist",
+    "com", "www", "http", "https", "org", "net",
+    # Instruction fragments
+    "right", "now", "currently", "today", "tonight", "next", "month",
+    "summarize", "compare", "list", "screenshot", "each",
+}
+
+
 def _slugify(text: str) -> str:
-    """Generate a URL-friendly slug from query text."""
+    """Generate a keyword-dense, SEO-friendly slug from query text."""
     text = text.lower().strip()
-    # Remove common filler words for cleaner slugs
-    for word in ("go to", "can you", "please", "find me", "i want",
-                 "search for", "look up", "tell me", "show me"):
-        text = text.replace(word, "")
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"\s+", "-", text.strip())
-    text = re.sub(r"-+", "-", text).strip("-")
-    # Truncate to reasonable length
-    if len(text) > 80:
-        text = text[:80].rsplit("-", 1)[0]
-    # Add short hash for uniqueness
-    h = hashlib.md5(f"{text}-{time.time()}".encode()).hexdigest()[:6]
-    return f"{text}-{h}" if text else h
+    # Remove punctuation, keep alphanumeric and spaces
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    # Split into words and filter stop words
+    words = [w for w in text.split() if w not in _SLUG_STOP_WORDS and len(w) > 1]
+    if not words:
+        words = [w for w in text.split() if len(w) > 1][:3]
+    # Keep first 6 meaningful words (short, keyword-dense)
+    slug = "-".join(words[:6])
+    # Cap at 60 chars
+    if len(slug) > 60:
+        slug = slug[:60].rsplit("-", 1)[0]
+    return slug if slug else hashlib.md5(text.encode()).hexdigest()[:8]
+
+
+def _query_hash(query: str) -> str:
+    """Normalized hash of a query for deduplication."""
+    normalized = re.sub(r"[^a-z0-9]", "", query.lower())
+    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+
+
+# Minimum quality thresholds for publishing
+_MIN_RESPONSE_CHARS = 200
+_NAV_ONLY_PATTERN = re.compile(
+    r"^(go to|navigate to|open|visit)\s+\S+\.?\s*$", re.IGNORECASE
+)
+
+
+def _passes_quality_gate(query: str, result_text: str) -> bool:
+    """Check if content meets minimum quality for publishing."""
+    # Reject navigation-only commands
+    if _NAV_ONLY_PATTERN.match(query.strip()):
+        return False
+    # Reject short responses
+    if len(result_text) < _MIN_RESPONSE_CHARS:
+        return False
+    return True
 
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -342,18 +382,35 @@ def publish_result(
         return None
 
     query = user_msgs[0]["content"]
-    # Check ALL visible messages against blacklist (not just first user msg)
+    result_text = asst_msgs[-1]["content"]
+    # Quality gate — reject navigation-only or short responses
+    if not _passes_quality_gate(query, result_text):
+        log.info("Publish blocked by quality gate: %s", query[:80])
+        return None
+    # Check ALL visible messages against blacklist
     for m in messages:
         if _is_query_blacklisted(m["content"]):
             return None
-    # Combine ALL assistant text for PII check — intermediate responses
-    # may contain PII even if the final answer is clean
+    # Deduplication — skip if same query already published
+    qhash = _query_hash(query)
+    with _lock:
+        conn = _connect()
+        try:
+            existing = conn.execute(
+                "SELECT slug FROM published_results WHERE meta_json LIKE ?",
+                (f'%"qhash":"{qhash}"%',),
+            ).fetchone()
+        finally:
+            conn.close()
+    if existing:
+        log.info("Publish skipped (duplicate): %s -> %s", query[:60], existing[0])
+        return existing[0]  # return existing slug instead of creating duplicate
+    # Combine ALL assistant text for PII check
     all_asst_text = "\n\n".join(m["content"] for m in asst_msgs)
     # LLM-based PII guard — blocks if content contains personal data
     if not _pii_guard(query, all_asst_text):
         log.info("Publish blocked by PII guard: %s", query[:80])
         return None
-    result_text = asst_msgs[-1]["content"]
     result_html = _messages_to_html(messages)
     slug = _slugify(query)
 
@@ -370,7 +427,7 @@ def publish_result(
                     query,
                     result_html,
                     result_text,
-                    json.dumps({"message_count": len(messages)}),
+                    json.dumps({"message_count": len(messages), "qhash": qhash}),
                     time.time(),
                     user_id,
                     session_id,
@@ -392,7 +449,7 @@ def publish_result(
                     query,
                     result_html,
                     result_text,
-                    json.dumps({"message_count": len(messages)}),
+                    json.dumps({"message_count": len(messages), "qhash": qhash}),
                     time.time(),
                     user_id,
                     session_id,
