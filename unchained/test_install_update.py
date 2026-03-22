@@ -344,6 +344,29 @@ def test_runtime_dockerfile_copies_scheduler_files():
     print("  Dockerfile copies scheduler runtime files")
 
 
+def test_runtime_dockerfile_copies_research_desk_vendor_tree():
+    repo_root = Path(__file__).resolve().parent.parent
+    dockerfile = (repo_root / "Dockerfile").read_text()
+    assert "COPY research_desk_vendor/ research_desk_vendor/" in dockerfile
+
+
+def test_deploy_script_uploads_research_desk_vendor_tree():
+    repo_root = Path(__file__).resolve().parent.parent
+    deploy_script = (repo_root / "deploy.sh").read_text()
+    assert 'echo "==> Uploading Research Desk vendor tree..."' in deploy_script
+    assert "rm -rf $REMOTE_DIR/research_desk_vendor" in deploy_script
+    assert '"${SCP_CMD[@]}" -r \\' in deploy_script
+    assert "research_desk_vendor" in deploy_script
+
+
+def test_research_desk_package_image_smoke_script_checks_built_image():
+    repo_root = Path(__file__).resolve().parent.parent
+    smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
+    assert 'docker build -t "${IMAGE_TAG}" .' in smoke_script
+    assert 'docker run --rm "${IMAGE_TAG}" python - <<\'PY\'' in smoke_script
+    assert "build_research_desk_zip()" in smoke_script
+
+
 def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
     available = {
         "/opt/homebrew/bin/claude": True,

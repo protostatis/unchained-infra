@@ -150,6 +150,13 @@ if [[ "${#INSTALLER_FILES[@]}" -gt 0 ]]; then
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/installers/"
 fi
 
+# Upload vendored Research Desk package source for /web/research-desk/files.
+echo "==> Uploading Research Desk vendor tree..."
+"${SSH_CMD[@]}" "rm -rf $REMOTE_DIR/research_desk_vendor && mkdir -p $REMOTE_DIR"
+"${SCP_CMD[@]}" -r \
+    research_desk_vendor \
+    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
+
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then
