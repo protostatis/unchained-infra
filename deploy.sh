@@ -32,6 +32,10 @@ fi
 SSH_CMD=(ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST")
 SCP_CMD=(scp "${SSH_OPTS[@]}")
 
+remote_bash() {
+    "${SSH_CMD[@]}" bash -s -- "$@"
+}
+
 FORCE_BUILD=false
 if [[ "${1:-}" == "--build" ]]; then
     FORCE_BUILD=true
@@ -73,14 +77,22 @@ done
 
 # Upload top-level files
 echo "==> Uploading config files..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir"
+EOF
 "${SCP_CMD[@]}" \
     "${TOP_LEVEL_CONTEXT_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
 
 # Upload Python modules
 echo "==> Uploading Python modules..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/benchmark"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/benchmark"
+EOF
 UNCHAINED_UPLOAD_FILES=()
 for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do
     UNCHAINED_UPLOAD_FILES+=("unchained/$rel")
@@ -95,14 +107,22 @@ done
 
 # Upload modular web_app package extracted from web.py
 echo "==> Uploading web_app package..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/web_app/handlers"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/web_app/handlers"
+EOF
 "${SCP_CMD[@]}" -r \
     unchained/web_app/* \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/web_app/"
 
 # Upload native installer assets
 echo "==> Uploading installer assets..."
-"${SSH_CMD[@]}" "mkdir -p $REMOTE_DIR/unchained/installers"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+mkdir -p "$remote_dir/unchained/installers"
+EOF
 shopt -s nullglob
 INSTALLER_FILES=(unchained/installers/*)
 shopt -u nullglob
@@ -114,11 +134,14 @@ fi
 
 # Upload vendored Research Desk package source for /web/research-desk/files.
 echo "==> Uploading Research Desk vendor tree..."
+RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES=()
 for rel in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do
-    if [[ ! -f "research_desk_vendor/$rel" ]]; then
-        echo "ERROR: missing Research Desk vendor file: research_desk_vendor/$rel" >&2
+    vendor_path="research_desk_vendor/$rel"
+    if [[ ! -f "$vendor_path" ]]; then
+        echo "ERROR: missing Research Desk vendor file: $vendor_path" >&2
         exit 1
     fi
+    RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES+=("$vendor_path")
 done
 shopt -s nullglob
 RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)
@@ -127,41 +150,95 @@ if [[ "${#RESEARCH_DESK_VENDOR_FILES[@]}" -eq 0 ]]; then
     echo "ERROR: Research Desk vendor package has no Python files" >&2
     exit 1
 fi
-REMOTE_VENDOR_STAGE="$REMOTE_DIR/research_desk_vendor.stage.$$"
-REMOTE_VENDOR_BACKUP="$REMOTE_DIR/research_desk_vendor.prev.$$"
-"${SSH_CMD[@]}" "rm -rf '$REMOTE_VENDOR_STAGE' '$REMOTE_VENDOR_BACKUP' && mkdir -p '$REMOTE_VENDOR_STAGE/unchained_pyreplab'"
+REMOTE_VENDOR_STAGE="$(
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+stage_dir="$(mktemp -d "$remote_dir/research_desk_vendor.stage.XXXXXX")"
+mkdir -p "$stage_dir/unchained_pyreplab"
+printf '%s\n' "$stage_dir"
+EOF
+)"
 "${SCP_CMD[@]}" \
-    research_desk_vendor/manifest.json \
-    research_desk_vendor/README.md \
-    research_desk_vendor/pyproject.toml \
+    "${RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/"
 "${SCP_CMD[@]}" \
     "${RESEARCH_DESK_VENDOR_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_VENDOR_STAGE/unchained_pyreplab/"
-"${SSH_CMD[@]}" "test -s '$REMOTE_VENDOR_STAGE/manifest.json' && test -s '$REMOTE_VENDOR_STAGE/README.md' && test -s '$REMOTE_VENDOR_STAGE/pyproject.toml' && find '$REMOTE_VENDOR_STAGE/unchained_pyreplab' -maxdepth 1 -type f -name '*.py' | grep -q ."
-"${SSH_CMD[@]}" "rm -rf '$REMOTE_VENDOR_BACKUP' && if [ -d '$REMOTE_DIR/research_desk_vendor' ]; then mv '$REMOTE_DIR/research_desk_vendor' '$REMOTE_VENDOR_BACKUP'; fi && mv '$REMOTE_VENDOR_STAGE' '$REMOTE_DIR/research_desk_vendor' && rm -rf '$REMOTE_VENDOR_BACKUP'"
+remote_bash "$REMOTE_VENDOR_STAGE" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+test -s "$stage_dir/manifest.json"
+test -s "$stage_dir/README.md"
+test -s "$stage_dir/pyproject.toml"
+find "$stage_dir/unchained_pyreplab" -maxdepth 1 -type f -name '*.py' | grep -q .
+EOF
+remote_bash "$REMOTE_DIR" "$REMOTE_VENDOR_STAGE" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+stage_dir="$2"
+live_dir="$remote_dir/research_desk_vendor"
+backup_dir="$(mktemp -d "$remote_dir/research_desk_vendor.prev.XXXXXX")"
+rmdir "$backup_dir"
+restore_live_dir() {
+    if [[ ! -e "$live_dir" && -e "$backup_dir" ]]; then
+        mv "$backup_dir" "$live_dir"
+    fi
+    rm -rf "$stage_dir"
+}
+trap restore_live_dir EXIT
+if [[ -e "$live_dir" ]]; then
+    mv "$live_dir" "$backup_dir"
+fi
+mv "$stage_dir" "$live_dir"
+rm -rf "$backup_dir"
+trap - EXIT
+EOF
 
 # Rebuild and restart
 echo "==> Rebuilding and restarting containers..."
 if $FORCE_BUILD; then
-    "${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose build --no-cache && docker compose up -d"
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+docker compose build --no-cache
+docker compose up -d
+EOF
 else
-    "${SSH_CMD[@]}" "cd $REMOTE_DIR && docker compose up -d --build"
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+docker compose up -d --build
+EOF
 fi
 
 # Refresh Caddy after upstream containers are recreated.
 # This avoids stale/no-such-host upstream resolution windows after deploys.
 echo "==> Restarting Caddy reverse proxy..."
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml restart caddy"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" restart caddy
+EOF
 
 # Show status
 echo ""
 echo "==> Container status:"
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml ps"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" ps
+EOF
 
 echo ""
 echo "==> Relay logs (last 5):"
-"${SSH_CMD[@]}" "docker compose -f $REMOTE_DIR/docker-compose.yml logs relay --tail 5"
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+docker compose -f "$remote_dir/docker-compose.yml" logs relay --tail 5
+EOF
 
 # Restore overlaid private-core files back to committed/public state.
 echo ""
