@@ -44,13 +44,17 @@ def _connect() -> sqlite3.Connection:
             view_count INTEGER DEFAULT 0
         )"""
     )
-    # Add query_hash column if upgrading from older schema
-    try:
-        conn.execute("ALTER TABLE published_results ADD COLUMN query_hash TEXT")
-    except sqlite3.OperationalError:
-        pass  # column already exists
+    # Schema migrations for older databases
+    for col, coltype in [("query_hash", "TEXT"), ("status", "TEXT DEFAULT 'pending'")]:
+        try:
+            conn.execute(f"ALTER TABLE published_results ADD COLUMN {col} {coltype}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_query_hash ON published_results(query_hash)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_status ON published_results(status)"
     )
     conn.execute(
         """CREATE TABLE IF NOT EXISTS publish_blacklist (
@@ -431,8 +435,8 @@ def publish_result(
             conn.execute(
                 """INSERT INTO published_results
                    (slug, query, query_hash, result_html, result_text,
-                    meta_json, created_at, user_id, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    meta_json, created_at, user_id, session_id, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
                 (
                     slug,
                     query,
@@ -454,8 +458,8 @@ def publish_result(
             conn.execute(
                 """INSERT INTO published_results
                    (slug, query, query_hash, result_html, result_text,
-                    meta_json, created_at, user_id, session_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    meta_json, created_at, user_id, session_id, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
                 (
                     slug,
                     query,
@@ -475,14 +479,15 @@ def publish_result(
 
 
 def get_result(slug: str) -> dict | None:
-    """Load a published result by slug. Returns dict or None."""
+    """Load an approved published result by slug. Returns dict or None."""
     with _lock:
         conn = _connect()
         try:
             row = conn.execute(
                 """SELECT slug, query, result_html, result_text,
                           meta_json, created_at, view_count
-                   FROM published_results WHERE slug = ?""",
+                   FROM published_results
+                   WHERE slug = ? AND (status = 'approved' OR status IS NULL)""",
                 (slug,),
             ).fetchone()
             if not row:
@@ -506,13 +511,14 @@ def get_result(slug: str) -> dict | None:
 
 
 def list_results(limit: int = 50) -> list[dict]:
-    """List recent published results for sitemap generation."""
+    """List approved published results for sitemap generation."""
     with _lock:
         conn = _connect()
         try:
             rows = conn.execute(
                 """SELECT slug, query, created_at, view_count
                    FROM published_results
+                   WHERE status = 'approved' OR status IS NULL
                    ORDER BY created_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -525,5 +531,101 @@ def list_results(limit: int = 50) -> list[dict]:
                 }
                 for r in rows
             ]
+        finally:
+            conn.close()
+
+
+def list_pending(limit: int = 50) -> list[dict]:
+    """List pending results awaiting approval."""
+    with _lock:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """SELECT slug, query, result_text, created_at, user_id
+                   FROM published_results
+                   WHERE status = 'pending'
+                   ORDER BY created_at ASC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "slug": r[0],
+                    "query": r[1],
+                    "result_preview": r[2][:500] if r[2] else "",
+                    "created_at": r[3],
+                    "user_id": r[4] or "",
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+
+def approve_result(slug: str) -> bool:
+    """Approve a pending result for public display."""
+    with _lock:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "UPDATE published_results SET status = 'approved' WHERE slug = ? AND status = 'pending'",
+                (slug,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def reject_result(slug: str, reason: str = "") -> bool:
+    """Reject a pending result. Removes it from the database."""
+    with _lock:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM published_results WHERE slug = ? AND status = 'pending'",
+                (slug,),
+            )
+            conn.commit()
+            if cur.rowcount > 0:
+                log.info("Result rejected: %s (%s)", slug, reason)
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def bulk_approve(slugs: list[str]) -> int:
+    """Approve multiple slugs at once. Returns count approved."""
+    with _lock:
+        conn = _connect()
+        try:
+            count = 0
+            for slug in slugs:
+                cur = conn.execute(
+                    "UPDATE published_results SET status = 'approved' WHERE slug = ? AND status = 'pending'",
+                    (slug,),
+                )
+                count += cur.rowcount
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+
+def bulk_reject(slugs: list[str], reason: str = "") -> int:
+    """Reject multiple slugs at once. Returns count rejected."""
+    with _lock:
+        conn = _connect()
+        try:
+            count = 0
+            for slug in slugs:
+                cur = conn.execute(
+                    "DELETE FROM published_results WHERE slug = ? AND status = 'pending'",
+                    (slug,),
+                )
+                count += cur.rowcount
+            conn.commit()
+            if count:
+                log.info("Bulk rejected %d results (%s)", count, reason)
+            return count
         finally:
             conn.close()
