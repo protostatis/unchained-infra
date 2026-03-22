@@ -105,6 +105,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/trial/{token}"),
             ("GET", "/web/agent/version"),
             ("GET", "/web/agent/files"),
+            ("GET", "/web/research-desk/files"),
             ("GET", "/web/provision/profiles"),
             ("POST", "/web/provision/start"),
             ("GET", "/web/provision/status"),

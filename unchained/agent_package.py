@@ -11,10 +11,13 @@ Usage (from web.py):
 """
 
 import io
+import json
+import hashlib
 import os
+from pathlib import Path
 import zipfile
 
-VERSION = "0.3.64"  # one-click Research Desk install bootstraps and opens the local desk
+VERSION = "0.3.65"  # one-click Research Desk install fetches a hosted package artifact
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -22,6 +25,13 @@ VERSION = "0.3.64"  # one-click Research Desk install bootstraps and opens the l
 # 0.3.46 is the first packaged client version that reliably includes the
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"
+RESEARCH_DESK_VERSION = "0.1.0"
+_RESEARCH_DESK_VENDOR_DIR = (
+    Path(__file__).resolve().parent.parent / "research_desk_vendor"
+)
+_RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md")
+_RESEARCH_DESK_VENDOR_PACKAGE_DIR = "unchained_pyreplab"
+_RESEARCH_DESK_VENDOR_MANIFEST = "manifest.json"
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
@@ -2074,4 +2084,47 @@ def build_update_zip() -> bytes:
 
         _add_source_files(zf, src_dir, "unchained-agent")
 
+    return buf.getvalue()
+
+
+def build_research_desk_zip() -> bytes:
+    """Build an installable ZIP snapshot for the Research Desk package."""
+    if not _RESEARCH_DESK_VENDOR_DIR.is_dir():
+        raise FileNotFoundError(
+            f"Research Desk vendor tree missing: {_RESEARCH_DESK_VENDOR_DIR}"
+        )
+
+    manifest_path = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_files = manifest.get("files", {})
+    if not isinstance(manifest_files, dict) or not manifest_files:
+        raise ValueError("Research Desk vendor manifest is missing file hashes")
+
+    expected_paths = set(_RESEARCH_DESK_VENDOR_ROOT_FILES)
+    package_dir = _RESEARCH_DESK_VENDOR_DIR / _RESEARCH_DESK_VENDOR_PACKAGE_DIR
+    if not package_dir.is_dir():
+        raise FileNotFoundError(
+            f"Research Desk vendor package missing: {package_dir}"
+        )
+    actual_package_paths = {
+        path.relative_to(_RESEARCH_DESK_VENDOR_DIR).as_posix()
+        for path in sorted(package_dir.glob("*.py"))
+        if path.is_file() and not path.is_symlink()
+    }
+    expected_paths.update(actual_package_paths)
+    if set(manifest_files) != expected_paths:
+        raise ValueError("Research Desk vendor manifest does not match vendored file set")
+
+    buf = io.BytesIO()
+    prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(manifest_path, f"{prefix}/{_RESEARCH_DESK_VENDOR_MANIFEST}")
+        for rel_name in sorted(expected_paths):
+            path = _RESEARCH_DESK_VENDOR_DIR / rel_name
+            if not path.is_file() or path.is_symlink():
+                raise FileNotFoundError(f"Research Desk vendor file missing: {path}")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if manifest_files.get(rel_name) != digest:
+                raise ValueError(f"Research Desk vendor hash mismatch: {rel_name}")
+            zf.write(path, f"{prefix}/{rel_name}")
     return buf.getvalue()

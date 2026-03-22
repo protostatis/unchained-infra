@@ -33,6 +33,7 @@ import socket
 import sys
 import tempfile
 import time
+import urllib.request
 from urllib.parse import urlparse
 import uuid
 
@@ -945,21 +946,38 @@ def _research_desk_launcher_prefix() -> str:
     return f"{shlex.quote(python_bin)} -m unchained_pyreplab"
 
 
-_DEFAULT_RESEARCH_DESK_PACKAGE_URL = (
-    "https://github.com/protostatis/unchained_pyreplab/archive/"
-    "ac3d8164f9bacb4d674615c7e46ac9e370f2dc3a.zip"
-)
-_RESEARCH_DESK_PACKAGE_URL_RE = re.compile(
-    r"^/protostatis/unchained_pyreplab/archive/"
-    r"(?:refs/tags/[A-Za-z0-9._-]+|[0-9a-f]{7,40})\.zip$"
-)
+_RESEARCH_DESK_PACKAGE_PATH = "/web/research-desk/files"
+_RESEARCH_DESK_PACKAGE_URL_RE = re.compile(r"^/web/research-desk/files$")
+_RESEARCH_DESK_PACKAGE_MAX_BYTES = 20 * 1024 * 1024
+_RESEARCH_DESK_PACKAGE_ALLOWED_NETLOCS = {
+    "api.unchainedsky.com",
+    "unchainedsky.com",
+}
+_RESEARCH_DESK_PACKAGE_ALLOWED_LOCAL_NETLOCS = {
+    "127.0.0.1:8080",
+    "127.0.0.1:8088",
+    "localhost:8080",
+    "localhost:8088",
+}
+
+
+def _allow_local_research_desk_package_url() -> bool:
+    # Local package serving is only for explicit dev flows; production install
+    # should always fetch the hosted artifact over HTTPS.
+    return os.environ.get("UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL", "").strip() == "1"
 
 
 def _is_allowed_research_desk_package_url(value: str) -> bool:
     parsed = urlparse(value)
     return (
-        parsed.scheme == "https"
-        and parsed.netloc == "github.com"
+        (
+            (parsed.scheme == "https" and parsed.netloc in _RESEARCH_DESK_PACKAGE_ALLOWED_NETLOCS)
+            or (
+                _allow_local_research_desk_package_url()
+                and parsed.scheme == "http"
+                and parsed.netloc in _RESEARCH_DESK_PACKAGE_ALLOWED_LOCAL_NETLOCS
+            )
+        )
         and bool(_RESEARCH_DESK_PACKAGE_URL_RE.match(parsed.path))
         and not parsed.params
         and not parsed.query
@@ -968,16 +986,51 @@ def _is_allowed_research_desk_package_url(value: str) -> bool:
 
 
 def _research_desk_package_url() -> str:
+    api_url = os.environ.get("UNCHAINED_API_URL", f"https://{RELAY_HOST}").strip()
+    if not api_url:
+        api_url = f"https://{RELAY_HOST}"
+    default_url = f"{api_url.rstrip('/')}{_RESEARCH_DESK_PACKAGE_PATH}"
     override = os.environ.get("UNCHAINED_RESEARCH_DESK_PACKAGE_URL", "").strip()
     if not override:
-        return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
+        return default_url
     if _is_allowed_research_desk_package_url(override):
         return override
     log.warning(
         "[research-desk-install] ignoring invalid package override: %s",
         override,
     )
-    return _DEFAULT_RESEARCH_DESK_PACKAGE_URL
+    return default_url
+
+
+def _download_research_desk_package(package_url: str) -> str:
+    if not _is_allowed_research_desk_package_url(package_url):
+        raise RuntimeError(f"Refusing unsupported Research Desk package URL: {package_url}")
+    req = urllib.request.Request(
+        package_url,
+        headers={"Authorization": f"Bearer {KEY}"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        content_type = str(resp.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+        if content_type and content_type != "application/zip":
+            raise RuntimeError(
+                f"Unexpected Research Desk package content type: {content_type}"
+            )
+        fd, temp_path = tempfile.mkstemp(prefix="research-desk-", suffix=".zip")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                total = 0
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _RESEARCH_DESK_PACKAGE_MAX_BYTES:
+                        raise RuntimeError("Research Desk package exceeded size limit")
+                    f.write(chunk)
+        except Exception:
+            os.unlink(temp_path)
+            raise
+    return temp_path
 
 
 def _remote_research_desk_install_supported() -> bool:
@@ -988,26 +1041,33 @@ def _run_research_desk_install_helper():
     """Detached helper that installs and bootstraps Research Desk locally."""
     python_bin = _research_desk_python_binary()
     package_url = _research_desk_package_url()
-    install_cmd = [python_bin, "-m", "pip", "install", "--user", "--upgrade", package_url]
     log.info(
         "[research-desk-install] helper starting (python=%s package=%s)",
         python_bin,
         package_url,
     )
-    rc = _run_logged(install_cmd, cwd=_agent_root())
-    if rc != 0:
-        log.error("[research-desk-install] install command failed with exit code %s", rc)
-        raise SystemExit(rc)
-    setup_cmd = [python_bin, "-m", "unchained_pyreplab", "setup"]
-    log.info("[research-desk-install] running setup: %s", shlex.join(setup_cmd))
-    rc = _run_logged(setup_cmd, cwd=_agent_root())
-    if rc != 0:
-        log.error("[research-desk-install] setup command failed with exit code %s", rc)
-        raise SystemExit(rc)
-    _ensure_research_desk_bridge_running(python_bin)
-    _ensure_research_desk_server_running(python_bin)
-    _open_research_desk_local()
-    log.info("[research-desk-install] install and bootstrap completed")
+    package_path = _download_research_desk_package(package_url)
+    try:
+        install_cmd = [python_bin, "-m", "pip", "install", "--user", "--upgrade", package_path]
+        rc = _run_logged(install_cmd, cwd=_agent_root())
+        if rc != 0:
+            log.error("[research-desk-install] install command failed with exit code %s", rc)
+            raise SystemExit(rc)
+        setup_cmd = [python_bin, "-m", "unchained_pyreplab", "setup"]
+        log.info("[research-desk-install] running setup: %s", shlex.join(setup_cmd))
+        rc = _run_logged(setup_cmd, cwd=_agent_root())
+        if rc != 0:
+            log.error("[research-desk-install] setup command failed with exit code %s", rc)
+            raise SystemExit(rc)
+        _ensure_research_desk_bridge_running(python_bin)
+        _ensure_research_desk_server_running(python_bin)
+        _open_research_desk_local()
+        log.info("[research-desk-install] install and bootstrap completed")
+    finally:
+        try:
+            os.unlink(package_path)
+        except OSError:
+            pass
 
 
 def _spawn_remote_research_desk_install() -> tuple[bool, str, str]:

@@ -1,0 +1,23 @@
+[project]
+name = "unchained-pyreplab"
+version = "0.1.0"
+description = "Local toy V1 for browser-to-lab workflows with Unchained MCP and pyreplab"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas>=2.2,<3",
+]
+
+[project.scripts]
+unchained-pyreplab = "unchained_pyreplab.cli:main"
+unchained-pyreplab-codex-agent = "unchained_pyreplab.codex_adapter:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["unchained_pyreplab*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

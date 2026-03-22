@@ -5,8 +5,10 @@ and chat_agent_cli.py version checking.
 """
 from __future__ import annotations
 
+import asyncio
 import ast
 import io
+import importlib.util
 import json
 import os
 import shutil
@@ -170,6 +172,121 @@ def test_build_update_zip_no_env_no_start():
         v = zf.read("unchained-agent/version.txt").decode()
         assert v == VERSION
     print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh; stop.sh included)")
+
+
+def test_build_research_desk_zip_contains_installable_source_tree():
+    from agent_package import RESEARCH_DESK_VERSION, build_research_desk_zip
+
+    zip_bytes = build_research_desk_zip()
+    assert len(zip_bytes) > 0
+
+    prefix = f"unchained-pyreplab-{RESEARCH_DESK_VERSION}"
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = zf.namelist()
+        assert f"{prefix}/pyproject.toml" in names
+        assert f"{prefix}/README.md" in names
+        assert f"{prefix}/manifest.json" in names
+        assert f"{prefix}/unchained_pyreplab/__init__.py" in names
+        pyproject = zf.read(f"{prefix}/pyproject.toml").decode()
+        assert 'name = "unchained-pyreplab"' in pyproject
+        manifest = json.loads(zf.read(f"{prefix}/manifest.json").decode())
+        assert "pyproject.toml" in manifest["files"]
+        assert "unchained_pyreplab/capsule_runtime.py" in manifest["files"]
+        package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
+        assert "Local browser-to-lab prototype" in package_init
+    print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
+
+
+def test_handle_research_desk_files_requires_auth():
+    from web import handle_research_desk_files
+
+    with mock.patch("web._authenticate", return_value=None):
+        response = asyncio.run(handle_research_desk_files(mock.Mock()))
+
+    assert response.status == 401
+    payload = json.loads(response.body.decode())
+    assert payload["error"] == "Not authenticated"
+
+
+def test_handle_research_desk_files_serves_zip_attachment():
+    from web import handle_research_desk_files
+
+    request = mock.Mock()
+    with mock.patch("web._authenticate", return_value={"user_id": "u-test"}):
+        with mock.patch("agent_package.build_research_desk_zip", return_value=b"zip-bytes"):
+            response = asyncio.run(handle_research_desk_files(request))
+
+    assert response.status == 200
+    assert response.body == b"zip-bytes"
+    assert response.content_type == "application/zip"
+    assert response.headers["Content-Disposition"] == "attachment; filename=unchained-pyreplab.zip"
+
+
+def _load_vendor_capsule_runtime():
+    vendor_path = (
+        Path(__file__).resolve().parent.parent
+        / "research_desk_vendor"
+        / "unchained_pyreplab"
+        / "capsule_runtime.py"
+    )
+    spec = importlib.util.spec_from_file_location("vendor_capsule_runtime", vendor_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_vendor_capsule_runtime_rejects_table_traversal():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        (capsule_dir / "object_manifest.json").write_text(
+            json.dumps({"objects": []}),
+            encoding="utf-8",
+        )
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.table("../evil")
+        except ValueError as exc:
+            assert "Invalid table name" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for invalid table name")
+
+
+def test_vendor_capsule_runtime_rejects_manifest_table_path_escape():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        (capsule_dir / "object_manifest.json").write_text(
+            json.dumps(
+                {
+                    "objects": [
+                        {"name": "safe_table", "table_path": "../escape.jsonl"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.table("safe_table")
+        except ValueError as exc:
+            assert "Invalid capsule relative path" in str(exc) or "Unexpected capsule table path" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for escaped table path")
+
+
+def test_vendor_capsule_runtime_rejects_invalid_followup_url():
+    module = _load_vendor_capsule_runtime()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        capsule_dir = Path(tmpdir)
+        capsule = module.Capsule(capsule_dir)
+        try:
+            capsule.request_followup(url="javascript:alert(1)", instruction="retry")
+        except ValueError as exc:
+            assert "Invalid followup URL" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for invalid followup URL")
 
 
 def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():
@@ -576,6 +693,7 @@ def test_web_imports():
         handle_download_installer,
         handle_agent_version,
         handle_agent_files,
+        handle_research_desk_files,
     )
     assert callable(handle_install_token)
     assert callable(handle_install_bootstrap)
@@ -589,6 +707,7 @@ def test_web_imports():
     assert callable(handle_download_installer)
     assert callable(handle_agent_version)
     assert callable(handle_agent_files)
+    assert callable(handle_research_desk_files)
     print("  All install/update handlers importable")
 
 
@@ -620,6 +739,7 @@ def test_web_routes_registered():
         assert ("GET", "/web/download-installer") in routes, "download-installer route not registered"
         assert ("GET", "/web/agent/version") in routes, "agent version route not registered"
         assert ("GET", "/web/agent/files") in routes, "agent files route not registered"
+        assert ("GET", "/web/research-desk/files") in routes, "research desk files route not registered"
     else:
         # Backward compatibility for older code where routes lived directly in main().
         import inspect
@@ -643,6 +763,7 @@ def test_web_routes_registered():
         assert "/web/download-installer" in source, "download-installer route not registered"
         assert "/web/agent/version" in source, "agent version route not registered"
         assert "/web/agent/files" in source, "agent files route not registered"
+        assert "/web/research-desk/files" in source, "research desk files route not registered"
     print("  All install/update routes registered")
 
 
