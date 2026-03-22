@@ -198,6 +198,34 @@ def test_build_research_desk_zip_contains_installable_source_tree():
     print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
 
 
+def test_resolve_research_desk_vendor_dir_supports_repo_checkout_layout():
+    from agent_package import _resolve_research_desk_vendor_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo_root = Path(tmpdir)
+        vendor_dir = repo_root / "research_desk_vendor"
+        vendor_dir.mkdir()
+        module_path = repo_root / "unchained" / "agent_package.py"
+        module_path.parent.mkdir()
+        module_path.write_text("# test module\n", encoding="utf-8")
+
+        assert _resolve_research_desk_vendor_dir(module_path) == vendor_dir.resolve()
+
+
+def test_resolve_research_desk_vendor_dir_supports_container_layout():
+    from agent_package import _resolve_research_desk_vendor_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        app_root = Path(tmpdir) / "app"
+        app_root.mkdir()
+        vendor_dir = app_root / "research_desk_vendor"
+        vendor_dir.mkdir()
+        module_path = app_root / "agent_package.py"
+        module_path.write_text("# test module\n", encoding="utf-8")
+
+        assert _resolve_research_desk_vendor_dir(module_path) == vendor_dir.resolve()
+
+
 def test_handle_research_desk_files_requires_auth():
     from web import handle_research_desk_files
 
