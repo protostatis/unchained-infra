@@ -6,8 +6,10 @@ services:
     command: [
       "python", "chrome_bridge.py", "start",
       "--relay", "${UNCHAINED_RELAY_URL:?UNCHAINED_RELAY_URL_required}",
+      "--key", "${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}",
       "--profile", "${CDP_PROFILE:-ec2-headless}",
-      "--headless"
+      "--headless",
+      "--stealth"
     ]
     volumes:
       - headless_data:/data
@@ -33,6 +35,7 @@ services:
       dockerfile: Dockerfile.headless
     command: [
       "python", "chat_agent_openrouter.py",
+      "--key", "${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}",
       "--agent", "${TRIAL_AGENT_ID:?TRIAL_AGENT_ID_required}",
       "--server", "${UNCHAINED_SERVER:-wss://api.unchainedsky.com}"
     ]
