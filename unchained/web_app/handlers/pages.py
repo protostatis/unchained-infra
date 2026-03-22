@@ -545,7 +545,58 @@ async def handle_publish_result(request: web.Request) -> web.Response:
     return web.json_response({
         "slug": slug,
         "url": f"https://unchainedsky.com/r/{slug}",
+        "status": "pending",
     })
+
+
+async def handle_pending_results(request: web.Request) -> web.Response:
+    """GET /web/publish/pending — list results awaiting approval."""
+    from published_results import list_pending
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    results = list_pending(limit=100)
+    return web.json_response({"pending": results})
+
+
+async def handle_approve_result(request: web.Request) -> web.Response:
+    """POST /web/publish/approve — approve one or more pending results."""
+    from published_results import approve_result, bulk_approve
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    body = await request.json()
+    slugs = body.get("slugs", [])
+    slug = body.get("slug", "")
+    if slug:
+        ok = approve_result(slug)
+        return web.json_response({"approved": ok, "slug": slug})
+    if slugs:
+        count = bulk_approve(slugs)
+        return web.json_response({"approved_count": count, "slugs": slugs})
+    return web.json_response({"error": "slug or slugs required"}, status=400)
+
+
+async def handle_reject_result(request: web.Request) -> web.Response:
+    """POST /web/publish/reject — reject one or more pending results."""
+    from published_results import reject_result, bulk_reject
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Authentication required"}, status=401)
+    body = await request.json()
+    reason = body.get("reason", "")
+    slugs = body.get("slugs", [])
+    slug = body.get("slug", "")
+    if slug:
+        ok = reject_result(slug, reason)
+        return web.json_response({"rejected": ok, "slug": slug})
+    if slugs:
+        count = bulk_reject(slugs, reason)
+        return web.json_response({"rejected_count": count, "slugs": slugs})
+    return web.json_response({"error": "slug or slugs required"}, status=400)
 
 
 async def handle_privacy_page(request: web.Request) -> web.Response:
