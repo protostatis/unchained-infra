@@ -7,6 +7,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import socket
 import socketserver
@@ -22,11 +23,12 @@ UNCHAINED_DIR = REPO_ROOT / "unchained"
 PACKAGE_PATH = "/web/research-desk/files"
 LOCAL_HOST = "127.0.0.1"
 LOCAL_DESK_URL = "http://127.0.0.1:8766/"
-AUTH_TOKEN = "uc_live_smoke_local_helper"
 PORT_CANDIDATES = (8088, 8080)
 SMOKE_TIMEOUT_SECONDS = 120
 BRIDGE_PORT = 9333
 DESK_PORT = 8766
+EXPECTED_PACKAGE = "unchained-pyreplab"
+EXPECTED_VERSION = "0.1.0"
 
 sys.path.insert(0, str(UNCHAINED_DIR))
 
@@ -105,7 +107,7 @@ exit 0
         path.chmod(0o755)
 
 
-def _serve_research_desk_zip(host: str, port: int):
+def _serve_research_desk_zip(host: str, port: int, auth_token: str):
     requests: list[dict[str, str]] = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -120,7 +122,7 @@ def _serve_research_desk_zip(host: str, port: int):
                 self.send_response(404)
                 self.end_headers()
                 return
-            if self.headers.get("Authorization") != f"Bearer {AUTH_TOKEN}":
+            if self.headers.get("Authorization") != f"Bearer {auth_token}":
                 self.send_response(401)
                 self.end_headers()
                 return
@@ -159,7 +161,12 @@ def _verify_installed(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         [
             python_bin,
             "-c",
-            "import unchained_pyreplab; print(unchained_pyreplab.__file__)",
+            (
+                "import importlib.metadata as metadata, json, unchained_pyreplab; "
+                f"print(json.dumps({{'module': unchained_pyreplab.__file__, "
+                f"'name': '{EXPECTED_PACKAGE}', "
+                f"'version': metadata.version('{EXPECTED_PACKAGE}')}}))"
+            ),
         ],
         env=env,
         capture_output=True,
@@ -182,6 +189,7 @@ def main() -> int:
 
     package_port = _pick_local_package_port()
     package_url = f"http://{LOCAL_HOST}:{package_port}{PACKAGE_PATH}"
+    auth_token = f"uc_live_smoke_{secrets.token_hex(12)}"
 
     temp_root = Path(tempfile.mkdtemp(prefix="research-desk-helper-smoke-"))
     try:
@@ -199,7 +207,7 @@ def main() -> int:
             {
                 "HOME": str(home_dir),
                 "PYTHONUSERBASE": str(user_base),
-                "UNCHAINED_API_KEY": AUTH_TOKEN,
+                "UNCHAINED_API_KEY": auth_token,
                 "UNCHAINED_API_URL": f"http://{LOCAL_HOST}:{package_port}",
                 "UNCHAINED_RESEARCH_DESK_PACKAGE_URL": package_url,
                 "UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL": "1",
@@ -209,7 +217,7 @@ def main() -> int:
             }
         )
 
-        server, requests = _serve_research_desk_zip(LOCAL_HOST, package_port)
+        server, requests = _serve_research_desk_zip(LOCAL_HOST, package_port, auth_token)
         try:
             with _FakePortListener(LOCAL_HOST, BRIDGE_PORT), _FakePortListener(LOCAL_HOST, DESK_PORT):
                 result = _run_helper(env, args.timeout)
@@ -218,6 +226,9 @@ def main() -> int:
             server.server_close()
 
         install_check = _verify_installed(env)
+        install_payload = {}
+        if install_check.returncode == 0 and install_check.stdout:
+            install_payload = json.loads(install_check.stdout)
         summary = {
             "package_url": package_url,
             "helper_returncode": result.returncode,
@@ -225,7 +236,7 @@ def main() -> int:
             "helper_stderr": result.stderr,
             "requests": requests,
             "install_check_returncode": install_check.returncode,
-            "install_check_stdout": install_check.stdout,
+            "install_check_stdout": install_payload,
             "install_check_stderr": install_check.stderr,
             "open_log": open_log.read_text(encoding="utf-8") if open_log.exists() else "",
             "user_base": str(user_base),
@@ -240,11 +251,17 @@ def main() -> int:
         if any(req["path"] != PACKAGE_PATH for req in requests):
             print("Unexpected request path observed during smoke.", file=sys.stderr)
             return 1
-        if any(req["authorization"] != f"Bearer {AUTH_TOKEN}" for req in requests):
+        if any(req["authorization"] != f"Bearer {auth_token}" for req in requests):
             print("Unexpected authorization header observed during smoke.", file=sys.stderr)
             return 1
         if install_check.returncode != 0:
             return install_check.returncode
+        if install_payload.get("name") != EXPECTED_PACKAGE:
+            print("Unexpected installed package name.", file=sys.stderr)
+            return 1
+        if install_payload.get("version") != EXPECTED_VERSION:
+            print("Unexpected installed package version.", file=sys.stderr)
+            return 1
         return 0
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

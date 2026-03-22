@@ -456,6 +456,9 @@ def test_research_desk_install_helper_smoke_script_is_local_only():
     assert 'browser-open.log' in smoke_script
     assert '/web/research-desk/files' in smoke_script
     assert 'api.unchainedsky.com' not in smoke_script
+    assert 'token_hex(12)' in smoke_script
+    assert "EXPECTED_PACKAGE" in smoke_script
+    assert "EXPECTED_VERSION" in smoke_script
 
 
 def test_research_desk_package_image_smoke_script_runs_with_fake_docker():
@@ -506,6 +509,19 @@ exit 1
         assert marker_path.is_file()
         payload = json.loads(marker_path.read_text(encoding="utf-8"))
         assert payload["build_context"]
+
+
+def test_research_desk_vendor_manifest_script_matches_current_manifest():
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "deploy" / "rebuild_research_desk_vendor_manifest.py"
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--check"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_research_desk_zip_installs_with_system_pip_metadata():
