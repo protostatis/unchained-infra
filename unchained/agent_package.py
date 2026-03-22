@@ -15,6 +15,7 @@ import json
 import hashlib
 import os
 from pathlib import Path
+from typing import Optional
 import zipfile
 
 VERSION = "0.3.65"  # one-click Research Desk install fetches a hosted package artifact
@@ -26,12 +27,26 @@ VERSION = "0.3.65"  # one-click Research Desk install fetches a hosted package a
 # archive-restore safety fix on users' machines, so anything older must update.
 MIN_VERSION = "0.3.46"
 RESEARCH_DESK_VERSION = "0.1.0"
-_RESEARCH_DESK_VENDOR_DIR = (
-    Path(__file__).resolve().parent.parent / "research_desk_vendor"
-)
 _RESEARCH_DESK_VENDOR_ROOT_FILES = ("pyproject.toml", "README.md")
 _RESEARCH_DESK_VENDOR_PACKAGE_DIR = "unchained_pyreplab"
 _RESEARCH_DESK_VENDOR_MANIFEST = "manifest.json"
+
+
+def _resolve_research_desk_vendor_dir(module_path: Optional[Path] = None) -> Path:
+    """Find the vendored Research Desk tree in both repo and container layouts."""
+    resolved_module_path = Path(module_path or __file__).resolve()
+    candidates: list[Path] = []
+    for base_dir in (resolved_module_path.parent.parent, resolved_module_path.parent):
+        candidate = base_dir / "research_desk_vendor"
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+_RESEARCH_DESK_VENDOR_DIR = _resolve_research_desk_vendor_dir()
 
 # Source files to include as-is (non-proprietary)
 _PACKAGE_FILES = {
