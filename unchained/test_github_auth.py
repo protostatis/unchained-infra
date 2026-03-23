@@ -25,6 +25,9 @@ class _FakeCore:
     def _public_base_url(self, _request) -> str:
         return "https://api.unchainedsky.com"
 
+    def _cookie_domain(self, _request) -> str | None:
+        return None
+
     def _track_event(self, _request, event_name: str, **fields) -> None:
         self.events.append({"event": event_name, **fields})
 
