@@ -59,6 +59,14 @@ class _FakePortListener:
             self._sock = None
 
 
+def _listener_context(host: str, port: int):
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.settimeout(0.2)
+        if sock.connect_ex((host, port)) == 0:
+            return contextlib.nullcontext()
+    return _FakePortListener(host, port)
+
+
 def _pick_local_package_port() -> int:
     for port in PORT_CANDIDATES:
         with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
@@ -219,7 +227,7 @@ def main() -> int:
 
         server, requests = _serve_research_desk_zip(LOCAL_HOST, package_port, auth_token)
         try:
-            with _FakePortListener(LOCAL_HOST, BRIDGE_PORT), _FakePortListener(LOCAL_HOST, DESK_PORT):
+            with _listener_context(LOCAL_HOST, BRIDGE_PORT), _listener_context(LOCAL_HOST, DESK_PORT):
                 result = _run_helper(env, args.timeout)
         finally:
             server.shutdown()
@@ -229,6 +237,10 @@ def main() -> int:
         install_payload = {}
         if install_check.returncode == 0 and install_check.stdout:
             install_payload = json.loads(install_check.stdout)
+        config_path = home_dir / ".config" / "unchained-pyreplab" / "config.json"
+        config_payload = {}
+        if config_path.exists():
+            config_payload = json.loads(config_path.read_text(encoding="utf-8"))
         summary = {
             "package_url": package_url,
             "helper_returncode": result.returncode,
@@ -238,6 +250,7 @@ def main() -> int:
             "install_check_returncode": install_check.returncode,
             "install_check_stdout": install_payload,
             "install_check_stderr": install_check.stderr,
+            "setup_config": config_payload,
             "open_log": open_log.read_text(encoding="utf-8") if open_log.exists() else "",
             "user_base": str(user_base),
         }
@@ -261,6 +274,9 @@ def main() -> int:
             return 1
         if install_payload.get("version") != EXPECTED_VERSION:
             print("Unexpected installed package version.", file=sys.stderr)
+            return 1
+        if "agent_id" in config_payload:
+            print("Setup config still persisted agent_id.", file=sys.stderr)
             return 1
         return 0
     finally:

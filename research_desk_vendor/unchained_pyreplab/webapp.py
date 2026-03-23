@@ -25,7 +25,7 @@ from .lab_agent import (
 )
 from .lab_session import discover_pyreplab_bin, get_session
 from .reload_control import is_reload_paused, set_reload_paused
-from .mcp_client import DEFAULT_AGENT_ENV_PATH, DEFAULT_ENDPOINT, infer_api_base, parse_env_file
+from .mcp_client import DEFAULT_AGENT_ENV_PATH, DEFAULT_ENDPOINT, infer_api_base, parse_env_file, resolve_credentials
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CAPSULES_ROOT = REPO_ROOT / "capsules"
@@ -2866,17 +2866,31 @@ def _research_desk_status_payload() -> dict[str, Any]:
         str(config.get("env_defaults", {}).get("UNCHAINED_API_KEY", "")).strip()
         or str(env_values.get("UNCHAINED_API_KEY", "")).strip()
     )
-    agent_id = (
-        os.environ.get("UNCHAINED_AGENT_ID", "").strip()
-        or str(config.get("agent_id", "")).strip()
-        or str(env_values.get("UNCHAINED_AGENT_ID", "")).strip()
-    )
     endpoint = (
         os.environ.get("UNCHAINED_MCP_ENDPOINT", "").strip()
         or str(config.get("mcp_endpoint", "")).strip()
         or str(env_values.get("UNCHAINED_MCP_ENDPOINT", "")).strip()
         or DEFAULT_ENDPOINT
     )
+    agent_id = (
+        os.environ.get("UNCHAINED_AGENT_ID", "").strip()
+        or str(env_values.get("UNCHAINED_AGENT_ID", "")).strip()
+    )
+    # Do not pin the browser-side agent to a stale setup snapshot. If live
+    # credential resolution is slow or unavailable, fall back to the local
+    # client env values instead of failing the status endpoint.
+    try:
+        resolved = resolve_credentials(
+            api_key=api_key or None,
+            agent_id=agent_id or None,
+            endpoint=endpoint,
+            timeout=3,
+        )
+    except Exception:
+        resolved = None
+    if resolved is not None:
+        api_key = str(resolved.api_key or api_key or "").strip()
+        agent_id = str(resolved.agent_id or agent_id or "").strip()
     pyreplab_bin = (
         os.environ.get("PYREPLAB_BIN", "").strip()
         or str(config.get("pyreplab_bin", "")).strip()
