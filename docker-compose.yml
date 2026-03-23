@@ -34,7 +34,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -55,7 +55,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -85,7 +85,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8766),2); s.close()"]
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8766,timeout=2); c.request('GET','/mcp'); c.getresponse(); c.close()"]
       interval: 5s
       timeout: 3s
       retries: 3

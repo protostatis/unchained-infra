@@ -229,19 +229,24 @@ cd "$1"
 # Wait up to 30s for relay and private-core to be healthy
 for svc in relay private-core; do
     for i in $(seq 1 30); do
-        status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q "$svc")" 2>/dev/null || echo "missing")
+        cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+        if [ -z "$cid" ]; then sleep 1; continue; fi
+        status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "missing")
         if [ "$status" = "healthy" ]; then
             echo "    $svc is healthy"
             break
         fi
         if [ "$i" -eq 30 ]; then
             echo "WARNING: $svc did not become healthy in 30s (status: $status), continuing anyway"
+            break
         fi
         sleep 1
     done
 done
 HEALTHEOF
 
+# NOTE: service list is hard-coded for staged ordering. Update here if
+# docker-compose.yml adds new services.
 echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
@@ -254,13 +259,16 @@ remote_bash "$REMOTE_DIR" <<'HEALTHEOF'
 set -euo pipefail
 cd "$1"
 for i in $(seq 1 30); do
-    status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q mcp)" 2>/dev/null || echo "missing")
+    cid=$(docker compose ps -q mcp 2>/dev/null | head -1)
+    if [ -z "$cid" ]; then sleep 1; continue; fi
+    status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "missing")
     if [ "$status" = "healthy" ]; then
         echo "    MCP is healthy"
         break
     fi
     if [ "$i" -eq 30 ]; then
         echo "WARNING: MCP did not become healthy in 30s (status: $status)"
+        break
     fi
     sleep 1
 done
@@ -271,7 +279,8 @@ HEALTHEOF
 echo "==> Restarting Caddy reverse proxy..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-docker compose -f "$1/docker-compose.yml" restart caddy
+cd "$1"
+docker compose restart caddy
 EOF
 
 # Show status
