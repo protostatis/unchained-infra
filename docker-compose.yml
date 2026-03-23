@@ -9,9 +9,12 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - relay
-      - mcp
-      - web
+      relay:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+      web:
+        condition: service_started
     networks:
       - edge
       - app
@@ -82,7 +85,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/mcp', timeout=2)"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8766),2); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 3
