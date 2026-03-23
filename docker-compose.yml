@@ -30,6 +30,12 @@ services:
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   private-core:
     build:
@@ -45,6 +51,12 @@ services:
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   mcp:
     build:
@@ -62,11 +74,19 @@ services:
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
     depends_on:
-      - relay
-      - private-core
+      relay:
+        condition: service_healthy
+      private-core:
+        condition: service_healthy
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/mcp', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   web:
     build:

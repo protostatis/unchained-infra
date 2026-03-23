@@ -196,32 +196,82 @@ rm -rf "$backup_dir"
 trap - EXIT
 EOF
 
-# Rebuild and restart
-echo "==> Rebuilding and restarting containers..."
+# Rebuild images (without restarting containers yet)
+echo "==> Building container images..."
 if $FORCE_BUILD; then
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-cd "$remote_dir"
+cd "$1"
 docker compose build --no-cache
-docker compose up -d
 EOF
 else
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-cd "$remote_dir"
-docker compose up -d --build
+cd "$1"
+docker compose build
 EOF
 fi
+
+# Staged restart: bring up backend services first, then MCP last to minimize
+# its downtime. Health checks in docker-compose.yml ensure each layer is ready
+# before the next starts.
+echo "==> Restarting backend services (relay, private-core)..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose up -d --no-deps relay private-core
+EOF
+
+echo "==> Waiting for backend health checks..."
+remote_bash "$REMOTE_DIR" <<'HEALTHEOF'
+set -euo pipefail
+cd "$1"
+# Wait up to 30s for relay and private-core to be healthy
+for svc in relay private-core; do
+    for i in $(seq 1 30); do
+        status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q "$svc")" 2>/dev/null || echo "missing")
+        if [ "$status" = "healthy" ]; then
+            echo "    $svc is healthy"
+            break
+        fi
+        if [ "$i" -eq 30 ]; then
+            echo "WARNING: $svc did not become healthy in 30s (status: $status), continuing anyway"
+        fi
+        sleep 1
+    done
+done
+HEALTHEOF
+
+echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose up -d --no-deps web mcp scheduler trial-agent
+EOF
+
+echo "==> Waiting for MCP health check..."
+remote_bash "$REMOTE_DIR" <<'HEALTHEOF'
+set -euo pipefail
+cd "$1"
+for i in $(seq 1 30); do
+    status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q mcp)" 2>/dev/null || echo "missing")
+    if [ "$status" = "healthy" ]; then
+        echo "    MCP is healthy"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "WARNING: MCP did not become healthy in 30s (status: $status)"
+    fi
+    sleep 1
+done
+HEALTHEOF
 
 # Refresh Caddy after upstream containers are recreated.
 # This avoids stale/no-such-host upstream resolution windows after deploys.
 echo "==> Restarting Caddy reverse proxy..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-docker compose -f "$remote_dir/docker-compose.yml" restart caddy
+docker compose -f "$1/docker-compose.yml" restart caddy
 EOF
 
 # Show status
