@@ -12574,20 +12574,23 @@ async function startProvision() {
     });
     const data = await r.json();
 
-    if (data.status === 'cooldown' && data.remaining_s) {
+    if (data.status === 'cooldown' && data.remaining_s > 0) {
       // Disable button and show countdown until cooldown expires.
+      // Clear any existing countdown timer to avoid leaks on re-click.
+      if (btn._cdTimer) { clearInterval(btn._cdTimer); btn._cdTimer = null; }
       let secs = Math.max(1, data.remaining_s);
       statusEl.className = 'provision-status error';
       statusEl.textContent = 'Please wait ' + secs + 's before provisioning again.';
       showToast('Cooldown active — wait ' + secs + 's', true);
       btn.disabled = true;
-      const cdTimer = setInterval(() => {
+      btn._cdTimer = setInterval(() => {
         secs--;
         if (secs <= 0) {
-          clearInterval(cdTimer);
+          clearInterval(btn._cdTimer);
+          btn._cdTimer = null;
           statusEl.className = 'provision-status';
           statusEl.textContent = 'Ready to provision.';
-          btn.disabled = (selectedProvider === 'codex-cli') ? false : (selectedProfile === undefined);
+          btn.disabled = (selectedProvider === 'codex-cli') ? false : !selectedProfile;
         } else {
           statusEl.textContent = 'Please wait ' + secs + 's before provisioning again.';
         }
