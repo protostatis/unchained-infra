@@ -245,8 +245,22 @@ for svc in relay private-core; do
 done
 HEALTHEOF
 
-# NOTE: service list is hard-coded for staged ordering. Update here if
-# docker-compose.yml adds new services.
+# Staged service lists — update if docker-compose.yml adds new services.
+# The assertion below will fail loudly if they drift.
+STAGED_SERVICES="caddy mcp private-core relay scheduler trial-agent web"
+echo "==> Verifying service list matches docker-compose.yml..."
+remote_bash "$REMOTE_DIR" "$STAGED_SERVICES" <<'EOF'
+set -euo pipefail
+cd "$1"
+actual=$(docker compose config --services | sort | tr '\n' ' ' | sed 's/ $//')
+expected="$2"
+if [ "$actual" != "$expected" ]; then
+    echo "ERROR: docker-compose.yml services ($actual) differ from deploy.sh ($expected)" >&2
+    echo "Update STAGED_SERVICES in deploy.sh to match." >&2
+    exit 1
+fi
+EOF
+
 echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
