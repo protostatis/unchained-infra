@@ -198,6 +198,14 @@ def test_build_research_desk_zip_contains_installable_source_tree():
         assert "unchained_pyreplab/capsule_runtime.py" in manifest["files"]
         package_init = zf.read(f"{prefix}/unchained_pyreplab/__init__.py").decode()
         assert "Local browser-to-lab prototype" in package_init
+        vendored_mcp_client = zf.read(f"{prefix}/unchained_pyreplab/mcp_client.py").decode()
+        assert "class AgentDiscoveryResult" in vendored_mcp_client
+        assert 'agent_resolution: str = "missing"' in vendored_mcp_client
+        vendored_cli = zf.read(f"{prefix}/unchained_pyreplab/cli.py").decode()
+        assert 'subparsers.add_parser("mcp-status"' in vendored_cli
+        vendored_webapp = zf.read(f"{prefix}/unchained_pyreplab/webapp.py").decode()
+        assert '"agent_resolution": agent_resolution' in vendored_webapp
+        assert '"credential_source": credential_source' in vendored_webapp
     print(f"  Research Desk ZIP: {len(zip_bytes)} bytes, {len(names)} files")
 
 
@@ -450,6 +458,8 @@ def test_research_desk_package_image_smoke_script_checks_built_image():
 def test_research_desk_install_helper_smoke_script_is_local_only():
     repo_root = Path(__file__).resolve().parent.parent
     smoke_script = (repo_root / "deploy" / "research_desk_install_helper_smoke.py").read_text()
+    assert 'REPO_ROOT / ".venv" / "bin" / "python"' in smoke_script
+    assert 'UNCHAINED_DIR / ".venv" / "bin" / "python"' in smoke_script
     assert 'UNCHAINED_RESEARCH_DESK_PACKAGE_URL' in smoke_script
     assert 'UNCHAINED_ALLOW_LOCAL_RESEARCH_DESK_PACKAGE_URL' in smoke_script
     assert 'PYTHONUSERBASE' in smoke_script

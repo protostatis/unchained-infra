@@ -17,6 +17,14 @@ class MCPError(RuntimeError):
     """Raised when an MCP request fails."""
 
 
+@dataclass
+class AgentDiscoveryResult:
+    agent_id: Optional[str]
+    status: str
+    error: str
+    agents_endpoint: str
+
+
 def parse_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -72,23 +80,70 @@ def extract_first_agent_id(payload: Any) -> Optional[str]:
     return None
 
 
-def fetch_agent_id(api_key: str, endpoint: str, timeout: int) -> Optional[str]:
+def discover_agent_id(api_key: str, endpoint: str, timeout: int) -> AgentDiscoveryResult:
+    agents_endpoint = infer_agents_endpoint(endpoint)
     request = urllib.request.Request(
-        infer_agents_endpoint(endpoint),
+        agents_endpoint,
         method="GET",
         headers={"Authorization": f"Bearer {api_key}"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", "replace")
-    except Exception:
-        return None
+    except urllib.error.HTTPError as exc:
+        reason = str(getattr(exc, "reason", "") or "").strip()
+        detail = f"HTTP {exc.code}"
+        if reason:
+            detail += f" {reason}"
+        return AgentDiscoveryResult(
+            agent_id=None,
+            status="error",
+            error=detail,
+            agents_endpoint=agents_endpoint,
+        )
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        return AgentDiscoveryResult(
+            agent_id=None,
+            status="error",
+            error=str(reason),
+            agents_endpoint=agents_endpoint,
+        )
+    except Exception as exc:
+        return AgentDiscoveryResult(
+            agent_id=None,
+            status="error",
+            error=str(exc),
+            agents_endpoint=agents_endpoint,
+        )
 
     try:
         payload = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    return extract_first_agent_id(payload)
+    except json.JSONDecodeError as exc:
+        return AgentDiscoveryResult(
+            agent_id=None,
+            status="error",
+            error=f"invalid JSON: {exc.msg}",
+            agents_endpoint=agents_endpoint,
+        )
+    agent_id = extract_first_agent_id(payload)
+    if not agent_id:
+        return AgentDiscoveryResult(
+            agent_id=None,
+            status="missing",
+            error="",
+            agents_endpoint=agents_endpoint,
+        )
+    return AgentDiscoveryResult(
+        agent_id=agent_id,
+        status="auto-discovered",
+        error="",
+        agents_endpoint=agents_endpoint,
+    )
+
+
+def fetch_agent_id(api_key: str, endpoint: str, timeout: int) -> Optional[str]:
+    return discover_agent_id(api_key, endpoint, timeout).agent_id
 
 
 @dataclass
@@ -97,6 +152,9 @@ class ResolvedCredentials:
     agent_id: Optional[str]
     endpoint: str
     source: str
+    agents_endpoint: str = ""
+    agent_resolution: str = "missing"
+    agent_resolution_error: str = ""
 
 
 def resolve_credentials(
@@ -109,6 +167,9 @@ def resolve_credentials(
     resolved_api_key = api_key or os.environ.get("UNCHAINED_API_KEY") or env_file_values.get("UNCHAINED_API_KEY")
     resolved_agent_id = agent_id or os.environ.get("UNCHAINED_AGENT_ID") or env_file_values.get("UNCHAINED_AGENT_ID")
     source = "flags"
+    agents_endpoint = infer_agents_endpoint(endpoint)
+    agent_resolution = "provided" if resolved_agent_id else "missing"
+    agent_resolution_error = ""
 
     if not api_key and os.environ.get("UNCHAINED_API_KEY"):
         source = "env"
@@ -116,16 +177,21 @@ def resolve_credentials(
         source = "agent-env-file"
 
     if resolved_api_key and not resolved_agent_id:
-        discovered = fetch_agent_id(resolved_api_key, endpoint=endpoint, timeout=timeout)
-        if discovered:
-            resolved_agent_id = discovered
-            source = "auto-discovered-agent"
+        discovered = discover_agent_id(resolved_api_key, endpoint=endpoint, timeout=timeout)
+        agents_endpoint = discovered.agents_endpoint
+        agent_resolution = discovered.status
+        agent_resolution_error = discovered.error
+        if discovered.agent_id:
+            resolved_agent_id = discovered.agent_id
 
     return ResolvedCredentials(
         api_key=resolved_api_key,
         agent_id=resolved_agent_id,
         endpoint=endpoint,
         source=source,
+        agents_endpoint=agents_endpoint,
+        agent_resolution=agent_resolution,
+        agent_resolution_error=agent_resolution_error,
     )
 
 

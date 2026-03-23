@@ -25,7 +25,14 @@ from .lab_agent import (
 )
 from .lab_session import discover_pyreplab_bin, get_session
 from .reload_control import is_reload_paused, set_reload_paused
-from .mcp_client import DEFAULT_AGENT_ENV_PATH, DEFAULT_ENDPOINT, infer_api_base, parse_env_file, resolve_credentials
+from .mcp_client import (
+    DEFAULT_AGENT_ENV_PATH,
+    DEFAULT_ENDPOINT,
+    infer_agents_endpoint,
+    infer_api_base,
+    parse_env_file,
+    resolve_credentials,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CAPSULES_ROOT = REPO_ROOT / "capsules"
@@ -2876,6 +2883,16 @@ def _research_desk_status_payload() -> dict[str, Any]:
         os.environ.get("UNCHAINED_AGENT_ID", "").strip()
         or str(env_values.get("UNCHAINED_AGENT_ID", "")).strip()
     )
+    agents_endpoint = infer_agents_endpoint(endpoint)
+    credential_source = "missing"
+    if os.environ.get("UNCHAINED_API_KEY") or os.environ.get("UNCHAINED_AGENT_ID"):
+        credential_source = "env"
+    elif env_values.get("UNCHAINED_API_KEY") or env_values.get("UNCHAINED_AGENT_ID"):
+        credential_source = "agent-env-file"
+    elif api_key:
+        credential_source = "config"
+    agent_resolution = "provided" if agent_id else "missing"
+    agent_resolution_error = ""
     # Do not pin the browser-side agent to a stale setup snapshot. If live
     # credential resolution is slow or unavailable, fall back to the local
     # client env values instead of failing the status endpoint.
@@ -2886,11 +2903,21 @@ def _research_desk_status_payload() -> dict[str, Any]:
             endpoint=endpoint,
             timeout=3,
         )
-    except Exception:
+    except Exception as exc:
         resolved = None
+        if api_key and not agent_id:
+            agent_resolution = "error"
+            agent_resolution_error = str(exc)
     if resolved is not None:
         api_key = str(resolved.api_key or api_key or "").strip()
         agent_id = str(resolved.agent_id or agent_id or "").strip()
+        agents_endpoint = str(resolved.agents_endpoint or agents_endpoint).strip() or agents_endpoint
+        resolved_source = str(resolved.source or credential_source).strip() or credential_source
+        if credential_source == "config" and resolved_source == "flags":
+            resolved_source = "config"
+        credential_source = resolved_source
+        agent_resolution = str(resolved.agent_resolution or agent_resolution).strip() or agent_resolution
+        agent_resolution_error = str(resolved.agent_resolution_error or "").strip()
     pyreplab_bin = (
         os.environ.get("PYREPLAB_BIN", "").strip()
         or str(config.get("pyreplab_bin", "")).strip()
@@ -2935,8 +2962,12 @@ def _research_desk_status_payload() -> dict[str, Any]:
         },
         "bridge": {
             "mcp_endpoint": endpoint,
+            "agents_endpoint": agents_endpoint,
             "agent_id": agent_id,
             "api_key_present": bool(api_key),
+            "credential_source": credential_source,
+            "agent_resolution": agent_resolution,
+            "agent_resolution_error": agent_resolution_error,
             "agent_env_path": str(DEFAULT_AGENT_ENV_PATH),
         },
         "hosted": {

@@ -35,8 +35,10 @@ from .mcp_client import (
     MCPClient,
     MCPError,
     extract_text,
+    infer_agents_endpoint,
     parse_env_file,
     parse_json_if_possible,
+    ResolvedCredentials,
     resolve_credentials,
 )
 from .planning import (
@@ -1055,7 +1057,7 @@ def _browser_setup_status(endpoint: str, timeout: int) -> dict[str, Any]:
     installed = DEFAULT_AGENT_ENV_PATH.exists() and bool(env_values.get("UNCHAINED_API_KEY"))
     resolved = resolve_credentials(
         api_key=None,
-        agent_id=_preferred_agent_id(),
+        agent_id=None,
         endpoint=endpoint,
         timeout=timeout,
     )
@@ -3849,16 +3851,12 @@ def capture_page(
 def cmd_doctor(args: argparse.Namespace) -> int:
     resolved = resolve_credentials(
         api_key=args.api_key,
-        agent_id=_preferred_agent_id(explicit=args.agent_id or ""),
+        agent_id=(args.agent_id or None),
         endpoint=args.endpoint,
         timeout=args.timeout,
     )
     pyreplab_bin = discover_pyreplab_bin()
-    print(f"repo_root={REPO_ROOT}")
-    print(f"endpoint={resolved.endpoint}")
-    print(f"api_key={'set' if resolved.api_key else 'missing'}")
-    print(f"agent_id={resolved.agent_id or 'missing'}")
-    print(f"credential_source={resolved.source}")
+    _print_mcp_status(resolved, include_repo_root=True)
     print(f"pyreplab_bin={pyreplab_bin or 'missing'}")
 
     if not args.ping:
@@ -3875,6 +3873,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print(f"mcp_session_id={client.session_id}")
     print(f"tool_count={len(tools)}")
     print(f"tools={','.join(tools)}")
+    return 0
+
+
+def _print_mcp_status(resolved: ResolvedCredentials, *, include_repo_root: bool = False) -> None:
+    if include_repo_root:
+        print(f"repo_root={REPO_ROOT}")
+    print(f"endpoint={resolved.endpoint}")
+    print(f"agents_endpoint={resolved.agents_endpoint or infer_agents_endpoint(resolved.endpoint)}")
+    print(f"api_key={'set' if resolved.api_key else 'missing'}")
+    print(f"agent_id={resolved.agent_id or 'missing'}")
+    print(f"credential_source={resolved.source}")
+    print(f"agent_resolution={resolved.agent_resolution}")
+    if resolved.agent_resolution_error:
+        print(f"agent_resolution_error={resolved.agent_resolution_error}")
+
+
+def cmd_mcp_status(args: argparse.Namespace) -> int:
+    resolved = resolve_credentials(
+        api_key=args.api_key,
+        agent_id=(args.agent_id or None),
+        endpoint=args.endpoint,
+        timeout=args.timeout,
+    )
+    _print_mcp_status(resolved)
     return 0
 
 
@@ -4546,6 +4568,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--ping", action="store_true")
     doctor.add_argument("--debug", action="store_true")
     doctor.set_defaults(func=cmd_doctor)
+
+    mcp_status = subparsers.add_parser("mcp-status", help="Report MCP credential and agent discovery status")
+    mcp_status.add_argument("--endpoint", default=os.environ.get("UNCHAINED_MCP_ENDPOINT", DEFAULT_ENDPOINT))
+    mcp_status.add_argument("--api-key")
+    mcp_status.add_argument("--agent-id")
+    mcp_status.add_argument("--timeout", type=int, default=45)
+    mcp_status.set_defaults(func=cmd_mcp_status)
 
     bridge_start = subparsers.add_parser("bridge-start", help="Start an isolated Unchained browser bridge")
     bridge_start.add_argument("--bridge-dir", help="Path to unchained-infra/unchained")

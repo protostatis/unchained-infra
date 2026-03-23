@@ -82,9 +82,13 @@ def _pick_local_package_port() -> int:
 
 
 def _smoke_helper_python() -> str:
-    repo_venv_python = UNCHAINED_DIR / ".venv" / "bin" / "python"
-    if repo_venv_python.is_file() and os.access(repo_venv_python, os.X_OK):
-        return str(repo_venv_python)
+    candidates = [
+        REPO_ROOT / ".venv" / "bin" / "python",
+        UNCHAINED_DIR / ".venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return sys.executable
 
 
