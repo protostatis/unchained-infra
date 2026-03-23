@@ -212,9 +212,24 @@ docker compose build
 EOF
 fi
 
-# Staged restart: bring up backend services first, then MCP last to minimize
-# its downtime. Health checks in docker-compose.yml ensure each layer is ready
-# before the next starts.
+# Staged restart: bring up backend services first, then MCP and dependents
+# second. docker-compose.yml health checks + depends_on conditions gate
+# startup ordering — MCP won't start until relay and private-core are healthy.
+#
+# Verify the hard-coded service lists match docker-compose.yml.
+echo "==> Verifying service list matches docker-compose.yml..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+actual=$(docker compose config --services | sort)
+expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent web)
+if [ "$actual" != "$expected" ]; then
+    diff <(echo "$expected") <(echo "$actual") >&2 || true
+    echo "ERROR: docker-compose.yml services changed — update staged lists in deploy.sh" >&2
+    exit 1
+fi
+EOF
+
 echo "==> Restarting backend services (relay, private-core)..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
@@ -222,71 +237,14 @@ cd "$1"
 docker compose up -d --no-deps relay private-core
 EOF
 
-echo "==> Waiting for backend health checks..."
-remote_bash "$REMOTE_DIR" <<'HEALTHEOF'
-set -euo pipefail
-cd "$1"
-# Wait up to 30s for relay and private-core to be healthy
-for svc in relay private-core; do
-    for i in $(seq 1 30); do
-        cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
-        if [ -z "$cid" ]; then sleep 1; continue; fi
-        status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "missing")
-        if [ "$status" = "healthy" ]; then
-            echo "    $svc is healthy"
-            break
-        fi
-        if [ "$i" -eq 30 ]; then
-            echo "WARNING: $svc did not become healthy in 30s (status: $status), continuing anyway"
-            break
-        fi
-        sleep 1
-    done
-done
-HEALTHEOF
-
-# Staged service lists — update if docker-compose.yml adds new services.
-# The assertion below will fail loudly if they drift.
-STAGED_SERVICES="caddy mcp private-core relay scheduler trial-agent web"
-echo "==> Verifying service list matches docker-compose.yml..."
-remote_bash "$REMOTE_DIR" "$STAGED_SERVICES" <<'EOF'
-set -euo pipefail
-cd "$1"
-actual=$(docker compose config --services | sort | tr '\n' ' ' | sed 's/ $//')
-expected="$2"
-if [ "$actual" != "$expected" ]; then
-    echo "ERROR: docker-compose.yml services ($actual) differ from deploy.sh ($expected)" >&2
-    echo "Update STAGED_SERVICES in deploy.sh to match." >&2
-    exit 1
-fi
-EOF
-
+# Let compose handle health-check gating: MCP depends_on relay/private-core
+# with condition: service_healthy, so it will wait for backends automatically.
 echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
-docker compose up -d --no-deps web mcp scheduler trial-agent
+docker compose up -d web mcp scheduler trial-agent
 EOF
-
-echo "==> Waiting for MCP health check..."
-remote_bash "$REMOTE_DIR" <<'HEALTHEOF'
-set -euo pipefail
-cd "$1"
-for i in $(seq 1 30); do
-    cid=$(docker compose ps -q mcp 2>/dev/null | head -1)
-    if [ -z "$cid" ]; then sleep 1; continue; fi
-    status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo "missing")
-    if [ "$status" = "healthy" ]; then
-        echo "    MCP is healthy"
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "WARNING: MCP did not become healthy in 30s (status: $status)"
-        break
-    fi
-    sleep 1
-done
-HEALTHEOF
 
 # Refresh Caddy after upstream containers are recreated.
 # This avoids stale/no-such-host upstream resolution windows after deploys.
