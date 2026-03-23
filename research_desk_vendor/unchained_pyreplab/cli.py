@@ -3926,7 +3926,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "pyreplab_bin": pyreplab_bin,
         "agent_env_path": browser["agent_env_path"],
         "agent_install_dir": browser["agent_install_dir"],
-        "agent_id": browser["agent_id"],
         "browser_agent_installed": browser["installed"],
         "browser_agent_running": browser["running"],
         "browser_bridge_mode": "isolated",

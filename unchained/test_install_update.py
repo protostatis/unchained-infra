@@ -537,6 +537,19 @@ def test_research_desk_vendor_versions_are_kept_in_sync():
     assert pyproject_version.group(1) == setup_version.group(1) == manifest_version.group(1)
 
 
+def test_vendor_cli_setup_does_not_persist_agent_id_snapshot():
+    repo_root = Path(__file__).resolve().parent.parent
+    cli_text = (repo_root / "research_desk_vendor" / "unchained_pyreplab" / "cli.py").read_text(encoding="utf-8")
+    assert '"agent_id": browser["agent_id"]' not in cli_text
+
+
+def test_vendor_webapp_status_ignores_saved_config_agent_id():
+    repo_root = Path(__file__).resolve().parent.parent
+    webapp_text = (repo_root / "research_desk_vendor" / "unchained_pyreplab" / "webapp.py").read_text(encoding="utf-8")
+    assert 'config.get("agent_id"' not in webapp_text
+    assert "resolve_credentials(" in webapp_text
+
+
 def test_research_desk_zip_installs_with_system_pip_metadata():
     from agent_package import build_research_desk_zip
 
