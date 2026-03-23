@@ -12574,7 +12574,29 @@ async function startProvision() {
     });
     const data = await r.json();
 
-    if (data.status === 'success' && data.key_preview) {
+    if (data.status === 'cooldown' && data.remaining_s > 0) {
+      // Disable button and show countdown until cooldown expires.
+      // Clear any existing countdown timer to avoid leaks on re-click.
+      if (btn._cdTimer) { clearInterval(btn._cdTimer); btn._cdTimer = null; }
+      let secs = Math.max(1, data.remaining_s);
+      statusEl.className = 'provision-status error';
+      statusEl.textContent = 'Please wait ' + secs + 's before provisioning again.';
+      showToast('Cooldown active — wait ' + secs + 's', true);
+      btn.disabled = true;
+      btn._cdTimer = setInterval(() => {
+        secs--;
+        if (secs <= 0) {
+          clearInterval(btn._cdTimer);
+          btn._cdTimer = null;
+          statusEl.className = 'provision-status';
+          statusEl.textContent = 'Ready to provision.';
+          btn.disabled = (selectedProvider === 'codex-cli') ? false : !selectedProfile;
+        } else {
+          statusEl.textContent = 'Please wait ' + secs + 's before provisioning again.';
+        }
+      }, 1000);
+      return;
+    } else if (data.status === 'success' && data.key_preview) {
       statusEl.className = 'provision-status done';
       statusEl.innerHTML = 'Key provisioned: <code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px">' + escHtml(data.key_preview) + '</code><br>' +
         'Store this key to power your ' + escHtml(pLabel) + ' chat sessions?' +
@@ -12601,8 +12623,8 @@ async function startProvision() {
       showToast('ToS required', true);
     } else {
       statusEl.className = 'provision-status error';
-      statusEl.textContent = data.message || 'Provisioning failed.';
-      showToast(data.message || 'Provisioning failed', true);
+      statusEl.textContent = data.message || data.error || 'Provisioning failed.';
+      showToast(data.message || data.error || 'Provisioning failed', true);
     }
   } catch(e) {
     statusEl.className = 'provision-status error';

@@ -137,7 +137,11 @@ async def handle_provision_start(request: web.Request) -> web.Response:
             meta={"remaining_s": remaining},
         )
         return web.json_response(
-            {"error": f"Please wait {remaining}s before starting another provision."},
+            {
+                "error": f"Please wait {remaining}s before starting another provision.",
+                "status": "cooldown",
+                "remaining_s": max(remaining, 1),
+            },
             status=429,
         )
 
@@ -524,6 +528,7 @@ async def handle_provision_revoke(request: web.Request) -> web.Response:
     revoked = signup_agent.revoke_provider_key(user_id, provider)
 
     core._terminate_provider_agent(provider, auth_info["key_hash"])
+    core._provision_cooldowns.pop(user_id, None)
 
     core._track_event(
         request,
