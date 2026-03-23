@@ -7,15 +7,15 @@
     "unchained_pyreplab/__main__.py": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b",
     "unchained_pyreplab/analysis_runtime.py": "0a6e74d743a3319b91bb11e31e4ad294f715e341fd76ded4744ee2d4e9afed3a",
     "unchained_pyreplab/capsule_runtime.py": "760c1f5318e07cd61fa2552b9854458422d0c16d901f81904136337efe41ef7c",
-    "unchained_pyreplab/cli.py": "93aed1dd2e9a1c777550a1bd7963c2b89484a61620e897098fa2b91ff664ed07",
+    "unchained_pyreplab/cli.py": "38066bfa4f14a6122a33c5c355fbf388d3d3781fb9939c3b30e29059edcccb35",
     "unchained_pyreplab/codex_adapter.py": "a5c44089a06c39e0c6919a8fd2988e8d4cfca5e14753c708fc898aab373eff87",
     "unchained_pyreplab/lab_agent.py": "dc6dd94fbf54416ea44ca085423f20ff040a003ba9b9d78a50ecdd1a04b4f1b4",
     "unchained_pyreplab/lab_session.py": "d592d65b057a96e8e6e63596128499118c37c87e8622da33cacf81a3b9a41900",
-    "unchained_pyreplab/mcp_client.py": "0389a05ab20026d433ebc7bc98c6a59ce0a23c3ea9c06acc2a3ecaad2745f881",
+    "unchained_pyreplab/mcp_client.py": "af3b2e1dc44df2209e64ae3892a3b473cabcc68502b2a1965e60810026c162a2",
     "unchained_pyreplab/planning.py": "2e1210d5a9fca619a8ad998c78a3265cda4658082fa36aa4378389565b35731a",
     "unchained_pyreplab/reload_control.py": "8b293f9a7db376405a6b56c82ffb8cfe38ab10e45f10d69c62f8d992063faa66",
     "unchained_pyreplab/scoring.py": "b568d3d920c5fe4d4ae098a21be2a2f18da18c481935663a89792a56a8e9584c",
-    "unchained_pyreplab/webapp.py": "de4f9de8123c2e1d2c6ee4f9028dac4905cafe1b33390b005f73a23f098a5c24"
+    "unchained_pyreplab/webapp.py": "05bd2e74d33b2c274ae1cc78feb3845c0ccae1701cc29e39869eacffa762b2b3"
   },
   "version": "0.1.0"
 }
