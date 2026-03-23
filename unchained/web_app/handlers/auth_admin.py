@@ -117,21 +117,25 @@ def _set_facebook_oauth_cookie(
     name: str,
     value: str,
 ) -> None:
-    response.set_cookie(
-        name,
-        value,
-        max_age=_FACEBOOK_OAUTH_MAX_AGE,
-        httponly=True,
-        secure=core._cookie_secure(request),
-        samesite="Lax",
-        path="/",
-    )
+    kwargs = {
+        "max_age": _FACEBOOK_OAUTH_MAX_AGE,
+        "httponly": True,
+        "secure": core._cookie_secure(request),
+        "samesite": "Lax",
+        "path": "/",
+    }
+    domain = core._cookie_domain(request)
+    if domain:
+        kwargs["domain"] = domain
+    response.set_cookie(name, value, **kwargs)
 
 
-def _clear_facebook_oauth_cookies(response: web.StreamResponse) -> None:
-    response.del_cookie(_FACEBOOK_OAUTH_STATE_COOKIE, path="/")
-    response.del_cookie(_FACEBOOK_OAUTH_SOURCE_COOKIE, path="/")
-    response.del_cookie(_FACEBOOK_OAUTH_NEXT_COOKIE, path="/")
+def _clear_facebook_oauth_cookies(response: web.StreamResponse, request: web.Request | None = None) -> None:
+    domain = _core()._cookie_domain(request) if request else None
+    for cookie in (_FACEBOOK_OAUTH_STATE_COOKIE, _FACEBOOK_OAUTH_SOURCE_COOKIE, _FACEBOOK_OAUTH_NEXT_COOKIE):
+        response.del_cookie(cookie, path="/")
+        if domain:
+            response.del_cookie(cookie, path="/", domain=domain)
 
 
 def _set_github_oauth_cookie(
@@ -141,21 +145,25 @@ def _set_github_oauth_cookie(
     name: str,
     value: str,
 ) -> None:
-    response.set_cookie(
-        name,
-        value,
-        max_age=_GITHUB_OAUTH_MAX_AGE,
-        httponly=True,
-        secure=core._cookie_secure(request),
-        samesite="Lax",
-        path="/",
-    )
+    kwargs = {
+        "max_age": _GITHUB_OAUTH_MAX_AGE,
+        "httponly": True,
+        "secure": core._cookie_secure(request),
+        "samesite": "Lax",
+        "path": "/",
+    }
+    domain = core._cookie_domain(request)
+    if domain:
+        kwargs["domain"] = domain
+    response.set_cookie(name, value, **kwargs)
 
 
-def _clear_github_oauth_cookies(response: web.StreamResponse) -> None:
-    response.del_cookie(_GITHUB_OAUTH_STATE_COOKIE, path="/")
-    response.del_cookie(_GITHUB_OAUTH_SOURCE_COOKIE, path="/")
-    response.del_cookie(_GITHUB_OAUTH_NEXT_COOKIE, path="/")
+def _clear_github_oauth_cookies(response: web.StreamResponse, request: web.Request | None = None) -> None:
+    domain = _core()._cookie_domain(request) if request else None
+    for cookie in (_GITHUB_OAUTH_STATE_COOKIE, _GITHUB_OAUTH_SOURCE_COOKIE, _GITHUB_OAUTH_NEXT_COOKIE):
+        response.del_cookie(cookie, path="/")
+        if domain:
+            response.del_cookie(cookie, path="/", domain=domain)
 
 
 async def handle_google_auth(request: web.Request) -> web.Response:
@@ -505,7 +513,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
             auth_pending="1" if pending else "",
         )
         resp = web.HTTPFound(location)
-        _clear_facebook_oauth_cookies(resp)
+        _clear_facebook_oauth_cookies(resp, request)
         return resp
 
     if not app_id or not app_secret:
@@ -872,7 +880,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
             auth_pending="1" if pending else "",
         )
         resp = web.HTTPFound(location)
-        _clear_github_oauth_cookies(resp)
+        _clear_github_oauth_cookies(resp, request)
         return resp
 
     if not client_id or not client_secret:
