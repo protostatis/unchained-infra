@@ -483,6 +483,7 @@ def _write_prov_state(slot: str, prov: dict):
         "copy_mode": prov.get("copy_mode", ""),
         "launched_at": prov.get("launched_at", time.time()),
         "ready": bool(prov.get("ready", True)),
+        "agent_id": prov.get("agent_id", ""),
     }
     tmp_path = f"{_prov_state_path(slot)}.tmp.{os.getpid()}"
     with open(tmp_path, "w") as f:
@@ -732,7 +733,11 @@ class Agent:
         self._last_prov_reconcile_ts = 0.0
 
     def _reconcile_prov_chromes(self, force: bool = False):
-        """Reload persisted provision slots and prune stale metadata."""
+        """Reload persisted provision slots and prune stale metadata.
+
+        Only adopts slots whose persisted ``agent_id`` matches this agent
+        (or slots written before agent_id tracking was added).
+        """
         if not force and not self.running:
             return
         now_mono = time.monotonic()
@@ -740,10 +745,38 @@ class Agent:
             return
         self._last_prov_reconcile_ts = now_mono
         now_wall = time.time()
+        my_id = self.agent_id or ""
+        if not my_id:
+            # agent_id not yet populated (e.g. reconnecting before auth).
+            # Fall back to legacy adopt-all behavior to avoid leaking our
+            # own slots from a prior run.
+            print("[agent:prov] Warning: agent_id not set during reconcile — adopting all slots")
         for slot in _list_prov_state_slots():
             state = _read_prov_state(slot)
             if not state:
                 _remove_prov_state(slot)
+                continue
+            # Skip slots belonging to a different agent.  Legacy slots
+            # (empty agent_id) are adopted by any agent for backward compat.
+            # When my_id is empty we also adopt everything (see warning above).
+            # For foreign slots we still prune dead-PID state files and their
+            # temp dirs to prevent accumulation from crashed agents.  There is
+            # a negligible TOCTOU window where a foreign agent could restart
+            # Chrome between the PID check and the prune — acceptable.
+            slot_agent = state.get("agent_id", "")
+            is_foreign = bool(my_id and slot_agent and slot_agent != my_id)
+            if is_foreign:
+                pid = int(state.get("pid") or 0)
+                temp_dir = state.get("temp_dir", "")
+                port = int(state.get("port") or 0)
+                if pid <= 0 or _classify_prov_pid(pid, temp_dir, port) != "alive":
+                    if temp_dir and os.path.isdir(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            print(f"[agent:prov] Pruned orphan temp dir {temp_dir} (foreign slot {slot})")
+                        except Exception:
+                            pass
+                    _remove_prov_state(slot)
                 continue
             pid = int(state.get("pid") or 0)
             port = int(state.get("port") or 0)
@@ -1176,8 +1209,18 @@ class Agent:
             prov_port = prov["port"]
             url = f"http://127.0.0.1:{prov_port}/json"
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                tabs = json.loads(resp.read())
+            try:
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs = json.loads(resp.read())
+            except (urllib.error.URLError, OSError):
+                # Provisioned Chrome is no longer running — clean up stale slot.
+                self._prov_chromes.pop(slot or next(iter(self._prov_chromes), ""), None)
+                if slot:
+                    _remove_prov_state(slot)
+                raise RuntimeError(
+                    f"Provisioned Chrome (slot '{slot}') is no longer running. "
+                    f"Re-provision with cdp_provision_launch to continue."
+                )
             page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
             if real_id == "auto":
                 # Reuse existing lease for this channel
@@ -1396,6 +1439,7 @@ class Agent:
             "copy_mode": copy_mode,
             "launched_at": time.time(),
             "ready": False,
+            "agent_id": self.agent_id or "",
         }
         try:
             _write_prov_state(slot, prov_state)
@@ -1585,7 +1629,11 @@ class Agent:
             _remove_prov_state(slot)
 
     def _cleanup_all_prov_chromes(self, include_persisted: bool = False):
-        """Kill all provision Chromes and clean up temp dirs."""
+        """Kill all provision Chromes owned by this agent and clean up temp dirs.
+
+        Agent isolation depends on _reconcile_prov_chromes filtering out slots
+        belonging to other agents before they enter self._prov_chromes.
+        """
         if include_persisted:
             self._reconcile_prov_chromes(force=True)
         for slot in list(self._prov_chromes):
