@@ -10,6 +10,10 @@ Validates that:
 
 Run:
     python3 test_provision_agent_isolation.py
+
+Note: tests write to the real PROVISION_STATE_DIR (~/.unchained/provision_slots/).
+Slot names are random (os.urandom) so collisions are extremely unlikely, but
+these tests must run serially — not under pytest-xdist or similar parallel runners.
 """
 from __future__ import annotations
 
@@ -87,7 +91,7 @@ class TestReconcileSkipsOtherAgents(unittest.TestCase):
         slot_b = _unique_slot()
         try:
             _write_prov_state(slot_b, {
-                "pid": 99999,  # non-existent PID — will be classified as dead
+                "pid": 99999,  # non-existent PID — reconcile prunes dead foreign slots
                 "port": 19333,
                 "temp_dir": "/tmp/nonexistent",
                 "agent_id": "agent-b",
