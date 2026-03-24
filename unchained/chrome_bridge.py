@@ -1629,9 +1629,25 @@ class Agent:
 
         cleaned = 0
         if slot:
-            # Specific slot requested — clean only that one (no-op if already gone)
-            prov = self._prov_chromes.pop(slot, None)
+            # Specific slot requested — clean only that one.
+            # If caller_tag is set, verify ownership before cleaning.
+            prov = self._prov_chromes.get(slot)
             if prov:
+                if caller_tag:
+                    slot_tag = prov.get("caller_tag", "")
+                    if not slot_tag:
+                        state = _read_prov_state(slot)
+                        slot_tag = state.get("caller_tag", "") if state else ""
+                    if slot_tag and slot_tag != caller_tag:
+                        # Slot belongs to a different caller — refuse cleanup
+                        await self.ws.send(json.dumps({
+                            "type": "http_response",
+                            "req_id": req_id,
+                            "status": 403,
+                            "body": {"error": f"Slot {slot} belongs to a different caller"},
+                        }))
+                        return
+                self._prov_chromes.pop(slot, None)
                 self._cleanup_single_prov(prov, slot=slot)
                 cleaned = 1
         elif caller_tag:
