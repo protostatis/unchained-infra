@@ -28,6 +28,8 @@ OP_SET_FILE = "set_file"
 OP_WAIT_READY = "wait_ready"
 OP_SET_TAB_ALIAS = "set_tab_alias"
 OP_LIST_TAB_ALIASES = "list_tab_aliases"
+OP_RUN_JS_IN_FRAME = "run_js_in_frame"
+OP_LIST_FRAMES = "list_frames"
 
 PRIVATE_CORE_OPS = {
     OP_RUN_DDM,
@@ -53,6 +55,8 @@ PRIVATE_CORE_OPS = {
     OP_WAIT_READY,
     OP_SET_TAB_ALIAS,
     OP_LIST_TAB_ALIASES,
+    OP_RUN_JS_IN_FRAME,
+    OP_LIST_FRAMES,
 }
 
 DEFAULT_PRIVATE_CORE_PORT = 8770
