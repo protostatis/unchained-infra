@@ -387,6 +387,38 @@ async def js_eval(expression: str,
 
 
 @mcp.tool()
+async def js_eval_frame(frame_id: str, expression: str,
+                        tab_id: str = "auto", agent_id: str = "") -> str:
+    """Execute JavaScript inside an iframe's context.
+
+    Use list_frames first to find frame IDs. frame_id can be:
+    - An index like "0", "1" (from list_frames output)
+    - A raw CDP frameId string
+
+    This enables interaction with cross-origin iframes that can't be
+    accessed from the main page's JavaScript context (e.g. ProtonMail
+    signup forms, embedded payment widgets, challenge iframes).
+
+    Example — read input value from first iframe:
+      js_eval_frame(frame_id="0", expression="document.querySelector('input')?.value")
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.run_js_in_frame(aid, tab_id, frame_id, expression)
+
+
+@mcp.tool()
+async def cdp_list_frames(tab_id: str = "auto", agent_id: str = "") -> str:
+    """List all iframes on the page with their frame IDs and URLs.
+
+    Use this when you see iframes in DDM output and need to interact
+    with content inside them. Returns frame indices that can be passed
+    to js_eval_frame.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.list_frames(aid, tab_id)
+
+
+@mcp.tool()
 async def cdp_screenshot(tab_id: str = "auto", agent_id: str = "") -> Image:
     """Take a screenshot of the current page.
 

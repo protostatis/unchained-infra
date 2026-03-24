@@ -47,6 +47,8 @@ OP_LIST_TAB_ALIASES = _safe_import_op("OP_LIST_TAB_ALIASES", "list_tab_aliases")
 OP_SET_COOKIES = _safe_import_op("OP_SET_COOKIES", "set_cookies")
 OP_GET_COOKIES = _safe_import_op("OP_GET_COOKIES", "get_cookies")
 OP_PROVISION_STATUS = _safe_import_op("OP_PROVISION_STATUS", "provision_status")
+OP_RUN_JS_IN_FRAME = _safe_import_op("OP_RUN_JS_IN_FRAME", "run_js_in_frame")
+OP_LIST_FRAMES = _safe_import_op("OP_LIST_FRAMES", "list_frames")
 
 
 class PrivateCoreError(RuntimeError):
@@ -158,6 +160,8 @@ class PrivateCoreClient:
             (OP_LIST_TAB_ALIASES, "list_tab_aliases"),
             (OP_SET_COOKIES, "set_cookies"),
             (OP_GET_COOKIES, "get_cookies"),
+            (OP_RUN_JS_IN_FRAME, "run_js_in_frame"),
+            (OP_LIST_FRAMES, "list_frames"),
         ]
         for op_name, fn_name in _optional_ops:
             fn = getattr(engine, fn_name, None)
@@ -400,6 +404,27 @@ class PrivateCoreClient:
     async def close_tab(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> bool:
         return await self.execute(
             OP_CLOSE_TAB,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def run_js_in_frame(self, agent_id: str, tab_id: str, frame_id: str,
+                              expression: str, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_RUN_JS_IN_FRAME,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            frame_id=frame_id,
+            expression=expression,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def list_frames(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_LIST_FRAMES,
             agent_id=agent_id,
             tab_id=tab_id,
             relay_host=relay_host,
