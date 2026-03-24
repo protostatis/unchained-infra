@@ -9,9 +9,12 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - relay
-      - mcp
-      - web
+      relay:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+      web:
+        condition: service_started
     networks:
       - edge
       - app
@@ -30,6 +33,12 @@ services:
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   private-core:
     build:
@@ -45,6 +54,12 @@ services:
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   mcp:
     build:
@@ -62,11 +77,19 @@ services:
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
     depends_on:
-      - relay
-      - private-core
+      relay:
+        condition: service_healthy
+      private-core:
+        condition: service_healthy
     networks:
       - app
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8766,timeout=2); c.request('GET','/mcp'); r=c.getresponse(); c.close(); assert r.status<500,r.status"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   web:
     build:

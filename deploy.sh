@@ -196,32 +196,63 @@ rm -rf "$backup_dir"
 trap - EXIT
 EOF
 
-# Rebuild and restart
-echo "==> Rebuilding and restarting containers..."
+# Rebuild images (without restarting containers yet)
+echo "==> Building container images..."
 if $FORCE_BUILD; then
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-cd "$remote_dir"
+cd "$1"
 docker compose build --no-cache
-docker compose up -d
 EOF
 else
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-cd "$remote_dir"
-docker compose up -d --build
+cd "$1"
+docker compose build
 EOF
 fi
+
+# Staged restart: bring up backend services first, then MCP and dependents
+# second. docker-compose.yml health checks + depends_on conditions gate
+# startup ordering — MCP won't start until relay and private-core are healthy.
+#
+# Verify the hard-coded service lists match docker-compose.yml.
+echo "==> Verifying service list matches docker-compose.yml..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+actual=$(docker compose config --services | sort)
+expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent web)
+if [ "$actual" != "$expected" ]; then
+    diff <(echo "$expected") <(echo "$actual") >&2 || true
+    echo "ERROR: docker-compose.yml services changed — update staged lists in deploy.sh" >&2
+    exit 1
+fi
+EOF
+
+echo "==> Restarting backend services (relay, private-core)..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose up -d --no-deps relay private-core
+EOF
+
+# Let compose handle health-check gating: MCP depends_on relay/private-core
+# with condition: service_healthy, so it will wait for backends automatically.
+echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose up -d web mcp scheduler trial-agent
+EOF
 
 # Refresh Caddy after upstream containers are recreated.
 # This avoids stale/no-such-host upstream resolution windows after deploys.
 echo "==> Restarting Caddy reverse proxy..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
-remote_dir="$1"
-docker compose -f "$remote_dir/docker-compose.yml" restart caddy
+cd "$1"
+docker compose restart caddy
 EOF
 
 # Show status
