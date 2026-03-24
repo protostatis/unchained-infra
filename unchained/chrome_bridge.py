@@ -1575,6 +1575,7 @@ class Agent:
             "temp_dir": temp_dir,
             "profile_dir_name": profile_dir_name,
             "ready": True,
+            "caller_tag": caller_tag,
         }
         try:
             _write_prov_state(slot, {**prov_state, "ready": True})
@@ -1636,10 +1637,15 @@ class Agent:
         elif caller_tag:
             # Clean only slots matching this caller_tag — leaves other
             # callers' provisioned Chrome instances untouched.
-            matching_slots = [
-                (s, p) for s, p in self._prov_chromes.items()
-                if _read_prov_state(s).get("caller_tag", "") == caller_tag
-            ]
+            matching_slots = []
+            for s, p in self._prov_chromes.items():
+                # Prefer in-memory caller_tag, fall back to disk state
+                slot_tag = p.get("caller_tag", "")
+                if not slot_tag:
+                    state = _read_prov_state(s)
+                    slot_tag = state.get("caller_tag", "") if state else ""
+                if slot_tag == caller_tag:
+                    matching_slots.append((s, p))
             for s, p in matching_slots:
                 self._prov_chromes.pop(s, None)
                 self._cleanup_single_prov(p, slot=s)
