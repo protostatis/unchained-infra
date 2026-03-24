@@ -574,19 +574,22 @@ async def list_connected_agents(agent_id: str = "") -> str:
 
 
 @mcp.tool()
-async def cdp_provision_launch(profile_path: str, agent_id: str = "") -> str:
+async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: bool = False) -> str:
     """Launch a temporary Chrome with a user profile for OAuth or authenticated browsing.
 
     Args:
         profile_path: Absolute path to the Chrome profile directory
             (e.g. "/Users/you/Library/Application Support/Google/Chrome/Profile 5").
         agent_id: Agent to provision on (default: auto-detected).
+        stealth: Inject fingerprint overrides to evade bot detection.
+            Patches navigator.webdriver, outerWidth/outerHeight, WebGL,
+            chrome.runtime, and disables automation-controlled blink features.
 
     Returns the provisioned slot ID and initial tab ID. Use the returned
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
     """
     aid = _resolve_agent(profile=agent_id)
-    result = await cloud_tools.provision_launch(aid, profile_path)
+    result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth)
     if not result or "error" in result:
         err = result.get("error", "Unknown error") if result else "No response"
         return f"Error: {err}"

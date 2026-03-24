@@ -121,6 +121,18 @@ def _build_stealth_js() -> str:
         f':p===0x9246?{r_js}:_gp(p)'
         '}return c};'
     )
+    # outerWidth/outerHeight — CDP-provisioned Chrome reports 0 for these,
+    # which is the #1 bot detection signal for Arkose Labs and similar.
+    # The +85 offset approximates the Chrome toolbar/frame height. The
+    # actual value varies by platform (macOS ~74-79px, Linux ~85px,
+    # Windows ~85px). A fixed offset is imperfect but sufficient to pass
+    # the outerHeight > innerHeight check that bot detectors use.
+    js += (
+        'Object.defineProperty(window,"outerWidth",'
+        '{get:()=>window.innerWidth,configurable:true});'
+        'Object.defineProperty(window,"outerHeight",'
+        '{get:()=>window.innerHeight+85,configurable:true});'
+    )
     # chrome.runtime stub
     js += (
         'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
@@ -1166,6 +1178,61 @@ class Agent:
         })
 
     @staticmethod
+    async def _inject_stealth_provision(prov_port: int, tab_info: dict):
+        """Inject stealth overrides into a provisioned Chrome tab.
+
+        Connects directly to the provisioned Chrome's CDP endpoint (not
+        through the relay) to call Page.addScriptToEvaluateOnNewDocument
+        before the user navigates anywhere.
+        """
+        ws_url = tab_info.get("webSocketDebuggerUrl", "")
+        if not ws_url:
+            tab_id = tab_info.get("id", "")
+            if not tab_id:
+                raise RuntimeError("Tab info has no webSocketDebuggerUrl or id")
+            ws_url = f"ws://127.0.0.1:{prov_port}/devtools/page/{tab_id}"
+
+        chrome_ws = await asyncio.wait_for(
+            websockets.connect(ws_url, max_size=10 * 1024 * 1024),
+            timeout=5,
+        )
+        try:
+            sid = random.randint(2**28, 2**30)
+
+            async def _ws_cdp(method, params=None):
+                nonlocal sid
+                sid += 1
+                msg_id = sid
+                await chrome_ws.send(json.dumps(
+                    {"id": msg_id, "method": method, "params": params or {}}))
+                while True:
+                    raw = await chrome_ws.recv()
+                    msg = json.loads(raw)
+                    if msg.get("id") == msg_id:
+                        if msg.get("error"):
+                            raise RuntimeError(
+                                f"CDP {method} failed: {msg['error']}")
+                        return msg
+
+            stealth_js = _build_stealth_js()
+
+            # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
+            await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
+            # Inject stealth JS into all future navigations
+            await asyncio.wait_for(
+                _ws_cdp("Page.addScriptToEvaluateOnNewDocument",
+                        {"source": stealth_js}),
+                timeout=10,
+            )
+            # Also inject into the currently loaded page
+            await asyncio.wait_for(
+                _ws_cdp("Runtime.evaluate", {"expression": stealth_js}),
+                timeout=10,
+            )
+        finally:
+            await chrome_ws.close()
+
+    @staticmethod
     def _extract_tab_id_from_ws_url(ws_url: str) -> str:
         """Extract Chrome tab ID from ws://host:port/devtools/page/<TAB_ID>.
 
@@ -1331,12 +1398,14 @@ class Agent:
         # Parse profile_path from query string: /provision-launch?profile_path=<encoded>
         profile_path = ""
         copy_mode = "light"
+        stealth = False
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
             params = urllib.parse.parse_qs(qs)
             profile_path = params.get("profile_path", [""])[0]
             copy_mode = (params.get("copy_mode", ["light"])[0] or "light").strip().lower()
+            stealth = params.get("stealth", [""])[0].lower() in ("1", "true", "yes")
         if copy_mode not in {"light", "full"}:
             copy_mode = "light"
 
@@ -1426,9 +1495,12 @@ class Agent:
             "--no-default-browser-check",
             "--disable-extensions",
             "--window-size=1280,900",
-            startup_url,
         ]
-        print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
+        if stealth:
+            cmd.append("--disable-blink-features=AutomationControlled")
+        cmd.append(startup_url)
+        print(f"[agent:prov] Launching provision Chrome on port {prov_port}"
+              f"{' (stealth)' if stealth else ''}...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         prov_state = {
             "port": prov_port,
@@ -1504,6 +1576,14 @@ class Agent:
             _write_prov_state(slot, {**prov_state, "ready": True})
         except Exception as e:
             print(f"[agent:prov] Warning: failed to update ready state for slot {slot}: {e}")
+
+        # Inject stealth fingerprint overrides before any user navigation
+        if stealth:
+            try:
+                await self._inject_stealth_provision(prov_port, first_tab)
+                print(f"[agent:prov] Stealth JS injected into provision slot {slot}")
+            except Exception as e:
+                print(f"[agent:prov] Stealth inject failed (non-fatal): {e}")
 
         prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
         print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
