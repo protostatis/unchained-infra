@@ -17,7 +17,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from chrome_bridge import (
     Agent,
@@ -94,15 +94,14 @@ class TestReconcileSkipsOtherAgents(unittest.TestCase):
         finally:
             _remove_prov_state(slot_b)
 
-    def test_adopts_own_slot(self):
+    @patch("chrome_bridge._classify_prov_pid", return_value="alive")
+    def test_adopts_own_slot(self, _mock_classify):
         """Agent A's reconcile should adopt its own persisted slot (if PID alive)."""
         slot_a = "aa03"
-        # Use current process PID so _classify_prov_pid sees it as alive
-        my_pid = os.getpid()
         tmp = tempfile.mkdtemp(prefix="prov_tmp_")
         try:
             _write_prov_state(slot_a, {
-                "pid": my_pid,
+                "pid": 12345,
                 "port": 19444,
                 "temp_dir": tmp,
                 "agent_id": "agent-a",
@@ -110,23 +109,20 @@ class TestReconcileSkipsOtherAgents(unittest.TestCase):
             })
             agent_a = _make_agent("agent-a")
             agent_a._reconcile_prov_chromes(force=True)
-            # Agent A should have adopted its own slot
-            # (may or may not be present depending on PID classification,
-            #  but it should NOT have been skipped due to agent_id mismatch)
-            # The key assertion: it was not filtered out by agent_id check
+            self.assertIn(slot_a, agent_a._prov_chromes)
         finally:
             _remove_prov_state(slot_a)
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_adopts_legacy_slot_without_agent_id(self):
+    @patch("chrome_bridge._classify_prov_pid", return_value="alive")
+    def test_adopts_legacy_slot_without_agent_id(self, _mock_classify):
         """Slots written before agent_id tracking should be adopted by any agent."""
         slot_legacy = "cc01"
-        my_pid = os.getpid()
         tmp = tempfile.mkdtemp(prefix="prov_tmp_")
         try:
             # Simulate a legacy slot file with no agent_id
             _write_prov_state(slot_legacy, {
-                "pid": my_pid,
+                "pid": 12345,
                 "port": 19555,
                 "temp_dir": tmp,
                 "ready": True,
@@ -142,9 +138,7 @@ class TestReconcileSkipsOtherAgents(unittest.TestCase):
 
             agent_a = _make_agent("agent-a")
             agent_a._reconcile_prov_chromes(force=True)
-            # Legacy slots (no agent_id) should NOT be filtered out
-            # (they may still be pruned for other reasons like PID mismatch,
-            #  but NOT because of agent_id)
+            self.assertIn(slot_legacy, agent_a._prov_chromes)
         finally:
             _remove_prov_state(slot_legacy)
             shutil.rmtree(tmp, ignore_errors=True)

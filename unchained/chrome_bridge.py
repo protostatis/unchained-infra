@@ -751,9 +751,10 @@ class Agent:
             if not state:
                 _remove_prov_state(slot)
                 continue
-            # Skip slots belonging to a different agent.
+            # Skip slots belonging to a different agent.  Legacy slots
+            # (empty agent_id) are adopted by any agent for backward compat.
             slot_agent = state.get("agent_id", "")
-            if slot_agent and my_id and slot_agent != my_id:
+            if slot_agent and slot_agent != my_id:
                 continue
             pid = int(state.get("pid") or 0)
             port = int(state.get("port") or 0)
@@ -1596,7 +1597,11 @@ class Agent:
             _remove_prov_state(slot)
 
     def _cleanup_all_prov_chromes(self, include_persisted: bool = False):
-        """Kill all provision Chromes and clean up temp dirs."""
+        """Kill all provision Chromes owned by this agent and clean up temp dirs.
+
+        Agent isolation depends on _reconcile_prov_chromes filtering out slots
+        belonging to other agents before they enter self._prov_chromes.
+        """
         if include_persisted:
             self._reconcile_prov_chromes(force=True)
         for slot in list(self._prov_chromes):
