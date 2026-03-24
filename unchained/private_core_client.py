@@ -312,13 +312,14 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def provision_launch(self, agent_id: str, profile_path: str, relay_host: str, relay_port: int) -> dict:
+    async def provision_launch(self, agent_id: str, profile_path: str, relay_host: str, relay_port: int, stealth: bool = False) -> dict:
         return await self.execute(
             OP_PROVISION_LAUNCH,
             agent_id=agent_id,
             profile_path=profile_path,
             relay_host=relay_host,
             relay_port=relay_port,
+            stealth=stealth,
         )
 
     async def provision_cleanup(self, agent_id: str, relay_host: str, relay_port: int, slot: str = "") -> dict:

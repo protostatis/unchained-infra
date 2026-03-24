@@ -75,8 +75,8 @@ async def create_tab(agent_id: str, url: str = "about:blank", relay_host: str = 
     return await _client().create_tab(agent_id, url, relay_host, relay_port)
 
 
-async def provision_launch(agent_id: str, profile_path: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> dict:
-    return await _client().provision_launch(agent_id, profile_path, relay_host, relay_port)
+async def provision_launch(agent_id: str, profile_path: str, relay_host: str = "127.0.0.1", relay_port: int = 8765, stealth: bool = False) -> dict:
+    return await _client().provision_launch(agent_id, profile_path, relay_host, relay_port, stealth=stealth)
 
 
 async def provision_cleanup(agent_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765, slot: str = "") -> dict:

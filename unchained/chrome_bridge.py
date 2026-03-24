@@ -121,6 +121,14 @@ def _build_stealth_js() -> str:
         f':p===0x9246?{r_js}:_gp(p)'
         '}return c};'
     )
+    # outerWidth/outerHeight — CDP-provisioned Chrome reports 0 for these,
+    # which is the #1 bot detection signal for Arkose Labs and similar.
+    js += (
+        'Object.defineProperty(window,"outerWidth",'
+        '{get:()=>window.innerWidth,configurable:true});'
+        'Object.defineProperty(window,"outerHeight",'
+        '{get:()=>window.innerHeight+79,configurable:true});'
+    )
     # chrome.runtime stub
     js += (
         'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
@@ -1166,6 +1174,46 @@ class Agent:
         })
 
     @staticmethod
+    async def _inject_stealth_provision(prov_port: int, tab_info: dict):
+        """Inject stealth overrides into a provisioned Chrome tab.
+
+        Connects directly to the provisioned Chrome's CDP endpoint (not
+        through the relay) to call Page.addScriptToEvaluateOnNewDocument
+        before the user navigates anywhere.
+        """
+        ws_url = tab_info.get("webSocketDebuggerUrl", "")
+        if not ws_url:
+            # Construct from tab id
+            tab_id = tab_info.get("id", "")
+            ws_url = f"ws://127.0.0.1:{prov_port}/devtools/page/{tab_id}"
+
+        chrome_ws = await websockets.connect(ws_url, max_size=10 * 1024 * 1024)
+        try:
+            sid = random.randint(2**28, 2**30)
+
+            async def _cdp(method, params=None):
+                nonlocal sid
+                sid += 1
+                await chrome_ws.send(json.dumps(
+                    {"id": sid, "method": method, "params": params or {}}))
+                while True:
+                    raw = await asyncio.wait_for(chrome_ws.recv(), timeout=5)
+                    msg = json.loads(raw)
+                    if msg.get("id") == sid:
+                        return msg
+
+            # Inject stealth JS into all future navigations
+            await _cdp("Page.addScriptToEvaluateOnNewDocument", {
+                "source": _build_stealth_js(),
+            })
+            # Also inject into the currently loaded page
+            await _cdp("Runtime.evaluate", {
+                "expression": _build_stealth_js(),
+            })
+        finally:
+            await chrome_ws.close()
+
+    @staticmethod
     def _extract_tab_id_from_ws_url(ws_url: str) -> str:
         """Extract Chrome tab ID from ws://host:port/devtools/page/<TAB_ID>.
 
@@ -1331,12 +1379,14 @@ class Agent:
         # Parse profile_path from query string: /provision-launch?profile_path=<encoded>
         profile_path = ""
         copy_mode = "light"
+        stealth = False
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
             params = urllib.parse.parse_qs(qs)
             profile_path = params.get("profile_path", [""])[0]
             copy_mode = (params.get("copy_mode", ["light"])[0] or "light").strip().lower()
+            stealth = params.get("stealth", [""])[0].lower() in ("1", "true", "yes")
         if copy_mode not in {"light", "full"}:
             copy_mode = "light"
 
@@ -1426,9 +1476,12 @@ class Agent:
             "--no-default-browser-check",
             "--disable-extensions",
             "--window-size=1280,900",
-            startup_url,
         ]
-        print(f"[agent:prov] Launching provision Chrome on port {prov_port}...")
+        if stealth:
+            cmd.append("--disable-blink-features=AutomationControlled")
+        cmd.append(startup_url)
+        print(f"[agent:prov] Launching provision Chrome on port {prov_port}"
+              f"{' (stealth)' if stealth else ''}...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         prov_state = {
             "port": prov_port,
@@ -1504,6 +1557,14 @@ class Agent:
             _write_prov_state(slot, {**prov_state, "ready": True})
         except Exception as e:
             print(f"[agent:prov] Warning: failed to update ready state for slot {slot}: {e}")
+
+        # Inject stealth fingerprint overrides before any user navigation
+        if stealth:
+            try:
+                await self._inject_stealth_provision(prov_port, first_tab)
+                print(f"[agent:prov] Stealth JS injected into provision slot {slot}")
+            except Exception as e:
+                print(f"[agent:prov] Stealth inject failed (non-fatal): {e}")
 
         prov_tab_id = f"prov-{slot}-{first_tab_id}" if first_tab_id else f"prov-{slot}-auto"
         print(f"[agent:prov] Provision Chrome ready: slot={slot}, port={prov_port}, tab={prov_tab_id}")
