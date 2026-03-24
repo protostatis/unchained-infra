@@ -11,7 +11,6 @@ Run:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -147,9 +146,30 @@ class TestReconcileSkipsOtherAgents(unittest.TestCase):
 class TestCleanupAllOnlyOwn(unittest.TestCase):
     """_cleanup_all_prov_chromes should only kill this agent's provisioned Chromes."""
 
-    def test_does_not_kill_foreign_persisted_slots(self):
-        """Agent A's cleanup-all should not touch Agent B's persisted slots."""
+    @patch("chrome_bridge._classify_prov_pid", return_value="alive")
+    def test_does_not_kill_foreign_persisted_slots(self, _mock_classify):
+        """Agent A's cleanup-all should not touch Agent B's live persisted slots."""
         slot_b = "dd01"
+        try:
+            _write_prov_state(slot_b, {
+                "pid": 12345,
+                "port": 19666,
+                "temp_dir": "/tmp/nonexistent",
+                "agent_id": "agent-b",
+            })
+            agent_a = _make_agent("agent-a")
+            # cleanup_all with include_persisted reconciles first
+            agent_a._cleanup_all_prov_chromes(include_persisted=True)
+            # Agent B's slot file should still exist (live PID, foreign agent)
+            state = _read_prov_state(slot_b)
+            self.assertIsNotNone(state, "Agent B's slot was deleted by Agent A's cleanup")
+            self.assertNotIn(slot_b, agent_a._prov_chromes)
+        finally:
+            _remove_prov_state(slot_b)
+
+    def test_prunes_dead_foreign_slot_state_file(self):
+        """Dead foreign slots should have their state files pruned during reconcile."""
+        slot_b = "dd02"
         try:
             _write_prov_state(slot_b, {
                 "pid": 99999,
@@ -158,11 +178,10 @@ class TestCleanupAllOnlyOwn(unittest.TestCase):
                 "agent_id": "agent-b",
             })
             agent_a = _make_agent("agent-a")
-            # cleanup_all with include_persisted reconciles first
             agent_a._cleanup_all_prov_chromes(include_persisted=True)
-            # Agent B's slot file should still exist
+            # Dead foreign slot's state file should be pruned
             state = _read_prov_state(slot_b)
-            self.assertIsNotNone(state, "Agent B's slot was deleted by Agent A's cleanup")
+            self.assertIsNone(state, "Dead foreign slot state file should have been pruned")
         finally:
             _remove_prov_state(slot_b)
 
@@ -170,12 +189,13 @@ class TestCleanupAllOnlyOwn(unittest.TestCase):
 class TestHandleProvisionCleanupIsolation(unittest.IsolatedAsyncioTestCase):
     """_handle_provision_cleanup (no slot) should only clean this agent's Chromes."""
 
-    async def test_cleanup_no_slot_only_cleans_own(self):
+    @patch("chrome_bridge._classify_prov_pid", return_value="alive")
+    async def test_cleanup_no_slot_only_cleans_own(self, _mock_classify):
         """When called with no slot, should clean in-memory slots but not adopt foreign ones."""
         slot_b = "ee01"
         try:
             _write_prov_state(slot_b, {
-                "pid": 99999,
+                "pid": 12345,
                 "port": 19777,
                 "temp_dir": "/tmp/nonexistent",
                 "agent_id": "agent-b",
@@ -195,7 +215,7 @@ class TestHandleProvisionCleanupIsolation(unittest.IsolatedAsyncioTestCase):
 
             # Own slot cleaned
             self.assertNotIn("ff01", agent_a._prov_chromes)
-            # Foreign slot's persisted state should be untouched
+            # Foreign slot's persisted state should be untouched (live PID)
             state = _read_prov_state(slot_b)
             self.assertIsNotNone(state, "Agent B's persisted slot was deleted by Agent A's cleanup")
 

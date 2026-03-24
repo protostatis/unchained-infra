@@ -753,8 +753,16 @@ class Agent:
                 continue
             # Skip slots belonging to a different agent.  Legacy slots
             # (empty agent_id) are adopted by any agent for backward compat.
+            # For foreign slots we still prune dead-PID state files to prevent
+            # accumulation from crashed agents.
             slot_agent = state.get("agent_id", "")
-            if slot_agent and slot_agent != my_id:
+            is_foreign = bool(slot_agent and slot_agent != my_id)
+            if is_foreign:
+                pid = int(state.get("pid") or 0)
+                temp_dir = state.get("temp_dir", "")
+                port = int(state.get("port") or 0)
+                if pid <= 0 or _classify_prov_pid(pid, temp_dir, port) != "alive":
+                    _remove_prov_state(slot)
                 continue
             pid = int(state.get("pid") or 0)
             port = int(state.get("port") or 0)
