@@ -1183,11 +1183,15 @@ class Agent:
         """
         ws_url = tab_info.get("webSocketDebuggerUrl", "")
         if not ws_url:
-            # Construct from tab id
             tab_id = tab_info.get("id", "")
+            if not tab_id:
+                raise RuntimeError("Tab info has no webSocketDebuggerUrl or id")
             ws_url = f"ws://127.0.0.1:{prov_port}/devtools/page/{tab_id}"
 
-        chrome_ws = await websockets.connect(ws_url, max_size=10 * 1024 * 1024)
+        chrome_ws = await asyncio.wait_for(
+            websockets.connect(ws_url, max_size=10 * 1024 * 1024),
+            timeout=5,
+        )
         try:
             sid = random.randint(2**28, 2**30)
 
