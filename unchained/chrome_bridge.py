@@ -123,11 +123,15 @@ def _build_stealth_js() -> str:
     )
     # outerWidth/outerHeight — CDP-provisioned Chrome reports 0 for these,
     # which is the #1 bot detection signal for Arkose Labs and similar.
+    # The +85 offset approximates the Chrome toolbar/frame height. The
+    # actual value varies by platform (macOS ~74-79px, Linux ~85px,
+    # Windows ~85px). A fixed offset is imperfect but sufficient to pass
+    # the outerHeight > innerHeight check that bot detectors use.
     js += (
         'Object.defineProperty(window,"outerWidth",'
         '{get:()=>window.innerWidth,configurable:true});'
         'Object.defineProperty(window,"outerHeight",'
-        '{get:()=>window.innerHeight+79,configurable:true});'
+        '{get:()=>window.innerHeight+85,configurable:true});'
     )
     # chrome.runtime stub
     js += (
@@ -1195,25 +1199,36 @@ class Agent:
         try:
             sid = random.randint(2**28, 2**30)
 
-            async def _cdp(method, params=None):
+            async def _ws_cdp(method, params=None):
                 nonlocal sid
                 sid += 1
+                msg_id = sid
                 await chrome_ws.send(json.dumps(
-                    {"id": sid, "method": method, "params": params or {}}))
+                    {"id": msg_id, "method": method, "params": params or {}}))
                 while True:
-                    raw = await asyncio.wait_for(chrome_ws.recv(), timeout=5)
+                    raw = await chrome_ws.recv()
                     msg = json.loads(raw)
-                    if msg.get("id") == sid:
+                    if msg.get("id") == msg_id:
+                        if msg.get("error"):
+                            raise RuntimeError(
+                                f"CDP {method} failed: {msg['error']}")
                         return msg
 
+            stealth_js = _build_stealth_js()
+
+            # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
+            await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
             # Inject stealth JS into all future navigations
-            await _cdp("Page.addScriptToEvaluateOnNewDocument", {
-                "source": _build_stealth_js(),
-            })
+            await asyncio.wait_for(
+                _ws_cdp("Page.addScriptToEvaluateOnNewDocument",
+                        {"source": stealth_js}),
+                timeout=10,
+            )
             # Also inject into the currently loaded page
-            await _cdp("Runtime.evaluate", {
-                "expression": _build_stealth_js(),
-            })
+            await asyncio.wait_for(
+                _ws_cdp("Runtime.evaluate", {"expression": stealth_js}),
+                timeout=10,
+            )
         finally:
             await chrome_ws.close()
 
