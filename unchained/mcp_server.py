@@ -618,10 +618,13 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
-    aid = _resolve_agent(profile=agent_id)
-    # Pass caller_tag so cleanup-all only kills this caller's provisions
+    aid = _resolve_agent(profile=agent_id)  # raises if no API key
+    # Pass caller_tag so cleanup-all only kills this caller's provisions.
+    # _resolve_agent already validated the key, so _extract_api_key is safe.
     api_key = _extract_api_key()
-    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else ""
+    if not api_key:
+        raise ValueError("Authorization: Bearer <api_key> header is required.")
+    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12]
     result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
