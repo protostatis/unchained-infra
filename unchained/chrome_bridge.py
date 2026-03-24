@@ -1209,8 +1209,18 @@ class Agent:
             prov_port = prov["port"]
             url = f"http://127.0.0.1:{prov_port}/json"
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                tabs = json.loads(resp.read())
+            try:
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    tabs = json.loads(resp.read())
+            except (urllib.error.URLError, OSError):
+                # Provisioned Chrome is no longer running — clean up stale slot.
+                self._prov_chromes.pop(slot or next(iter(self._prov_chromes), ""), None)
+                if slot:
+                    _remove_prov_state(slot)
+                raise RuntimeError(
+                    f"Provisioned Chrome (slot '{slot}') is no longer running. "
+                    f"Re-provision with cdp_provision_launch to continue."
+                )
             page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
             if real_id == "auto":
                 # Reuse existing lease for this channel
