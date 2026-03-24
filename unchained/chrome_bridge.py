@@ -483,6 +483,7 @@ def _write_prov_state(slot: str, prov: dict):
         "copy_mode": prov.get("copy_mode", ""),
         "launched_at": prov.get("launched_at", time.time()),
         "ready": bool(prov.get("ready", True)),
+        "agent_id": prov.get("agent_id", ""),
     }
     tmp_path = f"{_prov_state_path(slot)}.tmp.{os.getpid()}"
     with open(tmp_path, "w") as f:
@@ -732,7 +733,11 @@ class Agent:
         self._last_prov_reconcile_ts = 0.0
 
     def _reconcile_prov_chromes(self, force: bool = False):
-        """Reload persisted provision slots and prune stale metadata."""
+        """Reload persisted provision slots and prune stale metadata.
+
+        Only adopts slots whose persisted ``agent_id`` matches this agent
+        (or slots written before agent_id tracking was added).
+        """
         if not force and not self.running:
             return
         now_mono = time.monotonic()
@@ -740,10 +745,15 @@ class Agent:
             return
         self._last_prov_reconcile_ts = now_mono
         now_wall = time.time()
+        my_id = self.agent_id or ""
         for slot in _list_prov_state_slots():
             state = _read_prov_state(slot)
             if not state:
                 _remove_prov_state(slot)
+                continue
+            # Skip slots belonging to a different agent.
+            slot_agent = state.get("agent_id", "")
+            if slot_agent and my_id and slot_agent != my_id:
                 continue
             pid = int(state.get("pid") or 0)
             port = int(state.get("port") or 0)
@@ -1396,6 +1406,7 @@ class Agent:
             "copy_mode": copy_mode,
             "launched_at": time.time(),
             "ready": False,
+            "agent_id": self.agent_id or "",
         }
         try:
             _write_prov_state(slot, prov_state)
