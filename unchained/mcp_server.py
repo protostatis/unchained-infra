@@ -589,7 +589,11 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
     """
     aid = _resolve_agent(profile=agent_id)
-    result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth)
+    # Generate a caller_tag from the API key so cleanup-all only affects
+    # this caller's provisioned Chromes, not other MCP clients'.
+    api_key = _extract_api_key()
+    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else ""
+    result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
     if not result or "error" in result:
         err = result.get("error", "Unknown error") if result else "No response"
         return f"Error: {err}"
@@ -614,8 +618,14 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         slot: Specific slot to clean up (e.g. "dc31"). If empty, cleans up all.
         agent_id: Agent to clean up on (default: auto-detected).
     """
-    aid = _resolve_agent(profile=agent_id)
-    result = await cloud_tools.provision_cleanup(aid, slot=slot)
+    aid = _resolve_agent(profile=agent_id)  # raises if no API key
+    # Pass caller_tag so cleanup-all only kills this caller's provisions.
+    # _resolve_agent already validated the key, so _extract_api_key is safe.
+    api_key = _extract_api_key()
+    if not api_key:
+        raise ValueError("Authorization: Bearer <api_key> header is required.")
+    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+    result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
     if status == "cleaned_up":
