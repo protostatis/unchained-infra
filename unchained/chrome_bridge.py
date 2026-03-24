@@ -496,6 +496,7 @@ def _write_prov_state(slot: str, prov: dict):
         "launched_at": prov.get("launched_at", time.time()),
         "ready": bool(prov.get("ready", True)),
         "agent_id": prov.get("agent_id", ""),
+        "caller_tag": prov.get("caller_tag", ""),
     }
     tmp_path = f"{_prov_state_path(slot)}.tmp.{os.getpid()}"
     with open(tmp_path, "w") as f:
@@ -1399,6 +1400,7 @@ class Agent:
         profile_path = ""
         copy_mode = "light"
         stealth = False
+        caller_tag = ""
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
@@ -1406,6 +1408,7 @@ class Agent:
             profile_path = params.get("profile_path", [""])[0]
             copy_mode = (params.get("copy_mode", ["light"])[0] or "light").strip().lower()
             stealth = params.get("stealth", [""])[0].lower() in ("1", "true", "yes")
+            caller_tag = params.get("caller_tag", [""])[0].strip()[:64]
         if copy_mode not in {"light", "full"}:
             copy_mode = "light"
 
@@ -1512,6 +1515,7 @@ class Agent:
             "launched_at": time.time(),
             "ready": False,
             "agent_id": self.agent_id or "",
+            "caller_tag": caller_tag,
         }
         try:
             _write_prov_state(slot, prov_state)
@@ -1599,15 +1603,19 @@ class Agent:
         """Kill provision Chrome(s) and clean up temp dir(s).
 
         If path contains ?slot=<hex>, clean up only that slot.
-        If no slot specified, clean up ALL provision Chromes.
+        If path contains ?caller_tag=<tag>, clean up only slots from that caller.
+        If no slot or caller_tag specified, clean up ALL provision Chromes
+        (legacy behavior, but callers should prefer caller_tag isolation).
         """
         self._reconcile_prov_chromes()
         slot = ""
+        caller_tag = ""
         if "?" in path:
             import urllib.parse
             qs = path.split("?", 1)[1]
             params = urllib.parse.parse_qs(qs)
             slot = params.get("slot", [""])[0]
+            caller_tag = params.get("caller_tag", [""])[0].strip()[:64]
 
         if not self._prov_chromes:
             await self.ws.send(json.dumps({
@@ -1625,11 +1633,22 @@ class Agent:
             if prov:
                 self._cleanup_single_prov(prov, slot=slot)
                 cleaned = 1
+        elif caller_tag:
+            # Clean only slots matching this caller_tag — leaves other
+            # callers' provisioned Chrome instances untouched.
+            matching_slots = [
+                (s, p) for s, p in self._prov_chromes.items()
+                if _read_prov_state(s).get("caller_tag", "") == caller_tag
+            ]
+            for s, p in matching_slots:
+                self._prov_chromes.pop(s, None)
+                self._cleanup_single_prov(p, slot=s)
+                cleaned += 1
         else:
-            # No slot — clean up all provisioned Chromes.
+            # No slot or caller_tag — clean up all (legacy behavior).
             while self._prov_chromes:
-                slot, prov = self._prov_chromes.popitem()
-                self._cleanup_single_prov(prov, slot=slot)
+                s, prov = self._prov_chromes.popitem()
+                self._cleanup_single_prov(prov, slot=s)
                 cleaned += 1
 
         status = "cleaned_up" if cleaned else "nothing_to_clean"

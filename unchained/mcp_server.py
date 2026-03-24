@@ -589,7 +589,11 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
     """
     aid = _resolve_agent(profile=agent_id)
-    result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth)
+    # Generate a caller_tag from the API key so cleanup-all only affects
+    # this caller's provisioned Chromes, not other MCP clients'.
+    api_key = _extract_api_key()
+    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else ""
+    result = await cloud_tools.provision_launch(aid, profile_path, stealth=stealth, caller_tag=caller_tag)
     if not result or "error" in result:
         err = result.get("error", "Unknown error") if result else "No response"
         return f"Error: {err}"
@@ -615,7 +619,10 @@ async def cdp_provision_cleanup(slot: str = "", agent_id: str = "") -> str:
         agent_id: Agent to clean up on (default: auto-detected).
     """
     aid = _resolve_agent(profile=agent_id)
-    result = await cloud_tools.provision_cleanup(aid, slot=slot)
+    # Pass caller_tag so cleanup-all only kills this caller's provisions
+    api_key = _extract_api_key()
+    caller_tag = hashlib.sha256(api_key.encode()).hexdigest()[:12] if api_key else ""
+    result = await cloud_tools.provision_cleanup(aid, slot=slot, caller_tag=caller_tag)
     status = result.get("status", "") if isinstance(result, dict) else ""
     cleaned = result.get("cleaned") if isinstance(result, dict) else None
     if status == "cleaned_up":
