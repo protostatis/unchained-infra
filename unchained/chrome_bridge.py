@@ -746,6 +746,11 @@ class Agent:
         self._last_prov_reconcile_ts = now_mono
         now_wall = time.time()
         my_id = self.agent_id or ""
+        if not my_id:
+            # agent_id not yet populated (e.g. reconnecting before auth).
+            # Fall back to legacy adopt-all behavior to avoid leaking our
+            # own slots from a prior run.
+            print("[agent:prov] Warning: agent_id not set during reconcile — adopting all slots")
         for slot in _list_prov_state_slots():
             state = _read_prov_state(slot)
             if not state:
@@ -753,15 +758,24 @@ class Agent:
                 continue
             # Skip slots belonging to a different agent.  Legacy slots
             # (empty agent_id) are adopted by any agent for backward compat.
-            # For foreign slots we still prune dead-PID state files to prevent
-            # accumulation from crashed agents.
+            # When my_id is empty we also adopt everything (see warning above).
+            # For foreign slots we still prune dead-PID state files and their
+            # temp dirs to prevent accumulation from crashed agents.  There is
+            # a negligible TOCTOU window where a foreign agent could restart
+            # Chrome between the PID check and the prune — acceptable.
             slot_agent = state.get("agent_id", "")
-            is_foreign = bool(slot_agent and slot_agent != my_id)
+            is_foreign = bool(my_id and slot_agent and slot_agent != my_id)
             if is_foreign:
                 pid = int(state.get("pid") or 0)
                 temp_dir = state.get("temp_dir", "")
                 port = int(state.get("port") or 0)
                 if pid <= 0 or _classify_prov_pid(pid, temp_dir, port) != "alive":
+                    if temp_dir and os.path.isdir(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            print(f"[agent:prov] Pruned orphan temp dir {temp_dir} (foreign slot {slot})")
+                        except Exception:
+                            pass
                     _remove_prov_state(slot)
                 continue
             pid = int(state.get("pid") or 0)
