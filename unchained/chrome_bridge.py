@@ -1499,8 +1499,11 @@ class Agent:
             "--disable-extensions",
             "--window-size=1280,900",
         ]
-        if stealth:
-            cmd.append("--disable-blink-features=AutomationControlled")
+        # Note: --disable-blink-features=AutomationControlled was removed
+        # because Chrome shows an "unsupported command-line flag" banner
+        # that itself becomes a bot detection signal. The stealth JS
+        # injected via Page.addScriptToEvaluateOnNewDocument already
+        # overrides navigator.webdriver, making the flag redundant.
         cmd.append(startup_url)
         print(f"[agent:prov] Launching provision Chrome on port {prov_port}"
               f"{' (stealth)' if stealth else ''}...")
