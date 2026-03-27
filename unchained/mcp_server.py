@@ -146,6 +146,23 @@ def _resolve_agent(profile: str = "") -> str:
 # Tools
 # ---------------------------------------------------------------------------
 
+def _append_iframe_tip(ddm_output: str) -> str:
+    """Append a tool-discovery hint when DDM output contains iframe hints.
+
+    DDM renders cross-origin iframes as opaque 'X' blocks and surfaces them
+    in the hints section as 'Iframe: domain (WxH)'.  When the agent sees that
+    line it may not know what to do next.  This nudge closes that gap without
+    touching the private-core renderer.
+    """
+    if "Iframe:" not in ddm_output:
+        return ddm_output
+    tip = (
+        "\n[Iframes detected] use cdp_list_frames to identify frames by index/URL, "
+        "then ddm_frame(frame_id) to see inside or js_eval_frame(frame_id, expr) to interact."
+    )
+    return ddm_output + tip
+
+
 @mcp.tool()
 async def ddm(flags: str = "--llm-2pass --cols 60",
               tab_id: str = "auto", agent_id: str = "") -> str:
@@ -168,7 +185,8 @@ async def ddm(flags: str = "--llm-2pass --cols 60",
     follow the top-ranked strategy.
     """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.run_ddm(aid, tab_id, flags.split())
+    result = await cloud_tools.run_ddm(aid, tab_id, flags.split())
+    return _append_iframe_tip(result)
 
 
 @mcp.tool()
