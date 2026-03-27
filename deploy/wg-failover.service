@@ -1,0 +1,7 @@
+[Unit]
+Description=WireGuard VPN peer failover check
+After=network.target wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wg-failover.sh

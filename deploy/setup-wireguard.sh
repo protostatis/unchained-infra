@@ -73,6 +73,19 @@ sudo wg-quick up wg0
 # Enable on boot
 sudo systemctl enable wg-quick@wg0 2>/dev/null || true
 
+# Install failover script + systemd units
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/wg-failover.sh" ]; then
+    echo "Installing WireGuard failover..."
+    sudo cp "$SCRIPT_DIR/wg-failover.sh" /usr/local/bin/wg-failover.sh
+    sudo chmod +x /usr/local/bin/wg-failover.sh
+    sudo cp "$SCRIPT_DIR/wg-failover.service" /etc/systemd/system/
+    sudo cp "$SCRIPT_DIR/wg-failover.timer" /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now wg-failover.timer
+    echo "Failover timer active (checks every 30s)."
+fi
+
 # Verify
 echo ""
 echo "=== Verification ==="
