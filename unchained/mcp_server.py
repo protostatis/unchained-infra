@@ -56,7 +56,20 @@ mcp = FastMCP(
         "- React/Next SPAs (npm, GitHub): intel_probe → intel_extract react_fiber or data_testid\n"
         "- Web-component sites (Reddit): intel_probe → intel_extract host_attrs\n"
         "- Data-store sites (YouTube, Nuxt): intel_probe → intel_stores → js_eval\n"
-        "- Card grids / boards (Kalshi, Polymarket): intel_probe → follow top strategy"
+        "- Card grids / boards (Kalshi, Polymarket): intel_probe → follow top strategy\n\n"
+
+        "## Iframes\n"
+        "DDM shows iframes as 'X' blocks in the grid and lists them in hints "
+        "(e.g. `Iframe: stripe.com (400×200)`). The X block is opaque — DDM "
+        "cannot see inside from the main page context.\n"
+        "- If your task needs content or interaction inside an iframe:\n"
+        "  1. cdp_list_frames — identify frames by index and URL\n"
+        "  2. ddm_frame(frame_id) — run DDM inside the iframe to see its layout "
+        "and interactive elements, same output format as ddm\n"
+        "  3. js_eval_frame(frame_id, expr) — query or manipulate elements inside\n"
+        "- Ignore iframes that are ads or decorative embeds (doubleclick, ads, trackers)\n"
+        "- Functional iframes to act on: payment forms (stripe.com, paypal.com), "
+        "auth widgets (accounts.google.com, apple.com), CAPTCHAs, embedded signup forms"
     ),
 )
 
@@ -412,10 +425,31 @@ async def cdp_list_frames(tab_id: str = "auto", agent_id: str = "") -> str:
 
     Use this when you see iframes in DDM output and need to interact
     with content inside them. Returns frame indices that can be passed
-    to js_eval_frame.
+    to ddm_frame or js_eval_frame.
     """
     aid = _resolve_agent(profile=agent_id)
     return await cloud_tools.list_frames(aid, tab_id)
+
+
+@mcp.tool()
+async def ddm_frame(frame_id: str, tab_id: str = "auto", agent_id: str = "") -> str:
+    """Run DDM inside an iframe — returns the same layout map as ddm but for the frame's document.
+
+    Use after cdp_list_frames to get frame_id. frame_id can be:
+    - An index like "0", "1" (from cdp_list_frames output)
+    - A raw CDP frameId string
+
+    DDM on the main page shows iframes as opaque 'X' blocks — ddm_frame lets
+    you see inside: the iframe's own grid, interactive elements, and hints.
+
+    Typical flow when a task requires interacting with an embedded form or widget:
+      1. ddm                  → see Iframe: stripe.com hint + X block in grid
+      2. cdp_list_frames      → get frame index for stripe.com
+      3. ddm_frame("0")       → see the payment form layout inside the iframe
+      4. js_eval_frame("0", "document.querySelector('#cardNumber').value")
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.run_ddm_in_frame(aid, tab_id, frame_id, ["--llm-2pass", "--cols", "60"])
 
 
 @mcp.tool()

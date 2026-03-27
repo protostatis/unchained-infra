@@ -49,6 +49,7 @@ OP_GET_COOKIES = _safe_import_op("OP_GET_COOKIES", "get_cookies")
 OP_PROVISION_STATUS = _safe_import_op("OP_PROVISION_STATUS", "provision_status")
 OP_RUN_JS_IN_FRAME = _safe_import_op("OP_RUN_JS_IN_FRAME", "run_js_in_frame")
 OP_LIST_FRAMES = _safe_import_op("OP_LIST_FRAMES", "list_frames")
+OP_RUN_DDM_IN_FRAME = _safe_import_op("OP_RUN_DDM_IN_FRAME", "run_ddm_in_frame")
 
 
 class PrivateCoreError(RuntimeError):
@@ -162,6 +163,7 @@ class PrivateCoreClient:
             (OP_GET_COOKIES, "get_cookies"),
             (OP_RUN_JS_IN_FRAME, "run_js_in_frame"),
             (OP_LIST_FRAMES, "list_frames"),
+            (OP_RUN_DDM_IN_FRAME, "run_ddm_in_frame"),
         ]
         for op_name, fn_name in _optional_ops:
             fn = getattr(engine, fn_name, None)
@@ -430,6 +432,18 @@ class PrivateCoreClient:
             OP_LIST_FRAMES,
             agent_id=agent_id,
             tab_id=tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+        )
+
+    async def run_ddm_in_frame(self, agent_id: str, tab_id: str, frame_id: str,
+                               flags: list[str], relay_host: str, relay_port: int) -> str:
+        return await self.execute(
+            OP_RUN_DDM_IN_FRAME,
+            agent_id=agent_id,
+            tab_id=tab_id,
+            frame_id=frame_id,
+            flags=flags,
             relay_host=relay_host,
             relay_port=relay_port,
         )
