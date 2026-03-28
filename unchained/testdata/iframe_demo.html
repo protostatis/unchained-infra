@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>iframe DDM demo</title>
+  <style>
+    body { font-family: sans-serif; padding: 24px; background: #f5f5f5; }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; }
+    p  { color: #555; margin-bottom: 16px; }
+    .container { display: flex; gap: 24px; flex-wrap: wrap; }
+    .card {
+      background: white; border: 1px solid #ddd; border-radius: 8px;
+      padding: 16px; flex: 1 1 340px;
+    }
+    .card h2 { font-size: 1rem; margin: 0 0 12px; }
+    iframe { width: 100%; border: 1px solid #ccc; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>DDM iframe demo page</h1>
+  <p>
+    This page embeds two same-origin iframes so you can exercise
+    <code>cdp_list_frames</code> → <code>ddm_frame</code> → <code>js_eval_frame</code>.
+    Open it with <code>file://</code> or serve it locally.
+  </p>
+
+  <div class="container">
+
+    <div class="card">
+      <h2>Payment form (simulated Stripe-style iframe)</h2>
+      <iframe src="iframe_payment.html" height="220" title="payment-frame"></iframe>
+    </div>
+
+    <div class="card">
+      <h2>Login widget (simulated OAuth iframe)</h2>
+      <iframe src="iframe_login.html" height="220" title="login-frame"></iframe>
+    </div>
+
+  </div>
+
+  <div style="margin-top:24px; color:#888; font-size:0.85rem;">
+    Expected DDM output on this page: two <code>X</code> blocks in the grid,
+    hints showing <code>Iframe: iframe_payment.html</code> and
+    <code>Iframe: iframe_login.html</code>.<br>
+    After <code>cdp_list_frames</code>: frame 0 = payment, frame 1 = login.<br>
+    After <code>ddm_frame("0")</code>: card number + expiry + CVC inputs visible.
+  </div>
+</body>
+</html>

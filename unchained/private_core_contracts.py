@@ -30,6 +30,7 @@ OP_SET_TAB_ALIAS = "set_tab_alias"
 OP_LIST_TAB_ALIASES = "list_tab_aliases"
 OP_RUN_JS_IN_FRAME = "run_js_in_frame"
 OP_LIST_FRAMES = "list_frames"
+OP_RUN_DDM_IN_FRAME = "run_ddm_in_frame"
 
 PRIVATE_CORE_OPS = {
     OP_RUN_DDM,
@@ -57,6 +58,7 @@ PRIVATE_CORE_OPS = {
     OP_LIST_TAB_ALIASES,
     OP_RUN_JS_IN_FRAME,
     OP_LIST_FRAMES,
+    OP_RUN_DDM_IN_FRAME,
 }
 
 DEFAULT_PRIVATE_CORE_PORT = 8770

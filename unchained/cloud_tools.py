@@ -128,3 +128,10 @@ async def list_frames(agent_id: str, tab_id: str,
                       relay_host: str = "127.0.0.1",
                       relay_port: int = 8765) -> str:
     return await _client().list_frames(agent_id, tab_id, relay_host, relay_port)
+
+
+async def run_ddm_in_frame(agent_id: str, tab_id: str, frame_id: str,
+                           flags: list[str], relay_host: str = "127.0.0.1",
+                           relay_port: int = 8765) -> str:
+    return await _client().run_ddm_in_frame(agent_id, tab_id, frame_id,
+                                            flags, relay_host, relay_port)
