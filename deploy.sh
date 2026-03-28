@@ -218,21 +218,23 @@ trap - EXIT
 EOF
 
 # Upload rhythm build-context directory
-echo "==> Uploading rhythm..."
-remote_bash "$REMOTE_DIR" <<'EOF'
+if [[ -d "$RHYTHM_DST/rhythm" ]]; then
+    echo "==> Uploading rhythm..."
+    remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
 rm -rf "$remote_dir/rhythm"
-mkdir -p "$remote_dir/rhythm/rhythm"
+mkdir -p "$remote_dir/rhythm"
 EOF
-if [[ -d "$RHYTHM_DST/rhythm" ]]; then
-    "${SCP_CMD[@]}" "$RHYTHM_DST/rhythm/__init__.py" "$RHYTHM_DST/rhythm/tools.py" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/rhythm/"
+    "${SCP_CMD[@]}" -r "$RHYTHM_DST/rhythm" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/"
     shopt -s nullglob
     RHYTHM_TOP_FILES=("$RHYTHM_DST"/*.py "$RHYTHM_DST"/*.js)
     shopt -u nullglob
     if [[ "${#RHYTHM_TOP_FILES[@]}" -gt 0 ]]; then
         "${SCP_CMD[@]}" "${RHYTHM_TOP_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/"
     fi
+else
+    echo "==> Rhythm not found locally — keeping existing remote rhythm."
 fi
 
 # Rebuild images (without restarting containers yet)
