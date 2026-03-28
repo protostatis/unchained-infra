@@ -11028,7 +11028,7 @@ body{
   width:44px;height:44px;border:none;border-radius:12px;
   background:#ff4444;color:#fff;font-size:18px;
   cursor:pointer;flex-shrink:0;
-  display:none;
+  display:none;align-items:center;justify-content:center;
 }
 #cancelbtn:active{opacity:0.8}
 #quota-bar{
