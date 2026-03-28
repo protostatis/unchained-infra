@@ -217,6 +217,26 @@ rm -rf "$backup_dir"
 trap - EXIT
 EOF
 
+# Upload rhythm build-context directory
+if [[ -d "$RHYTHM_DST/rhythm" ]]; then
+    echo "==> Uploading rhythm..."
+    remote_bash "$REMOTE_DIR" <<EOF
+set -euo pipefail
+[[ -n "$REMOTE_DIR" ]] || { echo 'REMOTE_DIR is empty — aborting'; exit 1; }
+rm -rf "$REMOTE_DIR/rhythm"
+mkdir -p "$REMOTE_DIR/rhythm"
+EOF
+    "${SCP_CMD[@]}" -r "$RHYTHM_DST/rhythm" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
+    shopt -s nullglob
+    RHYTHM_TOP_FILES=("$RHYTHM_DST"/*.py "$RHYTHM_DST"/*.js)
+    shopt -u nullglob
+    if [[ "${#RHYTHM_TOP_FILES[@]}" -gt 0 ]]; then
+        "${SCP_CMD[@]}" "${RHYTHM_TOP_FILES[@]}" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/"
+    fi
+else
+    echo "==> Rhythm not found locally — keeping existing remote rhythm."
+fi
+
 # Rebuild images (without restarting containers yet)
 echo "==> Building container images..."
 if $FORCE_BUILD; then
