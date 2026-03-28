@@ -10812,7 +10812,7 @@ body{
 }
 
 /* === Main === */
-#main{display:flex;flex-direction:column;height:100dvh}
+#main{display:flex;flex-direction:column;height:100dvh;max-width:none!important;border:none!important;box-shadow:none!important}
 #workspace{
   flex:1;min-height:0;display:flex;overflow:hidden;
 }
@@ -10997,13 +10997,6 @@ body{
   resize:none;line-height:1.4;
 }
 #msginput:focus{outline:none;border-color:var(--accent)}
-#urlinput{
-  width:100%;height:32px;padding:4px 12px;
-  border:1px solid #333;border-radius:8px;
-  background:var(--bg);color:var(--muted);font-size:12px;
-  font-family:-apple-system,system-ui,sans-serif;outline:none;
-}
-#urlinput:focus{outline:none;border-color:var(--accent)}
 #sendbtn{
   width:44px;height:44px;border:none;border-radius:12px;
   background:var(--accent);color:#fff;font-size:18px;
@@ -11026,6 +11019,7 @@ body{
 /* === Steps === */
 .steps-wrap{
   padding:8px 12px 12px;border-top:1px solid #222;
+  max-height:180px;overflow-y:auto;flex-shrink:0;
 }
 .steps-title{
   font-size:11px;letter-spacing:0.4px;text-transform:uppercase;
@@ -11057,6 +11051,7 @@ body{
     <div class="nav">
       <a href="/">Home</a>
       <a id="browser-cta" href="/local">Continue in your browser</a>
+      <a href="#" onclick="doNewChat();return false">New Chat</a>
     </div>
   </div>
 
@@ -11088,7 +11083,6 @@ body{
       <div id="inputbar">
         <div id="input-fields">
           <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."></textarea>
-          <input id="urlinput" type="url" inputmode="url" placeholder="https://www.wikipedia.org/ (optional)">
           <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
         </div>
         <button id="sendbtn">&#9654;</button>
@@ -11206,6 +11200,18 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 220) + 'px';
 }
 
+function doNewChat() {
+  if (sending) return;
+  const chat = document.getElementById('chat');
+  chat.innerHTML = '';
+  resetPreview();
+  resetSteps();
+  document.getElementById('msginput').value = '';
+  sessionId = '';
+  historyLoaded = false;
+  ensureSessionId();
+}
+
 function hideHints() {
   const hints = document.getElementById('chat-hints');
   if (hints) hints.remove();
@@ -11257,8 +11263,6 @@ function normalizePublicUrl(value) {
 }
 
 function extractPromptUrl() {
-  const explicit = normalizePublicUrl(document.getElementById('urlinput').value);
-  if (explicit) return explicit;
   const match = String(document.getElementById('msginput').value || '').match(/https?:\/\/[^\s)]+/i);
   return match ? normalizePublicUrl(match[0]) : '';
 }
@@ -11379,12 +11383,8 @@ function resetPreview() {
   closePreviewSocket();
   previewRetryCount = 0;
   previewHasFrame = false;
-  const img = document.getElementById('preview-image');
-  const ph = document.getElementById('preview-empty');
-  if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
-  if (ph) ph.style.display = 'flex';
   document.getElementById('preview-mode').textContent = 'awaiting run';
-  setPreviewNote('Waiting for a run.', '');
+  setPreviewNote('Starting run...', '');
 }
 
 function resetSteps() {
@@ -11543,9 +11543,7 @@ async function loadHistory() {
 
 function fillExample(prompt, url) {
   const input = document.getElementById('msginput');
-  const urlInput = document.getElementById('urlinput');
   input.value = prompt;
-  urlInput.value = url || '';
   autoGrow(input);
   requestPreflight();
   input.focus();
@@ -11580,6 +11578,8 @@ async function doSend() {
   resetPreview();
   resetSteps();
   updateSendAvailability();
+  document.getElementById('msginput').value = '';
+  autoGrow(document.getElementById('msginput'));
   document.getElementById('sendbtn').style.display = 'none';
   document.getElementById('cancelbtn').style.display = 'inline-flex';
   addLine('user', 'You', message);
@@ -11720,7 +11720,6 @@ document.getElementById('msginput').addEventListener('input', function () {
   autoGrow(this);
   requestPreflight();
 });
-document.getElementById('urlinput').addEventListener('input', requestPreflight);
 document.getElementById('sendbtn').addEventListener('click', doSend);
 document.getElementById('cancelbtn').addEventListener('click', doCancel);
 document.getElementById('msginput').addEventListener('keydown', function (event) {
