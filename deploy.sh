@@ -20,6 +20,7 @@ source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
 INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
 PRIVATE_CORE_DST="$SCRIPT_DIR/unchained"
+RHYTHM_SRC="${RHYTHM_SRC:-$SCRIPT_DIR/../rhythm}"
 
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"
@@ -49,6 +50,26 @@ if [[ -x "$INSTALL_PRIVATE_CORE_SCRIPT" && -d "$PRIVATE_CORE_SRC" ]]; then
     "$INSTALL_PRIVATE_CORE_SCRIPT" "$PRIVATE_CORE_SRC" "$PRIVATE_CORE_DST"
 else
     echo "==> Private core auto-install skipped (set PRIVATE_CORE_SRC if needed)."
+fi
+
+# Copy rhythm repo into build context (for Dockerfile COPY rhythm/ rhythm/).
+# Only the files needed at runtime are copied — not tests, data, or docs.
+RHYTHM_DST="$SCRIPT_DIR/rhythm"
+if [[ -d "$RHYTHM_SRC/rhythm" ]]; then
+    echo "==> Copying rhythm into build context..."
+    rm -rf "$RHYTHM_DST"
+    mkdir -p "$RHYTHM_DST/rhythm"
+    cp "$RHYTHM_SRC/rhythm/__init__.py" "$RHYTHM_DST/rhythm/"
+    cp "$RHYTHM_SRC/rhythm/tools.py" "$RHYTHM_DST/rhythm/"
+    for f in rhythm_binding.py schema_registry.py schema_db.py state_machine.py \
+             catcher_agent.js prime_interceptor.js executor_binding.js; do
+        cp "$RHYTHM_SRC/$f" "$RHYTHM_DST/"
+    done
+    echo "    Rhythm files copied."
+else
+    echo "==> Rhythm not found at $RHYTHM_SRC — skipping (tools will return 'not available')."
+    mkdir -p "$RHYTHM_DST"
+    touch "$RHYTHM_DST/.empty"
 fi
 
 # Prevent shipping public stubs to production by mistake.
@@ -275,6 +296,8 @@ EOF
 # Restore overlaid private-core files back to committed/public state.
 echo ""
 if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" == "1" ]]; then
+    # Clean up rhythm build context copy
+    rm -rf "$SCRIPT_DIR/rhythm"
     echo "==> Restoring private-core overlay files..."
     OVERLAY_FILES=(
         "unchained/cdp.py"
