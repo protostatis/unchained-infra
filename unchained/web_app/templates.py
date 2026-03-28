@@ -10791,286 +10791,336 @@ FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Unchained First Look Preview</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-*{box-sizing:border-box}
+*{margin:0;padding:0;box-sizing:border-box}
 :root{
-  color-scheme:dark;
-  --bg:#08111a;
-  --panel:#10202b;
-  --panel-2:#152936;
-  --panel-3:#0d1821;
-  --line:rgba(173,197,208,0.18);
-  --line-strong:rgba(218,233,240,0.24);
-  --text:#eff6f8;
-  --muted:#9bb0ba;
-  --accent:#79d6b1;
-  --accent-2:#f1c260;
-  --danger:#f08a7c;
-  --ok-bg:rgba(121,214,177,0.12);
-  --warn-bg:rgba(241,194,96,0.12);
-  --danger-bg:rgba(240,138,124,0.12);
-  --shadow:0 24px 80px rgba(0,0,0,0.28);
-  --mono:'IBM Plex Mono','SFMono-Regular','Consolas',monospace;
-  --sans:'Space Grotesk','Segoe UI',sans-serif;
+  --bg:#1a1a2e;--surface:#16213e;--accent:#e94560;
+  --text:#eee;--muted:#888;--user-bg:#2a1a3e;--asst-bg:#1e2a3e;
+  --mono:'SF Mono','Menlo','Monaco','Consolas',monospace;
 }
-html,body{margin:0;min-height:100%;background:
-  radial-gradient(circle at top left, rgba(121,214,177,0.16), transparent 28%),
-  radial-gradient(circle at top right, rgba(241,194,96,0.12), transparent 24%),
-  linear-gradient(180deg,#071018 0%,#08111a 55%,#050a0f 100%);
-  color:var(--text);font-family:var(--sans)}
-body{padding:28px 18px 40px}
-a{color:inherit}
-.shell{max-width:1280px;margin:0 auto;display:grid;gap:18px}
-.hero,.workspace{display:grid;gap:18px}
-.hero{grid-template-columns:1.08fr 0.92fr}
-.workspace{grid-template-columns:minmax(0,1.05fr) minmax(0,0.95fr)}
-.card{
-  border:1px solid var(--line);
-  border-radius:24px;
-  background:linear-gradient(180deg,rgba(21,41,54,0.92),rgba(12,24,33,0.94));
-  box-shadow:var(--shadow);
-  backdrop-filter:blur(12px);
+body{
+  font-family:-apple-system,system-ui,sans-serif;
+  background:var(--bg);color:var(--text);
+  height:100dvh;overflow:hidden;
 }
-.hero-copy{padding:28px}
-.eyebrow{
-  display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;
-  font-family:var(--mono);font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent)
+
+/* === Main === */
+#main{display:flex;flex-direction:column;height:100dvh}
+#workspace{
+  flex:1;min-height:0;display:flex;overflow:hidden;
 }
-.eyebrow::before{content:'';width:10px;height:10px;border-radius:999px;background:var(--accent);box-shadow:0 0 18px rgba(121,214,177,0.55)}
-h1{margin:0 0 12px;font-size:clamp(34px,5vw,60px);line-height:0.94;letter-spacing:-0.04em}
-.hero-copy p{margin:0;color:var(--muted);font-size:17px;line-height:1.65;max-width:58ch}
-.hero-copy .hero-note{margin-top:14px;font-size:13px;color:#cde1e7}
-.hero-aside{padding:22px;display:grid;gap:12px}
-.pill-row,.sample-row,.action-row{display:flex;gap:10px;flex-wrap:wrap}
-.pill{
-  display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;
-  border:1px solid var(--line);background:rgba(255,255,255,0.03);font-size:12px;color:var(--muted)
+#chat-pane{
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;
 }
-.status-card{
-  border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.03)
+#live-pane{
+  flex:2 1 0;min-width:420px;width:auto;
+  border-left:1px solid #2a2a2a;background:#111;
+  display:flex;flex-direction:column;min-height:0;
 }
-.status-card strong,.composer-card label,.panel-title{
-  display:block;margin-bottom:6px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase
+#live-pane-head{
+  padding:10px 12px;border-bottom:1px solid #222;
+  color:#d5d5d5;font-size:12px;letter-spacing:0.4px;
+  text-transform:uppercase;
 }
-.status-card strong{color:var(--accent-2)}
-.status-copy{color:var(--text);font-size:15px;line-height:1.45}
-.status-copy.subtle{color:var(--muted)}
-.status-copy.ok{color:#b9f1d8}
-.status-copy.warn{color:#f7d996}
-.status-copy.danger{color:#f3aa9f}
-.composer-card{padding:22px}
-.composer-grid{display:grid;gap:14px}
-.composer-card label{color:#c2d6dc}
-.composer-card textarea,.composer-card input{
-  width:100%;border:1px solid var(--line);border-radius:18px;background:rgba(5,10,15,0.38);
-  color:var(--text);padding:14px 16px;font:inherit;resize:none;outline:none
+#live-window{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  padding:12px;
 }
-.composer-card textarea{min-height:132px;line-height:1.55}
-.composer-card textarea:focus,.composer-card input:focus{border-color:rgba(121,214,177,0.45);box-shadow:0 0 0 3px rgba(121,214,177,0.10)}
-.sample-btn,.cta,.ghost-btn{
-  appearance:none;border:none;border-radius:999px;cursor:pointer;text-decoration:none;font:inherit
+#live-window-bar{
+  height:28px;border:1px solid #2f2f2f;border-bottom:none;
+  border-radius:8px 8px 0 0;background:#171717;
+  display:flex;align-items:center;gap:6px;padding:0 10px;
 }
-.sample-btn{
-  border:1px solid var(--line);padding:10px 14px;background:rgba(255,255,255,0.04);color:var(--text);
-  text-align:left;min-height:52px
+#live-window-bar .dot{
+  width:9px;height:9px;border-radius:50%;display:inline-block;
 }
-.sample-btn:hover,.ghost-btn:hover{border-color:var(--line-strong);background:rgba(255,255,255,0.06)}
-.sample-btn small{display:block;margin-top:4px;color:var(--muted)}
-.action-row{align-items:center}
-.cta,.ghost-btn{
-  display:inline-flex;align-items:center;justify-content:center;padding:13px 18px;font-weight:700
+#live-window-bar .dot.red{background:#ff5f56}
+#live-window-bar .dot.yellow{background:#ffbd2e}
+#live-window-bar .dot.green{background:#27c93f}
+#live-window-bar .title{
+  margin-left:8px;color:#9a9a9a;font-size:11px;font-family:var(--mono);
 }
-.cta{
-  background:linear-gradient(90deg,var(--accent),#a8f7d9);color:#062018;box-shadow:0 12px 24px rgba(121,214,177,0.18)
-}
-.cta:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none}
-.ghost-btn{
-  border:1px solid var(--line);background:rgba(255,255,255,0.03);color:var(--text)
-}
-.quota-line{font-size:13px;color:var(--muted)}
-.quota-line strong{color:var(--text)}
-.workspace .card{min-height:0}
-.transcript-card,.preview-card{padding:22px;display:grid;gap:14px}
-.panel-title{color:var(--accent)}
-.transcript-log{
-  min-height:420px;max-height:68vh;overflow:auto;padding-right:4px;display:grid;gap:10px
-}
-.line{
-  border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.03)
-}
-.line.user{margin-left:auto;max-width:88%;background:rgba(121,214,177,0.10);border-color:rgba(121,214,177,0.18)}
-.line.assistant{max-width:92%}
-.line.system{border-style:dashed;background:rgba(255,255,255,0.02)}
-.line strong{display:block;margin-bottom:6px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent-2)}
-.line .body{color:var(--text);white-space:pre-wrap;line-height:1.6}
-.browser-frame{
-  border:1px solid var(--line-strong);border-radius:22px;background:#0a1218;overflow:hidden;display:grid;gap:0
-}
-.browser-top{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;
-  border-bottom:1px solid var(--line);background:rgba(255,255,255,0.03)
-}
-.browser-title{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px;color:#d9e8ed}
-.browser-dots{display:flex;gap:6px}
-.browser-dots span{width:10px;height:10px;border-radius:999px;display:block;background:rgba(255,255,255,0.18)}
-.browser-dots span:nth-child(1){background:#f28f7e}
-.browser-dots span:nth-child(2){background:#f1c260}
-.browser-dots span:nth-child(3){background:#79d6b1}
 .mode-pill{
-  border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--muted)
+  margin-left:auto;border:1px solid #2f2f2f;border-radius:999px;padding:3px 8px;
+  font-family:var(--mono);font-size:10px;color:var(--muted);
 }
-.preview-stage{
-  min-height:420px;display:grid;place-items:center;padding:16px;background:
-    linear-gradient(180deg,rgba(8,17,26,0.1),rgba(8,17,26,0.36)),
-    radial-gradient(circle at 20% 20%,rgba(121,214,177,0.08),transparent 24%),
-    radial-gradient(circle at 80% 0%,rgba(241,194,96,0.08),transparent 22%),
-    #091118
+#live-canvas-wrap{
+  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
+  background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
 }
-.preview-stage img{max-width:100%;max-height:56vh;border-radius:16px;border:1px solid var(--line);box-shadow:0 18px 50px rgba(0,0,0,0.32)}
-.preview-empty{max-width:420px;text-align:center;color:var(--muted);line-height:1.6}
-.preview-empty strong{display:block;margin-bottom:8px;color:var(--text);font-size:18px}
-.preview-note{
-  border-top:1px solid var(--line);padding:12px 14px;font-size:13px;line-height:1.5;color:var(--muted)
+#preview-image{
+  width:100%;height:100%;object-fit:contain;background:#0b0b0b;display:none;
 }
-.preview-note.warn{color:#f7d996;background:var(--warn-bg)}
-.preview-note.danger{color:#f3aa9f;background:var(--danger-bg)}
-.preview-note.ok{color:#b9f1d8;background:var(--ok-bg)}
-.steps-card{
-  border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,0.03);padding:14px;display:grid;gap:10px
+#preview-empty{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:13px;padding:16px;text-align:center;
 }
-.step-list{display:grid;gap:8px}
+#preview-note{
+  padding:8px 12px;color:var(--muted);font-size:12px;min-height:34px;
+}
+#preview-note.warn{color:#f7d996}
+#preview-note.danger{color:#f3aa9f}
+#preview-note.ok{color:#b9f1d8}
+@media (max-width: 1100px) {
+  #live-pane{min-width:320px}
+}
+@media (max-width: 900px) {
+  #workspace{flex-direction:column}
+  #live-pane{
+    width:100%;min-width:0;height:40vh;border-left:none;border-top:1px solid #2a2a2a;
+  }
+}
+
+#topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;padding-top:max(8px,env(safe-area-inset-top));
+  background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
+}
+#topbar .left{display:flex;align-items:center;gap:12px}
+#topbar .agent{font-family:var(--mono);font-size:14px;color:var(--accent)}
+#topbar .status{font-size:11px;color:var(--muted)}
+#topbar .status.online{color:#4caf50}
+#topbar .nav{display:flex;gap:8px}
+#topbar .nav a{
+  color:var(--muted);text-decoration:none;font-size:12px;
+  border:1px solid #555;padding:4px 10px;border-radius:6px;
+}
+#topbar .nav a:hover{border-color:var(--accent);color:var(--accent)}
+
+/* === Model notice === */
+#model-notice{
+  display:none;margin:0;padding:8px 16px;
+  border-bottom:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
+  font-size:12px;line-height:1.4;flex-shrink:0;
+}
+#model-notice strong{color:#f0d58b}
+#model-notice a{color:#f0d58b;text-decoration:underline}
+
+/* === Chat === */
+#chat{
+  flex:1;overflow-y:auto;padding:12px 16px;
+  -webkit-overflow-scrolling:touch;
+  display:flex;flex-direction:column;gap:12px;
+}
+.bubble{
+  max-width:85%;padding:10px 14px;border-radius:12px;
+  font-size:14px;line-height:1.5;word-break:break-word;
+}
+.bubble.user{
+  align-self:flex-end;background:var(--user-bg);
+  border:1px solid #3a2a5e;border-bottom-right-radius:4px;
+}
+.bubble.asst{
+  align-self:flex-start;background:var(--asst-bg);
+  border:1px solid #2a3a5e;border-bottom-left-radius:4px;
+}
+.bubble.asst .text{white-space:pre-wrap}
+.bubble.system{
+  align-self:flex-start;background:rgba(255,255,255,0.03);
+  border:1px dashed #333;font-size:13px;
+}
+.bubble.system strong{display:block;margin-bottom:4px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* === Chat hints === */
+#chat-hints{
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-start;height:100%;padding-top:24px;text-align:center;
+}
+.hint-badge{
+  display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border-radius:999px;
+  border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);
+  color:#cfd5e4;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+}
+.hint-title{font-size:20px;font-weight:600;color:var(--accent);margin-bottom:8px}
+.hint-sub{color:var(--muted);font-size:13px;margin-bottom:16px;max-width:380px;line-height:1.5}
+.hint-panels{
+  display:grid;grid-template-columns:1fr;gap:10px;width:100%;max-width:380px;margin-bottom:14px;
+}
+.hint-panel{
+  padding:14px;border:1px solid #333;border-radius:14px;background:rgba(255,255,255,0.03);text-align:left;
+}
+.hint-panel strong{
+  display:block;margin-bottom:6px;color:var(--text);font-size:13px;
+}
+.hint-panel span{
+  color:var(--muted);font-size:12px;line-height:1.6;
+}
+.hint-panel span.ok{color:#4caf50}
+.hint-panel span.warn{color:#f0d58b}
+.hint-panel span.danger{color:#ff6b6b}
+.hint-examples{display:flex;flex-direction:column;gap:8px;width:100%;max-width:380px}
+.hint-item{
+  padding:10px 14px;border:1px solid #333;border-radius:10px;
+  font-size:13px;color:var(--text);cursor:pointer;text-align:left;
+  transition:border-color 0.15s;display:flex;align-items:center;gap:10px;
+}
+.hint-item:hover{border-color:var(--accent)}
+.hint-emoji{font-size:18px;flex-shrink:0}
+.hint-note{
+  margin:14px 0 4px;max-width:380px;color:#c7cedf;font-size:12px;line-height:1.6;
+}
+.hint-actions{
+  display:flex;justify-content:center;width:100%;margin-top:16px;
+}
+.hint-cta{
+  display:inline-flex;align-items:center;justify-content:center;padding:12px 18px;border-radius:10px;
+  background:var(--accent);color:#fff;text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.2px;
+}
+.hint-cta:hover{opacity:0.92;box-shadow:0 0 18px rgba(233,69,96,0.28)}
+.hint-footer{
+  margin-top:20px;font-size:11px;color:var(--muted);
+  letter-spacing:0.5px;text-transform:uppercase;
+}
+
+/* === Input === */
+#inputbar{
+  display:flex;gap:8px;align-items:flex-end;
+  padding:8px 16px;padding-bottom:max(16px,env(safe-area-inset-bottom));
+  background:var(--surface);border-top:1px solid #333;flex-shrink:0;
+}
+#input-fields{
+  flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;
+}
+#msginput{
+  width:100%;min-height:44px;max-height:120px;padding:10px 12px;
+  border:1px solid #444;border-radius:12px;
+  background:var(--bg);color:var(--text);
+  font-size:15px;font-family:-apple-system,system-ui,sans-serif;
+  resize:none;line-height:1.4;
+}
+#msginput:focus{outline:none;border-color:var(--accent)}
+#urlinput{
+  width:100%;height:32px;padding:4px 12px;
+  border:1px solid #333;border-radius:8px;
+  background:var(--bg);color:var(--muted);font-size:12px;
+  font-family:-apple-system,system-ui,sans-serif;outline:none;
+}
+#urlinput:focus{outline:none;border-color:var(--accent)}
+#sendbtn{
+  width:44px;height:44px;border:none;border-radius:12px;
+  background:var(--accent);color:#fff;font-size:18px;
+  cursor:pointer;flex-shrink:0;
+}
+#sendbtn:active{opacity:0.8}
+#sendbtn:disabled{opacity:0.4;cursor:default}
+#cancelbtn{
+  width:44px;height:44px;border:none;border-radius:12px;
+  background:#ff4444;color:#fff;font-size:18px;
+  cursor:pointer;flex-shrink:0;
+  display:none;
+}
+#cancelbtn:active{opacity:0.8}
+#quota-bar{
+  padding:4px 0 0;font-size:11px;color:var(--muted);
+}
+#quota-bar strong{color:var(--text)}
+
+/* === Steps === */
+.steps-wrap{
+  padding:8px 12px 12px;border-top:1px solid #222;
+}
+.steps-title{
+  font-size:11px;letter-spacing:0.4px;text-transform:uppercase;
+  color:#d5d5d5;margin-bottom:8px;
+}
+.step-list{display:grid;gap:6px}
 .step-item{
-  display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line);border-radius:14px;padding:10px 12px;background:rgba(255,255,255,0.02)
+  display:flex;align-items:flex-start;gap:8px;
+  padding:6px 8px;font-size:12px;
 }
-.step-dot{width:10px;height:10px;border-radius:999px;margin-top:6px;background:rgba(255,255,255,0.18);flex:0 0 auto}
-.step-item.running .step-dot{background:var(--accent-2);box-shadow:0 0 0 5px rgba(241,194,96,0.10)}
-.step-item.done .step-dot{background:var(--accent);box-shadow:0 0 0 5px rgba(121,214,177,0.10)}
-.step-item.error .step-dot{background:var(--danger);box-shadow:0 0 0 5px rgba(240,138,124,0.10)}
+.step-dot{width:8px;height:8px;border-radius:999px;margin-top:4px;background:rgba(255,255,255,0.18);flex:0 0 auto}
+.step-item.running .step-dot{background:#ffbd2e;animation:pulse 1.2s ease-in-out infinite}
+.step-item.done .step-dot{background:#4caf50}
+.step-item.error .step-dot{background:#ff6b6b}
 .step-copy{min-width:0}
-.step-copy strong{display:block;color:var(--text);font-size:14px}
-.step-copy span{display:block;margin-top:4px;color:var(--muted);font-size:13px;line-height:1.45;word-break:break-word}
-.empty-steps{color:var(--muted);font-size:13px;line-height:1.6}
-@media (max-width:1080px){
-  .hero,.workspace{grid-template-columns:1fr}
-  .transcript-log{max-height:none}
-  .preview-stage{min-height:320px}
-}
-@media (max-width:640px){
-  body{padding:16px 12px 28px}
-  .hero-copy,.hero-aside,.composer-card,.transcript-card,.preview-card{padding:18px}
-  .sample-row,.action-row,.pill-row{flex-direction:column}
-  .cta,.ghost-btn,.sample-btn{width:100%}
-  .transcript-log{min-height:320px}
-}
+.step-copy strong{display:block;color:var(--text);font-size:12px}
+.step-copy span{display:block;margin-top:2px;color:var(--muted);font-size:11px;line-height:1.4;word-break:break-word}
+.empty-steps{color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
-<main class="shell">
-  <section class="hero">
-    <div class="card hero-copy">
-      <div class="eyebrow">First-Look Preview</div>
-      <h1>Watch the shared browser work before you install anything.</h1>
-      <p>Try a public site. Unchained will browse and show you what it is doing. This review route stays config-free and login-free, but it now tells the truth earlier when a site is a bad fit for the shared demo browser.</p>
-      <p class="hero-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page should say so instead of pretending the run is healthy.</p>
-    </div>
-    <div class="card hero-aside">
-      <div class="pill-row">
-        <span class="pill">public review route</span>
-        <span class="pill">guest-safe</span>
-        <span class="pill">honest preview fallback</span>
-      </div>
-      <div class="status-card">
-        <strong>Shared Browser</strong>
-        <div id="shared-browser-status" class="status-copy subtle">Checking shared browser availability...</div>
-      </div>
-      <div class="status-card">
-        <strong>Site Fit</strong>
-        <div id="site-fit-status" class="status-copy subtle">Paste a public URL or include one in the prompt to preflight the target.</div>
-      </div>
-      <div class="status-card">
-        <strong>Challenge State</strong>
-        <div id="challenge-status" class="status-copy subtle">No challenge signal yet.</div>
-      </div>
-    </div>
-  </section>
 
-  <section class="workspace">
-    <div class="card transcript-card">
-      <div class="composer-card" style="padding:0;border:none;background:none;box-shadow:none">
-        <div class="composer-grid">
-          <div>
-            <label for="msginput">Prompt</label>
-            <textarea id="msginput" placeholder="Open a public page, compare options, summarize what matters, and explain what you found."></textarea>
+<div id="main">
+  <div id="topbar">
+    <div class="left">
+      <span class="agent">Guest</span>
+      <span class="status online">shared demo browser</span>
+    </div>
+    <div class="nav">
+      <a href="/">Home</a>
+      <a id="browser-cta" href="/local">Continue in your browser</a>
+    </div>
+  </div>
+
+  <div id="model-notice" style="display:block"><strong>Shared demo browser:</strong> preview runs on selected public sites. <a href="/local">Continue in your browser</a> to use your own browser and your existing Claude plan.</div>
+
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="chat">
+        <div id="chat-hints">
+          <div class="hint-badge" id="quota-copy">__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs &middot; selected public sites</div>
+          <div class="hint-title">Watch the shared browser work before you install anything.</div>
+          <div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>
+          <div class="hint-panels">
+            <div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>
+            <div class="hint-panel"><strong>Site Fit</strong><span id="site-fit-status">Paste a public URL or include one in the prompt to preflight the target.</span></div>
+            <div class="hint-panel"><strong>Challenge State</strong><span id="challenge-status">No challenge signal yet.</span></div>
           </div>
-          <div>
-            <label for="urlinput">Public URL (optional)</label>
-            <input id="urlinput" type="url" inputmode="url" placeholder="https://www.wikipedia.org/">
+          <div class="hint-examples">
+            <div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Compare three computing pioneers on Wikipedia</div>
+            <div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</div>
+            <div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">&#9888;</span> Test a challenge-prone site</div>
           </div>
-          <div class="sample-row">
-            <button class="sample-btn" type="button" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/">
-              Compare three computing pioneers
-              <small>Safe shared-demo fit</small>
-            </button>
-            <button class="sample-btn" type="button" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/">
-              Pick the better coffee day
-              <small>Public data with a clear answer</small>
-            </button>
-            <button class="sample-btn" type="button" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/">
-              Test a challenge-prone site
-              <small>Should warn early instead of failing late</small>
-            </button>
-          </div>
-          <div class="action-row">
-            <button id="sendbtn" class="cta" type="button">Try It Now</button>
-            <button id="cancelbtn" class="ghost-btn" type="button" style="display:none">Cancel</button>
-            <a id="browser-cta" class="ghost-btn" href="/local">Continue in your browser</a>
-          </div>
-          <div id="quota-copy" class="quota-line"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>
+          <div class="hint-actions"><a class="hint-cta" href="/local">Connect Claude Free</a></div>
+          <div class="hint-footer">Shared demo browser on selected public sites only</div>
         </div>
       </div>
 
-      <div class="panel-title">Run Transcript</div>
-      <div id="chatlog" class="transcript-log">
-        <div class="line system">
-          <strong>How this preview works</strong>
-          <div class="body">The shared browser runs on Unchained infrastructure. If live preview frames are unavailable for a run, this page falls back to browser steps instead of pretending it is live video.</div>
+      <div id="inputbar">
+        <div id="input-fields">
+          <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."></textarea>
+          <input id="urlinput" type="url" inputmode="url" placeholder="https://www.wikipedia.org/ (optional)">
+          <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
         </div>
+        <button id="sendbtn">&#9654;</button>
+        <button id="cancelbtn">&#9632;</button>
       </div>
     </div>
 
-    <div class="card preview-card">
-      <div class="panel-title">Browser Preview</div>
-      <div class="browser-frame">
-        <div class="browser-top">
-          <div class="browser-title">
-            <div class="browser-dots"><span></span><span></span><span></span></div>
-            <span>shared-demo-browser</span>
-          </div>
+    <aside id="live-pane">
+      <div id="live-pane-head">Browser Preview</div>
+      <div id="live-window">
+        <div id="live-window-bar">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="title">shared-demo-browser</span>
           <span id="preview-mode" class="mode-pill">awaiting run</span>
         </div>
-        <div class="preview-stage">
+        <div id="live-canvas-wrap">
           <img id="preview-image" alt="Shared browser preview" style="display:none">
-          <div id="preview-empty" class="preview-empty">
-            <strong>Preview will appear here when the run emits browser frames.</strong>
-            Animated or challenge-heavy sites may still look choppy in shared mode. If that happens, the step log below remains the truthful fallback.
-          </div>
+          <div id="preview-empty">The browser preview appears here after navigation.</div>
         </div>
-        <div id="preview-note" class="preview-note">Waiting for a run. Live preview unavailable for this run. Showing browser steps instead.</div>
       </div>
-      <div class="steps-card">
-        <div class="panel-title" style="margin-bottom:0">Browser Steps</div>
+      <div id="preview-note">Waiting for a run.</div>
+      <div class="steps-wrap">
+        <div class="steps-title">Browser Steps</div>
         <div id="step-list" class="step-list">
           <div class="empty-steps">No browser steps yet.</div>
         </div>
       </div>
-    </div>
-  </section>
-</main>
+    </aside>
+  </div>
+</div>
 
 <script>
 const FIRST_LOOK_GUEST_LIMIT = __FIRST_LOOK_GUEST_LIMIT__;
@@ -11129,12 +11179,17 @@ function ensureSessionId() {
 }
 
 function updateQuotaCopy() {
-  const el = document.getElementById('quota-copy');
-  if (!el) return;
-  if (remainingGuestRuns > 0) {
-    el.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
-  } else {
-    el.innerHTML = '<strong>Guest runs used up.</strong> Continue in your browser for the reliable path.';
+  const badge = document.getElementById('quota-copy');
+  if (badge) {
+    badge.textContent = remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites';
+  }
+  const bar = document.getElementById('quota-bar');
+  if (bar) {
+    if (remainingGuestRuns > 0) {
+      bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
+    } else {
+      bar.innerHTML = '<strong>Guest runs used up.</strong> Continue in your browser for the reliable path.';
+    }
   }
 }
 
@@ -11151,11 +11206,22 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 220) + 'px';
 }
 
+function hideHints() {
+  const hints = document.getElementById('chat-hints');
+  if (hints) hints.remove();
+}
+
 function addLine(kind, title, body) {
+  hideHints();
   const row = document.createElement('div');
-  row.className = 'line ' + kind;
-  row.innerHTML = '<strong>' + esc(title) + '</strong><div class="body">' + esc(body) + '</div>';
-  document.getElementById('chatlog').appendChild(row);
+  const cls = kind === 'user' ? 'bubble user' : kind === 'assistant' ? 'bubble asst' : 'bubble system';
+  row.className = cls;
+  if (kind === 'system') {
+    row.innerHTML = '<strong>' + esc(title) + '</strong><div class="text">' + esc(body) + '</div>';
+  } else {
+    row.innerHTML = '<div class="text">' + esc(body) + '</div>';
+  }
+  document.getElementById('chat').appendChild(row);
   row.scrollIntoView({block:'end', behavior:'smooth'});
   return row;
 }
@@ -11163,7 +11229,7 @@ function addLine(kind, title, body) {
 function ensureAssistantLine() {
   if (currentAssistantEl) return currentAssistantEl;
   currentAssistantEl = addLine('assistant', 'Assistant', '');
-  currentAssistantEl.querySelector('.body').textContent = '';
+  currentAssistantEl.querySelector('.text').textContent = '';
   assistantText = '';
   return currentAssistantEl;
 }
@@ -11171,7 +11237,7 @@ function ensureAssistantLine() {
 function appendAssistantText(text) {
   const row = ensureAssistantLine();
   assistantText += String(text || '');
-  row.querySelector('.body').textContent = assistantText;
+  row.querySelector('.text').textContent = assistantText;
   row.scrollIntoView({block:'end', behavior:'smooth'});
 }
 
@@ -11200,13 +11266,15 @@ function extractPromptUrl() {
 function setStatusCopy(id, text, tone) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.className = 'status-copy ' + (tone || 'subtle');
+  el.className = tone || '';
   el.textContent = text;
 }
 
 function setPreviewNote(text, tone) {
   const el = document.getElementById('preview-note');
-  el.className = 'preview-note' + (tone ? (' ' + tone) : '');
+  if (!el) return;
+  el.className = tone || '';
+  el.id = 'preview-note';
   el.textContent = text;
 }
 
@@ -11223,7 +11291,7 @@ function closePreviewSocket() {
 }
 
 function previewViewport() {
-  const stage = document.querySelector('.preview-stage');
+  const stage = document.getElementById('live-canvas-wrap');
   const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 640};
   return {
     width: Math.max(320, Math.round(rect.width || 960)),
@@ -11297,10 +11365,11 @@ function openPreviewSocket() {
 
 function updatePreview(imageB64, note, modeLabel, mimeType) {
   const img = document.getElementById('preview-image');
-  const empty = document.getElementById('preview-empty');
+  const ph = document.getElementById('preview-empty');
+  if (!img) return;
   img.src = 'data:' + (mimeType || 'image/png') + ';base64,' + imageB64;
   img.style.display = 'block';
-  empty.style.display = 'none';
+  if (ph) ph.style.display = 'none';
   previewHasFrame = true;
   document.getElementById('preview-mode').textContent = modeLabel || 'live snapshot';
   setPreviewNote(note || 'Shared browser frame received.', 'ok');
@@ -11310,10 +11379,12 @@ function resetPreview() {
   closePreviewSocket();
   previewRetryCount = 0;
   previewHasFrame = false;
-  document.getElementById('preview-image').style.display = 'none';
-  document.getElementById('preview-empty').style.display = 'block';
+  const img = document.getElementById('preview-image');
+  const ph = document.getElementById('preview-empty');
+  if (img) { img.removeAttribute('src'); img.style.display = 'none'; }
+  if (ph) ph.style.display = 'flex';
   document.getElementById('preview-mode').textContent = 'awaiting run';
-  setPreviewNote('Waiting for a run. Live preview unavailable for this run. Showing browser steps instead.', '');
+  setPreviewNote('Waiting for a run.', '');
 }
 
 function resetSteps() {
@@ -11658,9 +11729,9 @@ document.getElementById('msginput').addEventListener('keydown', function (event)
     doSend();
   }
 });
-document.querySelectorAll('.sample-btn').forEach(function (button) {
-  button.addEventListener('click', function () {
-    fillExample(button.dataset.prompt || '', button.dataset.url || '');
+document.querySelectorAll('.hint-item').forEach(function (item) {
+  item.addEventListener('click', function () {
+    fillExample(item.dataset.prompt || '', item.dataset.url || '');
   });
 });
 
@@ -11692,6 +11763,7 @@ CHAT_GEMINI_HTML = _apply_modern_chat_theme(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _apply_modern_chat_theme(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _apply_modern_chat_theme(CHAT_CODEX_HTML)
 HEADLESS_DEMO_HTML = _apply_modern_chat_theme(HEADLESS_DEMO_HTML)
+FIRST_LOOK_PREVIEW_HTML = _apply_modern_chat_theme(FIRST_LOOK_PREVIEW_HTML)
 
 
 # ---------------------------------------------------------------------------
