@@ -29,31 +29,5 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  headless-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile.headless
-    command: [
-      "python", "chat_agent_openrouter.py",
-      "--key", "${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}",
-      "--agent", "${TRIAL_AGENT_ID:?TRIAL_AGENT_ID_required}",
-      "--server", "${UNCHAINED_SERVER:-wss://api.unchainedsky.com}"
-    ]
-    volumes:
-      - headless_data:/data
-    environment:
-      - UNCHAINED_DATA_DIR=/data
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-arcee-ai/trinity-large-preview:free}
-      - UNCHAINED_API_KEY=${UNCHAINED_API_KEY:?UNCHAINED_API_KEY_required}
-      - UNCHAINED_SERVER=${UNCHAINED_SERVER:-wss://api.unchainedsky.com}
-      - RELAY_HOST=${RELAY_HOST:-api.unchainedsky.com}
-      - RELAY_PORT=${RELAY_PORT:-443}
-      - SESSION_DIR=/data/sessions
-    depends_on:
-      headless-bridge:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   headless_data:
