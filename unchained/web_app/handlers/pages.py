@@ -702,13 +702,16 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
 
 
 async def handle_first_look_page(request: web.Request) -> web.Response:
-    """Serve the headless first-look chat HTML page."""
+    """Serve the first-look page (now uses the preview template)."""
     core = _core()
     ref = request.query.get('ref', '')[:64]
     core._track_page_view(request, meta={'ref': ref} if ref else None)
-    html = core.inject_google_client_id(core.HEADLESS_DEMO_HTML, core.GOOGLE_CLIENT_ID)
-    resp = web.Response(text=html, content_type="text/html")
     _, guest_id, quota_count = core._first_look_guest_auth(request)
+    html = _build_first_look_preview_html(
+        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+    )
+    resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
     return resp
 
