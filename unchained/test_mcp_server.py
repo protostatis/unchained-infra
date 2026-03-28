@@ -116,6 +116,33 @@ class TestDdmFrameFlagsSerialisation(unittest.IsolatedAsyncioTestCase):
 
 
 class TestDdmFrameTool(unittest.IsolatedAsyncioTestCase):
+    async def test_ddm_frame_returns_fallback_when_not_implemented(self):
+        """When private core doesn't have run_ddm_in_frame yet, agent gets actionable guidance."""
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.run_ddm_in_frame",
+                  new=AsyncMock(side_effect=NotImplementedError("Op not available in engine"))),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "ddm_frame", {"frame_id": "0"},
+            )
+        text = result.content[0].text
+        self.assertIn("not yet available", text)
+        self.assertIn("js_eval_frame", text)
+        self.assertIn("document.querySelectorAll", text)
+
+    async def test_ddm_frame_returns_fallback_on_private_core_error(self):
+        from private_core_client import PrivateCoreError
+        with (
+            patch("mcp_server._resolve_agent", return_value="claude-abc"),
+            patch("cloud_tools.run_ddm_in_frame",
+                  new=AsyncMock(side_effect=PrivateCoreError("run_ddm_in_frame not found"))),
+        ):
+            result = await mcp_server.mcp._tool_manager.call_tool(
+                "ddm_frame", {"frame_id": "0"},
+            )
+        self.assertIn("not yet available", result.content[0].text)
+
     async def test_ddm_frame_passes_frame_id_and_default_flags(self):
         """ddm_frame should call run_ddm_in_frame with the frame_id and default DDM flags."""
         fake_ddm_output = "=== DOM Density Map (frame 0) ===\n[card-number] Input\n[expiry] Input"

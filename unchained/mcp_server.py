@@ -28,6 +28,7 @@ from fastmcp.utilities.types import Image
 
 import cloud_tools
 from auth import Auth
+from private_core_client import PrivateCoreError
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -467,7 +468,18 @@ async def ddm_frame(frame_id: str, tab_id: str = "auto", agent_id: str = "") -> 
       4. js_eval_frame("0", "document.querySelector('#cardNumber').value")
     """
     aid = _resolve_agent(profile=agent_id)
-    return await cloud_tools.run_ddm_in_frame(aid, tab_id, frame_id, ["--llm-2pass", "--cols", "60"])
+    try:
+        return await cloud_tools.run_ddm_in_frame(aid, tab_id, frame_id, ["--llm-2pass", "--cols", "60"])
+    except (NotImplementedError, PrivateCoreError):
+        return (
+            "ddm_frame is not yet available on this server. "
+            "Fallback — inspect the iframe with js_eval_frame instead:\n"
+            "  Interactive elements: js_eval_frame(frame_id, "
+            "\"[...document.querySelectorAll('input,button,select,textarea,a'))"
+            ".map(e => `${e.tagName} id=${e.id} name=${e.name} placeholder=${e.placeholder}`.trim())"
+            ".join('\\n')\")\n"
+            "  Page text: js_eval_frame(frame_id, \"document.body.innerText.slice(0,2000)\")"
+        )
 
 
 @mcp.tool()
