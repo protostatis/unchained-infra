@@ -70,7 +70,14 @@ mcp = FastMCP(
         "  3. js_eval_frame(frame_id, expr) — query or manipulate elements inside\n"
         "- Ignore iframes that are ads or decorative embeds (doubleclick, ads, trackers)\n"
         "- Functional iframes to act on: payment forms (stripe.com, paypal.com), "
-        "auth widgets (accounts.google.com, apple.com), CAPTCHAs, embedded signup forms"
+        "auth widgets (accounts.google.com, apple.com), CAPTCHAs, embedded signup forms\n\n"
+
+        "## Rhythm (event-driven SPA automation)\n"
+        "For SPAs where DDM/intel gives weak results and you need to interact:\n"
+        "1. rhythm_train (once per site) — learn the page's element timing\n"
+        "2. rhythm_catch — scan page DOM for specific data terms\n"
+        "3. rhythm_execute — run multi-step plans at event speed (no LLM between steps)\n"
+        "4. rhythm_query — check what's already learned before training"
     ),
 )
 
@@ -737,6 +744,94 @@ async def list_provisioned_tabs(agent_id: str = "") -> str:
             popup = "  [popup]" if t.get("type") == "popup" else ""
             lines.append(f"  {tab_id}  {title}{popup}  {url}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Rhythm tools — event-driven SPA automation
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def rhythm_catch(
+    url: str, task: str, catch_terms: str,
+    click_text: str = "", tab_id: str = "auto", agent_id: str = "",
+) -> str:
+    """Scan an SPA page for specific data using event-driven interception.
+
+    Navigates to the URL, injects a DOM scanner, and returns text matching
+    your catch terms. Optionally click an element first to trigger SPA
+    navigation before scanning. 20-100x faster than screenshot-based extraction.
+
+    Args:
+        url: Page URL to navigate to.
+        task: What you're looking for (e.g. "find home prices in SF").
+        catch_terms: Comma-separated terms to scan for (e.g. "price,bed,sqft").
+        click_text: Optional — text of element to click before scanning.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    terms = [t.strip() for t in catch_terms.split(",") if t.strip()]
+    return await cloud_tools.run_rhythm_catch(
+        aid, tab_id, url, task, terms, click_text=click_text,
+    )
+
+
+@mcp.tool()
+async def rhythm_execute(
+    url: str, targets: str,
+    tab_id: str = "auto", agent_id: str = "",
+) -> str:
+    """Execute a multi-step action plan on a page at event speed.
+
+    Runs click/type/scroll steps using DOM MutationObservers — no LLM calls
+    between steps. 5-20x faster than screenshot-based agents.
+
+    Args:
+        url: Page URL to navigate to.
+        targets: JSON array of steps. Each step:
+            {"action": "click"|"type"|"scroll", "text": "...", "value": "..."}
+    """
+    aid = _resolve_agent(profile=agent_id)
+    try:
+        target_list = json.loads(targets)
+    except json.JSONDecodeError:
+        return "Invalid JSON in targets parameter."
+    if not isinstance(target_list, list):
+        return "targets must be a JSON array of step objects."
+    return await cloud_tools.run_rhythm_execute(aid, tab_id, url, target_list)
+
+
+@mcp.tool()
+async def rhythm_train(
+    url: str, click_link_text: str = "",
+    tab_id: str = "auto", agent_id: str = "",
+) -> str:
+    """Train Rhythm on a new SPA page by recording its interactive elements.
+
+    Call once per site pattern — the schema covers all pages matching
+    the same route (e.g. train on /product/123, works on /product/456).
+
+    Args:
+        url: Page URL to train on.
+        click_link_text: Optional — specific link to click for SPA nav observation.
+    """
+    aid = _resolve_agent(profile=agent_id)
+    return await cloud_tools.run_rhythm_train(
+        aid, tab_id, url, click_link_text=click_link_text,
+    )
+
+
+@mcp.tool()
+async def rhythm_query(
+    action: str, url: str = "", domain: str = "", agent_id: str = "",
+) -> str:
+    """Query what Rhythm already knows about sites.
+
+    Args:
+        action: "lookup_url" | "list_all" | "get_graph" | "list_sites"
+        url: Required for lookup_url.
+        domain: Required for get_graph, optional filter for list_all.
+    """
+    _resolve_agent(profile=agent_id)
+    return await cloud_tools.run_rhythm_query(action, url=url, domain=domain)
 
 
 # ---------------------------------------------------------------------------

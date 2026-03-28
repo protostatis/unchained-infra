@@ -50,6 +50,10 @@ OP_PROVISION_STATUS = _safe_import_op("OP_PROVISION_STATUS", "provision_status")
 OP_RUN_JS_IN_FRAME = _safe_import_op("OP_RUN_JS_IN_FRAME", "run_js_in_frame")
 OP_LIST_FRAMES = _safe_import_op("OP_LIST_FRAMES", "list_frames")
 OP_RUN_DDM_IN_FRAME = _safe_import_op("OP_RUN_DDM_IN_FRAME", "run_ddm_in_frame")
+OP_RHYTHM_CATCH = _safe_import_op("OP_RHYTHM_CATCH", "rhythm_catch")
+OP_RHYTHM_EXECUTE = _safe_import_op("OP_RHYTHM_EXECUTE", "rhythm_execute")
+OP_RHYTHM_TRAIN = _safe_import_op("OP_RHYTHM_TRAIN", "rhythm_train")
+OP_RHYTHM_QUERY = _safe_import_op("OP_RHYTHM_QUERY", "rhythm_query")
 
 
 class PrivateCoreError(RuntimeError):
@@ -446,6 +450,46 @@ class PrivateCoreClient:
             flags=flags,
             relay_host=relay_host,
             relay_port=relay_port,
+        )
+
+    # --- Rhythm tools ---
+
+    async def run_rhythm_catch(self, agent_id: str, tab_id: str,
+                               url: str, task: str, catch_terms: list,
+                               click_text: str = "",
+                               relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_RHYTHM_CATCH,
+            agent_id=agent_id, tab_id=tab_id,
+            url=url, task=task, catch_terms=catch_terms,
+            click_text=click_text,
+            relay_host=relay_host, relay_port=relay_port,
+        )
+
+    async def run_rhythm_execute(self, agent_id: str, tab_id: str,
+                                 url: str, targets: list,
+                                 relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_RHYTHM_EXECUTE,
+            agent_id=agent_id, tab_id=tab_id,
+            url=url, targets=targets,
+            relay_host=relay_host, relay_port=relay_port,
+        )
+
+    async def run_rhythm_train(self, agent_id: str, tab_id: str,
+                               url: str, click_link_text: str = "",
+                               relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
+        return await self.execute(
+            OP_RHYTHM_TRAIN,
+            agent_id=agent_id, tab_id=tab_id,
+            url=url, click_link_text=click_link_text,
+            relay_host=relay_host, relay_port=relay_port,
+        )
+
+    async def run_rhythm_query(self, action: str, url: str = "", domain: str = "") -> str:
+        return await self.execute(
+            OP_RHYTHM_QUERY,
+            action=action, url=url, domain=domain,
         )
 
 
