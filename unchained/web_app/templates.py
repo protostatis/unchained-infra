@@ -10975,11 +10975,14 @@ body{
 .hint-panel span.danger{color:#ff6b6b}
 .hint-examples{display:flex;flex-direction:column;gap:8px;width:100%;max-width:380px}
 .hint-item{
-  padding:10px 14px;border:1px solid #333;border-radius:10px;
+  padding:12px 16px;border:1px solid #444;border-radius:12px;
   font-size:13px;color:var(--text);cursor:pointer;text-align:left;
-  transition:border-color 0.15s;display:flex;align-items:center;gap:10px;
+  transition:border-color 0.15s,background 0.15s;display:flex;align-items:center;gap:10px;
+  background:rgba(255,255,255,0.03);
 }
-.hint-item:hover{border-color:var(--accent)}
+.hint-item::after{content:'\2192';margin-left:auto;color:var(--muted);font-size:16px;flex-shrink:0;transition:color 0.15s}
+.hint-item:hover{border-color:var(--accent);background:rgba(233,69,96,0.08)}
+.hint-item:hover::after{color:var(--accent)}
 .hint-emoji{font-size:18px;flex-shrink:0}
 .hint-note{
   margin:14px 0 4px;max-width:380px;color:#c7cedf;font-size:12px;line-height:1.6;
@@ -11132,13 +11135,11 @@ body{
           <div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>
           <div class="hint-panels">
             <div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>
-            <div class="hint-panel"><strong>Site Fit</strong><span id="site-fit-status">Paste a public URL or include one in the prompt to preflight the target.</span></div>
-            <div class="hint-panel"><strong>Challenge State</strong><span id="challenge-status">No challenge signal yet.</span></div>
           </div>
           <div class="hint-examples">
             <div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Compare three computing pioneers on Wikipedia</div>
             <div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</div>
-            <div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">&#9888;</span> Test a challenge-prone site</div>
+            <div class="hint-item" data-prompt="Show me the top 3 most expensive condos in New York on Redfin." data-url="https://www.redfin.com/"><span class="hint-emoji">&#127968;</span> Show me the top 3 most expensive condos in New York</div>
           </div>
           <div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>
           <div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>
@@ -11287,13 +11288,11 @@ function doNewChat() {
       '<div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>' +
       '<div class="hint-panels">' +
         '<div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>' +
-        '<div class="hint-panel"><strong>Site Fit</strong><span id="site-fit-status">Paste a public URL or include one in the prompt to preflight the target.</span></div>' +
-        '<div class="hint-panel"><strong>Challenge State</strong><span id="challenge-status">No challenge signal yet.</span></div>' +
       '</div>' +
       '<div class="hint-examples">' +
         '<div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare three computing pioneers on Wikipedia</div>' +
         '<div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</div>' +
-        '<div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">\u26a0</span> Test a challenge-prone site</div>' +
+        '<div class="hint-item" data-prompt="Show me the top 3 most expensive condos in New York on Redfin." data-url="https://www.redfin.com/"><span class="hint-emoji">\ud83c\udfe0</span> Show me the top 3 most expensive condos in New York</div>' +
       '</div>' +
       '<div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>' +
       '<div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>' +
