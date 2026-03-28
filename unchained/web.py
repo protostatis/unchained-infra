@@ -56,6 +56,7 @@ from web_app.templates import (
     CHAT_GEMINI_HTML,
     CHAT_HTML,
     CLAUDE_CHAT_HTML,
+    FIRST_LOOK_PREVIEW_HTML,
     HEADLESS_DEMO_HTML,
     HTML,
     INSTALL_CLAIM_HTML,

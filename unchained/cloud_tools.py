@@ -71,6 +71,36 @@ async def screenshot(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", 
     return await _client().screenshot(agent_id, tab_id, relay_host, relay_port)
 
 
+async def stream_screencast(
+    agent_id: str,
+    tab_id: str,
+    *,
+    relay_host: str = "127.0.0.1",
+    relay_port: int = 8765,
+    width: int = 1280,
+    height: int = 720,
+    quality: int = 70,
+    image_format: str = "jpeg",
+    every_nth_frame: int = 1,
+    max_frames: int = 600,
+    stream_timeout: float = 120.0,
+):
+    async for event in _client().stream_screencast(
+        agent_id,
+        tab_id,
+        relay_host=relay_host,
+        relay_port=relay_port,
+        width=width,
+        height=height,
+        quality=quality,
+        image_format=image_format,
+        every_nth_frame=every_nth_frame,
+        max_frames=max_frames,
+        stream_timeout=stream_timeout,
+    ):
+        yield event
+
+
 async def create_tab(agent_id: str, url: str = "about:blank", relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str | None:
     return await _client().create_tab(agent_id, url, relay_host, relay_port)
 

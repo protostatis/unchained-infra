@@ -9,6 +9,7 @@ from aiohttp import web
 
 
 from web_app.core import get_core as _core
+from web_app.templates import FIRST_LOOK_PREVIEW_HTML
 
 
 async def handle_install_page(request: web.Request) -> web.Response:
@@ -49,6 +50,13 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     core = _core()
     core._track_page_view(request)
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
+
+
+def _build_first_look_preview_html(*, prompt_limit: int, remaining: int) -> str:
+    html = FIRST_LOOK_PREVIEW_HTML
+    html = html.replace("__FIRST_LOOK_GUEST_LIMIT__", str(max(1, int(prompt_limit))))
+    html = html.replace("__FIRST_LOOK_GUEST_REMAINING__", str(max(0, int(remaining))))
+    return html
 
 
 def _safe_research_desk_sign_in_url(value: str) -> str:
@@ -701,6 +709,24 @@ async def handle_first_look_page(request: web.Request) -> web.Response:
     html = core.inject_google_client_id(core.HEADLESS_DEMO_HTML, core.GOOGLE_CLIENT_ID)
     resp = web.Response(text=html, content_type="text/html")
     _, guest_id, quota_count = core._first_look_guest_auth(request)
+    core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
+    return resp
+
+
+async def handle_first_look_preview_page(request: web.Request) -> web.Response:
+    """Serve the guest-safe preview route for first-look review."""
+    core = _core()
+    ref = request.query.get("ref", "")[:64]
+    meta = {"route": "first-look-preview"}
+    if ref:
+        meta["ref"] = ref
+    core._track_page_view(request, meta=meta)
+    _, guest_id, quota_count = core._first_look_guest_auth(request)
+    html = _build_first_look_preview_html(
+        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+    )
+    resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
     return resp
 
