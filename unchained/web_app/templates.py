@@ -11098,14 +11098,14 @@ body{
 <div id="quota-modal">
   <div class="quota-box">
     <h2>Shared demo complete</h2>
-    <p class="quota-sub">You've used your guest runs. Continue free with your own Claude and browser — no credit card, no extra billing.</p>
+    <p class="quota-sub">You've used your guest runs. Start a free trial to keep browsing with the full agent — no credit card required.</p>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>
-      <div class="quota-item"><strong>Why free</strong><span>You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</span></div>
-      <div class="quota-item"><strong>No sign-up wall</strong><span>Authentication just creates your personal connection key. No credit card required.</span></div>
-      <div class="quota-item"><strong>Full browser access</strong><span>Run on any site — no shared-demo restrictions or challenge issues.</span></div>
+      <div class="quota-item"><strong>Free trial</strong><span>Try the full agent on any site with no shared-demo restrictions.</span></div>
+      <div class="quota-item"><strong>No credit card</strong><span>Sign up and start browsing immediately. No billing from Unchained.</span></div>
+      <div class="quota-item"><strong>Any site</strong><span>No challenge issues or demo-only restrictions. Run on the sites you actually use.</span></div>
+      <div class="quota-item"><strong>Full browser access</strong><span>Use your own browser for reliable, unrestricted browsing.</span></div>
     </div>
-    <a href="/local" class="quota-cta">Connect Claude Free &rarr;</a>
+    <a href="/trial" class="quota-cta">Start Free Trial &rarr;</a>
     <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
@@ -11118,12 +11118,12 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a id="browser-cta" href="/local">Continue in your browser</a>
+      <a id="browser-cta" href="/trial">Start Free Trial</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
     </div>
   </div>
 
-  <div id="model-notice" style="display:block"><strong>Shared demo browser:</strong> preview runs on selected public sites. <a href="/local">Continue in your browser</a> to use your own browser and your existing Claude plan.</div>
+  <div id="model-notice" style="display:block"><strong>Shared demo browser:</strong> preview runs on selected public sites. <a href="/trial">Start a free trial</a> to browse any site with the full agent.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -11143,7 +11143,7 @@ body{
             <div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">&#9888;</span> Test a challenge-prone site</div>
           </div>
           <div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>
-          <div class="hint-actions"><a class="hint-cta" href="/local">Connect Claude Free</a></div>
+          <div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>
           <div class="hint-footer">Shared demo browser on selected public sites only</div>
         </div>
       </div>
@@ -11257,7 +11257,7 @@ function updateQuotaCopy() {
     if (remainingGuestRuns > 0) {
       bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
     } else {
-      bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/local" style="color:var(--accent)">Connect Claude Free</a> to continue with your own browser.';
+      bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/trial" style="color:var(--accent)">Start a free trial</a> to browse any site with the full agent.';
       showQuotaModal();
     }
   }
@@ -11295,7 +11295,7 @@ function doNewChat() {
         '<div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">\u26a0</span> Test a challenge-prone site</div>' +
       '</div>' +
       '<div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>' +
-      '<div class="hint-actions"><a class="hint-cta" href="/local">Connect Claude Free</a></div>' +
+      '<div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>' +
       '<div class="hint-footer">Shared demo browser on selected public sites only</div>' +
     '</div>';
   document.querySelectorAll('.hint-item').forEach(function (item) {
@@ -11553,16 +11553,13 @@ function setPolicyState(policy) {
   }
   if (policy.mode === 'shared_headless_ok') {
     setStatusCopy('site-fit-status', 'Shared demo looks like a reasonable fit for ' + (policy.host || 'this site') + '.', 'ok');
-    document.getElementById('browser-cta').textContent = 'Continue in your browser';
     return;
   }
   if (policy.mode === 'local_stealth_preferred') {
-    setStatusCopy('site-fit-status', 'This site may push back on the shared demo browser. You can still try it, but your own browser is more reliable.', 'warn');
-    document.getElementById('browser-cta').textContent = 'Continue in your browser';
+    setStatusCopy('site-fit-status', 'This site may push back on the shared demo browser. Start a free trial for reliable access.', 'warn');
     return;
   }
-  setStatusCopy('site-fit-status', 'This site is likely to challenge the shared demo browser. Best path is your own browser.', 'danger');
-  document.getElementById('browser-cta').textContent = 'Continue in your browser';
+  setStatusCopy('site-fit-status', 'This site is likely to challenge the shared demo browser. Start a free trial for reliable access.', 'danger');
 }
 
 async function requestPreflight() {
@@ -11600,7 +11597,7 @@ async function runChallengeSignalCheck() {
     const data = await resp.json();
     if (data.policy) setPolicyState(data.policy);
     if (data.challenge && data.challenge.blocked) {
-      setStatusCopy('challenge-status', 'This run appears to have hit human verification. Continue in your browser for the reliable path.', 'danger');
+      setStatusCopy('challenge-status', 'This run appears to have hit human verification. Start a free trial for unrestricted access.', 'danger');
       if (!previewHasFrame) {
         setPreviewNote('This run appears to have hit human verification. Shared preview may stop here.', 'danger');
       }
@@ -11724,7 +11721,7 @@ async function doSend() {
       if (resp.status === 429 && data.error === 'demo_quota_exceeded') {
         remainingGuestRuns = 0;
         updateQuotaCopy();
-        addLine('system', 'Quota', 'Guest runs used up. Continue in your browser for the reliable path.');
+        addLine('system', 'Quota', 'Guest runs used up. Start a free trial to browse any site with the full agent.');
         return;
       }
       addLine('system', 'Error', String(data.error || resp.statusText || 'Request failed'));
