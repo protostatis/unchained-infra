@@ -60,6 +60,35 @@ def _decode_type_text_arg(text: str) -> str:
     return text.replace(r"\r\n", "\r\n").replace(r"\n", "\n").replace(r"\r", "\r")
 
 
+def _parse_flags(args: list, known: dict, positional: int = 0) -> dict:
+    """Parse known --flags from args, warn on unknown ones.
+
+    Args:
+        args: Argument list after positional args are consumed.
+        known: Map of flag name (without --) to default value.
+        positional: Number of leading positional args to skip.
+    Returns:
+        dict with parsed values. Positional args under '_pos'.
+    """
+    result = {k: v for k, v in known.items()}
+    result["_pos"] = args[:positional]
+    i = positional
+    while i < len(args):
+        flag = args[i]
+        if flag.startswith("--"):
+            name = flag[2:]
+            if name in known and i + 1 < len(args):
+                result[name] = args[i + 1]
+                i += 2
+            else:
+                print(f"Warning: unknown flag '{flag}'", file=sys.stderr)
+                i += 1
+        else:
+            print(f"Warning: unexpected argument '{args[i]}'", file=sys.stderr)
+            i += 1
+    return result
+
+
 async def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
@@ -166,41 +195,29 @@ async def main():
             if not args:
                 print("Usage: cdp_tool.py rhythm_train <url> [--click <text>]", file=sys.stderr)
                 sys.exit(1)
-            url = args[0]
-            click_link_text = ""
-            j = 1
-            while j < len(args):
-                if args[j] == "--click" and j + 1 < len(args):
-                    click_link_text = args[j + 1]
-                    j += 2
-                else:
-                    j += 1
+            parsed = _parse_flags(args, {"click": ""}, positional=1)
             result = await cloud_tools.run_rhythm_train(
-                AGENT_ID, tab_id, url, click_link_text=click_link_text,
+                AGENT_ID, tab_id, parsed["_pos"][0],
+                click_link_text=parsed["click"],
                 relay_host=RELAY_HOST, relay_port=RELAY_PORT)
 
         elif cmd == "rhythm_catch":
             if len(args) < 3:
                 print("Usage: cdp_tool.py rhythm_catch <url> <task> <catch_terms> [--click <text>]", file=sys.stderr)
                 sys.exit(1)
-            url, task, catch_terms = args[0], args[1], args[2]
+            parsed = _parse_flags(args, {"click": ""}, positional=3)
+            url, task, catch_terms = parsed["_pos"]
             terms = [t.strip() for t in catch_terms.split(",") if t.strip()]
-            click_text = ""
-            j = 3
-            while j < len(args):
-                if args[j] == "--click" and j + 1 < len(args):
-                    click_text = args[j + 1]
-                    j += 2
-                else:
-                    j += 1
             result = await cloud_tools.run_rhythm_catch(
-                AGENT_ID, tab_id, url, task, terms, click_text=click_text,
+                AGENT_ID, tab_id, url, task, terms,
+                click_text=parsed["click"],
                 relay_host=RELAY_HOST, relay_port=RELAY_PORT)
 
         elif cmd == "rhythm_execute":
             if len(args) < 2:
                 print("Usage: cdp_tool.py rhythm_execute <url> <targets_json>", file=sys.stderr)
                 sys.exit(1)
+            _parse_flags(args, {}, positional=2)  # warn on unknown flags
             url = args[0]
             try:
                 target_list = json.loads(args[1])
@@ -218,20 +235,9 @@ async def main():
             if not args:
                 print("Usage: cdp_tool.py rhythm_query <action> [--url <url>] [--domain <domain>]", file=sys.stderr)
                 sys.exit(1)
-            action = args[0]
-            url = ""
-            domain = ""
-            j = 1
-            while j < len(args):
-                if args[j] == "--url" and j + 1 < len(args):
-                    url = args[j + 1]
-                    j += 2
-                elif args[j] == "--domain" and j + 1 < len(args):
-                    domain = args[j + 1]
-                    j += 2
-                else:
-                    j += 1
-            result = await cloud_tools.run_rhythm_query(action, url=url, domain=domain)
+            parsed = _parse_flags(args, {"url": "", "domain": ""}, positional=1)
+            result = await cloud_tools.run_rhythm_query(
+                parsed["_pos"][0], url=parsed["url"], domain=parsed["domain"])
 
         else:
             print(f"Unknown command: {cmd}", file=sys.stderr)

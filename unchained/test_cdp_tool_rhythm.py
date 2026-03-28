@@ -177,9 +177,30 @@ class TestCdpToolRhythmCLI(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("Usage", r.stderr)
 
-    def test_tab_flag_works_with_rhythm(self):
+    def test_rhythm_query_with_domain(self):
+        r = _run_cdp(["cdp_tool.py", "rhythm_query", "get_graph", "--domain", "ex.com"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_tab_flag_works_with_rhythm_train(self):
         r = _run_cdp(["cdp_tool.py", "rhythm_train", "--tab", "my-tab", "https://ex.com"])
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_tab_flag_works_with_rhythm_catch(self):
+        r = _run_cdp(["cdp_tool.py", "rhythm_catch", "--tab", "my-tab", "https://ex.com", "task", "terms"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_tab_flag_works_with_rhythm_execute(self):
+        r = _run_cdp(["cdp_tool.py", "rhythm_execute", "--tab", "my-tab", "https://ex.com", '[{"action":"click","text":"X"}]'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_tab_flag_works_with_rhythm_query(self):
+        r = _run_cdp(["cdp_tool.py", "rhythm_query", "--tab", "my-tab", "list_all"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_unknown_flag_warns(self):
+        r = _run_cdp(["cdp_tool.py", "rhythm_train", "https://ex.com", "--bogus", "val"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Warning", r.stderr)
 
 
 if __name__ == "__main__":
