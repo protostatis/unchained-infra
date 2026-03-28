@@ -10798,6 +10798,7 @@ FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -10922,6 +10923,24 @@ body{
   border:1px solid #2a3a5e;border-bottom-left-radius:4px;
 }
 .bubble.asst .text{white-space:pre-wrap}
+.bubble.asst .text.rendered{white-space:normal}
+.bubble.asst .text.rendered p{margin:0.5em 0}
+.bubble.asst .text.rendered p:first-child{margin-top:0}
+.bubble.asst .text.rendered p:last-child{margin-bottom:0}
+.bubble.asst .text.rendered h1{font-size:1.3em;margin:0.8em 0 0.4em;font-weight:700;color:var(--accent)}
+.bubble.asst .text.rendered h2{font-size:1.15em;margin:0.7em 0 0.35em;font-weight:600;color:var(--accent)}
+.bubble.asst .text.rendered h3{font-size:1.05em;margin:0.6em 0 0.3em;font-weight:600}
+.bubble.asst .text.rendered code{background:rgba(255,255,255,0.08);padding:2px 5px;border-radius:3px;font-family:var(--mono);font-size:0.88em}
+.bubble.asst .text.rendered pre{background:#0d1117;border-radius:6px;padding:12px;margin:8px 0;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.bubble.asst .text.rendered pre code{background:none;padding:0;font-size:12px;line-height:1.5}
+.bubble.asst .text.rendered a{color:var(--accent);text-decoration:underline}
+.bubble.asst .text.rendered ul,.bubble.asst .text.rendered ol{margin:0.4em 0;padding-left:1.5em}
+.bubble.asst .text.rendered li{margin:0.2em 0}
+.bubble.asst .text.rendered blockquote{border-left:3px solid var(--accent);padding-left:12px;margin:0.5em 0;color:var(--muted)}
+.bubble.asst .text.rendered table{border-collapse:collapse;margin:0.5em 0;width:100%;font-size:13px}
+.bubble.asst .text.rendered th,.bubble.asst .text.rendered td{border:1px solid #333;padding:6px 10px}
+.bubble.asst .text.rendered th{background:rgba(255,255,255,0.05);font-weight:600}
+.bubble.asst .text.rendered strong{font-weight:600}
 .bubble.system{
   align-self:flex-start;background:rgba(255,255,255,0.03);
   border:1px dashed #333;font-size:13px;
@@ -11322,10 +11341,25 @@ function ensureAssistantLine() {
   return currentAssistantEl;
 }
 
+function renderMarkdown(el, raw) {
+  if (typeof marked !== 'undefined') {
+    try {
+      el.innerHTML = marked.parse(raw);
+      el.classList.add('rendered');
+    } catch (_err) {
+      el.textContent = raw;
+      el.classList.remove('rendered');
+    }
+  } else {
+    el.textContent = raw;
+  }
+}
+
 function appendAssistantText(text) {
   const row = ensureAssistantLine();
   assistantText += String(text || '');
-  row.querySelector('.text').textContent = assistantText;
+  const span = row.querySelector('.text');
+  renderMarkdown(span, assistantText);
   row.scrollIntoView({block:'end', behavior:'smooth'});
 }
 
