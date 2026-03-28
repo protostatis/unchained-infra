@@ -220,13 +220,13 @@ EOF
 # Upload rhythm build-context directory
 if [[ -d "$RHYTHM_DST/rhythm" ]]; then
     echo "==> Uploading rhythm..."
-    remote_bash "$REMOTE_DIR" <<'EOF'
+    remote_bash "$REMOTE_DIR" <<EOF
 set -euo pipefail
-remote_dir="$1"
-rm -rf "$remote_dir/rhythm"
-mkdir -p "$remote_dir/rhythm"
+[[ -n "$REMOTE_DIR" ]] || { echo 'REMOTE_DIR is empty — aborting'; exit 1; }
+rm -rf "$REMOTE_DIR/rhythm"
+mkdir -p "$REMOTE_DIR/rhythm"
 EOF
-    "${SCP_CMD[@]}" -r "$RHYTHM_DST/rhythm" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/rhythm/"
+    "${SCP_CMD[@]}" -r "$RHYTHM_DST/rhythm" "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
     shopt -s nullglob
     RHYTHM_TOP_FILES=("$RHYTHM_DST"/*.py "$RHYTHM_DST"/*.js)
     shopt -u nullglob
