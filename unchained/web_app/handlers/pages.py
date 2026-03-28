@@ -24,7 +24,16 @@ async def handle_cli_page(request: web.Request) -> web.Response:
     core = _core()
     core._track_page_view(request)
     from web_app.templates import CLI_INSTALL_HTML
-    return web.Response(text=CLI_INSTALL_HTML, content_type="text/html")
+    return web.Response(
+        text=CLI_INSTALL_HTML,
+        content_type="text/html",
+        headers={
+            "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
+    )
 
 
 async def handle_mcp_page(request: web.Request) -> web.Response:

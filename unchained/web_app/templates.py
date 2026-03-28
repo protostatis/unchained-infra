@@ -668,7 +668,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>unchained launch &amp;&amp; unchained navigate &lt;url&gt;</div>
       </div>
       <a href="/cli" class="card-btn">Install Guide &#8594;</a>
-      <a href="https://github.com/protostatis/unchainedsky-cli" class="card-btn card-btn-secondary">GitHub &#8594;</a>
+      <a href="https://github.com/protostatis/unchainedsky-cli" rel="noopener noreferrer" class="card-btn card-btn-secondary">GitHub &#8594;</a>
     </div>
 
     <!-- MCP -->
@@ -15032,9 +15032,9 @@ unchained agent "find the cheapest flight to NYC"<button class="copy" onclick="c
     <div class="card-title">Verify</div>
     <div class="cmd" style="color:var(--text)">unchained --help<button class="copy" onclick="copyCmd(this)">copy</button></div>
     <div class="note" style="margin-top:10px">
-      <a href="https://github.com/protostatis/unchainedsky-cli">GitHub</a> &middot;
-      <a href="https://pypi.org/project/unchainedsky-cli/">PyPI</a> &middot;
-      <a href="https://github.com/protostatis/unchainedsky-cli/releases">Releases</a>
+      <a href="https://github.com/protostatis/unchainedsky-cli" rel="noopener noreferrer">GitHub</a> &middot;
+      <a href="https://pypi.org/project/unchainedsky-cli/" rel="noopener noreferrer">PyPI</a> &middot;
+      <a href="https://github.com/protostatis/unchainedsky-cli/releases" rel="noopener noreferrer">Releases</a>
     </div>
   </div>
 
