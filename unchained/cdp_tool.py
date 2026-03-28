@@ -18,6 +18,10 @@ Usage:
     uv run python cdp_tool.py screenshot
     uv run python cdp_tool.py intel --probe
     uv run python cdp_tool.py intel --extract
+    uv run python cdp_tool.py rhythm_train https://example.com
+    uv run python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"
+    uv run python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'
+    uv run python cdp_tool.py rhythm_query list_all
 
 Environment variables (set by chat_agent_cli.py):
     CDP_AGENT_ID   — Agent ID (default: a-7fba49f4)
@@ -27,6 +31,7 @@ Environment variables (set by chat_agent_cli.py):
 """
 
 import asyncio
+import json
 import os
 import sys
 
@@ -55,10 +60,39 @@ def _decode_type_text_arg(text: str) -> str:
     return text.replace(r"\r\n", "\r\n").replace(r"\n", "\n").replace(r"\r", "\r")
 
 
+def _parse_flags(args: list, known: dict, positional: int = 0) -> dict:
+    """Parse known --flags from args, warn on unknown ones.
+
+    Args:
+        args: Argument list after positional args are consumed.
+        known: Map of flag name (without --) to default value.
+        positional: Number of leading positional args to skip.
+    Returns:
+        dict with parsed values. Positional args under '_pos'.
+    """
+    result = {k: v for k, v in known.items()}
+    result["_pos"] = args[:positional]
+    i = positional
+    while i < len(args):
+        flag = args[i]
+        if flag.startswith("--"):
+            name = flag[2:]
+            if name in known and i + 1 < len(args):
+                result[name] = args[i + 1]
+                i += 2
+            else:
+                print(f"Warning: unknown flag '{flag}'", file=sys.stderr)
+                i += 1
+        else:
+            print(f"Warning: unexpected argument '{args[i]}'", file=sys.stderr)
+            i += 1
+    return result
+
+
 async def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
-        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf")
+        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf, rhythm_train, rhythm_catch, rhythm_execute, rhythm_query")
         print("Use --tab <id> to target a specific tab (default: auto = first tab)")
         sys.exit(1)
 
@@ -156,6 +190,54 @@ async def main():
             flags = ["--pdf"] + args
             result = await cloud_tools.run_ddm(
                 AGENT_ID, tab_id, flags, RELAY_HOST, RELAY_PORT)
+
+        elif cmd == "rhythm_train":
+            if not args:
+                print("Usage: cdp_tool.py rhythm_train <url> [--click <text>]", file=sys.stderr)
+                sys.exit(1)
+            parsed = _parse_flags(args, {"click": ""}, positional=1)
+            result = await cloud_tools.run_rhythm_train(
+                AGENT_ID, tab_id, parsed["_pos"][0],
+                click_link_text=parsed["click"],
+                relay_host=RELAY_HOST, relay_port=RELAY_PORT)
+
+        elif cmd == "rhythm_catch":
+            if len(args) < 3:
+                print("Usage: cdp_tool.py rhythm_catch <url> <task> <catch_terms> [--click <text>]", file=sys.stderr)
+                sys.exit(1)
+            parsed = _parse_flags(args, {"click": ""}, positional=3)
+            url, task, catch_terms = parsed["_pos"]
+            terms = [t.strip() for t in catch_terms.split(",") if t.strip()]
+            result = await cloud_tools.run_rhythm_catch(
+                AGENT_ID, tab_id, url, task, terms,
+                click_text=parsed["click"],
+                relay_host=RELAY_HOST, relay_port=RELAY_PORT)
+
+        elif cmd == "rhythm_execute":
+            if len(args) < 2:
+                print("Usage: cdp_tool.py rhythm_execute <url> <targets_json>", file=sys.stderr)
+                sys.exit(1)
+            _parse_flags(args, {}, positional=2)  # warn on unknown flags
+            url = args[0]
+            try:
+                target_list = json.loads(args[1])
+            except json.JSONDecodeError:
+                print("Invalid JSON in targets parameter.", file=sys.stderr)
+                sys.exit(1)
+            if not isinstance(target_list, list):
+                print("targets must be a JSON array of step objects.", file=sys.stderr)
+                sys.exit(1)
+            result = await cloud_tools.run_rhythm_execute(
+                AGENT_ID, tab_id, url, target_list,
+                relay_host=RELAY_HOST, relay_port=RELAY_PORT)
+
+        elif cmd == "rhythm_query":
+            if not args:
+                print("Usage: cdp_tool.py rhythm_query <action> [--url <url>] [--domain <domain>]", file=sys.stderr)
+                sys.exit(1)
+            parsed = _parse_flags(args, {"url": "", "domain": ""}, positional=1)
+            result = await cloud_tools.run_rhythm_query(
+                parsed["_pos"][0], url=parsed["url"], domain=parsed["domain"])
 
         else:
             print(f"Unknown command: {cmd}", file=sys.stderr)

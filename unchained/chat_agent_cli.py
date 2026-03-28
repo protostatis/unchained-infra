@@ -1127,6 +1127,23 @@ uv run python cdp_tool.py tabs                          # List open Chrome tabs
 uv run python cdp_tool.py new-tab https://example.com   # Open URL in a new tab
 uv run python cdp_tool.py close-tab <tab_id>            # Close a tab by ID
 
+## Rhythm (for SPAs where ddm --text returns <200 chars)
+
+When ddm --text is weak on JS-heavy pages (card grids, React apps, infinite scroll):
+1. `rhythm_query lookup_url --url <url>` — already trained? skip to step 3
+2. `rhythm_train <url>` — learn site once (covers same route pattern)
+3. `rhythm_catch <url> <task> <catch_terms>` — scan DOM for data, 20-100x faster
+
+catch_terms: comma-separated domain keywords from user's task (4-8 nouns).
+  "find homes in Austin" → "price,bed,bath,sqft,address"
+  "compare GPU prices"   → "price,GPU,RTX,stock,seller"
+
+uv run python cdp_tool.py rhythm_query lookup_url --url https://example.com                        # Check if trained
+uv run python cdp_tool.py rhythm_train https://example.com                                         # Learn site elements
+uv run python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"          # Scan for data
+uv run python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'  # Multi-step actions
+uv run python cdp_tool.py rhythm_query list_all                                                    # List trained sites
+
 ## DDM-First Methodology
 
 1. **ORIENT**: `navigate` and `click` return DDM page layout in their output (under "=== Page Layout ==="). Read that section — do NOT call `ddm` separately after navigate or click. If "=== Page Layout ===" is missing, run `ddm --llm-2pass --cols 60` as fallback. Only call `ddm` separately after `type`, for `--text`, `--at x,y`, `--find`, or `--js`.
@@ -1140,6 +1157,7 @@ uv run python cdp_tool.py close-tab <tab_id>            # Close a tab by ID
    - SPA data store (Nuxt/YouTube): `intel --stores` → `intel --find-paths` → `js`
    - Structured data: `js` with querySelectorAll
    - data-testid (GitHub): `intel --extract --strategy data_testid`
+   - JS-heavy SPAs / card grids: `rhythm_train` → `rhythm_catch` (if DDM/intel give weak results)
 
 ## Tab Management
 
@@ -1227,6 +1245,10 @@ Use CDP tools via Bash:
 - uv run python cdp_tool.py submit_form
 - uv run python cdp_tool.py js "document.title"
 - uv run python cdp_tool.py intel --probe
+- uv run python cdp_tool.py rhythm_train "https://example.com"
+- uv run python cdp_tool.py rhythm_catch "https://example.com" "find prices" "price,bed,sqft"
+- uv run python cdp_tool.py rhythm_execute "https://example.com" '[{"action":"click","text":"Next"}]'
+- uv run python cdp_tool.py rhythm_query list_all
 
 IMPORTANT shell rules:
 - NEVER use `cd` — your working directory is already correct.
