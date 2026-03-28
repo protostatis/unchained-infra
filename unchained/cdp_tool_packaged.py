@@ -277,7 +277,7 @@ def main():
                     j += 2
                 else:
                     j += 1
-            result = cmd("rhythm_query", tab_id=tab_id, action=action, url=url, domain=domain)
+            result = cmd("rhythm_query", tab_id=tab_id, query_action=action, url=url, domain=domain)
         else:
             print(f"Unknown command: {command}", file=sys.stderr)
             sys.exit(1)

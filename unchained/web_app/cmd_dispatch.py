@@ -121,7 +121,7 @@ async def _cmd_rhythm_execute(body, agent_id, tab_id, relay_host, relay_port, cl
 
 
 async def _cmd_rhythm_query(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
-    query_action = body.get("action")
+    query_action = body.get("query_action")
     if not query_action:
         raise CmdInputError("action required")
     result = await cloud_tools.run_rhythm_query(
