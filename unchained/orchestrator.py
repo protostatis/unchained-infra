@@ -564,13 +564,16 @@ class Orchestrator:
                     click_text=input_data.get("click_text", ""))
 
             elif name == "rhythm_execute":
-                import json
-                try:
-                    target_list = json.loads(input_data["targets"])
-                except json.JSONDecodeError:
-                    return "Invalid JSON in targets parameter."
-                if not isinstance(target_list, list):
-                    return "targets must be a JSON array of step objects."
+                raw = input_data["targets"]
+                if isinstance(raw, list):
+                    target_list = raw
+                else:
+                    try:
+                        target_list = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        return "Invalid JSON in targets parameter."
+                    if not isinstance(target_list, list):
+                        return "targets must be a JSON array of step objects."
                 return await cloud_tools.run_rhythm_execute(
                     self.agent_id, tab_id, input_data["url"], target_list)
 
