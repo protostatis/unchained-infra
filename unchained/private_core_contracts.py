@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 CORE_EXECUTE_PATH = "/core/execute"
+CORE_SCREENCAST_PATH = "/core/screencast"
 
 # Operation names accepted by the private core service.
 OP_RUN_DDM = "run_ddm"

@@ -7,13 +7,16 @@ Modes:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
+import aiohttp
 import httpx
 
 from private_core_contracts import (
     CORE_EXECUTE_PATH,
+    CORE_SCREENCAST_PATH,
     OP_CLICK,
     OP_CLOSE_TAB,
     OP_CREATE_TAB,
@@ -177,6 +180,94 @@ class PrivateCoreClient:
         if fn is None:
             raise NotImplementedError(f"Op {op!r} not available in engine")
         return await fn(**kwargs)
+
+    async def stream_screencast(
+        self,
+        agent_id: str,
+        tab_id: str,
+        *,
+        relay_host: str = "127.0.0.1",
+        relay_port: int = 8765,
+        width: int = 1280,
+        height: int = 720,
+        quality: int = 70,
+        image_format: str = "jpeg",
+        every_nth_frame: int = 1,
+        max_frames: int = 600,
+        stream_timeout: float = 120.0,
+    ):
+        """Yield screencast websocket events from private-core."""
+        if self.mode == "http":
+            if not self.base_url:
+                raise PrivateCoreError("PRIVATE_CORE_URL is required for http mode")
+            headers: dict[str, str] = {}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            params = {
+                "agent_id": agent_id,
+                "tab_id": tab_id,
+                "width": str(width),
+                "height": str(height),
+                "quality": str(quality),
+                "format": image_format,
+                "every_nth_frame": str(every_nth_frame),
+                "max_frames": str(max_frames),
+                "stream_timeout": str(stream_timeout),
+            }
+            timeout = aiohttp.ClientTimeout(total=None, sock_connect=self.timeout_seconds, sock_read=None)
+            try:
+                async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                    async with session.ws_connect(
+                        f"{self.base_url}{CORE_SCREENCAST_PATH}",
+                        params=params,
+                        heartbeat=30,
+                        autoping=True,
+                    ) as ws:
+                        async for msg in ws:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                try:
+                                    payload = json.loads(msg.data)
+                                except Exception as exc:
+                                    raise PrivateCoreError("Invalid screencast message from private core") from exc
+                                if isinstance(payload, dict):
+                                    yield payload
+                                    if payload.get("type") == "status":
+                                        return
+                            elif msg.type in {
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSED,
+                                aiohttp.WSMsgType.CLOSING,
+                            }:
+                                return
+                            elif msg.type == aiohttp.WSMsgType.ERROR:
+                                raise PrivateCoreError("Private core screencast websocket error")
+            except Exception as exc:
+                if isinstance(exc, PrivateCoreError):
+                    raise
+                raise PrivateCoreError(f"Failed to reach private core screencast: {exc}") from exc
+            return
+
+        import private_core_engine as engine
+
+        async for frame in engine.stream_screencast(
+            agent_id,
+            tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            width=width,
+            height=height,
+            quality=quality,
+            image_format=image_format,
+            every_nth_frame=every_nth_frame,
+            max_frames=max_frames,
+            stream_timeout=stream_timeout,
+        ):
+            yield {
+                "type": "frame",
+                "mime": frame.get("mime", "image/jpeg"),
+                "data": frame.get("data", ""),
+                "metadata": frame.get("metadata", {}),
+            }
 
     async def run_ddm(self, agent_id: str, tab_id: str, flags: list[str], relay_host: str, relay_port: int) -> str:
         return await self.execute(

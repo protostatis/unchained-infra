@@ -10768,6 +10768,895 @@ body{
 </style>"""
 
 
+FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Unchained First Look Preview</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+*{box-sizing:border-box}
+:root{
+  color-scheme:dark;
+  --bg:#08111a;
+  --panel:#10202b;
+  --panel-2:#152936;
+  --panel-3:#0d1821;
+  --line:rgba(173,197,208,0.18);
+  --line-strong:rgba(218,233,240,0.24);
+  --text:#eff6f8;
+  --muted:#9bb0ba;
+  --accent:#79d6b1;
+  --accent-2:#f1c260;
+  --danger:#f08a7c;
+  --ok-bg:rgba(121,214,177,0.12);
+  --warn-bg:rgba(241,194,96,0.12);
+  --danger-bg:rgba(240,138,124,0.12);
+  --shadow:0 24px 80px rgba(0,0,0,0.28);
+  --mono:'IBM Plex Mono','SFMono-Regular','Consolas',monospace;
+  --sans:'Space Grotesk','Segoe UI',sans-serif;
+}
+html,body{margin:0;min-height:100%;background:
+  radial-gradient(circle at top left, rgba(121,214,177,0.16), transparent 28%),
+  radial-gradient(circle at top right, rgba(241,194,96,0.12), transparent 24%),
+  linear-gradient(180deg,#071018 0%,#08111a 55%,#050a0f 100%);
+  color:var(--text);font-family:var(--sans)}
+body{padding:28px 18px 40px}
+a{color:inherit}
+.shell{max-width:1280px;margin:0 auto;display:grid;gap:18px}
+.hero,.workspace{display:grid;gap:18px}
+.hero{grid-template-columns:1.08fr 0.92fr}
+.workspace{grid-template-columns:minmax(0,1.05fr) minmax(0,0.95fr)}
+.card{
+  border:1px solid var(--line);
+  border-radius:24px;
+  background:linear-gradient(180deg,rgba(21,41,54,0.92),rgba(12,24,33,0.94));
+  box-shadow:var(--shadow);
+  backdrop-filter:blur(12px);
+}
+.hero-copy{padding:28px}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;
+  font-family:var(--mono);font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent)
+}
+.eyebrow::before{content:'';width:10px;height:10px;border-radius:999px;background:var(--accent);box-shadow:0 0 18px rgba(121,214,177,0.55)}
+h1{margin:0 0 12px;font-size:clamp(34px,5vw,60px);line-height:0.94;letter-spacing:-0.04em}
+.hero-copy p{margin:0;color:var(--muted);font-size:17px;line-height:1.65;max-width:58ch}
+.hero-copy .hero-note{margin-top:14px;font-size:13px;color:#cde1e7}
+.hero-aside{padding:22px;display:grid;gap:12px}
+.pill-row,.sample-row,.action-row{display:flex;gap:10px;flex-wrap:wrap}
+.pill{
+  display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;
+  border:1px solid var(--line);background:rgba(255,255,255,0.03);font-size:12px;color:var(--muted)
+}
+.status-card{
+  border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.03)
+}
+.status-card strong,.composer-card label,.panel-title{
+  display:block;margin-bottom:6px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase
+}
+.status-card strong{color:var(--accent-2)}
+.status-copy{color:var(--text);font-size:15px;line-height:1.45}
+.status-copy.subtle{color:var(--muted)}
+.status-copy.ok{color:#b9f1d8}
+.status-copy.warn{color:#f7d996}
+.status-copy.danger{color:#f3aa9f}
+.composer-card{padding:22px}
+.composer-grid{display:grid;gap:14px}
+.composer-card label{color:#c2d6dc}
+.composer-card textarea,.composer-card input{
+  width:100%;border:1px solid var(--line);border-radius:18px;background:rgba(5,10,15,0.38);
+  color:var(--text);padding:14px 16px;font:inherit;resize:none;outline:none
+}
+.composer-card textarea{min-height:132px;line-height:1.55}
+.composer-card textarea:focus,.composer-card input:focus{border-color:rgba(121,214,177,0.45);box-shadow:0 0 0 3px rgba(121,214,177,0.10)}
+.sample-btn,.cta,.ghost-btn{
+  appearance:none;border:none;border-radius:999px;cursor:pointer;text-decoration:none;font:inherit
+}
+.sample-btn{
+  border:1px solid var(--line);padding:10px 14px;background:rgba(255,255,255,0.04);color:var(--text);
+  text-align:left;min-height:52px
+}
+.sample-btn:hover,.ghost-btn:hover{border-color:var(--line-strong);background:rgba(255,255,255,0.06)}
+.sample-btn small{display:block;margin-top:4px;color:var(--muted)}
+.action-row{align-items:center}
+.cta,.ghost-btn{
+  display:inline-flex;align-items:center;justify-content:center;padding:13px 18px;font-weight:700
+}
+.cta{
+  background:linear-gradient(90deg,var(--accent),#a8f7d9);color:#062018;box-shadow:0 12px 24px rgba(121,214,177,0.18)
+}
+.cta:disabled{opacity:0.45;cursor:not-allowed;box-shadow:none}
+.ghost-btn{
+  border:1px solid var(--line);background:rgba(255,255,255,0.03);color:var(--text)
+}
+.quota-line{font-size:13px;color:var(--muted)}
+.quota-line strong{color:var(--text)}
+.workspace .card{min-height:0}
+.transcript-card,.preview-card{padding:22px;display:grid;gap:14px}
+.panel-title{color:var(--accent)}
+.transcript-log{
+  min-height:420px;max-height:68vh;overflow:auto;padding-right:4px;display:grid;gap:10px
+}
+.line{
+  border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.03)
+}
+.line.user{margin-left:auto;max-width:88%;background:rgba(121,214,177,0.10);border-color:rgba(121,214,177,0.18)}
+.line.assistant{max-width:92%}
+.line.system{border-style:dashed;background:rgba(255,255,255,0.02)}
+.line strong{display:block;margin-bottom:6px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent-2)}
+.line .body{color:var(--text);white-space:pre-wrap;line-height:1.6}
+.browser-frame{
+  border:1px solid var(--line-strong);border-radius:22px;background:#0a1218;overflow:hidden;display:grid;gap:0
+}
+.browser-top{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;
+  border-bottom:1px solid var(--line);background:rgba(255,255,255,0.03)
+}
+.browser-title{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px;color:#d9e8ed}
+.browser-dots{display:flex;gap:6px}
+.browser-dots span{width:10px;height:10px;border-radius:999px;display:block;background:rgba(255,255,255,0.18)}
+.browser-dots span:nth-child(1){background:#f28f7e}
+.browser-dots span:nth-child(2){background:#f1c260}
+.browser-dots span:nth-child(3){background:#79d6b1}
+.mode-pill{
+  border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--muted)
+}
+.preview-stage{
+  min-height:420px;display:grid;place-items:center;padding:16px;background:
+    linear-gradient(180deg,rgba(8,17,26,0.1),rgba(8,17,26,0.36)),
+    radial-gradient(circle at 20% 20%,rgba(121,214,177,0.08),transparent 24%),
+    radial-gradient(circle at 80% 0%,rgba(241,194,96,0.08),transparent 22%),
+    #091118
+}
+.preview-stage img{max-width:100%;max-height:56vh;border-radius:16px;border:1px solid var(--line);box-shadow:0 18px 50px rgba(0,0,0,0.32)}
+.preview-empty{max-width:420px;text-align:center;color:var(--muted);line-height:1.6}
+.preview-empty strong{display:block;margin-bottom:8px;color:var(--text);font-size:18px}
+.preview-note{
+  border-top:1px solid var(--line);padding:12px 14px;font-size:13px;line-height:1.5;color:var(--muted)
+}
+.preview-note.warn{color:#f7d996;background:var(--warn-bg)}
+.preview-note.danger{color:#f3aa9f;background:var(--danger-bg)}
+.preview-note.ok{color:#b9f1d8;background:var(--ok-bg)}
+.steps-card{
+  border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,0.03);padding:14px;display:grid;gap:10px
+}
+.step-list{display:grid;gap:8px}
+.step-item{
+  display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line);border-radius:14px;padding:10px 12px;background:rgba(255,255,255,0.02)
+}
+.step-dot{width:10px;height:10px;border-radius:999px;margin-top:6px;background:rgba(255,255,255,0.18);flex:0 0 auto}
+.step-item.running .step-dot{background:var(--accent-2);box-shadow:0 0 0 5px rgba(241,194,96,0.10)}
+.step-item.done .step-dot{background:var(--accent);box-shadow:0 0 0 5px rgba(121,214,177,0.10)}
+.step-item.error .step-dot{background:var(--danger);box-shadow:0 0 0 5px rgba(240,138,124,0.10)}
+.step-copy{min-width:0}
+.step-copy strong{display:block;color:var(--text);font-size:14px}
+.step-copy span{display:block;margin-top:4px;color:var(--muted);font-size:13px;line-height:1.45;word-break:break-word}
+.empty-steps{color:var(--muted);font-size:13px;line-height:1.6}
+@media (max-width:1080px){
+  .hero,.workspace{grid-template-columns:1fr}
+  .transcript-log{max-height:none}
+  .preview-stage{min-height:320px}
+}
+@media (max-width:640px){
+  body{padding:16px 12px 28px}
+  .hero-copy,.hero-aside,.composer-card,.transcript-card,.preview-card{padding:18px}
+  .sample-row,.action-row,.pill-row{flex-direction:column}
+  .cta,.ghost-btn,.sample-btn{width:100%}
+  .transcript-log{min-height:320px}
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <section class="hero">
+    <div class="card hero-copy">
+      <div class="eyebrow">First-Look Preview</div>
+      <h1>Watch the shared browser work before you install anything.</h1>
+      <p>Try a public site. Unchained will browse and show you what it is doing. This review route stays config-free and login-free, but it now tells the truth earlier when a site is a bad fit for the shared demo browser.</p>
+      <p class="hero-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page should say so instead of pretending the run is healthy.</p>
+    </div>
+    <div class="card hero-aside">
+      <div class="pill-row">
+        <span class="pill">public review route</span>
+        <span class="pill">guest-safe</span>
+        <span class="pill">honest preview fallback</span>
+      </div>
+      <div class="status-card">
+        <strong>Shared Browser</strong>
+        <div id="shared-browser-status" class="status-copy subtle">Checking shared browser availability...</div>
+      </div>
+      <div class="status-card">
+        <strong>Site Fit</strong>
+        <div id="site-fit-status" class="status-copy subtle">Paste a public URL or include one in the prompt to preflight the target.</div>
+      </div>
+      <div class="status-card">
+        <strong>Challenge State</strong>
+        <div id="challenge-status" class="status-copy subtle">No challenge signal yet.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="workspace">
+    <div class="card transcript-card">
+      <div class="composer-card" style="padding:0;border:none;background:none;box-shadow:none">
+        <div class="composer-grid">
+          <div>
+            <label for="msginput">Prompt</label>
+            <textarea id="msginput" placeholder="Open a public page, compare options, summarize what matters, and explain what you found."></textarea>
+          </div>
+          <div>
+            <label for="urlinput">Public URL (optional)</label>
+            <input id="urlinput" type="url" inputmode="url" placeholder="https://www.wikipedia.org/">
+          </div>
+          <div class="sample-row">
+            <button class="sample-btn" type="button" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/">
+              Compare three computing pioneers
+              <small>Safe shared-demo fit</small>
+            </button>
+            <button class="sample-btn" type="button" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/">
+              Pick the better coffee day
+              <small>Public data with a clear answer</small>
+            </button>
+            <button class="sample-btn" type="button" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/">
+              Test a challenge-prone site
+              <small>Should warn early instead of failing late</small>
+            </button>
+          </div>
+          <div class="action-row">
+            <button id="sendbtn" class="cta" type="button">Try It Now</button>
+            <button id="cancelbtn" class="ghost-btn" type="button" style="display:none">Cancel</button>
+            <a id="browser-cta" class="ghost-btn" href="/local">Continue in your browser</a>
+          </div>
+          <div id="quota-copy" class="quota-line"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+        </div>
+      </div>
+
+      <div class="panel-title">Run Transcript</div>
+      <div id="chatlog" class="transcript-log">
+        <div class="line system">
+          <strong>How this preview works</strong>
+          <div class="body">The shared browser runs on Unchained infrastructure. If live preview frames are unavailable for a run, this page falls back to browser steps instead of pretending it is live video.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card preview-card">
+      <div class="panel-title">Browser Preview</div>
+      <div class="browser-frame">
+        <div class="browser-top">
+          <div class="browser-title">
+            <div class="browser-dots"><span></span><span></span><span></span></div>
+            <span>shared-demo-browser</span>
+          </div>
+          <span id="preview-mode" class="mode-pill">awaiting run</span>
+        </div>
+        <div class="preview-stage">
+          <img id="preview-image" alt="Shared browser preview" style="display:none">
+          <div id="preview-empty" class="preview-empty">
+            <strong>Preview will appear here when the run emits browser frames.</strong>
+            Animated or challenge-heavy sites may still look choppy in shared mode. If that happens, the step log below remains the truthful fallback.
+          </div>
+        </div>
+        <div id="preview-note" class="preview-note">Waiting for a run. Live preview unavailable for this run. Showing browser steps instead.</div>
+      </div>
+      <div class="steps-card">
+        <div class="panel-title" style="margin-bottom:0">Browser Steps</div>
+        <div id="step-list" class="step-list">
+          <div class="empty-steps">No browser steps yet.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const FIRST_LOOK_GUEST_LIMIT = __FIRST_LOOK_GUEST_LIMIT__;
+let remainingGuestRuns = __FIRST_LOOK_GUEST_REMAINING__;
+let agentId = '';
+let sessionId = '';
+let sending = false;
+let cancelCtrl = null;
+let currentToolEl = null;
+let currentAssistantEl = null;
+let assistantText = '';
+let lastPolicyUrl = '';
+let challengeCheckTimer = null;
+let signalBuffer = '';
+let historyLoaded = false;
+let previewHasFrame = false;
+let previewSocket = null;
+let previewRetryTimer = null;
+let previewRetryCount = 0;
+
+const BROWSER_TOOL_LABELS = {
+  navigate: 'Navigate',
+  ddm: 'Inspect',
+  click: 'Click',
+  type: 'Type',
+  intel: 'Analyze',
+  screenshot: 'Screenshot',
+  js: 'Script'
+};
+
+function esc(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sessionStoreKey() {
+  return agentId ? ('unchained_session_' + agentId + '_first_look_preview') : '';
+}
+
+function ensureSessionId() {
+  if (!agentId) return '';
+  const key = sessionStoreKey();
+  const prefix = 's-' + agentId + '-';
+  let existing = '';
+  try { existing = key ? (localStorage.getItem(key) || '') : ''; } catch (_err) {}
+  if (!existing.startsWith(prefix)) {
+    existing = prefix + Date.now().toString(36);
+    try { if (key) localStorage.setItem(key, existing); } catch (_err) {}
+  }
+  sessionId = existing;
+  return sessionId;
+}
+
+function updateQuotaCopy() {
+  const el = document.getElementById('quota-copy');
+  if (!el) return;
+  if (remainingGuestRuns > 0) {
+    el.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
+  } else {
+    el.innerHTML = '<strong>Guest runs used up.</strong> Continue in your browser for the reliable path.';
+  }
+}
+
+function updateSendAvailability() {
+  const send = document.getElementById('sendbtn');
+  const input = document.getElementById('msginput');
+  const unavailable = sending || remainingGuestRuns <= 0 || !agentId;
+  send.disabled = unavailable;
+  input.disabled = remainingGuestRuns <= 0;
+}
+
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 220) + 'px';
+}
+
+function addLine(kind, title, body) {
+  const row = document.createElement('div');
+  row.className = 'line ' + kind;
+  row.innerHTML = '<strong>' + esc(title) + '</strong><div class="body">' + esc(body) + '</div>';
+  document.getElementById('chatlog').appendChild(row);
+  row.scrollIntoView({block:'end', behavior:'smooth'});
+  return row;
+}
+
+function ensureAssistantLine() {
+  if (currentAssistantEl) return currentAssistantEl;
+  currentAssistantEl = addLine('assistant', 'Assistant', '');
+  currentAssistantEl.querySelector('.body').textContent = '';
+  assistantText = '';
+  return currentAssistantEl;
+}
+
+function appendAssistantText(text) {
+  const row = ensureAssistantLine();
+  assistantText += String(text || '');
+  row.querySelector('.body').textContent = assistantText;
+  row.scrollIntoView({block:'end', behavior:'smooth'});
+}
+
+function normalizePublicUrl(value) {
+  let text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text) && /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(text)) {
+    text = 'https://' + text;
+  }
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch (_err) {
+    return '';
+  }
+}
+
+function extractPromptUrl() {
+  const explicit = normalizePublicUrl(document.getElementById('urlinput').value);
+  if (explicit) return explicit;
+  const match = String(document.getElementById('msginput').value || '').match(/https?:\/\/[^\s)]+/i);
+  return match ? normalizePublicUrl(match[0]) : '';
+}
+
+function setStatusCopy(id, text, tone) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'status-copy ' + (tone || 'subtle');
+  el.textContent = text;
+}
+
+function setPreviewNote(text, tone) {
+  const el = document.getElementById('preview-note');
+  el.className = 'preview-note' + (tone ? (' ' + tone) : '');
+  el.textContent = text;
+}
+
+function closePreviewSocket() {
+  if (previewRetryTimer) {
+    clearTimeout(previewRetryTimer);
+    previewRetryTimer = null;
+  }
+  const ws = previewSocket;
+  previewSocket = null;
+  if (ws && ws.readyState < 2) {
+    try { ws.close(); } catch (_err) {}
+  }
+}
+
+function previewViewport() {
+  const stage = document.querySelector('.preview-stage');
+  const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 640};
+  return {
+    width: Math.max(320, Math.round(rect.width || 960)),
+    height: Math.max(240, Math.round(rect.height || 640)),
+  };
+}
+
+function previewSocketUrl() {
+  const viewport = previewViewport();
+  const qs = new URLSearchParams({
+    session_id: sessionId,
+    width: String(viewport.width),
+    height: String(viewport.height),
+  });
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
+}
+
+function schedulePreviewRetry() {
+  if (!sending || previewHasFrame || previewRetryCount >= 2 || previewRetryTimer) return;
+  previewRetryCount += 1;
+  previewRetryTimer = setTimeout(() => {
+    previewRetryTimer = null;
+    openPreviewSocket();
+  }, 450 * previewRetryCount);
+}
+
+function openPreviewSocket() {
+  if (!sessionId || !agentId) return;
+  closePreviewSocket();
+  const url = previewSocketUrl();
+  let sawFrame = false;
+  const ws = new WebSocket(url);
+  previewSocket = ws;
+  ws.onopen = () => {
+    setPreviewNote('Opening live browser stream...', '');
+  };
+  ws.onmessage = (event) => {
+    let msg = null;
+    try { msg = JSON.parse(event.data); } catch (_err) { msg = null; }
+    if (!msg) return;
+    if (msg.type === 'frame' && msg.data) {
+      sawFrame = true;
+      updatePreview(
+        msg.data,
+        'Shared browser live stream active.',
+        'live stream',
+        msg.mime || 'image/jpeg',
+      );
+      return;
+    }
+    if (msg.type === 'status') {
+      if (msg.reason === 'slow_client') {
+        setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
+      } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
+        setPreviewNote('Live stream window ended. Keeping the latest frame and browser steps current.', 'warn');
+      } else if (!previewHasFrame) {
+        setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
+      }
+    }
+  };
+  ws.onclose = () => {
+    if (previewSocket === ws) previewSocket = null;
+    if (!sawFrame && sending) {
+      setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
+      schedulePreviewRetry();
+    }
+  };
+  ws.onerror = () => {};
+}
+
+function updatePreview(imageB64, note, modeLabel, mimeType) {
+  const img = document.getElementById('preview-image');
+  const empty = document.getElementById('preview-empty');
+  img.src = 'data:' + (mimeType || 'image/png') + ';base64,' + imageB64;
+  img.style.display = 'block';
+  empty.style.display = 'none';
+  previewHasFrame = true;
+  document.getElementById('preview-mode').textContent = modeLabel || 'live snapshot';
+  setPreviewNote(note || 'Shared browser frame received.', 'ok');
+}
+
+function resetPreview() {
+  closePreviewSocket();
+  previewRetryCount = 0;
+  previewHasFrame = false;
+  document.getElementById('preview-image').style.display = 'none';
+  document.getElementById('preview-empty').style.display = 'block';
+  document.getElementById('preview-mode').textContent = 'awaiting run';
+  setPreviewNote('Waiting for a run. Live preview unavailable for this run. Showing browser steps instead.', '');
+}
+
+function resetSteps() {
+  const list = document.getElementById('step-list');
+  list.innerHTML = '<div class="empty-steps">No browser steps yet.</div>';
+  currentToolEl = null;
+}
+
+function trimSnippet(value, limit) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return text.slice(0, limit - 3) + '...';
+}
+
+function addStep(name, input) {
+  const list = document.getElementById('step-list');
+  const empty = list.querySelector('.empty-steps');
+  if (empty) empty.remove();
+  const label = BROWSER_TOOL_LABELS[name] || trimSnippet(name || 'Step', 20);
+  const row = document.createElement('div');
+  row.className = 'step-item running';
+  row.innerHTML =
+    '<span class="step-dot"></span>' +
+    '<div class="step-copy"><strong>' + esc(label) + '</strong><span>' + esc(trimSnippet(input, 140) || 'Working...') + '</span></div>';
+  list.appendChild(row);
+  row.scrollIntoView({block:'end', behavior:'smooth'});
+  return row;
+}
+
+function finishStep(row, statusText, failed) {
+  if (!row) return;
+  row.className = 'step-item ' + (failed ? 'error' : 'done');
+  if (statusText) {
+    const copy = row.querySelector('.step-copy span');
+    if (copy) copy.textContent = trimSnippet(statusText, 160);
+  }
+}
+
+function appendSignal(text) {
+  const next = (signalBuffer + '\n' + String(text || '')).slice(-6000);
+  signalBuffer = next;
+  if (challengeCheckTimer) clearTimeout(challengeCheckTimer);
+  challengeCheckTimer = setTimeout(runChallengeSignalCheck, 500);
+}
+
+function setPolicyState(policy) {
+  if (!policy || !policy.mode) {
+    setStatusCopy('site-fit-status', 'Paste a public URL or include one in the prompt to preflight the target.', 'subtle');
+    return;
+  }
+  if (policy.mode === 'shared_headless_ok') {
+    setStatusCopy('site-fit-status', 'Shared demo looks like a reasonable fit for ' + (policy.host || 'this site') + '.', 'ok');
+    document.getElementById('browser-cta').textContent = 'Continue in your browser';
+    return;
+  }
+  if (policy.mode === 'local_stealth_preferred') {
+    setStatusCopy('site-fit-status', 'This site may push back on the shared demo browser. You can still try it, but your own browser is more reliable.', 'warn');
+    document.getElementById('browser-cta').textContent = 'Continue in your browser';
+    return;
+  }
+  setStatusCopy('site-fit-status', 'This site is likely to challenge the shared demo browser. Best path is your own browser.', 'danger');
+  document.getElementById('browser-cta').textContent = 'Continue in your browser';
+}
+
+async function requestPreflight() {
+  const url = extractPromptUrl();
+  if (!url) {
+    lastPolicyUrl = '';
+    setPolicyState(null);
+    return;
+  }
+  if (url === lastPolicyUrl) return;
+  lastPolicyUrl = url;
+  try {
+    const resp = await fetch('/web/first-look/preflight?url=' + encodeURIComponent(url), {cache:'no-store'});
+    if (!resp.ok) throw new Error('preflight failed');
+    const data = await resp.json();
+    setPolicyState(data.policy || null);
+  } catch (_err) {
+    setStatusCopy('site-fit-status', 'Could not preflight this target right now.', 'subtle');
+  }
+}
+
+async function runChallengeSignalCheck() {
+  challengeCheckTimer = null;
+  if (!signalBuffer.trim()) return;
+  try {
+    const resp = await fetch('/web/first-look/signal', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        url: extractPromptUrl(),
+        text: signalBuffer
+      })
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.policy) setPolicyState(data.policy);
+    if (data.challenge && data.challenge.blocked) {
+      setStatusCopy('challenge-status', 'This run appears to have hit human verification. Continue in your browser for the reliable path.', 'danger');
+      if (!previewHasFrame) {
+        setPreviewNote('This run appears to have hit human verification. Shared preview may stop here.', 'danger');
+      }
+    } else if (sending) {
+      setStatusCopy('challenge-status', 'No challenge signal yet.', 'subtle');
+    }
+  } catch (_err) {}
+}
+
+async function refreshSharedBrowserStatus() {
+  try {
+    const resp = await fetch('/web/chat/status?first_look_guest=1', {cache:'no-store'});
+    if (!resp.ok) throw new Error('status failed');
+    const data = await resp.json();
+    if (data.agent_id) {
+      agentId = data.agent_id;
+      ensureSessionId();
+    }
+    if (data.connected) {
+      setStatusCopy('shared-browser-status', 'Shared browser ready for guest runs.', 'ok');
+    } else if (!data.bridge_configured) {
+      setStatusCopy('shared-browser-status', 'Shared browser is not configured right now.', 'danger');
+    } else if (data.chat_connected || data.bridge_connected) {
+      setStatusCopy('shared-browser-status', 'Shared browser is warming up. Try again in a moment.', 'warn');
+    } else {
+      setStatusCopy('shared-browser-status', 'Shared browser is unavailable right now.', 'danger');
+    }
+  } catch (_err) {
+    setStatusCopy('shared-browser-status', 'Could not check shared browser status.', 'danger');
+  }
+  updateSendAvailability();
+}
+
+async function loadHistory() {
+  if (historyLoaded || !ensureSessionId()) return;
+  historyLoaded = true;
+  try {
+    const qs = new URLSearchParams({
+      model: 'google/gemini-3-flash-preview',
+      session_id: sessionId,
+      first_look_guest: '1'
+    });
+    const resp = await fetch('/web/chat/history?' + qs.toString(), {cache:'no-store'});
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.messages || !data.messages.length) return;
+    for (const msg of data.messages) {
+      if (msg.role === 'user') {
+        addLine('user', 'You', String(msg.content || ''));
+      } else if (msg.role === 'assistant') {
+        addLine('assistant', 'Assistant', String(msg.content || ''));
+      }
+    }
+  } catch (_err) {}
+}
+
+function fillExample(prompt, url) {
+  const input = document.getElementById('msginput');
+  const urlInput = document.getElementById('urlinput');
+  input.value = prompt;
+  urlInput.value = url || '';
+  autoGrow(input);
+  requestPreflight();
+  input.focus();
+}
+
+async function doCancel() {
+  if (!sessionId) return;
+  try {
+    await fetch('/web/chat/cancel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sessionId, first_look_guest: true})
+    });
+  } catch (_err) {}
+  if (cancelCtrl) cancelCtrl.abort();
+}
+
+async function doSend() {
+  if (sending) return;
+  const message = String(document.getElementById('msginput').value || '').trim();
+  if (!message || remainingGuestRuns <= 0) return;
+  if (!ensureSessionId()) {
+    setStatusCopy('shared-browser-status', 'Shared browser is still warming up. Try again in a moment.', 'warn');
+    updateSendAvailability();
+    return;
+  }
+
+  sending = true;
+  signalBuffer = '';
+  assistantText = '';
+  currentAssistantEl = null;
+  resetPreview();
+  resetSteps();
+  updateSendAvailability();
+  document.getElementById('sendbtn').style.display = 'none';
+  document.getElementById('cancelbtn').style.display = 'inline-flex';
+  addLine('user', 'You', message);
+  setStatusCopy('challenge-status', 'No challenge signal yet.', 'subtle');
+
+  cancelCtrl = new AbortController();
+  let accepted = false;
+
+  try {
+    const resp = await fetch('/web/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: message,
+        agent_id: agentId,
+        session_id: sessionId,
+        model: 'google/gemini-3-flash-preview',
+        headless: true,
+        first_look_guest: true
+      }),
+      signal: cancelCtrl.signal
+    });
+
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({error: 'Request failed'}));
+      if (resp.status === 429 && data.error === 'demo_quota_exceeded') {
+        remainingGuestRuns = 0;
+        updateQuotaCopy();
+        addLine('system', 'Quota', 'Guest runs used up. Continue in your browser for the reliable path.');
+        return;
+      }
+      addLine('system', 'Error', String(data.error || resp.statusText || 'Request failed'));
+      return;
+    }
+
+    accepted = true;
+    remainingGuestRuns = Math.max(0, remainingGuestRuns - 1);
+    updateQuotaCopy();
+    setPreviewNote('Shared browser run started. Preview frames will appear here when available.', '');
+    document.getElementById('preview-mode').textContent = 'running';
+    openPreviewSocket();
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, {stream:true});
+      let splitAt = -1;
+      while ((splitAt = buffer.indexOf('\n\n')) !== -1) {
+        const packet = buffer.slice(0, splitAt);
+        buffer = buffer.slice(splitAt + 2);
+        for (const line of packet.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          let evt = null;
+          try { evt = JSON.parse(line.slice(6)); } catch (_err) { evt = null; }
+          if (!evt) continue;
+
+          if (evt.type === 'tool_start') {
+            currentToolEl = addStep(evt.name || 'tool', evt.input || '');
+            if (evt.name === 'navigate') {
+              setPreviewNote('Shared browser is loading the page...', '');
+            }
+            if (!evt.is_screenshot) appendSignal((evt.name || 'tool') + ' ' + (evt.input || ''));
+          } else if (evt.type === 'tool_result') {
+            if (currentToolEl) {
+              finishStep(currentToolEl, evt.is_screenshot ? 'Frame captured' : String(evt.data || 'Done'), false);
+              currentToolEl = null;
+            }
+            if (evt.is_screenshot && evt.visible && evt.data) {
+              if (!previewHasFrame) {
+                updatePreview(evt.data, 'Shared browser snapshot received.', 'live snapshot', 'image/png');
+              }
+            } else if (!evt.is_screenshot) {
+              appendSignal(String(evt.data || ''));
+            }
+          } else if (evt.type === 'live_preview') {
+            if (evt.data && !previewHasFrame) {
+              updatePreview(evt.data, evt.note || 'Shared browser frame received.', 'live snapshot', 'image/png');
+            }
+            if (evt.note) appendSignal(String(evt.note));
+          } else if (evt.type === 'text') {
+            appendAssistantText(evt.data || '');
+            appendSignal(String(evt.data || ''));
+          } else if (evt.type === 'cancelled') {
+            addLine('system', 'Cancelled', 'Run cancelled.');
+            closePreviewSocket();
+          } else if (evt.type === 'error') {
+            if (currentToolEl) {
+              finishStep(currentToolEl, String(evt.data || 'Error'), true);
+              currentToolEl = null;
+            }
+            addLine('system', 'Run Error', String(evt.data || 'Unknown error'));
+            appendSignal(String(evt.data || ''));
+            closePreviewSocket();
+          } else if (evt.type === 'done') {
+            closePreviewSocket();
+            if (!previewHasFrame) {
+              document.getElementById('preview-mode').textContent = 'steps fallback';
+              setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
+            } else {
+              document.getElementById('preview-mode').textContent = 'run complete';
+            }
+          }
+        }
+      }
+    }
+
+    await runChallengeSignalCheck();
+    if (!previewHasFrame) {
+      document.getElementById('preview-mode').textContent = 'steps fallback';
+      setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      addLine('system', 'Cancelled', 'Run cancelled.');
+    } else {
+      addLine('system', 'Connection Error', String((err && err.message) || err || 'Connection failed'));
+    }
+  } finally {
+    closePreviewSocket();
+    if (!accepted && remainingGuestRuns <= 0) {
+      document.getElementById('msginput').disabled = true;
+    }
+    cancelCtrl = null;
+    sending = false;
+    currentToolEl = null;
+    currentAssistantEl = null;
+    document.getElementById('sendbtn').style.display = 'inline-flex';
+    document.getElementById('cancelbtn').style.display = 'none';
+    updateSendAvailability();
+  }
+}
+
+document.getElementById('msginput').addEventListener('input', function () {
+  autoGrow(this);
+  requestPreflight();
+});
+document.getElementById('urlinput').addEventListener('input', requestPreflight);
+document.getElementById('sendbtn').addEventListener('click', doSend);
+document.getElementById('cancelbtn').addEventListener('click', doCancel);
+document.getElementById('msginput').addEventListener('keydown', function (event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    doSend();
+  }
+});
+document.querySelectorAll('.sample-btn').forEach(function (button) {
+  button.addEventListener('click', function () {
+    fillExample(button.dataset.prompt || '', button.dataset.url || '');
+  });
+});
+
+updateQuotaCopy();
+updateSendAvailability();
+autoGrow(document.getElementById('msginput'));
+refreshSharedBrowserStatus().then(loadHistory);
+requestPreflight();
+setInterval(refreshSharedBrowserStatus, 10000);
+</script>
+</body>
+</html>"""
+
+
 def _apply_modern_chat_theme(html: str) -> str:
     if 'id="modern-chat-theme"' in html:
         return html

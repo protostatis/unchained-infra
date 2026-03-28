@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
+from urllib.parse import urlsplit
 
 import httpx
 from aiohttp import web
 
+from challenge_detection import detect_challenge
+from domain_policy import execution_policy_for_url
 
 from web_app.core import get_core as _core
 
@@ -43,6 +47,11 @@ def _client_version_status(caps: dict | None) -> dict:
 
 
 _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION = "0.3.65"
+_FIRST_LOOK_SIGNAL_URL_MAX = 500
+_FIRST_LOOK_SIGNAL_TEXT_MAX = 6000
+_FIRST_LOOK_PREVIEW_WIDTH_DEFAULT = 960
+_FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT = 640
+_PUBLIC_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:
@@ -57,6 +66,157 @@ def _research_desk_install_requires_update(caps: dict | None) -> dict:
         "update_supported": bool(caps.get("remote_update")),
         "update_required": (not local_version) or local_t < required_t,
     }
+
+
+def _normalize_first_look_public_url(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > _FIRST_LOOK_SIGNAL_URL_MAX:
+        raise ValueError("url too long")
+    if "://" not in text and _PUBLIC_HOST_RE.match(text):
+        text = "https://" + text
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if not parsed.hostname:
+        return ""
+    return parsed.geturl()
+
+
+def _clip_signal_text(value: str, limit: int = _FIRST_LOOK_SIGNAL_TEXT_MAX) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _normalize_first_look_preview_dimension(
+    params,
+    name: str,
+    default: int,
+    *,
+    min_value: int = 320,
+    max_value: int = 1920,
+) -> int:
+    raw = str(params.get(name, default) or default).strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+def _resolve_first_look_preview_target(core, guest_auth: dict, session_id: str) -> tuple[str, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise web.HTTPBadRequest(text="session_id required")
+    prefix = f"s-{guest_auth.get('agent_id', '')}-"
+    if not sid.startswith(prefix):
+        raise web.HTTPForbidden(text="session_id not owned by guest")
+    if not core.HEADLESS_AGENT_ID:
+        raise web.HTTPServiceUnavailable(text="Shared browser is not configured")
+    tab_id = str(core._session_tabs.get(sid, "") or "").strip()
+    if not tab_id:
+        raise web.HTTPNotFound(text="No live preview available for this session yet")
+    return core.HEADLESS_AGENT_ID, tab_id
+
+
+async def handle_first_look_preflight(request: web.Request) -> web.Response:
+    """GET /web/first-look/preflight — classify a public target before a guest run."""
+    try:
+        url = _normalize_first_look_public_url(request.query.get("url", ""))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    if not url:
+        return web.json_response({"ok": True, "url": "", "policy": None})
+    policy = execution_policy_for_url(url)
+    return web.json_response({"ok": True, "url": url, "policy": policy.to_dict()})
+
+
+async def handle_first_look_signal(request: web.Request) -> web.Response:
+    """POST /web/first-look/signal — classify run text for challenge hints."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        url = _normalize_first_look_public_url(body.get("url", ""))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    text = _clip_signal_text(body.get("text", ""))
+    title = _clip_signal_text(body.get("title", ""), limit=256)
+    html = _clip_signal_text(body.get("html", ""), limit=6000)
+    challenge = detect_challenge(page_text=text, title=title, url=url, html=html)
+    payload = {"ok": True, "challenge": challenge.to_dict()}
+    if url:
+        payload["policy"] = execution_policy_for_url(url).to_dict()
+    else:
+        payload["policy"] = None
+    return web.json_response(payload)
+
+
+async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
+    """GET /web/first-look/preview/ws — proxy private-core screencast for guest preview."""
+    core = _core()
+    guest_auth, guest_id, _ = core._first_look_guest_auth(request)
+    try:
+        agent_id, tab_id = _resolve_first_look_preview_target(
+            core,
+            guest_auth,
+            request.query.get("session_id", ""),
+        )
+    except web.HTTPException as exc:
+        denied = web.Response(status=exc.status, text=exc.text)
+        core._attach_first_look_guest_cookies(denied, request, guest_id)
+        return denied
+
+    width = _normalize_first_look_preview_dimension(
+        request.query,
+        "width",
+        _FIRST_LOOK_PREVIEW_WIDTH_DEFAULT,
+    )
+    height = _normalize_first_look_preview_dimension(
+        request.query,
+        "height",
+        _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT,
+        min_value=240,
+    )
+
+    import cloud_tools
+
+    relay_host, relay_port = core._parse_relay()
+    ws = web.WebSocketResponse(heartbeat=30)
+    core._attach_first_look_guest_cookies(ws, request, guest_id)
+    await ws.prepare(request)
+    try:
+        async for event in cloud_tools.stream_screencast(
+            agent_id,
+            tab_id,
+            relay_host=relay_host,
+            relay_port=relay_port,
+            width=width,
+            height=height,
+            quality=60,
+            image_format="jpeg",
+            every_nth_frame=2,
+            max_frames=900,
+            stream_timeout=120.0,
+        ):
+            await ws.send_json(event)
+            if event.get("type") == "status":
+                break
+    except Exception:
+        if not ws.closed:
+            try:
+                await ws.send_json({"type": "status", "status": "error", "reason": "preview_unavailable"})
+            except Exception:
+                pass
+    finally:
+        if not ws.closed:
+            await ws.close()
+    return ws
 
 
 async def check_relay_agent(agent_id: str) -> bool:
