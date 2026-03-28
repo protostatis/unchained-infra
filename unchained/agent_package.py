@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.67"  # one-click Research Desk install fetches a hosted package artifact
+VERSION = "0.3.68"  # one-click Research Desk install fetches a hosted package artifact
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -90,6 +90,10 @@ Usage (called by Claude via Bash):
     python cdp_tool.py tabs
     python cdp_tool.py new-tab https://example.com
     python cdp_tool.py close-tab <tab_id>
+    python cdp_tool.py rhythm_train https://example.com
+    python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"
+    python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'
+    python cdp_tool.py rhythm_query list_all
 """
 
 import json
@@ -159,7 +163,7 @@ def _decode_type_text_arg(text):
 def main():
     if len(sys.argv) < 2:
         print("Usage: cdp_tool.py <command> [--tab <id>] [args...]")
-        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf, tabs, new-tab, close-tab")
+        print("Commands: ddm, navigate, click, type, press_enter, submit_form, js, screenshot, intel, pdf, tabs, new-tab, close-tab, rhythm_train, rhythm_catch, rhythm_execute, rhythm_query")
         print("Use --tab <id> to target a specific tab (default: auto = first tab)")
         sys.exit(1)
 
@@ -259,6 +263,60 @@ def main():
             result = cmd("intel", tab_id=tab_id, flags=args or ["--probe"])
         elif command == "pdf":
             result = cmd("ddm", tab_id=tab_id, flags=["--pdf"] + args)
+        elif command == "rhythm_train":
+            if not args:
+                print("Usage: cdp_tool.py rhythm_train <url> [--click <text>]", file=sys.stderr)
+                sys.exit(1)
+            click_text = ""
+            url = args[0]
+            rest = args[1:]
+            j = 0
+            while j < len(rest):
+                if rest[j] == "--click" and j + 1 < len(rest):
+                    click_text = rest[j + 1]
+                    j += 2
+                else:
+                    j += 1
+            result = cmd("rhythm_train", tab_id=tab_id, url=url, click_link_text=click_text)
+        elif command == "rhythm_catch":
+            if len(args) < 3:
+                print("Usage: cdp_tool.py rhythm_catch <url> <task> <catch_terms> [--click <text>]", file=sys.stderr)
+                sys.exit(1)
+            url, task, catch_terms = args[0], args[1], args[2]
+            click_text = ""
+            rest = args[3:]
+            j = 0
+            while j < len(rest):
+                if rest[j] == "--click" and j + 1 < len(rest):
+                    click_text = rest[j + 1]
+                    j += 2
+                else:
+                    j += 1
+            result = cmd("rhythm_catch", tab_id=tab_id, url=url, task=task, catch_terms=catch_terms, click_text=click_text)
+        elif command == "rhythm_execute":
+            if len(args) < 2:
+                print("Usage: cdp_tool.py rhythm_execute <url> <targets_json>", file=sys.stderr)
+                sys.exit(1)
+            result = cmd("rhythm_execute", tab_id=tab_id, url=args[0], targets=args[1])
+        elif command == "rhythm_query":
+            if not args:
+                print("Usage: cdp_tool.py rhythm_query <action> [--url <url>] [--domain <domain>]", file=sys.stderr)
+                sys.exit(1)
+            action = args[0]
+            url = ""
+            domain = ""
+            rest = args[1:]
+            j = 0
+            while j < len(rest):
+                if rest[j] == "--url" and j + 1 < len(rest):
+                    url = rest[j + 1]
+                    j += 2
+                elif rest[j] == "--domain" and j + 1 < len(rest):
+                    domain = rest[j + 1]
+                    j += 2
+                else:
+                    j += 1
+            result = cmd("rhythm_query", tab_id=tab_id, action=action, url=url, domain=domain)
         else:
             print(f"Unknown command: {command}", file=sys.stderr)
             sys.exit(1)
