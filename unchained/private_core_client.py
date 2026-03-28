@@ -197,24 +197,33 @@ class PrivateCoreClient:
         stream_timeout: float = 120.0,
     ):
         """Yield screencast websocket events from private-core."""
+        normalized_image_format = str(image_format or "jpeg").strip().lower() or "jpeg"
+        if normalized_image_format not in {"jpeg", "png"}:
+            raise PrivateCoreError("Unsupported screencast image format")
+
         if self.mode == "http":
             if not self.base_url:
                 raise PrivateCoreError("PRIVATE_CORE_URL is required for http mode")
             headers: dict[str, str] = {}
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
+            read_timeout = max(float(stream_timeout) + 15.0, float(self.timeout_seconds))
             params = {
                 "agent_id": agent_id,
                 "tab_id": tab_id,
                 "width": str(width),
                 "height": str(height),
                 "quality": str(quality),
-                "format": image_format,
+                "format": normalized_image_format,
                 "every_nth_frame": str(every_nth_frame),
                 "max_frames": str(max_frames),
                 "stream_timeout": str(stream_timeout),
             }
-            timeout = aiohttp.ClientTimeout(total=None, sock_connect=self.timeout_seconds, sock_read=None)
+            timeout = aiohttp.ClientTimeout(
+                total=read_timeout + 10.0,
+                sock_connect=self.timeout_seconds,
+                sock_read=read_timeout,
+            )
             try:
                 async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
                     async with session.ws_connect(
@@ -257,7 +266,7 @@ class PrivateCoreClient:
             width=width,
             height=height,
             quality=quality,
-            image_format=image_format,
+            image_format=normalized_image_format,
             every_nth_frame=every_nth_frame,
             max_frames=max_frames,
             stream_timeout=stream_timeout,

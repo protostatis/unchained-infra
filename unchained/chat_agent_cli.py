@@ -1447,6 +1447,7 @@ async def handle_message_claude(
     cmd = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose",
            "--model", cli_model,
            "--allowedTools", allowed,
+           "--strict-mcp-config",
            "--system-prompt", _claude_system_prompt(scheduler_armed=scheduler_armed),
            "--tools"] + tools
     if is_resume:

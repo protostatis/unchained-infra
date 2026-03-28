@@ -12,6 +12,7 @@ from aiohttp import web
 
 from challenge_detection import detect_challenge
 from domain_policy import execution_policy_for_url
+from rate_limit import SlidingWindowRateLimiter
 
 from web_app.core import get_core as _core
 
@@ -51,7 +52,11 @@ _FIRST_LOOK_SIGNAL_URL_MAX = 500
 _FIRST_LOOK_SIGNAL_TEXT_MAX = 6000
 _FIRST_LOOK_PREVIEW_WIDTH_DEFAULT = 960
 _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT = 640
+_FIRST_LOOK_PUBLIC_RATE_WINDOW_S = 60.0
+_FIRST_LOOK_PREFLIGHT_LIMIT = 30
+_FIRST_LOOK_SIGNAL_LIMIT = 20
 _PUBLIC_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+_FIRST_LOOK_PUBLIC_RATE_LIMITER = SlidingWindowRateLimiter()
 
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:
@@ -86,6 +91,35 @@ def _normalize_first_look_public_url(value: str) -> str:
 
 def _clip_signal_text(value: str, limit: int = _FIRST_LOOK_SIGNAL_TEXT_MAX) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _request_source_ip(request: web.Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        source = forwarded.split(",")[0].strip()
+        if source:
+            return source
+    return (request.remote or "unknown").strip() or "unknown"
+
+
+def _check_first_look_public_rate_limit(
+    request: web.Request,
+    *,
+    bucket: str,
+    limit: int,
+) -> web.Response | None:
+    allowed, retry_after = _FIRST_LOOK_PUBLIC_RATE_LIMITER.allow(
+        f"{bucket}:{_request_source_ip(request)}",
+        limit,
+        _FIRST_LOOK_PUBLIC_RATE_WINDOW_S,
+    )
+    if allowed:
+        return None
+    return web.json_response(
+        {"error": "Rate limit exceeded", "retry_after": retry_after},
+        status=429,
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _normalize_first_look_preview_dimension(
@@ -125,6 +159,13 @@ def _resolve_first_look_preview_target(core, guest_auth: dict, session_id: str) 
 
 async def handle_first_look_preflight(request: web.Request) -> web.Response:
     """GET /web/first-look/preflight — classify a public target before a guest run."""
+    limited = _check_first_look_public_rate_limit(
+        request,
+        bucket="first-look-preflight",
+        limit=_FIRST_LOOK_PREFLIGHT_LIMIT,
+    )
+    if limited is not None:
+        return limited
     try:
         url = _normalize_first_look_public_url(request.query.get("url", ""))
     except ValueError as exc:
@@ -137,6 +178,13 @@ async def handle_first_look_preflight(request: web.Request) -> web.Response:
 
 async def handle_first_look_signal(request: web.Request) -> web.Response:
     """POST /web/first-look/signal — classify run text for challenge hints."""
+    limited = _check_first_look_public_rate_limit(
+        request,
+        bucket="first-look-signal",
+        limit=_FIRST_LOOK_SIGNAL_LIMIT,
+    )
+    if limited is not None:
+        return limited
     try:
         body = await request.json()
     except Exception:
