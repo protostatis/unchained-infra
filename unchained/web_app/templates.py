@@ -653,6 +653,24 @@ body::before{
       <a href="/chat-codex?model=codex-cli:gpt-5.1-codex-mini" class="card-btn">Open Chat &#8594;</a>
     </div>
 
+    <!-- Unchained CLI -->
+    <div class="card local">
+      <div class="card-badge">&#128187; Standalone</div>
+      <div class="card-title">Unchained CLI</div>
+      <div class="card-desc">Standalone browser automation. DDM page layout (~500 tokens), Intel extraction strategies, stealth mode, multi-profile. No relay needed.</div>
+      <div class="card-reqs">
+        <span class="req">Chrome</span>
+        <span class="req">Python 3.10+</span>
+        <span class="req">pip install</span>
+      </div>
+      <div class="card-steps">
+        <div class="step"><span class="step-num">1</span>pip install unchainedsky-cli[agent]</div>
+        <div class="step"><span class="step-num">2</span>unchained launch &amp;&amp; unchained navigate &lt;url&gt;</div>
+      </div>
+      <a href="/cli" class="card-btn">Install Guide &#8594;</a>
+      <a href="https://github.com/protostatis/unchainedsky-cli" target="_blank" rel="noopener noreferrer" class="card-btn card-btn-secondary">GitHub &#8594;</a>
+    </div>
+
     <!-- MCP -->
     <div class="card trial">
       <div class="card-badge">MCP</div>
@@ -14843,5 +14861,201 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
       }
     })();
   </script>
+</body>
+</html>"""
+
+
+CLI_INSTALL_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install — Unchained CLI</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{
+  --bg:#0b0d10;--surface:#13171d;--line:#2a313b;--text:#e8edf3;--muted:#a7b0bc;
+  --accent:#23c483;--accent-2:#0ea5e9;--warn:#f59e0b;
+}
+*{box-sizing:border-box;margin:0}
+body{
+  background:radial-gradient(1200px 700px at 70% -10%,#1d2c3a 0%,var(--bg) 60%);
+  color:var(--text);
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  min-height:100vh;
+}
+.shell{max-width:720px;margin:0 auto;padding:48px 20px 80px}
+.kicker{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--accent-2)}
+h1{margin:8px 0 10px;font-size:38px;line-height:1.15;font-weight:700}
+h1 span{background:linear-gradient(135deg,#23c483,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sub{color:var(--muted);font-size:16px;line-height:1.7;max-width:620px}
+.card{
+  margin-top:24px;background:rgba(19,23,29,0.92);border:1px solid var(--line);
+  border-radius:14px;padding:22px 24px;
+}
+.card-title{font-size:16px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.card-title .num{
+  width:22px;height:22px;border-radius:50%;background:var(--accent);color:#062217;
+  font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.card-sub{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.5}
+.tabs{display:flex;gap:0;margin-bottom:0;border-bottom:1px solid var(--line)}
+.tab{
+  padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;
+  color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;
+  background:none;border-top:none;border-left:none;border-right:none;
+}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.cmd{
+  margin-top:10px;padding:12px 14px;border:1px solid #2f3b4a;border-radius:8px;
+  background:#0b1118;color:#c8f7df;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;
+  position:relative;
+}
+.cmd .copy{
+  position:absolute;top:8px;right:8px;background:#1e2a38;border:1px solid #3a4759;
+  border-radius:6px;padding:4px 8px;font-size:11px;color:#93d5ff;cursor:pointer;
+  font-family:inherit;transition:all .15s;
+}
+.cmd .copy:hover{background:#2a3a4d;color:#fff}
+.cmd .copy.ok{color:var(--accent);border-color:#2f6f39}
+.note{margin-top:8px;color:var(--muted);font-size:12px;line-height:1.5}
+.pill{
+  display:inline-flex;align-items:center;border:1px solid #334155;border-radius:999px;
+  padding:4px 10px;font-size:11px;color:#c6d0dc;background:#0d1218;gap:4px;
+}
+.features{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;
+}
+.feat{
+  padding:10px 12px;border:1px solid var(--line);border-radius:8px;
+  background:rgba(11,17,24,0.6);font-size:13px;line-height:1.4;
+}
+.feat strong{color:var(--accent);font-weight:600}
+.feat .desc{color:var(--muted);font-size:12px;margin-top:2px}
+.verify{margin-top:16px}
+.verify .cmd{color:#e8edf3}
+a{color:#93d5ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.or{color:var(--muted);font-size:12px;margin:10px 0 2px;text-align:center}
+@media(max-width:600px){
+  h1{font-size:28px}
+  .features{grid-template-columns:1fr}
+  .shell{padding:32px 16px 60px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div style="margin-bottom:24px">
+    <div class="kicker">Developer CLI</div>
+    <h1>Install <span>Unchained</span></h1>
+    <div class="sub">Browser automation with DDM-first methodology. Navigate, extract, and interact with pages &mdash; optimized for LLM agents at ~500 tokens per page instead of ~2,100 for screenshots.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">1</span> Install</div>
+    <div class="card-sub">Choose your package manager. All methods install the same tool.</div>
+    <div class="tabs">
+      <button class="tab active" onclick="showTab(event,'pip')">pip</button>
+      <button class="tab" onclick="showTab(event,'uv')">uv</button>
+      <button class="tab" onclick="showTab(event,'brew')">brew</button>
+    </div>
+    <div class="tab-content active" id="tab-pip">
+      <div class="cmd">pip install unchainedsky-cli[agent]<button class="copy" onclick="copyCmd(this)">copy</button></div>
+      <div class="note">Includes the Claude agent. Omit <code>[agent]</code> for CLI-only.</div>
+    </div>
+    <div class="tab-content" id="tab-uv">
+      <div class="cmd">uv tool install unchainedsky-cli[agent]<button class="copy" onclick="copyCmd(this)">copy</button></div>
+      <div class="note">Installs globally. No venv needed.</div>
+    </div>
+    <div class="tab-content" id="tab-brew">
+      <div class="cmd">brew install protostatis/tap/unchainedsky-cli<button class="copy" onclick="copyCmd(this)">copy</button></div>
+      <div class="note">macOS and Linux. Agent extra requires <code>pip install anthropic</code> separately.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">2</span> Launch Chrome</div>
+    <div class="card-sub">Start a CDP-enabled Chrome instance. Pick your mode.</div>
+    <div class="cmd">unchained launch https://example.com<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note">Sandboxed profile &mdash; clean, isolated session.</div>
+    <div class="or">&mdash; or with your existing profile &mdash;</div>
+    <div class="cmd">unchained --port 9333 launch --use-profile --profile "Profile 3" https://x.com<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note">Copies your Chrome profile (cookies, logins) to a sandboxed dir. Original stays untouched.</div>
+    <div class="or">&mdash; or headless with stealth &mdash;</div>
+    <div class="cmd">unchained launch --headless --stealth https://example.com<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note">No visible window. Fingerprint evasion auto-enabled.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">3</span> Browse</div>
+    <div class="card-sub">Navigate returns page layout + Intel probe inline. No separate DDM call needed.</div>
+    <div class="cmd">unchained navigate https://news.ycombinator.com<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note">Returns interactive elements with coordinates + extraction strategy ranking.</div>
+    <div style="margin-top:14px">
+      <div class="cmd" style="color:var(--muted);font-size:12px">Tab: 2DB5FFBC...
+Hacker News: Hacker News@112,20 | new@178,20 | past@222,20 | comments@287,20
+--- ddm | mode: 2pass | elements: 50 ---
+layout: header | content(links)
+strategy: innerText (69%) | runner-up: img_alt (15%)</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="num">4</span> Agent <span class="pill">optional</span></div>
+    <div class="card-sub">Interactive Claude agent that browses autonomously using DDM + Intel.</div>
+    <div class="cmd">export ANTHROPIC_API_KEY=sk-ant-...
+unchained agent "find the cheapest flight to NYC"<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note">Uses Sonnet by default. <code>--model opus</code> or <code>--model haiku</code> to switch.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">What's included</div>
+    <div class="features">
+      <div class="feat"><strong>DDM</strong><div class="desc">DOM Density Map &mdash; ~500 token page layout with interactive elements and coordinates</div></div>
+      <div class="feat"><strong>Intel</strong><div class="desc">Bayesian page fingerprinting &mdash; ranks 8 extraction strategies per domain</div></div>
+      <div class="feat"><strong>26 commands</strong><div class="desc">navigate, click, type, scroll, js, screenshot, tabs, cookies, frames, and more</div></div>
+      <div class="feat"><strong>Stealth</strong><div class="desc">WebGL, navigator, screen overrides to evade bot detection</div></div>
+      <div class="feat"><strong>Multi-profile</strong><div class="desc">Run multiple Chrome profiles on different ports simultaneously</div></div>
+      <div class="feat"><strong>Claude agent</strong><div class="desc">Interactive browsing agent with DDM-first methodology built in</div></div>
+    </div>
+  </div>
+
+  <div class="card verify">
+    <div class="card-title">Verify</div>
+    <div class="cmd" style="color:var(--text)">unchained --help<button class="copy" onclick="copyCmd(this)">copy</button></div>
+    <div class="note" style="margin-top:10px">
+      <a href="https://github.com/protostatis/unchainedsky-cli" target="_blank" rel="noopener noreferrer">GitHub</a> &middot;
+      <a href="https://pypi.org/project/unchainedsky-cli/" target="_blank" rel="noopener noreferrer">PyPI</a> &middot;
+      <a href="https://github.com/protostatis/unchainedsky-cli/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+    </div>
+  </div>
+
+</div>
+<script>
+function showTab(e,id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById('tab-'+id).classList.add('active');
+}
+function copyCmd(btn){
+  const el=btn.parentElement;
+  const clone=el.cloneNode(true);
+  clone.querySelectorAll('.copy').forEach(b=>b.remove());
+  const cmd=clone.textContent.trim();
+  navigator.clipboard.writeText(cmd).then(()=>{
+    btn.textContent='copied';btn.classList.add('ok');
+    setTimeout(()=>{btn.textContent='copy';btn.classList.remove('ok')},1500);
+  });
+}
+</script>
 </body>
 </html>"""

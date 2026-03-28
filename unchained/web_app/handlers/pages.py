@@ -19,6 +19,23 @@ async def handle_install_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_cli_page(request: web.Request) -> web.Response:
+    """Serve the CLI install guide page."""
+    core = _core()
+    core._track_page_view(request)
+    from web_app.templates import CLI_INSTALL_HTML
+    return web.Response(
+        text=CLI_INSTALL_HTML,
+        content_type="text/html",
+        charset="utf-8",
+        headers={
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
+    )
+
+
 async def handle_mcp_page(request: web.Request) -> web.Response:
     """Serve the MCP install/setup page."""
     core = _core()
