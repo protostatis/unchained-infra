@@ -26,7 +26,6 @@ COPY unchained/cdp.py .
 COPY unchained/ddm.py .
 COPY unchained/intel.py .
 COPY unchained/web.py .
-COPY unchained/web_cmd.py .
 COPY unchained/web_state.py .
 COPY unchained/overlay_js.py .
 COPY unchained/cdp_tool_packaged.py .
