@@ -17,6 +17,8 @@ for f in \
   private_core_engine.py \
   private_core_server.py \
   private_core_contracts.py \
+  challenge_detection.py \
+  domain_policy.py \
   CLAUDE.md \
   LABEL_RESOLUTION.md
 do

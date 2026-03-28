@@ -17,6 +17,8 @@ UNCHAINED_RUNTIME_FILES=(
     "private_core_engine.py"
     "private_core_server.py"
     "editable_helpers.js"
+    "challenge_detection.py"
+    "domain_policy.py"
     "api.py"
     "mcp_server.py"
     "orchestrator.py"
