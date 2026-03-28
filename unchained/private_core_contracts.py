@@ -31,6 +31,10 @@ OP_LIST_TAB_ALIASES = "list_tab_aliases"
 OP_RUN_JS_IN_FRAME = "run_js_in_frame"
 OP_LIST_FRAMES = "list_frames"
 OP_RUN_DDM_IN_FRAME = "run_ddm_in_frame"
+OP_RHYTHM_CATCH = "rhythm_catch"
+OP_RHYTHM_EXECUTE = "rhythm_execute"
+OP_RHYTHM_TRAIN = "rhythm_train"
+OP_RHYTHM_QUERY = "rhythm_query"
 
 PRIVATE_CORE_OPS = {
     OP_RUN_DDM,
@@ -59,6 +63,10 @@ PRIVATE_CORE_OPS = {
     OP_RUN_JS_IN_FRAME,
     OP_LIST_FRAMES,
     OP_RUN_DDM_IN_FRAME,
+    OP_RHYTHM_CATCH,
+    OP_RHYTHM_EXECUTE,
+    OP_RHYTHM_TRAIN,
+    OP_RHYTHM_QUERY,
 }
 
 DEFAULT_PRIVATE_CORE_PORT = 8770
