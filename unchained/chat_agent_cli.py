@@ -1141,7 +1141,7 @@ catch_terms: comma-separated domain keywords from user's task (4-8 nouns).
 uv run python cdp_tool.py rhythm_query lookup_url --url https://example.com                        # Check if trained
 uv run python cdp_tool.py rhythm_train https://example.com                                         # Learn site elements
 uv run python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"          # Scan for data
-uv run python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'  # Multi-step actions
+uv run python cdp_tool.py rhythm_execute https://example.com '[{{"action":"click","text":"Next"}}]'  # Multi-step actions
 uv run python cdp_tool.py rhythm_query list_all                                                    # List trained sites
 
 ## DDM-First Methodology
@@ -1247,7 +1247,7 @@ Use CDP tools via Bash:
 - uv run python cdp_tool.py intel --probe
 - uv run python cdp_tool.py rhythm_train "https://example.com"
 - uv run python cdp_tool.py rhythm_catch "https://example.com" "find prices" "price,bed,sqft"
-- uv run python cdp_tool.py rhythm_execute "https://example.com" '[{"action":"click","text":"Next"}]'
+- uv run python cdp_tool.py rhythm_execute "https://example.com" '[{{"action":"click","text":"Next"}}]'
 - uv run python cdp_tool.py rhythm_query list_all
 
 IMPORTANT shell rules:
