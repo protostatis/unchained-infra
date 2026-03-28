@@ -29,6 +29,9 @@ unchained/installers/*.dmg
 # Playwright CLI
 unchained/.playwright-cli/
 
+# Rhythm build context (copied by deploy.sh, cleaned up after)
+rhythm/
+
 # Secrets
 .env
 .env.*
