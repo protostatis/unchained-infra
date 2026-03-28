@@ -58,12 +58,18 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(second["reason"], "max_frames")
         self.assertIn(closed.type, {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED})
 
-    async def test_unknown_session_returns_404(self):
+    async def test_rejects_foreign_guest_session(self):
+        resp = await self.client.request("GET", "/ws?session_id=s-guest-bbbb2222-demo")
+        self.assertEqual(resp.status, 403)
+        self.assertIn("session_id not owned by guest", await resp.text())
+
+    async def test_owned_but_unprovisioned_session_returns_404(self):
         import web_app.handlers.chat_flow as cf
         saved = cf._FIRST_LOOK_PREVIEW_RESOLVE_TIMEOUT
         cf._FIRST_LOOK_PREVIEW_RESOLVE_TIMEOUT = 0.1
         try:
-            resp = await self.client.request("GET", "/ws?session_id=s-guest-bbbb2222-demo")
+            # Session prefix matches guest identity but is not in _session_tabs
+            resp = await self.client.request("GET", "/ws?session_id=s-guest-aaaa1111-unknown")
             self.assertEqual(resp.status, 404)
             self.assertIn("No live preview available", await resp.text())
         finally:

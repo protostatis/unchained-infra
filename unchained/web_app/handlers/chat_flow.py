@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from urllib.parse import urlsplit
@@ -16,7 +17,10 @@ from rate_limit import SlidingWindowRateLimiter
 
 from web_app.core import get_core as _core
 
+log = logging.getLogger(__name__)
 
+
+# Chrome headless launch typically takes 2-5s; 10s gives comfortable margin.
 _FIRST_LOOK_PREVIEW_RESOLVE_TIMEOUT = 10.0
 
 def _parse_version_tuple(value: str) -> tuple[int, int, int]:
@@ -145,23 +149,41 @@ def _normalize_first_look_preview_dimension(
 
 
 async def _resolve_first_look_preview_target(
-    core, guest_auth: dict, session_id: str, *, timeout: float | None = None, poll_interval: float = 0.3,
+    core,
+    guest_auth: dict,
+    session_id: str,
+    *,
+    timeout: float | None = None,
+    # 300ms balances responsiveness with CPU overhead during polling.
+    poll_interval: float = 0.3,
 ) -> tuple[str, str]:
     if timeout is None:
         timeout = _FIRST_LOOK_PREVIEW_RESOLVE_TIMEOUT
     sid = str(session_id or "").strip()
     if not sid:
         raise web.HTTPBadRequest(text="session_id required")
+
+    # --- Ownership check ---
+    # The session_id is formatted as "s-{agent_id}-{suffix}".  Accept the
+    # request when EITHER the guest cookie identity owns the session OR the
+    # session already exists in _session_tabs (meaning it was created through
+    # an authenticated code path such as /web/chat).
+    guest_agent = guest_auth.get("agent_id", "")
+    prefix = f"s-{guest_agent}-"
+    if not sid.startswith(prefix) and sid not in core._session_tabs:
+        raise web.HTTPForbidden(text="session_id not owned by guest")
+
     if not core.HEADLESS_AGENT_ID:
         raise web.HTTPServiceUnavailable(text="Shared browser is not configured")
     # The tab may not be provisioned yet (headless Chrome launch takes seconds).
     # Poll until it appears or we time out.
-    deadline = asyncio.get_event_loop().time() + timeout
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     while True:
         tab_id = str(core._session_tabs.get(sid, "") or "").strip()
         if tab_id:
             return core.HEADLESS_AGENT_ID, tab_id
-        if asyncio.get_event_loop().time() >= deadline:
+        if loop.time() >= deadline:
             raise web.HTTPNotFound(text="No live preview available for this session yet")
         await asyncio.sleep(poll_interval)
 
@@ -218,7 +240,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     """GET /web/first-look/preview/ws — proxy private-core screencast for guest preview."""
     core = _core()
     sid_param = request.query.get("session_id", "")
-    print(f"[preview-ws] request received sid={sid_param!r} tabs={dict(core._session_tabs)}")
+    log.debug("request received sid=%r tabs=%s", sid_param, dict(core._session_tabs))
     guest_auth, guest_id, _ = core._first_look_guest_auth(request)
     try:
         agent_id, tab_id = await _resolve_first_look_preview_target(
@@ -227,11 +249,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
             sid_param,
         )
     except web.HTTPException as exc:
-        print(f"[preview-ws] resolve failed: {exc.status} {exc.text}")
+        log.warning("resolve failed: %s %s", exc.status, exc.text)
         denied = web.Response(status=exc.status, text=exc.text)
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
-    print(f"[preview-ws] resolved agent={agent_id} tab={tab_id}")
+    log.debug("resolved agent=%s tab=%s", agent_id, tab_id)
 
     width = _normalize_first_look_preview_dimension(
         request.query,
@@ -251,7 +273,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     ws = web.WebSocketResponse(heartbeat=30)
     core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
-    print(f"[preview-ws] starting screencast stream agent={agent_id} tab={tab_id}")
+    log.debug("starting screencast stream agent=%s tab=%s", agent_id, tab_id)
     try:
         async for event in cloud_tools.stream_screencast(
             agent_id,
@@ -270,7 +292,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
             if event.get("type") == "status":
                 break
     except Exception as exc:
-        print(f"[preview-ws] screencast error: {exc!r}")
+        log.warning("screencast error: %r", exc)
         if not ws.closed:
             try:
                 await ws.send_json({"type": "status", "status": "error", "reason": "preview_unavailable"})
