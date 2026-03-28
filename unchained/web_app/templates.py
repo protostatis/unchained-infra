@@ -10982,7 +10982,7 @@ body{
 
 /* === Input === */
 #inputbar{
-  display:flex;gap:8px;align-items:flex-end;
+  display:flex;gap:8px;align-items:flex-start;
   padding:8px 16px;padding-bottom:max(16px,env(safe-area-inset-bottom));
   background:var(--surface);border-top:1px solid #333;flex-shrink:0;
 }
@@ -11019,7 +11019,7 @@ body{
 /* === Steps === */
 .steps-wrap{
   padding:8px 12px 12px;border-top:1px solid #222;
-  max-height:180px;overflow-y:auto;flex-shrink:0;
+  max-height:52px;overflow-y:auto;flex-shrink:0;
 }
 .steps-title{
   font-size:11px;letter-spacing:0.4px;text-transform:uppercase;
