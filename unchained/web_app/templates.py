@@ -668,7 +668,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>unchained launch &amp;&amp; unchained navigate &lt;url&gt;</div>
       </div>
       <a href="/cli" class="card-btn">Install Guide &#8594;</a>
-      <a href="https://github.com/protostatis/unchainedsky-cli" rel="noopener noreferrer" class="card-btn card-btn-secondary">GitHub &#8594;</a>
+      <a href="https://github.com/protostatis/unchainedsky-cli" target="_blank" rel="noopener noreferrer" class="card-btn card-btn-secondary">GitHub &#8594;</a>
     </div>
 
     <!-- MCP -->
@@ -15032,9 +15032,9 @@ unchained agent "find the cheapest flight to NYC"<button class="copy" onclick="c
     <div class="card-title">Verify</div>
     <div class="cmd" style="color:var(--text)">unchained --help<button class="copy" onclick="copyCmd(this)">copy</button></div>
     <div class="note" style="margin-top:10px">
-      <a href="https://github.com/protostatis/unchainedsky-cli" rel="noopener noreferrer">GitHub</a> &middot;
-      <a href="https://pypi.org/project/unchainedsky-cli/" rel="noopener noreferrer">PyPI</a> &middot;
-      <a href="https://github.com/protostatis/unchainedsky-cli/releases" rel="noopener noreferrer">Releases</a>
+      <a href="https://github.com/protostatis/unchainedsky-cli" target="_blank" rel="noopener noreferrer">GitHub</a> &middot;
+      <a href="https://pypi.org/project/unchainedsky-cli/" target="_blank" rel="noopener noreferrer">PyPI</a> &middot;
+      <a href="https://github.com/protostatis/unchainedsky-cli/releases" target="_blank" rel="noopener noreferrer">Releases</a>
     </div>
   </div>
 
@@ -15047,7 +15047,10 @@ function showTab(e,id){
   document.getElementById('tab-'+id).classList.add('active');
 }
 function copyCmd(btn){
-  const cmd=btn.parentElement.textContent.replace('copy','').trim();
+  const el=btn.parentElement;
+  const clone=el.cloneNode(true);
+  clone.querySelectorAll('.copy').forEach(b=>b.remove());
+  const cmd=clone.textContent.trim();
   navigator.clipboard.writeText(cmd).then(()=>{
     btn.textContent='copied';btn.classList.add('ok');
     setTimeout(()=>{btn.textContent='copy';btn.classList.remove('ok')},1500);

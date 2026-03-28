@@ -27,8 +27,8 @@ async def handle_cli_page(request: web.Request) -> web.Response:
     return web.Response(
         text=CLI_INSTALL_HTML,
         content_type="text/html",
+        charset="utf-8",
         headers={
-            "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'",
             "X-Frame-Options": "DENY",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "strict-origin-when-cross-origin",
