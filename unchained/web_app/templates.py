@@ -10791,8 +10791,6 @@ FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Unchained First Look Preview</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11240,7 +11238,10 @@ function ensureSessionId() {
   return sessionId;
 }
 
+let quotaModalShown = false;
 function showQuotaModal() {
+  if (quotaModalShown) return;
+  quotaModalShown = true;
   document.getElementById('quota-modal').classList.add('visible');
 }
 function dismissQuota() {
@@ -11307,6 +11308,9 @@ function doNewChat() {
   resetSteps();
   document.getElementById('msginput').value = '';
   signalBuffer = '';
+  assistantText = '';
+  currentAssistantEl = null;
+  currentToolEl = null;
   sessionId = '';
   historyLoaded = false;
   ensureSessionId();
@@ -11319,7 +11323,6 @@ function hideHints() {
 }
 
 function addLine(kind, title, body) {
-  hideHints();
   const row = document.createElement('div');
   const cls = kind === 'user' ? 'bubble user' : kind === 'assistant' ? 'bubble asst' : 'bubble system';
   row.className = cls;
@@ -11341,10 +11344,22 @@ function ensureAssistantLine() {
   return currentAssistantEl;
 }
 
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('[onload],[onerror],[onclick],[onmouseover],[onfocus],[onblur]').forEach(function(el) {
+    el.removeAttribute('onload');el.removeAttribute('onerror');el.removeAttribute('onclick');
+    el.removeAttribute('onmouseover');el.removeAttribute('onfocus');el.removeAttribute('onblur');
+  });
+  tmp.querySelectorAll('a[href^="javascript:"]').forEach(function(el) { el.removeAttribute('href'); });
+  return tmp.innerHTML;
+}
+
 function renderMarkdown(el, raw) {
   if (typeof marked !== 'undefined') {
     try {
-      el.innerHTML = marked.parse(raw);
+      el.innerHTML = sanitizeHtml(marked.parse(raw));
       el.classList.add('rendered');
     } catch (_err) {
       el.textContent = raw;
@@ -11394,7 +11409,6 @@ function setPreviewNote(text, tone) {
   const el = document.getElementById('preview-note');
   if (!el) return;
   el.className = tone || '';
-  el.id = 'preview-note';
   el.textContent = text;
 }
 
@@ -11695,6 +11709,7 @@ async function doSend() {
   autoGrow(document.getElementById('msginput'));
   document.getElementById('sendbtn').style.display = 'none';
   document.getElementById('cancelbtn').style.display = 'inline-flex';
+  hideHints();
   addLine('user', 'You', message);
   setStatusCopy('challenge-status', 'No challenge signal yet.', 'subtle');
 
