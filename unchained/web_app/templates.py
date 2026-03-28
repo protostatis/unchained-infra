@@ -11001,6 +11001,7 @@ body{
   width:44px;height:44px;border:none;border-radius:12px;
   background:var(--accent);color:#fff;font-size:18px;
   cursor:pointer;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
 }
 #sendbtn:active{opacity:0.8}
 #sendbtn:disabled{opacity:0.4;cursor:default}
@@ -11038,9 +11039,57 @@ body{
 .step-copy strong{display:block;color:var(--text);font-size:12px}
 .step-copy span{display:block;margin-top:2px;color:var(--muted);font-size:11px;line-height:1.4;word-break:break-word}
 .empty-steps{color:var(--muted);font-size:12px}
+
+/* === Quota modal === */
+#quota-modal{
+  display:none;position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,0.75);align-items:center;justify-content:center;
+}
+#quota-modal.visible{display:flex}
+.quota-box{
+  background:var(--surface);border:1px solid #444;border-radius:16px;
+  padding:32px;max-width:480px;width:92%;text-align:center;
+}
+.quota-box h2{font-size:22px;color:var(--accent);margin-bottom:8px}
+.quota-box .quota-sub{color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6}
+.quota-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;text-align:left;
+}
+.quota-item{
+  padding:12px;border:1px solid #333;border-radius:10px;background:rgba(255,255,255,0.03);
+}
+.quota-item strong{display:block;font-size:14px;color:var(--text);margin-bottom:2px}
+.quota-item span{font-size:12px;color:var(--muted);line-height:1.4}
+.quota-cta{
+  display:inline-block;padding:12px 28px;border-radius:8px;
+  background:var(--accent);color:#fff;font-size:15px;font-weight:600;
+  text-decoration:none;letter-spacing:0.5px;transition:opacity 0.2s;
+}
+.quota-cta:hover{opacity:0.9;box-shadow:0 0 20px rgba(233,69,96,0.3)}
+.quota-dismiss{
+  display:block;margin-top:12px;background:none;border:none;
+  color:var(--muted);font-size:13px;cursor:pointer;
+}
+.quota-dismiss:hover{color:var(--text)}
+@media(max-width:640px){.quota-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
+
+<div id="quota-modal">
+  <div class="quota-box">
+    <h2>Shared demo complete</h2>
+    <p class="quota-sub">You've used your guest runs. Continue free with your own Claude and browser — no credit card, no extra billing.</p>
+    <div class="quota-grid">
+      <div class="quota-item"><strong>Your Claude + your browser</strong><span>Use your Claude Pro or Max plan in your current Chrome profile or a clean guest profile.</span></div>
+      <div class="quota-item"><strong>Why free</strong><span>You bring Claude, your browser, and your data. Unchained only provides the lightweight extraction layer.</span></div>
+      <div class="quota-item"><strong>No sign-up wall</strong><span>Authentication just creates your personal connection key. No credit card required.</span></div>
+      <div class="quota-item"><strong>Full browser access</strong><span>Run on any site — no shared-demo restrictions or challenge issues.</span></div>
+    </div>
+    <a href="/local" class="quota-cta">Connect Claude Free &rarr;</a>
+    <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
+  </div>
+</div>
 
 <div id="main">
   <div id="topbar">
@@ -11172,6 +11221,13 @@ function ensureSessionId() {
   return sessionId;
 }
 
+function showQuotaModal() {
+  document.getElementById('quota-modal').classList.add('visible');
+}
+function dismissQuota() {
+  document.getElementById('quota-modal').classList.remove('visible');
+}
+
 function updateQuotaCopy() {
   const badge = document.getElementById('quota-copy');
   if (badge) {
@@ -11182,7 +11238,8 @@ function updateQuotaCopy() {
     if (remainingGuestRuns > 0) {
       bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
     } else {
-      bar.innerHTML = '<strong>Guest runs used up.</strong> Continue in your browser for the reliable path.';
+      bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/local" style="color:var(--accent)">Connect Claude Free</a> to continue with your own browser.';
+      showQuotaModal();
     }
   }
 }
@@ -11203,13 +11260,38 @@ function autoGrow(el) {
 function doNewChat() {
   if (sending) return;
   const chat = document.getElementById('chat');
-  chat.innerHTML = '';
+  chat.innerHTML =
+    '<div id="chat-hints">' +
+      '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
+      '<div class="hint-title">Watch the shared browser work before you install anything.</div>' +
+      '<div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>' +
+      '<div class="hint-panels">' +
+        '<div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>' +
+        '<div class="hint-panel"><strong>Site Fit</strong><span id="site-fit-status">Paste a public URL or include one in the prompt to preflight the target.</span></div>' +
+        '<div class="hint-panel"><strong>Challenge State</strong><span id="challenge-status">No challenge signal yet.</span></div>' +
+      '</div>' +
+      '<div class="hint-examples">' +
+        '<div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare three computing pioneers on Wikipedia</div>' +
+        '<div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</div>' +
+        '<div class="hint-item" data-prompt="Look at Zillow and tell me whether the shared demo browser is likely to be challenged before I trust this path." data-url="https://www.zillow.com/"><span class="hint-emoji">\u26a0</span> Test a challenge-prone site</div>' +
+      '</div>' +
+      '<div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>' +
+      '<div class="hint-actions"><a class="hint-cta" href="/local">Connect Claude Free</a></div>' +
+      '<div class="hint-footer">Shared demo browser on selected public sites only</div>' +
+    '</div>';
+  document.querySelectorAll('.hint-item').forEach(function (item) {
+    item.addEventListener('click', function () {
+      fillExample(item.dataset.prompt || '', item.dataset.url || '');
+    });
+  });
   resetPreview();
   resetSteps();
   document.getElementById('msginput').value = '';
+  signalBuffer = '';
   sessionId = '';
   historyLoaded = false;
   ensureSessionId();
+  refreshSharedBrowserStatus();
 }
 
 function hideHints() {
