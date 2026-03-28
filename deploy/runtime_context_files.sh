@@ -26,7 +26,6 @@ UNCHAINED_RUNTIME_FILES=(
     "ddm.py"
     "intel.py"
     "web.py"
-    "web_cmd.py"
     "web_state.py"
     "overlay_js.py"
     "cdp_tool_packaged.py"
