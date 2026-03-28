@@ -1127,24 +1127,22 @@ uv run python cdp_tool.py tabs                          # List open Chrome tabs
 uv run python cdp_tool.py new-tab https://example.com   # Open URL in a new tab
 uv run python cdp_tool.py close-tab <tab_id>            # Close a tab by ID
 
-## Rhythm (event-driven SPA automation)
+## Rhythm (for SPAs where ddm --text returns <200 chars)
 
-uv run python cdp_tool.py rhythm_train https://example.com                # Learn a site's element manifest (once per site pattern)
-uv run python cdp_tool.py rhythm_train https://example.com --click "Nav"  # Train with SPA nav observation
-uv run python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"  # Scan DOM for data (20-100x faster)
-uv run python cdp_tool.py rhythm_catch https://example.com "task" "terms" --click "Go"     # Click before scanning
-uv run python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'  # Run action plan at event speed
-uv run python cdp_tool.py rhythm_query list_all                           # List all learned site schemas
-uv run python cdp_tool.py rhythm_query lookup_url --url https://example.com  # Check if a site is trained
-uv run python cdp_tool.py rhythm_query get_graph --domain example.com     # View navigation graph
+When ddm --text is weak on JS-heavy pages (card grids, React apps, infinite scroll):
+1. `rhythm_query lookup_url --url <url>` — already trained? skip to step 3
+2. `rhythm_train <url>` — learn site once (covers same route pattern)
+3. `rhythm_catch <url> <task> <catch_terms>` — scan DOM for data, 20-100x faster
 
-When to use Rhythm vs DDM/intel:
-- DDM/intel: page orientation, text extraction, strategy classification — works on any page
-- Rhythm: event-driven interception for SPAs where DDM gives weak results (JS-heavy apps, card grids)
-  1. `rhythm_query list_all` — check if the site is already trained
-  2. `rhythm_train <url>` — learn once per site pattern (e.g. train on /product/123, works on /product/456)
-  3. `rhythm_catch <url> <task> <terms>` — scan for data terms
-  4. `rhythm_execute <url> <steps_json>` — multi-step plans without LLM between steps
+catch_terms: comma-separated domain keywords from user's task (4-8 nouns).
+  "find homes in Austin" → "price,bed,bath,sqft,address"
+  "compare GPU prices"   → "price,GPU,RTX,stock,seller"
+
+uv run python cdp_tool.py rhythm_query lookup_url --url https://example.com                        # Check if trained
+uv run python cdp_tool.py rhythm_train https://example.com                                         # Learn site elements
+uv run python cdp_tool.py rhythm_catch https://example.com "find prices" "price,bed,sqft"          # Scan for data
+uv run python cdp_tool.py rhythm_execute https://example.com '[{"action":"click","text":"Next"}]'  # Multi-step actions
+uv run python cdp_tool.py rhythm_query list_all                                                    # List trained sites
 
 ## DDM-First Methodology
 

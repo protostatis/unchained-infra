@@ -51,6 +51,10 @@ click          — Click at pixel coordinates from DDM. Returns diff + DDM layou
 type_text      — Type into focused input (click first!)
 js_eval        — Execute JavaScript on page, return result
 screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
+rhythm_train   — Learn a site's interactive elements (once per domain pattern). Use when ddm --text returns <200 chars on JS-heavy SPAs.
+rhythm_catch   — Scan DOM for data by keyword terms, 20-100x faster than screenshots. Requires training first.
+rhythm_execute — Run multi-step action plans at event speed (no LLM between steps).
+rhythm_query   — Check if a site is already trained, list all schemas, or view navigation graphs.
 
 ## DDM-First Methodology
 
@@ -65,6 +69,13 @@ screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
    - SPA data store (Nuxt/YouTube): `intel_stores` → `intel_find_paths` → `js_eval`
    - Structured data: `js_eval` with querySelectorAll
    - data-testid (GitHub): `intel_extract` with data_testid strategy
+   - JS-heavy SPAs / card grids (ddm --text weak): `rhythm_query` → `rhythm_train` → `rhythm_catch`
+
+## Rhythm — catch_terms construction
+catch_terms: comma-separated domain keywords derived from the user's task. Pick 4-8 nouns.
+  "find homes in Austin" → "price,bed,bath,sqft,address"
+  "compare GPU prices"   → "price,GPU,RTX,stock,seller"
+  "top posts on HN"      → "score,upvote,comment,title,author"
 
 ## Key Rules
 - ALWAYS use tools. NEVER answer from memory or fabricate data.
@@ -109,6 +120,7 @@ screenshot     — Capture screenshot (CAPTCHAs only, ~2100 tok)
 | Simple pages | Single `ddm` (default flags) |
 | data-testid rich | `intel_extract` with data_testid strategy |
 | Property / real estate | `ddm` with "--text --max 8000" |
+| Card grids / infinite scroll | `rhythm_train` → `rhythm_catch` |
 
 ## Key Gotchas
 - SPA widgets such as date pickers often need `js_eval` with .click()
@@ -310,6 +322,91 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "rhythm_train",
+        "description": (
+            "Learn a site's interactive element manifest. Call once per domain "
+            "pattern — e.g. train on /product/123, works on /product/456. "
+            "Use when ddm --text returns weak results on JS-heavy SPAs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Page URL to train on"},
+                "click_link_text": {
+                    "type": "string",
+                    "description": "Optional link text to click for SPA nav observation",
+                    "default": "",
+                },
+                "tab_id": {"type": "string", "default": "auto"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "rhythm_catch",
+        "description": (
+            "Scan DOM for data matching catch_terms. 20-100x faster than "
+            "screenshot extraction. Requires rhythm_train first. "
+            "catch_terms: comma-separated domain keywords from user's task (4-8 nouns)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Page URL to scan"},
+                "task": {"type": "string", "description": "What you're looking for (e.g. 'find home prices')"},
+                "catch_terms": {
+                    "type": "string",
+                    "description": "Comma-separated keywords (e.g. 'price,bed,bath,sqft')",
+                },
+                "click_text": {
+                    "type": "string",
+                    "description": "Optional element text to click before scanning",
+                    "default": "",
+                },
+                "tab_id": {"type": "string", "default": "auto"},
+            },
+            "required": ["url", "task", "catch_terms"],
+        },
+    },
+    {
+        "name": "rhythm_execute",
+        "description": (
+            "Run multi-step action plan at event speed (no LLM between steps). "
+            "Steps: {action: click|type|scroll, text: 'visible text', value: '...'}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Page URL"},
+                "targets": {
+                    "type": "string",
+                    "description": "JSON array of step objects",
+                },
+                "tab_id": {"type": "string", "default": "auto"},
+            },
+            "required": ["url", "targets"],
+        },
+    },
+    {
+        "name": "rhythm_query",
+        "description": (
+            "Check what Rhythm already knows. Actions: 'lookup_url' (is this site trained?), "
+            "'list_all' (all schemas), 'get_graph' (nav graph for domain), 'list_sites'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "lookup_url | list_all | get_graph | list_sites",
+                },
+                "url": {"type": "string", "description": "For lookup_url", "default": ""},
+                "domain": {"type": "string", "description": "For get_graph / list_all filter", "default": ""},
+            },
+            "required": ["action"],
+        },
+    },
 ]
 
 
@@ -453,6 +550,35 @@ class Orchestrator:
                 data = await cloud_tools.screenshot(self.agent_id, tab_id)
                 # Return truncated indicator — actual image would go via content block
                 return f"[screenshot captured, {len(data)} bytes base64]"
+
+            elif name == "rhythm_train":
+                return await cloud_tools.run_rhythm_train(
+                    self.agent_id, tab_id, input_data["url"],
+                    click_link_text=input_data.get("click_link_text", ""))
+
+            elif name == "rhythm_catch":
+                terms = [t.strip() for t in input_data["catch_terms"].split(",") if t.strip()]
+                return await cloud_tools.run_rhythm_catch(
+                    self.agent_id, tab_id, input_data["url"],
+                    input_data["task"], terms,
+                    click_text=input_data.get("click_text", ""))
+
+            elif name == "rhythm_execute":
+                import json
+                try:
+                    target_list = json.loads(input_data["targets"])
+                except json.JSONDecodeError:
+                    return "Invalid JSON in targets parameter."
+                if not isinstance(target_list, list):
+                    return "targets must be a JSON array of step objects."
+                return await cloud_tools.run_rhythm_execute(
+                    self.agent_id, tab_id, input_data["url"], target_list)
+
+            elif name == "rhythm_query":
+                return await cloud_tools.run_rhythm_query(
+                    input_data["action"],
+                    url=input_data.get("url", ""),
+                    domain=input_data.get("domain", ""))
 
             else:
                 return f"Unknown tool: {name}"
