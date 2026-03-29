@@ -170,7 +170,7 @@ def _ev_chrome_props() -> str:
         'RunningState:{CANNOT_RUN:"cannot_run",READY_TO_RUN:"ready_to_run",'
         'RUNNING:"running"},getDetails:function(){},getIsInstalled:function(){},'
         'installState:function(){return"not_installed"}};'
-        'window.chrome.csi=window.chrome.csi||function(){return{startE:Date.now(),onloadT:0,pageT:0,tran:15}};'
+        'window.chrome.csi=window.chrome.csi||function(){return{startE:Date.now(),onloadT:Date.now(),pageT:0.1,tran:15}};'
         'window.chrome.loadTimes=window.chrome.loadTimes||function(){'
         'return{commitLoadTime:Date.now()/1000,connectionInfo:"h2",'
         'finishDocumentLoadTime:0,finishLoadTime:0,firstPaintAfterLoadTime:0,'
@@ -194,21 +194,29 @@ def _ev_media_devices() -> str:
 
 
 def _ev_plugins() -> str:
-    """navigator.plugins mock (empty PluginArray = headless signal)"""
+    """navigator.plugins mock with MimeType entries.
+
+    Empty PluginArray is a strong headless signal.  CreepJS also iterates
+    plugin[0].type and checks navigator.mimeTypes.length, so we must
+    provide associated MimeType objects.
+    """
     return (
-        'Object.defineProperty(navigator,"plugins",{get:()=>{'
-        'const p=[{name:"PDF Viewer",filename:"internal-pdf-viewer",'
-        'description:"Portable Document Format",length:1},'
-        '{name:"Chrome PDF Viewer",filename:"internal-pdf-viewer",'
-        'description:"Portable Document Format",length:1},'
-        '{name:"Chromium PDF Viewer",filename:"internal-pdf-viewer",'
-        'description:"Portable Document Format",length:1},'
-        '{name:"Microsoft Edge PDF Viewer",filename:"internal-pdf-viewer",'
-        'description:"Portable Document Format",length:1},'
-        '{name:"WebKit built-in PDF",filename:"internal-pdf-viewer",'
-        'description:"Portable Document Format",length:1}];'
+        '(()=>{'
+        'const mt={type:"application/pdf",suffixes:"pdf",'
+        'description:"Portable Document Format"};'
+        'const names=["PDF Viewer","Chrome PDF Viewer","Chromium PDF Viewer",'
+        '"Microsoft Edge PDF Viewer","WebKit built-in PDF"];'
+        'const p=names.map(n=>{const pl={name:n,filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1};'
+        'const m=Object.create(mt);m.enabledPlugin=pl;pl[0]=m;return pl});'
         'p.item=i=>p[i]||null;p.namedItem=n=>p.find(x=>x.name===n)||null;'
-        'p.refresh=()=>{};return p}})'
+        'p.refresh=()=>{};'
+        'Object.defineProperty(navigator,"plugins",{get:()=>p});'
+        'const mimes=p.map(pl=>pl[0]);'
+        'mimes.item=i=>mimes[i]||null;'
+        'mimes.namedItem=n=>mimes.find(x=>x.type===n)||null;'
+        'Object.defineProperty(navigator,"mimeTypes",{get:()=>mimes})'
+        '})()'
     )
 
 
@@ -221,9 +229,15 @@ def _ev_languages() -> str:
 
 
 def _ev_permissions() -> str:
-    """permissions.query override for notifications"""
+    """permissions.query override for notifications.
+
+    Guarded: navigator.permissions may be undefined in embedded contexts
+    or older WebViews — an unguarded access would throw and abort the
+    entire stealth injection chain.
+    """
     return (
-        '(()=>{const _pq=navigator.permissions.query.bind(navigator.permissions);'
+        '(()=>{if(!navigator.permissions||!navigator.permissions.query)return;'
+        'const _pq=navigator.permissions.query.bind(navigator.permissions);'
         'navigator.permissions.query=p=>p.name==="notifications"'
         '?Promise.resolve({state:Notification.permission==="default"'
         '?"prompt":Notification.permission,onchange:null}):_pq(p)})()'
@@ -247,10 +261,7 @@ def _ev_mouse_coords() -> str:
         'if(!cd||!cd.get)continue;'
         'const cGet=cd.get;'
         'Object.defineProperty(MouseEvent.prototype,sp,{'
-        'get(){const c=cGet.call(this);'
-        'const orig=Object.getOwnPropertyDescriptor(UIEvent.prototype,sp);'
-        'const s=orig&&orig.get?orig.get.call(this):c;'
-        'return s===c?c+off:s},'
+        'get(){return cGet.call(this)+off},'
         'configurable:true})}'
         '})()'
     )
