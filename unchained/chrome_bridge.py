@@ -1424,6 +1424,22 @@ class Agent:
                 if msg.get("id") == sid:
                     return msg
 
+        # Clear stale emulation from previous bridge sessions so headed
+        # browsers don't keep a viewport override from an old headless run.
+        # Also remove any lingering screen property overrides from old stealth
+        # scripts that may have been registered via addScriptToEvaluateOnNewDocument
+        # in a previous session (those scripts persist across bridge restarts).
+        await _cdp("Emulation.clearDeviceMetricsOverride")
+        if "screen" not in self._stealth_evasions:
+            # Undo any stale screen overrides from previous sessions by
+            # deleting the property descriptors, restoring native getters.
+            await _cdp("Page.addScriptToEvaluateOnNewDocument", {
+                "source": (
+                    'try{delete screen.width;delete screen.height;'
+                    'delete screen.availWidth;delete screen.availHeight}catch(e){}'
+                ),
+            })
+
         if "emulation_override" in self._stealth_evasions:
             await _cdp("Emulation.setDeviceMetricsOverride", {
                 "width": 1920, "height": 1080, "deviceScaleFactor": 1,
