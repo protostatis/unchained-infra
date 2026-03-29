@@ -1671,17 +1671,18 @@ def _patch_chat_agent_cli(source: str) -> str:
         'CWD = os.path.dirname(os.path.abspath(__file__))',
     )
     # Use sys.executable instead of uv run (package has venv activated)
-    # For permission patterns in allowed string: keep as string literals, match any Python binary
-    # The actual subprocess call (line 1683) uses sys.executable as a runtime variable
-    source = source.replace("uv run python cdp_tool.py", "python3 cdp_tool.py")
-    source = source.replace("uv run python scheduler_tool.py", "python3 scheduler_tool.py")
-    # Bash permission patterns: use wildcards to match any Python executable path or variant
-    source = source.replace("Bash(uv run python cdp_tool.py:*)", "Bash(*python* cdp_tool.py:*)")
-    source = source.replace("Bash(uv run python scheduler_tool.py:*)", "Bash(*python* scheduler_tool.py:*)")
+    # Order matters: replace more-specific patterns first (Bash globs, list-form),
+    # then the broad string replacement last (it would clobber the others)
     source = source.replace(
         '["uv", "run", "python", "cdp_tool.py",',
         '[sys.executable, "cdp_tool.py",',
     )
+    # Bash permission patterns: wildcards to match any Python path variant
+    source = source.replace("Bash(uv run python cdp_tool.py:*)", "Bash(*python* cdp_tool.py:*)")
+    source = source.replace("Bash(uv run python scheduler_tool.py:*)", "Bash(*python* scheduler_tool.py:*)")
+    # Broad replacement last — catches remaining occurrences (e.g. inside allowed string)
+    source = source.replace("uv run python cdp_tool.py", "python3 cdp_tool.py")
+    source = source.replace("uv run python scheduler_tool.py", "python3 scheduler_tool.py")
     # Set API URL for the HTTP-based cdp_tool.py
     source = source.replace(
         '    env["CDP_AGENT_ID"] = AGENT_ID\n'
