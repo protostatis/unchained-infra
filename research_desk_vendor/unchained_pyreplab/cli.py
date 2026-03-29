@@ -1283,11 +1283,12 @@ def discover_pyreplab_bin() -> Optional[str]:
     candidates = [
         os.environ.get("PYREPLAB_BIN"),
         shutil.which("pyreplab"),
-        str(REPO_ROOT.parent / "pyrepl" / "pyreplab"),
-        "/Users/zhiminzou/Projects/pyrepl/pyreplab",
+        # research_desk_vendor is nested: unchained-infra/research_desk_vendor/
+        # REPO_ROOT = research_desk_vendor, so parent.parent.parent reaches /Projects
+        str(REPO_ROOT.parent.parent.parent / "pyreplab" / "pyreplab"),
     ]
     for candidate in candidates:
-        if candidate and Path(candidate).exists():
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return candidate
     return None
 
@@ -3982,13 +3983,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     checks = provider_status.get("checks", [])
     if checks:
         print("provider_checks={value}".format(value=",".join(str(item) for item in checks)))
+    # Fail if pyreplab is missing - cannot proceed without it
+    if not pyreplab_bin:
+        print("ERROR: pyreplab not found. Cannot proceed with setup.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Install pyreplab from the sibling repo:", file=sys.stderr)
+        print("  cd ../pyreplab && pip install -e .", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Or set PYREPLAB_BIN environment variable:", file=sys.stderr)
+        print("  export PYREPLAB_BIN=/path/to/pyreplab", file=sys.stderr)
+        raise SystemExit(1)
+
     warnings = list(provider_status.get("warnings", []))
     if not browser["installed"]:
         warnings.append("browser bridge not installed")
     elif not browser["running"]:
         warnings.append("browser bridge is installed but no running agent was discovered")
-    if not pyreplab_bin:
-        warnings.append("pyreplab not found")
     for warning in warnings:
         print("warning={value}".format(value=warning))
     print("next=uv run unchained-pyreplab serve --open --reload")
@@ -4254,6 +4264,16 @@ def cmd_cells(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     from .webapp import run_server
+
+    # Validate pyreplab is configured before starting server
+    config = apply_setup_environment()
+    pyreplab_bin = config.get("pyreplab_bin", "")
+    if not pyreplab_bin or not Path(pyreplab_bin).is_file():
+        print("ERROR: pyreplab is not configured or not found at: {path}".format(path=pyreplab_bin or "(not set)"), file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Run setup first:", file=sys.stderr)
+        print("  uv run unchained-pyreplab setup", file=sys.stderr)
+        raise SystemExit(1)
 
     if args.reload and not getattr(args, "reload_child", False):
         return _cmd_serve_with_reload(args)
