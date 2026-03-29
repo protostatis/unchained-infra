@@ -1950,9 +1950,10 @@ async def handle_message_codex(
             "--output-last-message", output_file,
             "resume",
             "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
-            "-C", CWD, "-m", codex_model,
+            "-m", codex_model,
             codex_sid, "-",
         ]
+        # codex exec resume doesn't support -C; set CWD via subprocess cwd instead
         cmd_cwd = CWD
     else:
         cmd = [
