@@ -1950,10 +1950,10 @@ async def handle_message_codex(
             "--output-last-message", output_file,
             "resume",
             "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
-            "-m", codex_model,
+            "-C", CWD, "-m", codex_model,
             codex_sid, "-",
         ]
-        cmd_cwd = None
+        cmd_cwd = CWD
     else:
         cmd = [
             CODEX_BIN, "exec",
