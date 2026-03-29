@@ -54,7 +54,7 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
     Uses cloud_tools.run_js() — same path as DDM, click, navigate.
     No bridge handlers, no relay HTTP, no chat_agent_cli involvement.
     """
-    if not tab_id or tab_id == "auto":
+    if not tab_id:
         return
 
     try:
@@ -737,9 +737,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._session_agents[session_id] = routing_agent_id
 
     # --- Inject overlay copilot into the task browser ---
-    # Only inject when we have a concrete tab_id (not None/"auto")
-    if tab_id and not guest_mode and not is_openrouter:
-        _inject_overlay(core, session_id, cdp_agent_id, tab_id, message,
+    overlay_tab = tab_id or "auto"
+    if not guest_mode and not is_openrouter:
+        _inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message,
                         user_id=auth_info.get("user_id", ""), slot=slot)
 
     resp = web.StreamResponse(
