@@ -1670,14 +1670,11 @@ def _patch_chat_agent_cli(source: str) -> str:
         'CWD = os.path.expanduser("~/Projects/unchained/unchained")',
         'CWD = os.path.dirname(os.path.abspath(__file__))',
     )
-    # Use plain python instead of uv run (package has venv activated)
-    source = source.replace("uv run python cdp_tool.py", "python cdp_tool.py")
-    source = source.replace("uv run python scheduler_tool.py", "python scheduler_tool.py")
-    source = source.replace("Bash(uv run python cdp_tool.py:*)", "Bash(python cdp_tool.py:*)")
-    source = source.replace("Bash(uv run python scheduler_tool.py:*)", "Bash(python scheduler_tool.py:*)")
+    # Fix the list-form subprocess call to use sys.executable (platform-independent)
+    # System prompt and Bash permission patterns keep "uv run python" as-is
     source = source.replace(
         '["uv", "run", "python", "cdp_tool.py",',
-        '["python", "cdp_tool.py",',
+        '[sys.executable, "cdp_tool.py",',
     )
     # Set API URL for the HTTP-based cdp_tool.py
     source = source.replace(
