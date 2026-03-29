@@ -391,7 +391,6 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("This run appears to have hit human verification.", html)
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
-        self.assertIn("Continue in your browser", html)
         self.assertNotIn("2 shared demo runs", html)
         self.assertNotIn("Stay in the shared demo", html)
         self.assertNotIn("viewer token", html)

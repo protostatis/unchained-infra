@@ -115,9 +115,15 @@ def _ev_screen() -> str:
     )
 
 
+# Selected once at process start so all tabs in the same session report the
+# same GPU — avoids cross-tab correlation when a tracker links different GPU
+# strings to the same origin.
+_SESSION_WEBGL_GPU = random.choice(_WEBGL_GPUS)
+
+
 def _ev_webgl() -> str:
-    """WebGL vendor/renderer spoofing (random GPU per call)"""
-    vendor, renderer = random.choice(_WEBGL_GPUS)
+    """WebGL vendor/renderer spoofing (fixed per session)"""
+    vendor, renderer = _SESSION_WEBGL_GPU
     v_js = json.dumps(vendor)
     r_js = json.dumps(renderer)
     return (
@@ -171,7 +177,7 @@ def _ev_chrome_props() -> str:
         'firstPaintTime:0,navigationType:"Other",'
         'npnNegotiatedProtocol:"h2",requestTime:Date.now()/1000-0.3,'
         'startLoadTime:Date.now()/1000-0.3,wasAlternateProtocolAvailable:false,'
-        'wasFetchedViaSpdy:true,wasNpnNegotiated:true}}}'
+        'wasFetchedViaSpdy:false,wasNpnNegotiated:false}}}'
     )
 
 
@@ -300,14 +306,14 @@ def _resolve_stealth_evasions(
         enabled = {n.strip() for n in evasions_csv.split(",") if n.strip()}
         unknown = enabled - ALL_STEALTH_EVASION_NAMES
         if unknown:
-            print(f"[agent:stealth] WARNING: unknown evasions ignored: {', '.join(sorted(unknown))}")
+            logging.warning("[agent:stealth] unknown evasions ignored: %s", ", ".join(sorted(unknown)))
             enabled &= ALL_STEALTH_EVASION_NAMES
 
     if disable_csv:
         disable = {n.strip() for n in disable_csv.split(",") if n.strip()}
         unknown = disable - ALL_STEALTH_EVASION_NAMES
         if unknown:
-            print(f"[agent:stealth] WARNING: unknown evasions in disable list: {', '.join(sorted(unknown))}")
+            logging.warning("[agent:stealth] unknown evasions in disable list: %s", ", ".join(sorted(unknown)))
         enabled -= disable
 
     return enabled
@@ -1406,9 +1412,17 @@ class Agent:
                         return msg
 
             stealth_js = _build_stealth_js(enabled_evasions)
+            _ev = enabled_evasions or ALL_STEALTH_EVASION_NAMES
 
             # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
             await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
+            # Apply CDP-level evasions
+            if "emulation_override" in _ev:
+                await asyncio.wait_for(_ws_cdp(
+                    "Emulation.setDeviceMetricsOverride", {
+                        "width": 1920, "height": 1080, "deviceScaleFactor": 1,
+                        "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
+                    }), timeout=10)
             # Inject stealth JS into all future navigations
             if stealth_js:
                 await asyncio.wait_for(
@@ -2421,15 +2435,16 @@ def _ensure_chrome(
                 ua_version = m.group(1)
         except Exception:
             pass
-        # Note: --disable-blink-features=AutomationControlled is intentionally
-        # omitted.  The flag itself is a bot detection signal (fingerprinters
-        # check Chrome's command-line switches).  The stealth JS injected via
-        # Page.addScriptToEvaluateOnNewDocument already overrides
-        # navigator.webdriver, making the flag redundant.
-        cmd.append(
+        # Both the flag and JS override are applied for defense-in-depth:
+        # Page.addScriptToEvaluateOnNewDocument fires before page scripts (CDP
+        # contract), but the flag provides a browser-level guarantee.  While
+        # some fingerprinters check for --disable-blink-features in Chrome
+        # internals, that is a rarer vector than navigator.webdriver=true.
+        cmd.extend([
+            "--disable-blink-features=AutomationControlled",
             f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
             f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
-        )
+        ])
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
