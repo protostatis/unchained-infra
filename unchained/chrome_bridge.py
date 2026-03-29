@@ -2607,10 +2607,15 @@ def cmd_start(config: dict):
         return
 
     _write_pid(profile, port=cdp_port)
-    stealth_evasions = _resolve_stealth_evasions(
-        config.get("stealth_evasions", ""),
-        config.get("stealth_disable", ""),
-    )
+    # Only pass explicit evasion set if the user specified --stealth-evasions
+    # or --stealth-disable.  Otherwise pass None so Agent.__init__ auto-selects
+    # the correct tier (base for headed, all for headless).
+    evasions_csv = config.get("stealth_evasions", "")
+    disable_csv = config.get("stealth_disable", "")
+    if evasions_csv or disable_csv:
+        stealth_evasions = _resolve_stealth_evasions(evasions_csv, disable_csv)
+    else:
+        stealth_evasions = None
     agent = Agent(
         relay_url=relay_url,
         api_key=config["api_key"],
@@ -2618,7 +2623,7 @@ def cmd_start(config: dict):
         cdp_port=config["cdp_port"],
         profile=config["profile"],
         headless=config.get("chrome_headless", False),
-        stealth=config.get("chrome_stealth", False),
+        stealth=config.get("chrome_stealth", True),
         stealth_evasions=stealth_evasions,
     )
 
