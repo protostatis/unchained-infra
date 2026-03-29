@@ -377,7 +377,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         from web_app.handlers.pages import _build_first_look_preview_html
 
         html = _build_first_look_preview_html(prompt_limit=5, remaining=3)
-        self.assertIn("Try a public site. Unchained will browse and show you what it is doing.", html)
+        self.assertIn("Try a public site. Unchained will browse and show you what it is doing in real time.", html)
         self.assertIn("const FIRST_LOOK_GUEST_LIMIT = 5;", html)
         self.assertIn("let remainingGuestRuns = 3;", html)
         self.assertIn("/web/first-look/preflight", html)
