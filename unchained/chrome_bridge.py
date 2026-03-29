@@ -328,6 +328,7 @@ STEALTH_BASE_EVASIONS = frozenset({
     "languages",       # real Chrome already has languages
     "permissions",     # harmless override
     "media_devices",   # real Chrome already has devices
+    "outer_dimensions",  # CDP-attached browsers may report 0 for outerWidth/outerHeight
 })
 
 # Headless-only evasions: override real values with fake ones.  These would
@@ -337,7 +338,6 @@ STEALTH_HEADLESS_EVASIONS = frozenset({
     "emulation_override",  # forces Chrome layout engine to 1920x1080
     "webgl",               # replaces real GPU string with fake one
     "navigator_props",     # overwrites real hardwareConcurrency/deviceMemory
-    "outer_dimensions",    # overwrites real outerWidth/outerHeight
 })
 
 
