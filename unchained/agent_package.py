@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.73"  # two-tier stealth: base evasions on by default for all bridges
+VERSION = "0.3.74"  # crash circuit breaker + auto-rollback on bad updates
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -319,18 +319,76 @@ if $DAEMON; then
 
   # Launch both processes in a subshell, redirect to log
   (
-    bridge_loop() {
+    # --- Crash circuit breaker ---
+    # If a process crashes MAX_RAPID_CRASHES times within RAPID_WINDOW seconds,
+    # stop retrying and attempt a rollback to the previous version.
+    MAX_RAPID_CRASHES=5
+    RAPID_WINDOW=60  # seconds
+
+    supervised_loop() {
+      # Usage: supervised_loop <label> <command...>
+      local label="$1"; shift
+      local crash_times=()
+
       while true; do
-        echo "[$(date)] Starting Chrome bridge..."
-        # set +e prevents daemon crash when bridge exits non-zero.
+        echo "[$(date)] Starting $label..."
+        local start_epoch
+        start_epoch=$(date +%s)
         set +e
-        python unchained/chrome_bridge.py start \
-          --relay "wss://$UNCHAINED_RELAY_HOST/tunnel"
-        BRIDGE_EXIT_CODE=$?
+        "$@"
+        local exit_code=$?
         set -e
-        echo "[$(date)] Chrome bridge exited (code $BRIDGE_EXIT_CODE). Restarting in 5s..."
+        local end_epoch
+        end_epoch=$(date +%s)
+        local runtime=$((end_epoch - start_epoch))
+
+        echo "[$(date)] $label exited (code $exit_code, ran ${runtime}s)."
+
+        # Only count rapid crashes (ran < 10 seconds)
+        if [ "$runtime" -lt 10 ]; then
+          crash_times+=("$end_epoch")
+          # Trim old entries outside the window
+          local cutoff=$((end_epoch - RAPID_WINDOW))
+          local recent=()
+          for t in "${crash_times[@]}"; do
+            if [ "$t" -ge "$cutoff" ]; then
+              recent+=("$t")
+            fi
+          done
+          crash_times=("${recent[@]}")
+
+          if [ "${#crash_times[@]}" -ge "$MAX_RAPID_CRASHES" ]; then
+            echo "[$(date)] CIRCUIT BREAKER: $label crashed ${#crash_times[@]} times in ${RAPID_WINDOW}s."
+            # Attempt rollback if backup exists
+            if [ -d "unchained/.backup" ]; then
+              echo "[$(date)] Rolling back $label to previous version..."
+              cp -f unchained/.backup/*.py unchained/ 2>/dev/null || true
+              if [ -f unchained/.backup/version.txt ]; then
+                cp -f unchained/.backup/version.txt . 2>/dev/null || true
+              fi
+              echo "[$(date)] Rollback complete. Resetting crash counter."
+              crash_times=()
+              # Remove backup so we don't loop rollbacks
+              rm -rf unchained/.backup
+            else
+              echo "[$(date)] No backup available. $label is stopped. Run ./update.sh to fix."
+              return 1
+            fi
+          fi
+        else
+          # Healthy run — reset crash counter
+          crash_times=()
+        fi
+
+        echo "[$(date)] Restarting $label in 5s..."
         sleep 5
       done
+    }
+
+    bridge_loop() {
+      supervised_loop "Chrome bridge" \
+        python unchained/chrome_bridge.py start \
+          --relay "wss://$UNCHAINED_RELAY_HOST/tunnel"
     }
 
     cleanup() {
@@ -352,15 +410,7 @@ if $DAEMON; then
     if command -v caffeinate &>/dev/null; then
       AGENT_CMD=(caffeinate -i -- "${AGENT_CMD[@]}")
     fi
-    while true; do
-      # set +e prevents daemon crash when agent exits non-zero.
-      set +e
-      "${AGENT_CMD[@]}"
-      EXIT_CODE=$?
-      set -e
-      echo "[$(date)] Agent exited (code $EXIT_CODE). Restarting in 5s..."
-      sleep 5
-    done
+    supervised_loop "chat agent" "${AGENT_CMD[@]}"
   ) >> "$LOGFILE" 2>&1 &
   DAEMON_PID=$!
 
@@ -999,8 +1049,16 @@ if [ -f requirements.txt ]; then
   OLD_REQS=$(cat requirements.txt)
 fi
 
-# Extract — update code files only, never touch .env or .venv
+# Backup current version before overwriting (for crash rollback)
 AGENT_DIR="$(pwd)"
+mkdir -p "$AGENT_DIR/unchained/.backup"
+cp -f "$AGENT_DIR"/unchained/*.py "$AGENT_DIR/unchained/.backup/" 2>/dev/null || true
+if [ -f "$AGENT_DIR/version.txt" ]; then
+  cp -f "$AGENT_DIR/version.txt" "$AGENT_DIR/unchained/.backup/" 2>/dev/null || true
+fi
+echo "Backed up current version ($LOCAL_VERSION) for rollback."
+
+# Extract — update code files only, never touch .env or .venv
 mkdir -p "$AGENT_DIR/unchained"
 cd "$TMPDIR" && unzip -qo update.zip
 cp -f unchained-agent/unchained/*.py "$AGENT_DIR/unchained/" 2>/dev/null || true
