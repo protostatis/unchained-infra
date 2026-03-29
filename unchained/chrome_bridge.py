@@ -1483,9 +1483,14 @@ class Agent:
             })
         js = _build_stealth_js(self._stealth_evasions)
         if js:
+            # Register for future navigations
             await _cdp("Page.addScriptToEvaluateOnNewDocument", {
                 "source": js,
             })
+            # Also inject into the already-loaded page — addScriptToEvaluate
+            # only fires on future navigations, and some overrides (webgl,
+            # chrome.runtime) don't persist from that context.
+            await _cdp("Runtime.evaluate", {"expression": js})
 
     @staticmethod
     async def _inject_stealth_provision(
