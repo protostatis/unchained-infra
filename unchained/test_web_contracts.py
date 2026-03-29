@@ -556,5 +556,74 @@ class TestWebAnalyticsIsolationContracts(unittest.TestCase):
         )
 
 
+class TestStealthEvasions(unittest.TestCase):
+    """Tests for the modular stealth evasion system in chrome_bridge.py."""
+
+    def test_resolve_all_by_default(self):
+        from chrome_bridge import _resolve_stealth_evasions, ALL_STEALTH_EVASION_NAMES
+        result = _resolve_stealth_evasions("", "")
+        self.assertEqual(result, set(ALL_STEALTH_EVASION_NAMES))
+
+    def test_resolve_explicit_all(self):
+        from chrome_bridge import _resolve_stealth_evasions, ALL_STEALTH_EVASION_NAMES
+        result = _resolve_stealth_evasions("all", "")
+        self.assertEqual(result, set(ALL_STEALTH_EVASION_NAMES))
+
+    def test_resolve_specific_evasions(self):
+        from chrome_bridge import _resolve_stealth_evasions
+        result = _resolve_stealth_evasions("webdriver,screen", "")
+        self.assertEqual(result, {"webdriver", "screen"})
+
+    def test_resolve_disable_subtracts(self):
+        from chrome_bridge import _resolve_stealth_evasions, ALL_STEALTH_EVASION_NAMES
+        result = _resolve_stealth_evasions("", "webgl,plugins")
+        self.assertEqual(result, set(ALL_STEALTH_EVASION_NAMES) - {"webgl", "plugins"})
+
+    def test_resolve_unknown_names_ignored(self):
+        from chrome_bridge import _resolve_stealth_evasions
+        result = _resolve_stealth_evasions("webdriver,bogus_name", "")
+        self.assertEqual(result, {"webdriver"})
+
+    def test_build_stealth_js_empty_set(self):
+        from chrome_bridge import _build_stealth_js
+        self.assertEqual(_build_stealth_js(set()), "")
+
+    def test_build_stealth_js_subset(self):
+        from chrome_bridge import _build_stealth_js
+        js = _build_stealth_js({"webdriver"})
+        self.assertIn("webdriver", js)
+        self.assertNotIn("screen", js)
+        self.assertNotIn("plugins", js)
+
+    def test_build_stealth_js_all_evasions(self):
+        from chrome_bridge import _build_stealth_js, ALL_STEALTH_EVASION_NAMES
+        js = _build_stealth_js(set(ALL_STEALTH_EVASION_NAMES))
+        self.assertGreater(len(js), 3000)
+        self.assertIn("webdriver", js)
+        self.assertIn("screenX", js)  # mouse_coords
+
+    def test_base_and_headless_cover_all(self):
+        from chrome_bridge import STEALTH_BASE_EVASIONS, STEALTH_HEADLESS_EVASIONS, ALL_STEALTH_EVASION_NAMES
+        self.assertEqual(STEALTH_BASE_EVASIONS | STEALTH_HEADLESS_EVASIONS,
+                         ALL_STEALTH_EVASION_NAMES)
+
+    def test_base_and_headless_no_overlap(self):
+        from chrome_bridge import STEALTH_BASE_EVASIONS, STEALTH_HEADLESS_EVASIONS
+        self.assertFalse(STEALTH_BASE_EVASIONS & STEALTH_HEADLESS_EVASIONS)
+
+    def test_each_js_evasion_returns_nonempty_string(self):
+        from chrome_bridge import STEALTH_JS_EVASIONS
+        for name, _desc, builder in STEALTH_JS_EVASIONS:
+            js = builder()
+            self.assertIsInstance(js, str, f"{name} should return str")
+            self.assertGreater(len(js), 10, f"{name} should return non-trivial JS")
+
+    def test_webgl_gpu_consistent_per_session(self):
+        from chrome_bridge import _ev_webgl
+        js1 = _ev_webgl()
+        js2 = _ev_webgl()
+        self.assertEqual(js1, js2, "WebGL GPU should be consistent per session")
+
+
 if __name__ == "__main__":
     unittest.main()
