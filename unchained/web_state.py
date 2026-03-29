@@ -23,7 +23,7 @@ class OverlaySessionState:
     """
     session_id: str
     agent_id: str
-    tab_id: str  # concrete tab ID, never "auto"
+    tab_id: str  # concrete tab ID or "auto" (bridge resolves to active tab)
     user_id: str
     slot: int | None = None
     injected: bool = False

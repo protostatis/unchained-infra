@@ -54,6 +54,11 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
     Uses cloud_tools.run_js() — same path as DDM, click, navigate.
     No bridge handlers, no relay HTTP, no chat_agent_cli involvement.
     """
+    # "auto" is valid: the bridge resolves it to the agent's current page
+    # tab via _get_tab_ws_url with per-channel lease isolation.  Local bridge
+    # users share one Chrome so "auto" correctly targets their active tab.
+    # Profile/headless sessions always pass concrete tab_ids (prov-...) and
+    # never reach this path.  See chrome_bridge._get_tab_ws_url for details.
     if not tab_id:
         return
 
