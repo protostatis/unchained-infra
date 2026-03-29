@@ -94,14 +94,20 @@ _WEBGL_GPUS = [
 
 def _ev_webdriver() -> str:
     """navigator.webdriver → undefined"""
-    return 'Object.defineProperty(navigator,"webdriver",{get:()=>undefined});'
+    return 'Object.defineProperty(Navigator.prototype,"webdriver",{get:()=>false,configurable:true});'
 
 
 def _ev_navigator_props() -> str:
-    """deviceMemory, hardwareConcurrency"""
+    """deviceMemory, hardwareConcurrency.
+
+    Must define on Navigator.prototype (not the navigator instance) because
+    Chromium implements these as prototype getters — instance-level
+    defineProperty is silently ignored.
+    """
     return (
-        'Object.defineProperty(navigator,"deviceMemory",{get:()=>8});'
-        'Object.defineProperty(navigator,"hardwareConcurrency",{get:()=>8});'
+        'Object.defineProperty(Navigator.prototype,"deviceMemory",{get:()=>8,configurable:true});'
+        'Object.defineProperty(Navigator.prototype,"hardwareConcurrency",{get:()=>8,configurable:true});'
+        'Object.defineProperty(Navigator.prototype,"platform",{get:()=>"Linux x86_64",configurable:true});'
     )
 
 
@@ -169,9 +175,9 @@ def _ev_chrome_props() -> str:
     return (
         '(()=>{'
         'window.chrome=window.chrome||{};'
-        'window.chrome.runtime=window.chrome.runtime||{};'
-        'window.chrome.runtime.connect=function(){};'
-        'window.chrome.runtime.sendMessage=function(){};'
+        'var _rt={connect:function(){},sendMessage:function(){}};'
+        'try{Object.defineProperty(window.chrome,"runtime",'
+        '{get:()=>_rt,configurable:true})}catch(e){window.chrome.runtime=_rt};'
         'window.chrome.app=window.chrome.app||'
         '{isInstalled:false,InstallState:{DISABLED:"disabled",'
         'INSTALLED:"installed",NOT_INSTALLED:"not_installed"},'
@@ -385,7 +391,9 @@ def _build_stealth_js(enabled: set[str] | None = None) -> str:
     parts = []
     for name, _desc, builder in STEALTH_JS_EVASIONS:
         if name in enabled:
-            parts.append(builder())
+            # Wrap each evasion in try/catch so one failure doesn't kill the rest.
+            js = builder()
+            parts.append("try{" + js + "}catch(_e){}")
     return "".join(parts)
 
 DEFAULT_NEW_TAB_PATH = "/tab"
@@ -1449,6 +1457,29 @@ class Agent:
             await _cdp("Emulation.setDeviceMetricsOverride", {
                 "width": 1920, "height": 1080, "deviceScaleFactor": 1,
                 "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
+            })
+        # Override UA via CDP to strip "HeadlessChrome" (--user-agent flag is
+        # ignored by headless=new) and align navigator.platform with the UA.
+        if self._headless:
+            ua_version = "146.0.0.0"
+            try:
+                ver_info = json.loads(urllib.request.urlopen(
+                    f"http://{self.cdp_host}:{self.cdp_port}/json/version",
+                    timeout=2,
+                ).read())
+                import re as _re
+                m = _re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_info.get("Browser", ""))
+                if m:
+                    ua_version = m.group(1)
+            except Exception:
+                pass
+            await _cdp("Network.setUserAgentOverride", {
+                "userAgent": (
+                    f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+                    f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36"
+                ),
+                "platform": "Linux x86_64",
+                "acceptLanguage": "en-US,en;q=0.9",
             })
         js = _build_stealth_js(self._stealth_evasions)
         if js:
