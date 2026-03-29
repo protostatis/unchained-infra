@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.74"  # crash circuit breaker + auto-rollback on bad updates
+VERSION = "0.3.75"  # fix update stuck: add curl timeouts + crash circuit breaker
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -1018,7 +1018,7 @@ echo "Current version: $LOCAL_VERSION"
 echo "Checking for updates..."
 
 # Check remote version
-REMOTE=$(curl -sf -H "Authorization: Bearer $UNCHAINED_API_KEY" "$API_URL/web/agent/version" 2>/dev/null || true)
+REMOTE=$(curl -sf --connect-timeout 10 --max-time 15 -H "Authorization: Bearer $UNCHAINED_API_KEY" "$API_URL/web/agent/version" 2>/dev/null || true)
 if [ -z "$REMOTE" ]; then
   echo "ERROR: Cannot reach update server. Check your internet connection."; exit 1
 fi
@@ -1038,7 +1038,7 @@ echo "Downloading update..."
 # Download update ZIP
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
-curl -sf -H "Authorization: Bearer $UNCHAINED_API_KEY" "$API_URL/web/agent/files" -o "$TMPDIR/update.zip"
+curl -sf --connect-timeout 10 --max-time 60 -H "Authorization: Bearer $UNCHAINED_API_KEY" "$API_URL/web/agent/files" -o "$TMPDIR/update.zip"
 if [ ! -s "$TMPDIR/update.zip" ]; then
   echo "ERROR: Download failed."; exit 1
 fi
