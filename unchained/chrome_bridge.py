@@ -74,6 +74,11 @@ DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
 
 # --- Stealth fingerprint overrides (injected via CDP on every new tab) ---
+#
+# Each evasion is a named module that can be individually toggled for testing.
+# Use --stealth-disable name1,name2 to disable specific evasions, or
+# --stealth-evasions name1,name2 to enable only those.  Default: all enabled.
+#
 # GPU strings rotated per-tab to avoid fingerprint clustering.
 _WEBGL_GPUS = [
     ("Google Inc. (Intel)", "ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)"),
@@ -84,26 +89,44 @@ _WEBGL_GPUS = [
 ]
 
 
-def _build_stealth_js() -> str:
-    """Build stealth JS with a randomly selected GPU string."""
-    vendor, renderer = random.choice(_WEBGL_GPUS)
-    v_js = json.dumps(vendor)   # properly escaped JS string literal
-    r_js = json.dumps(renderer)
-    # Screen
-    js = (
+# --- Individual evasion builder functions ---
+# Each returns a JS string to inject via Page.addScriptToEvaluateOnNewDocument.
+
+def _ev_webdriver() -> str:
+    """navigator.webdriver → undefined"""
+    return 'Object.defineProperty(navigator,"webdriver",{get:()=>undefined});'
+
+
+def _ev_navigator_props() -> str:
+    """deviceMemory, hardwareConcurrency"""
+    return (
+        'Object.defineProperty(navigator,"deviceMemory",{get:()=>8});'
+        'Object.defineProperty(navigator,"hardwareConcurrency",{get:()=>8});'
+    )
+
+
+def _ev_screen() -> str:
+    """screen dimensions 1920x1080"""
+    return (
         'Object.defineProperty(screen,"width",{get:()=>1920});'
         'Object.defineProperty(screen,"height",{get:()=>1080});'
         'Object.defineProperty(screen,"availWidth",{get:()=>1920});'
         'Object.defineProperty(screen,"availHeight",{get:()=>1040});'
     )
-    # Navigator
-    js += (
-        'Object.defineProperty(navigator,"deviceMemory",{get:()=>8});'
-        'Object.defineProperty(navigator,"hardwareConcurrency",{get:()=>8});'
-        'Object.defineProperty(navigator,"webdriver",{get:()=>undefined});'
-    )
-    # WebGL — fake context when headless returns null, override when real
-    js += (
+
+
+# Selected once at process start so all tabs in the same session report the
+# same GPU — avoids cross-tab correlation when a tracker links different GPU
+# strings to the same origin.
+_SESSION_WEBGL_GPU = random.choice(_WEBGL_GPUS)
+
+
+def _ev_webgl() -> str:
+    """WebGL vendor/renderer spoofing (fixed per session)"""
+    vendor, renderer = _SESSION_WEBGL_GPU
+    v_js = json.dumps(vendor)
+    r_js = json.dumps(renderer)
+    return (
         'const _gc=HTMLCanvasElement.prototype.getContext;'
         'HTMLCanvasElement.prototype.getContext=function(t,a){'
         'const c=_gc.call(this,t,a);'
@@ -121,26 +144,57 @@ def _build_stealth_js() -> str:
         f':p===0x9246?{r_js}:_gp(p)'
         '}return c};'
     )
-    # outerWidth/outerHeight — CDP-provisioned Chrome reports 0 for these,
-    # which is the #1 bot detection signal for Arkose Labs and similar.
-    # The +85 offset approximates the Chrome toolbar/frame height. The
-    # actual value varies by platform (macOS ~74-79px, Linux ~85px,
-    # Windows ~85px). A fixed offset is imperfect but sufficient to pass
-    # the outerHeight > innerHeight check that bot detectors use.
-    js += (
+
+
+def _ev_outer_dimensions() -> str:
+    """outerWidth/outerHeight fix (Arkose Labs detection)"""
+    # CDP-provisioned Chrome reports 0 for these.  The +85 offset approximates
+    # the Chrome toolbar/frame height (macOS ~74-79px, Linux/Windows ~85px).
+    return (
         'Object.defineProperty(window,"outerWidth",'
         '{get:()=>window.innerWidth,configurable:true});'
         'Object.defineProperty(window,"outerHeight",'
         '{get:()=>window.innerHeight+85,configurable:true});'
     )
-    # chrome.runtime stub
-    js += (
-        'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
+
+
+def _ev_chrome_props() -> str:
+    """chrome.app/csi/loadTimes/runtime stubs.
+
+    Timing values are captured once at injection time (inside an IIFE) so
+    they remain stable across repeated calls — real Chrome returns fixed
+    navigation-time values, not live Date.now().  We prefer
+    performance.timing.navigationStart for alignment with real Chrome.
+    """
+    return (
+        '(()=>{'
+        'window.chrome=window.chrome||{};'
+        'window.chrome.runtime=window.chrome.runtime||{};'
         'window.chrome.runtime.connect=function(){};'
-        'window.chrome.runtime.sendMessage=function(){}}'
+        'window.chrome.runtime.sendMessage=function(){};'
+        'window.chrome.app=window.chrome.app||'
+        '{isInstalled:false,InstallState:{DISABLED:"disabled",'
+        'INSTALLED:"installed",NOT_INSTALLED:"not_installed"},'
+        'RunningState:{CANNOT_RUN:"cannot_run",READY_TO_RUN:"ready_to_run",'
+        'RUNNING:"running"},getDetails:function(){},getIsInstalled:function(){},'
+        'installState:function(){return"not_installed"}};'
+        'const _t=(performance&&performance.timing)?performance.timing.navigationStart:Date.now();const _ts=_t/1000;'
+        'window.chrome.csi=window.chrome.csi||function(){return{startE:_t,onloadT:_t,pageT:0.1,tran:15}};'
+        'window.chrome.loadTimes=window.chrome.loadTimes||function(){'
+        'return{commitLoadTime:_ts,connectionInfo:"h2",'
+        'finishDocumentLoadTime:_ts+0.05,finishLoadTime:_ts+0.15,'
+        'firstPaintAfterLoadTime:_ts+0.1,'
+        'firstPaintTime:_ts+0.08,navigationType:"Other",'
+        'npnNegotiatedProtocol:"h2",requestTime:_ts-0.3,'
+        'startLoadTime:_ts-0.3,wasAlternateProtocolAvailable:false,'
+        'wasFetchedViaSpdy:false,wasNpnNegotiated:false}}'
+        '})()'
     )
-    # Notification + media devices
-    js += (
+
+
+def _ev_media_devices() -> str:
+    """Notification permission + media device enumeration"""
+    return (
         'Object.defineProperty(Notification,"permission",{get:()=>"default"});'
         'if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){'
         'navigator.mediaDevices.enumerateDevices=async()=>['
@@ -148,7 +202,191 @@ def _build_stealth_js() -> str:
         '{deviceId:"",kind:"videoinput",label:"",groupId:""},'
         '{deviceId:"",kind:"audiooutput",label:"",groupId:""}]}'
     )
-    return js
+
+
+def _ev_plugins() -> str:
+    """navigator.plugins mock with MimeType entries.
+
+    Empty PluginArray is a strong headless signal.  CreepJS also iterates
+    plugin[0].type and checks navigator.mimeTypes.length, so we must
+    provide associated MimeType objects.  Symbol.toStringTag is set so
+    toString checks return '[object PluginArray]' / '[object MimeTypeArray]'.
+    """
+    return (
+        '(()=>{'
+        'const mt={type:"application/pdf",suffixes:"pdf",'
+        'description:"Portable Document Format"};'
+        'const names=["PDF Viewer","Chrome PDF Viewer","Chromium PDF Viewer",'
+        '"Microsoft Edge PDF Viewer","WebKit built-in PDF"];'
+        'const p=names.map(n=>{const pl={name:n,filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1};'
+        'const m=Object.create(mt);m.enabledPlugin=pl;pl[0]=m;return pl});'
+        'p.item=i=>p[i]||null;p.namedItem=n=>p.find(x=>x.name===n)||null;'
+        'p.refresh=()=>{};'
+        'Object.defineProperty(p,Symbol.toStringTag,{value:"PluginArray"});'
+        'Object.defineProperty(navigator,"plugins",{get:()=>p});'
+        'const mimes=p.map(pl=>pl[0]);'
+        'mimes.item=i=>mimes[i]||null;'
+        'mimes.namedItem=n=>mimes.find(x=>x.type===n)||null;'
+        'Object.defineProperty(mimes,Symbol.toStringTag,{value:"MimeTypeArray"});'
+        'Object.defineProperty(navigator,"mimeTypes",{get:()=>mimes})'
+        '})()'
+    )
+
+
+def _ev_languages() -> str:
+    """navigator.languages (headless may return empty)"""
+    return (
+        'Object.defineProperty(navigator,"languages",'
+        '{get:()=>["en-US","en"]});'
+    )
+
+
+def _ev_permissions() -> str:
+    """permissions.query override for notifications.
+
+    Guarded: navigator.permissions may be undefined in embedded contexts
+    or older WebViews — an unguarded access would throw and abort the
+    entire stealth injection chain.
+    """
+    return (
+        '(()=>{if(!navigator.permissions||!navigator.permissions.query)return;'
+        'const _pq=navigator.permissions.query.bind(navigator.permissions);'
+        'navigator.permissions.query=p=>p.name==="notifications"'
+        '?Promise.resolve({state:Notification.permission==="default"'
+        '?"prompt":Notification.permission,onchange:null}):_pq(p)})()'
+    )
+
+
+def _ev_mouse_coords() -> str:
+    """MouseEvent screenX/screenY offset (CDP coordinate leak fix)
+
+    CDP's Input.dispatchMouseEvent sets screenX==clientX, screenY==clientY,
+    which real browsers never produce (screen coords include window position).
+    Brotector and similar detectors explicitly test for this.  We intercept the
+    MouseEvent prototype getters to add a realistic window-position offset.
+
+    Offsets are generated in Python and embedded as literals so they remain
+    stable across navigations within the same tab (a real browser window
+    does not change position between page loads).  Each tab gets its own
+    random offsets (per-tab, not per-session) — this is intentional to
+    reduce cross-tab correlation by fingerprinters.
+    """
+    win_x = random.randint(50, 250)
+    win_y = random.randint(50, 150)
+    return (
+        '(()=>{'
+        f'const _winX={win_x};const _winY={win_y};'
+        'for(const [sp,cp,off] of [["screenX","clientX",_winX],["screenY","clientY",_winY]]){'
+        'const cd=Object.getOwnPropertyDescriptor(MouseEvent.prototype,cp);'
+        'if(!cd||!cd.get)continue;'
+        'const cGet=cd.get;'
+        'Object.defineProperty(MouseEvent.prototype,sp,{'
+        'get(){return cGet.call(this)+off},'
+        'configurable:true})}'
+        '})()'
+    )
+
+
+# --- Evasion registry ---
+# Ordered: name → (description, builder_fn)
+# builder_fn returns JS string.  CDP-only evasions (emulation_override) have
+# no JS — they're handled separately in _inject_stealth/_inject_stealth_provision.
+STEALTH_JS_EVASIONS = [
+    ("webdriver",        "navigator.webdriver → undefined",          _ev_webdriver),
+    ("navigator_props",  "deviceMemory, hardwareConcurrency",        _ev_navigator_props),
+    ("screen",           "screen dimensions 1920x1080",              _ev_screen),
+    ("webgl",            "WebGL vendor/renderer spoofing",           _ev_webgl),
+    ("outer_dimensions", "outerWidth/outerHeight fix",               _ev_outer_dimensions),
+    ("chrome_props",     "chrome.app/csi/loadTimes/runtime stubs",   _ev_chrome_props),
+    ("media_devices",    "Notification + media device enumeration",  _ev_media_devices),
+    ("plugins",          "navigator.plugins mock",                   _ev_plugins),
+    ("languages",        "navigator.languages",                      _ev_languages),
+    ("permissions",      "permissions.query override",               _ev_permissions),
+    ("mouse_coords",     "MouseEvent screenX/screenY offset",        _ev_mouse_coords),
+]
+
+# CDP-level evasion names (no JS — handled in _inject_stealth).
+STEALTH_CDP_EVASIONS = [
+    ("emulation_override", "Emulation.setDeviceMetricsOverride 1920x1080"),
+]
+
+# All known evasion names for validation.
+ALL_STEALTH_EVASION_NAMES = frozenset(
+    [name for name, _, _ in STEALTH_JS_EVASIONS]
+    + [name for name, _ in STEALTH_CDP_EVASIONS]
+)
+
+# --- Two-tier stealth ---
+# Base evasions: safe on all machines (fix CDP artifacts, no-ops on real browsers).
+# These are always on by default.
+STEALTH_BASE_EVASIONS = frozenset({
+    "webdriver",       # CDP always sets navigator.webdriver
+    "mouse_coords",    # CDP click events always leak screenX==clientX
+    "chrome_props",    # stubs for chrome.app/csi/loadTimes (real Chrome already has them)
+    "plugins",         # mock (real Chrome already has plugins, mock is harmless)
+    "languages",       # real Chrome already has languages
+    "permissions",     # harmless override
+    "media_devices",   # real Chrome already has devices
+    "outer_dimensions",  # CDP-attached browsers may report 0 for outerWidth/outerHeight
+})
+
+# Headless-only evasions: override real values with fake ones.  These would
+# harm real browsers by replacing clean native values with synthetic ones.
+STEALTH_HEADLESS_EVASIONS = frozenset({
+    "screen",              # overwrites real screen dimensions with 1920x1080
+    "emulation_override",  # forces Chrome layout engine to 1920x1080
+    "webgl",               # replaces real GPU string with fake one
+    "navigator_props",     # overwrites real hardwareConcurrency/deviceMemory
+})
+
+
+def _resolve_stealth_evasions(
+    evasions_csv: str = "",
+    disable_csv: str = "",
+) -> set[str]:
+    """Resolve which stealth evasions are active.
+
+    Args:
+        evasions_csv: Comma-separated list of evasion names to enable.
+                      "all" or empty string means all evasions.
+        disable_csv:  Comma-separated list of evasion names to disable
+                      (subtracted from the enabled set).
+    Returns:
+        Set of active evasion names.
+    """
+    if not evasions_csv or evasions_csv.strip().lower() == "all":
+        enabled = set(ALL_STEALTH_EVASION_NAMES)
+    else:
+        enabled = {n.strip() for n in evasions_csv.split(",") if n.strip()}
+        unknown = enabled - ALL_STEALTH_EVASION_NAMES
+        if unknown:
+            logging.warning("[agent:stealth] unknown evasions ignored: %s", ", ".join(sorted(unknown)))
+            enabled &= ALL_STEALTH_EVASION_NAMES
+
+    if disable_csv:
+        disable = {n.strip() for n in disable_csv.split(",") if n.strip()}
+        unknown = disable - ALL_STEALTH_EVASION_NAMES
+        if unknown:
+            logging.warning("[agent:stealth] unknown evasions in disable list: %s", ", ".join(sorted(unknown)))
+        enabled -= disable
+
+    return enabled
+
+
+def _build_stealth_js(enabled: set[str] | None = None) -> str:
+    """Build stealth JS by concatenating enabled evasion modules.
+
+    Args:
+        enabled: Set of evasion names to include.  None means all.
+    """
+    if enabled is None:
+        enabled = ALL_STEALTH_EVASION_NAMES
+    parts = []
+    for name, _desc, builder in STEALTH_JS_EVASIONS:
+        if name in enabled:
+            parts.append(builder())
+    return "".join(parts)
 
 DEFAULT_NEW_TAB_PATH = "/tab"
 DEFAULT_WEB_PORT = 8080
@@ -714,12 +952,16 @@ class Agent:
                  cdp_port: int = DEFAULT_CDP_PORT,
                  profile: str = "default",
                  headless: bool = False,
-                 stealth: bool = False):
+                 stealth: bool = True,
+                 stealth_evasions: set[str] | None = None):
         """
         Args:
-            stealth: Enable CDP fingerprint injection. Auto-enabled when
-                     *headless* is True (pass ``stealth=False`` explicitly
-                     to suppress injection in headless mode).
+            stealth: Enable CDP fingerprint injection.  Default ``True`` —
+                     base evasions (CDP artifact fixes) are always active.
+                     Pass ``stealth=False`` or ``--no-stealth`` to disable.
+            stealth_evasions: Set of evasion names to enable.  ``None``
+                     means auto-select: base evasions on real machines,
+                     all evasions on headless.
         """
         self.relay_url = relay_url
         self.api_key = api_key
@@ -727,7 +969,19 @@ class Agent:
         self.cdp_port = cdp_port
         self.profile = profile
         self._headless = headless
-        self._stealth = stealth or headless
+        self._stealth = stealth
+        # Auto-select tier when no explicit evasion set is given.
+        if stealth_evasions is not None:
+            self._stealth_evasions = stealth_evasions
+        elif headless:
+            self._stealth_evasions = set(STEALTH_BASE_EVASIONS | STEALTH_HEADLESS_EVASIONS)
+        else:
+            self._stealth_evasions = set(STEALTH_BASE_EVASIONS)
+        if self._stealth:
+            active = sorted(self._stealth_evasions & ALL_STEALTH_EVASION_NAMES)
+            tier = "all (headless)" if headless else "base (real browser)"
+            logging.info("[agent:stealth] %s — active evasions (%d): %s",
+                         tier, len(active), ", ".join(active))
         self.ws = None
         self.channels: dict[int, websockets.WebSocketClientProtocol] = {}
         self._channel_tasks: dict[int, asyncio.Task] = {}
@@ -1170,16 +1424,23 @@ class Agent:
                 if msg.get("id") == sid:
                     return msg
 
-        await _cdp("Emulation.setDeviceMetricsOverride", {
-            "width": 1920, "height": 1080, "deviceScaleFactor": 1,
-            "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
-        })
-        await _cdp("Page.addScriptToEvaluateOnNewDocument", {
-            "source": _build_stealth_js(),
-        })
+        if "emulation_override" in self._stealth_evasions:
+            await _cdp("Emulation.setDeviceMetricsOverride", {
+                "width": 1920, "height": 1080, "deviceScaleFactor": 1,
+                "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
+            })
+        js = _build_stealth_js(self._stealth_evasions)
+        if js:
+            await _cdp("Page.addScriptToEvaluateOnNewDocument", {
+                "source": js,
+            })
 
     @staticmethod
-    async def _inject_stealth_provision(prov_port: int, tab_info: dict):
+    async def _inject_stealth_provision(
+        prov_port: int,
+        tab_info: dict,
+        enabled_evasions: set[str],
+    ):
         """Inject stealth overrides into a provisioned Chrome tab.
 
         Connects directly to the provisioned Chrome's CDP endpoint (not
@@ -1215,21 +1476,30 @@ class Agent:
                                 f"CDP {method} failed: {msg['error']}")
                         return msg
 
-            stealth_js = _build_stealth_js()
+            stealth_js = _build_stealth_js(enabled_evasions)
+            _ev = enabled_evasions if enabled_evasions is not None else ALL_STEALTH_EVASION_NAMES
 
             # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
             await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
+            # Apply CDP-level evasions
+            if "emulation_override" in _ev:
+                await asyncio.wait_for(_ws_cdp(
+                    "Emulation.setDeviceMetricsOverride", {
+                        "width": 1920, "height": 1080, "deviceScaleFactor": 1,
+                        "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
+                    }), timeout=10)
             # Inject stealth JS into all future navigations
-            await asyncio.wait_for(
-                _ws_cdp("Page.addScriptToEvaluateOnNewDocument",
-                        {"source": stealth_js}),
-                timeout=10,
-            )
-            # Also inject into the currently loaded page
-            await asyncio.wait_for(
-                _ws_cdp("Runtime.evaluate", {"expression": stealth_js}),
-                timeout=10,
-            )
+            if stealth_js:
+                await asyncio.wait_for(
+                    _ws_cdp("Page.addScriptToEvaluateOnNewDocument",
+                            {"source": stealth_js}),
+                    timeout=10,
+                )
+                # Also inject into the currently loaded page
+                await asyncio.wait_for(
+                    _ws_cdp("Runtime.evaluate", {"expression": stealth_js}),
+                    timeout=10,
+                )
         finally:
             await chrome_ws.close()
 
@@ -1588,7 +1858,7 @@ class Agent:
         # Inject stealth fingerprint overrides before any user navigation
         if stealth:
             try:
-                await self._inject_stealth_provision(prov_port, first_tab)
+                await self._inject_stealth_provision(prov_port, first_tab, self._stealth_evasions)
                 print(f"[agent:prov] Stealth JS injected into provision slot {slot}")
             except Exception as e:
                 print(f"[agent:prov] Stealth inject failed (non-fatal): {e}")
@@ -1896,7 +2166,9 @@ def _load_config() -> dict:
         "cdp_port": DEFAULT_CDP_PORT,
         "profile": "default",
         "chrome_headless": False,
-        "chrome_stealth": False,
+        "chrome_stealth": True,
+        "stealth_evasions": "",   # "" or "all" = all; "name1,name2" = only those
+        "stealth_disable": "",    # "name1,name2" = disable these from the enabled set
         "chrome_args": "",
         "daemon": False,
     }
@@ -1923,10 +2195,15 @@ def _load_config() -> dict:
         "1", "true", "yes", "on",
     ):
         config["chrome_headless"] = True
-    if os.environ.get("UNCHAINED_CHROME_STEALTH", "").lower() in (
-        "1", "true", "yes", "on",
-    ):
+    _stealth_env = os.environ.get("UNCHAINED_CHROME_STEALTH", "").lower()
+    if _stealth_env in ("1", "true", "yes", "on"):
         config["chrome_stealth"] = True
+    elif _stealth_env in ("0", "false", "no", "off"):
+        config["chrome_stealth"] = False
+    if os.environ.get("UNCHAINED_STEALTH_EVASIONS"):
+        config["stealth_evasions"] = os.environ["UNCHAINED_STEALTH_EVASIONS"]
+    if os.environ.get("UNCHAINED_STEALTH_DISABLE"):
+        config["stealth_disable"] = os.environ["UNCHAINED_STEALTH_DISABLE"]
     if os.environ.get("UNCHAINED_CHROME_ARGS"):
         config["chrome_args"] = os.environ["UNCHAINED_CHROME_ARGS"]
     return config
@@ -1960,6 +2237,15 @@ def _parse_args(args: list[str], config: dict) -> dict:
         elif args[i] == "--stealth":
             config["chrome_stealth"] = True
             i += 1
+        elif args[i] == "--no-stealth":
+            config["chrome_stealth"] = False
+            i += 1
+        elif args[i] == "--stealth-evasions" and i + 1 < len(args):
+            config["stealth_evasions"] = args[i + 1]
+            i += 2
+        elif args[i] == "--stealth-disable" and i + 1 < len(args):
+            config["stealth_disable"] = args[i + 1]
+            i += 2
         elif args[i] in ("--daemon", "-d"):
             config["daemon"] = True
             i += 1
@@ -2203,26 +2489,26 @@ def _ensure_chrome(
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             cmd.append("--no-sandbox")
     if stealth:
-        if not headless:
-            print("[agent] WARNING: --stealth is intended for headless mode; "
-                  "it will override your browser's user-agent")
-        # Derive UA version from the Chrome binary to avoid a stale hardcoded string.
-        ua_version = "131.0.0.0"
-        try:
-            ver_out = subprocess.check_output(
-                [chrome_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5,
-            ).decode().strip()
-            # e.g. "Chromium 131.0.6778.139" or "Google Chrome 131.0.6778.139"
-            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
-            if m:
-                ua_version = m.group(1)
-        except Exception:
-            pass
-        cmd.extend([
-            "--disable-blink-features=AutomationControlled",
-            f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-            f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
-        ])
+        # AutomationControlled flag is safe on all platforms — defense-in-depth
+        # alongside the JS navigator.webdriver override.
+        cmd.append("--disable-blink-features=AutomationControlled")
+        # UA override only in headless — on real browsers the native macOS/
+        # Windows UA is already clean and a Linux UA would be a mismatch.
+        if headless:
+            ua_version = "131.0.0.0"
+            try:
+                ver_out = subprocess.check_output(
+                    [chrome_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5,
+                ).decode().strip()
+                m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
+                if m:
+                    ua_version = m.group(1)
+            except Exception:
+                pass
+            cmd.append(
+                f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+                f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
+            )
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2300,6 +2586,10 @@ def cmd_start(config: dict):
         return
 
     _write_pid(profile, port=cdp_port)
+    stealth_evasions = _resolve_stealth_evasions(
+        config.get("stealth_evasions", ""),
+        config.get("stealth_disable", ""),
+    )
     agent = Agent(
         relay_url=relay_url,
         api_key=config["api_key"],
@@ -2308,6 +2598,7 @@ def cmd_start(config: dict):
         profile=config["profile"],
         headless=config.get("chrome_headless", False),
         stealth=config.get("chrome_stealth", False),
+        stealth_evasions=stealth_evasions,
     )
 
     import atexit
