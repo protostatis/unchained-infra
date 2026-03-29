@@ -974,7 +974,7 @@ class Agent:
         if stealth_evasions is not None:
             self._stealth_evasions = stealth_evasions
         elif headless:
-            self._stealth_evasions = set(ALL_STEALTH_EVASION_NAMES)
+            self._stealth_evasions = set(STEALTH_BASE_EVASIONS | STEALTH_HEADLESS_EVASIONS)
         else:
             self._stealth_evasions = set(STEALTH_BASE_EVASIONS)
         if self._stealth:
