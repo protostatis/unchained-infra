@@ -163,7 +163,8 @@ def _ev_chrome_props() -> str:
 
     Timing values are captured once at injection time (inside an IIFE) so
     they remain stable across repeated calls — real Chrome returns fixed
-    navigation-time values, not live Date.now().
+    navigation-time values, not live Date.now().  We prefer
+    performance.timing.navigationStart for alignment with real Chrome.
     """
     return (
         '(()=>{'
@@ -177,7 +178,7 @@ def _ev_chrome_props() -> str:
         'RunningState:{CANNOT_RUN:"cannot_run",READY_TO_RUN:"ready_to_run",'
         'RUNNING:"running"},getDetails:function(){},getIsInstalled:function(){},'
         'installState:function(){return"not_installed"}};'
-        'const _t=Date.now();const _ts=_t/1000;'
+        'const _t=(performance&&performance.timing)?performance.timing.navigationStart:Date.now();const _ts=_t/1000;'
         'window.chrome.csi=window.chrome.csi||function(){return{startE:_t,onloadT:_t,pageT:0.1,tran:15}};'
         'window.chrome.loadTimes=window.chrome.loadTimes||function(){'
         'return{commitLoadTime:_ts,connectionInfo:"h2",'
@@ -237,7 +238,7 @@ def _ev_languages() -> str:
     """navigator.languages (headless may return empty)"""
     return (
         'Object.defineProperty(navigator,"languages",'
-        '{get:()=>["en-US","en"]})'
+        '{get:()=>["en-US","en"]});'
     )
 
 
@@ -267,7 +268,9 @@ def _ev_mouse_coords() -> str:
 
     Offsets are generated in Python and embedded as literals so they remain
     stable across navigations within the same tab (a real browser window
-    does not change position between page loads).
+    does not change position between page loads).  Each tab gets its own
+    random offsets (per-tab, not per-session) — this is intentional to
+    reduce cross-tab correlation by fingerprinters.
     """
     win_x = random.randint(50, 250)
     win_y = random.randint(50, 150)
@@ -288,7 +291,7 @@ def _ev_mouse_coords() -> str:
 # --- Evasion registry ---
 # Ordered: name → (description, builder_fn)
 # builder_fn returns JS string.  CDP-only evasions (emulation_override) have
-# no JS — they're handled separately in _inject_stealth().
+# no JS — they're handled separately in _inject_stealth/_inject_stealth_provision.
 STEALTH_JS_EVASIONS = [
     ("webdriver",        "navigator.webdriver → undefined",          _ev_webdriver),
     ("navigator_props",  "deviceMemory, hardwareConcurrency",        _ev_navigator_props),
@@ -1436,7 +1439,7 @@ class Agent:
     async def _inject_stealth_provision(
         prov_port: int,
         tab_info: dict,
-        enabled_evasions: set[str] | None = None,
+        enabled_evasions: set[str],
     ):
         """Inject stealth overrides into a provisioned Chrome tab.
 
