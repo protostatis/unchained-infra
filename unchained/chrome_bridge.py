@@ -314,6 +314,29 @@ ALL_STEALTH_EVASION_NAMES = frozenset(
     + [name for name, _ in STEALTH_CDP_EVASIONS]
 )
 
+# --- Two-tier stealth ---
+# Base evasions: safe on all machines (fix CDP artifacts, no-ops on real browsers).
+# These are always on by default.
+STEALTH_BASE_EVASIONS = frozenset({
+    "webdriver",       # CDP always sets navigator.webdriver
+    "mouse_coords",    # CDP click events always leak screenX==clientX
+    "chrome_props",    # stubs for chrome.app/csi/loadTimes (real Chrome already has them)
+    "plugins",         # mock (real Chrome already has plugins, mock is harmless)
+    "languages",       # real Chrome already has languages
+    "permissions",     # harmless override
+    "media_devices",   # real Chrome already has devices
+})
+
+# Headless-only evasions: override real values with fake ones.  These would
+# harm real browsers by replacing clean native values with synthetic ones.
+STEALTH_HEADLESS_EVASIONS = frozenset({
+    "screen",              # overwrites real screen dimensions with 1920x1080
+    "emulation_override",  # forces Chrome layout engine to 1920x1080
+    "webgl",               # replaces real GPU string with fake one
+    "navigator_props",     # overwrites real hardwareConcurrency/deviceMemory
+    "outer_dimensions",    # overwrites real outerWidth/outerHeight
+})
+
 
 def _resolve_stealth_evasions(
     evasions_csv: str = "",
@@ -926,14 +949,16 @@ class Agent:
                  cdp_port: int = DEFAULT_CDP_PORT,
                  profile: str = "default",
                  headless: bool = False,
-                 stealth: bool = False,
+                 stealth: bool = True,
                  stealth_evasions: set[str] | None = None):
         """
         Args:
-            stealth: Enable CDP fingerprint injection. Auto-enabled when
-                     *headless* is True (pass ``stealth=False`` explicitly
-                     to suppress injection in headless mode).
-            stealth_evasions: Set of evasion names to enable (None = all).
+            stealth: Enable CDP fingerprint injection.  Default ``True`` —
+                     base evasions (CDP artifact fixes) are always active.
+                     Pass ``stealth=False`` or ``--no-stealth`` to disable.
+            stealth_evasions: Set of evasion names to enable.  ``None``
+                     means auto-select: base evasions on real machines,
+                     all evasions on headless.
         """
         self.relay_url = relay_url
         self.api_key = api_key
@@ -941,11 +966,19 @@ class Agent:
         self.cdp_port = cdp_port
         self.profile = profile
         self._headless = headless
-        self._stealth = stealth or headless
-        self._stealth_evasions = stealth_evasions if stealth_evasions is not None else set(ALL_STEALTH_EVASION_NAMES)
+        self._stealth = stealth
+        # Auto-select tier when no explicit evasion set is given.
+        if stealth_evasions is not None:
+            self._stealth_evasions = stealth_evasions
+        elif headless:
+            self._stealth_evasions = set(ALL_STEALTH_EVASION_NAMES)
+        else:
+            self._stealth_evasions = set(STEALTH_BASE_EVASIONS)
         if self._stealth:
             active = sorted(self._stealth_evasions & ALL_STEALTH_EVASION_NAMES)
-            logging.info("[agent:stealth] active evasions (%d): %s", len(active), ", ".join(active))
+            tier = "all (headless)" if headless else "base (real browser)"
+            logging.info("[agent:stealth] %s — active evasions (%d): %s",
+                         tier, len(active), ", ".join(active))
         self.ws = None
         self.channels: dict[int, websockets.WebSocketClientProtocol] = {}
         self._channel_tasks: dict[int, asyncio.Task] = {}
@@ -2130,7 +2163,7 @@ def _load_config() -> dict:
         "cdp_port": DEFAULT_CDP_PORT,
         "profile": "default",
         "chrome_headless": False,
-        "chrome_stealth": False,
+        "chrome_stealth": True,
         "stealth_evasions": "",   # "" or "all" = all; "name1,name2" = only those
         "stealth_disable": "",    # "name1,name2" = disable these from the enabled set
         "chrome_args": "",
@@ -2159,10 +2192,11 @@ def _load_config() -> dict:
         "1", "true", "yes", "on",
     ):
         config["chrome_headless"] = True
-    if os.environ.get("UNCHAINED_CHROME_STEALTH", "").lower() in (
-        "1", "true", "yes", "on",
-    ):
+    _stealth_env = os.environ.get("UNCHAINED_CHROME_STEALTH", "").lower()
+    if _stealth_env in ("1", "true", "yes", "on"):
         config["chrome_stealth"] = True
+    elif _stealth_env in ("0", "false", "no", "off"):
+        config["chrome_stealth"] = False
     if os.environ.get("UNCHAINED_STEALTH_EVASIONS"):
         config["stealth_evasions"] = os.environ["UNCHAINED_STEALTH_EVASIONS"]
     if os.environ.get("UNCHAINED_STEALTH_DISABLE"):
@@ -2199,6 +2233,9 @@ def _parse_args(args: list[str], config: dict) -> dict:
             i += 1
         elif args[i] == "--stealth":
             config["chrome_stealth"] = True
+            i += 1
+        elif args[i] == "--no-stealth":
+            config["chrome_stealth"] = False
             i += 1
         elif args[i] == "--stealth-evasions" and i + 1 < len(args):
             config["stealth_evasions"] = args[i + 1]
@@ -2449,31 +2486,26 @@ def _ensure_chrome(
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             cmd.append("--no-sandbox")
     if stealth:
-        if not headless:
-            print("[agent] WARNING: --stealth is intended for headless mode; "
-                  "it will override your browser's user-agent")
-        # Derive UA version from the Chrome binary to avoid a stale hardcoded string.
-        ua_version = "131.0.0.0"
-        try:
-            ver_out = subprocess.check_output(
-                [chrome_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5,
-            ).decode().strip()
-            # e.g. "Chromium 131.0.6778.139" or "Google Chrome 131.0.6778.139"
-            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
-            if m:
-                ua_version = m.group(1)
-        except Exception:
-            pass
-        # Both the flag and JS override are applied for defense-in-depth:
-        # Page.addScriptToEvaluateOnNewDocument fires before page scripts (CDP
-        # contract), but the flag provides a browser-level guarantee.  While
-        # some fingerprinters check for --disable-blink-features in Chrome
-        # internals, that is a rarer vector than navigator.webdriver=true.
-        cmd.extend([
-            "--disable-blink-features=AutomationControlled",
-            f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-            f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
-        ])
+        # AutomationControlled flag is safe on all platforms — defense-in-depth
+        # alongside the JS navigator.webdriver override.
+        cmd.append("--disable-blink-features=AutomationControlled")
+        # UA override only in headless — on real browsers the native macOS/
+        # Windows UA is already clean and a Linux UA would be a mismatch.
+        if headless:
+            ua_version = "131.0.0.0"
+            try:
+                ver_out = subprocess.check_output(
+                    [chrome_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5,
+                ).decode().strip()
+                m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
+                if m:
+                    ua_version = m.group(1)
+            except Exception:
+                pass
+            cmd.append(
+                f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+                f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
+            )
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
