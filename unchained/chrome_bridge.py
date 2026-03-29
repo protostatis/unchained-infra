@@ -1431,12 +1431,17 @@ class Agent:
         # in a previous session (those scripts persist across bridge restarts).
         await _cdp("Emulation.clearDeviceMetricsOverride")
         if "screen" not in self._stealth_evasions:
-            # Undo any stale screen overrides from previous sessions by
-            # deleting the property descriptors, restoring native getters.
+            # Undo stale screen overrides from previous sessions.  delete
+            # doesn't work on Object.defineProperty getters, so we re-define
+            # them to return the native CSS value (which is correct after
+            # Emulation.clearDeviceMetricsOverride).
             await _cdp("Page.addScriptToEvaluateOnNewDocument", {
                 "source": (
-                    'try{delete screen.width;delete screen.height;'
-                    'delete screen.availWidth;delete screen.availHeight}catch(e){}'
+                    '(()=>{const s=window.screen;'
+                    'for(const p of ["width","height","availWidth","availHeight"]){'
+                    'const d=Object.getOwnPropertyDescriptor(Screen.prototype,p);'
+                    'if(d&&d.get)Object.defineProperty(s,p,{get:d.get.bind(s),configurable:true})}'
+                    '})()'
                 ),
             })
 
