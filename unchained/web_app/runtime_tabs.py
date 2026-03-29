@@ -16,14 +16,30 @@ def session_cdp_url(agent_id: str) -> str:
     return core._relay_cdp_url(agent_id, "auto")
 
 
-async def create_session_tab(session_id: str, agent_id: str) -> str:
-    """Create a new Chrome tab via CDP Target.createTarget through the relay."""
+async def create_session_tab(
+    session_id: str,
+    agent_id: str,
+    *,
+    clean_cookies: bool = False,
+) -> str:
+    """Create a new Chrome tab via CDP Target.createTarget through the relay.
+
+    Args:
+        clean_cookies: If True, clear cookies and cache before creating the
+            tab so anti-bot reputation scores (PerimeterX _pxvid/_pxhd etc.)
+            don't carry over from previous sessions.  Only used for headless
+            first-look guest sessions — not for logged-in users with saved
+            browser profiles.
+    """
     del session_id
     from cdp import CDP
 
     cdp = CDP(session_cdp_url(agent_id))
     try:
         await asyncio.wait_for(cdp.connect(), timeout=10)
+        if clean_cookies:
+            await cdp.send("Network.clearBrowserCookies")
+            await cdp.send("Network.clearBrowserCache")
         result = await cdp.send("Target.createTarget", {"url": "about:blank"})
         return result["targetId"]
     finally:
@@ -99,8 +115,11 @@ async def ensure_session_tab(session_id: str, agent_id: str) -> str | None:
             )
             await close_session_tab(oldest_sid)
 
+    # Headless agents (e.g. headless-9aaabaf7) get clean cookies per session
+    # so anti-bot scores don't carry over between users.
+    is_headless_agent = agent_id.startswith("headless-")
     try:
-        tab_id = await create_session_tab(session_id, agent_id)
+        tab_id = await create_session_tab(session_id, agent_id, clean_cookies=is_headless_agent)
         core._session_tabs[session_id] = tab_id
         core._session_agent_map[session_id] = agent_id
         core._session_last_active[session_id] = time.time()
