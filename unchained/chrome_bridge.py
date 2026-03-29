@@ -133,11 +133,26 @@ def _build_stealth_js() -> str:
         'Object.defineProperty(window,"outerHeight",'
         '{get:()=>window.innerHeight+85,configurable:true});'
     )
-    # chrome.runtime stub
+    # chrome.runtime stub — expand beyond connect/sendMessage to cover
+    # chrome.app, chrome.csi, chrome.loadTimes which bot detectors also probe.
     js += (
         'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
         'window.chrome.runtime.connect=function(){};'
-        'window.chrome.runtime.sendMessage=function(){}}'
+        'window.chrome.runtime.sendMessage=function(){};'
+        'window.chrome.app=window.chrome.app||'
+        '{isInstalled:false,InstallState:{DISABLED:"disabled",'
+        'INSTALLED:"installed",NOT_INSTALLED:"not_installed"},'
+        'RunningState:{CANNOT_RUN:"cannot_run",READY_TO_RUN:"ready_to_run",'
+        'RUNNING:"running"},getDetails:function(){},getIsInstalled:function(){},'
+        'installState:function(){return"not_installed"}};'
+        'window.chrome.csi=window.chrome.csi||function(){return{startE:Date.now(),onloadT:0,pageT:0,tran:15}};'
+        'window.chrome.loadTimes=window.chrome.loadTimes||function(){'
+        'return{commitLoadTime:Date.now()/1000,connectionInfo:"h2",'
+        'finishDocumentLoadTime:0,finishLoadTime:0,firstPaintAfterLoadTime:0,'
+        'firstPaintTime:0,navigationType:"Other",'
+        'npnNegotiatedProtocol:"h2",requestTime:Date.now()/1000-0.3,'
+        'startLoadTime:Date.now()/1000-0.3,wasAlternateProtocolAvailable:false,'
+        'wasFetchedViaSpdy:true,wasNpnNegotiated:true}}}'
     )
     # Notification + media devices
     js += (
@@ -147,6 +162,37 @@ def _build_stealth_js() -> str:
         '{deviceId:"",kind:"audioinput",label:"",groupId:""},'
         '{deviceId:"",kind:"videoinput",label:"",groupId:""},'
         '{deviceId:"",kind:"audiooutput",label:"",groupId:""}]}'
+    )
+    # navigator.plugins — headless Chrome returns an empty PluginArray which is
+    # a strong bot signal.  Mock a realistic set of plugins.
+    js += (
+        ';Object.defineProperty(navigator,"plugins",{get:()=>{'
+        'const p=[{name:"PDF Viewer",filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1},'
+        '{name:"Chrome PDF Viewer",filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1},'
+        '{name:"Chromium PDF Viewer",filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1},'
+        '{name:"Microsoft Edge PDF Viewer",filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1},'
+        '{name:"WebKit built-in PDF",filename:"internal-pdf-viewer",'
+        'description:"Portable Document Format",length:1}];'
+        'p.item=i=>p[i]||null;p.namedItem=n=>p.find(x=>x.name===n)||null;'
+        'p.refresh=()=>{};return p}})'
+    )
+    # navigator.languages — ensure a realistic default (headless may be empty).
+    js += (
+        ';Object.defineProperty(navigator,"languages",'
+        '{get:()=>["en-US","en"]})'
+    )
+    # permissions.query — automated browsers return inconsistent results for
+    # notification permission queries. Override to return "prompt" (default for
+    # a real browser that hasn't been asked yet).
+    js += (
+        ';(()=>{const _pq=navigator.permissions.query.bind(navigator.permissions);'
+        'navigator.permissions.query=p=>p.name==="notifications"'
+        '?Promise.resolve({state:Notification.permission==="default"'
+        '?"prompt":Notification.permission,onchange:null}):_pq(p)})()'
     )
     return js
 
@@ -2218,11 +2264,15 @@ def _ensure_chrome(
                 ua_version = m.group(1)
         except Exception:
             pass
-        cmd.extend([
-            "--disable-blink-features=AutomationControlled",
+        # Note: --disable-blink-features=AutomationControlled is intentionally
+        # omitted.  The flag itself is a bot detection signal (fingerprinters
+        # check Chrome's command-line switches).  The stealth JS injected via
+        # Page.addScriptToEvaluateOnNewDocument already overrides
+        # navigator.webdriver, making the flag redundant.
+        cmd.append(
             f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
             f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
-        ])
+        )
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
