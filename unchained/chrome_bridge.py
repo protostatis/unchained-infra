@@ -159,9 +159,16 @@ def _ev_outer_dimensions() -> str:
 
 
 def _ev_chrome_props() -> str:
-    """chrome.app/csi/loadTimes/runtime stubs"""
+    """chrome.app/csi/loadTimes/runtime stubs.
+
+    Timing values are captured once at injection time (inside an IIFE) so
+    they remain stable across repeated calls — real Chrome returns fixed
+    navigation-time values, not live Date.now().
+    """
     return (
-        'if(window.chrome){window.chrome.runtime=window.chrome.runtime||{};'
+        '(()=>{'
+        'window.chrome=window.chrome||{};'
+        'window.chrome.runtime=window.chrome.runtime||{};'
         'window.chrome.runtime.connect=function(){};'
         'window.chrome.runtime.sendMessage=function(){};'
         'window.chrome.app=window.chrome.app||'
@@ -170,14 +177,17 @@ def _ev_chrome_props() -> str:
         'RunningState:{CANNOT_RUN:"cannot_run",READY_TO_RUN:"ready_to_run",'
         'RUNNING:"running"},getDetails:function(){},getIsInstalled:function(){},'
         'installState:function(){return"not_installed"}};'
-        'window.chrome.csi=window.chrome.csi||function(){return{startE:Date.now(),onloadT:Date.now(),pageT:0.1,tran:15}};'
+        'const _t=Date.now();const _ts=_t/1000;'
+        'window.chrome.csi=window.chrome.csi||function(){return{startE:_t,onloadT:_t,pageT:0.1,tran:15}};'
         'window.chrome.loadTimes=window.chrome.loadTimes||function(){'
-        'return{commitLoadTime:Date.now()/1000,connectionInfo:"h2",'
-        'finishDocumentLoadTime:0,finishLoadTime:0,firstPaintAfterLoadTime:0,'
-        'firstPaintTime:0,navigationType:"Other",'
-        'npnNegotiatedProtocol:"h2",requestTime:Date.now()/1000-0.3,'
-        'startLoadTime:Date.now()/1000-0.3,wasAlternateProtocolAvailable:false,'
-        'wasFetchedViaSpdy:false,wasNpnNegotiated:false}}}'
+        'return{commitLoadTime:_ts,connectionInfo:"h2",'
+        'finishDocumentLoadTime:_ts+0.05,finishLoadTime:_ts+0.15,'
+        'firstPaintAfterLoadTime:_ts+0.1,'
+        'firstPaintTime:_ts+0.08,navigationType:"Other",'
+        'npnNegotiatedProtocol:"h2",requestTime:_ts-0.3,'
+        'startLoadTime:_ts-0.3,wasAlternateProtocolAvailable:false,'
+        'wasFetchedViaSpdy:false,wasNpnNegotiated:false}}'
+        '})()'
     )
 
 
@@ -198,7 +208,8 @@ def _ev_plugins() -> str:
 
     Empty PluginArray is a strong headless signal.  CreepJS also iterates
     plugin[0].type and checks navigator.mimeTypes.length, so we must
-    provide associated MimeType objects.
+    provide associated MimeType objects.  Symbol.toStringTag is set so
+    toString checks return '[object PluginArray]' / '[object MimeTypeArray]'.
     """
     return (
         '(()=>{'
@@ -211,10 +222,12 @@ def _ev_plugins() -> str:
         'const m=Object.create(mt);m.enabledPlugin=pl;pl[0]=m;return pl});'
         'p.item=i=>p[i]||null;p.namedItem=n=>p.find(x=>x.name===n)||null;'
         'p.refresh=()=>{};'
+        'Object.defineProperty(p,Symbol.toStringTag,{value:"PluginArray"});'
         'Object.defineProperty(navigator,"plugins",{get:()=>p});'
         'const mimes=p.map(pl=>pl[0]);'
         'mimes.item=i=>mimes[i]||null;'
         'mimes.namedItem=n=>mimes.find(x=>x.type===n)||null;'
+        'Object.defineProperty(mimes,Symbol.toStringTag,{value:"MimeTypeArray"});'
         'Object.defineProperty(navigator,"mimeTypes",{get:()=>mimes})'
         '})()'
     )
@@ -251,11 +264,16 @@ def _ev_mouse_coords() -> str:
     which real browsers never produce (screen coords include window position).
     Brotector and similar detectors explicitly test for this.  We intercept the
     MouseEvent prototype getters to add a realistic window-position offset.
+
+    Offsets are generated in Python and embedded as literals so they remain
+    stable across navigations within the same tab (a real browser window
+    does not change position between page loads).
     """
+    win_x = random.randint(50, 250)
+    win_y = random.randint(50, 150)
     return (
         '(()=>{'
-        'const _winX=Math.floor(Math.random()*200)+50;'
-        'const _winY=Math.floor(Math.random()*100)+50;'
+        f'const _winX={win_x};const _winY={win_y};'
         'for(const [sp,cp,off] of [["screenX","clientX",_winX],["screenY","clientY",_winY]]){'
         'const cd=Object.getOwnPropertyDescriptor(MouseEvent.prototype,cp);'
         'if(!cd||!cd.get)continue;'
@@ -927,7 +945,7 @@ class Agent:
         self._stealth_evasions = stealth_evasions if stealth_evasions is not None else set(ALL_STEALTH_EVASION_NAMES)
         if self._stealth:
             active = sorted(self._stealth_evasions & ALL_STEALTH_EVASION_NAMES)
-            print(f"[agent:stealth] active evasions ({len(active)}): {', '.join(active)}")
+            logging.info("[agent:stealth] active evasions (%d): %s", len(active), ", ".join(active))
         self.ws = None
         self.channels: dict[int, websockets.WebSocketClientProtocol] = {}
         self._channel_tasks: dict[int, asyncio.Task] = {}
@@ -1423,7 +1441,7 @@ class Agent:
                         return msg
 
             stealth_js = _build_stealth_js(enabled_evasions)
-            _ev = enabled_evasions or ALL_STEALTH_EVASION_NAMES
+            _ev = enabled_evasions if enabled_evasions is not None else ALL_STEALTH_EVASION_NAMES
 
             # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
             await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
