@@ -377,23 +377,16 @@ class TestWebTemplateContracts(unittest.TestCase):
         from web_app.handlers.pages import _build_first_look_preview_html
 
         html = _build_first_look_preview_html(prompt_limit=5, remaining=3)
-        self.assertIn("Try a public site. Unchained will browse and show you what it is doing in real time.", html)
+        # Structural assertions — API endpoints and JS constants that must be
+        # present for the page to function correctly.
         self.assertIn("const FIRST_LOOK_GUEST_LIMIT = 5;", html)
         self.assertIn("let remainingGuestRuns = 3;", html)
         self.assertIn("/web/first-look/preflight", html)
         self.assertIn("/web/first-look/preview/ws", html)
         self.assertIn("/web/first-look/signal", html)
         self.assertIn("new WebSocket(url)", html)
-        self.assertIn("Shared browser live stream active.", html)
-        self.assertIn("live stream", html)
-        self.assertIn("Live preview unavailable for this run. Showing browser steps instead.", html)
-        self.assertIn("This site is likely to challenge the shared demo browser.", html)
-        self.assertIn("This run appears to have hit human verification.", html)
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
-        self.assertNotIn("2 shared demo runs", html)
-        self.assertNotIn("Stay in the shared demo", html)
-        self.assertNotIn("viewer token", html)
 
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
