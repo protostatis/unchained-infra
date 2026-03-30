@@ -2523,6 +2523,14 @@ def _ensure_chrome(
 
     profile_dir = os.path.join(DATA_DIR, f"chrome_{profile}")
     os.makedirs(profile_dir, exist_ok=True)
+    # Remove stale SingletonLock from previous container (different hostname).
+    lock_file = os.path.join(profile_dir, "SingletonLock")
+    if os.path.islink(lock_file) or os.path.exists(lock_file):
+        try:
+            os.remove(lock_file)
+            print("[agent] removed stale SingletonLock")
+        except OSError:
+            pass
 
     startup_url = _default_new_tab_url(relay_url)
     cmd = [
@@ -2537,10 +2545,13 @@ def _ensure_chrome(
         cmd.extend([
             "--headless=new",
             "--disable-gpu",
+            "--use-gl=angle",
+            "--use-angle=swiftshader-webgl",
             "--disable-dev-shm-usage",
             "--mute-audio",
             "--hide-scrollbars",
             "--window-size=1920,1080",
+            "--ozone-override-screen-size=1920,1080",
         ])
         # Root-run Chromium still needs --no-sandbox; non-root containers do not.
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -2575,7 +2586,8 @@ def _ensure_chrome(
     with open(chrome_pid_file, "w") as f:
         f.write(str(proc.pid))
 
-    for _ in range(15):
+    startup_attempts = 30 if headless else 15
+    for _ in range(startup_attempts):
         time.sleep(1)
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:

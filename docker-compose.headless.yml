@@ -21,12 +21,13 @@ services:
       - CDP_PROFILE=${CDP_PROFILE:-ec2-headless}
       - UNCHAINED_CHROME_HEADLESS=1
       - UNCHAINED_CHROME_ARGS=${UNCHAINED_CHROME_ARGS:-}
+      - TZ=America/New_York
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 6
-      start_period: 15s
+      start_period: 35s
     restart: unless-stopped
 
 volumes:
