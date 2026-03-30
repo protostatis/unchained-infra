@@ -1639,7 +1639,35 @@ class Agent:
                 auto_tab = available[0] if available else (available_all[0] if available_all else None)
                 if auto_tab:
                     return auto_tab["webSocketDebuggerUrl"]
-                # No available provisioned tabs (all leased or none exist) — create one
+                # All tabs appear leased — reconcile stale leases first.
+                stale_channels = [ch for ch in self._tab_leases
+                                  if ch not in self.channels]
+                for ch in stale_channels:
+                    tid = self._tab_leases.pop(ch, None)
+                    if tid:
+                        self._leased_tabs.discard(tid)
+                live_ids = {t["id"] for t in page_tabs}
+                stale_tabs = self._leased_tabs - live_ids
+                if stale_tabs:
+                    self._leased_tabs -= stale_tabs
+                    for ch, tid in list(self._tab_leases.items()):
+                        if tid in stale_tabs:
+                            self._tab_leases.pop(ch, None)
+                if stale_channels or stale_tabs:
+                    available = [t for t in pages_only if t["id"] not in self._leased_tabs]
+                    if available:
+                        print(f"[agent:prov] reclaimed {len(stale_channels)} dead ch, {len(stale_tabs)} stale leases")
+                        return available[0]["webSocketDebuggerUrl"]
+                    available_all = [t for t in page_tabs if t["id"] not in self._leased_tabs]
+                    if available_all:
+                        print(f"[agent:prov] reclaimed {len(stale_channels)} dead ch, {len(stale_tabs)} stale leases")
+                        return available_all[0]["webSocketDebuggerUrl"]
+                # Still all leased — share rather than creating unbounded tabs
+                if pages_only:
+                    print(f"[agent:prov] sharing existing tab (all leased)")
+                    return pages_only[0]["webSocketDebuggerUrl"]
+                if page_tabs:
+                    return page_tabs[0]["webSocketDebuggerUrl"]
                 try:
                     new_req = urllib.request.Request(
                         f"http://127.0.0.1:{prov_port}/json/new",
@@ -1647,8 +1675,8 @@ class Agent:
                     with urllib.request.urlopen(new_req, timeout=3) as resp:
                         new_tab = json.loads(resp.read())
                 except Exception as e:
-                    raise RuntimeError(f"All provisioned tabs leased and /json/new failed: {e}")
-                print(f"[agent] auto-created provisioned tab (all existing tabs leased)")
+                    raise RuntimeError(f"No provisioned tabs and /json/new failed: {e}")
+                print(f"[agent:prov] auto-created tab (no tabs remained)")
                 return new_tab["webSocketDebuggerUrl"]
             matches = [t for t in page_tabs if t["id"].startswith(real_id)]
             if len(matches) == 1:
@@ -1700,7 +1728,41 @@ class Agent:
                 return available[0]["webSocketDebuggerUrl"]
             if available_all:
                 return available_all[0]["webSocketDebuggerUrl"]
-            # All tabs leased by other channels — create a new one
+            # All tabs appear leased — reconcile stale leases first.
+            # Purge leases whose channels are no longer in self.channels
+            # (dead connections the relay forgot to close).
+            stale_channels = [ch for ch in self._tab_leases
+                              if ch not in self.channels]
+            for ch in stale_channels:
+                tid = self._tab_leases.pop(ch, None)
+                if tid:
+                    self._leased_tabs.discard(tid)
+            # Also purge leases for tabs that no longer exist in Chrome
+            live_ids = {t["id"] for t in page_tabs}
+            stale_tabs = self._leased_tabs - live_ids
+            if stale_tabs:
+                self._leased_tabs -= stale_tabs
+                for ch, tid in list(self._tab_leases.items()):
+                    if tid in stale_tabs:
+                        self._tab_leases.pop(ch, None)
+            if stale_channels or stale_tabs:
+                # Re-filter after purge
+                available = [t for t in pages_only if t["id"] not in self._leased_tabs]
+                if available:
+                    print(f"[agent] reclaimed {len(stale_channels)} dead channel(s), {len(stale_tabs)} stale tab lease(s)")
+                    return available[0]["webSocketDebuggerUrl"]
+                available_all = [t for t in page_tabs if t["id"] not in self._leased_tabs]
+                if available_all:
+                    print(f"[agent] reclaimed {len(stale_channels)} dead channel(s), {len(stale_tabs)} stale tab lease(s)")
+                    return available_all[0]["webSocketDebuggerUrl"]
+            # Still all leased — share the first page tab rather than
+            # creating an unbounded number of blank tabs.
+            if pages_only:
+                print(f"[agent] sharing existing tab (all {len(pages_only)} leased, {len(self._leased_tabs)} leases)")
+                return pages_only[0]["webSocketDebuggerUrl"]
+            if page_tabs:
+                return page_tabs[0]["webSocketDebuggerUrl"]
+            # Truly no tabs at all (shouldn't happen — handled above)
             try:
                 new_req = urllib.request.Request(
                     f"http://{self.cdp_host}:{self.cdp_port}/json/new",
@@ -1708,8 +1770,8 @@ class Agent:
                 with urllib.request.urlopen(new_req, timeout=3) as resp:
                     new_tab = json.loads(resp.read())
             except Exception as e:
-                raise RuntimeError(f"All tabs leased and /json/new failed: {e}")
-            print(f"[agent] auto-created tab (all existing tabs leased)")
+                raise RuntimeError(f"No tabs available and /json/new failed: {e}")
+            print(f"[agent] auto-created tab (no tabs remained)")
             return new_tab["webSocketDebuggerUrl"]
         matches = [t for t in page_tabs if t["id"].startswith(tab_id)]
         if len(matches) == 1:

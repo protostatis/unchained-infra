@@ -189,7 +189,7 @@ def main():
                 sys.exit(1)
             close_id = matches[0]["id"]
             req = urllib.request.Request(
-                f"http://{CDP_HOST}:{CDP_PORT}/json/close/{close_id}", method="PUT")
+                f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/close/{close_id}", method="PUT")
             urllib.request.urlopen(req, timeout=5)
             print(f"Closed tab {close_id[:12]}")
             return
