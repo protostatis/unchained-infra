@@ -164,6 +164,7 @@ class Relay:
         print(f"[relay] client endpoint: ws://{self.host}:{self.port}/cdp/<agent_id>/<tab_id>")
         async with websockets.serve(self._route, self.host, self.port,
                                     max_size=50 * 1024 * 1024,
+                                    ping_interval=None,
                                     process_request=self._process_request):
             await asyncio.Future()  # run forever
 
@@ -361,20 +362,24 @@ class Relay:
             print(f"[relay] agent {agent_id} connection closed: code={exc.code} reason={exc.reason!r}")
         finally:
             if agent_id:
-                self.agents.pop(agent_id, None)
-                self.agent_users.pop(agent_id, None)
-                self.agent_profiles.pop(agent_id, None)
-                self._next_channel.pop(agent_id, None)
-                # Close all clients connected to this agent
-                to_close = [c for c, (aid, _) in self.clients.items()
-                            if aid == agent_id]
-                for client_ws in to_close:
-                    self.clients.pop(client_ws, None)
-                    try:
-                        await client_ws.close(4001, "Agent disconnected")
-                    except Exception:
-                        pass
-                print(f"[relay] agent {agent_id} disconnected")
+                # Guard against race: if the agent reconnected quickly, a new
+                # handler already registered a fresh ws under the same agent_id.
+                # Only clean up if this ws is still the registered one.
+                if self.agents.get(agent_id) is ws:
+                    self.agents.pop(agent_id, None)
+                    self.agent_users.pop(agent_id, None)
+                    self.agent_profiles.pop(agent_id, None)
+                    self._next_channel.pop(agent_id, None)
+                    # Close all clients connected to this agent
+                    to_close = [c for c, (aid, _) in self.clients.items()
+                                if aid == agent_id]
+                    for client_ws in to_close:
+                        self.clients.pop(client_ws, None)
+                        try:
+                            await client_ws.close(4001, "Agent disconnected")
+                        except Exception:
+                            pass
+                    print(f"[relay] agent {agent_id} disconnected")
 
     async def _handle_agent_message(self, agent_id: str, msg: dict):
         """Process a message from an agent."""
