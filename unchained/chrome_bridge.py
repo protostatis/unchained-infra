@@ -1669,9 +1669,8 @@ class Agent:
                 if page_tabs:
                     return page_tabs[0]["webSocketDebuggerUrl"]
                 try:
-                    new_req = urllib.request.Request(
-                        f"http://127.0.0.1:{prov_port}/json/new",
-                        method="PUT")
+                    startup_url = _default_new_tab_url(self.relay_url)
+                    new_req = _new_tab_request("127.0.0.1", prov_port, startup_url)
                     with urllib.request.urlopen(new_req, timeout=3) as resp:
                         new_tab = json.loads(resp.read())
                 except Exception as e:
@@ -1705,9 +1704,8 @@ class Agent:
             if not page_tabs:
                 # Chrome is running but has no page tabs — create one
                 try:
-                    new_req = urllib.request.Request(
-                        f"http://{self.cdp_host}:{self.cdp_port}/json/new",
-                        method="PUT")
+                    startup_url = _default_new_tab_url(self.relay_url)
+                    new_req = _new_tab_request(self.cdp_host, self.cdp_port, startup_url)
                     with urllib.request.urlopen(new_req, timeout=3) as resp:
                         new_tab = json.loads(resp.read())
                 except Exception as e:
@@ -1764,9 +1762,8 @@ class Agent:
                 return page_tabs[0]["webSocketDebuggerUrl"]
             # Truly no tabs at all (shouldn't happen — handled above)
             try:
-                new_req = urllib.request.Request(
-                    f"http://{self.cdp_host}:{self.cdp_port}/json/new",
-                    method="PUT")
+                startup_url = _default_new_tab_url(self.relay_url)
+                new_req = _new_tab_request(self.cdp_host, self.cdp_port, startup_url)
                 with urllib.request.urlopen(new_req, timeout=3) as resp:
                     new_tab = json.loads(resp.read())
             except Exception as e:
