@@ -139,8 +139,9 @@ async def run(args):
         text = args[1]
         for ch in text:
             await cdp.send("Input.dispatchKeyEvent", {
-                "type": "keyDown", "key": ch, "text": ch
+                "type": "keyDown", "key": ch
             })
+            await cdp.send("Input.insertText", {"text": ch})
             await asyncio.sleep(random.uniform(0.03, 0.08))
             await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch})
             await asyncio.sleep(random.uniform(0.02, 0.06))
