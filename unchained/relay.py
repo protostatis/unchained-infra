@@ -65,6 +65,9 @@ class Relay:
             or os.environ.get("PRIVATE_CORE_TOKEN", "")
         ).strip()
         self.rate_limiter = SlidingWindowRateLimiter()
+        # Cache valid API keys for 60s so per-message rate checks skip SQLite.
+        self._api_key_cache: dict[str, float] = {}  # token → monotonic expiry
+        self._API_KEY_CACHE_TTL = 60.0
         self.rate_window_s = int(os.environ.get("RELAY_RATE_WINDOW_S", "60"))
         self.http_limit = int(os.environ.get("RELAY_HTTP_RATE_LIMIT", "120"))
         self.cdp_connect_limit = int(os.environ.get("RELAY_CDP_CONNECT_RATE_LIMIT", "30"))
@@ -134,10 +137,32 @@ class Relay:
             return "Invalid API key"
         return None
 
+    def _is_valid_api_key_cached(self, token: str) -> bool:
+        """Return True if token is a valid API key. Results are cached to
+        avoid hitting SQLite on every CDP message."""
+        if not token:
+            return False
+        now = time.monotonic()
+        expiry = self._api_key_cache.get(token)
+        if expiry is not None:
+            if now < expiry:
+                return True
+            del self._api_key_cache[token]
+        if self.auth.validate_key(token) is not None:
+            self._api_key_cache[token] = now + self._API_KEY_CACHE_TTL
+            return True
+        return False
+
     def _rate_limit_key_from_headers(self, headers: Headers | None, prefix: str) -> tuple[str, bool]:
         token = self._get_bearer_token(headers)
         if self.shared_token and token and secrets.compare_digest(token, self.shared_token):
             return f"{prefix}:internal", True
+        # Valid API key holders get internal-tier rate limits. They are
+        # approved users running their own agents — each cdp_tool.py
+        # subprocess opens a fresh WebSocket, so external limits (30
+        # connects/min) are too low for normal agent usage.
+        if self._is_valid_api_key_cached(token):
+            return f"{prefix}:{token}", True
         return f"{prefix}:{token or 'anonymous'}", False
 
     def _rate_limit_key_from_cdp(self, ws: ServerConnection,
