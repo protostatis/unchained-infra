@@ -153,7 +153,11 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
             except Exception as e:
                 print(f"[overlay] Injection failed: {e}")
 
-        asyncio.create_task(_inject_and_poll())
+        # Cancel any previous poll loop for this session to avoid
+        # duplicate pollers each opening their own CDP connections.
+        if overlay.poll_task and not overlay.poll_task.done():
+            overlay.poll_task.cancel()
+        overlay.poll_task = asyncio.create_task(_inject_and_poll())
     except Exception as e:
         print(f"[overlay] Setup failed: {e}")
 
