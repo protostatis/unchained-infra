@@ -28,6 +28,7 @@ class OverlaySessionState:
     slot: int | None = None
     injected: bool = False
     pending_events: list = field(default_factory=list)  # buffered before bridge injection
+    poll_task: object = None  # asyncio.Task for the overlay poll loop
 
 
 @dataclass
