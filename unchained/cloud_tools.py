@@ -28,12 +28,13 @@ async def run_cdp_command(
     params: dict | None = None,
     relay_host: str = "127.0.0.1",
     relay_port: int = 8765,
+    overlay: bool = False,
 ) -> dict:
-    return await _client().run_cdp_command(agent_id, tab_id, method, params, relay_host, relay_port)
+    return await _client().run_cdp_command(agent_id, tab_id, method, params, relay_host, relay_port, overlay=overlay)
 
 
-async def run_js(agent_id: str, tab_id: str, expression: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
-    return await _client().run_js(agent_id, tab_id, expression, relay_host, relay_port)
+async def run_js(agent_id: str, tab_id: str, expression: str, relay_host: str = "127.0.0.1", relay_port: int = 8765, overlay: bool = False) -> str:
+    return await _client().run_js(agent_id, tab_id, expression, relay_host, relay_port, overlay=overlay)
 
 
 async def navigate(agent_id: str, tab_id: str, url: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
