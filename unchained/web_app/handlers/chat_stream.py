@@ -41,7 +41,7 @@ def _broadcast_overlay(session_id: str, event: dict) -> None:
             import cloud_tools
             relay_host, relay_port = core._parse_relay()
             await cloud_tools.run_js(
-                overlay.agent_id, overlay.tab_id, js, relay_host, relay_port)
+                overlay.agent_id, overlay.tab_id, js, relay_host, relay_port, overlay=True)
         except Exception:
             pass
     asyncio.create_task(_push())
@@ -100,14 +100,15 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 import cloud_tools
                 relay_host, relay_port = core._parse_relay()
 
-                # Inject overlay JS via CDP
-                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                # Inject overlay JS via CDP (overlay=True → separate CDP pool)
+                await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port, overlay=True)
                 # Persist across navigations
                 await cloud_tools.run_cdp_command(
                     agent_id, tab_id,
                     "Page.addScriptToEvaluateOnNewDocument",
                     {"source": bootstrap_js},
                     relay_host, relay_port,
+                    overlay=True,
                 )
                 overlay.injected = True
 
@@ -130,10 +131,11 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                             "(function(){if(!document.getElementById('__uc_overlay_host'))return '__REINJECT__';"
                             "var q=window.__uc_overlay_outbox||[];window.__uc_overlay_outbox=[];return JSON.stringify(q)})()",
                             relay_host, relay_port,
+                            overlay=True,
                         )
                         if raw == "__REINJECT__":
                             # Overlay lost (navigation cleared DOM) — re-inject
-                            await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port)
+                            await cloud_tools.run_js(agent_id, tab_id, overlay_js, relay_host, relay_port, overlay=True)
                             continue
                         if raw and raw != "[]":
                             from web_app.handlers.overlay_ws import _route_followup

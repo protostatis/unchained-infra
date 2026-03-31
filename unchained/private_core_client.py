@@ -306,6 +306,7 @@ class PrivateCoreClient:
         params: dict | None,
         relay_host: str,
         relay_port: int,
+        overlay: bool = False,
     ) -> dict:
         return await self.execute(
             OP_RUN_CDP_COMMAND,
@@ -315,9 +316,10 @@ class PrivateCoreClient:
             params=params,
             relay_host=relay_host,
             relay_port=relay_port,
+            overlay=overlay,
         )
 
-    async def run_js(self, agent_id: str, tab_id: str, expression: str, relay_host: str, relay_port: int) -> str:
+    async def run_js(self, agent_id: str, tab_id: str, expression: str, relay_host: str, relay_port: int, overlay: bool = False) -> str:
         return await self.execute(
             OP_RUN_JS,
             agent_id=agent_id,
@@ -325,6 +327,7 @@ class PrivateCoreClient:
             expression=expression,
             relay_host=relay_host,
             relay_port=relay_port,
+            overlay=overlay,
         )
 
     async def navigate(self, agent_id: str, tab_id: str, url: str, relay_host: str, relay_port: int) -> str:
