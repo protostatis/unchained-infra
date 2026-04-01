@@ -3847,6 +3847,7 @@ body{
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview &mdash; Default</option>
       <option value="arcee-ai/trinity-large-preview:free">Trinity &mdash; Fast</option>
       <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Balanced</option>
+      <option value="qwen/qwen3.6-plus-preview:free">Qwen 3.6 Plus &mdash; Preview</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
   </div>
@@ -14395,6 +14396,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
           <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
+          <option value="qwen/qwen3.6-plus-preview:free">OpenRouter: Qwen 3.6 Plus</option>
           <option value="__custom__">Custom model ID</option>
         </select>
         <span class="hint">Leave on default to use your normal local Claude CLI agent. Choose Custom for any raw model ID.</span>
@@ -14531,7 +14533,8 @@ function formatSchedulerModel(model){
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
-    'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash'
+    'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
+    'qwen/qwen3.6-plus-preview:free':'OpenRouter: Qwen 3.6 Plus'
   };
   return labels[value]||value;
 }
