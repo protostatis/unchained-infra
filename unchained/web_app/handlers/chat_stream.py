@@ -665,7 +665,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
 
-    use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
+    # Only route to the headless bridge for guest (unauthenticated) users.
+    # Authenticated users should always use their own local bridge, even if
+    # the request comes from a page that sets headless:true (e.g. first-look).
+    use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID and guest_mode
     if use_headless and selected_profile_path:
         core._response_queues.pop(session_id, None)
         return web.json_response(
