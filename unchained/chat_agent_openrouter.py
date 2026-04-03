@@ -942,6 +942,17 @@ class TrialAgent:
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
         messages = self.sessions[session_id]
+        # Sanitize malformed messages (e.g. content as dict/None instead of string)
+        for msg in messages:
+            c = msg.get("content")
+            if c is None:
+                # Qwen rejects content:null — use reasoning if available, else empty
+                msg["content"] = msg.get("reasoning") or ""
+            elif not isinstance(c, (str, list)):
+                msg["content"] = str(c)
+            # Remove non-standard fields that some providers reject
+            for key in ("refusal", "reasoning"):
+                msg.pop(key, None)
         messages.append({"role": "user", "content": user_text})
 
         ns = NudgeState()
@@ -1032,6 +1043,16 @@ class TrialAgent:
                             print(
                                 f"[{session_id}] Hard-stop guard: forcing final response after one recovery turn"
                             )
+                        response = await self._call_openrouter(
+                            client,
+                            messages,
+                            model,
+                            tool_choice=next_tool_choice,
+                            session_id=session_id,
+                            user_id=user_id,
+                        )
+                    except httpx.ReadTimeout:
+                        print(f"[{session_id}] OpenRouter read timeout on turn {turn+1} — retrying once")
                         response = await self._call_openrouter(
                             client,
                             messages,
@@ -1377,8 +1398,10 @@ class TrialAgent:
             self._save_session(session_id, messages)
             # Don't send done — the cancel handler or new message handler does that
         except Exception as e:
-            print(f"[{session_id}] Error: {e}")
-            await self._send(session_id, {"type": "error", "data": str(e)})
+            import traceback
+            print(f"[{session_id}] Error ({type(e).__name__}): {e}")
+            traceback.print_exc()
+            await self._send(session_id, {"type": "error", "data": str(e) or type(e).__name__})
             self._save_session(session_id, messages)
             await self._send(session_id, {"type": "done"})
 
@@ -1409,17 +1432,19 @@ class TrialAgent:
             "X-Title": "Unchained Trial Agent",
         }
         resp = await client.post(
-            OPENROUTER_URL, json=body, headers=headers, timeout=60.0,
+            OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
         )
-        # Retry on 500/502/503 (OpenRouter free tier instability)
-        if resp.status_code in (500, 502, 503):
-            for attempt in range(1, 3):
-                print(f"[openrouter] {resp.status_code} — retry {attempt}/2 after {2*attempt}s")
-                await asyncio.sleep(2 * attempt)
+        # Retry on 429/500/502/503 (OpenRouter rate limits & free tier instability)
+        _RETRY_CODES = (429, 500, 502, 503)
+        if resp.status_code in _RETRY_CODES:
+            for attempt in range(1, 4):
+                delay = 3 * attempt if resp.status_code == 429 else 2 * attempt
+                print(f"[openrouter] {resp.status_code} — retry {attempt}/3 after {delay}s")
+                await asyncio.sleep(delay)
                 resp = await client.post(
-                    OPENROUTER_URL, json=body, headers=headers, timeout=60.0,
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
                 )
-                if resp.status_code not in (500, 502, 503):
+                if resp.status_code not in _RETRY_CODES:
                     break
         if not resp.is_success:
             print(f"[openrouter] {resp.status_code} error: {resp.text[:400]}")
@@ -1434,7 +1459,7 @@ class TrialAgent:
             for attempt in range(1, 3):
                 await asyncio.sleep(2 * attempt)
                 resp = await client.post(
-                    OPENROUTER_URL, json=body, headers=headers, timeout=60.0,
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
                 )
                 if resp.is_success:
                     data = resp.json()
