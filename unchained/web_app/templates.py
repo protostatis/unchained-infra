@@ -11204,6 +11204,8 @@ let previewHasFrame = false;
 let previewSocket = null;
 let previewRetryTimer = null;
 let previewRetryCount = 0;
+let previewReconnectCount = 0;
+const MAX_PREVIEW_RECONNECTS = 5;
 
 const BROWSER_TOOL_LABELS = {
   navigate: 'Navigate',
@@ -11281,7 +11283,7 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 220) + 'px';
 }
 
-function doNewChat() {
+async function doNewChat() {
   if (sending) return;
   const chat = document.getElementById('chat');
   chat.innerHTML =
@@ -11313,9 +11315,27 @@ function doNewChat() {
   assistantText = '';
   currentAssistantEl = null;
   currentToolEl = null;
-  sessionId = '';
   historyLoaded = false;
-  ensureSessionId();
+
+  try {
+    const r = await fetch('/web/chat/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: currentModel(),
+        session_id: sessionId,
+        first_look_guest: true,
+      }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.session_id) {
+        sessionId = data.session_id;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to clear context:', err);
+  }
   refreshSharedBrowserStatus();
 }
 
@@ -11483,7 +11503,12 @@ function openPreviewSocket() {
       if (msg.reason === 'slow_client') {
         setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
       } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
-        setPreviewNote('Live stream window ended. Keeping the latest frame and browser steps current.', 'warn');
+        if (sending && previewReconnectCount < MAX_PREVIEW_RECONNECTS) {
+          previewReconnectCount += 1;
+          setPreviewNote('Reconnecting live stream...', '');
+        } else {
+          setPreviewNote('Live stream ended.', 'warn');
+        }
       } else if (!previewHasFrame) {
         setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
       }
@@ -11491,9 +11516,12 @@ function openPreviewSocket() {
   };
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
-    if (!sawFrame && sending) {
+    if (!sending) return;
+    if (!sawFrame) {
       setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
       schedulePreviewRetry();
+    } else if (previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
+      setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
     }
   };
   ws.onerror = () => {};
@@ -11514,6 +11542,7 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
 function resetPreview() {
   closePreviewSocket();
   previewRetryCount = 0;
+  previewReconnectCount = 0;
   previewHasFrame = false;
   document.getElementById('preview-mode').textContent = 'awaiting run';
   setPreviewNote('Starting run...', '');
