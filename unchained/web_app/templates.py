@@ -11331,6 +11331,7 @@ async function doNewChat() {
       const data = await r.json();
       if (data.session_id) {
         sessionId = data.session_id;
+        try { const k = sessionStoreKey(); if (k) localStorage.setItem(k, sessionId); } catch (_e) {}
       }
     }
   } catch (err) {
