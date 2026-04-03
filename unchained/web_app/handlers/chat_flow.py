@@ -276,6 +276,16 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     log.debug("starting screencast stream agent=%s tab=%s", agent_id, tab_id)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
+        # Re-resolve tab on retries — the old tab may be gone after bridge
+        # reconnect or Chrome restart.
+        if attempt > 1:
+            try:
+                _, tab_id = await _resolve_first_look_preview_target(
+                    core, guest_auth, sid_param, timeout=5.0,
+                )
+                log.info("re-resolved tab=%s on attempt %d", tab_id, attempt)
+            except web.HTTPException:
+                pass  # keep previous tab_id if re-resolve fails
         try:
             async for event in cloud_tools.stream_screencast(
                 agent_id,
