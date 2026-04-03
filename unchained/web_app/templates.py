@@ -11322,7 +11322,7 @@ async function doNewChat() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: currentModel(),
+        model: 'qwen/qwen3.6-plus:free',
         session_id: sessionId,
         first_look_guest: true,
       }),
