@@ -11281,7 +11281,7 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 220) + 'px';
 }
 
-function doNewChat() {
+async function doNewChat() {
   if (sending) return;
   const chat = document.getElementById('chat');
   chat.innerHTML =
@@ -11313,9 +11313,27 @@ function doNewChat() {
   assistantText = '';
   currentAssistantEl = null;
   currentToolEl = null;
-  sessionId = '';
   historyLoaded = false;
-  ensureSessionId();
+
+  try {
+    const r = await fetch('/web/chat/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: currentModel(),
+        session_id: sessionId,
+        first_look_guest: true,
+      }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.session_id) {
+        sessionId = data.session_id;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to clear context:', err);
+  }
   refreshSharedBrowserStatus();
 }
 
