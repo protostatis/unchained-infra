@@ -11185,9 +11185,9 @@ body{
           <span class="title">shared-demo-browser</span>
           <span id="preview-mode" class="mode-pill">awaiting run</span>
         </div>
-        <div id="url-bar">
-          <span class="url-text empty" id="url-text">No URL yet</span>
-          <button class="copy-btn" id="url-copy-btn" title="Copy URL" style="display:none" onclick="copyCurrentUrl()">copy</button>
+        <div id="url-bar" role="status">
+          <span class="url-text empty" id="url-text" aria-live="polite">No URL yet</span>
+          <button class="copy-btn" id="url-copy-btn" aria-label="Copy URL" title="Copy URL" style="display:none" onclick="copyCurrentUrl()">copy</button>
         </div>
         <div id="live-canvas-wrap">
           <img id="preview-image" alt="Shared browser preview" style="display:none">
@@ -11576,7 +11576,7 @@ function setBrowserUrl(url) {
 }
 
 function extractUrlFromToolResult(text) {
-  const m = String(text || '').match(/(?:Navigated to|URL):\s*(https?:\/\/[^\s)]+)/i);
+  const m = String(text || '').match(/^(?:Navigated to|URL):\s*(https?:\/\/[^\s)]+)/im);
   return m ? m[1] : '';
 }
 
