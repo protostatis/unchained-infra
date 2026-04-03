@@ -11608,8 +11608,9 @@ function resetPreview() {
 }
 
 function followTab(newTabId) {
-  if (!newTabId || newTabId === 'auto' || newTabId === previewTabId) return;
-  previewTabId = newTabId;
+  const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
+  if (!sanitized || sanitized === previewTabId) return;
+  previewTabId = sanitized;
   if (sending && previewSocket) {
     closePreviewSocket();
     openPreviewSocket();
