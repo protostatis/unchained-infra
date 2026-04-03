@@ -11881,12 +11881,11 @@ async function doSend() {
               finishStep(currentToolEl, evt.is_screenshot ? 'Frame captured' : String(evt.data || 'Done'), false);
               currentToolEl = null;
             }
-            if (evt.tab_id) followTab(evt.tab_id);
             if (!evt.is_screenshot) {
-              if (!evt.tab_id) {
-                const resultTab = extractTabIdFromResult(evt.data);
-                if (resultTab) followTab(resultTab);
-              }
+              // ddm --new creates a tab with tab_id "auto" — extract the
+              // new tab ID from the result text (Tab: <hex>).
+              const resultTab = extractTabIdFromResult(evt.data);
+              if (resultTab) followTab(resultTab);
               const resultUrl = extractUrlFromToolResult(evt.data);
               if (resultUrl) setBrowserUrl(resultUrl);
             }

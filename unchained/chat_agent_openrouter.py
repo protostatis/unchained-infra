@@ -1269,16 +1269,13 @@ class TrialAgent:
 
                         is_screenshot = name == "screenshot" and _is_base64_png_blob(result)
                         show_user = args.get("show_user", False)
-                        tool_result_evt = {
+                        await self._send(session_id, {
                             "type": "tool_result",
                             "name": ui_name,
                             "data": result if is_screenshot else result[:3000],
                             "is_screenshot": is_screenshot,
                             "visible": is_screenshot and bool(show_user),
-                        }
-                        if tab_id and tab_id != "auto":
-                            tool_result_evt["tab_id"] = tab_id
-                        await self._send(session_id, tool_result_evt)
+                        })
 
                         tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
                         if name == "navigate" and not tool_failed:
