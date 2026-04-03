@@ -11204,6 +11204,8 @@ let previewHasFrame = false;
 let previewSocket = null;
 let previewRetryTimer = null;
 let previewRetryCount = 0;
+let previewReconnectCount = 0;
+const MAX_PREVIEW_RECONNECTS = 5;
 
 const BROWSER_TOOL_LABELS = {
   navigate: 'Navigate',
@@ -11501,9 +11503,9 @@ function openPreviewSocket() {
       if (msg.reason === 'slow_client') {
         setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
       } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
-        if (sending) {
+        if (sending && previewReconnectCount < MAX_PREVIEW_RECONNECTS) {
+          previewReconnectCount += 1;
           setPreviewNote('Reconnecting live stream...', '');
-          setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
         } else {
           setPreviewNote('Live stream ended.', 'warn');
         }
@@ -11514,13 +11516,12 @@ function openPreviewSocket() {
   };
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
-    if (sending) {
-      if (!sawFrame) {
-        setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
-        schedulePreviewRetry();
-      } else {
-        setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
-      }
+    if (!sending) return;
+    if (!sawFrame) {
+      setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
+      schedulePreviewRetry();
+    } else if (previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
+      setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
     }
   };
   ws.onerror = () => {};
@@ -11541,6 +11542,7 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
 function resetPreview() {
   closePreviewSocket();
   previewRetryCount = 0;
+  previewReconnectCount = 0;
   previewHasFrame = false;
   document.getElementById('preview-mode').textContent = 'awaiting run';
   setPreviewNote('Starting run...', '');
