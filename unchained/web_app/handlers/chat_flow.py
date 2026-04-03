@@ -274,33 +274,42 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
     log.debug("starting screencast stream agent=%s tab=%s", agent_id, tab_id)
-    try:
-        async for event in cloud_tools.stream_screencast(
-            agent_id,
-            tab_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            width=width,
-            height=height,
-            quality=60,
-            image_format="jpeg",
-            every_nth_frame=2,
-            max_frames=900,
-            stream_timeout=120.0,
-        ):
-            await ws.send_json(event)
-            if event.get("type") == "status":
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            async for event in cloud_tools.stream_screencast(
+                agent_id,
+                tab_id,
+                relay_host=relay_host,
+                relay_port=relay_port,
+                width=width,
+                height=height,
+                quality=60,
+                image_format="jpeg",
+                every_nth_frame=2,
+                max_frames=900,
+                stream_timeout=120.0,
+            ):
+                if ws.closed:
+                    break
+                await ws.send_json(event)
+                if event.get("type") == "status":
+                    break
+            break  # clean exit
+        except Exception as exc:
+            if ws.closed:
                 break
-    except Exception as exc:
-        log.warning("screencast error: %r", exc)
-        if not ws.closed:
+            if attempt < max_retries:
+                log.info("screencast dropped (attempt %d/%d, %r) — reconnecting in 2s", attempt, max_retries, exc)
+                await asyncio.sleep(2)
+                continue
+            log.warning("screencast failed after %d attempts: %r", max_retries, exc)
             try:
                 await ws.send_json({"type": "status", "status": "error", "reason": "preview_unavailable"})
             except Exception:
                 pass
-    finally:
-        if not ws.closed:
-            await ws.close()
+    if not ws.closed:
+        await ws.close()
     return ws
 
 
