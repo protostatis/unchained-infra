@@ -11501,7 +11501,12 @@ function openPreviewSocket() {
       if (msg.reason === 'slow_client') {
         setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
       } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
-        setPreviewNote('Live stream window ended. Keeping the latest frame and browser steps current.', 'warn');
+        if (sending) {
+          setPreviewNote('Reconnecting live stream...', '');
+          setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
+        } else {
+          setPreviewNote('Live stream ended.', 'warn');
+        }
       } else if (!previewHasFrame) {
         setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
       }
@@ -11509,9 +11514,13 @@ function openPreviewSocket() {
   };
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
-    if (!sawFrame && sending) {
-      setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
-      schedulePreviewRetry();
+    if (sending) {
+      if (!sawFrame) {
+        setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
+        schedulePreviewRetry();
+      } else {
+        setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
+      }
     }
   };
   ws.onerror = () => {};
