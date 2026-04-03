@@ -253,7 +253,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         denied = web.Response(status=exc.status, text=exc.text)
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
-    log.debug("resolved agent=%s tab=%s", agent_id, tab_id)
+    # Allow explicit tab_id override for multi-tab auto-follow.
+    explicit_tab = request.query.get("tab_id", "").strip()
+    if explicit_tab:
+        tab_id = explicit_tab
+    log.debug("resolved agent=%s tab=%s explicit=%s", agent_id, tab_id, bool(explicit_tab))
 
     width = _normalize_first_look_preview_dimension(
         request.query,

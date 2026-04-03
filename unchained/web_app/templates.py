@@ -11217,6 +11217,7 @@ let currentAssistantEl = null;
 let assistantText = '';
 let lastPolicyUrl = '';
 let currentBrowserUrl = '';
+let previewTabId = '';
 let challengeCheckTimer = null;
 let signalBuffer = '';
 let historyLoaded = false;
@@ -11483,6 +11484,7 @@ function previewSocketUrl() {
     width: String(viewport.width),
     height: String(viewport.height),
   });
+  if (previewTabId) qs.set('tab_id', previewTabId);
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
 }
@@ -11580,6 +11582,11 @@ function extractUrlFromToolResult(text) {
   return m ? m[1] : '';
 }
 
+function extractTabIdFromResult(text) {
+  const m = String(text || '').match(/\bTab:\s*([A-F0-9]{8,})/i);
+  return m ? m[1] : '';
+}
+
 function copyCurrentUrl() {
   if (!currentBrowserUrl) return;
   navigator.clipboard.writeText(currentBrowserUrl).then(() => {
@@ -11594,9 +11601,19 @@ function resetPreview() {
   previewRetryCount = 0;
   previewReconnectCount = 0;
   previewHasFrame = false;
+  previewTabId = '';
   setBrowserUrl('');
   document.getElementById('preview-mode').textContent = 'awaiting run';
   setPreviewNote('Starting run...', '');
+}
+
+function followTab(newTabId) {
+  if (!newTabId || newTabId === 'auto' || newTabId === previewTabId) return;
+  previewTabId = newTabId;
+  if (sending && previewSocket) {
+    closePreviewSocket();
+    openPreviewSocket();
+  }
 }
 
 function resetSteps() {
@@ -11852,6 +11869,7 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentToolEl = addStep(evt.name || 'tool', evt.input || '');
+            if (evt.tab_id) followTab(evt.tab_id);
             if (evt.name === 'navigate' && evt.input) {
               const navUrl = normalizePublicUrl(evt.input);
               if (navUrl) setBrowserUrl(navUrl);
@@ -11863,7 +11881,12 @@ async function doSend() {
               finishStep(currentToolEl, evt.is_screenshot ? 'Frame captured' : String(evt.data || 'Done'), false);
               currentToolEl = null;
             }
+            if (evt.tab_id) followTab(evt.tab_id);
             if (!evt.is_screenshot) {
+              if (!evt.tab_id) {
+                const resultTab = extractTabIdFromResult(evt.data);
+                if (resultTab) followTab(resultTab);
+              }
               const resultUrl = extractUrlFromToolResult(evt.data);
               if (resultUrl) setBrowserUrl(resultUrl);
             }
