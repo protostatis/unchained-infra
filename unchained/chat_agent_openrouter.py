@@ -1189,11 +1189,14 @@ class TrialAgent:
                         ui_name = _ui_tool_name(name)
                         ui_input = _truncate(_ui_tool_input(name, args), 200)
 
-                        await self._send(session_id, {
+                        tool_start_evt = {
                             "type": "tool_start",
                             "name": ui_name,
                             "input": ui_input,
-                        })
+                        }
+                        if tab_id and tab_id != "auto":
+                            tool_start_evt["tab_id"] = tab_id
+                        await self._send(session_id, tool_start_evt)
 
                         print(
                             f"[{session_id}] Tool {turn + 1}.{idx + 1} start: "
@@ -1266,13 +1269,20 @@ class TrialAgent:
 
                         is_screenshot = name == "screenshot" and _is_base64_png_blob(result)
                         show_user = args.get("show_user", False)
-                        await self._send(session_id, {
+                        tool_result_evt = {
                             "type": "tool_result",
                             "name": ui_name,
                             "data": result if is_screenshot else result[:3000],
                             "is_screenshot": is_screenshot,
                             "visible": is_screenshot and bool(show_user),
-                        })
+                        }
+                        # Emit structured new_tab_id for ddm --new so clients
+                        # don't need to regex-parse the result text.
+                        if name == "ddm" and "--new" in str(args.get("flags", "")):
+                            _tab_m = re.search(r"^Tab:\s*([A-Fa-f0-9]{8,64})", result, re.MULTILINE)
+                            if _tab_m:
+                                tool_result_evt["new_tab_id"] = _tab_m.group(1)
+                        await self._send(session_id, tool_result_evt)
 
                         tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
                         if name == "navigate" and not tool_failed:

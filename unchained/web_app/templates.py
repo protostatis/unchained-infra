@@ -11217,6 +11217,7 @@ let currentAssistantEl = null;
 let assistantText = '';
 let lastPolicyUrl = '';
 let currentBrowserUrl = '';
+let previewTabId = '';
 let challengeCheckTimer = null;
 let signalBuffer = '';
 let historyLoaded = false;
@@ -11483,6 +11484,7 @@ function previewSocketUrl() {
     width: String(viewport.width),
     height: String(viewport.height),
   });
+  if (previewTabId) qs.set('tab_id', previewTabId);
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
 }
@@ -11538,6 +11540,12 @@ function openPreviewSocket() {
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
     if (!sending) return;
+    // Tab switch: reconnect immediately with the new tab_id.
+    if (pendingTabSwitch) {
+      pendingTabSwitch = false;
+      openPreviewSocket();
+      return;
+    }
     if (!sawFrame) {
       setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
       schedulePreviewRetry();
@@ -11580,6 +11588,8 @@ function extractUrlFromToolResult(text) {
   return m ? m[1] : '';
 }
 
+/* extractTabIdFromResult removed — use structured evt.new_tab_id instead */
+
 function copyCurrentUrl() {
   if (!currentBrowserUrl) return;
   navigator.clipboard.writeText(currentBrowserUrl).then(() => {
@@ -11594,9 +11604,24 @@ function resetPreview() {
   previewRetryCount = 0;
   previewReconnectCount = 0;
   previewHasFrame = false;
+  previewTabId = '';
   setBrowserUrl('');
   document.getElementById('preview-mode').textContent = 'awaiting run';
   setPreviewNote('Starting run...', '');
+}
+
+let pendingTabSwitch = false;
+
+function followTab(newTabId) {
+  const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
+  if (!sanitized || sanitized === previewTabId) return;
+  previewTabId = sanitized;
+  if (sending && previewSocket) {
+    // Mark pending so onclose reconnects with the new tab_id.
+    pendingTabSwitch = true;
+    closePreviewSocket();
+    // openPreviewSocket() will be called from onclose handler.
+  }
 }
 
 function resetSteps() {
@@ -11852,6 +11877,7 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentToolEl = addStep(evt.name || 'tool', evt.input || '');
+            if (evt.tab_id) followTab(evt.tab_id);
             if (evt.name === 'navigate' && evt.input) {
               const navUrl = normalizePublicUrl(evt.input);
               if (navUrl) setBrowserUrl(navUrl);
@@ -11864,6 +11890,9 @@ async function doSend() {
               currentToolEl = null;
             }
             if (!evt.is_screenshot) {
+              // ddm --new: server extracts the new tab ID and sends it
+              // as a structured field — no client-side regex needed.
+              if (evt.new_tab_id) followTab(evt.new_tab_id);
               const resultUrl = extractUrlFromToolResult(evt.data);
               if (resultUrl) setBrowserUrl(resultUrl);
             }
