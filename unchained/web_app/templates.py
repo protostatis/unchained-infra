@@ -3844,11 +3844,12 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview &mdash; Default</option>
+      <option value="qwen/qwen3.6-plus:free">Qwen 3.6 Plus &mdash; Default</option>
+      <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
       <option value="arcee-ai/trinity-large-preview:free">Trinity &mdash; Fast</option>
       <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Balanced</option>
-      <option value="qwen/qwen3.6-plus-preview:free">Qwen 3.6 Plus &mdash; Preview</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
+      <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
   </div>
@@ -7578,7 +7579,7 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedFirstLookModel || 'google/gemini-3-flash-preview';
+  return _forcedFirstLookModel || 'qwen/qwen3.6-plus:free';
 }
 
 function _sessionStoreKey() {
@@ -11651,7 +11652,7 @@ async function loadHistory() {
   historyLoaded = true;
   try {
     const qs = new URLSearchParams({
-      model: 'google/gemini-3-flash-preview',
+      model: 'qwen/qwen3.6-plus:free',
       session_id: sessionId,
       first_look_guest: '1'
     });
@@ -11725,7 +11726,7 @@ async function doSend() {
         message: message,
         agent_id: agentId,
         session_id: sessionId,
-        model: 'google/gemini-3-flash-preview',
+        model: 'qwen/qwen3.6-plus:free',
         headless: true,
         first_look_guest: true
       }),
@@ -14397,8 +14398,9 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
           <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
-          <option value="qwen/qwen3.6-plus-preview:free">OpenRouter: Qwen 3.6 Plus</option>
+          <option value="qwen/qwen3.6-plus:free">OpenRouter: Qwen 3.6 Plus</option>
           <option value="nvidia/nemotron-3-super-120b-a12b:free">OpenRouter: NVIDIA Nemotron</option>
+          <option value="qwen/qwen3.5-flash-02-23">OpenRouter: Qwen 3.5 Flash</option>
           <option value="__custom__">Custom model ID</option>
         </select>
         <span class="hint">Leave on default to use your normal local Claude CLI agent. Choose Custom for any raw model ID.</span>
@@ -14536,8 +14538,10 @@ function formatSchedulerModel(model){
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
     'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
-    'qwen/qwen3.6-plus-preview:free':'OpenRouter: Qwen 3.6 Plus',
-    'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron'
+    'qwen/qwen3.6-plus:free':'OpenRouter: Qwen 3.6 Plus',
+    'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
+    'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
+    'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
   };
   return labels[value]||value;
 }

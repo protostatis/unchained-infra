@@ -145,12 +145,12 @@ if not TRIAL_AGENT_ID:
     log.warning("[chat] TRIAL_AGENT_ID unresolved; OpenRouter trial routing disabled.")
 
 # Demo prompt quota — number of headless demo interactions before requiring trial install
-_DEMO_PROMPT_LIMIT = 4
+_DEMO_PROMPT_LIMIT = 20
 
 # First-look guest flow — anonymous browsing before sign-up
 _FIRST_LOOK_GUEST_PROMPT_LIMIT = max(
     1,
-    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "5")),
+    int(os.environ.get("FIRST_LOOK_GUEST_PROMPT_LIMIT", "20")),
 )
 _FIRST_LOOK_GUEST_COOKIE_MAX_AGE = 60 * 24 * 3600
 _FIRST_LOOK_GUEST_ID_COOKIE = "uc_fl_guest"
@@ -167,8 +167,8 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
     float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
 )
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3-flash-preview").strip()
-    or "google/gemini-3-flash-preview"
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "qwen/qwen3.6-plus:free").strip()
+    or "qwen/qwen3.6-plus:free"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()
