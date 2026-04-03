@@ -254,10 +254,14 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
     # Allow explicit tab_id override for multi-tab auto-follow.
-    explicit_tab = re.sub(r"[^A-Fa-f0-9]", "", request.query.get("tab_id", ""))[:64]
-    if explicit_tab:
-        tab_id = explicit_tab
-    log.debug("resolved agent=%s tab=%s explicit=%s", agent_id, tab_id, bool(explicit_tab))
+    # The tab_id must be a hex string (Chrome tab IDs are 32-char uppercase hex).
+    # Reject malformed values with 400 rather than silently normalizing.
+    raw_tab = request.query.get("tab_id", "")
+    if raw_tab:
+        if not re.fullmatch(r"[A-Fa-f0-9]{8,64}", raw_tab):
+            return web.Response(status=400, text="invalid tab_id format")
+        tab_id = raw_tab
+    log.debug("resolved agent=%s tab=%s explicit=%s", agent_id, tab_id, bool(raw_tab))
 
     width = _normalize_first_look_preview_dimension(
         request.query,

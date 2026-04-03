@@ -11540,6 +11540,12 @@ function openPreviewSocket() {
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
     if (!sending) return;
+    // Tab switch: reconnect immediately with the new tab_id.
+    if (pendingTabSwitch) {
+      pendingTabSwitch = false;
+      openPreviewSocket();
+      return;
+    }
     if (!sawFrame) {
       setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
       schedulePreviewRetry();
@@ -11582,10 +11588,7 @@ function extractUrlFromToolResult(text) {
   return m ? m[1] : '';
 }
 
-function extractTabIdFromResult(text) {
-  const m = String(text || '').match(/\bTab:\s*([A-F0-9]{8,})/i);
-  return m ? m[1] : '';
-}
+/* extractTabIdFromResult removed — use structured evt.new_tab_id instead */
 
 function copyCurrentUrl() {
   if (!currentBrowserUrl) return;
@@ -11607,13 +11610,17 @@ function resetPreview() {
   setPreviewNote('Starting run...', '');
 }
 
+let pendingTabSwitch = false;
+
 function followTab(newTabId) {
   const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
   if (!sanitized || sanitized === previewTabId) return;
   previewTabId = sanitized;
   if (sending && previewSocket) {
+    // Mark pending so onclose reconnects with the new tab_id.
+    pendingTabSwitch = true;
     closePreviewSocket();
-    openPreviewSocket();
+    // openPreviewSocket() will be called from onclose handler.
   }
 }
 
@@ -11883,10 +11890,9 @@ async function doSend() {
               currentToolEl = null;
             }
             if (!evt.is_screenshot) {
-              // ddm --new creates a tab with tab_id "auto" — extract the
-              // new tab ID from the result text (Tab: <hex>).
-              const resultTab = extractTabIdFromResult(evt.data);
-              if (resultTab) followTab(resultTab);
+              // ddm --new: server extracts the new tab ID and sends it
+              // as a structured field — no client-side regex needed.
+              if (evt.new_tab_id) followTab(evt.new_tab_id);
               const resultUrl = extractUrlFromToolResult(evt.data);
               if (resultUrl) setBrowserUrl(resultUrl);
             }
