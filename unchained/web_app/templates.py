@@ -10853,8 +10853,23 @@ body{
   margin-left:auto;border:1px solid #2f2f2f;border-radius:999px;padding:3px 8px;
   font-family:var(--mono);font-size:10px;color:var(--muted);
 }
+#url-bar{
+  display:flex;align-items:center;gap:6px;padding:2px 8px;
+  background:#1a1a1a;border:1px solid #2f2f2f;border-top:none;
+  font-family:var(--mono);font-size:11px;min-height:24px;
+}
+#url-bar .url-text{
+  flex:1;min-width:0;color:#9a9a9a;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;user-select:all;
+}
+#url-bar .url-text.empty{color:#555;font-style:italic}
+#url-bar .copy-btn{
+  flex-shrink:0;background:none;border:1px solid #333;border-radius:4px;
+  color:#777;font-size:10px;padding:1px 6px;cursor:pointer;font-family:var(--mono);
+}
+#url-bar .copy-btn:hover{color:#ccc;border-color:#555}
 #live-canvas-wrap{
-  flex:1;min-height:0;border:1px solid #2f2f2f;border-radius:0 0 8px 8px;
+  flex:1;min-height:0;border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
   background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
 }
 #preview-image{
@@ -11170,6 +11185,10 @@ body{
           <span class="title">shared-demo-browser</span>
           <span id="preview-mode" class="mode-pill">awaiting run</span>
         </div>
+        <div id="url-bar">
+          <span class="url-text empty" id="url-text">No URL yet</span>
+          <button class="copy-btn" id="url-copy-btn" title="Copy URL" style="display:none" onclick="copyCurrentUrl()">copy</button>
+        </div>
         <div id="live-canvas-wrap">
           <img id="preview-image" alt="Shared browser preview" style="display:none">
           <div id="preview-empty">The browser preview appears here after navigation.</div>
@@ -11197,6 +11216,7 @@ let currentToolEl = null;
 let currentAssistantEl = null;
 let assistantText = '';
 let lastPolicyUrl = '';
+let currentBrowserUrl = '';
 let challengeCheckTimer = null;
 let signalBuffer = '';
 let historyLoaded = false;
@@ -11540,11 +11560,41 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
   setPreviewNote(note || 'Shared browser frame received.', 'ok');
 }
 
+function setBrowserUrl(url) {
+  currentBrowserUrl = url || '';
+  const el = document.getElementById('url-text');
+  const btn = document.getElementById('url-copy-btn');
+  if (currentBrowserUrl) {
+    el.textContent = currentBrowserUrl;
+    el.classList.remove('empty');
+    btn.style.display = '';
+  } else {
+    el.textContent = 'No URL yet';
+    el.classList.add('empty');
+    btn.style.display = 'none';
+  }
+}
+
+function extractUrlFromToolResult(text) {
+  const m = String(text || '').match(/(?:Navigated to|URL):\s*(https?:\/\/[^\s)]+)/i);
+  return m ? m[1] : '';
+}
+
+function copyCurrentUrl() {
+  if (!currentBrowserUrl) return;
+  navigator.clipboard.writeText(currentBrowserUrl).then(() => {
+    const btn = document.getElementById('url-copy-btn');
+    btn.textContent = 'copied';
+    setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+  });
+}
+
 function resetPreview() {
   closePreviewSocket();
   previewRetryCount = 0;
   previewReconnectCount = 0;
   previewHasFrame = false;
+  setBrowserUrl('');
   document.getElementById('preview-mode').textContent = 'awaiting run';
   setPreviewNote('Starting run...', '');
 }
@@ -11802,7 +11852,9 @@ async function doSend() {
 
           if (evt.type === 'tool_start') {
             currentToolEl = addStep(evt.name || 'tool', evt.input || '');
-            if (evt.name === 'navigate') {
+            if (evt.name === 'navigate' && evt.input) {
+              const navUrl = normalizePublicUrl(evt.input);
+              if (navUrl) setBrowserUrl(navUrl);
               setPreviewNote('Shared browser is loading the page...', '');
             }
             if (!evt.is_screenshot) appendSignal((evt.name || 'tool') + ' ' + (evt.input || ''));
@@ -11810,6 +11862,10 @@ async function doSend() {
             if (currentToolEl) {
               finishStep(currentToolEl, evt.is_screenshot ? 'Frame captured' : String(evt.data || 'Done'), false);
               currentToolEl = null;
+            }
+            if (!evt.is_screenshot) {
+              const resultUrl = extractUrlFromToolResult(evt.data);
+              if (resultUrl) setBrowserUrl(resultUrl);
             }
             if (evt.is_screenshot && evt.visible && evt.data) {
               if (!previewHasFrame) {
