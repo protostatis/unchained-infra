@@ -14540,6 +14540,7 @@ function formatSchedulerModel(model){
     'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
     'qwen/qwen3.6-plus:free':'OpenRouter: Qwen 3.6 Plus',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
+    'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
   };
   return labels[value]||value;
