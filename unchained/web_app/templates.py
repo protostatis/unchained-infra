@@ -11155,7 +11155,8 @@ body{
     <div class="quota-or">or install now — 30 seconds</div>
     <div class="quota-install">
       <div class="qi-label">macOS / Linux</div>
-      <div class="qi-cmd"><code>curl -fsSL https://unchainedsky.com/install.sh | bash</code><button class="qi-copy" onclick="navigator.clipboard.writeText('curl -fsSL https://unchainedsky.com/install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+      <div class="qi-cmd"><code>curl -fsSL https://unchainedsky.com/install.sh | bash</code><button class="qi-copy" aria-label="Copy install command" onclick="navigator.clipboard.writeText('curl -fsSL https://unchainedsky.com/install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px"><a href="https://unchainedsky.com/install.sh" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline">Review script before running</a></div>
     </div>
     <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
@@ -11962,12 +11963,19 @@ async function doSend() {
             } else {
               document.getElementById('preview-mode').textContent = 'run complete';
             }
-            // Install nudge after task completion
-            var nudge = document.createElement('div');
-            nudge.className = 'install-nudge';
-            nudge.innerHTML = 'Want this on your own browser with your logins? <a href="/install">Install in 30 seconds \u2192</a>';
-            document.getElementById('chat').appendChild(nudge);
-            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+            // Install nudge after task completion (once per session)
+            if (!sessionStorage.getItem('uc_install_nudge_shown')) {
+              sessionStorage.setItem('uc_install_nudge_shown', '1');
+              var nudge = document.createElement('div');
+              nudge.className = 'install-nudge';
+              nudge.textContent = 'Want this on your own browser with your logins? ';
+              var nudgeLink = document.createElement('a');
+              nudgeLink.href = '/install';
+              nudgeLink.textContent = 'Install in 30 seconds \u2192';
+              nudge.appendChild(nudgeLink);
+              document.getElementById('chat').appendChild(nudge);
+              document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+            }
           }
         }
       }
