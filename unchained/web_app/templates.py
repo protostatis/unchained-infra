@@ -11104,6 +11104,33 @@ body{
   text-decoration:none;letter-spacing:0.5px;transition:opacity 0.2s;
 }
 .quota-cta:hover{opacity:0.9;box-shadow:0 0 20px rgba(233,69,96,0.3)}
+.quota-or{color:var(--muted);font-size:13px;margin:16px 0 8px}
+.quota-install{
+  background:rgba(255,255,255,0.04);border:1px solid #333;border-radius:10px;
+  padding:16px;margin-bottom:16px;text-align:left;
+}
+.quota-install .qi-label{font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px}
+.quota-install .qi-cmd{
+  display:flex;align-items:center;gap:8px;
+  background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px 12px;
+  font-family:'SF Mono','Menlo','Monaco',monospace;font-size:12px;color:#c9d1d9;
+  word-break:break-all;
+}
+.quota-install .qi-cmd code{flex:1}
+.quota-install .qi-copy{
+  flex-shrink:0;padding:4px 10px;border-radius:4px;border:1px solid #444;
+  background:rgba(255,255,255,0.06);color:var(--muted);font-size:11px;cursor:pointer;
+  transition:all 0.15s;
+}
+.quota-install .qi-copy:hover{border-color:#666;color:var(--text)}
+.install-nudge{
+  margin:8px 0 4px;padding:8px 14px;border-radius:8px;
+  background:rgba(233,69,96,0.06);border:1px solid rgba(233,69,96,0.15);
+  font-size:13px;color:var(--muted);cursor:pointer;transition:all 0.2s;
+}
+.install-nudge:hover{color:var(--text);border-color:rgba(233,69,96,0.3)}
+.install-nudge a{color:var(--accent);text-decoration:none;font-weight:500}
+.install-nudge a:hover{text-decoration:underline}
 .quota-dismiss{
   display:block;margin-top:12px;background:none;border:none;
   color:var(--muted);font-size:13px;cursor:pointer;
@@ -11119,12 +11146,17 @@ body{
     <h2>Shared demo complete</h2>
     <p class="quota-sub">You've used your guest runs. Start a free trial to keep browsing with the full agent — no credit card required.</p>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Free trial</strong><span>Try the full agent on any site with no shared-demo restrictions.</span></div>
-      <div class="quota-item"><strong>No credit card</strong><span>Sign up and start browsing immediately. No billing from Unchained.</span></div>
-      <div class="quota-item"><strong>Any site</strong><span>No challenge issues or demo-only restrictions. Run on the sites you actually use.</span></div>
-      <div class="quota-item"><strong>Full browser access</strong><span>Use your own browser for reliable, unrestricted browsing.</span></div>
+      <div class="quota-item"><strong>Any site</strong><span>Browse the sites you actually use, not just public demos.</span></div>
+      <div class="quota-item"><strong>Your logins</strong><span>Use your own cookies, sessions, and saved accounts.</span></div>
+      <div class="quota-item"><strong>Stronger models</strong><span>Claude, GPT-4o, Gemini Pro — not demo-tier.</span></div>
+      <div class="quota-item"><strong>No run limit</strong><span>Unlimited tasks on your own machine.</span></div>
     </div>
     <a href="/trial" class="quota-cta">Start Free Trial &rarr;</a>
+    <div class="quota-or">or install now — 30 seconds</div>
+    <div class="quota-install">
+      <div class="qi-label">macOS / Linux</div>
+      <div class="qi-cmd"><code>curl -fsSL https://unchainedsky.com/install.sh | bash</code><button class="qi-copy" onclick="navigator.clipboard.writeText('curl -fsSL https://unchainedsky.com/install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
+    </div>
     <button class="quota-dismiss" onclick="dismissQuota()">Stay in the shared demo</button>
   </div>
 </div>
@@ -11930,6 +11962,12 @@ async function doSend() {
             } else {
               document.getElementById('preview-mode').textContent = 'run complete';
             }
+            // Install nudge after task completion
+            var nudge = document.createElement('div');
+            nudge.className = 'install-nudge';
+            nudge.innerHTML = 'Want this on your own browser with your logins? <a href="/install">Install in 30 seconds \u2192</a>';
+            document.getElementById('chat').appendChild(nudge);
+            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
           }
         }
       }
