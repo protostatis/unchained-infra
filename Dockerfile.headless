@@ -23,13 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Then update both NOPECHA_VERSION and NOPECHA_SHA256 below.
 ARG NOPECHA_VERSION=0.5.5
 ARG NOPECHA_SHA256=ed22fc4d75562efeca996ac4611cf0d9283ffa9dbcd6cfce59a2c5ee58d784d8
-RUN mkdir -p /opt/nopecha \
+RUN mkdir -p /opt/nopecha /usr/share/chromium/extensions \
     && curl -fsSL "https://github.com/NopeCHALLC/nopecha-extension/releases/download/${NOPECHA_VERSION}/chromium_automation.zip" \
        -o /tmp/nopecha.zip \
     && echo "${NOPECHA_SHA256}  /tmp/nopecha.zip" | sha256sum -c - \
     && unzip -q /tmp/nopecha.zip -d /opt/nopecha \
     && rm /tmp/nopecha.zip \
-    && chown -R 10001:10001 /opt/nopecha
+    && chown -R 10001:10001 /opt/nopecha \
+    && ln -s /opt/nopecha /usr/share/chromium/extensions/nopecha
 
 RUN useradd -m -u 10001 -s /bin/bash unchained \
     && mkdir -p /app /data \
