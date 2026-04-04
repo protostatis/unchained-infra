@@ -11142,7 +11142,7 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:block"><strong>Shared demo browser:</strong> preview runs on selected public sites. <a href="/trial">Start a free trial</a> to browse any site with the full agent.</div>
+  <div id="model-notice" style="display:block"><strong>Live demo</strong> — watch the agent browse in real time. <a href="/trial">Start a free trial</a> to browse any site with the full agent.</div>
 
   <div id="workspace">
     <div id="chat-pane">
@@ -11155,13 +11155,13 @@ body{
             <div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>
           </div>
           <div class="hint-examples">
-            <div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Compare three computing pioneers on Wikipedia</div>
-            <div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</div>
-            <div class="hint-item" data-prompt="Show me the top 3 most expensive condos in New York on Redfin." data-url="https://www.redfin.com/"><span class="hint-emoji">&#127968;</span> Show me the top 3 most expensive condos in New York</div>
+            <div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">&#128722;</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>
+            <div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">&#9992;</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>
+            <div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">&#127968;</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>
           </div>
-          <div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>
+          <div class="hint-note">Tasks typically complete in 30–60 seconds</div>
           <div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>
-          <div class="hint-footer">Shared demo browser on selected public sites only</div>
+          <div class="hint-footer">Live browser demo</div>
         </div>
       </div>
 
@@ -11316,13 +11316,13 @@ async function doNewChat() {
         '<div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>' +
       '</div>' +
       '<div class="hint-examples">' +
-        '<div class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare three computing pioneers on Wikipedia</div>' +
-        '<div class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</div>' +
-        '<div class="hint-item" data-prompt="Show me the top 3 most expensive condos in New York on Redfin." data-url="https://www.redfin.com/"><span class="hint-emoji">\ud83c\udfe0</span> Show me the top 3 most expensive condos in New York</div>' +
+        '<div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">\ud83d\uded2</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>' +
+        '<div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">\u2708</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>' +
+        '<div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">\ud83c\udfe0</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>' +
       '</div>' +
-      '<div class="hint-note">Heavy animation and challenge-prone sites can still degrade the shared preview. When that happens, this page shows browser steps instead of pretending it is live video.</div>' +
+      '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
       '<div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>' +
-      '<div class="hint-footer">Shared demo browser on selected public sites only</div>' +
+      '<div class="hint-footer">Live browser demo</div>' +
     '</div>';
   document.querySelectorAll('.hint-item').forEach(function (item) {
     item.addEventListener('click', function () {
