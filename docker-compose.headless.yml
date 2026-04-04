@@ -21,7 +21,7 @@ services:
       - CDP_PROFILE=${CDP_PROFILE:-ec2-headless}
       - UNCHAINED_CHROME_HEADLESS=1
       - UNCHAINED_CHROME_ARGS=${UNCHAINED_CHROME_ARGS:-}
-      - NOPECHA_EXT_DIR=/opt/nopecha
+      - NOPECHA_EXT_DIR=${NOPECHA_EXT_DIR:-/opt/nopecha}
       - TZ=America/New_York
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=2)"]

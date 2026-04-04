@@ -12,8 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # NopeCHA — auto-solves CAPTCHAs (reCAPTCHA, hCaptcha, Turnstile, PerimeterX)
 # transparently via Chrome extension. Free tier: 100 solves/day, no API key.
-# Manifest V3: permissions are debugger, declarativeNetRequest, storage,
-# scripting, host_permissions <all_urls>. No webRequestBlocking.
+# Manifest V3 permissions: debugger, declarativeNetRequest, storage, scripting,
+# host_permissions <all_urls>. No webRequestBlocking.
+# Disable by setting NOPECHA_EXT_DIR= (empty) in .env.headless.
+#
+# SHA256 verification: hash obtained by downloading the release asset directly
+# from GitHub and running `sha256sum chromium_automation.zip`. To upgrade:
+#   curl -fsSL https://github.com/NopeCHALLC/nopecha-extension/releases/download/<VER>/chromium_automation.zip -o nopecha.zip
+#   sha256sum nopecha.zip
+# Then update both NOPECHA_VERSION and NOPECHA_SHA256 below.
 ARG NOPECHA_VERSION=0.5.5
 ARG NOPECHA_SHA256=ed22fc4d75562efeca996ac4611cf0d9283ffa9dbcd6cfce59a2c5ee58d784d8
 RUN mkdir -p /opt/nopecha \
