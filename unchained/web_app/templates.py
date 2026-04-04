@@ -11156,7 +11156,7 @@ body{
           </div>
           <div class="hint-examples">
             <div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">&#128722;</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>
-            <div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Google Flights" data-url="https://www.google.com/travel/flights"><span class="hint-emoji">&#9992;</span> Find the cheapest nonstop flight from NYC to LA next month on Google Flights</div>
+            <div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">&#9992;</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>
             <div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">&#127968;</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>
           </div>
           <div class="hint-note">Tasks typically complete in 30–60 seconds</div>
@@ -11317,7 +11317,7 @@ async function doNewChat() {
       '</div>' +
       '<div class="hint-examples">' +
         '<div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">\ud83d\uded2</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>' +
-        '<div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Google Flights" data-url="https://www.google.com/travel/flights"><span class="hint-emoji">\u2708</span> Find the cheapest nonstop flight from NYC to LA next month on Google Flights</div>' +
+        '<div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">\u2708</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>' +
         '<div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">\ud83c\udfe0</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>' +
       '</div>' +
       '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
