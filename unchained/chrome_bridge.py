@@ -2636,6 +2636,17 @@ def _ensure_chrome(
                 f"--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
                 f" (KHTML, like Gecko) Chrome/{ua_version} Safari/537.36",
             )
+    # Auto-CAPTCHA solver extension (NopeCHA). When NOPECHA_EXT_DIR points to
+    # an unpacked extension directory, load it into Chrome so CAPTCHAs are
+    # solved transparently before the agent sees them.
+    # Free tier: 100 solves/day, no API key needed.
+    nopecha_dir = os.environ.get("NOPECHA_EXT_DIR", "")
+    if nopecha_dir and os.path.isdir(nopecha_dir):
+        cmd.extend([
+            f"--disable-extensions-except={nopecha_dir}",
+            f"--load-extension={nopecha_dir}",
+        ])
+        print(f"[agent] NopeCHA extension loaded from {nopecha_dir}")
     if extra_chrome_args:
         cmd.extend(shlex.split(extra_chrome_args))
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

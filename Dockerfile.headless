@@ -7,7 +7,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     ca-certificates \
     fonts-liberation \
+    unzip curl \
     && rm -rf /var/lib/apt/lists/*
+
+# NopeCHA — auto-solves CAPTCHAs (reCAPTCHA, hCaptcha, Turnstile, PerimeterX)
+# transparently via Chrome extension. Free tier: 100 solves/day, no API key.
+# Set NOPECHA_KEY in .env for higher limits.
+ARG NOPECHA_VERSION=0.5.5
+RUN mkdir -p /opt/nopecha \
+    && curl -fsSL "https://github.com/NopeCHALLC/nopecha-extension/releases/download/${NOPECHA_VERSION}/chromium_automation.zip" \
+       -o /tmp/nopecha.zip \
+    && unzip -q /tmp/nopecha.zip -d /opt/nopecha \
+    && rm /tmp/nopecha.zip \
+    && chown -R 10001:10001 /opt/nopecha
 
 RUN useradd -m -u 10001 -s /bin/bash unchained \
     && mkdir -p /app /data \
@@ -41,7 +53,8 @@ ENV PYTHONUNBUFFERED=1 \
     UNCHAINED_DATA_DIR=/data \
     CDP_PORT=9222 \
     UNCHAINED_CHROME_HEADLESS=1 \
-    UNCHAINED_CHROME_STEALTH=1
+    UNCHAINED_CHROME_STEALTH=1 \
+    NOPECHA_EXT_DIR=/opt/nopecha
 
 USER 10001:10001
 
