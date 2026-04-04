@@ -2641,14 +2641,20 @@ def _ensure_chrome(
     # solved transparently before the agent sees them.
     # Free tier: 100 solves/day, no API key needed.
     nopecha_dir = os.environ.get("NOPECHA_EXT_DIR", "")
-    if nopecha_dir and os.path.isdir(nopecha_dir):
+    nopecha_active = nopecha_dir and os.path.isdir(nopecha_dir)
+    if nopecha_active:
         cmd.extend([
             f"--disable-extensions-except={nopecha_dir}",
             f"--load-extension={nopecha_dir}",
         ])
         print(f"[agent] NopeCHA extension loaded from {nopecha_dir}")
     if extra_chrome_args:
-        cmd.extend(shlex.split(extra_chrome_args))
+        parts = shlex.split(extra_chrome_args)
+        # Strip --disable-extensions when NopeCHA is active — it would
+        # prevent the extension from loading.
+        if nopecha_active:
+            parts = [p for p in parts if p != "--disable-extensions"]
+        cmd.extend(parts)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # Write Chrome PID so we can stop it later
