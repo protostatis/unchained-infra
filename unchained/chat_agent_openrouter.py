@@ -1189,13 +1189,27 @@ class TrialAgent:
                         ui_name = _ui_tool_name(name)
                         ui_input = _truncate(_ui_tool_input(name, args), 200)
 
+                        # Resolve the effective tab the tool will actually
+                        # run on, so the preview can follow tab switches.
+                        # Mirrors _execute_tool() resolution logic.
+                        args_tab = args.get("tab_id", "")
+                        if args_tab and args_tab != "auto" and "://" not in args_tab and "/" not in args_tab:
+                            preview_tab = args_tab
+                        elif session_tab_id:
+                            preview_tab = session_tab_id
+                        else:
+                            preview_tab = ""
+                        flags_str = args.get("flags", "")
+                        if name == "ddm" and any(f in flags_str for f in ("--new", "--tabs", "--close")):
+                            preview_tab = ""
+
                         tool_start_evt = {
                             "type": "tool_start",
                             "name": ui_name,
                             "input": ui_input,
                         }
-                        if tab_id and tab_id != "auto":
-                            tool_start_evt["tab_id"] = tab_id
+                        if preview_tab:
+                            tool_start_evt["tab_id"] = preview_tab
                         await self._send(session_id, tool_start_evt)
 
                         print(
