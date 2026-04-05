@@ -1299,7 +1299,11 @@ class TrialAgent:
                         await self._send(session_id, tool_result_evt)
 
                         tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
-                        if name == "navigate" and not tool_failed:
+                        # Skip screenshot-based preview for headless sessions —
+                        # they have a live screencast stream that the screenshot
+                        # would override/fight with.
+                        is_headless_agent = agent_id.startswith("headless-")
+                        if name == "navigate" and not tool_failed and not is_headless_agent:
                             await self._emit_live_preview(
                                 session_id,
                                 agent_id,
