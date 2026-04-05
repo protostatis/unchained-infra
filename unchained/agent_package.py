@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.76"  # fix close-tab port for provisioned Chrome + tab lease proliferation
+VERSION = "0.3.77"  # install uv on client + fix CWD patch for packaged agents
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -269,6 +269,13 @@ PY
   mv .env.tmp .env
   export UNCHAINED_API_KEY="$NEW_KEY"
   unset UNCHAINED_INSTALL_TOKEN
+fi
+
+# Ensure uv is available (handles python resolution across all platforms)
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
 fi
 
 # Install deps if needed
@@ -1725,7 +1732,7 @@ def _patch_chat_agent_cli(source: str) -> str:
         'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))',
     )
     source = source.replace(
-        'CWD = os.path.expanduser("~/Projects/unchained/unchained")',
+        'CWD = os.path.expanduser("~/unchained-agent/unchained")',
         'CWD = os.path.dirname(os.path.abspath(__file__))',
     )
     # Fix the list-form subprocess call to use sys.executable (platform-independent)
