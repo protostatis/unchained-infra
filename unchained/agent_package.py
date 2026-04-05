@@ -1072,9 +1072,10 @@ cp -f unchained-agent/unchained/*.py "$AGENT_DIR/unchained/" 2>/dev/null || true
 cp -f unchained-agent/CLAUDE.md "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/version.txt "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/requirements.txt "$AGENT_DIR/" 2>/dev/null || true
+cp -f unchained-agent/start.sh "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/update.sh "$AGENT_DIR/" 2>/dev/null || true
 cp -f unchained-agent/stop.sh "$AGENT_DIR/" 2>/dev/null || true
-chmod +x "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh" 2>/dev/null || true
+chmod +x "$AGENT_DIR/start.sh" "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh" 2>/dev/null || true
 # Copy scheduled_jobs.json only if it doesn't exist (don't overwrite user edits)
 if [ ! -f "$AGENT_DIR/scheduled_jobs.json" ]; then
   cp -f unchained-agent/scheduled_jobs.json "$AGENT_DIR/" 2>/dev/null || true
