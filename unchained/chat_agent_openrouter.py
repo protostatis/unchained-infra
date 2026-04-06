@@ -1502,11 +1502,12 @@ class TrialAgent:
                     if "choices" in data:
                         break
                 print(f"[openrouter] Provider error retry {attempt}/{len(delays)} still no choices")
-            # If still failing and this was a rate-ramp, fall back to the
-            # configured fallback model (same one used for budget-cap fallback).
+            # If still failing and this was a rate-ramp, fall back to a
+            # non-Alibaba model (NVIDIA runs on NVIDIA infra, not shared throttle).
+            _RATE_RAMP_FALLBACK = "nvidia/nemotron-3-super-120b-a12b:free"
             if "choices" not in data and _is_rate_ramp:
-                _fallback = os.environ.get("OPENROUTER_TRIAL_FALLBACK_MODEL", "").strip()
-                if _fallback and _fallback != body.get("model"):
+                _fallback = os.environ.get("OPENROUTER_RATE_RAMP_FALLBACK_MODEL", _RATE_RAMP_FALLBACK).strip() or _RATE_RAMP_FALLBACK
+                if _fallback != body.get("model"):
                     print(f"[openrouter] Rate-ramp fallback: switching {body['model']} → {_fallback}")
                     body["model"] = _fallback
                     resp = await client.post(
