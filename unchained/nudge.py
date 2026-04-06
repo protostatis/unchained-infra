@@ -77,8 +77,10 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 
 def _is_base64_png_blob(value: str) -> bool:
-    """Heuristic check for screenshot payloads (base64-encoded PNG)."""
-    return isinstance(value, str) and value.startswith("iVBOR") and len(value) > 64
+    """Heuristic check for screenshot payloads (base64-encoded PNG or JPEG)."""
+    if not isinstance(value, str) or len(value) < 64:
+        return False
+    return value.startswith("iVBOR") or value.startswith("/9j/")
 
 
 def _hash_sig(text: str) -> str:

@@ -295,6 +295,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
             except web.HTTPException:
                 pass  # keep previous tab_id if re-resolve fails
         try:
+            frame_n = 0
             async for event in cloud_tools.stream_screencast(
                 agent_id,
                 tab_id,
@@ -310,6 +311,10 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
             ):
                 if ws.closed:
                     break
+                frame_n += 1
+                if frame_n <= 3:
+                    log.warning("[preview-ws] frame %d → client (%d bytes)",
+                                frame_n, len(event.get("data", "")))
                 await ws.send_json(event)
                 if event.get("type") == "status":
                     break
