@@ -1043,6 +1043,9 @@ class TrialAgent:
                             print(
                                 f"[{session_id}] Hard-stop guard: forcing final response after one recovery turn"
                             )
+                        # Skip reasoning on first turn for instant action
+                        # (user sees the agent react immediately).
+                        first_turn_fast = turn == 0
                         response = await self._call_openrouter(
                             client,
                             messages,
@@ -1050,6 +1053,7 @@ class TrialAgent:
                             tool_choice=next_tool_choice,
                             session_id=session_id,
                             user_id=user_id,
+                            reasoning=not first_turn_fast,
                         )
                     except httpx.ReadTimeout:
                         print(f"[{session_id}] OpenRouter read timeout on turn {turn+1} — retrying once")
@@ -1437,6 +1441,7 @@ class TrialAgent:
         tool_choice: str = "auto",
         session_id: str = "",
         user_id: str = "",
+        reasoning: bool = True,
     ) -> dict:
         body: dict = {
             "model": model or self.model,
@@ -1444,6 +1449,8 @@ class TrialAgent:
             "max_tokens": 4096,
             "temperature": 0.2,
         }
+        if not reasoning:
+            body["reasoning"] = {"enabled": False}
         if tool_choice == "none":
             body["tool_choice"] = "none"
         else:
