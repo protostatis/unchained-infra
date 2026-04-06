@@ -170,19 +170,25 @@ async def _resolve_first_look_preview_target(
     # an authenticated code path such as /web/chat).
     guest_agent = guest_auth.get("agent_id", "")
     prefix = f"s-{guest_agent}-"
-    if not sid.startswith(prefix) and sid not in core._session_tabs:
-        raise web.HTTPForbidden(text="session_id not owned by guest")
 
     if not core.HEADLESS_AGENT_ID:
         raise web.HTTPServiceUnavailable(text="Shared browser is not configured")
     # The tab may not be provisioned yet (headless Chrome launch takes seconds).
-    # Poll until it appears or we time out.
+    # Poll until the session appears in _session_tabs.  The ownership check
+    # is deferred into the poll loop because the session entry is created
+    # asynchronously — rejecting before it exists causes premature 403s that
+    # force slow client-side retries.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
         tab_id = str(core._session_tabs.get(sid, "") or "").strip()
         if tab_id:
             return core.HEADLESS_AGENT_ID, tab_id
+        # If we recognise the session by prefix, keep waiting.
+        # If it's an unknown prefix AND not yet in _session_tabs,
+        # only reject once we've given it a chance to appear.
+        if not sid.startswith(prefix) and loop.time() >= deadline:
+            raise web.HTTPForbidden(text="session_id not owned by guest")
         if loop.time() >= deadline:
             raise web.HTTPNotFound(text="No live preview available for this session yet")
         await asyncio.sleep(poll_interval)
@@ -303,9 +309,9 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                 relay_port=relay_port,
                 width=width,
                 height=height,
-                quality=60,
+                quality=30,
                 image_format="jpeg",
-                every_nth_frame=2,
+                every_nth_frame=3,
                 max_frames=900,
                 stream_timeout=120.0,
             ):
