@@ -1488,7 +1488,7 @@ class TrialAgent:
             # longer back-off — they throttle on request velocity, not volume.
             _is_rate_ramp = any(k in err_str for k in (
                 "rate increased too quickly", "rate limit", "too many requests",
-                "slow down", "throttle", "quota",
+                "slow down", "throttle", "quota", "overloaded", "server busy",
             ))
             delays = [5, 10, 20, 30] if _is_rate_ramp else [2, 4]
             print(f"[openrouter] Provider error: {err_msg} — retrying ({len(delays)} attempts)")
