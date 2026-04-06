@@ -1437,11 +1437,14 @@ class Agent:
 
         # Clear stale emulation from previous bridge sessions so headed
         # browsers don't keep a viewport override from an old headless run.
-        # Skip on headless — clearDeviceMetricsOverride resets the viewport
-        # away from --window-size for tabs created via Target.createTarget,
-        # causing the screencast to flicker between viewport sizes.
-        if not self._headless:
-            await _cdp("Emulation.clearDeviceMetricsOverride")
+        await _cdp("Emulation.clearDeviceMetricsOverride")
+        # On headless, tabs from Target.createTarget don't inherit --window-size.
+        # Set the viewport explicitly to match the launch size.
+        if self._headless:
+            await _cdp("Emulation.setDeviceMetricsOverride", {
+                "width": 1280, "height": 900, "deviceScaleFactor": 1,
+                "mobile": False, "screenWidth": 1280, "screenHeight": 900,
+            })
         if "screen" not in self._stealth_evasions:
             # Undo stale screen overrides from previous sessions.  delete
             # doesn't work on Object.defineProperty getters, so we re-define
