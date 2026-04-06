@@ -1368,11 +1368,14 @@ class Agent:
         try:
             chrome_ws = await websockets.connect(ws_url,
                                                  max_size=50 * 1024 * 1024)
-            try:
-                await self._inject_stealth(chrome_ws)
-            except Exception as e:
-                # Best-effort: stealth failure should not block tab usage.
-                print(f"[agent] stealth inject failed (non-fatal): {e}")
+            # Skip stealth on browser-level connections — no page context.
+            # The agent's per-tab connection already has stealth injected.
+            if tab_id != "browser":
+                try:
+                    await self._inject_stealth(chrome_ws)
+                except Exception as e:
+                    # Best-effort: stealth failure should not block tab usage.
+                    print(f"[agent] stealth inject failed (non-fatal): {e}")
             self.channels[channel] = chrome_ws
             # Start background task to forward Chrome → relay
             task = asyncio.create_task(
@@ -1587,6 +1590,14 @@ class Agent:
         channels from resolving to the same tab.  A channel that already holds
         a lease reuses its tab; tabs leased by *other* channels are skipped.
         """
+        # Browser-level WebSocket — used by screencast to avoid tab eviction
+        if tab_id == "browser":
+            url = f"http://{self.cdp_host}:{self.cdp_port}/json/version"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                version = json.loads(resp.read())
+            return version["webSocketDebuggerUrl"]
+
         # Provision Chrome routing
         if tab_id.startswith("prov-"):
             self._reconcile_prov_chromes()

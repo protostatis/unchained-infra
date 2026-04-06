@@ -11938,7 +11938,7 @@ async function doSend() {
             }
           } else if (evt.type === 'live_preview') {
             if (evt.data && !previewHasFrame) {
-              updatePreview(evt.data, evt.note || 'Shared browser frame received.', 'live snapshot', 'image/png');
+              updatePreview(evt.data, evt.note || 'Shared browser frame received.', 'live snapshot', evt.mime || 'image/png');
             }
             if (evt.note) appendSignal(String(evt.note));
           } else if (evt.type === 'text') {

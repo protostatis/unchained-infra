@@ -74,7 +74,7 @@ from reflex import ReflexState, REFLEX_ENABLED
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
+DEFAULT_MODEL = "qwen/qwen3.6-plus:free"
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
 
 # When running inside Docker, override these via env vars:
@@ -809,12 +809,22 @@ class TrialAgent:
         tab_id: str | None = None,
         note: str = "Page loaded",
     ):
-        """Capture and stream a screenshot to refresh the First Look live panel."""
+        """Capture a small JPEG screenshot to refresh the First Look live panel.
+
+        Uses JPEG at quality 50 clipped to 1280x720 to match the screencast
+        viewport.  This keeps the image small (~30-50KB) and visually
+        consistent with the live stream frames.
+        """
         if not AUTO_LIVE_PREVIEW:
             return
+        effective_tab = tab_id or "auto"
         try:
             screenshot = await asyncio.wait_for(
-                self._execute_tool(agent_id, "screenshot", {}, tab_id=tab_id),
+                cloud_tools.screenshot(
+                    agent_id, effective_tab, RELAY_HOST, RELAY_PORT,
+                    format="jpeg", quality=50,
+                    max_width=1280, max_height=720,
+                ),
                 timeout=LIVE_PREVIEW_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -830,12 +840,14 @@ class TrialAgent:
             print(f"[{session_id}] Live preview skipped (non-image payload)")
             return
 
+        print(f"[{session_id}] Live preview: sending ({len(screenshot)} bytes)")
         await self._send(
             session_id,
             {
                 "type": "live_preview",
                 "data": screenshot,
                 "note": note,
+                "mime": "image/jpeg",
             },
         )
 
@@ -1043,6 +1055,9 @@ class TrialAgent:
                             print(
                                 f"[{session_id}] Hard-stop guard: forcing final response after one recovery turn"
                             )
+                        # Skip reasoning on first turn for instant action
+                        # (user sees the agent react immediately).
+                        first_turn_fast = turn == 0
                         response = await self._call_openrouter(
                             client,
                             messages,
@@ -1050,6 +1065,7 @@ class TrialAgent:
                             tool_choice=next_tool_choice,
                             session_id=session_id,
                             user_id=user_id,
+                            reasoning=not first_turn_fast,
                         )
                     except httpx.ReadTimeout:
                         print(f"[{session_id}] OpenRouter read timeout on turn {turn+1} — retrying once")
@@ -1299,7 +1315,12 @@ class TrialAgent:
                         await self._send(session_id, tool_result_evt)
 
                         tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
-                        if name == "navigate" and not tool_failed:
+                        # Headless sessions have a live screencast — screenshot
+                        # backup opens a competing CDP connection that captures
+                        # blank/stale state.  Only use screenshot backup for
+                        # non-headless (local Chrome) sessions.
+                        is_headless = agent_id.startswith("headless-")
+                        if name == "navigate" and not tool_failed and not is_headless:
                             await self._emit_live_preview(
                                 session_id,
                                 agent_id,
@@ -1437,6 +1458,7 @@ class TrialAgent:
         tool_choice: str = "auto",
         session_id: str = "",
         user_id: str = "",
+        reasoning: bool = True,
     ) -> dict:
         body: dict = {
             "model": model or self.model,
@@ -1444,6 +1466,8 @@ class TrialAgent:
             "max_tokens": 4096,
             "temperature": 0.2,
         }
+        if not reasoning:
+            body["reasoning"] = {"enabled": False}
         if tool_choice == "none":
             body["tool_choice"] = "none"
         else:
@@ -1458,11 +1482,24 @@ class TrialAgent:
         resp = await client.post(
             OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
         )
-        # Retry on 429/500/502/503 (OpenRouter rate limits & free tier instability)
-        _RETRY_CODES = (429, 500, 502, 503)
+        # On 429, immediately switch to fallback model — don't waste time retrying
+        # the same rate-limited model.
+        _FALLBACK_MODEL = os.environ.get(
+            "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+        ).strip() or "nvidia/nemotron-3-super-120b-a12b:free"
+        if resp.status_code == 429 and _FALLBACK_MODEL != body.get("model"):
+            print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
+            body["model"] = _FALLBACK_MODEL
+            resp = await client.post(
+                OPENROUTER_URL, json=body, headers=headers,
+                timeout=httpx.Timeout(10.0, read=300.0),
+            )
+        # Retry on 500/502/503 (transient server errors)
+        _RETRY_CODES = (500, 502, 503)
         if resp.status_code in _RETRY_CODES:
             for attempt in range(1, 4):
-                delay = 3 * attempt if resp.status_code == 429 else 2 * attempt
+                delay = 2 * attempt
                 print(f"[openrouter] {resp.status_code} — retry {attempt}/3 after {delay}s")
                 await asyncio.sleep(delay)
                 resp = await client.post(
@@ -1474,21 +1511,30 @@ class TrialAgent:
             print(f"[openrouter] {resp.status_code} error: {resp.text[:400]}")
             resp.raise_for_status()
         data = resp.json()
-        # Retry on provider error responses (no "choices" key)
+        # Provider error (200 but no "choices") — switch model immediately
         if "choices" not in data:
             err_msg = data.get("error", {})
             if isinstance(err_msg, dict):
                 err_msg = err_msg.get("message", str(data)[:200])
-            print(f"[openrouter] Provider error: {err_msg} — retrying")
-            for attempt in range(1, 3):
-                await asyncio.sleep(2 * attempt)
+            if _FALLBACK_MODEL != body.get("model"):
+                print(f"[openrouter] Provider error → switching {body['model']} → {_FALLBACK_MODEL}: {str(err_msg)[:120]}")
+                body["model"] = _FALLBACK_MODEL
                 resp = await client.post(
                     OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
                 )
                 if resp.is_success:
                     data = resp.json()
-                    if "choices" in data:
-                        break
+            else:
+                # Already on fallback, retry once after short delay
+                print(f"[openrouter] Provider error on fallback: {str(err_msg)[:120]} — retrying in 3s")
+                await asyncio.sleep(3)
+                resp = await client.post(
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                )
+                if resp.is_success:
+                    data = resp.json()
+                    if resp.is_success:
+                        data = resp.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         usage = _extract_openrouter_usage(data)

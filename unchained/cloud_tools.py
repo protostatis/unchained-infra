@@ -68,8 +68,12 @@ async def submit_form(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1",
     return await _client().submit_form(agent_id, tab_id, relay_host, relay_port)
 
 
-async def screenshot(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765) -> str:
-    return await _client().screenshot(agent_id, tab_id, relay_host, relay_port)
+async def screenshot(agent_id: str, tab_id: str, relay_host: str = "127.0.0.1", relay_port: int = 8765,
+                     *, format: str = "png", quality: int | None = None,
+                     max_width: int | None = None, max_height: int | None = None) -> str:
+    return await _client().screenshot(agent_id, tab_id, relay_host, relay_port,
+                                      format=format, quality=quality,
+                                      max_width=max_width, max_height=max_height)
 
 
 async def stream_screencast(

@@ -407,14 +407,21 @@ class PrivateCoreClient:
             relay_port=relay_port,
         )
 
-    async def screenshot(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int) -> str:
-        return await self.execute(
-            OP_SCREENSHOT,
-            agent_id=agent_id,
-            tab_id=tab_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
+    async def screenshot(self, agent_id: str, tab_id: str, relay_host: str, relay_port: int,
+                         *, format: str = "png", quality: int | None = None,
+                         max_width: int | None = None, max_height: int | None = None) -> str:
+        kwargs: dict = dict(
+            agent_id=agent_id, tab_id=tab_id,
+            relay_host=relay_host, relay_port=relay_port,
+            format=format,
         )
+        if quality is not None:
+            kwargs["quality"] = quality
+        if max_width is not None:
+            kwargs["max_width"] = max_width
+        if max_height is not None:
+            kwargs["max_height"] = max_height
+        return await self.execute(OP_SCREENSHOT, **kwargs)
 
     async def create_tab(self, agent_id: str, url: str, relay_host: str, relay_port: int) -> str | None:
         return await self.execute(
