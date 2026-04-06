@@ -1502,6 +1502,18 @@ class TrialAgent:
                     if "choices" in data:
                         break
                 print(f"[openrouter] Provider error retry {attempt}/{len(delays)} still no choices")
+            # If still failing and this was a rate-ramp, fall back to the
+            # configured fallback model (same one used for budget-cap fallback).
+            if "choices" not in data and _is_rate_ramp:
+                _fallback = os.environ.get("OPENROUTER_TRIAL_FALLBACK_MODEL", "").strip()
+                if _fallback and _fallback != body.get("model"):
+                    print(f"[openrouter] Rate-ramp fallback: switching {body['model']} → {_fallback}")
+                    body["model"] = _fallback
+                    resp = await client.post(
+                        OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                    )
+                    if resp.is_success:
+                        data = resp.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         usage = _extract_openrouter_usage(data)
