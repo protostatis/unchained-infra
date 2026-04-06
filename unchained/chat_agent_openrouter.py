@@ -1303,7 +1303,11 @@ class TrialAgent:
                         await self._send(session_id, tool_result_evt)
 
                         tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
-                        if name == "navigate" and not tool_failed:
+                        # Skip screenshot-based preview for headless sessions —
+                        # they have a live screencast stream that the screenshot
+                        # would override/fight with.
+                        is_headless_agent = agent_id.startswith("headless-")
+                        if name == "navigate" and not tool_failed and not is_headless_agent:
                             await self._emit_live_preview(
                                 session_id,
                                 agent_id,
@@ -1486,9 +1490,17 @@ class TrialAgent:
             err_msg = data.get("error", {})
             if isinstance(err_msg, dict):
                 err_msg = err_msg.get("message", str(data)[:200])
-            print(f"[openrouter] Provider error: {err_msg} — retrying")
-            for attempt in range(1, 3):
-                await asyncio.sleep(2 * attempt)
+            err_str = str(err_msg).lower()
+            # Rate-ramp errors from upstream providers (e.g. Alibaba) need
+            # longer back-off — they throttle on request velocity, not volume.
+            _is_rate_ramp = any(k in err_str for k in (
+                "rate increased too quickly", "rate limit", "too many requests",
+                "slow down", "throttle", "quota", "overloaded", "server busy",
+            ))
+            delays = [5, 10, 20, 30] if _is_rate_ramp else [2, 4]
+            print(f"[openrouter] Provider error: {err_msg} — retrying ({len(delays)} attempts)")
+            for attempt, delay in enumerate(delays, 1):
+                await asyncio.sleep(delay)
                 resp = await client.post(
                     OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
                 )
@@ -1496,6 +1508,20 @@ class TrialAgent:
                     data = resp.json()
                     if "choices" in data:
                         break
+                print(f"[openrouter] Provider error retry {attempt}/{len(delays)} still no choices")
+            # If still failing and this was a rate-ramp, fall back to a
+            # non-Alibaba model (NVIDIA runs on NVIDIA infra, not shared throttle).
+            _RATE_RAMP_FALLBACK = "nvidia/nemotron-3-super-120b-a12b:free"
+            if "choices" not in data and _is_rate_ramp:
+                _fallback = os.environ.get("OPENROUTER_RATE_RAMP_FALLBACK_MODEL", _RATE_RAMP_FALLBACK).strip() or _RATE_RAMP_FALLBACK
+                if _fallback != body.get("model"):
+                    print(f"[openrouter] Rate-ramp fallback: switching {body['model']} → {_fallback}")
+                    body["model"] = _fallback
+                    resp = await client.post(
+                        OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                    )
+                    if resp.is_success:
+                        data = resp.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         usage = _extract_openrouter_usage(data)
