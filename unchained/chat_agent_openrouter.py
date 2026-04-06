@@ -1483,9 +1483,17 @@ class TrialAgent:
             err_msg = data.get("error", {})
             if isinstance(err_msg, dict):
                 err_msg = err_msg.get("message", str(data)[:200])
-            print(f"[openrouter] Provider error: {err_msg} — retrying")
-            for attempt in range(1, 3):
-                await asyncio.sleep(2 * attempt)
+            err_str = str(err_msg).lower()
+            # Rate-ramp errors from upstream providers (e.g. Alibaba) need
+            # longer back-off — they throttle on request velocity, not volume.
+            _is_rate_ramp = any(k in err_str for k in (
+                "rate increased too quickly", "rate limit", "too many requests",
+                "slow down", "throttle", "quota",
+            ))
+            delays = [5, 10, 20, 30] if _is_rate_ramp else [2, 4]
+            print(f"[openrouter] Provider error: {err_msg} — retrying ({len(delays)} attempts)")
+            for attempt, delay in enumerate(delays, 1):
+                await asyncio.sleep(delay)
                 resp = await client.post(
                     OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
                 )
@@ -1493,6 +1501,7 @@ class TrialAgent:
                     data = resp.json()
                     if "choices" in data:
                         break
+                print(f"[openrouter] Provider error retry {attempt}/{len(delays)} still no choices")
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         usage = _extract_openrouter_usage(data)

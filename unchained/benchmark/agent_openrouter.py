@@ -62,7 +62,39 @@ async def _call_openrouter(
         timeout=90.0,
     )
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    if "choices" not in data:
+        err_msg = data.get("error", {})
+        if isinstance(err_msg, dict):
+            err_msg = err_msg.get("message", str(data)[:200])
+        err_str = str(err_msg).lower()
+        _is_rate_ramp = any(k in err_str for k in (
+            "rate increased too quickly", "rate limit", "too many requests",
+            "slow down", "throttle", "quota",
+        ))
+        delays = [5, 10, 20, 30] if _is_rate_ramp else [2, 4]
+        print(f"[openrouter/bench] Provider error: {err_msg} — retrying ({len(delays)} attempts)")
+        _body = {
+            "model": model, "messages": messages,
+            "tools": TOOLS, "tool_choice": "auto", "max_tokens": 4096,
+        }
+        _headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://unchainedsky.com",
+            "X-Title": "Unchained Benchmark",
+        }
+        for attempt, delay in enumerate(delays, 1):
+            await asyncio.sleep(delay)
+            response = await client.post(OPENROUTER_URL, json=_body, headers=_headers, timeout=90.0)
+            if response.is_success:
+                data = response.json()
+                if "choices" in data:
+                    break
+            print(f"[openrouter/bench] Provider error retry {attempt}/{len(delays)} still no choices")
+        if "choices" not in data:
+            raise RuntimeError(f"OpenRouter provider error: {err_msg}")
+    return data
 
 
 async def run_task(
