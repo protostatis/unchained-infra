@@ -1456,7 +1456,9 @@ class Agent:
                 ),
             })
 
-        if "emulation_override" in self._stealth_evasions:
+        # Skip emulation override on headless — --window-size already controls
+        # the viewport and overriding it causes screencast frame flickering.
+        if "emulation_override" in self._stealth_evasions and not self._headless:
             await _cdp("Emulation.setDeviceMetricsOverride", {
                 "width": 1920, "height": 1080, "deviceScaleFactor": 1,
                 "mobile": False, "screenWidth": 1920, "screenHeight": 1080,
@@ -1541,8 +1543,9 @@ class Agent:
 
             # Enable Page domain (required for addScriptToEvaluateOnNewDocument)
             await asyncio.wait_for(_ws_cdp("Page.enable"), timeout=10)
-            # Apply CDP-level evasions
-            if "emulation_override" in _ev:
+            # Apply CDP-level evasions (skip emulation override on headless —
+            # --window-size controls viewport, override causes screencast flicker)
+            if "emulation_override" in _ev and not self._headless:
                 await asyncio.wait_for(_ws_cdp(
                     "Emulation.setDeviceMetricsOverride", {
                         "width": 1920, "height": 1080, "deviceScaleFactor": 1,
