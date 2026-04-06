@@ -1437,10 +1437,11 @@ class Agent:
 
         # Clear stale emulation from previous bridge sessions so headed
         # browsers don't keep a viewport override from an old headless run.
-        # Also remove any lingering screen property overrides from old stealth
-        # scripts that may have been registered via addScriptToEvaluateOnNewDocument
-        # in a previous session (those scripts persist across bridge restarts).
-        await _cdp("Emulation.clearDeviceMetricsOverride")
+        # Skip on headless — clearDeviceMetricsOverride resets the viewport
+        # away from --window-size for tabs created via Target.createTarget,
+        # causing the screencast to flicker between viewport sizes.
+        if not self._headless:
+            await _cdp("Emulation.clearDeviceMetricsOverride")
         if "screen" not in self._stealth_evasions:
             # Undo stale screen overrides from previous sessions.  delete
             # doesn't work on Object.defineProperty getters, so we re-define
