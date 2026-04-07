@@ -11531,13 +11531,17 @@ function schedulePreviewRetry() {
 }
 
 function openPreviewSocket() {
+  console.log('[preview] openPreviewSocket called, sessionId=', sessionId, 'agentId=', agentId, 'existing=', previewSocket?.readyState);
   if (!sessionId || !agentId) return;
+  // Reuse existing socket if still alive — tab persists across prompts
+  if (previewSocket && previewSocket.readyState === WebSocket.OPEN) return;
   closePreviewSocket();
   const url = previewSocketUrl();
   let sawFrame = false;
   const ws = new WebSocket(url);
   previewSocket = ws;
   ws.onopen = () => {
+    console.log('[preview-ws] OPEN', url);
     setPreviewNote('Opening live browser stream...', '');
   };
   ws.onmessage = (event) => {
@@ -11546,6 +11550,7 @@ function openPreviewSocket() {
     if (!msg) return;
     if (msg.type === 'frame' && msg.data) {
       sawFrame = true;
+      console.log('[preview-ws] frame received', msg.data.length, 'bytes, previewHasFrame=', previewHasFrame);
       updatePreview(
         msg.data,
         'Shared browser live stream active.',
@@ -11569,7 +11574,8 @@ function openPreviewSocket() {
       }
     }
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    console.log('[preview-ws] CLOSED', ev.code, ev.reason, 'sawFrame=', sawFrame);
     if (previewSocket === ws) previewSocket = null;
     if (!sending) return;
     // Tab switch: reconnect immediately with the new tab_id.
@@ -11578,12 +11584,14 @@ function openPreviewSocket() {
       openPreviewSocket();
       return;
     }
-    if (!sawFrame) {
+    if (!sawFrame && !previewHasFrame) {
       setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
       schedulePreviewRetry();
-    } else if (previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
+    } else if (sending && !previewHasFrame && previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
       setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
     }
+    // If we already have a frame, don't reconnect or show fallback —
+    // the last rendered frame stays visible.
   };
   ws.onerror = () => {};
 }
@@ -11592,7 +11600,7 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
   const img = document.getElementById('preview-image');
   const ph = document.getElementById('preview-empty');
   if (!img) return;
-  img.src = 'data:' + (mimeType || 'image/png') + ';base64,' + imageB64;
+  img.src = 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageB64;
   img.style.display = 'block';
   if (ph) ph.style.display = 'none';
   previewHasFrame = true;
@@ -11632,13 +11640,12 @@ function copyCurrentUrl() {
 }
 
 function resetPreview() {
-  closePreviewSocket();
+  // Don't close the preview socket or reset previewHasFrame — the tab
+  // persists across prompts and the screencast may still be streaming.
+  // Only reset UI state for the new run.
   previewRetryCount = 0;
   previewReconnectCount = 0;
-  previewHasFrame = false;
-  previewTabId = '';
-  setBrowserUrl('');
-  document.getElementById('preview-mode').textContent = 'awaiting run';
+  document.getElementById('preview-mode').textContent = 'running';
   setPreviewNote('Starting run...', '');
 }
 
@@ -11648,11 +11655,16 @@ function followTab(newTabId) {
   const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
   if (!sanitized || sanitized === previewTabId) return;
   previewTabId = sanitized;
-  if (sending && previewSocket) {
-    // Mark pending so onclose reconnects with the new tab_id.
-    pendingTabSwitch = true;
-    closePreviewSocket();
-    // openPreviewSocket() will be called from onclose handler.
+  if (sending) {
+    if (previewSocket) {
+      // Mark pending so onclose reconnects with the new tab_id.
+      pendingTabSwitch = true;
+      closePreviewSocket();
+      // openPreviewSocket() will be called from onclose handler.
+    } else {
+      // No existing socket — open one now with the new tab_id.
+      openPreviewSocket();
+    }
   }
 }
 
@@ -11955,11 +11967,10 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            closePreviewSocket();
-            if (!previewHasFrame) {
-              document.getElementById('preview-mode').textContent = 'steps fallback';
-              setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-            } else {
+            // Keep preview socket alive — the tab persists across prompts.
+            // Don't show "unavailable" — frames may still arrive from the
+            // screencast WS after the SSE "done" event.
+            if (previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'run complete';
             }
             // Install nudge after task completion (once per session)
@@ -11981,10 +11992,6 @@ async function doSend() {
     }
 
     await runChallengeSignalCheck();
-    if (!previewHasFrame) {
-      document.getElementById('preview-mode').textContent = 'steps fallback';
-      setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-    }
   } catch (err) {
     if (err && err.name === 'AbortError') {
       addLine('system', 'Cancelled', 'Run cancelled.');
