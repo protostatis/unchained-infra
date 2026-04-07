@@ -1894,7 +1894,7 @@ class Agent:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-extensions",
-            "--window-size=1280,900",
+            "--window-size=1920,1080",
         ]
         # Note: --disable-blink-features=AutomationControlled was removed
         # because Chrome shows an "unsupported command-line flag" banner
