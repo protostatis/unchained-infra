@@ -11655,11 +11655,16 @@ function followTab(newTabId) {
   const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
   if (!sanitized || sanitized === previewTabId) return;
   previewTabId = sanitized;
-  if (sending && previewSocket) {
-    // Mark pending so onclose reconnects with the new tab_id.
-    pendingTabSwitch = true;
-    closePreviewSocket();
-    // openPreviewSocket() will be called from onclose handler.
+  if (sending) {
+    if (previewSocket) {
+      // Mark pending so onclose reconnects with the new tab_id.
+      pendingTabSwitch = true;
+      closePreviewSocket();
+      // openPreviewSocket() will be called from onclose handler.
+    } else {
+      // No existing socket — open one now with the new tab_id.
+      openPreviewSocket();
+    }
   }
 }
 
@@ -11894,7 +11899,9 @@ async function doSend() {
     updateQuotaCopy();
     setPreviewNote('Shared browser run started. Preview frames will appear here when available.', '');
     document.getElementById('preview-mode').textContent = 'running';
-    openPreviewSocket();
+    // Don't open the preview socket yet — the tab doesn't exist until
+    // the agent navigates.  followTab() will set previewTabId and call
+    // openPreviewSocket() once we know the real tab ID.
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
