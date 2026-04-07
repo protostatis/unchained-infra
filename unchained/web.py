@@ -167,8 +167,8 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
     float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
 )
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "qwen/qwen3.5-flash-02-23").strip()
-    or "qwen/qwen3.5-flash-02-23"
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "qwen/qwen3.6-plus:free").strip()
+    or "qwen/qwen3.6-plus:free"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()

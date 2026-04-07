@@ -165,7 +165,7 @@ services:
       - relay_data:/data
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-qwen/qwen3.5-flash-02-23}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-qwen/qwen3.6-plus:free}
       - UNCHAINED_API_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
       - UNCHAINED_SERVER=ws://web:8080
       - RELAY_HOST=relay
