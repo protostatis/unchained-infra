@@ -11532,6 +11532,8 @@ function schedulePreviewRetry() {
 
 function openPreviewSocket() {
   if (!sessionId || !agentId) return;
+  // Reuse existing socket if still alive — tab persists across prompts
+  if (previewSocket && previewSocket.readyState === WebSocket.OPEN) return;
   closePreviewSocket();
   const url = previewSocketUrl();
   let sawFrame = false;
@@ -11955,7 +11957,9 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            closePreviewSocket();
+            // Keep preview socket alive — the tab persists across prompts
+            // so the screencast can continue streaming without reconnecting.
+            // closePreviewSocket();
             if (!previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'steps fallback';
               setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');

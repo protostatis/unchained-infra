@@ -789,15 +789,22 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
         old_session = core._resolve_trial_session_id(agent_id, requested_session_id)
-        core._delete_trial_session(old_session)
-        await core._close_session_tab(old_session)
-        new_session = f"s-{agent_id}-{int(core.time.time() * 1000):x}"
+        # Reuse the existing session (and its Chrome tab) if the tab is
+        # still alive.  This keeps the screencast stream running across
+        # prompts without reconnecting.  Only create a new session when
+        # there's no existing tab to reuse.
+        old_tab = core._session_tabs.get(old_session)
+        if old_tab:
+            session_id = old_session
+        else:
+            session_id = f"s-{agent_id}-{int(core.time.time() * 1000):x}"
+            core._delete_trial_session(old_session)
         return web.json_response(
             {
                 "ok": True,
                 "active_slot": 1,
                 "trial": True,
-                "session_id": new_session,
+                "session_id": session_id,
             }
         )
 
