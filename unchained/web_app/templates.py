@@ -11906,6 +11906,9 @@ async function doSend() {
     let buffer = '';
 
     while (true) {
+      // Yield to the event loop between SSE chunks so the browser can
+      // process WebSocket onmessage events and repaint the preview image.
+      await new Promise(r => setTimeout(r, 0));
       const chunk = await reader.read();
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, {stream:true});
