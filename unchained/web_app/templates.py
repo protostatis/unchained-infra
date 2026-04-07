@@ -11531,7 +11531,6 @@ function schedulePreviewRetry() {
 }
 
 function openPreviewSocket() {
-  console.log('[preview] openPreviewSocket called, sessionId=', sessionId, 'agentId=', agentId, 'existing=', previewSocket?.readyState);
   if (!sessionId || !agentId) return;
   // Reuse existing socket if still alive — tab persists across prompts
   if (previewSocket && previewSocket.readyState === WebSocket.OPEN) return;
@@ -11541,7 +11540,6 @@ function openPreviewSocket() {
   const ws = new WebSocket(url);
   previewSocket = ws;
   ws.onopen = () => {
-    console.log('[preview-ws] OPEN', url);
     setPreviewNote('Opening live browser stream...', '');
   };
   ws.onmessage = (event) => {
@@ -11550,7 +11548,6 @@ function openPreviewSocket() {
     if (!msg) return;
     if (msg.type === 'frame' && msg.data) {
       sawFrame = true;
-      console.log('[preview-ws] frame received', msg.data.length, 'bytes, previewHasFrame=', previewHasFrame);
       updatePreview(
         msg.data,
         'Shared browser live stream active.',
@@ -11574,8 +11571,7 @@ function openPreviewSocket() {
       }
     }
   };
-  ws.onclose = (ev) => {
-    console.log('[preview-ws] CLOSED', ev.code, ev.reason, 'sawFrame=', sawFrame);
+  ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
     if (!sending) return;
     // Tab switch: reconnect immediately with the new tab_id.
@@ -11640,11 +11636,17 @@ function copyCurrentUrl() {
 }
 
 function resetPreview() {
-  // Don't close the preview socket or reset previewHasFrame — the tab
-  // persists across prompts and the screencast may still be streaming.
-  // Only reset UI state for the new run.
+  closePreviewSocket();
   previewRetryCount = 0;
   previewReconnectCount = 0;
+  previewHasFrame = false;
+  previewTabId = '';
+  // Clear visible image
+  const img = document.getElementById('preview-image');
+  if (img) img.style.display = 'none';
+  const ph = document.getElementById('preview-empty');
+  if (ph) ph.style.display = '';
+  setBrowserUrl('');
   document.getElementById('preview-mode').textContent = 'running';
   setPreviewNote('Starting run...', '');
 }
@@ -11899,7 +11901,9 @@ async function doSend() {
     updateQuotaCopy();
     setPreviewNote('Shared browser run started. Preview frames will appear here when available.', '');
     document.getElementById('preview-mode').textContent = 'running';
-    openPreviewSocket();
+    // Don't open the preview WS yet — the tab doesn't exist until the
+    // agent's first tool_start.  followTab() will open it with the real
+    // tab_id once the SSE event arrives.
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -12002,7 +12006,8 @@ async function doSend() {
       addLine('system', 'Connection Error', String((err && err.message) || err || 'Connection failed'));
     }
   } finally {
-    closePreviewSocket();
+    // Don't close the preview socket — it survives across prompts.
+    // It closes on: cancelled/error events, server timeout, page reload.
     if (!accepted && remainingGuestRuns <= 0) {
       document.getElementById('msginput').disabled = true;
     }
