@@ -11899,9 +11899,7 @@ async function doSend() {
     updateQuotaCopy();
     setPreviewNote('Shared browser run started. Preview frames will appear here when available.', '');
     document.getElementById('preview-mode').textContent = 'running';
-    // Don't open the preview socket yet — the tab doesn't exist until
-    // the agent navigates.  followTab() will set previewTabId and call
-    // openPreviewSocket() once we know the real tab ID.
+    openPreviewSocket();
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -11969,13 +11967,10 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            // Keep preview socket alive — the tab persists across prompts
-            // so the screencast can continue streaming without reconnecting.
-            // closePreviewSocket();
-            if (!previewHasFrame) {
-              document.getElementById('preview-mode').textContent = 'steps fallback';
-              setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-            } else {
+            // Keep preview socket alive — the tab persists across prompts.
+            // Don't show "unavailable" — frames may still arrive from the
+            // screencast WS after the SSE "done" event.
+            if (previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'run complete';
             }
             // Install nudge after task completion (once per session)
@@ -11997,10 +11992,6 @@ async function doSend() {
     }
 
     await runChallengeSignalCheck();
-    if (!previewHasFrame) {
-      document.getElementById('preview-mode').textContent = 'steps fallback';
-      setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-    }
   } catch (err) {
     if (err && err.name === 'AbortError') {
       addLine('system', 'Cancelled', 'Run cancelled.');
