@@ -11594,7 +11594,20 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
   const img = document.getElementById('preview-image');
   const ph = document.getElementById('preview-empty');
   if (!img) return;
-  img.src = 'data:' + (mimeType || 'image/png') + ';base64,' + imageB64;
+  // Decode base64 to blob URL — avoids browser stalling on large data URIs
+  // and ensures the image actually repaints without user interaction.
+  try {
+    const bin = atob(imageB64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const blob = new Blob([arr], {type: mimeType || 'image/jpeg'});
+    const url = URL.createObjectURL(blob);
+    const prev = img.src;
+    img.src = url;
+    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+  } catch (_e) {
+    img.src = 'data:' + (mimeType || 'image/png') + ';base64,' + imageB64;
+  }
   img.style.display = 'block';
   if (ph) ph.style.display = 'none';
   previewHasFrame = true;
