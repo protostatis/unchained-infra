@@ -11901,9 +11901,7 @@ async function doSend() {
     updateQuotaCopy();
     setPreviewNote('Shared browser run started. Preview frames will appear here when available.', '');
     document.getElementById('preview-mode').textContent = 'running';
-    // Don't open the preview WS yet — the tab doesn't exist until the
-    // agent's first tool_start.  followTab() will open it with the real
-    // tab_id once the SSE event arrives.
+    openPreviewSocket();
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
