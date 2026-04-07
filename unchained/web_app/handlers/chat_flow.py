@@ -287,6 +287,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     ws = web.WebSocketResponse(heartbeat=30)
     core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
+    log.warning("[preview-ws] connected sid=%s agent=%s tab=%s", sid_param, agent_id, tab_id)
     log.debug("starting screencast stream agent=%s tab=%s", agent_id, tab_id)
     max_retries = 3
     for attempt in range(1, max_retries + 1):
