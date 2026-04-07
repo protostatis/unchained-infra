@@ -311,7 +311,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                 height=height,
                 quality=30,
                 image_format="jpeg",
-                every_nth_frame=3,
+                every_nth_frame=1,
                 max_frames=900,
                 stream_timeout=120.0,
             ):

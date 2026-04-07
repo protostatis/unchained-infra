@@ -74,7 +74,7 @@ from reflex import ReflexState, REFLEX_ENABLED
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "qwen/qwen3.6-plus:free"
+DEFAULT_MODEL = "qwen/qwen3.5-flash-02-23"
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
 
 # When running inside Docker, override these via env vars:

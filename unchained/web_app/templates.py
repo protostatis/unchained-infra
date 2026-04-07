@@ -3844,12 +3844,11 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="qwen/qwen3.6-plus:free">Qwen 3.6 Plus &mdash; Default</option>
+      <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash &mdash; Default</option>
+      <option value="qwen/qwen3.5-flash-02-23">Qwen 3.6 Plus</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
-      <option value="arcee-ai/trinity-large-preview:free">Trinity &mdash; Fast</option>
-      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash &mdash; Balanced</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
-      <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
+      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
   </div>
@@ -7579,7 +7578,7 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedFirstLookModel || 'qwen/qwen3.6-plus:free';
+  return _forcedFirstLookModel || 'qwen/qwen3.5-flash-02-23';
 }
 
 function _sessionStoreKey() {
@@ -11376,7 +11375,7 @@ async function doNewChat() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: 'qwen/qwen3.6-plus:free',
+        model: 'qwen/qwen3.5-flash-02-23',
         session_id: sessionId,
         first_look_guest: true,
       }),
@@ -11790,7 +11789,7 @@ async function loadHistory() {
   historyLoaded = true;
   try {
     const qs = new URLSearchParams({
-      model: 'qwen/qwen3.6-plus:free',
+      model: 'qwen/qwen3.5-flash-02-23',
       session_id: sessionId,
       first_look_guest: '1'
     });
@@ -11864,7 +11863,7 @@ async function doSend() {
         message: message,
         agent_id: agentId,
         session_id: sessionId,
-        model: 'qwen/qwen3.6-plus:free',
+        model: 'qwen/qwen3.5-flash-02-23',
         headless: true,
         first_look_guest: true
       }),
@@ -14559,7 +14558,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
           <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
-          <option value="qwen/qwen3.6-plus:free">OpenRouter: Qwen 3.6 Plus</option>
+          <option value="qwen/qwen3.5-flash-02-23">OpenRouter: Qwen 3.6 Plus</option>
           <option value="nvidia/nemotron-3-super-120b-a12b:free">OpenRouter: NVIDIA Nemotron</option>
           <option value="qwen/qwen3.5-flash-02-23">OpenRouter: Qwen 3.5 Flash</option>
           <option value="__custom__">Custom model ID</option>
@@ -14699,7 +14698,7 @@ function formatSchedulerModel(model){
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
     'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
-    'qwen/qwen3.6-plus:free':'OpenRouter: Qwen 3.6 Plus',
+    'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.6 Plus',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
