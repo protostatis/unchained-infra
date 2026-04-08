@@ -3845,7 +3845,7 @@ body{
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
       <option value="google/gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite &mdash; Default</option>
-      <option value="qwen/qwen3.6-plus:free">Qwen 3.6 Plus</option>
+      <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
@@ -14573,7 +14573,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
           <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
           <option value="google/gemini-3.1-flash-lite-preview">OpenRouter: Gemini 3.1 Flash Lite</option>
-          <option value="qwen/qwen3.6-plus:free">OpenRouter: Qwen 3.6 Plus</option>
+          <option value="qwen/qwen3.6-plus">OpenRouter: Qwen 3.6 Plus</option>
           <option value="nvidia/nemotron-3-super-120b-a12b:free">OpenRouter: NVIDIA Nemotron</option>
           <option value="qwen/qwen3.5-flash-02-23">OpenRouter: Qwen 3.5 Flash</option>
           <option value="__custom__">Custom model ID</option>
@@ -14714,7 +14714,7 @@ function formatSchedulerModel(model){
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
     'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
     'google/gemini-3.1-flash-lite-preview':'OpenRouter: Gemini 3.1 Flash Lite',
-    'qwen/qwen3.6-plus:free':'OpenRouter: Qwen 3.6 Plus',
+    'qwen/qwen3.6-plus':'OpenRouter: Qwen 3.6 Plus',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
   };
