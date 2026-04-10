@@ -64,6 +64,22 @@ _FIRST_LOOK_SIGNAL_LIMIT = 20
 _PUBLIC_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _FIRST_LOOK_PUBLIC_RATE_LIMITER = SlidingWindowRateLimiter()
 
+# --- First-look preview FSM tunables ---
+# Protocol version emitted in every event's `v` field.
+_FIRST_LOOK_PREVIEW_PROTOCOL_VERSION = 1
+# Idle deadline passed to private-core's stream_screencast. Private-core raises
+# TimeoutError after this many seconds of no frames, which we catch and handle
+# transparently by reconnecting the underlying stream.
+_FIRST_LOOK_PREVIEW_STREAM_IDLE_TIMEOUT_S = 120.0
+# How many transparent reconnects (on stream_timeout / max_frames / internal
+# fault) we allow per client WS before giving up and emitting preview.ended.
+# 5 * 120s = up to 10 minutes of logical stream per WS, which comfortably
+# covers any guest run.
+_FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS = 5
+# Backoff between transparent reconnects. Keep small so the preview feels
+# continuous; private-core's reattach is cheap.
+_FIRST_LOOK_PREVIEW_RECONNECT_BACKOFF_S = 0.5
+
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:
     """Return whether the connected client is new enough for bootstrap install."""
@@ -242,8 +258,73 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+# ---------------------------------------------------------------------------
+# First-look preview state machine (server-owned)
+# ---------------------------------------------------------------------------
+#
+# The guest's browser opens a single WebSocket to
+# ``/web/first-look/preview/ws`` for the duration of one run. The server
+# translates private-core's internal screencast events into a small, explicit
+# protocol so the client can stay a dumb renderer.
+#
+# Event schema (all events carry ``v: 1``):
+#
+#   {v:1, type:"preview.attached", tab_id, width, height}
+#     Sent once, immediately after the WS is accepted and the session tab
+#     has been resolved. Tells the client "the server is about to start
+#     streaming; clear any stale state and show the live frame area."
+#
+#   {v:1, type:"preview.frame", mime, data, seq}
+#     A paintable frame. ``data`` is a base64-encoded image of the declared
+#     mime type. ``seq`` is a monotonic counter scoped to this WS.
+#
+#   {v:1, type:"preview.reconnecting", attempt}
+#     The underlying private-core screencast hit its idle deadline (normal on
+#     static pages) or reached its per-connection frame cap. The server is
+#     transparently rebuilding it. The client WS is still alive; the client
+#     should keep the last-painted frame and optionally show a subtle
+#     "reconnecting" indicator. No action required from the client.
+#
+#   {v:1, type:"preview.ended", reason, retriable, frame_count}
+#     Terminal. The WS will close immediately after this event is emitted.
+#     ``reason`` is one of:
+#         "done"           — screencast iterator exhausted cleanly
+#         "slow_client"    — backpressure; the client couldn't keep up
+#         "max_reconnects" — server gave up after N transparent reconnects
+#         "fatal"          — unhandled exception in the underlying stream
+#     ``retriable`` tells the client whether it's worth opening a fresh WS
+#     if the run is still active. "done" and "max_reconnects" are not
+#     retriable; "slow_client" and "fatal" are (one-shot retry from the UI).
+#
+# Design notes:
+# - There is no ``preview.idle`` application-level heartbeat. aiohttp's
+#   WebSocketResponse(heartbeat=30) keeps the transport alive; the
+#   transparent-reconnect loop below keeps the logical stream alive.
+# - Unknown or future event fields are ignored silently by clients; the
+#   ``v`` discriminator lets us add breaking changes in a future protocol
+#   bump without tripping old clients.
+# - This handler is the ONLY component that speaks the public protocol.
+#   private-core still speaks its legacy ``frame``/``status`` shape and we
+#   translate inside this function. Callers of ``cloud_tools.stream_screencast``
+#   elsewhere are unaffected.
+
+
 async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
-    """GET /web/first-look/preview/ws — proxy private-core screencast for guest preview."""
+    """GET /web/first-look/preview/ws — server-owned preview state machine.
+
+    Forwards private-core screencast frames to the guest browser as explicit
+    protocol events (see the comment block above). The server transparently
+    reconnects the underlying screencast when its idle deadline fires, so a
+    single client WS represents one *logical* stream for the lifetime of the
+    user's run regardless of how many physical reconnects happen inside
+    private-core.
+
+    This replaces the previous pass-through handler that leaked private-core's
+    ``frame``/``status`` events to the client and relied on the client to
+    reconnect on idle-timeout — a gate that never fired once the first frame
+    had been painted, causing the preview to freeze after the initial
+    navigate on any static page.
+    """
     core = _core()
     sid_param = request.query.get("session_id", "")
     log.debug("request received sid=%r tabs=%s", sid_param, dict(core._session_tabs))
@@ -259,7 +340,8 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         denied = web.Response(status=exc.status, text=exc.text)
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
-    # Allow explicit tab_id override for multi-tab auto-follow.
+
+    # Allow explicit tab_id override for multi-tab auto-follow (ddm --new).
     # The tab_id must be a hex string (Chrome tab IDs are 32-char uppercase hex).
     # Reject malformed values with 400 rather than silently normalizing.
     raw_tab = request.query.get("tab_id", "")
@@ -287,35 +369,161 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     ws = web.WebSocketResponse(heartbeat=30)
     core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
-    log.info("[preview-ws] connected sid=%s agent=%s tab=%s", sid_param, agent_id, tab_id)
-    try:
-        async for event in cloud_tools.stream_screencast(
-            agent_id,
-            tab_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            width=width,
-            height=height,
-            quality=30,
-            image_format="jpeg",
-            every_nth_frame=1,
-            max_frames=900,
-            stream_timeout=120.0,
-        ):
-            if ws.closed:
-                break
+    log.info(
+        "[preview-fsm] connected sid=%s agent=%s tab=%s",
+        sid_param,
+        agent_id,
+        tab_id,
+    )
+
+    frame_seq = 0
+    reconnect_attempt = 0
+
+    async def emit(event: dict) -> bool:
+        """Send one protocol event. Returns False if the WS is no longer writable."""
+        if ws.closed:
+            return False
+        event.setdefault("v", _FIRST_LOOK_PREVIEW_PROTOCOL_VERSION)
+        try:
             await ws.send_json(event)
-            if event.get("type") == "status":
+            return True
+        except (ConnectionResetError, asyncio.CancelledError):
+            raise
+        except Exception:
+            return False
+
+    alive = await emit(
+        {
+            "type": "preview.attached",
+            "tab_id": tab_id,
+            "width": width,
+            "height": height,
+        }
+    )
+
+    try:
+        while alive:
+            if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
+                await emit(
+                    {
+                        "type": "preview.ended",
+                        "reason": "max_reconnects",
+                        "retriable": False,
+                        "frame_count": frame_seq,
+                    }
+                )
                 break
-    except Exception as exc:
-        log.info("[preview-ws] stream ended: %r", exc)
-        if not ws.closed:
+
+            # One underlying private-core screencast session. Runs until it
+            # emits a terminal status, raises, or the iterator finishes.
+            terminal_reason: str | None = None
+            retriable_terminal: bool = False
+            reconnect_due: bool = False
+
             try:
-                await ws.send_json({"type": "status", "status": "error", "reason": "stream_ended"})
-            except Exception:
-                pass
-    if not ws.closed:
-        await ws.close()
+                async for event in cloud_tools.stream_screencast(
+                    agent_id,
+                    tab_id,
+                    relay_host=relay_host,
+                    relay_port=relay_port,
+                    width=width,
+                    height=height,
+                    quality=30,
+                    image_format="jpeg",
+                    every_nth_frame=1,
+                    max_frames=900,
+                    stream_timeout=_FIRST_LOOK_PREVIEW_STREAM_IDLE_TIMEOUT_S,
+                ):
+                    if ws.closed:
+                        alive = False
+                        break
+
+                    evt_type = event.get("type")
+                    if evt_type == "frame":
+                        frame_seq += 1
+                        alive = await emit(
+                            {
+                                "type": "preview.frame",
+                                "mime": event.get("mime", "image/jpeg"),
+                                "data": event.get("data", ""),
+                                "seq": frame_seq,
+                            }
+                        )
+                        if not alive:
+                            break
+                        continue
+
+                    if evt_type == "status":
+                        # Translate private-core's legacy status reasons into
+                        # either a transparent reconnect or a terminal end.
+                        reason = str(event.get("reason") or "").strip() or "ended"
+                        if reason in ("stream_timeout", "max_frames"):
+                            reconnect_due = True
+                        else:
+                            terminal_reason = reason
+                            # slow_client is the only status-based reason a
+                            # fresh WS might recover from (backpressure may
+                            # have cleared by the time the client retries).
+                            retriable_terminal = reason == "slow_client"
+                        break
+
+                    # Unknown event types from private-core are ignored.
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.info("[preview-fsm] underlying stream error: %r", exc)
+                # Network / relay / private-core fault. Treat as terminal but
+                # retriable so the UI can attempt a fresh WS if the run is
+                # still active.
+                terminal_reason = "fatal"
+                retriable_terminal = True
+
+            if not alive:
+                break
+
+            if reconnect_due:
+                reconnect_attempt += 1
+                if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
+                    # Will be caught at the top of the next loop iteration
+                    # and turned into a preview.ended(max_reconnects).
+                    continue
+                alive = await emit(
+                    {
+                        "type": "preview.reconnecting",
+                        "attempt": reconnect_attempt,
+                    }
+                )
+                if not alive:
+                    break
+                await asyncio.sleep(_FIRST_LOOK_PREVIEW_RECONNECT_BACKOFF_S)
+                continue
+
+            if terminal_reason is not None:
+                await emit(
+                    {
+                        "type": "preview.ended",
+                        "reason": terminal_reason,
+                        "retriable": retriable_terminal,
+                        "frame_count": frame_seq,
+                    }
+                )
+                break
+
+            # Iterator exhausted with no status and no error — treat as a
+            # clean "run finished" signal from private-core.
+            await emit(
+                {
+                    "type": "preview.ended",
+                    "reason": "done",
+                    "retriable": False,
+                    "frame_count": frame_seq,
+                }
+            )
+            break
+    finally:
+        if not ws.closed:
+            await ws.close()
+
     return ws
 
 

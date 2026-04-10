@@ -11254,12 +11254,18 @@ let previewTabId = '';
 let challengeCheckTimer = null;
 let signalBuffer = '';
 let historyLoaded = false;
-let previewHasFrame = false;
 let previewSocket = null;
-let previewRetryTimer = null;
-let previewRetryCount = 0;
-let previewReconnectCount = 0;
-const MAX_PREVIEW_RECONNECTS = 5;
+// State machine driven by server events (preview.attached, preview.frame,
+// preview.reconnecting, preview.ended). The server owns the reconnect loop
+// for underlying screencast idle-timeouts; the client only handles pure
+// transport faults (WS closed without an `ended` event).
+let previewState = 'idle'; // 'idle'|'connecting'|'streaming'|'reconnecting'|'ended'
+// Cosmetic only: "has any frame painted in this session?" Used purely to
+// decide UI copy (e.g. "run complete" vs "live preview unavailable").
+// NEVER used to gate reconnects — that was the previous freeze bug.
+let previewHasFrame = false;
+let previewTransportRetries = 0;
+const PREVIEW_MAX_TRANSPORT_RETRIES = 2;
 
 const BROWSER_TOOL_LABELS = {
   navigate: 'Navigate',
@@ -11490,10 +11496,6 @@ function setPreviewNote(text, tone) {
 }
 
 function closePreviewSocket() {
-  if (previewRetryTimer) {
-    clearTimeout(previewRetryTimer);
-    previewRetryTimer = null;
-  }
   const ws = previewSocket;
   previewSocket = null;
   if (ws && ws.readyState < 2) {
@@ -11522,74 +11524,119 @@ function previewSocketUrl() {
   return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
 }
 
-function schedulePreviewRetry() {
-  if (!sending || previewHasFrame || previewRetryCount >= 2 || previewRetryTimer) return;
-  previewRetryCount += 1;
-  previewRetryTimer = setTimeout(() => {
-    previewRetryTimer = null;
-    openPreviewSocket();
-  }, 450 * previewRetryCount);
-}
-
+// Server drives transparent reconnects for underlying screencast idle-timeouts
+// via preview.reconnecting events on the same WS. The client only reopens the
+// WS for hard transport faults (socket closed without a preview.ended event)
+// or when the server said `retriable:true` on preview.ended.
 function openPreviewSocket() {
   if (!sessionId || !agentId) return;
-  // Reuse existing socket if still alive — tab persists across prompts
+  // Reuse existing socket if still alive — tab persists across prompts.
   if (previewSocket && previewSocket.readyState === WebSocket.OPEN) return;
   closePreviewSocket();
   const url = previewSocketUrl();
-  let sawFrame = false;
   const ws = new WebSocket(url);
   previewSocket = ws;
+  previewState = 'connecting';
+  // Per-connection guard so stale WS callbacks (after a replacement WS has
+  // already been opened) can't mutate the shared state.
+  let sawTerminalEvent = false;
+
   ws.onopen = () => {
+    if (previewSocket !== ws) return;
     setPreviewNote('Opening live browser stream...', '');
   };
+
   ws.onmessage = (event) => {
+    if (previewSocket !== ws) return;
     let msg = null;
     try { msg = JSON.parse(event.data); } catch (_err) { msg = null; }
-    if (!msg) return;
-    if (msg.type === 'frame' && msg.data) {
-      sawFrame = true;
-      updatePreview(
-        msg.data,
-        'Shared browser live stream active.',
-        'live stream',
-        msg.mime || 'image/jpeg',
-      );
-      return;
-    }
-    if (msg.type === 'status') {
-      if (msg.reason === 'slow_client') {
-        setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
-      } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
-        if (sending && previewReconnectCount < MAX_PREVIEW_RECONNECTS) {
-          previewReconnectCount += 1;
-          setPreviewNote('Reconnecting live stream...', '');
-        } else {
-          setPreviewNote('Live stream ended.', 'warn');
+    if (!msg || typeof msg.type !== 'string') return;
+
+    switch (msg.type) {
+      case 'preview.attached':
+        previewState = 'streaming';
+        previewTransportRetries = 0;
+        setPreviewNote('Shared browser connected. Waiting for first frame...', '');
+        break;
+
+      case 'preview.frame':
+        if (!msg.data) return;
+        previewState = 'streaming';
+        previewTransportRetries = 0;
+        updatePreview(
+          msg.data,
+          'Shared browser live stream active.',
+          'live stream',
+          msg.mime || 'image/jpeg',
+        );
+        break;
+
+      case 'preview.reconnecting':
+        // Transparent server-side reconnect: WS is still alive, last frame
+        // stays painted, we just surface a subtle indicator.
+        previewState = 'reconnecting';
+        setPreviewNote('Reconnecting live stream...', '');
+        break;
+
+      case 'preview.ended':
+        sawTerminalEvent = true;
+        previewState = 'ended';
+        {
+          const reason = String(msg.reason || '');
+          const retriable = !!msg.retriable;
+          if (reason === 'slow_client') {
+            setPreviewNote(
+              'Live stream throttled for this connection. Keeping the latest frame and browser steps current.',
+              'warn',
+            );
+          } else if (reason === 'max_reconnects') {
+            setPreviewNote('Live stream ended after repeated reconnects.', 'warn');
+          } else if (reason === 'fatal') {
+            setPreviewNote('Live stream hit an error.', 'warn');
+          } else if (reason === 'done') {
+            if (previewHasFrame) {
+              document.getElementById('preview-mode').textContent = 'run complete';
+            } else {
+              setPreviewNote(
+                'Live preview unavailable for this run. Showing browser steps instead.',
+                'warn',
+              );
+            }
+          }
+          // Schedule a single reconnect attempt if the server said we could
+          // retry and the run is still active.
+          if (retriable && sending && previewTransportRetries < PREVIEW_MAX_TRANSPORT_RETRIES) {
+            previewTransportRetries += 1;
+            setTimeout(() => {
+              if (sending && previewState === 'ended') openPreviewSocket();
+            }, 500);
+          }
         }
-      } else if (!previewHasFrame) {
-        setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-      }
+        break;
+
+      default:
+        // Unknown event — ignore silently for forward compatibility.
+        break;
     }
   };
+
   ws.onclose = () => {
     if (previewSocket === ws) previewSocket = null;
+    if (sawTerminalEvent) return; // preview.ended already drove the state
     if (!sending) return;
-    // Tab switch: reconnect immediately with the new tab_id.
-    if (pendingTabSwitch) {
-      pendingTabSwitch = false;
-      openPreviewSocket();
-      return;
+    // Transport-level fault: WS closed without a terminal protocol event.
+    // Retry a couple of times, then freeze the last frame.
+    if (previewTransportRetries < PREVIEW_MAX_TRANSPORT_RETRIES) {
+      previewTransportRetries += 1;
+      setTimeout(() => { if (sending) openPreviewSocket(); }, 500 * previewTransportRetries);
+    } else if (!previewHasFrame) {
+      setPreviewNote(
+        'Live stream not ready. Showing browser steps while the run continues.',
+        'warn',
+      );
     }
-    if (!sawFrame && !previewHasFrame) {
-      setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
-      schedulePreviewRetry();
-    } else if (sending && !previewHasFrame && previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
-      setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
-    }
-    // If we already have a frame, don't reconnect or show fallback —
-    // the last rendered frame stays visible.
   };
+
   ws.onerror = () => {};
 }
 
@@ -11638,9 +11685,9 @@ function copyCurrentUrl() {
 
 function resetPreview() {
   closePreviewSocket();
-  previewRetryCount = 0;
-  previewReconnectCount = 0;
+  previewState = 'idle';
   previewHasFrame = false;
+  previewTransportRetries = 0;
   previewTabId = '';
   // Clear visible image
   const img = document.getElementById('preview-image');
@@ -11652,23 +11699,18 @@ function resetPreview() {
   setPreviewNote('Starting run...', '');
 }
 
-let pendingTabSwitch = false;
-
+// Switch the preview to a different Chrome tab (used when the agent opens a
+// new tab via ddm --new). Atomic: close the current WS and open a fresh one
+// with the new tab_id in the query string. The old close/reopen-via-flag
+// dance is gone — the onclose handler ignores closes on replaced sockets
+// because previewSocket === ws will be false by then.
 function followTab(newTabId) {
   const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
   if (!sanitized || sanitized === previewTabId) return;
   previewTabId = sanitized;
-  if (sending) {
-    if (previewSocket) {
-      // Mark pending so onclose reconnects with the new tab_id.
-      pendingTabSwitch = true;
-      closePreviewSocket();
-      // openPreviewSocket() will be called from onclose handler.
-    } else {
-      // No existing socket — open one now with the new tab_id.
-      openPreviewSocket();
-    }
-  }
+  if (!sending) return;
+  closePreviewSocket();
+  openPreviewSocket();
 }
 
 function resetSteps() {
