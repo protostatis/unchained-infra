@@ -3868,7 +3868,8 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="google/gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite &mdash; Default</option>
+      <option value="xiaomi/mimo-v2-flash">Xiaomi MiMo v2 Flash &mdash; Default</option>
+      <option value="google/gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite</option>
       <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
@@ -7603,7 +7604,7 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedFirstLookModel || 'google/gemini-3.1-flash-lite-preview';
+  return _forcedFirstLookModel || 'xiaomi/mimo-v2-flash';
 }
 
 function _sessionStoreKey() {
@@ -11423,7 +11424,7 @@ async function doNewChat() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: 'google/gemini-3.1-flash-lite-preview',
+        model: 'xiaomi/mimo-v2-flash',
         session_id: sessionId,
         first_look_guest: true,
       }),
@@ -11958,7 +11959,7 @@ async function loadHistory() {
   historyLoaded = true;
   try {
     const qs = new URLSearchParams({
-      model: 'google/gemini-3.1-flash-lite-preview',
+      model: 'xiaomi/mimo-v2-flash',
       session_id: sessionId,
       first_look_guest: '1'
     });
@@ -12032,7 +12033,7 @@ async function doSend() {
         message: message,
         agent_id: agentId,
         session_id: sessionId,
-        model: 'google/gemini-3.1-flash-lite-preview',
+        model: 'xiaomi/mimo-v2-flash',
         headless: true,
         first_look_guest: true
       }),

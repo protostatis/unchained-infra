@@ -351,6 +351,25 @@ else
 fi
 
 echo ""
+
+# Prune stale docker images and build cache on the remote to prevent the
+# 10GB root partition from filling up between deploys. Images older than
+# a week that aren't referenced by any running container get freed. This
+# is a belt-and-suspenders hedge against the disk-full build failure we
+# hit on 2026-04-11 when docker had accumulated 181 images / 3.7 GB of
+# stale layers. Runs AFTER the successful deploy so nothing the new
+# containers depend on is touched. Errors are swallowed — pruning is
+# best-effort, we don't want a prune failure to fail the deploy.
+if [[ "${DEPLOY_PRUNE_OLD_IMAGES:-1}" == "1" ]]; then
+    echo "==> Pruning old docker images + build cache (older than 7 days)..."
+    remote_bash "$REMOTE_DIR" <<'EOF' || echo "    (prune failed, ignoring)"
+set +e
+docker image prune -f --filter "until=168h" 2>&1 | tail -1
+docker builder prune -f --filter "until=168h" 2>&1 | tail -1
+EOF
+fi
+
+echo ""
 echo "==> Deploy complete!"
 echo "    Relay:  ws://$EC2_HOST/tunnel"
 echo "    MCP:    http://$EC2_HOST/mcp"

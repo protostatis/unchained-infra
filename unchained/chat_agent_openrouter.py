@@ -74,7 +74,7 @@ from reflex import ReflexState, REFLEX_ENABLED
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "xiaomi/mimo-v2-flash"
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
 
 # When running inside Docker, override these via env vars:
