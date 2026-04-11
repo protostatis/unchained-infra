@@ -11541,11 +11541,23 @@ function closePreviewSocket() {
 }
 
 function previewViewport() {
+  // Compute the desired screencast frame size in PHYSICAL pixels, not CSS
+  // pixels. On a retina display the CSS box is (e.g.) 800x600 but the
+  // actual pixels behind it are 1600x1200; requesting only 800x600 from
+  // Chrome means the browser scales a 800x600 JPEG up to fill 1600 physical
+  // pixels, blurring everything. Multiplying by devicePixelRatio (capped at
+  // 2 so 4K/5K retina displays don't blow out the WS payload) asks Chrome
+  // for frames at the display's actual resolution.
+  //
+  // Chrome's own viewport is fixed at 1440x1080 (chrome_bridge.py headless
+  // launch args), so if we ask for 1600x1200 Chrome returns its native
+  // 1440x1080 frame — still sharper than the old request.
   const stage = document.getElementById('live-canvas-wrap');
-  const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 640};
+  const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 720};
+  const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
   return {
-    width: Math.max(320, Math.round(rect.width || 960)),
-    height: Math.max(240, Math.round(rect.height || 640)),
+    width: Math.max(320, Math.round((rect.width || 960) * dpr)),
+    height: Math.max(240, Math.round((rect.height || 720) * dpr)),
   };
 }
 

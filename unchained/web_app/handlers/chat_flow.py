@@ -490,7 +490,16 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                     relay_port=relay_port,
                     width=width,
                     height=height,
-                    quality=30,
+                    # JPEG quality 70: visibly sharper than the previous 30
+                    # on both the Chrome push path and the poll fallback.
+                    # Bandwidth @1fps x 1440x1080 is ~15 KB/s per guest,
+                    # negligible at current concurrency. Paired with the
+                    # core-private fix that removed the hard `min(..., 20)`
+                    # cap in _poll_screenshot (which was silently clamping
+                    # the poll path's quality below what the caller asked
+                    # for). Without that core fix this bump would only
+                    # affect the Chrome push path.
+                    quality=70,
                     image_format="jpeg",
                     every_nth_frame=1,
                     max_frames=900,
