@@ -11254,12 +11254,18 @@ let previewTabId = '';
 let challengeCheckTimer = null;
 let signalBuffer = '';
 let historyLoaded = false;
-let previewHasFrame = false;
 let previewSocket = null;
-let previewRetryTimer = null;
-let previewRetryCount = 0;
-let previewReconnectCount = 0;
-const MAX_PREVIEW_RECONNECTS = 5;
+// State machine driven by server events (preview.attached, preview.frame,
+// preview.reconnecting, preview.ended). The server owns the reconnect loop
+// for underlying screencast idle-timeouts; the client only handles pure
+// transport faults (WS closed without an `ended` event).
+let previewState = 'idle'; // 'idle'|'connecting'|'streaming'|'reconnecting'|'ended'
+// Cosmetic only: "has any frame painted in this session?" Used purely to
+// decide UI copy (e.g. "run complete" vs "live preview unavailable").
+// NEVER used to gate reconnects — that was the previous freeze bug.
+let previewHasFrame = false;
+let previewTransportRetries = 0;
+const PREVIEW_MAX_TRANSPORT_RETRIES = 2;
 
 const BROWSER_TOOL_LABELS = {
   navigate: 'Navigate',
@@ -11490,10 +11496,6 @@ function setPreviewNote(text, tone) {
 }
 
 function closePreviewSocket() {
-  if (previewRetryTimer) {
-    clearTimeout(previewRetryTimer);
-    previewRetryTimer = null;
-  }
   const ws = previewSocket;
   previewSocket = null;
   if (ws && ws.readyState < 2) {
@@ -11522,86 +11524,177 @@ function previewSocketUrl() {
   return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
 }
 
-function schedulePreviewRetry() {
-  if (!sending || previewHasFrame || previewRetryCount >= 2 || previewRetryTimer) return;
-  previewRetryCount += 1;
-  previewRetryTimer = setTimeout(() => {
-    previewRetryTimer = null;
-    openPreviewSocket();
-  }, 450 * previewRetryCount);
-}
-
+// Server drives transparent reconnects for underlying screencast idle-timeouts
+// and clean screencast EOFs via preview.reconnecting events on the same WS.
+// The client only reopens the WS for hard transport faults (socket closed
+// without a preview.ended event) or when the server said `retriable:true` on
+// preview.ended. Actual run completion comes from chat SSE `done`, not this WS.
 function openPreviewSocket() {
   if (!sessionId || !agentId) return;
-  // Reuse existing socket if still alive — tab persists across prompts
+  // Reuse existing socket if still alive — tab persists across prompts.
   if (previewSocket && previewSocket.readyState === WebSocket.OPEN) return;
   closePreviewSocket();
   const url = previewSocketUrl();
-  let sawFrame = false;
   const ws = new WebSocket(url);
   previewSocket = ws;
+  previewState = 'connecting';
+  // Per-connection guard so stale WS callbacks (after a replacement WS has
+  // already been opened) can't mutate the shared state.
+  let sawTerminalEvent = false;
+
   ws.onopen = () => {
+    if (previewSocket !== ws) return;
     setPreviewNote('Opening live browser stream...', '');
   };
+
   ws.onmessage = (event) => {
+    if (previewSocket !== ws) return;
     let msg = null;
     try { msg = JSON.parse(event.data); } catch (_err) { msg = null; }
-    if (!msg) return;
-    if (msg.type === 'frame' && msg.data) {
-      sawFrame = true;
-      updatePreview(
-        msg.data,
-        'Shared browser live stream active.',
-        'live stream',
-        msg.mime || 'image/jpeg',
-      );
-      return;
-    }
-    if (msg.type === 'status') {
-      if (msg.reason === 'slow_client') {
-        setPreviewNote('Live stream throttled for this connection. Keeping the latest frame and browser steps current.', 'warn');
-      } else if (msg.reason === 'stream_timeout' || msg.reason === 'max_frames') {
-        if (sending && previewReconnectCount < MAX_PREVIEW_RECONNECTS) {
-          previewReconnectCount += 1;
-          setPreviewNote('Reconnecting live stream...', '');
-        } else {
-          setPreviewNote('Live stream ended.', 'warn');
+    if (!msg || typeof msg.type !== 'string') return;
+
+    switch (msg.type) {
+      case 'preview.attached':
+        previewState = 'streaming';
+        // NOTE: do NOT reset previewTransportRetries here. preview.attached
+        // is sent on every new WS, including reconnects after a retriable
+        // failure. If the server is in a crash loop where every new
+        // stream dies shortly after attach (but before any frame),
+        // resetting the counter on attached would let the client
+        // reconnect forever. Reset only on a real preview.frame, which
+        // proves the new WS actually delivered useful data.
+        setPreviewNote('Shared browser connected. Waiting for first frame...', '');
+        break;
+
+      case 'preview.frame':
+        if (!msg.data) return;
+        previewState = 'streaming';
+        previewTransportRetries = 0;
+        updatePreview(
+          msg.data,
+          'Shared browser live stream active.',
+          'live stream',
+          msg.mime || 'image/jpeg',
+        );
+        break;
+
+      case 'preview.reconnecting':
+        // Transparent server-side reconnect: WS is still alive, last frame
+        // stays painted, we just surface a subtle indicator.
+        previewState = 'reconnecting';
+        setPreviewNote('Reconnecting live stream...', '');
+        break;
+
+      case 'preview.ended':
+        sawTerminalEvent = true;
+        previewState = 'ended';
+        {
+          const reason = String(msg.reason || '');
+          const retriable = !!msg.retriable;
+          if (reason === 'slow_client') {
+            setPreviewNote(
+              'Live stream throttled for this connection. Keeping the latest frame and browser steps current.',
+              'warn',
+            );
+          } else if (reason === 'max_reconnects') {
+            setPreviewNote('Live stream ended after repeated reconnects.', 'warn');
+          } else if (reason === 'fatal') {
+            setPreviewNote('Live stream hit an error.', 'warn');
+          }
+          // Schedule a single reconnect attempt if the server said we could
+          // retry and the run is still active.
+          if (retriable && sending && previewTransportRetries < PREVIEW_MAX_TRANSPORT_RETRIES) {
+            previewTransportRetries += 1;
+            setTimeout(() => {
+              if (sending && previewState === 'ended') openPreviewSocket();
+            }, 500);
+          }
         }
-      } else if (!previewHasFrame) {
-        setPreviewNote('Live preview unavailable for this run. Showing browser steps instead.', 'warn');
-      }
+        break;
+
+      default:
+        // Unknown event — ignore silently for forward compatibility.
+        break;
     }
   };
+
   ws.onclose = () => {
-    if (previewSocket === ws) previewSocket = null;
+    // Stale close from a replaced WS. openPreviewSocket() / followTab() /
+    // a preview.ended retriable path may have already swapped previewSocket
+    // out from under us. If so, do NOT touch shared state, do NOT schedule
+    // a retry, do NOT fall through to the "run still active" branch.
+    // This guard mirrors the one at the top of onopen and onmessage.
+    // Without it, every stale close fires another openPreviewSocket()
+    // via the transport-retry setTimeout below, and you get cascading
+    // WS reopens that look like a flap to private-core.
+    if (previewSocket !== ws) return;
+    previewSocket = null;
+    if (sawTerminalEvent) return; // preview.ended already drove the state
     if (!sending) return;
-    // Tab switch: reconnect immediately with the new tab_id.
-    if (pendingTabSwitch) {
-      pendingTabSwitch = false;
-      openPreviewSocket();
-      return;
+    // Transport-level fault: WS closed without a terminal protocol event.
+    // Retry a couple of times, then freeze the last frame.
+    if (previewTransportRetries < PREVIEW_MAX_TRANSPORT_RETRIES) {
+      previewTransportRetries += 1;
+      setTimeout(() => { if (sending) openPreviewSocket(); }, 500 * previewTransportRetries);
+    } else if (!previewHasFrame) {
+      setPreviewNote(
+        'Live stream not ready. Showing browser steps while the run continues.',
+        'warn',
+      );
     }
-    if (!sawFrame && !previewHasFrame) {
-      setPreviewNote('Live stream not ready yet. Falling back to browser steps while retrying.', 'warn');
-      schedulePreviewRetry();
-    } else if (sending && !previewHasFrame && previewReconnectCount <= MAX_PREVIEW_RECONNECTS) {
-      setTimeout(() => { if (sending) openPreviewSocket(); }, 2000);
-    }
-    // If we already have a frame, don't reconnect or show fallback —
-    // the last rendered frame stays visible.
   };
+
   ws.onerror = () => {};
 }
 
+// blob: URL rendering instead of data: URI. Browsers (especially Safari)
+// treat `img.src = 'data:image/jpeg;base64,SAME_BYTES'` as a no-op when
+// the bytes match the previous assignment, so on a static page (where
+// Chrome's captureScreenshot returns byte-identical JPEGs every poll)
+// the preview appeared frozen even while the server was streaming
+// frames at 1 fps. createObjectURL() returns a unique blob: URL on every
+// call, which forces the browser to treat it as a fresh image load.
+// We revoke the previous blob URL on a small delay so the browser has
+// time to pick up the new src before the old one becomes invalid.
+let previewFrameCount = 0;
 function updatePreview(imageB64, note, modeLabel, mimeType) {
   const img = document.getElementById('preview-image');
   const ph = document.getElementById('preview-empty');
   if (!img) return;
-  img.src = 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageB64;
+  let newUrl = '';
+  try {
+    const binary = atob(imageB64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], {type: mimeType || 'image/jpeg'});
+    newUrl = URL.createObjectURL(blob);
+  } catch (_err) {
+    // Fallback path — should never hit, but if blob construction fails
+    // for any reason at least show *something*.
+    newUrl = 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageB64;
+  }
+  const oldUrl = img.dataset.previewBlobUrl || '';
+  img.src = newUrl;
+  if (newUrl.startsWith('blob:')) {
+    img.dataset.previewBlobUrl = newUrl;
+  } else {
+    delete img.dataset.previewBlobUrl;
+  }
+  if (oldUrl && oldUrl.startsWith('blob:')) {
+    // Defer revoke a moment so the browser definitely has the new src
+    // bound before the old blob disappears.
+    setTimeout(function () { try { URL.revokeObjectURL(oldUrl); } catch (_e) {} }, 250);
+  }
   img.style.display = 'block';
   if (ph) ph.style.display = 'none';
   previewHasFrame = true;
-  document.getElementById('preview-mode').textContent = modeLabel || 'live snapshot';
+  previewFrameCount += 1;
+  // Frame counter in the preview-mode label so during live debugging we
+  // can tell at a glance whether frames are arriving (counter ticks) or
+  // the WS is silent (counter stuck). Distinguishes "stream is dead" from
+  // "stream is alive but the page hasn't changed visually."
+  document.getElementById('preview-mode').textContent =
+    (modeLabel || 'live snapshot') + ' \u00b7 ' + previewFrameCount + ' frames';
   setPreviewNote(note || 'Shared browser frame received.', 'ok');
 }
 
@@ -11638,12 +11731,18 @@ function copyCurrentUrl() {
 
 function resetPreview() {
   closePreviewSocket();
-  previewRetryCount = 0;
-  previewReconnectCount = 0;
+  previewState = 'idle';
   previewHasFrame = false;
+  previewTransportRetries = 0;
   previewTabId = '';
-  // Clear visible image
+  previewFrameCount = 0;
+  // Clear visible image (and revoke any pending blob URL to free memory).
   const img = document.getElementById('preview-image');
+  if (img && img.dataset && img.dataset.previewBlobUrl &&
+      img.dataset.previewBlobUrl.startsWith('blob:')) {
+    try { URL.revokeObjectURL(img.dataset.previewBlobUrl); } catch (_e) {}
+    delete img.dataset.previewBlobUrl;
+  }
   if (img) img.style.display = 'none';
   const ph = document.getElementById('preview-empty');
   if (ph) ph.style.display = '';
@@ -11652,23 +11751,18 @@ function resetPreview() {
   setPreviewNote('Starting run...', '');
 }
 
-let pendingTabSwitch = false;
-
+// Switch the preview to a different Chrome tab (used when the agent opens a
+// new tab via ddm --new). Atomic: close the current WS and open a fresh one
+// with the new tab_id in the query string. The old close/reopen-via-flag
+// dance is gone — the onclose handler ignores closes on replaced sockets
+// because previewSocket === ws will be false by then.
 function followTab(newTabId) {
   const sanitized = String(newTabId || '').replace(/[^A-Fa-f0-9]/g, '').slice(0, 64);
   if (!sanitized || sanitized === previewTabId) return;
   previewTabId = sanitized;
-  if (sending) {
-    if (previewSocket) {
-      // Mark pending so onclose reconnects with the new tab_id.
-      pendingTabSwitch = true;
-      closePreviewSocket();
-      // openPreviewSocket() will be called from onclose handler.
-    } else {
-      // No existing socket — open one now with the new tab_id.
-      openPreviewSocket();
-    }
-  }
+  if (!sending) return;
+  closePreviewSocket();
+  openPreviewSocket();
 }
 
 function resetSteps() {
@@ -11711,7 +11805,14 @@ function appendSignal(text) {
   const next = (signalBuffer + '\n' + String(text || '')).slice(-6000);
   signalBuffer = next;
   if (challengeCheckTimer) clearTimeout(challengeCheckTimer);
-  challengeCheckTimer = setTimeout(runChallengeSignalCheck, 500);
+  // 1500ms (was 500ms). With the old debounce, every text-stream pause
+  // longer than 500ms triggered a /web/first-look/signal POST, and the
+  // server's _FIRST_LOOK_SIGNAL_LIMIT (20/min per source IP) was
+  // reliably exceeded on active runs — producing a flood of 429s in
+  // the browser console with no visible effect on screencast streaming.
+  // 1500ms still detects challenges within ~2s of a quiet moment but
+  // emits ~3x fewer signal POSTs per minute.
+  challengeCheckTimer = setTimeout(runChallengeSignalCheck, 1500);
 }
 
 function setPolicyState(policy) {
@@ -11973,12 +12074,19 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            // Keep preview socket alive — the tab persists across prompts.
-            // Don't show "unavailable" — frames may still arrive from the
-            // screencast WS after the SSE "done" event.
             if (previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'run complete';
+              setPreviewNote('Run complete. Keeping the final browser frame.', 'ok');
+            } else {
+              setPreviewNote(
+                'Run complete. Live preview was unavailable for this run.',
+                'warn',
+              );
             }
+            const wsAtDone = previewSocket;
+            setTimeout(() => {
+              if (!sending && previewSocket === wsAtDone) closePreviewSocket();
+            }, 1000);
             // Install nudge after task completion (once per session)
             if (!sessionStorage.getItem('uc_install_nudge_shown')) {
               sessionStorage.setItem('uc_install_nudge_shown', '1');
