@@ -11621,7 +11621,16 @@ function openPreviewSocket() {
   };
 
   ws.onclose = () => {
-    if (previewSocket === ws) previewSocket = null;
+    // Stale close from a replaced WS. openPreviewSocket() / followTab() /
+    // a preview.ended retriable path may have already swapped previewSocket
+    // out from under us. If so, do NOT touch shared state, do NOT schedule
+    // a retry, do NOT fall through to the "run still active" branch.
+    // This guard mirrors the one at the top of onopen and onmessage.
+    // Without it, every stale close fires another openPreviewSocket()
+    // via the transport-retry setTimeout below, and you get cascading
+    // WS reopens that look like a flap to private-core.
+    if (previewSocket !== ws) return;
+    previewSocket = null;
     if (sawTerminalEvent) return; // preview.ended already drove the state
     if (!sending) return;
     // Transport-level fault: WS closed without a terminal protocol event.

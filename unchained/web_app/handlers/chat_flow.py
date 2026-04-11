@@ -369,11 +369,13 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     ws = web.WebSocketResponse(heartbeat=30)
     core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
-    log.info(
-        "[preview-fsm] connected sid=%s agent=%s tab=%s",
-        sid_param,
-        agent_id,
-        tab_id,
+    # print() so the line is visible in docker compose logs regardless of
+    # the root logger level — the web container runs without a logging
+    # handler configured, so log.info goes nowhere.
+    print(
+        f"[preview-fsm] connected sid={sid_param} "
+        f"agent={agent_id} tab={tab_id[:12]}",
+        flush=True,
     )
 
     frame_seq = 0
@@ -404,6 +406,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     try:
         while alive:
             if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
+                print(
+                    f"[preview-fsm] sid={sid_param} ended reason=max_reconnects "
+                    f"attempts={reconnect_attempt} frames={frame_seq}",
+                    flush=True,
+                )
                 await emit(
                     {
                         "type": "preview.ended",
@@ -471,7 +478,10 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.info("[preview-fsm] underlying stream error: %r", exc)
+                print(
+                    f"[preview-fsm] sid={sid_param} underlying stream error: {exc!r}",
+                    flush=True,
+                )
                 # Network / relay / private-core fault. Treat as terminal but
                 # retriable so the UI can attempt a fresh WS if the run is
                 # still active.
@@ -479,6 +489,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                 retriable_terminal = True
 
             if not alive:
+                print(
+                    f"[preview-fsm] sid={sid_param} client WS closed mid-stream "
+                    f"frames={frame_seq}",
+                    flush=True,
+                )
                 break
 
             if reconnect_due:
@@ -487,6 +502,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                     # Will be caught at the top of the next loop iteration
                     # and turned into a preview.ended(max_reconnects).
                     continue
+                print(
+                    f"[preview-fsm] sid={sid_param} transparent reconnect "
+                    f"attempt={reconnect_attempt} frames_so_far={frame_seq}",
+                    flush=True,
+                )
                 alive = await emit(
                     {
                         "type": "preview.reconnecting",
@@ -499,6 +519,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                 continue
 
             if terminal_reason is not None:
+                print(
+                    f"[preview-fsm] sid={sid_param} ended reason={terminal_reason} "
+                    f"retriable={retriable_terminal} frames={frame_seq}",
+                    flush=True,
+                )
                 await emit(
                     {
                         "type": "preview.ended",
@@ -511,6 +536,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
 
             # Iterator exhausted with no status and no error — treat as a
             # clean "run finished" signal from private-core.
+            print(
+                f"[preview-fsm] sid={sid_param} ended reason=done "
+                f"frames={frame_seq}",
+                flush=True,
+            )
             await emit(
                 {
                     "type": "preview.ended",
@@ -523,6 +553,10 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     finally:
         if not ws.closed:
             await ws.close()
+        print(
+            f"[preview-fsm] sid={sid_param} disconnected frames={frame_seq}",
+            flush=True,
+        )
 
     return ws
 

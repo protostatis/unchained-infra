@@ -11,6 +11,8 @@ Chrome / relay / private-core.
 
 from __future__ import annotations
 
+import unittest
+
 from aiohttp import WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase
 from aiohttp import web
@@ -283,6 +285,69 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         )
         self.assertEqual(resp.status, 400)
         self.assertIn("invalid tab_id", await resp.text())
+
+
+class TestFirstLookPreviewClientJsShape(unittest.TestCase):
+    """Static string checks on the FIRST_LOOK_PREVIEW_HTML template.
+
+    These are not unit tests of running code — they're grep-style regression
+    guards for specific JS invariants that are too awkward to test in a real
+    headless browser and that have bitten the preview lifecycle before.
+    """
+
+    def _preview_html(self) -> str:
+        import web_app.templates as templates
+        return templates.FIRST_LOOK_PREVIEW_HTML
+
+    def test_onclose_has_stale_guard_as_first_line(self):
+        """Every callback that mutates preview state must early-return on a
+        stale WS (one that has been replaced by openPreviewSocket while the
+        event was in flight). onopen and onmessage already have this guard;
+        onclose needs it too. Without it, a stale close from followTab's
+        close+reopen dance triggers a transport-level retry which opens
+        *another* WS, and every replacement cascades into more opens.
+
+        The original FSM refactor shipped without this guard on onclose,
+        causing 10+ WebSocket reopens per guest run in prod. This test
+        catches that exact regression.
+        """
+        html = self._preview_html()
+        # The guard has to appear BEFORE the state mutation and BEFORE the
+        # transport-retry branch, so match it relative to the onclose arrow.
+        marker = "ws.onclose = () => {"
+        self.assertIn(marker, html, "onclose handler missing from template")
+        after_onclose = html.split(marker, 1)[1].split("};", 1)[0]
+        # The guard must be the FIRST meaningful statement in the handler —
+        # anything stateful above it would defeat the purpose.
+        stripped = [
+            line.strip()
+            for line in after_onclose.splitlines()
+            if line.strip() and not line.strip().startswith("//")
+        ]
+        self.assertTrue(stripped, "onclose handler body is empty")
+        self.assertIn(
+            "previewSocket !== ws",
+            stripped[0],
+            f"onclose first statement must early-return on stale WS, got: {stripped[0]!r}",
+        )
+        self.assertIn(
+            "return",
+            stripped[0],
+            f"onclose stale check must return, got: {stripped[0]!r}",
+        )
+
+    def test_onopen_and_onmessage_also_have_stale_guard(self):
+        """Belt-and-suspenders: the pattern already existed on onopen /
+        onmessage before this PR. Make sure nobody removes it later."""
+        html = self._preview_html()
+        for marker in ("ws.onopen = () => {", "ws.onmessage = (event) => {"):
+            self.assertIn(marker, html, f"{marker} missing from template")
+            body = html.split(marker, 1)[1].split("};", 1)[0]
+            self.assertIn(
+                "previewSocket !== ws",
+                body,
+                f"{marker} missing stale-WS guard",
+            )
 
 
 if __name__ == "__main__":
