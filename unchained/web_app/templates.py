@@ -10857,7 +10857,11 @@ body{
 }
 #live-window{
   flex:1;display:flex;flex-direction:column;min-height:0;
-  padding:12px;
+  /* padding:0 (was 12px) — 12px inner padding was adding 24px of
+     horizontal dead space around the browser chrome + canvas,
+     compounding any aspect-ratio shrinkage that #live-canvas-wrap
+     might do. Let the mockup go edge-to-edge inside #live-pane. */
+  padding:0;
 }
 #live-window-bar{
   height:28px;border:1px solid #2f2f2f;border-bottom:none;
@@ -10893,19 +10897,19 @@ body{
 }
 #url-bar .copy-btn:hover{color:#ccc;border-color:#555}
 #live-canvas-wrap{
-  flex:1 1 auto;min-height:0;
-  /* Match Chrome's headless viewport aspect ratio. chrome_bridge.py
-     launches headless Chrome with --window-size=1440,1080 (4:3), chosen
-     to fit the first-look preview panel without letterboxing while still
-     giving agent-driven navigation enough width to render desktop
-     layouts correctly on demo sites (Best Buy, Walmart, Kayak, Zillow).
-     Earlier 16:9 (1920x1080) Chrome output was letterboxed into this
-     panel with large black bars top/bottom. aspect-ratio + max-height:100%
-     keeps the box 4:3 when there's vertical room, and caps it to the
-     available height on tighter layouts (width adjusts proportionally). */
-  aspect-ratio:4/3;
-  max-height:100%;max-width:100%;
-  margin:0 auto;
+  flex:1;min-height:0;width:100%;
+  /* Fill the full width of #live-window (which is now padding:0). No
+     aspect-ratio constraint on the wrapper itself — the earlier
+     `aspect-ratio: 4/3 + max-height: 100%` combo backfired when the
+     flex column had less vertical room than the 4:3 ratio wanted: CSS
+     shrank the wrapper *width* to preserve the ratio, producing
+     visible side margins inside #live-window.
+     Instead, let the wrapper take all available space and delegate
+     aspect handling to the <img> below via object-fit: contain. Chrome
+     is launched at 1440x1080 (4:3) so the image's intrinsic ratio is
+     already close to most desktop pane shapes, and any residual
+     letterboxing is absorbed inside the wrapper frame — much less
+     visually jarring than external margin around a shrunken wrapper. */
   border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
   background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
 }
