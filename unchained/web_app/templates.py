@@ -1095,6 +1095,16 @@ body::before{
 }
 .scroll-hint span{animation:bounce 2s ease-in-out infinite;font-size:16px;line-height:1}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
+
+.sky-search-link{
+  margin-top:16px;font-size:12px;
+  color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;
+  text-decoration:none;
+  animation:fadeIn 1s ease-out 2.9s both;
+  transition:color 0.2s;
+}
+.sky-search-link:hover{color:var(--accent)}
+
 .more-toggle-btn{
   display:flex;align-items:center;justify-content:center;gap:8px;
   margin:32px auto 0;padding:8px 0;
@@ -1370,6 +1380,7 @@ body::before{
   </div>
   <a href="/demo" class="cta">Try it free &rarr;</a>
   <div class="tagline">Your browser. Your data. No walls.</div>
+  <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
   <div class="scroll-hint" onclick="document.querySelector('.mock-section').scrollIntoView({behavior:'smooth'})">
     <span>&#8595;</span>
     watch it work
@@ -1602,6 +1613,7 @@ body::before{
   <div class="footer-links">
     <a href="/first-look">Demo</a>
     <a href="/trial">Free Tier</a>
+    <a href="https://search.unchainedsky.com/">Sky Search</a>
     <a href="/use/apartment-hunting">Apartments</a>
     <a href="/use/flight-comparison">Flights</a>
     <a href="/use/competitor-monitoring">Competitors</a>
