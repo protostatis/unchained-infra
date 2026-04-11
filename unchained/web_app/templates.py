@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from web_app.template_transforms import (
+    TemplateReplacement,
+    TemplateTransformError,
+    apply_template_replacements,
+)
+
 BRANDED_TAB_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6437,70 +6443,111 @@ async function doSend() {
 </body>
 </html>"""
 
-CHAT_CLAUDE_SDK_HTML = (
-    CHAT_GEMINI_HTML
-    .replace("Unchained — Gemini API", "Unchained — Claude API")
-    .replace("Unchained Gemini API", "Unchained Claude API")
-    .replace("AI browser agent powered by your Gemini API key", "AI browser agent powered by your Claude API key")
-    .replace("Need a Gemini API key? Set up here &rarr;", "Need a Claude API key? Set up here &rarr;")
-    .replace('href="/setup"', 'href="/setup?provider=claude-sdk"')
-    .replace("No Gemini API key provisioned.", "No Claude API key provisioned.")
-    .replace(
-        """      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+
+_API_CHAT_GEMINI_MODEL_OPTIONS_HTML = """      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
       <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>""",
-        """      <option value="claude-sdk:claude-sonnet-4-6">Claude API · Sonnet 4.6</option>
-      <option value="claude-sdk:claude-opus-4-6">Claude API · Opus 4.6</option>
-      <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API · Haiku 4.5</option>""",
-    )
-    .replace("let geminiProvisioned = false;", "let claudeSdkProvisioned = false;")
-    .replace("source: 'gemini'", "source: 'claude-sdk'")
-    .replace("'unchained_session_' + agentId + '_gemini'", "'unchained_session_' + agentId + '_claude_sdk'")
-    .replace("unchained_gemini_model", "unchained_claude_sdk_model")
-    .replace(
-        """    const gemini = (data.providers || []).find(p => p.name === 'gemini');
+      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>"""
+
+_API_CHAT_GEMINI_PROVIDER_STATE_SNIPPET = """    const gemini = (data.providers || []).find(p => p.name === 'gemini');
     geminiProvisioned = gemini && gemini.provisioned;
-    document.getElementById('nokey-banner').style.display = geminiProvisioned ? 'none' : 'flex';""",
-        """    const claudeSdk = (data.providers || []).find(p => p.name === 'claude-sdk');
-    claudeSdkProvisioned = claudeSdk && claudeSdk.provisioned;
-    document.getElementById('nokey-banner').style.display = claudeSdkProvisioned ? 'none' : 'flex';""",
-    )
-    .replace(
-        "fetch('/web/chat/status?gemini=1')",
-        "fetch('/web/chat/status?claude_sdk=1')",
-    )
-    .replace(
-        """      updateAgentStatusUI({
+    document.getElementById('nokey-banner').style.display = geminiProvisioned ? 'none' : 'flex';"""
+
+_API_CHAT_GEMINI_STATUS_POLL_SNIPPET = "fetch('/web/chat/status?gemini=1')"
+
+_API_CHAT_GEMINI_STATUS_UPDATE_SNIPPET = """      updateAgentStatusUI({
         chat_connected: data.gemini_connected || false,
         bridge_connected: !!data.bridge_connected,
         mismatch: !!data.mismatch,
-      });""",
+      });"""
+
+_API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET = "document.getElementById('agentlabel').textContent = data.gemini_agent_id;"
+_API_CHAT_GEMINI_PROVISION_GUARD_SNIPPET = "if (!geminiProvisioned) {"
+
+_API_CHAT_CLAUDE_SDK_SAVED_MODEL_SNIPPET = """  const saved = localStorage.getItem('unchained_claude_sdk_model');
+  if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
+    document.getElementById('modelsel').value = saved;
+  }"""
+
+_API_CHAT_CODEX_SAVED_MODEL_SNIPPET = """  const saved = localStorage.getItem('unchained_codex_model');
+  if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
+    document.getElementById('modelsel').value = saved;
+  }"""
+
+_API_CHAT_CLAUDE_SDK_REPLACEMENTS = (
+    TemplateReplacement("Unchained — Gemini API", "Unchained — Claude API", "Claude SDK title"),
+    TemplateReplacement("Unchained Gemini API", "Unchained Claude API", "Claude SDK heading"),
+    TemplateReplacement(
+        "AI browser agent powered by your Gemini API key",
+        "AI browser agent powered by your Claude API key",
+        "Claude SDK login subhead",
+    ),
+    TemplateReplacement(
+        "Need a Gemini API key? Set up here &rarr;",
+        "Need a Claude API key? Set up here &rarr;",
+        "Claude SDK setup CTA copy",
+    ),
+    TemplateReplacement('href="/setup"', 'href="/setup?provider=claude-sdk"', "Claude SDK setup href", expected_count=3),
+    TemplateReplacement(
+        "No Gemini API key provisioned.",
+        "No Claude API key provisioned.",
+        "Claude SDK no-key banner",
+        expected_count=2,
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
+        """      <option value="claude-sdk:claude-sonnet-4-6">Claude API · Sonnet 4.6</option>
+      <option value="claude-sdk:claude-opus-4-6">Claude API · Opus 4.6</option>
+      <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API · Haiku 4.5</option>""",
+        "Claude SDK model options",
+    ),
+    TemplateReplacement("let geminiProvisioned = false;", "let claudeSdkProvisioned = false;", "Claude SDK provisioned flag"),
+    TemplateReplacement("source: 'gemini'", "source: 'claude-sdk'", "Claude SDK auth source"),
+    TemplateReplacement(
+        "'unchained_session_' + agentId + '_gemini'",
+        "'unchained_session_' + agentId + '_claude_sdk'",
+        "Claude SDK session storage key",
+    ),
+    TemplateReplacement("unchained_gemini_model", "unchained_claude_sdk_model", "Claude SDK model storage key", expected_count=2),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_PROVIDER_STATE_SNIPPET,
+        """    const claudeSdk = (data.providers || []).find(p => p.name === 'claude-sdk');
+    claudeSdkProvisioned = claudeSdk && claudeSdk.provisioned;
+    document.getElementById('nokey-banner').style.display = claudeSdkProvisioned ? 'none' : 'flex';""",
+        "Claude SDK provider state loader",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_STATUS_POLL_SNIPPET,
+        "fetch('/web/chat/status?claude_sdk=1')",
+        "Claude SDK status polling endpoint",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_STATUS_UPDATE_SNIPPET,
         """      updateAgentStatusUI({
         chat_connected: data.claude_sdk_connected || false,
         bridge_connected: !!data.bridge_connected,
         mismatch: !!data.mismatch,
       });""",
-    )
-    .replace("if (data.gemini_agent_id) {", "if (data.claude_sdk_agent_id) {")
-    .replace(
-        "document.getElementById('agentlabel').textContent = data.gemini_agent_id;",
+        "Claude SDK status update mapping",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET,
         "document.getElementById('agentlabel').textContent = data.claude_sdk_agent_id;",
-    )
-    .replace("if (!geminiProvisioned) {", "if (!claudeSdkProvisioned) {")
-    .replace(
-        "No Gemini API key provisioned. Visit /setup to get one.",
-        "No Claude API key provisioned. Visit /setup to get one.",
-    )
-    .replace("Gemini API Chat", "Claude API Chat")
-    .replace(
+        "Claude SDK agent id label",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_PROVISION_GUARD_SNIPPET,
+        "if (!claudeSdkProvisioned) {",
+        "Claude SDK provision guard",
+    ),
+    TemplateReplacement("Gemini API Chat", "Claude API Chat", "Claude SDK hint title", expected_count=2),
+    TemplateReplacement(
         "Browser agent powered by your provisioned Gemini API key.",
         "Browser agent powered by your provisioned Claude API key.",
-    )
-    .replace(
-        """  const saved = localStorage.getItem('unchained_claude_sdk_model');
-  if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-    document.getElementById('modelsel').value = saved;
-  }""",
+        "Claude SDK hint subtitle",
+        expected_count=2,
+    ),
+    TemplateReplacement(
+        _API_CHAT_CLAUDE_SDK_SAVED_MODEL_SNIPPET,
         """  const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
   if (fromQuery && document.querySelector('#modelsel option[value="' + CSS.escape(fromQuery) + '"]')) {
@@ -6511,66 +6558,82 @@ CHAT_CLAUDE_SDK_HTML = (
       document.getElementById('modelsel').value = saved;
     }
   }""",
-    )
+        "Claude SDK model init override",
+    ),
 )
 
-CHAT_CODEX_HTML = (
-    CHAT_GEMINI_HTML
-    .replace("Unchained — Gemini API", "Unchained — Codex")
-    .replace("Unchained Gemini API", "Unchained Codex")
-    .replace("AI browser agent powered by your Gemini API key", "AI browser agent powered by your Codex API key")
-    .replace("Need a Gemini API key? Set up here &rarr;", "Need a Codex key? Set up here &rarr;")
-    .replace("No Gemini API key provisioned.", "No Codex key provisioned.")
-    .replace("Gemini API Chat", "Codex Chat")
-    .replace(
+CHAT_CLAUDE_SDK_HTML = apply_template_replacements(
+    CHAT_GEMINI_HTML,
+    _API_CHAT_CLAUDE_SDK_REPLACEMENTS,
+    template_name="CHAT_CLAUDE_SDK_HTML",
+)
+
+_API_CHAT_CODEX_BASE_REPLACEMENTS = (
+    TemplateReplacement("Unchained — Gemini API", "Unchained — Codex", "Codex title"),
+    TemplateReplacement("Unchained Gemini API", "Unchained Codex", "Codex heading"),
+    TemplateReplacement(
+        "AI browser agent powered by your Gemini API key",
+        "AI browser agent powered by your Codex API key",
+        "Codex login subhead",
+    ),
+    TemplateReplacement(
+        "Need a Gemini API key? Set up here &rarr;",
+        "Need a Codex key? Set up here &rarr;",
+        "Codex setup CTA copy",
+    ),
+    TemplateReplacement("No Gemini API key provisioned.", "No Codex key provisioned.", "Codex no-key banner", expected_count=2),
+    TemplateReplacement("Gemini API Chat", "Codex Chat", "Codex hint title", expected_count=2),
+    TemplateReplacement(
         "Browser agent powered by your provisioned Gemini API key.",
         "Browser agent powered by your provisioned Codex API key.",
-    )
-    .replace(
-        """      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>""",
+        "Codex hint subtitle",
+        expected_count=2,
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
         """      <option value="codex-sdk:codex-mini-latest">Codex API · codex-mini-latest</option>
       <option value="codex-sdk:gpt-5-codex">Codex API · gpt-5-codex</option>
       <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI · gpt-5.1-codex-mini</option>
       <option value="codex-cli:gpt-5-codex">Codex CLI · gpt-5-codex</option>""",
-    )
-    .replace("let geminiProvisioned = false;", "let codexProvisioned = false;")
-    .replace("source: 'gemini'", "source: 'codex'")
-    .replace("'unchained_session_' + agentId + '_gemini'", "'unchained_session_' + agentId + '_codex'")
-    .replace("unchained_gemini_model", "unchained_codex_model")
-    .replace(
-        """    const gemini = (data.providers || []).find(p => p.name === 'gemini');
-    geminiProvisioned = gemini && gemini.provisioned;
-    document.getElementById('nokey-banner').style.display = geminiProvisioned ? 'none' : 'flex';""",
+        "Codex model options",
+    ),
+    TemplateReplacement("let geminiProvisioned = false;", "let codexProvisioned = false;", "Codex provisioned flag"),
+    TemplateReplacement("source: 'gemini'", "source: 'codex'", "Codex auth source"),
+    TemplateReplacement(
+        "'unchained_session_' + agentId + '_gemini'",
+        "'unchained_session_' + agentId + '_codex'",
+        "Codex session storage key",
+    ),
+    TemplateReplacement("unchained_gemini_model", "unchained_codex_model", "Codex model storage key", expected_count=2),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_PROVIDER_STATE_SNIPPET,
         """    const codexProviders = (data.providers || []).filter(p => p.name === 'codex-sdk' || p.name === 'codex-cli');
     codexProvisioned = codexProviders.some(p => p.provisioned);
     const _isCodexCli = currentModel().startsWith('codex-cli:');
     document.getElementById('nokey-banner').style.display = (codexProvisioned || _isCodexCli) ? 'none' : 'flex';""",
-    )
-    .replace(
-        "fetch('/web/chat/status?gemini=1')",
+        "Codex provider state loader",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_STATUS_POLL_SNIPPET,
         "fetch('/web/chat/status?codex=1&model=' + encodeURIComponent(currentModel()))",
-    )
-    .replace(
-        """      updateAgentStatusUI({
-        chat_connected: data.gemini_connected || false,
-        bridge_connected: !!data.bridge_connected,
-        mismatch: !!data.mismatch,
-      });""",
+        "Codex status polling endpoint",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_STATUS_UPDATE_SNIPPET,
         """      updateAgentStatusUI({
         chat_connected: data.codex_connected || false,
         bridge_connected: !!data.bridge_connected,
         mismatch: !!data.mismatch,
       });""",
-    )
-    .replace("if (data.gemini_agent_id) {", "if (data.codex_agent_id) {")
-    .replace("document.getElementById('agentlabel').textContent = data.gemini_agent_id;", "document.getElementById('agentlabel').textContent = data.codex_agent_id;")
-    .replace(
-        """  const saved = localStorage.getItem('unchained_codex_model');
-  if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-    document.getElementById('modelsel').value = saved;
-  }""",
+        "Codex status update mapping",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET,
+        "document.getElementById('agentlabel').textContent = data.codex_agent_id;",
+        "Codex agent id label",
+    ),
+    TemplateReplacement(
+        _API_CHAT_CODEX_SAVED_MODEL_SNIPPET,
         """  const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
   if (fromQuery && document.querySelector('#modelsel option[value="' + CSS.escape(fromQuery) + '"]')) {
@@ -6584,13 +6647,17 @@ CHAT_CODEX_HTML = (
   if (document.getElementById('modelsel').value.startsWith('codex-cli:')) {
     document.querySelectorAll('#modelsel option[value^="codex-sdk:"]').forEach(o => o.remove());
   }""",
-    )
-    .replace(
-        "if (!geminiProvisioned) {",
+        "Codex model init override",
+    ),
+    TemplateReplacement(
+        _API_CHAT_GEMINI_PROVISION_GUARD_SNIPPET,
         "if (!codexProvisioned && !currentModel().startsWith('codex-cli:')) {",
-    )
-    .replace("No Gemini API key provisioned. Visit /setup to get one.", "No Codex key provisioned. Visit /setup to get one.")
-    .replace(
+        "Codex provision guard",
+    ),
+)
+
+_API_CHAT_CODEX_SERVER_SLOT_REPLACEMENTS = (
+    TemplateReplacement(
         "/* === Model selector === */",
         """/* === Slot bar === */
 #slotbar{
@@ -6613,8 +6680,9 @@ CHAT_CODEX_HTML = (
 #slotbar.locked button.active{opacity:0.7}
 
 /* === Model selector === */""",
-    )
-    .replace(
+        "Codex slotbar style injection",
+    ),
+    TemplateReplacement(
         '  <div id="agent-bar">',
         """  <div id="slotbar">
     <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
@@ -6623,8 +6691,9 @@ CHAT_CODEX_HTML = (
   </div>
 
   <div id="agent-bar">""",
-    )
-    .replace(
+        "Codex slotbar markup injection",
+    ),
+    TemplateReplacement(
         """function currentModel() {
   return document.getElementById('modelsel').value;
 }""",
@@ -6686,42 +6755,63 @@ async function switchSlot(n) {
   document.getElementById('chat').innerHTML = '';
   await loadHistory();
 }""",
-    )
-    .replace(
-        "async function loadHistory() {\n  try {",
-        "async function loadHistory() {\n  await loadSlots();\n  try {",
-    )
-    .replace(
-        "  } catch(e) {}\n}\n\ncheckSession();",
-        "  } catch(e) {}\n  await loadSlots();\n}\n\ncheckSession();",
-    )
-    .replace(
+        "Codex server slot runtime injection",
+    ),
+    TemplateReplacement(
+        """async function loadHistory() {
+  try {""",
+        """async function loadHistory() {
+  await loadSlots();
+  try {""",
+        "Codex slot-aware history load",
+    ),
+    TemplateReplacement(
+        """  } catch(e) {}
+}
+
+checkSession();""",
+        """  } catch(e) {}
+  await loadSlots();
+}
+
+checkSession();""",
+        "Codex slot reload after history refresh",
+    ),
+    TemplateReplacement(
         "  document.getElementById('cancelbtn').style.display = 'block';",
         """  document.getElementById('cancelbtn').style.display = 'block';
   const slotbar = document.getElementById('slotbar');
   if (slotbar) slotbar.classList.add('locked');""",
-    )
-    .replace(
+        "Codex slot lock while sending",
+    ),
+    TemplateReplacement(
         """    document.getElementById('cancelbtn').style.display = 'none';
     document.getElementById('agent-bar').classList.remove('active');""",
         """    document.getElementById('cancelbtn').style.display = 'none';
     const slotbar2 = document.getElementById('slotbar');
     if (slotbar2) slotbar2.classList.remove('locked');
     document.getElementById('agent-bar').classList.remove('active');""",
-    )
+        "Codex slot unlock after send",
+    ),
 )
+
+CHAT_CODEX_HTML = apply_template_replacements(
+    CHAT_GEMINI_HTML,
+    _API_CHAT_CODEX_BASE_REPLACEMENTS + _API_CHAT_CODEX_SERVER_SLOT_REPLACEMENTS,
+    template_name="CHAT_CODEX_HTML",
+)
+
 
 def _inject_client_slots_ui(html: str) -> str:
     """Inject 3 local conversation slots for API-backed chat pages."""
-    # Idempotency guard: some pages (for example TRIAL_CHAT_HTML) may already
-    # contain the slot runtime. Re-injecting duplicates `let activeSlot`.
     if "let activeSlot = 1;" in html:
         return html
-    return (
-        html
-        .replace(
-            "/* === Model selector === */",
-            """/* === Slot bar === */
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "/* === Model selector === */",
+                """/* === Slot bar === */
 #slotbar{
   display:flex;gap:6px;padding:4px 16px;
   background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
@@ -6742,24 +6832,26 @@ def _inject_client_slots_ui(html: str) -> str:
 #slotbar.locked button.active{opacity:0.7}
 
 /* === Model selector === */""",
-        )
-        .replace(
-            '  <div id="agent-bar">',
-            """  <div id="slotbar">
+                "client slotbar style injection",
+            ),
+            TemplateReplacement(
+                '  <div id="agent-bar">',
+                """  <div id="slotbar">
     <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
     <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
     <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
   </div>
 
   <div id="agent-bar">""",
-        )
-        .replace(
-            """function _persistSessionId(sid) {
+                "client slotbar markup injection",
+            ),
+            TemplateReplacement(
+                """function _persistSessionId(sid) {
   if (sid && sid.startsWith('s-' + agentId)) {
     localStorage.setItem(_sessionStoreKey(), sid);
   }
 }""",
-            """function _persistSessionId(sid) {
+                """function _persistSessionId(sid) {
   if (sid && sid.startsWith('s-' + agentId)) {
     localStorage.setItem(_sessionStoreKey(), sid);
   }
@@ -6849,53 +6941,74 @@ async function switchSlot(n) {
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
   await loadHistory();
 }""",
-        )
-        .replace(
-            "  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));\n  _persistSessionId(sessionId);",
-            """  const slotState = _ensureSlotState();
+                "client slot runtime injection",
+            ),
+            TemplateReplacement(
+                """  sessionId = _restoreSessionId() || ('s-' + agentId + '-' + Date.now().toString(36));
+  _persistSessionId(sessionId);""",
+                """  const slotState = _ensureSlotState();
   activeSlot = slotState.active_slot;
   sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
   _persistSessionId(sessionId);
   _setActiveSlotSession(sessionId);
   _syncSlotButtons();""",
-        )
-        .replace(
-            "async function loadHistory() {\n  try {",
-            "async function loadHistory() {\n  _syncSlotButtons();\n  try {",
-        )
-        .replace(
-            """    const data = await r.json();
+                "client slot-aware session init",
+            ),
+            TemplateReplacement(
+                """async function loadHistory() {
+  try {""",
+                """async function loadHistory() {
+  _syncSlotButtons();
+  try {""",
+                "client slot-aware history load",
+            ),
+            TemplateReplacement(
+                """    const data = await r.json();
     if (data.session_id) {""",
-            """    const data = await r.json();
+                """    const data = await r.json();
     const chatEl = document.getElementById('chat');
     if (chatEl) chatEl.innerHTML = '';
     if (data.session_id) {""",
-        )
-        .replace(
-            """      sessionId = data.session_id;
+                "clear slot loading state before replay",
+            ),
+            TemplateReplacement(
+                """      sessionId = data.session_id;
       _persistSessionId(sessionId);""",
-            """      sessionId = data.session_id;
+                """      sessionId = data.session_id;
       _persistSessionId(sessionId);
       _setActiveSlotSession(sessionId);""",
-        )
-        .replace(
-            "  } catch(e) {}\n}\n\ncheckSession();",
-            "  } catch(e) {}\n  _syncSlotButtons();\n}\n\ncheckSession();",
-        )
-        .replace(
-            "  document.getElementById('cancelbtn').style.display = 'block';",
-            """  document.getElementById('cancelbtn').style.display = 'block';
+                "store restored slot session",
+            ),
+            TemplateReplacement(
+                """  } catch(e) {}
+}
+
+checkSession();""",
+                """  } catch(e) {}
+  _syncSlotButtons();
+}
+
+checkSession();""",
+                "refresh slot buttons after history load",
+            ),
+            TemplateReplacement(
+                "  document.getElementById('cancelbtn').style.display = 'block';",
+                """  document.getElementById('cancelbtn').style.display = 'block';
   const slotbar = document.getElementById('slotbar');
   if (slotbar) slotbar.classList.add('locked');""",
-        )
-        .replace(
-            """    document.getElementById('cancelbtn').style.display = 'none';
+                "lock slots while sending",
+            ),
+            TemplateReplacement(
+                """    document.getElementById('cancelbtn').style.display = 'none';
     document.getElementById('agent-bar').classList.remove('active');""",
-            """    document.getElementById('cancelbtn').style.display = 'none';
+                """    document.getElementById('cancelbtn').style.display = 'none';
     const slotbar2 = document.getElementById('slotbar');
     if (slotbar2) slotbar2.classList.remove('locked');
     document.getElementById('agent-bar').classList.remove('active');""",
-        )
+                "unlock slots after send",
+            ),
+        ),
+        template_name="client slot injection",
     )
 
 
@@ -12220,7 +12333,17 @@ def _apply_modern_chat_theme(html: str) -> str:
     if "fonts.googleapis.com/css2?family=Space+Grotesk" not in html:
         parts.append(_MODERN_CHAT_THEME_LINKS)
     parts.append(_MODERN_CHAT_THEME_STYLE)
-    return html.replace("</head>", "\n" + "\n".join(parts) + "\n</head>", 1)
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</head>",
+                "\n" + "\n".join(parts) + "\n</head>",
+                "modern chat theme head injection",
+            ),
+        ),
+        template_name="modern chat theme injection",
+    )
 
 
 TRIAL_CHAT_HTML = _apply_modern_chat_theme(TRIAL_CHAT_HTML)
@@ -12494,88 +12617,143 @@ def _inject_sidebar(html: str) -> str:
     if 'id="sidebar"' in html:
         return html
 
-    # 0. If archive support is missing, inject it (needed for Gemini/Codex/Claude SDK)
+    # Inject archive support first when the page does not already ship it.
     if 'id="archive-overlay"' not in html:
-        html = html.replace("</head>", _ARCHIVE_INJECT_STYLE + "\n</head>", 1)
-        html = html.replace("</body>", _ARCHIVE_INJECT_HTML + "\n</body>", 1)
-        html = html.replace(
-            "\ncheckSession();\n",
-            _ARCHIVE_INJECT_JS + "\ncheckSession();\n",
-            1,
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    "</head>",
+                    _ARCHIVE_INJECT_STYLE + "\n</head>",
+                    "archive overlay style injection",
+                ),
+                TemplateReplacement(
+                    "</body>",
+                    _ARCHIVE_INJECT_HTML + "\n</body>",
+                    "archive overlay markup injection",
+                ),
+                TemplateReplacement(
+                    "\ncheckSession();\n",
+                    _ARCHIVE_INJECT_JS + "\ncheckSession();\n",
+                    "archive overlay runtime injection",
+                ),
+            ),
+            template_name="sidebar archive injection",
         )
 
-    # 1. Sidebar CSS before </head>
-    html = html.replace("</head>", _SIDEBAR_STYLE + "\n</head>", 1)
-
-    # 2. Wrap #main in app-shell with sidebar
-    html = html.replace(
-        "<!-- Main -->\n<div id=\"main\">",
-        _SIDEBAR_BODY + "<!-- Main -->\n<div id=\"main\">",
+    html = apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</head>",
+                _SIDEBAR_STYLE + "\n</head>",
+                "sidebar style injection",
+            ),
+            TemplateReplacement(
+                "<!-- Main -->\n<div id=\"main\">",
+                _SIDEBAR_BODY + "<!-- Main -->\n<div id=\"main\">",
+                "sidebar shell injection",
+            ),
+            TemplateReplacement(
+                '<div class="left">',
+                '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
+                "sidebar toggle injection",
+            ),
+            TemplateReplacement(
+                '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
+                "",
+                "sidebar nav new-chat removal",
+            ),
+            TemplateReplacement(
+                "</div>\n<script>",
+                "</div>\n</div>\n<script>",
+                "sidebar shell close injection",
+            ),
+            TemplateReplacement(
+                "document.getElementById('main').style.display = 'flex';",
+                "document.getElementById('app-shell').style.display = 'flex';\n"
+                "  document.getElementById('main').style.display = 'flex';",
+                "sidebar shell show hook",
+            ),
+            TemplateReplacement(
+                "document.getElementById('main').style.display = 'none';",
+                "document.getElementById('app-shell').style.display = 'none';\n"
+                "  document.getElementById('main').style.display = 'none';",
+                "sidebar shell hide hook",
+                expected_count=2,
+            ),
+            TemplateReplacement(
+                "\ncheckSession();\n",
+                _SIDEBAR_JS + "\ncheckSession();\n",
+                "sidebar runtime injection",
+            ),
+        ),
+        template_name="sidebar injection",
     )
 
-    # 3. Hamburger button in topbar
-    html = html.replace(
-        '<div class="left">',
-        '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
-        1,
-    )
+    if '      <a href="#" onclick="openArchives();return false">Archives</a>\n' in html:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    '      <a href="#" onclick="openArchives();return false">Archives</a>\n',
+                    "",
+                    "sidebar nav archives removal",
+                ),
+            ),
+            template_name="sidebar archive-nav cleanup",
+        )
 
-    # 4. Remove duplicate nav links (sidebar has + New and View all archives)
-    html = html.replace(
-        '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
-        '',
-    )
-    html = html.replace(
-        '      <a href="#" onclick="openArchives();return false">Archives</a>\n',
-        '',
-    )
+    if "  loadHistory();\n}" in html:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    "  loadHistory();\n}",
+                    "  loadHistory();\n  loadSidebarHistory();\n}",
+                    "sidebar history refresh after showMain",
+                ),
+            ),
+            template_name="sidebar showMain hook injection",
+        )
 
-    # 5. Close app-shell wrapper after main closes, before <script>
-    html = html.replace("</div>\n<script>", "</div>\n</div>\n<script>", 1)
-
-    # 6. Show/hide app-shell alongside main
-    html = html.replace(
-        "document.getElementById('main').style.display = 'flex';",
-        "document.getElementById('app-shell').style.display = 'flex';\n"
-        "  document.getElementById('main').style.display = 'flex';",
-    )
-    # 6b. Load sidebar after model selector is initialized (loadHistory runs
-    #     after model setup in showMain, so sidebar gets the correct model).
-    html = html.replace(
-        "  loadHistory();\n}",
-        "  loadHistory();\n  loadSidebarHistory();\n}",
-        1,
-    )
-    html = html.replace(
-        "document.getElementById('main').style.display = 'none';",
-        "document.getElementById('app-shell').style.display = 'none';\n"
-        "  document.getElementById('main').style.display = 'none';",
-    )
-
-    # 7. Sidebar JS functions (before checkSession)
-    html = html.replace(
-        "\ncheckSession();\n",
-        _SIDEBAR_JS + "\ncheckSession();\n",
-        1,
-    )
-
-    # 8. doNewChat → reload sidebar after new chat
-    for old_hook, new_hook in [
+    # `doNewChat` has two variants depending on whether server-backed slots are present.
+    for old_hook, new_hook, label in [
         (
             "  _syncSlotButtons();\n}",
             "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
+            "sidebar refresh after local slot reset",
         ),
         (
             "  await loadSlots();\n}",
             "  await loadSlots();\n  loadSidebarHistory();\n}",
+            "sidebar refresh after server slot reset",
         ),
     ]:
         if old_hook in html:
-            html = html.replace(old_hook, new_hook, 1)
+            html = apply_template_replacements(
+                html,
+                (TemplateReplacement(old_hook, new_hook, label),),
+                template_name="sidebar new-chat hook injection",
+            )
             break
+    else:
+        raise TemplateTransformError(
+            "sidebar injection: expected a doNewChat completion hook to refresh sidebar history"
+        )
 
-    # 9. Fix deleteArchive: show error on failure, refresh sidebar on success
-    html = html.replace(_OLD_DELETE_ARCHIVE_JS, _NEW_DELETE_ARCHIVE_JS)
+    if _OLD_DELETE_ARCHIVE_JS in html:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    _OLD_DELETE_ARCHIVE_JS,
+                    _NEW_DELETE_ARCHIVE_JS,
+                    "sidebar delete-archive runtime upgrade",
+                ),
+            ),
+            template_name="sidebar delete archive injection",
+        )
 
     return html
 
