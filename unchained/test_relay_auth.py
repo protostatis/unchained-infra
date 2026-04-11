@@ -31,6 +31,21 @@ class TestRelayAuth(unittest.TestCase):
             self.assertEqual(resp.status_code, 401)
             self.assertEqual(json.loads(resp.body.decode())["error"], "Missing Authorization header")
 
+    def test_health_returns_http_json_without_auth(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as db:
+            relay = Relay(db_path=db.name)
+            resp = asyncio.run(relay._process_request(None, _make_request("/health")))
+            self.assertIsNotNone(resp)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(json.loads(resp.body.decode()), {"status": "ok", "agents": 0})
+
+    def test_health_websocket_upgrade_falls_through_to_ws_handler(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as db:
+            relay = Relay(db_path=db.name)
+            headers = Headers([("Upgrade", "websocket")])
+            resp = asyncio.run(relay._process_request(None, _make_request("/health", headers)))
+            self.assertIsNone(resp)
+
     def test_api_agents_allows_shared_token(self):
         old_token = os.environ.get("RELAY_SHARED_TOKEN")
         os.environ["RELAY_SHARED_TOKEN"] = "relay-test-token"

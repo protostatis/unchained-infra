@@ -82,6 +82,9 @@ class Relay:
             ("Content-Type", "application/json"),
         ]), body)
 
+    def _is_websocket_upgrade(self, headers: Headers | None) -> bool:
+        return (headers.get("Upgrade", "") if headers else "").lower() == "websocket"
+
     def _get_bearer_token(self, headers: Headers | None) -> str:
         auth_header = headers.get("Authorization", "") if headers else ""
         if auth_header.startswith("Bearer "):
@@ -197,6 +200,8 @@ class Relay:
         del connection
         full_path = request.path
         path = urllib.parse.urlsplit(full_path).path
+        if path == "/health" and not self._is_websocket_upgrade(request.headers):
+            return self._json_response(200, "OK", {"status": "ok", "agents": len(self.agents)})
         # GET /api/agents — list connected agents
         if path == "/api/agents":
             auth_info, internal, reason = self._authorize_headers(request.headers)
