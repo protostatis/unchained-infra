@@ -11555,7 +11555,13 @@ function openPreviewSocket() {
     switch (msg.type) {
       case 'preview.attached':
         previewState = 'streaming';
-        previewTransportRetries = 0;
+        // NOTE: do NOT reset previewTransportRetries here. preview.attached
+        // is sent on every new WS, including reconnects after a retriable
+        // failure. If the server is in a crash loop where every new
+        // stream dies shortly after attach (but before any frame),
+        // resetting the counter on attached would let the client
+        // reconnect forever. Reset only on a real preview.frame, which
+        // proves the new WS actually delivered useful data.
         setPreviewNote('Shared browser connected. Waiting for first frame...', '');
         break;
 

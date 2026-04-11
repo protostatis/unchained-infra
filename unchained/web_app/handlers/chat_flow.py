@@ -342,11 +342,33 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         return denied
 
     # Allow explicit tab_id override for multi-tab auto-follow (ddm --new).
-    # The tab_id must be a hex string (Chrome tab IDs are 32-char uppercase hex).
-    # Reject malformed values with 400 rather than silently normalizing.
+    #
+    # Format check: 32-64 char hex (Chrome targetIds are 32 uppercase hex
+    # chars). Tightened from {8,64} so a guest can't brute-force 8-char
+    # prefixes — at 32 chars the search space is 128 bits which is not
+    # economically feasible to scan over WS handshakes.
+    #
+    # Ownership check: NONE for now. The agent's `ddm --new` flow opens a
+    # fresh Chrome tab and emits its targetId in `tool_result.new_tab_id`,
+    # but the server-side `core._session_tabs` map is never updated to
+    # include that new tab — only the *initial* session tab from
+    # `create_session_tab()` lives in `_session_tabs`. So an ownership
+    # check that requires `raw_tab in _session_tabs.values()` would 403
+    # every legitimate followTab() after a `ddm --new`, breaking
+    # multi-tab guest runs entirely.
+    #
+    # The cross-guest-tab-watch concern (Guest B passes Guest A's known
+    # targetId) is mitigated by the 32-char hex entropy: 128 bits is
+    # impossible to guess, and the targetId only ever appears in private
+    # logs and the guest's own session payloads. Closing this properly
+    # requires a per-guest tab tracker (a future PR — see follow-up task
+    # #N: "headless agent watchdog + per-guest tab tracking").
+    #
+    # TODO(unchained-infra#TBD): add per-guest tab tracking + apply a
+    # strict ownership check here once the tracker exists.
     raw_tab = request.query.get("tab_id", "")
     if raw_tab:
-        if not re.fullmatch(r"[A-Fa-f0-9]{8,64}", raw_tab):
+        if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", raw_tab):
             return web.Response(status=400, text="invalid tab_id format")
         tab_id = raw_tab
     log.debug("resolved agent=%s tab=%s explicit=%s", agent_id, tab_id, bool(raw_tab))
@@ -382,16 +404,39 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     reconnect_attempt = 0
 
     async def emit(event: dict) -> bool:
-        """Send one protocol event. Returns False if the WS is no longer writable."""
+        """Send one protocol event. Returns False if the WS is no longer writable.
+
+        We swallow ALL connection-gone errors (ConnectionResetError,
+        ConnectionAbortedError, BrokenPipeError) and return False so the
+        FSM loop's `if not alive: break` path drives a clean teardown.
+        Re-raising would propagate out through the handler's `finally`
+        and produce a noisy aiohttp traceback in prod logs every time a
+        client closes mid-frame, which is the common case.
+
+        We DO re-raise asyncio.CancelledError because that's a cooperative
+        cancellation signal from upstream (server shutdown, request
+        cleanup) that has to propagate.
+
+        Any other exception (TypeError on a bad payload, etc.) is logged
+        once and treated as a closed-WS so the loop unwinds — these
+        indicate a real bug that we want visible without crashing the
+        request.
+        """
         if ws.closed:
             return False
         event.setdefault("v", _FIRST_LOOK_PREVIEW_PROTOCOL_VERSION)
         try:
             await ws.send_json(event)
             return True
-        except (ConnectionResetError, asyncio.CancelledError):
+        except asyncio.CancelledError:
             raise
-        except Exception:
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            return False
+        except Exception as exc:
+            print(
+                f"[preview-fsm] sid={sid_param} emit failed: {exc!r}",
+                flush=True,
+            )
             return False
 
     alive = await emit(
@@ -405,6 +450,14 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
 
     try:
         while alive:
+            # > MAX (not >=). With MAX=N: we run 1 initial stream + N retry
+            # streams = N+1 total stream sessions, and the client sees N
+            # "preview.reconnecting" events. The (N+1)th stream session is
+            # NOT wasted — it's the Nth retry actually being attempted; we
+            # need to run it to know whether it succeeds. After it fails
+            # the bottom check skips its emit, the loop returns to the top,
+            # and the top guard fires `max_reconnects`. Wall-clock cost
+            # at default `stream_timeout=120s` is ~(N+1)*120s, not N*120s.
             if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
                 print(
                     f"[preview-fsm] sid={sid_param} ended reason=max_reconnects "
@@ -463,7 +516,19 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                     if evt_type == "status":
                         # Translate private-core's legacy status reasons into
                         # either a transparent reconnect or a terminal end.
-                        reason = str(event.get("reason") or "").strip() or "ended"
+                        # Default to "fatal" (NOT "ended") so the literal
+                        # value we emit is always one of the documented
+                        # protocol reasons (done|slow_client|max_reconnects|
+                        # fatal). The client switch has no case for "ended"
+                        # and would silently swallow it.
+                        raw_reason = str(event.get("reason") or "").strip()
+                        if not raw_reason:
+                            print(
+                                f"[preview-fsm] sid={sid_param} status event "
+                                f"missing reason; treating as fatal",
+                                flush=True,
+                            )
+                        reason = raw_reason or "fatal"
                         if reason in ("stream_timeout", "max_frames"):
                             reconnect_due = True
                         else:
@@ -498,6 +563,11 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
 
             if reconnect_due:
                 reconnect_attempt += 1
+                # > MAX (matches the top-of-loop guard). The (N+1)th
+                # reconnect_due fires after we've already run our Nth
+                # retry stream session, so we suppress the (N+1)th
+                # reconnecting event and let the next iteration's top
+                # guard emit max_reconnects instead.
                 if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
                     # Will be caught at the top of the next loop iteration
                     # and turned into a preview.ended(max_reconnects).
