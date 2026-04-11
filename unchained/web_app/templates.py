@@ -1097,13 +1097,25 @@ body::before{
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
 
 .sky-search-link{
-  margin-top:16px;font-size:12px;
-  color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;
-  text-decoration:none;
+  /* Secondary CTA pill sitting under the primary "Try it free" button.
+     Uses the same accent color as the primary CTA but with a lighter
+     background wash and rounded-pill shape so it's clearly visible
+     without competing with the primary action for attention. */
+  display:inline-flex;align-items:center;gap:8px;
+  margin-top:22px;padding:11px 24px;
+  background:rgba(233,69,96,0.12);
+  border:1px solid rgba(233,69,96,0.4);
+  border-radius:999px;
+  color:var(--accent);
+  font-size:13px;font-weight:500;letter-spacing:0.8px;
+  text-transform:uppercase;text-decoration:none;
   animation:fadeIn 1s ease-out 2.9s both;
-  transition:color 0.2s;
+  transition:all 0.3s ease;
 }
-.sky-search-link:hover{color:var(--accent)}
+.sky-search-link:hover{
+  background:var(--accent);color:#fff;
+  box-shadow:0 0 24px var(--accent-glow);
+}
 
 .more-toggle-btn{
   display:flex;align-items:center;justify-content:center;gap:8px;
@@ -10845,7 +10857,11 @@ body{
 }
 #live-window{
   flex:1;display:flex;flex-direction:column;min-height:0;
-  padding:12px;
+  /* padding:0 (was 12px) — 12px inner padding was adding 24px of
+     horizontal dead space around the browser chrome + canvas,
+     compounding any aspect-ratio shrinkage that #live-canvas-wrap
+     might do. Let the mockup go edge-to-edge inside #live-pane. */
+  padding:0;
 }
 #live-window-bar{
   height:28px;border:1px solid #2f2f2f;border-bottom:none;
@@ -10881,7 +10897,20 @@ body{
 }
 #url-bar .copy-btn:hover{color:#ccc;border-color:#555}
 #live-canvas-wrap{
-  flex:1;min-height:0;border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
+  flex:1;min-height:0;width:100%;
+  /* Fill the full width of #live-window (which is now padding:0). No
+     aspect-ratio constraint on the wrapper itself — the earlier
+     `aspect-ratio: 4/3 + max-height: 100%` combo backfired when the
+     flex column had less vertical room than the 4:3 ratio wanted: CSS
+     shrank the wrapper *width* to preserve the ratio, producing
+     visible side margins inside #live-window.
+     Instead, let the wrapper take all available space and delegate
+     aspect handling to the <img> below via object-fit: contain. Chrome
+     is launched at 1440x1080 (4:3) so the image's intrinsic ratio is
+     already close to most desktop pane shapes, and any residual
+     letterboxing is absorbed inside the wrapper frame — much less
+     visually jarring than external margin around a shrunken wrapper. */
+  border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
   background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
 }
 #preview-image{
@@ -11516,11 +11545,23 @@ function closePreviewSocket() {
 }
 
 function previewViewport() {
+  // Compute the desired screencast frame size in PHYSICAL pixels, not CSS
+  // pixels. On a retina display the CSS box is (e.g.) 800x600 but the
+  // actual pixels behind it are 1600x1200; requesting only 800x600 from
+  // Chrome means the browser scales a 800x600 JPEG up to fill 1600 physical
+  // pixels, blurring everything. Multiplying by devicePixelRatio (capped at
+  // 2 so 4K/5K retina displays don't blow out the WS payload) asks Chrome
+  // for frames at the display's actual resolution.
+  //
+  // Chrome's own viewport is fixed at 1440x1080 (chrome_bridge.py headless
+  // launch args), so if we ask for 1600x1200 Chrome returns its native
+  // 1440x1080 frame — still sharper than the old request.
   const stage = document.getElementById('live-canvas-wrap');
-  const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 640};
+  const rect = stage ? stage.getBoundingClientRect() : {width: 960, height: 720};
+  const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
   return {
-    width: Math.max(320, Math.round(rect.width || 960)),
-    height: Math.max(240, Math.round(rect.height || 640)),
+    width: Math.max(320, Math.round((rect.width || 960) * dpr)),
+    height: Math.max(240, Math.round((rect.height || 720) * dpr)),
   };
 }
 
