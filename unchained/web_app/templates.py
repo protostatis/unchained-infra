@@ -6460,7 +6460,6 @@ _API_CHAT_GEMINI_STATUS_UPDATE_SNIPPET = """      updateAgentStatusUI({
         mismatch: !!data.mismatch,
       });"""
 
-_API_CHAT_GEMINI_AGENT_ID_IF_SNIPPET = "if (data.gemini_agent_id && !_userName) {"
 _API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET = "document.getElementById('agentlabel').textContent = data.gemini_agent_id;"
 _API_CHAT_GEMINI_PROVISION_GUARD_SNIPPET = "if (!geminiProvisioned) {"
 
@@ -6529,11 +6528,6 @@ _API_CHAT_CLAUDE_SDK_REPLACEMENTS = (
         mismatch: !!data.mismatch,
       });""",
         "Claude SDK status update mapping",
-    ),
-    TemplateReplacement(
-        _API_CHAT_GEMINI_AGENT_ID_IF_SNIPPET,
-        "if (data.claude_sdk_agent_id && !_userName) {",
-        "Claude SDK agent id presence check",
     ),
     TemplateReplacement(
         _API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET,
@@ -6632,11 +6626,6 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
         mismatch: !!data.mismatch,
       });""",
         "Codex status update mapping",
-    ),
-    TemplateReplacement(
-        _API_CHAT_GEMINI_AGENT_ID_IF_SNIPPET,
-        "if (data.codex_agent_id && !_userName) {",
-        "Codex agent id presence check",
     ),
     TemplateReplacement(
         _API_CHAT_GEMINI_AGENT_ID_ASSIGN_SNIPPET,
@@ -12715,28 +12704,17 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar archive-nav cleanup",
         )
 
-    for old_hook, new_hook, label in [
-        (
-            "  loadHistory();\n}",
-            "  loadHistory();\n  loadSidebarHistory();\n}",
-            "sidebar history refresh after showMain",
-        ),
-        (
-            "  loadHistory();\n\n}",
-            "  loadHistory();\n  loadSidebarHistory();\n\n}",
-            "sidebar history refresh after showMain",
-        ),
-    ]:
-        if old_hook in html:
-            html = apply_template_replacements(
-                html,
-                (TemplateReplacement(old_hook, new_hook, label),),
-                template_name="sidebar showMain hook injection",
-            )
-            break
-    else:
-        raise TemplateTransformError(
-            "sidebar injection: expected showMain to load history before sidebar history"
+    if "  loadHistory();\n}" in html:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    "  loadHistory();\n}",
+                    "  loadHistory();\n  loadSidebarHistory();\n}",
+                    "sidebar history refresh after showMain",
+                ),
+            ),
+            template_name="sidebar showMain hook injection",
         )
 
     # `doNewChat` has two variants depending on whether server-backed slots are present.
