@@ -11525,9 +11525,10 @@ function previewSocketUrl() {
 }
 
 // Server drives transparent reconnects for underlying screencast idle-timeouts
-// via preview.reconnecting events on the same WS. The client only reopens the
-// WS for hard transport faults (socket closed without a preview.ended event)
-// or when the server said `retriable:true` on preview.ended.
+// and clean screencast EOFs via preview.reconnecting events on the same WS.
+// The client only reopens the WS for hard transport faults (socket closed
+// without a preview.ended event) or when the server said `retriable:true` on
+// preview.ended. Actual run completion comes from chat SSE `done`, not this WS.
 function openPreviewSocket() {
   if (!sessionId || !agentId) return;
   // Reuse existing socket if still alive — tab persists across prompts.
@@ -11599,15 +11600,6 @@ function openPreviewSocket() {
             setPreviewNote('Live stream ended after repeated reconnects.', 'warn');
           } else if (reason === 'fatal') {
             setPreviewNote('Live stream hit an error.', 'warn');
-          } else if (reason === 'done') {
-            if (previewHasFrame) {
-              document.getElementById('preview-mode').textContent = 'run complete';
-            } else {
-              setPreviewNote(
-                'Live preview unavailable for this run. Showing browser steps instead.',
-                'warn',
-              );
-            }
           }
           // Schedule a single reconnect attempt if the server said we could
           // retry and the run is still active.
@@ -12082,12 +12074,19 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            // Keep preview socket alive — the tab persists across prompts.
-            // Don't show "unavailable" — frames may still arrive from the
-            // screencast WS after the SSE "done" event.
             if (previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'run complete';
+              setPreviewNote('Run complete. Keeping the final browser frame.', 'ok');
+            } else {
+              setPreviewNote(
+                'Run complete. Live preview was unavailable for this run.',
+                'warn',
+              );
             }
+            const wsAtDone = previewSocket;
+            setTimeout(() => {
+              if (!sending && previewSocket === wsAtDone) closePreviewSocket();
+            }, 1000);
             // Install nudge after task completion (once per session)
             if (!sessionStorage.getItem('uc_install_nudge_shown')) {
               sessionStorage.setItem('uc_install_nudge_shown', '1');
