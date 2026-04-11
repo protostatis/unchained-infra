@@ -207,3 +207,97 @@ async def stale_tab_cleanup_loop():
                         pass
         except Exception:
             pass
+
+
+# --- Headless agent absence watchdog ---
+
+# How often to poll the relay for headless agent presence.
+_HEADLESS_WATCHDOG_POLL_INTERVAL_S = 60.0
+# How long the headless agent can be missing before we emit a loud warning.
+# Set to 2× poll interval so a single missed heartbeat doesn't page.
+_HEADLESS_WATCHDOG_ABSENCE_THRESHOLD_S = 120.0
+
+
+async def headless_agent_watchdog_loop():
+    """Periodically verify HEADLESS_AGENT_ID is connected to the relay.
+
+    When the headless worker crashes, wedges, or gets OOM-killed (as
+    happened on 2026-04-10 when the EC2 host had to be hard-rebooted),
+    the relay sees the agent disappear but nothing else notices until
+    a guest tries to run /first-look-preview and gets an empty stream.
+    By then the user has already had a bad experience.
+
+    This loop polls the relay's /api/agents endpoint every 60s and
+    emits a loud `[watchdog]` line to stdout/stderr when the headless
+    agent has been absent for more than 2 minutes. On recovery it also
+    emits a one-shot RECOVERED line. Both are easily greppable for
+    alerting hooks.
+
+    The watchdog is self-quiescing: if HEADLESS_AGENT_ID is empty (dev
+    mode without a configured headless bridge), the loop returns
+    immediately after the first poll. No spam on local dev.
+    """
+    core = _core()
+    headless_id = getattr(core, "HEADLESS_AGENT_ID", "") or ""
+    if not headless_id:
+        print(
+            "[watchdog] no HEADLESS_AGENT_ID configured; headless absence "
+            "watchdog disabled",
+            flush=True,
+        )
+        return
+
+    absent_since: float | None = None
+    warned = False
+    print(
+        f"[watchdog] headless absence watchdog armed for agent={headless_id} "
+        f"(poll={_HEADLESS_WATCHDOG_POLL_INTERVAL_S:.0f}s, "
+        f"threshold={_HEADLESS_WATCHDOG_ABSENCE_THRESHOLD_S:.0f}s)",
+        flush=True,
+    )
+    while True:
+        try:
+            await asyncio.sleep(_HEADLESS_WATCHDOG_POLL_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
+
+        try:
+            connected = await core._check_relay_agent(headless_id)
+        except Exception as exc:
+            # Don't let a relay network hiccup spam the logs. Degrade to
+            # "unknown" and try again next cycle.
+            print(
+                f"[watchdog] headless relay check failed (ignored): {exc!r}",
+                flush=True,
+            )
+            continue
+
+        now = time.time()
+        if connected:
+            if warned and absent_since is not None:
+                duration = int(now - absent_since)
+                print(
+                    f"[watchdog] headless agent {headless_id} RECOVERED "
+                    f"after {duration}s absence",
+                    flush=True,
+                )
+            absent_since = None
+            warned = False
+            continue
+
+        # Agent is absent.
+        if absent_since is None:
+            absent_since = now
+            # Don't warn on the first missed poll — wait for the
+            # threshold so we don't spam on transient relay blips.
+            continue
+        elapsed = now - absent_since
+        if elapsed >= _HEADLESS_WATCHDOG_ABSENCE_THRESHOLD_S and not warned:
+            print(
+                f"[watchdog] headless agent {headless_id} ABSENT for "
+                f"{int(elapsed)}s (relay reports not connected) — "
+                f"guest /first-look-preview runs will fail until the "
+                f"headless worker reconnects",
+                flush=True,
+            )
+            warned = True

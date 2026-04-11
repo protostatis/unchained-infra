@@ -502,7 +502,17 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                     quality=70,
                     image_format="jpeg",
                     every_nth_frame=1,
-                    max_frames=900,
+                    # Bumped 900 → 5000 so the transparent reconnect
+                    # triggered by the engine's max_frames status fires
+                    # much less often during long guest runs. With the
+                    # 1-fps poll floor, 900 frames = 15 min per logical
+                    # stream before a (brief) reattach; Chrome push
+                    # frames during fast animation can push the count
+                    # even higher, so the old 900 cap could fire
+                    # mid-page on a single fast-loading e-commerce
+                    # site. 5000 frames = ~83 minutes at 1 fps, well
+                    # beyond any realistic guest run.
+                    max_frames=5000,
                     stream_timeout=_FIRST_LOOK_PREVIEW_STREAM_IDLE_TIMEOUT_S,
                 ):
                     if ws.closed:

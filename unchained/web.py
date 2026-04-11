@@ -167,8 +167,8 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
     float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
 )
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3.1-flash-lite-preview").strip()
-    or "google/gemini-3.1-flash-lite-preview"
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "xiaomi/mimo-v2-flash").strip()
+    or "xiaomi/mimo-v2-flash"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()
@@ -685,6 +685,7 @@ _gemini_last_active = _state.gemini_last_active  # agent_id -> last msg timestam
 _gemini_spawn_lock = _state.gemini_spawn_lock  # prevents duplicate spawn race
 _GEMINI_IDLE_TIMEOUT = 600
 _gemini_cleanup_task: asyncio.Task | None = None
+_headless_watchdog_task: asyncio.Task | None = None
 _scheduler_turn_grants = _state.scheduler_turn_grants  # grant_id -> {user_id, session_id, expires_at}
 _SCHEDULER_TURN_GRANT_TTL = 5 * 60
 
@@ -1135,6 +1136,7 @@ from web_app.runtime_tabs import (
     close_session_tab as _close_session_tab,
     create_session_tab as _create_session_tab,
     ensure_session_tab as _ensure_session_tab,
+    headless_agent_watchdog_loop as _headless_agent_watchdog_loop,
     session_cdp_url as _session_cdp_url,
     stale_tab_cleanup_loop as _stale_tab_cleanup_loop,
 )
@@ -1894,24 +1896,30 @@ def _register_routes(app: web.Application):
 
 async def _on_startup(app_: web.Application):
     del app_
-    global _stale_tab_task, _gemini_cleanup_task
+    global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
     _state.stale_tab_task = asyncio.create_task(_stale_tab_cleanup_loop())
     _state.gemini_cleanup_task = asyncio.create_task(_cleanup_idle_gemini_agents())
+    _state.headless_watchdog_task = asyncio.create_task(_headless_agent_watchdog_loop())
     _stale_tab_task = _state.stale_tab_task
     _gemini_cleanup_task = _state.gemini_cleanup_task
+    _headless_watchdog_task = _state.headless_watchdog_task
 
 
 async def _on_cleanup(app_: web.Application):
     del app_
-    global _stale_tab_task, _gemini_cleanup_task
+    global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
     if _state.stale_tab_task:
         _state.stale_tab_task.cancel()
     if _state.gemini_cleanup_task:
         _state.gemini_cleanup_task.cancel()
+    if _state.headless_watchdog_task:
+        _state.headless_watchdog_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
+    _state.headless_watchdog_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
+    _headless_watchdog_task = None
     # Close persistent HTTP client for private-core.
     try:
         from private_core_client import get_private_core_client

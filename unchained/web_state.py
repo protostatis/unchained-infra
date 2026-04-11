@@ -49,6 +49,7 @@ class ChatRuntimeState:
     gemini_last_active: dict[str, float] = field(default_factory=dict)
     gemini_spawn_lock: LockType = field(default_factory=threading.Lock)
     gemini_cleanup_task: asyncio.Task | None = None
+    headless_watchdog_task: asyncio.Task | None = None
     scheduler_turn_grants: dict[str, dict[str, object]] = field(default_factory=dict)
     pending_provision: dict[str, tuple[str, str, float]] = field(default_factory=dict)
     provision_cooldowns: dict[str, float] = field(default_factory=dict)
