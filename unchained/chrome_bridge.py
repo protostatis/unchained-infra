@@ -2620,8 +2620,15 @@ def _ensure_chrome(
             "--disable-dev-shm-usage",
             "--mute-audio",
             "--hide-scrollbars",
-            "--window-size=1920,1080",
-            "--ozone-override-screen-size=1920,1080",
+            # 4:3 (1440x1080) instead of 16:9 (1920x1080) so the first-look
+            # preview panel (CSS aspect-ratio: 4/3 on #live-canvas-wrap)
+            # receives a frame with no letterboxing. 1440px width still
+            # renders desktop layouts correctly for the demo sites (Best Buy,
+            # Walmart, Kayak, Zillow), avoiding the mobile-breakpoint snap
+            # that would occur below ~1024px. The screencast fits the square-
+            # ish preview container natively.
+            "--window-size=1440,1080",
+            "--ozone-override-screen-size=1440,1080",
         ])
         # Root-run Chromium still needs --no-sandbox; non-root containers do not.
         if hasattr(os, "geteuid") and os.geteuid() == 0:

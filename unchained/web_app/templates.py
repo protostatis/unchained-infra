@@ -1097,13 +1097,25 @@ body::before{
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}
 
 .sky-search-link{
-  margin-top:16px;font-size:12px;
-  color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;
-  text-decoration:none;
+  /* Secondary CTA pill sitting under the primary "Try it free" button.
+     Uses the same accent color as the primary CTA but with a lighter
+     background wash and rounded-pill shape so it's clearly visible
+     without competing with the primary action for attention. */
+  display:inline-flex;align-items:center;gap:8px;
+  margin-top:22px;padding:11px 24px;
+  background:rgba(233,69,96,0.12);
+  border:1px solid rgba(233,69,96,0.4);
+  border-radius:999px;
+  color:var(--accent);
+  font-size:13px;font-weight:500;letter-spacing:0.8px;
+  text-transform:uppercase;text-decoration:none;
   animation:fadeIn 1s ease-out 2.9s both;
-  transition:color 0.2s;
+  transition:all 0.3s ease;
 }
-.sky-search-link:hover{color:var(--accent)}
+.sky-search-link:hover{
+  background:var(--accent);color:#fff;
+  box-shadow:0 0 24px var(--accent-glow);
+}
 
 .more-toggle-btn{
   display:flex;align-items:center;justify-content:center;gap:8px;
@@ -10881,7 +10893,20 @@ body{
 }
 #url-bar .copy-btn:hover{color:#ccc;border-color:#555}
 #live-canvas-wrap{
-  flex:1;min-height:0;border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
+  flex:1 1 auto;min-height:0;
+  /* Match Chrome's headless viewport aspect ratio. chrome_bridge.py
+     launches headless Chrome with --window-size=1440,1080 (4:3), chosen
+     to fit the first-look preview panel without letterboxing while still
+     giving agent-driven navigation enough width to render desktop
+     layouts correctly on demo sites (Best Buy, Walmart, Kayak, Zillow).
+     Earlier 16:9 (1920x1080) Chrome output was letterboxed into this
+     panel with large black bars top/bottom. aspect-ratio + max-height:100%
+     keeps the box 4:3 when there's vertical room, and caps it to the
+     available height on tighter layouts (width adjusts proportionally). */
+  aspect-ratio:4/3;
+  max-height:100%;max-width:100%;
+  margin:0 auto;
+  border:1px solid #2f2f2f;border-top:none;border-radius:0 0 8px 8px;
   background:#0b0b0b;display:flex;align-items:center;justify-content:center;position:relative;
 }
 #preview-image{
