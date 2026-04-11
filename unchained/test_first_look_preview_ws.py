@@ -61,11 +61,18 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
 
     # --- Happy path -------------------------------------------------------
 
-    async def test_emits_attached_then_frame_then_done(self):
-        """A clean screencast run: attached → frame → done (not retriable)."""
+    async def test_iterator_exhaust_treated_as_transparent_reconnect(self):
+        """A clean iterator EOF is reconnect-worthy, not semantic completion."""
+
+        chat_flow._FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS = 1
+        call_count = {"n": 0}
 
         async def fake_stream(*_args, **_kwargs):
-            yield {"type": "frame", "mime": "image/jpeg", "data": "frame-1", "metadata": {}}
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                yield {"type": "frame", "mime": "image/jpeg", "data": "frame-1", "metadata": {}}
+                return
+            yield {"type": "frame", "mime": "image/jpeg", "data": "frame-2", "metadata": {}}
 
         cloud_tools.stream_screencast = fake_stream
 
@@ -73,7 +80,9 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
             "/ws?session_id=s-guest-aaaa1111-demo&width=800&height=600",
         )
         attached = await ws.receive_json()
-        frame = await ws.receive_json()
+        first = await ws.receive_json()
+        reconnecting = await ws.receive_json()
+        second = await ws.receive_json()
         ended = await ws.receive_json()
         closed = await ws.receive()
 
@@ -83,15 +92,23 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(attached["width"], 800)
         self.assertEqual(attached["height"], 600)
 
-        self.assertEqual(frame["type"], "preview.frame")
-        self.assertEqual(frame["data"], "frame-1")
-        self.assertEqual(frame["mime"], "image/jpeg")
-        self.assertEqual(frame["seq"], 1)
+        self.assertEqual(first["type"], "preview.frame")
+        self.assertEqual(first["data"], "frame-1")
+        self.assertEqual(first["mime"], "image/jpeg")
+        self.assertEqual(first["seq"], 1)
+
+        self.assertEqual(reconnecting["type"], "preview.reconnecting")
+        self.assertEqual(reconnecting["attempt"], 1)
+
+        self.assertEqual(second["type"], "preview.frame")
+        self.assertEqual(second["data"], "frame-2")
+        self.assertEqual(second["seq"], 2)
 
         self.assertEqual(ended["type"], "preview.ended")
-        self.assertEqual(ended["reason"], "done")
+        self.assertEqual(ended["reason"], "max_reconnects")
         self.assertFalse(ended["retriable"])
-        self.assertEqual(ended["frame_count"], 1)
+        self.assertEqual(ended["frame_count"], 2)
+        self.assertEqual(call_count["n"], 2)
 
         self.assertIn(closed.type, {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED})
 
@@ -122,6 +139,7 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         painted, freezing the preview. The new FSM rebuilds the underlying
         stream server-side without the client noticing.
         """
+        chat_flow._FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS = 1
         call_count = {"n": 0}
 
         async def fake_stream(*_args, **_kwargs):
@@ -155,12 +173,13 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(second["seq"], 2)
 
         self.assertEqual(ended["type"], "preview.ended")
-        self.assertEqual(ended["reason"], "done")
+        self.assertEqual(ended["reason"], "max_reconnects")
         self.assertEqual(ended["frame_count"], 2)
 
         self.assertEqual(call_count["n"], 2, "underlying stream should have been rebuilt once")
 
     async def test_max_frames_also_triggers_transparent_reconnect(self):
+        chat_flow._FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS = 1
         call_count = {"n": 0}
 
         async def fake_stream(*_args, **_kwargs):
@@ -182,7 +201,7 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(frame["type"], "preview.frame")
         self.assertEqual(frame["data"], "after")
         self.assertEqual(ended["type"], "preview.ended")
-        self.assertEqual(ended["reason"], "done")
+        self.assertEqual(ended["reason"], "max_reconnects")
 
     async def test_reconnect_cap_emits_max_reconnects(self):
         """After N consecutive stream_timeouts, the server gives up."""

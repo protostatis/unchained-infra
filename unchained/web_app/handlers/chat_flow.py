@@ -286,17 +286,19 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
 #     "reconnecting" indicator. No action required from the client.
 #
 #   {v:1, type:"preview.ended", reason, retriable, frame_count}
-#     Terminal. The WS will close immediately after this event is emitted.
-#     ``reason`` is one of:
-#         "done"           — screencast iterator exhausted cleanly
+#     Transport-terminal. The WS will close immediately after this event is
+#     emitted. ``reason`` is one of:
 #         "slow_client"    — backpressure; the client couldn't keep up
 #         "max_reconnects" — server gave up after N transparent reconnects
 #         "fatal"          — unhandled exception in the underlying stream
 #     ``retriable`` tells the client whether it's worth opening a fresh WS
-#     if the run is still active. "done" and "max_reconnects" are not
-#     retriable; "slow_client" and "fatal" are (one-shot retry from the UI).
+#     if the run is still active. "max_reconnects" is not retriable;
+#     "slow_client" and "fatal" are (one-shot retry from the UI).
 #
 # Design notes:
+# - The preview WS owns transport state only. It MUST NOT infer run completion
+#   from screencast EOF. Actual run completion comes from the chat SSE `done`
+#   event, not this websocket.
 # - There is no ``preview.idle`` application-level heartbeat. aiohttp's
 #   WebSocketResponse(heartbeat=30) keeps the transport alive; the
 #   transparent-reconnect loop below keeps the logical stream alive.
@@ -518,9 +520,9 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                         # either a transparent reconnect or a terminal end.
                         # Default to "fatal" (NOT "ended") so the literal
                         # value we emit is always one of the documented
-                        # protocol reasons (done|slow_client|max_reconnects|
-                        # fatal). The client switch has no case for "ended"
-                        # and would silently swallow it.
+                        # protocol reasons (slow_client|max_reconnects|fatal).
+                        # The client switch has no case for "ended" and would
+                        # silently swallow it.
                         raw_reason = str(event.get("reason") or "").strip()
                         if not raw_reason:
                             print(
@@ -604,22 +606,26 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
                 )
                 break
 
-            # Iterator exhausted with no status and no error — treat as a
-            # clean "run finished" signal from private-core.
+            # Iterator exhausted with no status and no error. That only tells
+            # us the screencast transport ended; it does NOT tell us the run
+            # finished. Treat it as a reconnect-worthy transport loss.
+            reconnect_attempt += 1
+            if reconnect_attempt > _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS:
+                continue
             print(
-                f"[preview-fsm] sid={sid_param} ended reason=done "
-                f"frames={frame_seq}",
+                f"[preview-fsm] sid={sid_param} iterator exhausted; "
+                f"reconnecting attempt={reconnect_attempt} frames_so_far={frame_seq}",
                 flush=True,
             )
-            await emit(
+            alive = await emit(
                 {
-                    "type": "preview.ended",
-                    "reason": "done",
-                    "retriable": False,
-                    "frame_count": frame_seq,
+                    "type": "preview.reconnecting",
+                    "attempt": reconnect_attempt,
                 }
             )
-            break
+            if not alive:
+                break
+            await asyncio.sleep(_FIRST_LOOK_PREVIEW_RECONNECT_BACKOFF_S)
     finally:
         if not ws.closed:
             await ws.close()
