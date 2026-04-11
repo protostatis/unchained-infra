@@ -11655,15 +11655,54 @@ function openPreviewSocket() {
   ws.onerror = () => {};
 }
 
+// blob: URL rendering instead of data: URI. Browsers (especially Safari)
+// treat `img.src = 'data:image/jpeg;base64,SAME_BYTES'` as a no-op when
+// the bytes match the previous assignment, so on a static page (where
+// Chrome's captureScreenshot returns byte-identical JPEGs every poll)
+// the preview appeared frozen even while the server was streaming
+// frames at 1 fps. createObjectURL() returns a unique blob: URL on every
+// call, which forces the browser to treat it as a fresh image load.
+// We revoke the previous blob URL on a small delay so the browser has
+// time to pick up the new src before the old one becomes invalid.
+let previewFrameCount = 0;
 function updatePreview(imageB64, note, modeLabel, mimeType) {
   const img = document.getElementById('preview-image');
   const ph = document.getElementById('preview-empty');
   if (!img) return;
-  img.src = 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageB64;
+  let newUrl = '';
+  try {
+    const binary = atob(imageB64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], {type: mimeType || 'image/jpeg'});
+    newUrl = URL.createObjectURL(blob);
+  } catch (_err) {
+    // Fallback path — should never hit, but if blob construction fails
+    // for any reason at least show *something*.
+    newUrl = 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageB64;
+  }
+  const oldUrl = img.dataset.previewBlobUrl || '';
+  img.src = newUrl;
+  if (newUrl.startsWith('blob:')) {
+    img.dataset.previewBlobUrl = newUrl;
+  } else {
+    delete img.dataset.previewBlobUrl;
+  }
+  if (oldUrl && oldUrl.startsWith('blob:')) {
+    // Defer revoke a moment so the browser definitely has the new src
+    // bound before the old blob disappears.
+    setTimeout(function () { try { URL.revokeObjectURL(oldUrl); } catch (_e) {} }, 250);
+  }
   img.style.display = 'block';
   if (ph) ph.style.display = 'none';
   previewHasFrame = true;
-  document.getElementById('preview-mode').textContent = modeLabel || 'live snapshot';
+  previewFrameCount += 1;
+  // Frame counter in the preview-mode label so during live debugging we
+  // can tell at a glance whether frames are arriving (counter ticks) or
+  // the WS is silent (counter stuck). Distinguishes "stream is dead" from
+  // "stream is alive but the page hasn't changed visually."
+  document.getElementById('preview-mode').textContent =
+    (modeLabel || 'live snapshot') + ' \u00b7 ' + previewFrameCount + ' frames';
   setPreviewNote(note || 'Shared browser frame received.', 'ok');
 }
 
@@ -11704,8 +11743,14 @@ function resetPreview() {
   previewHasFrame = false;
   previewTransportRetries = 0;
   previewTabId = '';
-  // Clear visible image
+  previewFrameCount = 0;
+  // Clear visible image (and revoke any pending blob URL to free memory).
   const img = document.getElementById('preview-image');
+  if (img && img.dataset && img.dataset.previewBlobUrl &&
+      img.dataset.previewBlobUrl.startsWith('blob:')) {
+    try { URL.revokeObjectURL(img.dataset.previewBlobUrl); } catch (_e) {}
+    delete img.dataset.previewBlobUrl;
+  }
   if (img) img.style.display = 'none';
   const ph = document.getElementById('preview-empty');
   if (ph) ph.style.display = '';
@@ -11768,7 +11813,14 @@ function appendSignal(text) {
   const next = (signalBuffer + '\n' + String(text || '')).slice(-6000);
   signalBuffer = next;
   if (challengeCheckTimer) clearTimeout(challengeCheckTimer);
-  challengeCheckTimer = setTimeout(runChallengeSignalCheck, 500);
+  // 1500ms (was 500ms). With the old debounce, every text-stream pause
+  // longer than 500ms triggered a /web/first-look/signal POST, and the
+  // server's _FIRST_LOOK_SIGNAL_LIMIT (20/min per source IP) was
+  // reliably exceeded on active runs — producing a flood of 429s in
+  // the browser console with no visible effect on screencast streaming.
+  // 1500ms still detects challenges within ~2s of a quiet moment but
+  // emits ~3x fewer signal POSTs per minute.
+  challengeCheckTimer = setTimeout(runChallengeSignalCheck, 1500);
 }
 
 function setPolicyState(policy) {
