@@ -29,6 +29,9 @@ services:
       timeout: 3s
       retries: 6
       start_period: 35s
+    dns:
+      - 1.1.1.3  # Cloudflare for Families — blocks adult + malware domains
+      - 1.0.0.3  # Cloudflare for Families fallback
     restart: unless-stopped
 
 volumes:
