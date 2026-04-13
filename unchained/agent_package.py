@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.78"  # chrome_bridge.py: headless viewport 1920x1080 → 1440x1080 (4:3 preview)
+VERSION = "0.3.79"  # start.sh: UV_NO_MODIFY_PATH=1 prevents uv installer from writing ~/.bash_profile
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -274,7 +274,7 @@ fi
 # Ensure uv is available (handles python resolution across all platforms)
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installing uv..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
