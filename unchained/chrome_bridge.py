@@ -1165,7 +1165,7 @@ class Agent:
         self._watchdog_triggered = False
         async with websockets.connect(self.relay_url,
                                       max_size=50 * 1024 * 1024,
-                                      ping_interval=None) as ws:
+                                      ping_interval=120) as ws:  # WS-level safety net; app heartbeat is primary
             self.ws = ws
             self._backoff = 1  # reset on successful connect
             await self._authenticate()
