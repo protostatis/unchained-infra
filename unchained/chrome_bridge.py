@@ -1164,7 +1164,8 @@ class Agent:
         """Single connection lifecycle: connect → auth → message loop."""
         self._watchdog_triggered = False
         async with websockets.connect(self.relay_url,
-                                      max_size=50 * 1024 * 1024) as ws:
+                                      max_size=50 * 1024 * 1024,
+                                      ping_interval=None) as ws:
             self.ws = ws
             self._backoff = 1  # reset on successful connect
             await self._authenticate()
