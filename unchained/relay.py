@@ -192,6 +192,7 @@ class Relay:
         print(f"[relay] client endpoint: ws://{self.host}:{self.port}/cdp/<agent_id>/<tab_id>")
         async with websockets.serve(self._route, self.host, self.port,
                                     max_size=50 * 1024 * 1024,
+                                    ping_interval=120,  # WS-level safety net; app heartbeat is primary
                                     process_request=self._process_request):
             await asyncio.Future()  # run forever
 
