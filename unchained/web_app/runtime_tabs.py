@@ -137,7 +137,10 @@ async def stale_tab_cleanup_loop():
         await asyncio.sleep(60)
         now = time.time()
 
-        stale = [sid for sid, ts in core._session_last_active.items() if now - ts > core._STALE_TAB_SECONDS]
+        stale = [
+            sid for sid, ts in core._session_last_active.items()
+            if now - ts > (core._STALE_TAB_SECONDS if sid.startswith("s-guest") else core._STALE_TAB_SECONDS_AGENT)
+        ]
         for sid in stale:
             print(f"[tabs] Closing stale tab for session {sid}")
             await close_session_tab(sid)
