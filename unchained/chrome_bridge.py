@@ -1005,6 +1005,7 @@ class Agent:
         # share the same namespace; collision is astronomically unlikely.
         self._tab_leases: dict[int, str] = {}   # channel → Chrome tab ID
         self._leased_tabs: set[str] = set()     # Chrome tab IDs currently leased
+        self._stealth_injected_tabs: set[str] = set()  # tabs that already have stealth
         self._last_prov_reconcile_ts = 0.0
 
     def _reconcile_prov_chromes(self, force: bool = False):
@@ -1107,13 +1108,17 @@ class Agent:
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
-        return _ensure_chrome(
+        result = _ensure_chrome(
             self.cdp_host,
             self.cdp_port,
             self.profile,
             self._headless,
             relay_url=self.relay_url,
         )
+        if result:
+            # New Chrome process — previous stealth injections are gone.
+            self._stealth_injected_tabs.clear()
+        return result
 
     def _cleanup_orphan_tabs(self):
         """Close all Chrome tabs except one (headless only).
@@ -1225,7 +1230,10 @@ class Agent:
         elif t == "http":
             await self._handle_http(msg)
         elif t == "ws_open":
-            await self._handle_ws_open(msg)
+            # Fire-and-forget: stealth inject can block for seconds on pages
+            # that flood CDP events (e.g. CAPTCHAs), starving the tunnel
+            # message loop and delaying pong processing + new channel opens.
+            asyncio.create_task(self._handle_ws_open(msg))
         elif t == "ws_send":
             await self._handle_ws_send(msg)
         elif t == "ws_close":
@@ -1370,10 +1378,22 @@ class Agent:
             chrome_ws = await websockets.connect(ws_url,
                                                  max_size=50 * 1024 * 1024)
             # Skip stealth on browser-level connections — no page context.
-            # The agent's per-tab connection already has stealth injected.
-            if tab_id != "browser":
+            # Also skip on tabs that already have stealth injected (e.g.
+            # screencast poll reopening the same tab every second).
+            # addScriptToEvaluateOnNewDocument persists across navigations
+            # so re-injection is unnecessary and wastes time — especially
+            # on pages that flood CDP events where the inject recv() loop
+            # can block for the full 5s timeout per command.
+            resolved = self._extract_tab_id_from_ws_url(ws_url)
+            need_stealth = (
+                tab_id != "browser"
+                and resolved
+                and resolved not in self._stealth_injected_tabs
+            )
+            if need_stealth:
                 try:
                     await self._inject_stealth(chrome_ws)
+                    self._stealth_injected_tabs.add(resolved)
                 except Exception as e:
                     # Best-effort: stealth failure should not block tab usage.
                     print(f"[agent] stealth inject failed (non-fatal): {e}")
