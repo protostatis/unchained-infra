@@ -59,6 +59,15 @@ _PATTERN_GROUPS: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "perimeterx_block",
+        0.94,
+        (
+            r"/blocked\?url=",
+            r"robot or human",
+            r"px-captcha",
+        ),
+    ),
+    (
         "generic_human_verification",
         0.76,
         (
