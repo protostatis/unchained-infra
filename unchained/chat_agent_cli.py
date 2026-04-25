@@ -100,7 +100,7 @@ RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
 CWD = os.path.expanduser("~/unchained-agent/unchained")
 CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
 CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
-DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
+DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
 CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
 

@@ -25,7 +25,7 @@ except RuntimeError:
 
 CWD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
-DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
+DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
 
 _CLAUDE_MD_PATH = os.path.join(CWD, "CLAUDE.md")

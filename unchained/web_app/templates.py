@@ -656,7 +656,7 @@ body::before{
         <div class="step"><span class="step-num">1</span>Install local agent and Codex CLI</div>
         <div class="step"><span class="step-num">2</span>Choose Codex CLI models in chat</div>
       </div>
-      <a href="/chat-codex?model=codex-cli:gpt-5.1-codex-mini" class="card-btn">Open Chat &#8594;</a>
+      <a href="/chat-codex?model=codex-cli:gpt-5.5" class="card-btn">Open Chat &#8594;</a>
     </div>
 
     <!-- Unchained CLI -->
@@ -1561,7 +1561,7 @@ body::before{
         <div class="step"><span class="step-num">1</span>Install local agent and Codex CLI</div>
         <div class="step"><span class="step-num">2</span>Choose Codex CLI models in chat</div>
       </div>
-      <a href="/chat-codex?model=codex-cli:gpt-5.1-codex-mini" class="card-btn">Open Chat &#8594;</a>
+      <a href="/chat-codex?model=codex-cli:gpt-5.5" class="card-btn">Open Chat &#8594;</a>
     </div>
 
     <!-- MCP -->
@@ -6592,9 +6592,8 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
     TemplateReplacement(
         _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
         """      <option value="codex-sdk:codex-mini-latest">Codex API · codex-mini-latest</option>
-      <option value="codex-sdk:gpt-5-codex">Codex API · gpt-5-codex</option>
-      <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI · gpt-5.1-codex-mini</option>
-      <option value="codex-cli:gpt-5-codex">Codex CLI · gpt-5-codex</option>""",
+      <option value="codex-sdk:gpt-5.5">Codex API · gpt-5.5</option>
+      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5</option>""",
         "Codex model options",
     ),
     TemplateReplacement("let geminiProvisioned = false;", "let codexProvisioned = false;", "Codex provisioned flag"),
@@ -13920,7 +13919,7 @@ function providerLabel(provider) {
 
 function providerChatUrl(provider) {
   if (provider === 'claude-sdk') return '/chat-claude';
-  if (provider === 'codex-cli') return '/chat-codex?model=codex-cli:gpt-5.1-codex-mini';
+  if (provider === 'codex-cli') return '/chat-codex?model=codex-cli:gpt-5.5';
   return provider === 'gemini' ? '/chat-gemini' : '/chat-codex';
 }
 
@@ -14907,7 +14906,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
           <option value="claude-sdk:claude-opus-4-6">Claude API: Opus 4.6</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
-          <option value="codex-cli:gpt-5.1-codex-mini">Codex CLI: GPT-5.1 Codex Mini</option>
+          <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
@@ -14922,7 +14921,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
       </div>
       <div class="field" id="f-model-custom-wrap" style="display:none">
         <label for="f-model-custom">Custom Model ID</label>
-        <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.1-codex">
+        <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.5">
       </div>
       <div class="field" style="margin-top:10px">
         <label for="f-profile">Chrome Profile</label>
@@ -15048,7 +15047,7 @@ function formatSchedulerModel(model){
     'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
     'claude-sdk:claude-opus-4-6':'Claude API: Opus 4.6',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
-    'codex-cli:gpt-5.1-codex-mini':'Codex CLI: GPT-5.1 Codex Mini',
+    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
