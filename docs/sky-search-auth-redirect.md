@@ -1,93 +1,111 @@
-# Spec: External Auth Redirect for searchagentsky.com
+# External Auth Redirect — Unchained Provider Contract
 
 ## Context
 
-searchagentsky.com (sky-search) now has shareable result pages — after an agent run, users can click "Share" to publish a permanent link at `/r/:id`. Publishing requires authentication, but sky-search has **zero auth infrastructure** — no Google OAuth, no user DB, no session management.
+sky-search (searchagentsky.com / search.unchainedsky.com) has shareable result
+pages. Publishing requires authentication, but sky-search has no auth
+infrastructure. unchainedsky.com is the auth provider.
 
-**unchainedsky.com is the auth provider.** When a sky-search user wants to share, they're redirected here to log in, then sent back with a signed JWT.
+This document describes the provider-side contract. The matching client-side
+spec lives in the sky-search repo under `docs/AUTH_FLOW.md`.
 
-This is already deployed on sky-search (protostatis/sky-search#12). The Share button redirects to:
+## Endpoints
 
-```
-https://unchainedsky.com/auth/login?redirect_uri=https://searchagentsky.com/auth/callback&scope=share
-```
-
-That endpoint currently 404s. This spec describes what to build.
-
-## What to build
-
-### New endpoint: `GET /auth/login`
+### `GET /auth/login`
 
 Query params:
-- `redirect_uri` (required) — where to redirect after login. Must match an allowlist.
-- `scope` (optional) — currently just `share`, reserved for future use.
+- `redirect_uri` (required) — where to send the user after login. Must match the allowlist.
+- `scope` (optional) — `share` for the publish flow; reserved for future use.
+- `state` (optional) — opaque value from the client; echoed back unchanged.
 
 **Behavior:**
 
-1. **Validate `redirect_uri`** against an allowlist:
-   - `https://searchagentsky.com/auth/callback`
-   - `https://search.unchainedsky.com/auth/callback`
-   - In dev: `http://localhost:3000/auth/callback`
-   - Reject all others with 400.
+1. Validate `redirect_uri` against the allowlist (see below). Return 400 if invalid.
+2. If the user is already logged in:
+   - Generate a random 64-hex-character one-time code (`secrets.token_hex(32)`).
+   - Persist it in `auth_codes` table with a 120-second TTL, bound to `redirect_uri`.
+   - Redirect to `{redirect_uri}?code={code}[&state={state}]`.
+3. If the user is not logged in:
+   - Serve a minimal Google Sign-In page.
+   - After sign-in, the page reloads (preserving all query params).
+   - The handler runs again with a session cookie and issues the code.
 
-2. **If the user is already logged in** (has a valid session):
-   - Mint a JWT containing `{ sub, name, email, picture }` from the user record
-   - Sign it with `JWT_SECRET` (shared with sky-search)
-   - Redirect immediately to `{redirect_uri}?token={jwt}`
+### `POST /auth/token`
 
-3. **If the user is NOT logged in**:
-   - Store `redirect_uri` and `scope` in the session (or a short-lived cookie)
-   - Proceed with the normal Google Sign-In flow
-   - After successful login, mint the JWT and redirect to `{redirect_uri}?token={jwt}`
+Exchanges a one-time code for an identity JWT. Called server-side from the
+client's `/auth/callback` handler.
 
-### JWT format
+Request body (JSON):
+```json
+{
+  "grant_type": "authorization_code",
+  "code": "<one_time_code>",
+  "redirect_uri": "<exact_redirect_uri_used_at_login>"
+}
+```
+
+Success response:
+```json
+{
+  "access_token": "<jwt>",
+  "token_type": "Bearer",
+  "expires_in": 86400,
+  "scope": "share"
+}
+```
+
+Error responses follow OAuth 2.0 error format:
+```json
+{ "error": "invalid_grant", "error_description": "Code expired." }
+```
+
+Possible `error` values: `invalid_request`, `unsupported_grant_type`,
+`invalid_grant`.
+
+## JWT format
 
 ```json
 {
-  "sub": "google-user-id-12345",
-  "name": "John Doe",
-  "email": "john@example.com",
+  "sub": "<user_id>",
+  "name": "Jane Doe",
+  "email": "jane@example.com",
   "picture": "https://lh3.googleusercontent.com/...",
+  "aud": "sky-search",
   "iat": 1776802484,
   "exp": 1776888884
 }
 ```
 
-- Signed with `JWT_SECRET` (HS256)
-- TTL: 24 hours
-- `sub` = the Google `sub` claim (stable user identifier)
-- Sky-search verifies with the same `JWT_SECRET` — no network call back to unchainedsky.com
+- Signed with `JWT_SECRET` (HS256), shared with sky-search.
+- TTL: 24 hours.
+- `aud` claim: `"sky-search"` — clients must verify this.
 
-### Env var
+## Redirect URI allowlist
 
-`JWT_SECRET` must be set on the unchainedsky.com server. The same value is already set on sky-search (35.153.83.133).
+Production:
+- `https://searchagentsky.com/auth/callback`
+- `https://search.unchainedsky.com/auth/callback`
 
-Current production value on sky-search — retrieve it with:
-```
-ssh -i ~/.ssh/unchained-key.pem ec2-user@35.153.83.133 "grep JWT_SECRET /opt/sky-search/server/.env"
-```
+Development (only when the provider runs without `GOOGLE_CLIENT_ID`):
+- `http://localhost:3000/auth/callback`
+- `http://127.0.0.1:3000/auth/callback`
 
-Set the same value on the unchainedsky.com server.
+A production-hosted provider always rejects localhost redirect URIs.
 
-## What NOT to build
+## Security invariants
 
-- No changes to the existing login UI — reuse the current Google OAuth flow
-- No new user table or schema — use existing user records
-- No API endpoints beyond the redirect — sky-search doesn't call back after getting the JWT
-- No changes to sky-search — it's already deployed and waiting for this endpoint
-
-## Security considerations
-
-- **Allowlisted redirect URIs only** — prevents open redirect attacks
-- **Short JWT TTL (24h)** — limits exposure if a token leaks
-- **HTTPS only** in production redirect URIs
-- **`scope=share`** is informational for now but could gate JWT claims in the future
+- One-time codes expire after 120 seconds.
+- Each code is single-use; replay returns `invalid_grant`.
+- Codes are bound to the exact `redirect_uri` used at login time.
+- Bearer tokens never appear in redirect URLs.
+- Localhost redirect URIs are rejected in production.
 
 ## Test plan
 
-1. Visit `https://unchainedsky.com/auth/login?redirect_uri=https://searchagentsky.com/auth/callback&scope=share`
-2. If not logged in → Google Sign-In → redirect to `searchagentsky.com/auth/callback?token=...`
-3. If already logged in → immediate redirect with token
-4. Token should be verifiable: `jwt.verify(token, JWT_SECRET)` returns `{ sub, name, email, picture }`
-5. Bad `redirect_uri` → 400 error
-6. Full flow: searchagentsky.com → run query → click Share → redirected to unchainedsky.com → login → redirected back → result published → link copied
+1. Visit `/auth/login?redirect_uri=https://searchagentsky.com/auth/callback&scope=share&state=abc`
+2. Not logged in → Google Sign-In → redirect to `/auth/callback?code=...&state=abc`
+3. Already logged in → immediate redirect with code
+4. `POST /auth/token` with the code → returns `access_token`
+5. Bad `redirect_uri` → 400
+6. Replay the same code → `invalid_grant`
+7. Wait >120 s then exchange → `Code expired.`

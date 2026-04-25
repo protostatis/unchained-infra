@@ -27,6 +27,8 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/privacy", "web_app.handlers.pages:handle_privacy_page"),
     ("GET", "/privacy-policy", "web_app.handlers.pages:handle_privacy_page"),
     ("GET", "/data-deletion", "web_app.handlers.pages:handle_data_deletion_page"),
+    ("GET", "/auth/login", "web_app.handlers.auth_admin:handle_auth_login"),
+    ("POST", "/auth/token", "web_app.handlers.auth_admin:handle_auth_token"),
     ("POST", "/auth/google", "web_app.handlers.auth_admin:handle_google_auth"),
     ("GET", "/auth/facebook/start", "web_app.handlers.auth_admin:handle_facebook_start"),
     ("GET", "/auth/facebook/callback", "web_app.handlers.auth_admin:handle_facebook_callback"),
