@@ -48,7 +48,7 @@ jobs:
           chmod 600 ~/.ssh/unchained-key.pem
           ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts 2>/dev/null
 
-          EC2_USER="ubuntu"
+          EC2_USER="ec2-user"
           REMOTE_DIR="/home/$EC2_USER/unchained"
           SSH_CMD="ssh -i ~/.ssh/unchained-key.pem $EC2_USER@$EC2_HOST"
           SCP_CMD="scp -i ~/.ssh/unchained-key.pem"
