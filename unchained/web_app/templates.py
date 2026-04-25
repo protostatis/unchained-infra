@@ -6593,7 +6593,8 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
         _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
         """      <option value="codex-sdk:codex-mini-latest">Codex API · codex-mini-latest</option>
       <option value="codex-sdk:gpt-5.5">Codex API · gpt-5.5</option>
-      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5</option>""",
+      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5</option>
+      <option value="codex-cli:gpt-5.4-mini">Codex CLI · gpt-5.4-mini (fast)</option>""",
         "Codex model options",
     ),
     TemplateReplacement("let geminiProvisioned = false;", "let codexProvisioned = false;", "Codex provisioned flag"),
@@ -14907,6 +14908,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-opus-4-6">Claude API: Opus 4.6</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
           <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
+          <option value="codex-cli:gpt-5.4-mini">Codex CLI: GPT-5.4 Mini (fast)</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
@@ -15048,6 +15050,7 @@ function formatSchedulerModel(model){
     'claude-sdk:claude-opus-4-6':'Claude API: Opus 4.6',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
     'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5',
+    'codex-cli:gpt-5.4-mini':'Codex CLI: GPT-5.4 Mini (fast)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
