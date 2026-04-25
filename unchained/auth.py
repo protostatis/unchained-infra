@@ -74,6 +74,17 @@ class Auth:
                     used INTEGER DEFAULT 0
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS auth_codes (
+                    code TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    redirect_uri TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    used INTEGER DEFAULT 0
+                )
+            """)
             # Migration: add status column (existing users default to 'approved')
             try:
                 conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
