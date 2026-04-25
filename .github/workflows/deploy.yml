@@ -32,12 +32,7 @@ jobs:
           token: ${{ secrets.PRIVATE_CORE_REPO_PAT }}
           path: private-core
 
-      - name: Overlay private core files
-        if: steps.check-secrets.outputs.available == 'true'
-        run: |
-          ./tools/install_private_core.sh private-core/unchained unchained
-
-      - name: Deploy to EC2
+      - name: Set up SSH key
         if: steps.check-secrets.outputs.available == 'true'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -46,33 +41,30 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/unchained-key.pem
           chmod 600 ~/.ssh/unchained-key.pem
-          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          EC2_USER="ec2-user"
-          REMOTE_DIR="/home/$EC2_USER/unchained"
-          SSH_CMD="ssh -i ~/.ssh/unchained-key.pem $EC2_USER@$EC2_HOST"
-          SCP_CMD="scp -i ~/.ssh/unchained-key.pem"
-
-          # Single source of truth for the runtime file list. deploy.sh
-          # sources this same file. Adding a new server-side runtime file
-          # only requires editing runtime_context_files.sh.
-          source deploy/runtime_context_files.sh
-
-          $SCP_CMD "${TOP_LEVEL_CONTEXT_FILES[@]}" $EC2_USER@$EC2_HOST:$REMOTE_DIR/
-
-          $SSH_CMD "mkdir -p $REMOTE_DIR/unchained/benchmark"
-
-          UNCHAINED_UPLOAD=()
-          for rel in "${UNCHAINED_RUNTIME_FILES[@]}"; do
-            UNCHAINED_UPLOAD+=("unchained/$rel")
-          done
-          $SCP_CMD "${UNCHAINED_UPLOAD[@]}" $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/
-
-          BENCHMARK_UPLOAD=()
-          for rel in "${BENCHMARK_CONTEXT_FILES[@]}"; do
-            BENCHMARK_UPLOAD+=("unchained/benchmark/$rel")
-          done
-          $SCP_CMD "${BENCHMARK_UPLOAD[@]}" $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/
-
-          $SSH_CMD "cd $REMOTE_DIR && docker compose up -d --build"
-          $SSH_CMD "docker compose -f $REMOTE_DIR/docker-compose.yml ps"
+      - name: Run deploy.sh
+        if: steps.check-secrets.outputs.available == 'true'
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          # Delegate to deploy.sh — same path the team uses manually.
+          # Reusing it instead of re-implementing in YAML eliminates drift
+          # and gets us the staged restart, stub guards, web_app/installers/
+          # research_desk_vendor sync, and image pruning for free.
+          #
+          # Env overrides:
+          #   PRIVATE_CORE_SRC — points deploy.sh at the path we just checked
+          #     out at "private-core/" instead of its default sibling-repo path.
+          #   RHYTHM_SRC=/nonexistent — forces deploy.sh's empty-rhythm fallback
+          #     since the rhythm repo isn't accessible to this workflow's PAT.
+          #     Rhythm tools will report "not available" until we either grant
+          #     the workflow access or run a manual deploy.
+          #   DEPLOY_RESTORE_WORKTREE=0 — runner is ephemeral, no need to
+          #     restore overlaid private-core files at the end.
+          export KEY_PATH="$HOME/.ssh/unchained-key.pem"
+          export EC2_USER="ec2-user"
+          export PRIVATE_CORE_SRC="$(pwd)/private-core/unchained"
+          export RHYTHM_SRC="/nonexistent"
+          export DEPLOY_RESTORE_WORKTREE=0
+          ./deploy.sh
