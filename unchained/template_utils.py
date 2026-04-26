@@ -503,7 +503,8 @@ _GSI_SAFARI_FIX_SNIPPET = r"""<script data-uc-gsi-safari-fix>
   if(document.getElementById('uc-gsi-safari-fix')) return;
   var style = document.createElement('style');
   style.id = 'uc-gsi-safari-fix';
-  style.textContent = '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;}';
+  style.textContent = '#login .g_id_signin{display:flex;justify-content:center;width:min(100%,320px);max-width:320px;margin:0 auto;}'
+    + '.g_id_signin iframe{clip-path:inset(2px 10px) !important;}';
   if(document.head) document.head.appendChild(style);
 })();
 </script>"""
