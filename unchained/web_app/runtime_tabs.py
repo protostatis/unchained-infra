@@ -126,7 +126,10 @@ async def ensure_session_tab(session_id: str, agent_id: str) -> str | None:
         core.log.info("[tabs] Created tab %s for session %s (agent %s)", tab_id, session_id, agent_id)
         return tab_id
     except Exception as e:
-        core.log.warning("[tabs] Failed to create tab for session %s: %s", session_id, e)
+        core.log.warning(
+            "[tabs] Failed to create tab for session %s (agent %s): %s: %s",
+            session_id, agent_id, type(e).__name__, e or "<empty>",
+        )
         return None
 
 
