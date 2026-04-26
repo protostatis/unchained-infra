@@ -33,9 +33,10 @@ jobs:
       - name: run install script
         run: |
           set +e
-          timeout "$INSTALL_TIMEOUT" bash -c "curl -fsSL -H 'X-Install-Token: ${{ steps.mint.outputs.token }}' 'https://$INSTALL_HOST/install/script' | bash"
+          # gtimeout: macOS runners ship coreutils via brew but not as `timeout`
+          gtimeout "$INSTALL_TIMEOUT" bash -c "curl -fsSL -H 'X-Install-Token: ${{ steps.mint.outputs.token }}' 'https://$INSTALL_HOST/install/script' | bash"
           code=$?
-          # 124 = SIGTERM from timeout (expected — start.sh launches the agent in foreground)
+          # 124 = SIGTERM from gtimeout (expected — start.sh launches the agent in foreground)
           # 0   = clean exit
           if [ "$code" -ne 124 ] && [ "$code" -ne 0 ]; then
             echo "::error::install.sh failed with exit code $code"
@@ -90,13 +91,20 @@ jobs:
           } -ArgumentList $url, $token
 
           $finished = Wait-Job $job -Timeout ([int]$env:INSTALL_TIMEOUT)
+          # Drain output BEFORE Stop-Job to avoid the post-stop runspace-close race
+          # (manifests as "client did not receive a response for a Close operation")
+          try {
+            $output = Receive-Job $job -ErrorAction Stop 2>&1 | Out-String
+          } catch {
+            $output = "<output unavailable: $_>"
+          }
           if (-not $finished) {
-            Stop-Job $job
+            Stop-Job $job -ErrorAction SilentlyContinue
             Write-Host "install reached the agent-start stage cleanly (killed at timeout)"
           } else {
             Write-Host "install completed before timeout"
           }
-          $output = Receive-Job $job 2>&1 | Out-String
+          Remove-Job $job -Force -ErrorAction SilentlyContinue
           Write-Host $output
           if ($output -match "ERROR:|FATAL:|Could not install|not recognized as the name") {
             Write-Error "install script reported a failure"; exit 1
