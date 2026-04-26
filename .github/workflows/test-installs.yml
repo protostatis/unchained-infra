@@ -33,12 +33,17 @@ jobs:
       - name: run install script
         run: |
           set +e
-          # gtimeout: macOS runners ship coreutils via brew but not as `timeout`
-          gtimeout "$INSTALL_TIMEOUT" bash -c "curl -fsSL -H 'X-Install-Token: ${{ steps.mint.outputs.token }}' 'https://$INSTALL_HOST/install/script' | bash"
+          # Portable timeout: macOS runners don't ship GNU `timeout` or `gtimeout`.
+          # Run installer in the background, kill it after INSTALL_TIMEOUT seconds.
+          bash -c "curl -fsSL -H 'X-Install-Token: ${{ steps.mint.outputs.token }}' 'https://$INSTALL_HOST/install/script' | bash" &
+          pid=$!
+          ( sleep "$INSTALL_TIMEOUT" && kill -TERM "$pid" 2>/dev/null ) &
+          watcher=$!
+          wait "$pid" 2>/dev/null
           code=$?
-          # 124 = SIGTERM from gtimeout (expected — start.sh launches the agent in foreground)
-          # 0   = clean exit
-          if [ "$code" -ne 124 ] && [ "$code" -ne 0 ]; then
+          kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+          # 0 = clean exit; 143 = killed by SIGTERM (expected — start.sh foregrounds the agent)
+          if [ "$code" -ne 0 ] && [ "$code" -ne 143 ]; then
             echo "::error::install.sh failed with exit code $code"
             exit "$code"
           fi
