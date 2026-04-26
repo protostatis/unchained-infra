@@ -8,6 +8,17 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		-Server
 	}
 
+	# Per-request access log to stderr in JSON. Lands in
+	# `docker compose logs caddy` (mixed with TLS/proxy errors).
+	# Captures method, path, status, latency, remote_ip, headers
+	# (User-Agent, Referer) — useful for funnel/origin analysis
+	# when a new user signs up. Default rotation is handled by
+	# Docker's json-file driver.
+	log {
+		output stderr
+		format json
+	}
+
 	request_body {
 		max_size 10MB
 	}
