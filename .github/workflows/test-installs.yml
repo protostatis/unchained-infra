@@ -1,0 +1,127 @@
+name: test-installs
+
+# Manual smoke test for end-user install paths.
+# Verifies install scripts and native installers run to completion on a clean OS.
+# Auth: requires UNCHAINED_API_KEY secret (a service-account API key).
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_host:
+        description: "Host to fetch install scripts/binaries from"
+        required: false
+        default: "api.unchainedsky.com"
+
+env:
+  INSTALL_HOST: ${{ github.event.inputs.install_host || 'api.unchainedsky.com' }}
+  INSTALL_TIMEOUT: "120"
+
+jobs:
+  mac-curl-bash:
+    runs-on: macos-latest
+    steps:
+      - name: mint install token
+        id: mint
+        run: |
+          token=$(curl -sf -X POST \
+            -H "Authorization: Bearer ${{ secrets.UNCHAINED_API_KEY }}" \
+            "https://$INSTALL_HOST/web/install-token" \
+            | python3 -c "import sys,json,re; d=json.load(sys.stdin); m=re.search(r\"X-Install-Token: ([^ \\\"]+)\", d['curl_command']); print(m.group(1))")
+          if [ -z "$token" ]; then echo "::error::failed to mint install token"; exit 1; fi
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$token"
+      - name: run install script
+        run: |
+          set +e
+          timeout "$INSTALL_TIMEOUT" bash -c "curl -fsSL -H 'X-Install-Token: ${{ steps.mint.outputs.token }}' 'https://$INSTALL_HOST/install/script' | bash"
+          code=$?
+          # 124 = SIGTERM from timeout (expected — start.sh launches the agent in foreground)
+          # 0   = clean exit
+          if [ "$code" -ne 124 ] && [ "$code" -ne 0 ]; then
+            echo "::error::install.sh failed with exit code $code"
+            exit "$code"
+          fi
+          echo "install reached the agent-start stage cleanly"
+
+  mac-pkg:
+    runs-on: macos-latest
+    steps:
+      - name: mint install token
+        id: mint
+        run: |
+          token=$(curl -sf -X POST \
+            -H "Authorization: Bearer ${{ secrets.UNCHAINED_API_KEY }}" \
+            "https://$INSTALL_HOST/web/install-token" \
+            | python3 -c "import sys,json,re; d=json.load(sys.stdin); m=re.search(r\"X-Install-Token: ([^ \\\"]+)\", d['curl_command']); print(m.group(1))")
+          if [ -z "$token" ]; then echo "::error::failed to mint install token"; exit 1; fi
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$token"
+      - name: download .pkg
+        run: |
+          curl -fsSL -H "X-Install-Token: ${{ steps.mint.outputs.token }}" \
+            "https://$INSTALL_HOST/web/download-installer?os=mac" -o installer.pkg
+          file installer.pkg | grep -q "xar archive" || { echo "::error::invalid .pkg"; file installer.pkg; exit 1; }
+          ls -lh installer.pkg
+      - name: install .pkg
+        run: sudo installer -pkg installer.pkg -target /
+
+  windows-ps:
+    runs-on: windows-latest
+    steps:
+      - name: PowerShell install
+        shell: pwsh
+        env:
+          UNCHAINED_API_KEY: ${{ secrets.UNCHAINED_API_KEY }}
+        run: |
+          $headers = @{ "Authorization" = "Bearer $env:UNCHAINED_API_KEY" }
+          $mint = Invoke-RestMethod -Method Post -Uri "https://$env:INSTALL_HOST/web/install-token" -Headers $headers
+          if ($mint.powershell_command -match "X-Install-Token'='([^']+)'") {
+            $token = $matches[1]
+          } else {
+            Write-Error "failed to mint install token"; exit 1
+          }
+          Write-Host "::add-mask::$token"
+
+          $url = "https://$env:INSTALL_HOST/install/windows/script"
+          $job = Start-Job -ScriptBlock {
+            param($u, $t)
+            $h = @{ "X-Install-Token" = $t }
+            (Invoke-WebRequest -UseBasicParsing -Headers $h -Uri $u).Content | Invoke-Expression
+          } -ArgumentList $url, $token
+
+          $finished = Wait-Job $job -Timeout ([int]$env:INSTALL_TIMEOUT)
+          if (-not $finished) {
+            Stop-Job $job
+            Write-Host "install reached the agent-start stage cleanly (killed at timeout)"
+          } else {
+            Write-Host "install completed before timeout"
+          }
+          $output = Receive-Job $job 2>&1 | Out-String
+          Write-Host $output
+          if ($output -match "ERROR:|FATAL:|Could not install|not recognized as the name") {
+            Write-Error "install script reported a failure"; exit 1
+          }
+
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: download .exe
+        shell: pwsh
+        env:
+          UNCHAINED_API_KEY: ${{ secrets.UNCHAINED_API_KEY }}
+        run: |
+          $headers = @{ "Authorization" = "Bearer $env:UNCHAINED_API_KEY" }
+          $mint = Invoke-RestMethod -Method Post -Uri "https://$env:INSTALL_HOST/web/install-token" -Headers $headers
+          if ($mint.powershell_command -match "X-Install-Token'='([^']+)'") {
+            $token = $matches[1]
+          } else {
+            Write-Error "failed to mint install token"; exit 1
+          }
+          Write-Host "::add-mask::$token"
+          $h = @{ "X-Install-Token" = $token }
+          Invoke-WebRequest -UseBasicParsing -Headers $h -Uri "https://$env:INSTALL_HOST/web/download-installer?os=windows" -OutFile installer.exe
+          if ((Get-Item installer.exe).Length -lt 10000) { throw "installer.exe is suspiciously small" }
+          Get-Item installer.exe | Format-List Name, Length
+      - name: install .exe (silent)
+        shell: pwsh
+        run: Start-Process .\installer.exe -ArgumentList '/S' -Wait
