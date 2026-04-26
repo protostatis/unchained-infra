@@ -250,6 +250,11 @@ if $FORCE_BUILD; then
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
+echo "[diag] pwd=$(pwd)"
+echo "[diag] dirs at build context root:"
+ls -la | grep -E '^d' | head -20
+echo "[diag] rhythm/ contents:"
+ls -la rhythm/ 2>&1 | head -10
 sync
 sleep 3
 docker compose build --no-cache </dev/null
@@ -258,6 +263,11 @@ else
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
+echo "[diag] pwd=$(pwd)"
+echo "[diag] dirs at build context root:"
+ls -la | grep -E '^d' | head -20
+echo "[diag] rhythm/ contents:"
+ls -la rhythm/ 2>&1 | head -10
 sync
 sleep 3
 docker compose build </dev/null
