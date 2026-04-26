@@ -221,6 +221,23 @@ def _load_claude_session() -> dict:
     return data.get("claude_session", {})
 
 
+def _claude_session_exists(claude_sid: str) -> bool:
+    """Return True if Claude CLI's local JSONL for this session id is still on disk.
+
+    Without this check, calling `claude --resume <stale-id>` causes Claude to
+    silently start a fresh session (with no prior context). The agent then
+    saves the new id over the stale one and the conversation appears to
+    "forget" everything. See bug investigation 2026-04-26 ("Chat C" context
+    loss in slot 3).
+    """
+    if not claude_sid:
+        return False
+    project_dir = CWD.replace("/", "-")
+    return os.path.exists(
+        os.path.expanduser(f"~/.claude/projects/{project_dir}/{claude_sid}.jsonl")
+    )
+
+
 def _save_codex_session(chat_session_id: str, codex_sid: str, model: str = ""):
     """Persist codex session mapping in the active slot."""
     data = _load_chat()
@@ -1415,6 +1432,14 @@ async def handle_message_claude(
     _append_message("user", user_text)
 
     claude_sid = claude_sessions.get(sid)
+    if claude_sid and not _claude_session_exists(claude_sid):
+        log.info(
+            "[%s] Saved Claude session %s no longer on disk; treating as fresh",
+            sid, claude_sid[:12],
+        )
+        claude_sessions.pop(sid, None)
+        _context_injected.discard((sid, "claude"))
+        claude_sid = None
     is_resume = claude_sid is not None
 
     # Context fallback: if no resume session but slot has history, inject summary
