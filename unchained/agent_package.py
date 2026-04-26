@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.80"  # cdp_tool: round-trip prov-<slot>-<id> form for tab listings + --tab
+VERSION = "0.3.81"  # chat_agent_cli: validate Claude session file before resume to prevent silent context loss
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
