@@ -60,6 +60,19 @@ LOCAL_CHECKSUMS_FILE="$(mktemp -t uc_local_checksums.XXXXXX)"
 DEPLOYED_PATHS_FILE="$(mktemp -t uc_deployed_paths.XXXXXX)"
 trap 'rm -f "$REMOTE_CHECKSUMS_FILE" "$LOCAL_CHECKSUMS_FILE" "$DEPLOYED_PATHS_FILE"' EXIT
 
+# Pick the local SHA-256 tool. macOS without GNU coreutils has `shasum`
+# but not `sha256sum`; Linux has `sha256sum`. Both produce the same
+# `<hash>  <path>` output format so they're interchangeable for diff.
+# Remote (EC2 Linux) always has sha256sum — no detection needed there.
+if command -v sha256sum >/dev/null 2>&1; then
+    LOCAL_HASH_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    LOCAL_HASH_CMD="shasum -a 256"
+else
+    echo "ERROR: need either sha256sum or shasum installed locally" >&2
+    exit 1
+fi
+
 # Emit the relative paths of every file that this deploy will upload.
 # Used to bound the checksum scan to files that actually exist on both
 # sides so the diff doesn't catch local-only dev cruft (.venv, tests,
@@ -335,7 +348,7 @@ if $FORCE_FULL_DEPLOY; then
     SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent web"
 else
     echo "==> Computing changed files..."
-    if (cd "$SCRIPT_DIR" && xargs -r sha256sum 2>/dev/null < "$DEPLOYED_PATHS_FILE" | sort) > "$LOCAL_CHECKSUMS_FILE"; then
+    if (cd "$SCRIPT_DIR" && xargs -r $LOCAL_HASH_CMD 2>/dev/null < "$DEPLOYED_PATHS_FILE" | sort) > "$LOCAL_CHECKSUMS_FILE"; then
         # diff outputs lines like:
         #   < <hash>  <path>          (only on remote — file was deleted)
         #   > <hash>  <path>          (only on local — file is new)
