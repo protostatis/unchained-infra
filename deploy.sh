@@ -237,19 +237,30 @@ else
     echo "==> Rhythm not found locally — keeping existing remote rhythm."
 fi
 
-# Rebuild images (without restarting containers yet)
+# Rebuild images (without restarting containers yet).
+# `sync` and a brief settle delay before the build — observed CI race where
+# `docker buildx bake`'s parallel context-load fired against an FS that
+# wasn't fully visible to BuildKit yet, manifesting as
+#   "ERROR: failed to calculate checksum of ref ...: '/rhythm': not found"
+# even though the dir was on disk. Manual deploys never hit this because
+# minutes pass between the last SCP and a human running build. CI's tighter
+# loop reproduces it deterministically.
 echo "==> Building container images..."
 if $FORCE_BUILD; then
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
-docker compose build --no-cache
+sync
+sleep 3
+docker compose build --no-cache </dev/null
 EOF
 else
     remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
-docker compose build
+sync
+sleep 3
+docker compose build </dev/null
 EOF
 fi
 
