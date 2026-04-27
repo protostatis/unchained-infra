@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.86"  # fix: move PATH extension before uv check so launchd autostart doesn't reinstall uv every boot
+VERSION = "0.3.87"  # daemon + autostart on by default; --foreground/-f to run interactively
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -91,11 +91,12 @@ _START_SH = r"""#!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
 
-DAEMON=false
+DAEMON=true
 ENABLE_AUTOSTART=false
 DISABLE_AUTOSTART=false
 for arg in "$@"; do
   case "$arg" in
+    --foreground|-f) DAEMON=false ;;
     --daemon|-d) DAEMON=true ;;
     --enable-autostart) ENABLE_AUTOSTART=true ;;
     --disable-autostart) DISABLE_AUTOSTART=true ;;
@@ -176,7 +177,7 @@ if $DISABLE_AUTOSTART; then
   exit 0
 fi
 
-if $ENABLE_AUTOSTART && ! $DAEMON; then
+if $ENABLE_AUTOSTART && ! $DAEMON; then  # standalone: register launchd entry and exit without starting
   install_autostart
   exit 0
 fi
@@ -323,7 +324,7 @@ if $DAEMON; then
     exit 0
   fi
 
-  if $ENABLE_AUTOSTART; then
+  if ! $DISABLE_AUTOSTART; then
     install_autostart
   fi
 
@@ -1381,22 +1382,24 @@ echo "  Then restart Claude Code for tools to take effect."
 echo ""
 echo "To start the agent:"
 echo "  cd $INSTALL_DIR"
-echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
-echo "  ./start.sh --daemon   # background (close terminal safely)"
+echo "  ./start.sh            # background daemon + autostart (default)"
+echo "  ./start.sh --foreground   # foreground mode (see output, Ctrl+C to stop)"
 echo ""
 if [ -t 0 ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
   echo ""
 elif [ -e /dev/tty ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r </dev/tty || REPLY=n
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r </dev/tty || REPLY=n
   echo ""
 else
   echo "Non-interactive — run ./start.sh manually."
   REPLY=n
 fi
-if [[ $REPLY =~ ^[Dd]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh --daemon
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+  true
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
+  cd "$INSTALL_DIR" && ./start.sh --foreground
+else
   cd "$INSTALL_DIR" && ./start.sh
 fi
 """
@@ -1491,25 +1494,27 @@ echo "=== Installation complete ==="
 echo "Location: $INSTALL_DIR"
 echo ""
 echo "To start the agent:"
-echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
-echo "  ./start.sh --daemon   # background (close terminal safely)"
-echo "  ./start.sh --enable-autostart   # start daemon on reboot/login (macOS)"
-echo "  ./start.sh --disable-autostart  # remove reboot/login autostart"
-echo "  ./stop.sh             # stop background agent"
+echo "  ./start.sh                      # background daemon + autostart (default)"
+echo "  ./start.sh --foreground         # foreground mode (see output, Ctrl+C to stop)"
+echo "  ./start.sh --disable-autostart  # background daemon, skip autostart registration"
+echo "  ./start.sh --enable-autostart   # register autostart only, don't start now"
+echo "  ./stop.sh                       # stop background agent"
 echo ""
 if [ -t 0 ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
   echo ""
 elif [ -e /dev/tty ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r </dev/tty || REPLY=n
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r </dev/tty || REPLY=n
   echo ""
 else
   echo "Non-interactive — run ./start.sh manually."
   REPLY=n
 fi
-if [[ $REPLY =~ ^[Dd]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh --daemon
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+  true
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
+  cd "$INSTALL_DIR" && ./start.sh --foreground
+else
   cd "$INSTALL_DIR" && ./start.sh
 fi
 """
@@ -1793,7 +1798,7 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 3. Opens Chrome with remote debugging enabled
 4. Connects Chrome to the Unchained relay server
 5. Starts the chat agent (waits for messages from the web UI)
-6. Optional: enable reboot/login autostart via `./start.sh --enable-autostart` (macOS)
+6. Runs as a background daemon and registers macOS login autostart automatically
 
 ## Requirements
 
