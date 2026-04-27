@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.89"  # decouple daemon from autostart: --enable-autostart opt-in, plist runs --daemon, KeepAlive=false
+VERSION = "0.3.90"  # installer postinstall + DMG launcher + interactive prompt now use --enable-autostart so autostart works out of the box
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -1418,7 +1418,7 @@ if [[ $REPLY =~ ^[Nn]$ ]]; then
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
   cd "$INSTALL_DIR" && ./start.sh --foreground
 else
-  cd "$INSTALL_DIR" && ./start.sh
+  cd "$INSTALL_DIR" && ./start.sh --enable-autostart
 fi
 """
 
@@ -1533,7 +1533,7 @@ if [[ $REPLY =~ ^[Nn]$ ]]; then
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
   cd "$INSTALL_DIR" && ./start.sh --foreground
 else
-  cd "$INSTALL_DIR" && ./start.sh
+  cd "$INSTALL_DIR" && ./start.sh --enable-autostart
 fi
 """
 
