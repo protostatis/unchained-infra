@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.83"  # update.ps1: fix em-dash that broke string parsing; add UTF-8 BOM to all .ps1 in package
+VERSION = "0.3.84"  # start.sh: fix launchctl enable-before-bootstrap order; guard against sudo
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -117,6 +117,12 @@ install_autostart() {
     echo "Autostart setup skipped: launchctl not found."
     return 0
   fi
+  if [[ "$(id -u)" == "0" ]]; then
+    echo "ERROR: Do not run --enable-autostart with sudo."
+    echo "  LaunchAgents run as your user — root access is not needed."
+    echo "  Run: ./start.sh --enable-autostart"
+    return 1
+  fi
   mkdir -p "$HOME/Library/LaunchAgents"
   cat > "$AUTOSTART_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -144,8 +150,8 @@ install_autostart() {
 </plist>
 PLIST
   launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   launchctl enable "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   echo "Autostart enabled: $AUTOSTART_LABEL"
   echo "LaunchAgent: $AUTOSTART_PLIST"
 }
