@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.82"  # start.ps1: install Python via uv (fixes ARM64 silent failure of python.org direct installer)
+VERSION = "0.3.83"  # update.ps1: fix em-dash that broke string parsing; add UTF-8 BOM to all .ps1 in package
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -1201,7 +1201,7 @@ if (Test-Path "requirements.txt") {
   $newReqs = Get-Content "requirements.txt" -Raw
 }
 if ($oldReqs -ne $newReqs -and (Test-Path ".\.venv\Scripts\python.exe")) {
-  Write-Host "Dependencies changed — reinstalling..."
+  Write-Host "Dependencies changed -- reinstalling..."
   & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
 }
 
@@ -1876,6 +1876,13 @@ def _add_source_files(zf: zipfile.ZipFile, src_dir: str, prefix: str):
         zf.writestr(f"{prefix}/{dest}", content)
 
 
+def _ps1(content: str) -> str:
+    """PowerShell loads .ps1 as ANSI by default; prefix a UTF-8 BOM so any
+    non-ASCII character in script bodies (em-dashes, smart quotes, etc.) is
+    parsed as UTF-8 instead of breaking string terminators."""
+    return content if content.startswith("﻿") else "﻿" + content
+
+
 def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> bytes:
     """Build an in-memory ZIP file with the agent package.
 
@@ -1911,9 +1918,9 @@ def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> b
         zf.writestr(info, _STOP_SH)
 
         # Windows scripts
-        zf.writestr("unchained-agent/start.ps1", _START_PS1)
-        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
-        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/start.ps1", _ps1(_START_PS1))
+        zf.writestr("unchained-agent/stop.ps1", _ps1(_STOP_PS1))
+        zf.writestr("unchained-agent/update.ps1", _ps1(_UPDATE_PS1))
         zf.writestr("unchained-agent/start.bat", _START_BAT)
         zf.writestr("unchained-agent/stop.bat", _STOP_BAT)
         zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
@@ -1951,14 +1958,14 @@ def build_update_zip() -> bytes:
         info = zipfile.ZipInfo("unchained-agent/update.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _UPDATE_SH)
-        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/update.ps1", _ps1(_UPDATE_PS1))
         zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
 
         # stop.sh (executable) so installed agents pick up stop/autostart fixes.
         info = zipfile.ZipInfo("unchained-agent/stop.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _STOP_SH)
-        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
+        zf.writestr("unchained-agent/stop.ps1", _ps1(_STOP_PS1))
 
         # CLAUDE.md
         claude_md_path = os.path.join(src_dir, "CLAUDE.md")
