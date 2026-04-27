@@ -257,7 +257,7 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
                     "prompt": "Old prompt",
                     "schedule": {"daily_at": "09:00"},
                     "enabled": False,
-                    "model": "claude-opus-4-6",
+                    "model": "claude-opus-4-7",
                     "use_stable_session": True,
                     "timeout_seconds": 240,
                 }
@@ -292,7 +292,7 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
         stored = writes[-1]["jobs"][0]
         self.assertEqual(stored["prompt"], "New prompt")
         self.assertEqual(stored["schedule"], {"daily_at": "09:00"})
-        self.assertEqual(stored["model"], "claude-opus-4-6")
+        self.assertEqual(stored["model"], "claude-opus-4-7")
         self.assertTrue(stored["use_stable_session"])
         self.assertEqual(stored["timeout_seconds"], 240)
         self.assertFalse(stored["enabled"])
@@ -305,7 +305,7 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
                     "prompt": "Old prompt",
                     "schedule": {"daily_at": "09:00"},
                     "enabled": True,
-                    "model": "claude-opus-4-6",
+                    "model": "claude-opus-4-7",
                     "use_stable_session": True,
                 }
             ]

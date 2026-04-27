@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.83"  # update.ps1: fix em-dash that broke string parsing; add UTF-8 BOM to all .ps1 in package
+VERSION = "0.3.86"  # fix: move PATH extension before uv check so launchd autostart doesn't reinstall uv every boot
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -117,6 +117,12 @@ install_autostart() {
     echo "Autostart setup skipped: launchctl not found."
     return 0
   fi
+  if [[ "$(id -u)" == "0" ]]; then
+    echo "ERROR: Do not run --enable-autostart with sudo."
+    echo "  LaunchAgents run as your user — root access is not needed."
+    echo "  Run: ./start.sh --enable-autostart"
+    return 1
+  fi
   mkdir -p "$HOME/Library/LaunchAgents"
   cat > "$AUTOSTART_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -144,8 +150,8 @@ install_autostart() {
 </plist>
 PLIST
   launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   launchctl enable "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   echo "Autostart enabled: $AUTOSTART_LABEL"
   echo "LaunchAgent: $AUTOSTART_PLIST"
 }
@@ -271,6 +277,10 @@ PY
   unset UNCHAINED_INSTALL_TOKEN
 fi
 
+# launchd starts with a minimal PATH; add common CLI locations before any checks.
+# Homebrew/system installs are placed ahead of ~/.local/bin so stale local shims do not win.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
+
 # Ensure uv is available (handles python resolution across all platforms)
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installing uv..."
@@ -288,10 +298,6 @@ fi
 
 # Activate venv so Claude's Bash tool finds the right python
 source .venv/bin/activate
-
-# launchd starts with a minimal PATH; add common CLI locations, but keep
-# Homebrew/system installs ahead of ~/.local/bin so stale local shims do not win.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
 if [ -z "${CLAUDE_BIN:-}" ] && command -v claude >/dev/null 2>&1; then
   export CLAUDE_BIN="$(command -v claude)"
 fi
