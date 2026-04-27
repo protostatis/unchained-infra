@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.88"  # fix launchd autostart: plist passes --foreground, guard stale PID on reboot
+VERSION = "0.3.89"  # decouple daemon from autostart: --enable-autostart opt-in, plist runs --daemon, KeepAlive=false
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -136,11 +136,20 @@ install_autostart() {
   <array>
     <string>/bin/bash</string>
     <string>$SCRIPT_PATH</string>
-    <string>--foreground</string>
+    <string>--daemon</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <!-- KeepAlive=false: start.sh --daemon forks the supervised loop into a
+       background subshell and exits 0 quickly. The supervised loop is the
+       supervisor (it has the crash circuit breaker + rollback). KeepAlive=true
+       would loop infinitely re-spawning start.sh whenever it returns. -->
   <key>KeepAlive</key>
+  <false/>
+  <!-- AbandonProcessGroup=true: when start.sh --daemon exits after forking,
+       launchd should NOT kill its child processes. The forked supervised loop
+       must keep running. Default false would tear down the whole process tree. -->
+  <key>AbandonProcessGroup</key>
   <true/>
   <key>WorkingDirectory</key>
   <string>$AGENT_DIR</string>
@@ -178,7 +187,10 @@ if $DISABLE_AUTOSTART; then
   exit 0
 fi
 
-if $ENABLE_AUTOSTART && ! $DAEMON; then  # standalone: register launchd entry and exit without starting
+if $ENABLE_AUTOSTART; then
+  # Register launchd plist + exit. RunAtLoad=true causes launchd to immediately
+  # spawn `start.sh --daemon`, which forks the supervised loop. So this single
+  # command both starts the daemon now AND persists across reboots.
   install_autostart
   exit 0
 fi
@@ -331,10 +343,8 @@ if $DAEMON; then
     rm -f "$PIDFILE"
   fi
 
-  if ! $DISABLE_AUTOSTART; then
-    install_autostart
-  fi
-
+  # Daemon mode runs the supervised loop in a background subshell. It does
+  # NOT touch launchd — autostart is opt-in via `--enable-autostart`.
   echo "Starting in daemon mode..."
   echo "Log file: $LOGFILE"
 
@@ -425,8 +435,8 @@ if $DAEMON; then
     BRIDGE_SUP_PID=$!
     sleep 2
 
-    echo "[$(date)] Starting chat agent..."
-    # caffeinate -i prevents macOS App Nap from suspending the agent
+    # caffeinate -i prevents macOS App Nap from suspending the agent.
+    # supervised_loop prints "Starting chat agent..." itself.
     AGENT_CMD=(env PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py)
     if command -v caffeinate &>/dev/null; then
       AGENT_CMD=(caffeinate -i -- "${AGENT_CMD[@]}")
@@ -1389,8 +1399,9 @@ echo "  Then restart Claude Code for tools to take effect."
 echo ""
 echo "To start the agent:"
 echo "  cd $INSTALL_DIR"
-echo "  ./start.sh            # background daemon + autostart (default)"
-echo "  ./start.sh --foreground   # foreground mode (see output, Ctrl+C to stop)"
+echo "  ./start.sh                  # background daemon"
+echo "  ./start.sh --enable-autostart   # background daemon + reboot autostart"
+echo "  ./start.sh --foreground         # foreground mode (see output, Ctrl+C to stop)"
 echo ""
 if [ -t 0 ]; then
   read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
@@ -1501,11 +1512,11 @@ echo "=== Installation complete ==="
 echo "Location: $INSTALL_DIR"
 echo ""
 echo "To start the agent:"
-echo "  ./start.sh                      # background daemon + autostart (default)"
+echo "  ./start.sh                      # background daemon (one-shot)"
+echo "  ./start.sh --enable-autostart   # background daemon + autostart on reboot"
+echo "  ./start.sh --disable-autostart  # remove reboot autostart"
 echo "  ./start.sh --foreground         # foreground mode (see output, Ctrl+C to stop)"
-echo "  ./start.sh --disable-autostart  # background daemon, skip autostart registration"
-echo "  ./start.sh --enable-autostart   # register autostart only, don't start now"
-echo "  ./stop.sh                       # stop background agent"
+echo "  ./stop.sh                       # stop daemon"
 echo ""
 if [ -t 0 ]; then
   read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
@@ -1805,7 +1816,7 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 3. Opens Chrome with remote debugging enabled
 4. Connects Chrome to the Unchained relay server
 5. Starts the chat agent (waits for messages from the web UI)
-6. Runs as a background daemon and registers macOS login autostart automatically
+6. Runs as a background daemon. Run `./start.sh --enable-autostart` once to also register macOS reboot autostart.
 
 ## Requirements
 
