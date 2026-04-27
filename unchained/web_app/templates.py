@@ -6496,7 +6496,7 @@ _API_CHAT_CLAUDE_SDK_REPLACEMENTS = (
     TemplateReplacement(
         _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
         """      <option value="claude-sdk:claude-sonnet-4-6">Claude API · Sonnet 4.6</option>
-      <option value="claude-sdk:claude-opus-4-6">Claude API · Opus 4.6</option>
+      <option value="claude-sdk:claude-opus-4-7">Claude API · Opus 4.7</option>
       <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API · Haiku 4.5</option>""",
         "Claude SDK model options",
     ),
@@ -9335,7 +9335,7 @@ body{
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
       <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-      <option value="claude-opus-4-6">Opus 4.6</option>
+      <option value="claude-opus-4-7">Opus 4.7</option>
       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
     </select>
     <label for="profilesel">Profile</label>
@@ -14902,10 +14902,10 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
         <select id="f-model" onchange="syncSchedulerModelField()">
           <option value="">Default: Claude CLI Opus</option>
           <option value="claude-sonnet-4-6">Claude CLI: Sonnet 4.6</option>
-          <option value="claude-opus-4-6">Claude CLI: Opus 4.6</option>
+          <option value="claude-opus-4-7">Claude CLI: Opus 4.7</option>
           <option value="claude-haiku-4-5-20251001">Claude CLI: Haiku 4.5</option>
           <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
-          <option value="claude-sdk:claude-opus-4-6">Claude API: Opus 4.6</option>
+          <option value="claude-sdk:claude-opus-4-7">Claude API: Opus 4.7</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
           <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
           <option value="codex-cli:gpt-5.4-mini">Codex CLI: GPT-5.4 Mini (fast)</option>
@@ -15044,10 +15044,10 @@ function formatSchedulerModel(model){
   if(!value) return 'Default: Claude CLI Opus';
   const labels={
     'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
-    'claude-opus-4-6':'Claude CLI: Opus 4.6',
+    'claude-opus-4-7':'Claude CLI: Opus 4.7',
     'claude-haiku-4-5-20251001':'Claude CLI: Haiku 4.5',
     'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
-    'claude-sdk:claude-opus-4-6':'Claude API: Opus 4.6',
+    'claude-sdk:claude-opus-4-7':'Claude API: Opus 4.7',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
     'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5',
     'codex-cli:gpt-5.4-mini':'Codex CLI: GPT-5.4 Mini (fast)',

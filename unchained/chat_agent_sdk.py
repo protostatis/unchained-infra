@@ -19,7 +19,7 @@ Architecture:
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
     uv run chat_agent_sdk.py --key uc_live_... --agent a-12345678
-    uv run chat_agent_sdk.py --key uc_live_... --agent a-... --model claude-opus-4-6
+    uv run chat_agent_sdk.py --key uc_live_... --agent a-... --model claude-opus-4-7
 
 See also: chat_agent_cli.py (test version using `claude -p` CLI, no API key needed)
 """
