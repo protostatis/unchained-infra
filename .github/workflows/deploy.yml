@@ -1,8 +1,10 @@
 name: Deploy to EC2
 
+# Auto-deploy on push is disabled: the workflow uses `docker compose up -d --build`
+# which stops every container and races with manual `./deploy.sh` runs, leaving
+# services in a stopped state when the workflow fails mid-flight (see incident
+# 2026-04-27). Trigger manually via the Actions tab when needed.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
