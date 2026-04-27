@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.81"  # chat_agent_cli: validate Claude session file before resume to prevent silent context loss
+VERSION = "0.3.82"  # start.ps1: install Python via uv (fixes ARM64 silent failure of python.org direct installer)
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -692,39 +692,47 @@ function Find-PythonCommand() {
 }
 
 function Install-PythonRuntime() {
-  $pythonVersion = "3.13.2"
-  $installerName = "python-$pythonVersion-amd64.exe"
-  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
-  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
-
-  Write-Host "Python 3.8+ not found. Installing Python runtime..."
+  # Use uv as the Python package feed: arch-aware (works on x86_64 + ARM64),
+  # and avoids the python.org direct installer's ARM-incompatibility silent failure.
+  # Local 'Continue' preference: uv emits warnings to stderr (e.g. shim collision)
+  # that would otherwise be promoted to terminating errors by the script-wide 'Stop'.
+  $oldPref = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
-    $installArgs = @(
-      "/quiet",
-      "InstallAllUsers=0",
-      "Include_test=0",
-      "Include_doc=0",
-      "Include_dev=0",
-      "Include_pip=1",
-      "Include_launcher=1",
-      "InstallLauncherAllUsers=0",
-      "PrependPath=1",
-      "SimpleInstall=1"
-    )
-    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
-    if (-not $proc -or $proc.ExitCode -ne 0) {
+    Write-Host "Python 3.8+ not found. Installing uv to manage Python..."
+    Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    $uvBin = $null
+    foreach ($cand in @(
+      (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+      "$env:LOCALAPPDATA\Programs\uv\uv.exe"
+    )) {
+      if (Test-Path $cand) { $uvBin = $cand; break }
+    }
+    if (-not $uvBin) {
+      $uvBin = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $uvBin -or -not (Test-Path $uvBin)) {
+      Write-Host "ERROR: uv installer did not produce uv.exe."
       return $false
     }
-    # Refresh PATH from registry for this process.
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+
+    Write-Host "Installing Python 3.13 via uv..."
+    # --force overwrites any stale executable shim from a prior partial install.
+    & $uvBin python install 3.13 --force 2>&1 | ForEach-Object { Write-Host $_ }
+    # uv exits 0 even when shim install warns; check that python is actually resolvable.
+    $pythonPath = (& $uvBin python find 3.13 2>&1 | Select-Object -Last 1).ToString().Trim()
+    if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
+      Write-Host "ERROR: 'uv python find 3.13' returned no usable path: $pythonPath"
+      return $false
+    }
+    $pythonDir = Split-Path $pythonPath -Parent
+    $env:Path = "$pythonDir;$env:Path"
     return $true
   } catch {
+    Write-Host "ERROR: Install-PythonRuntime failed: $($_.Exception.Message)"
     return $false
   } finally {
-    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+    $ErrorActionPreference = $oldPref
   }
 }
 
@@ -1550,39 +1558,47 @@ function Find-PythonCommand() {
 }
 
 function Install-PythonRuntime() {
-  $pythonVersion = "3.13.2"
-  $installerName = "python-$pythonVersion-amd64.exe"
-  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
-  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
-
-  Write-Host "Python 3.8+ not found. Installing Python runtime..."
+  # Use uv as the Python package feed: arch-aware (works on x86_64 + ARM64),
+  # and avoids the python.org direct installer's ARM-incompatibility silent failure.
+  # Local 'Continue' preference: uv emits warnings to stderr (e.g. shim collision)
+  # that would otherwise be promoted to terminating errors by the script-wide 'Stop'.
+  $oldPref = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
-    $installArgs = @(
-      "/quiet",
-      "InstallAllUsers=0",
-      "Include_test=0",
-      "Include_doc=0",
-      "Include_dev=0",
-      "Include_pip=1",
-      "Include_launcher=1",
-      "InstallLauncherAllUsers=0",
-      "PrependPath=1",
-      "SimpleInstall=1"
-    )
-    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
-    if (-not $proc -or $proc.ExitCode -ne 0) {
+    Write-Host "Python 3.8+ not found. Installing uv to manage Python..."
+    Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    $uvBin = $null
+    foreach ($cand in @(
+      (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+      "$env:LOCALAPPDATA\Programs\uv\uv.exe"
+    )) {
+      if (Test-Path $cand) { $uvBin = $cand; break }
+    }
+    if (-not $uvBin) {
+      $uvBin = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $uvBin -or -not (Test-Path $uvBin)) {
+      Write-Host "ERROR: uv installer did not produce uv.exe."
       return $false
     }
-    # Refresh PATH from registry for this process.
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+
+    Write-Host "Installing Python 3.13 via uv..."
+    # --force overwrites any stale executable shim from a prior partial install.
+    & $uvBin python install 3.13 --force 2>&1 | ForEach-Object { Write-Host $_ }
+    # uv exits 0 even when shim install warns; check that python is actually resolvable.
+    $pythonPath = (& $uvBin python find 3.13 2>&1 | Select-Object -Last 1).ToString().Trim()
+    if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
+      Write-Host "ERROR: 'uv python find 3.13' returned no usable path: $pythonPath"
+      return $false
+    }
+    $pythonDir = Split-Path $pythonPath -Parent
+    $env:Path = "$pythonDir;$env:Path"
     return $true
   } catch {
+    Write-Host "ERROR: Install-PythonRuntime failed: $($_.Exception.Message)"
     return $false
   } finally {
-    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+    $ErrorActionPreference = $oldPref
   }
 }
 
