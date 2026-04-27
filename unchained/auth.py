@@ -126,6 +126,25 @@ class Auth:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
+            # Auto-approve trigger: any new user inserted with status='pending'
+            # is immediately promoted to 'approved' with a fresh API key.
+            # Drop+recreate keeps the trigger body in sync with KEY_PREFIX /
+            # KEY_RAND_BYTES if those constants ever change.
+            conn.execute("DROP TRIGGER IF EXISTS auto_approve_pending_users")
+            conn.execute(f"""
+                CREATE TRIGGER auto_approve_pending_users
+                AFTER INSERT ON users
+                WHEN NEW.status = 'pending'
+                BEGIN
+                    UPDATE users
+                    SET status = 'approved',
+                        api_key = '{KEY_PREFIX}' || lower(hex(randomblob({KEY_RAND_BYTES})))
+                    WHERE user_id = NEW.user_id;
+                    INSERT INTO api_keys (key, user_id, created_at, active)
+                    SELECT api_key, user_id, created_at, 1
+                    FROM users WHERE user_id = NEW.user_id;
+                END
+            """)
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
