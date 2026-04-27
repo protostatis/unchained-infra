@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.87"  # daemon + autostart on by default; --foreground/-f to run interactively
+VERSION = "0.3.88"  # fix launchd autostart: plist passes --foreground, guard stale PID on reboot
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -136,6 +136,7 @@ install_autostart() {
   <array>
     <string>/bin/bash</string>
     <string>$SCRIPT_PATH</string>
+    <string>--foreground</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -317,11 +318,17 @@ if $DAEMON; then
   LOGFILE="$(pwd)/agent.log"
   PIDFILE="$(pwd)/.agent.pid"
 
-  # Check if already running
-  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "Agent is already running (PID $(cat "$PIDFILE"))."
-    echo "Stop: ./stop.sh"
-    exit 0
+  # Check if already running — verify cmdline to guard against stale PID files
+  # (after reboot the PID slot may be reused by an unrelated process)
+  if [ -f "$PIDFILE" ]; then
+    _OLD_PID="$(cat "$PIDFILE")"
+    if kill -0 "$_OLD_PID" 2>/dev/null && \
+       ps -p "$_OLD_PID" -o args= 2>/dev/null | grep -q "start\.sh\|chat_agent_cli"; then
+      echo "Agent is already running (PID $_OLD_PID)."
+      echo "Stop: ./stop.sh"
+      exit 0
+    fi
+    rm -f "$PIDFILE"
   fi
 
   if ! $DISABLE_AUTOSTART; then
