@@ -67,6 +67,73 @@ def _normalized_email(value: object) -> str:
     return email
 
 
+def _send_signup_emails(
+    core,
+    *,
+    user: dict,
+    email: str,
+    name: str,
+    user_type: str,
+    is_trial_branch: bool,
+) -> None:
+    # The auto_approve_pending_users trigger may have flipped the user to
+    # 'approved' before we get here, so branch on the post-trigger status
+    # rather than assuming pending.
+    approved = user.get("status") == "approved"
+    display = name or email
+
+    if approved:
+        core.send_email(
+            email,
+            "Unchained — You're in!",
+            f"<p>Hi {display},</p>"
+            "<p>Your account has been approved! "
+            '<a href="https://api.unchainedsky.com/chat">Visit unchainedsky.com/chat</a> to get started.</p>'
+            "<p>— The Unchained Team</p>",
+        )
+    elif is_trial_branch:
+        core.send_email(
+            email,
+            "Unchained — Trial access enabled (account review pending)",
+            f"<p>Hi {display},</p>"
+            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
+            "<p>We'll notify you once your full account is approved.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+    else:
+        core.send_email(
+            email,
+            "Unchained — Sign-up request received",
+            f"<p>Hi {display},</p>"
+            "<p>We received your request to join Unchained. "
+            "We're reviewing it now and will get back to you shortly.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+
+    if approved:
+        admin_subject = f"New Unchained sign-up (auto-approved): {email}"
+        admin_body = (
+            f"<p>New {user_type} sign-up: <b>{display}</b> ({email}).</p>"
+            "<p>Status: <b>auto-approved</b>.</p>"
+        )
+    elif is_trial_branch:
+        admin_subject = f"New trial sign-up (pending review): {email}"
+        admin_body = (
+            f"<p>New trial/demo user: <b>{display}</b> ({email}).</p>"
+            "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>"
+        )
+    else:
+        admin_subject = f"New Unchained sign-up: {email}"
+        admin_body = (
+            f"<p>New sign-up request from <b>{display}</b> ({email}).</p>"
+            f"<p>Source: <b>{user_type}</b></p>"
+            f"<p>Approve: <code>POST /admin/approve</code> with body "
+            f'<code>{{"email": "{email}"}}</code></p>'
+        )
+    for admin in core.ADMIN_EMAILS:
+        core.send_email(admin, admin_subject, admin_body)
+
+
 def _facebook_oauth_config() -> tuple[str, str, str, str]:
     app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
     app_secret = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
@@ -385,44 +452,27 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
 
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
 
     resp = web.json_response(
         {
@@ -760,42 +810,26 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
     resp = _redirect(pending=True)
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
@@ -1180,42 +1214,26 @@ async def handle_github_callback(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
     resp = _redirect(pending=True)
     core._set_session_cookie(resp, session_token, request)
     core._track_event(

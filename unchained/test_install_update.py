@@ -851,6 +851,27 @@ def test_openrouter_token_usage_tracking():
         os.unlink(db_path)
 
 
+def test_create_pending_user_returns_post_trigger_state():
+    """create_pending_user must reflect the auto_approve_pending_users trigger.
+
+    The trigger flips status='pending' -> 'approved' on insert and issues an
+    api_key, so callers in the signup flow can branch on the returned status
+    to send the right welcome email.
+    """
+    from auth import Auth
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        auth = Auth(db_path=db_path)
+        user = auth.create_pending_user("auto-approved@example.com", "Auto Approved", "", user_type="claude")
+        assert user["status"] == "approved", f"expected status='approved' from trigger, got: {user}"
+        assert user["api_key"], f"expected api_key issued by trigger, got: {user}"
+        assert user["user_type"] == "claude", f"user_type lost: {user}"
+        print("  create_pending_user reflects auto_approve trigger output")
+    finally:
+        os.unlink(db_path)
+
+
 def test_approve_user_keeps_existing_api_key():
     from auth import Auth
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -1597,6 +1618,7 @@ if __name__ == "__main__":
         ("auth: cleanup_expired_tokens", test_cleanup_expired_tokens),
         ("auth: openrouter budget tracking", test_openrouter_budget_tracking),
         ("auth: openrouter token usage tracking", test_openrouter_token_usage_tracking),
+        ("auth: create_pending_user reflects trigger", test_create_pending_user_returns_post_trigger_state),
         ("auth: approve_user keeps existing API key", test_approve_user_keeps_existing_api_key),
         ("chat_agent_cli: _parse_version", test_parse_version),
         ("web: new handlers importable", test_web_imports),

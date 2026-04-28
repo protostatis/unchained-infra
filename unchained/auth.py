@@ -298,7 +298,12 @@ class Auth:
         }
 
     def create_pending_user(self, email: str, name: str = "", picture: str = "", user_type: str = "claude") -> dict:
-        """Create a user with status='pending' and no API key."""
+        """Create a user with status='pending'.
+
+        The ``auto_approve_pending_users`` trigger may flip status to
+        ``'approved'`` and issue an ``api_key`` before this returns, so the
+        result is re-read from the row so callers can detect auto-approval.
+        """
         email = email.lower()
         user_id = "u-" + secrets.token_hex(4)
         now = time.time()
@@ -308,6 +313,9 @@ class Auth:
                 "VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending', ?)",
                 (user_id, email, name, picture, now, now, user_type),
             )
+        user = self.find_user_by_email(email)
+        if user is not None:
+            return user
         return {"user_id": user_id, "email": email, "name": name, "picture": picture,
                 "api_key": None, "status": "pending", "user_type": user_type}
 
