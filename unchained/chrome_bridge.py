@@ -1659,8 +1659,18 @@ class Agent:
                     # Leased tab was closed externally — release stale lease
                     self._tab_leases.pop(channel, None)
                     self._leased_tabs.discard(leased_id)
-                # Auto prefers page tabs; fall back to popup only if no pages
-                pages_only = [t for t in tabs if t.get("type") == "page"]
+                # Auto prefers page tabs; fall back to popup only if no pages.
+                # Exclude chrome:// targets — Chrome 147+ exposes the omnibox
+                # AI dropdown (chrome://omnibox-popup.top-chrome/...) as a
+                # type=page target with no associated OS window. If 'auto'
+                # picks one of those, every Page.navigate routed through this
+                # connection lands inside the URL-bar dropdown instead of a
+                # real tab the user can see.
+                pages_only = [
+                    t for t in tabs
+                    if t.get("type") == "page"
+                    and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+                ]
                 # Filter out tabs leased by other channels
                 if channel >= 0:
                     available = [t for t in pages_only if t["id"] not in self._leased_tabs]
@@ -1722,7 +1732,16 @@ class Agent:
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
         page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
-        pages_only = [t for t in tabs if t.get("type") == "page"]
+        # Exclude chrome:// / devtools:// internal targets (omnibox AIM
+        # dropdown in Chrome 147+, devtools://, etc) from auto-resolution
+        # candidates. Same rationale as the provisioned-Chrome path above:
+        # those targets are window-less and stealing them for navigates
+        # makes the user's tab content render inside the URL-bar dropdown.
+        pages_only = [
+            t for t in tabs
+            if t.get("type") == "page"
+            and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+        ]
         if tab_id == "auto":
             # Reuse existing lease for this channel
             if channel >= 0 and channel in self._tab_leases:
