@@ -593,9 +593,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     """GET /web/first-look/preview/ws — public guest preview of the headless agent.
 
     Resolves the target via guest cookie + ``_session_tabs`` and streams
-    frames from ``HEADLESS_AGENT_ID``. For authenticated /local users,
-    use ``handle_local_preview_ws`` instead — that endpoint resolves the
-    caller's own local Chrome agent.
+    frames from ``HEADLESS_AGENT_ID`` through ``_run_preview_stream``.
     """
     core = _core()
     sid_param = request.query.get("session_id", "")
@@ -642,111 +640,6 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         ws,
         sid_param=sid_param,
         agent_id=agent_id,
-        tab_id=tab_id,
-        width=width,
-        height=height,
-    )
-    return ws
-
-
-async def _resolve_local_preview_tab_id(core, agent_id: str) -> str | None:
-    """Pick a tab to attach the screencast to for an authenticated /local user.
-
-    The local agent's tabs aren't tracked in ``_session_tabs`` (that map is
-    only populated for headless guest provisioning), so we ask the relay's
-    HTTP-proxy for the agent's Chrome tab list and return the first ``page``
-    target. Returns ``None`` if no usable tab is reachable yet.
-    """
-    relay_host, relay_port = core._parse_relay()
-    scheme = "https" if relay_port == 443 else "http"
-    base = (
-        f"{scheme}://{relay_host}"
-        if relay_port in (443, 80)
-        else f"{scheme}://{relay_host}:{relay_port}"
-    )
-    url = f"{base}/api/agents/{agent_id}/http/GET/json/list"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url, timeout=5, headers=core._relay_auth_headers()
-            )
-            if not resp.is_success:
-                return None
-            payload = resp.json()
-    except Exception:
-        return None
-
-    body = payload.get("body") if isinstance(payload, dict) else None
-    candidates = body if isinstance(body, list) else payload
-    if not isinstance(candidates, list):
-        return None
-    for entry in candidates:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("type") != "page":
-            continue
-        tab = str(entry.get("id") or "").strip()
-        if re.fullmatch(r"[A-Fa-f0-9]{32,64}", tab):
-            return tab
-    return None
-
-
-async def handle_local_preview_ws(request: web.Request) -> web.StreamResponse:
-    """GET /web/preview/ws — authenticated local-agent preview.
-
-    The caller's session cookie identifies the agent (e.g. ``claude-XXXXXXXX``);
-    the screencast streams from THAT agent's Chrome, not the shared headless
-    one. Used by ``/local`` so users see the browser running on their own
-    machine instead of the cloud worker.
-    """
-    core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info or not auth_info.get("agent_id"):
-        return web.Response(status=401, text="authentication required")
-    user_agent_id = str(auth_info["agent_id"]).strip()
-    # Refuse the headless agent here so /web/preview/ws is unambiguously the
-    # "local" endpoint. Headless flows must go through /web/first-look/preview/ws.
-    if user_agent_id == getattr(core, "HEADLESS_AGENT_ID", ""):
-        return web.Response(status=400, text="use /web/first-look/preview/ws for headless")
-
-    sid_param = request.query.get("session_id", "")
-    sid = sid_param.strip()
-    if not sid:
-        return web.Response(status=400, text="session_id required")
-    # Session prefix encodes agent_id as `s-{agent_id}-{suffix}`.
-    expected_prefix = f"s-{user_agent_id}-"
-    if not sid.startswith(expected_prefix):
-        return web.Response(status=403, text="session_id does not belong to caller")
-
-    raw_tab = request.query.get("tab_id", "").strip()
-    if raw_tab:
-        if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", raw_tab):
-            return web.Response(status=400, text="invalid tab_id format")
-        tab_id = raw_tab
-    else:
-        tab_id = await _resolve_local_preview_tab_id(core, user_agent_id) or ""
-        if not tab_id:
-            return web.Response(status=503, text="no tab available for this agent yet")
-
-    width = _normalize_first_look_preview_dimension(
-        request.query,
-        "width",
-        _FIRST_LOOK_PREVIEW_WIDTH_DEFAULT,
-    )
-    height = _normalize_first_look_preview_dimension(
-        request.query,
-        "height",
-        _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT,
-        min_value=240,
-    )
-
-    ws = web.WebSocketResponse(heartbeat=30)
-    await ws.prepare(request)
-    await _run_preview_stream(
-        core,
-        ws,
-        sid_param=sid_param,
-        agent_id=user_agent_id,
         tab_id=tab_id,
         width=width,
         height=height,

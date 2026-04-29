@@ -92,7 +92,6 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/web/chat/status", "web_app.handlers.chat_flow:handle_chat_status"),
     ("GET", "/web/first-look/preflight", "web_app.handlers.chat_flow:handle_first_look_preflight"),
     ("GET", "/web/first-look/preview/ws", "web_app.handlers.chat_flow:handle_first_look_preview_ws"),
-    ("GET", "/web/preview/ws", "web_app.handlers.chat_flow:handle_local_preview_ws"),
     ("POST", "/web/first-look/signal", "web_app.handlers.chat_flow:handle_first_look_signal"),
     ("POST", "/web/chat/update-client", "web_app.handlers.chat_flow:handle_chat_update_client"),
     ("POST", "/web/chat/install-research-desk", "web_app.handlers.chat_flow:handle_chat_install_research_desk"),

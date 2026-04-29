@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.90"  # installer postinstall + DMG launcher + interactive prompt now use --enable-autostart so autostart works out of the box
+VERSION = "0.3.91"  # chrome_bridge purges window-less orphan tabs before 'auto' resolve so navigates stop landing in invisible targets
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

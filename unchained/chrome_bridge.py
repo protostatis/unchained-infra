@@ -1349,10 +1349,91 @@ class Agent:
 
     # --- CDP WebSocket channels ---
 
+    async def _purge_orphan_tabs(self) -> int:
+        """Close 'page' targets that have no associated OS window.
+
+        Orphans are page targets created via Target.createTarget over
+        CDP that Chrome (esp. on macOS) parents to no OS window — they
+        have full DOM/network/render but the user can't see them in
+        any Chrome window. They also pollute /json/list, get picked up
+        by 'auto' tab resolution, and silently redirect navigates into
+        invisibility.
+
+        Skips tabs that are currently leased by any channel — those are
+        in active use, even if a previous resolution made them orphan.
+        Best-effort: any failure (Chrome down, CDP error, etc.) is
+        swallowed so this can't break a normal tab resolve.
+
+        Returns the number of orphan tabs closed.
+        """
+        try:
+            url = f"http://{self.cdp_host}:{self.cdp_port}/json"
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=2) as resp:
+                tabs = json.loads(resp.read())
+            page_tabs = [t for t in tabs if t.get("type") == "page"]
+            # 0 or 1 page tab → no orphan-vs-visible ambiguity worth checking.
+            # Skip the CDP roundtrip in the common healthy state.
+            if len(page_tabs) <= 1:
+                return 0
+            url = f"http://{self.cdp_host}:{self.cdp_port}/json/version"
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=2) as resp:
+                browser_ws_url = json.loads(resp.read())["webSocketDebuggerUrl"]
+        except Exception as e:
+            print(f"[agent] orphan purge: list tabs failed (non-fatal): {e!r}")
+            return 0
+
+        closed = 0
+        try:
+            async with websockets.connect(
+                browser_ws_url, max_size=10 * 1024 * 1024, open_timeout=3,
+            ) as ws:
+                mid = 0
+                for tab in page_tabs:
+                    if tab["id"] in self._leased_tabs:
+                        # Active channel is using this tab — leave alone.
+                        continue
+                    mid += 1
+                    await ws.send(json.dumps({
+                        "id": mid,
+                        "method": "Browser.getWindowForTarget",
+                        "params": {"targetId": tab["id"]},
+                    }))
+                    while True:
+                        msg_in = json.loads(await ws.recv())
+                        if msg_in.get("id") == mid:
+                            break
+                    # -32000 "Browser window not found" → orphan
+                    if msg_in.get("error", {}).get("code") != -32000:
+                        continue
+                    mid += 1
+                    await ws.send(json.dumps({
+                        "id": mid,
+                        "method": "Target.closeTarget",
+                        "params": {"targetId": tab["id"]},
+                    }))
+                    while True:
+                        ack = json.loads(await ws.recv())
+                        if ack.get("id") == mid:
+                            break
+                    closed += 1
+                    print(
+                        f"[agent] purged orphan tab {tab['id'][:12]} "
+                        f"url={tab.get('url','')[:60]}"
+                    )
+        except Exception as e:
+            print(f"[agent] orphan purge: cdp connect failed (non-fatal): {e!r}")
+        return closed
+
     async def _handle_ws_open(self, msg: dict):
         """Open a WebSocket channel to a local Chrome tab."""
         channel = msg.get("channel", 0)
         tab_id = msg.get("tab_id", "")
+        # Pre-clean orphan tabs (window-less page targets) before auto-
+        # resolving. Without this, 'auto' picks an orphan whenever the
+        # visible tab is leased by another channel, and the resulting
+        # navigate happens in a tab the user can never see.
+        if tab_id == "auto":
+            await self._purge_orphan_tabs()
         try:
             ws_url = self._get_tab_ws_url(tab_id, channel)
         except Exception:
