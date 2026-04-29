@@ -311,26 +311,91 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
 #   elsewhere are unaffected.
 
 
-async def _run_preview_stream(
-    core,
-    ws: web.WebSocketResponse,
-    *,
-    sid_param: str,
-    agent_id: str,
-    tab_id: str,
-    width: int,
-    height: int,
-) -> None:
-    """Pump private-core screencast frames to ``ws`` until done.
+async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
+    """GET /web/first-look/preview/ws — server-owned preview state machine.
 
-    Caller owns ws.prepare()/ws.close(). This helper does the FSM loop
-    (transparent reconnects, terminal preview.ended events) and is shared
-    by both the public first-look endpoint and the authenticated /local
-    endpoint so they emit the same protocol.
+    Forwards private-core screencast frames to the guest browser as explicit
+    protocol events (see the comment block above). The server transparently
+    reconnects the underlying screencast when its idle deadline fires, so a
+    single client WS represents one *logical* stream for the lifetime of the
+    user's run regardless of how many physical reconnects happen inside
+    private-core.
+
+    This replaces the previous pass-through handler that leaked private-core's
+    ``frame``/``status`` events to the client and relied on the client to
+    reconnect on idle-timeout — a gate that never fired once the first frame
+    had been painted, causing the preview to freeze after the initial
+    navigate on any static page.
     """
+    core = _core()
+    sid_param = request.query.get("session_id", "")
+    log.debug("request received sid=%r tabs=%s", sid_param, dict(core._session_tabs))
+    guest_auth, guest_id, _ = core._first_look_guest_auth(request)
+    try:
+        agent_id, tab_id = await _resolve_first_look_preview_target(
+            core,
+            guest_auth,
+            sid_param,
+        )
+    except web.HTTPException as exc:
+        log.warning("resolve failed: %s %s", exc.status, exc.text)
+        denied = web.Response(status=exc.status, text=exc.text)
+        core._attach_first_look_guest_cookies(denied, request, guest_id)
+        return denied
+
+    # Allow explicit tab_id override for multi-tab auto-follow (ddm --new).
+    #
+    # Format check: 32-64 char hex (Chrome targetIds are 32 uppercase hex
+    # chars). Tightened from {8,64} so a guest can't brute-force 8-char
+    # prefixes — at 32 chars the search space is 128 bits which is not
+    # economically feasible to scan over WS handshakes.
+    #
+    # Ownership check: NONE for now. The agent's `ddm --new` flow opens a
+    # fresh Chrome tab and emits its targetId in `tool_result.new_tab_id`,
+    # but the server-side `core._session_tabs` map is never updated to
+    # include that new tab — only the *initial* session tab from
+    # `create_session_tab()` lives in `_session_tabs`. So an ownership
+    # check that requires `raw_tab in _session_tabs.values()` would 403
+    # every legitimate followTab() after a `ddm --new`, breaking
+    # multi-tab guest runs entirely.
+    #
+    # The cross-guest-tab-watch concern (Guest B passes Guest A's known
+    # targetId) is mitigated by the 32-char hex entropy: 128 bits is
+    # impossible to guess, and the targetId only ever appears in private
+    # logs and the guest's own session payloads. Closing this properly
+    # requires a per-guest tab tracker (a future PR — see follow-up task
+    # #N: "headless agent watchdog + per-guest tab tracking").
+    #
+    # TODO(unchained-infra#TBD): add per-guest tab tracking + apply a
+    # strict ownership check here once the tracker exists.
+    raw_tab = request.query.get("tab_id", "")
+    if raw_tab:
+        if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", raw_tab):
+            return web.Response(status=400, text="invalid tab_id format")
+        tab_id = raw_tab
+    log.debug("resolved agent=%s tab=%s explicit=%s", agent_id, tab_id, bool(raw_tab))
+
+    width = _normalize_first_look_preview_dimension(
+        request.query,
+        "width",
+        _FIRST_LOOK_PREVIEW_WIDTH_DEFAULT,
+    )
+    height = _normalize_first_look_preview_dimension(
+        request.query,
+        "height",
+        _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT,
+        min_value=240,
+    )
+
     import cloud_tools
 
     relay_host, relay_port = core._parse_relay()
+    ws = web.WebSocketResponse(heartbeat=30)
+    core._attach_first_look_guest_cookies(ws, request, guest_id)
+    await ws.prepare(request)
+    # print() so the line is visible in docker compose logs regardless of
+    # the root logger level — the web container runs without a logging
+    # handler configured, so log.info goes nowhere.
     print(
         f"[preview-fsm] connected sid={sid_param} "
         f"agent={agent_id} tab={tab_id[:12]}",
@@ -588,62 +653,6 @@ async def _run_preview_stream(
             flush=True,
         )
 
-
-async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
-    """GET /web/first-look/preview/ws — public guest preview of the headless agent.
-
-    Resolves the target via guest cookie + ``_session_tabs`` and streams
-    frames from ``HEADLESS_AGENT_ID`` through ``_run_preview_stream``.
-    """
-    core = _core()
-    sid_param = request.query.get("session_id", "")
-    log.debug("request received sid=%r tabs=%s", sid_param, dict(core._session_tabs))
-    guest_auth, guest_id, _ = core._first_look_guest_auth(request)
-    try:
-        agent_id, tab_id = await _resolve_first_look_preview_target(
-            core,
-            guest_auth,
-            sid_param,
-        )
-    except web.HTTPException as exc:
-        log.warning("resolve failed: %s %s", exc.status, exc.text)
-        denied = web.Response(status=exc.status, text=exc.text)
-        core._attach_first_look_guest_cookies(denied, request, guest_id)
-        return denied
-
-    # Allow explicit tab_id override for multi-tab auto-follow (ddm --new).
-    # See the long ownership-check note in the original handler — kept brief
-    # here because the rationale is identical.
-    raw_tab = request.query.get("tab_id", "")
-    if raw_tab:
-        if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", raw_tab):
-            return web.Response(status=400, text="invalid tab_id format")
-        tab_id = raw_tab
-
-    width = _normalize_first_look_preview_dimension(
-        request.query,
-        "width",
-        _FIRST_LOOK_PREVIEW_WIDTH_DEFAULT,
-    )
-    height = _normalize_first_look_preview_dimension(
-        request.query,
-        "height",
-        _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT,
-        min_value=240,
-    )
-
-    ws = web.WebSocketResponse(heartbeat=30)
-    core._attach_first_look_guest_cookies(ws, request, guest_id)
-    await ws.prepare(request)
-    await _run_preview_stream(
-        core,
-        ws,
-        sid_param=sid_param,
-        agent_id=agent_id,
-        tab_id=tab_id,
-        width=width,
-        height=height,
-    )
     return ws
 
 
