@@ -1385,6 +1385,34 @@ class Agent:
             # on pages that flood CDP events where the inject recv() loop
             # can block for the full 5s timeout per command.
             resolved = self._extract_tab_id_from_ws_url(ws_url)
+
+            # Force the resolved tab to foreground BEFORE forwarding any
+            # cloud commands. Chrome 147+ silently routes Page.navigate
+            # to the omnibox AI Mode (AIM) popup target instead of the
+            # requested tab when the requested tab isn't the active
+            # foreground page — content ends up rendering inside the URL
+            # bar dropdown rather than the visible tab. Verified
+            # empirically: without this call, navigate(example.com) on
+            # the visible tab's WS rewrites the chrome://omnibox-popup
+            # target's URL to example.com and leaves the visible tab
+            # untouched. With this call, the visible tab navigates
+            # correctly and the AIM target stays at chrome://. See
+            # field-report investigation 2026-04-29.
+            if tab_id != "browser":
+                try:
+                    bid = random.randint(2**28, 2**30)
+                    await chrome_ws.send(json.dumps(
+                        {"id": bid, "method": "Page.bringToFront"}
+                    ))
+                    while True:
+                        raw = await asyncio.wait_for(chrome_ws.recv(), timeout=2)
+                        msg = json.loads(raw)
+                        if msg.get("id") == bid:
+                            break
+                except Exception as e:
+                    # Best-effort: failure here shouldn't block tab usage.
+                    print(f"[agent] Page.bringToFront failed (non-fatal): {e}")
+
             need_stealth = (
                 tab_id != "browser"
                 and resolved
@@ -1648,7 +1676,14 @@ class Agent:
                     f"Provisioned Chrome (slot '{slot}') is no longer running. "
                     f"Re-provision with cdp_provision_launch to continue."
                 )
-            page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+            # Also exclude chrome:// / devtools:// from page_tabs so the
+            # 'auto' fallback path (which uses page_tabs when pages_only
+            # is exhausted) cannot return the omnibox AIM popup target.
+            page_tabs = [
+                t for t in tabs
+                if t.get("type") in ("page", "popup")
+                and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+            ]
             if real_id == "auto":
                 # Reuse existing lease for this channel
                 if channel >= 0 and channel in self._tab_leases:
@@ -1731,7 +1766,14 @@ class Agent:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
-        page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+        # Also exclude chrome:// / devtools:// from page_tabs so the
+        # 'auto' fallback path (which uses page_tabs when pages_only is
+        # exhausted) cannot return the omnibox AIM popup target.
+        page_tabs = [
+            t for t in tabs
+            if t.get("type") in ("page", "popup")
+            and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+        ]
         # Exclude chrome:// / devtools:// internal targets (omnibox AIM
         # dropdown in Chrome 147+, devtools://, etc) from auto-resolution
         # candidates. Same rationale as the provisioned-Chrome path above:
