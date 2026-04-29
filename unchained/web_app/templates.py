@@ -11688,15 +11688,7 @@ function previewSocketUrl() {
   });
   if (previewTabId) qs.set('tab_id', previewTabId);
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  // Route choice: anything served from /local (the authenticated user's
-  // own Chrome) goes through the local-agent preview endpoint. Everything
-  // else (/, /first-look, /trial guests) keeps using the headless guest
-  // stream. Picking by pathname keeps the same template usable for both
-  // flows without server-side template forking.
-  const path = window.location.pathname || '';
-  const isLocal = path === '/local' || path.startsWith('/local/');
-  const endpoint = isLocal ? '/web/preview/ws' : '/web/first-look/preview/ws';
-  return scheme + '://' + window.location.host + endpoint + '?' + qs.toString();
+  return scheme + '://' + window.location.host + '/web/first-look/preview/ws?' + qs.toString();
 }
 
 // Server drives transparent reconnects for underlying screencast idle-timeouts
