@@ -22,64 +22,25 @@ async def create_session_tab(
     *,
     clean_cookies: bool = False,
 ) -> str:
-    """Create a new Chrome tab for a chat session.
-
-    Uses Chrome's /json/new HTTP API via the relay HTTP proxy. That is
-    the same code path as a user clicking "New Tab", so the resulting
-    tab always lands in the agent's existing Chrome window — visible
-    in the tab strip, navigable, screenshot-able.
-
-    The previous implementation used CDP ``Target.createTarget`` over
-    a WebSocket. On macOS that can produce window-less ``page`` targets
-    (real DOM, real network, no OS window), and every navigate routed
-    to the session would land in a tab the user could never see in
-    their actual Chrome.
+    """Create a new Chrome tab via CDP Target.createTarget through the relay.
 
     Args:
-        clean_cookies: If True, clear cookies and cache before creating
-            the tab so anti-bot reputation scores (PerimeterX _pxvid /
-            _pxhd, etc.) don't carry over between sessions. Only used
-            for headless first-look guest sessions.
+        clean_cookies: If True, clear cookies and cache before creating the
+            tab so anti-bot reputation scores (PerimeterX _pxvid/_pxhd etc.)
+            don't carry over from previous sessions.  Only used for headless
+            first-look guest sessions — not for logged-in users with saved
+            browser profiles.
     """
     del session_id
-    core = _core()
-    relay_host, relay_port = core._parse_relay()
-
-    if clean_cookies:
-        # Cookie clear still needs a CDP connection — /json/new can't do
-        # it. Open browser-level CDP, clear, close.
-        from cdp import CDP
-
-        cleaner = CDP(session_cdp_url(agent_id))
-        try:
-            await asyncio.wait_for(cleaner.connect(), timeout=10)
-            await cleaner.send("Network.clearBrowserCookies")
-            await cleaner.send("Network.clearBrowserCache")
-        finally:
-            if cleaner.ws:
-                await cleaner.ws.close()
-
-    import cloud_tools
-
-    tab_id = await cloud_tools.create_tab(
-        agent_id, "about:blank",
-        relay_host=relay_host, relay_port=relay_port,
-    )
-    if tab_id:
-        return tab_id
-
-    # Fallback: relay HTTP proxy unreachable from web. CDP-side create
-    # with newWindow=True forces a fresh OS window — uglier than a
-    # tab in the existing window, but still visible (and never orphan).
     from cdp import CDP
 
     cdp = CDP(session_cdp_url(agent_id))
     try:
         await asyncio.wait_for(cdp.connect(), timeout=10)
-        result = await cdp.send(
-            "Target.createTarget",
-            {"url": "about:blank", "newWindow": True},
-        )
+        if clean_cookies:
+            await cdp.send("Network.clearBrowserCookies")
+            await cdp.send("Network.clearBrowserCache")
+        result = await cdp.send("Target.createTarget", {"url": "about:blank"})
         return result["targetId"]
     finally:
         if cdp.ws:

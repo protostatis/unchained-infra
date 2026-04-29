@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.92"  # chrome_bridge orphan-purge: skip chrome:// + 5s age-grace + 5s throttle to stop racing with the auto-create path
+VERSION = "0.3.94"  # revert 0.3.91-0.3.93 orphan-tab work — symptoms persisted, root cause not isolated; bridge back to baseline
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
