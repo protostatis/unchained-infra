@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.95"  # chrome_bridge: exclude chrome:// targets (Chrome 147+ omnibox AIM dropdown) from 'auto' tab resolution — fixes navigates rendering inside URL-bar dropdown instead of a real tab
+VERSION = "0.3.96"  # chrome_bridge: also filter chrome:// from page_tabs fallback + Page.bringToFront on resolved tab — Chrome 147 AIM was hijacking Page.navigate even after the pages_only filter excluded it from auto-resolve
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
