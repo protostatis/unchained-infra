@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.92"  # chrome_bridge orphan-purge: skip chrome:// + 5s age-grace + 5s throttle to stop racing with the auto-create path
+VERSION = "0.3.93"  # chrome_bridge: launch default Chrome with --window-size so CDP-created tabs aren't born window-less on macOS
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

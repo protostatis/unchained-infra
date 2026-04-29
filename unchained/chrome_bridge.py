@@ -2753,6 +2753,15 @@ def _ensure_chrome(
         f"--remote-debugging-port={port}",
         "--no-first-run",
         "--no-default-browser-check",
+        # Tabs created via CDP Target.createTarget do not inherit launch
+        # flags. On macOS, when Chrome is launched without --window-size,
+        # subsequent CDP-created tabs can be born without an OS window
+        # association — Browser.getWindowForTarget returns -32000 for them
+        # and they're invisible in any tab strip even though their DOM,
+        # network, and rendering all work. The provisioned-Chrome path has
+        # always passed --window-size=1920,1080 and never exhibits the
+        # orphan-tab symptom; the default-Chrome path was missing it.
+        "--window-size=1920,1080",
         startup_url,
     ]
     if headless:
