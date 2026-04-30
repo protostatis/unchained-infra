@@ -1387,12 +1387,12 @@ body::before{
     </span>
     <span class="line">
       <span class="stage s1">Wind rushes where walls once stood</span>
-      <span class="stage s2">Wind drives where walls once stood</span>
+      <span class="stage s2">An agent moves where walls once stood</span>
       <span class="stage s3">A browser agent does it for you</span>
     </span>
     <span class="line">
       <span class="stage s1">I am sky, unchained</span>
-      <span class="stage s2">I am sky, unchained</span>
+      <span class="stage s2">I am unchained</span>
       <span class="stage s3">You are sky, unchained</span>
     </span>
   </div>
@@ -2099,15 +2099,19 @@ a{color:inherit;text-decoration:none}
 }
 .hero-brand .sky-search-link:hover{color:var(--text);border-color:var(--accent)}
 .hero-brand .scroll-hint{
-  position:absolute;bottom:28px;left:50%;
-  transform:translateX(-50%);
+  position:absolute;bottom:28px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:4px;
   font-size:10px;letter-spacing:3px;text-transform:uppercase;
   color:var(--muted);cursor:pointer;
-  animation:brandFade 1.2s ease-out 3.4s both;
+  animation:scrollHintFade 1.2s ease-out 3.4s both;
 }
 .hero-brand .scroll-hint .arrow{
-  display:block;font-size:14px;margin-bottom:6px;
+  font-size:14px;line-height:1;
   animation:bob 2s ease-in-out infinite;
+}
+@keyframes scrollHintFade{
+  from{opacity:0;transform:translateX(-50%) translateY(12px)}
+  to{opacity:1;transform:translateX(-50%) translateY(0)}
 }
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
 
@@ -2292,15 +2296,122 @@ a{color:inherit;text-decoration:none}
   color:var(--muted);margin-left:auto;
 }
 
+/* ── Act 4: WASM Browser shock section ── */
+.wb-act{
+  position:relative;z-index:1;
+  max-width:1200px;margin:0 auto;
+  padding:64px 24px 64px;
+}
+.wb-act .section-head{text-align:center;margin-bottom:32px}
+.wb-act .section-eyebrow{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(93,155,255,0.12);
+  border:1px solid rgba(93,155,255,0.35);
+  color:var(--blue);padding:5px 12px;border-radius:999px;
+  font-size:11px;font-weight:600;letter-spacing:1.5px;
+  text-transform:uppercase;margin-bottom:14px;
+}
+.wb-act h2{
+  font-size:clamp(28px,4vw,42px);font-weight:600;
+  letter-spacing:-0.01em;margin-bottom:12px;line-height:1.1;
+}
+.wb-act h2 em{
+  font-style:normal;
+  background:linear-gradient(120deg,#5d9bff 0%,#3fb98a 100%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.wb-act .lede{
+  color:var(--text-soft);font-size:16px;line-height:1.6;
+  max-width:680px;margin:0 auto 28px;text-align:center;
+}
+.wb-wrap{
+  border:1px solid var(--border);border-radius:14px;
+  background:linear-gradient(180deg,#13131c 0%,#0c0c14 100%);
+  box-shadow:0 30px 80px rgba(0,0,0,0.5),
+             0 0 0 1px rgba(93,155,255,0.06),
+             0 0 60px rgba(93,155,255,0.04);
+  overflow:hidden;
+}
+.wb-status{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 18px;font-family:ui-monospace,monospace;
+  font-size:12.5px;color:var(--text-soft);
+  border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,0.25);
+}
+.wb-status .pulse{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--muted);flex-shrink:0;
+}
+.wb-status.loading .pulse{background:var(--amber);animation:pulse 1.4s infinite}
+.wb-status.ready .pulse{background:var(--mint)}
+.wb-status.error .pulse{background:#ff5f56}
+.wb-status .stat{
+  margin-left:auto;display:flex;gap:14px;
+  color:var(--muted);font-size:11px;letter-spacing:1px;
+  text-transform:uppercase;
+}
+.wb-status .stat b{color:var(--text-soft);font-weight:600}
+.wb-fakebar{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  font-family:ui-monospace,monospace;font-size:12px;
+}
+.wb-fakebar .url{
+  flex:1;background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);border-radius:6px;
+  padding:6px 12px;color:var(--text-soft);
+  font-family:ui-monospace,monospace;
+}
+.wb-fakebar .url .scheme{color:var(--mint)}
+.wb-fakebar .url .host{color:var(--text)}
+.wb-frame-wrap{
+  position:relative;background:#fff;
+  min-height:520px;
+  border-bottom:1px solid var(--border);
+}
+#wb-frame{
+  width:100%;height:520px;border:none;
+  background:#fff;display:block;
+}
+.wb-tabs{
+  display:flex;gap:6px;padding:10px 14px;
+  border-top:1px solid var(--border);
+  background:rgba(0,0,0,0.2);font-size:12px;
+  flex-wrap:wrap;
+}
+.wb-tabs .label{
+  color:var(--muted);text-transform:uppercase;
+  letter-spacing:1.5px;font-size:10px;
+  display:inline-flex;align-items:center;
+  margin-right:4px;
+}
+.wb-tab{
+  display:inline-flex;align-items:center;gap:4px;
+  background:rgba(93,155,255,0.08);
+  border:1px solid rgba(93,155,255,0.25);
+  color:var(--blue);
+  padding:4px 10px;border-radius:6px;
+  font-family:ui-monospace,monospace;font-size:11.5px;
+  cursor:pointer;transition:background 0.15s;
+}
+.wb-tab:hover{background:rgba(93,155,255,0.18)}
+
 /* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
 .poem{
   font-family:'Cormorant Garamond',serif;
   font-size:clamp(22px,3vw,28px);
   line-height:1.85;font-style:italic;
   color:var(--text);opacity:0.92;
-  text-align:center;max-width:560px;
+  text-align:center;max-width:680px;
+  white-space:nowrap;
 }
 .hero-brand .poem{margin:0 auto}
+@media (max-width:720px){
+  .poem{font-size:clamp(18px,5vw,22px);max-width:92vw}
+}
 .poem .line{
   display:block;position:relative;height:1.7em;
   animation:poemFadeIn 1s ease-out both;
@@ -2645,12 +2756,12 @@ a{color:inherit;text-decoration:none}
     </span>
     <span class="line">
       <span class="stage s1">Wind rushes where walls once stood</span>
-      <span class="stage s2">Wind drives where walls once stood</span>
+      <span class="stage s2">An agent moves where walls once stood</span>
       <span class="stage s3">A browser agent does it for you</span>
     </span>
     <span class="line">
       <span class="stage s1">I am sky, unchained</span>
-      <span class="stage s2">I am sky, unchained</span>
+      <span class="stage s2">I am unchained</span>
       <span class="stage s3">You are sky, unchained</span>
     </span>
   </div>
@@ -2752,6 +2863,44 @@ print(f"cheapest kayak:  ${min(prices_k):,}  &lt;-- saves ${min(prices_g)-min(pr
         <pre id="repl-out">// WASM Python runtime loading on scroll&hellip;
 // once ready, this code auto-runs and the result appears here.</pre>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- Act 4: WASM Browser — a tiny site running in your browser, no network -->
+<section class="wb-act" id="wbrowser">
+  <div class="section-head">
+    <div class="section-eyebrow">&#127760; QuickJS-WASM &middot; No backend</div>
+    <h2>This iframe is <em>a browser running inside your browser</em>.</h2>
+    <p class="lede">QuickJS compiled to WebAssembly, executing the page&rsquo;s JavaScript in a sandboxed VM. Mutations sync to the iframe. Click, type, submit &mdash; the events run inside WASM, not in your real browser.</p>
+  </div>
+
+  <div class="wb-wrap">
+    <div class="wb-status loading" id="wb-status">
+      <span class="pulse"></span>
+      <span id="wb-status-msg">Booting QuickJS &middot; ~400 KB&hellip;</span>
+      <span class="stat">
+        <span>nodes <b id="wb-stat-nodes">&mdash;</b></span>
+        <span>mutations <b id="wb-stat-mut">&mdash;</b></span>
+        <span>last event <b id="wb-stat-evt">&mdash;</b></span>
+      </span>
+    </div>
+    <div class="wb-fakebar">
+      <span style="color:var(--muted);">&laquo;</span>
+      <span style="color:var(--muted);">&raquo;</span>
+      <div class="url"><span class="scheme">wasm://</span><span class="host">flightfinder.demo</span><span style="color:var(--muted);">/</span></div>
+    </div>
+    <div class="wb-frame-wrap">
+      <iframe id="wb-frame" sandbox="allow-same-origin" title="WASM browser demo"></iframe>
+    </div>
+    <div class="wb-tabs">
+      <span class="label">try</span>
+      <span class="wb-tab" data-q="tokyo">tokyo</span>
+      <span class="wb-tab" data-q="london">london</span>
+      <span class="wb-tab" data-q="bali">bali</span>
+      <span class="wb-tab" data-q="">all</span>
+      <span class="label" style="margin-left:auto">tip</span>
+      <span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:11.5px">click &amp; type inside the iframe &mdash; events flow into the WASM VM</span>
     </div>
   </div>
 </section>
@@ -3230,6 +3379,307 @@ if ('IntersectionObserver' in window) {
   } else {
     loadPyodideOnce();
   }
+})();
+</script>
+
+<!-- ── WASM Browser boot — module script (ESM imports) ── -->
+<script type="module">
+window.WB = {
+  loaded: false,
+  loading: false,
+  loader: null,
+  iframe: null,
+  status: document.getElementById('wb-status'),
+  msg: document.getElementById('wb-status-msg'),
+  statNodes: document.getElementById('wb-stat-nodes'),
+  statMut: document.getElementById('wb-stat-mut'),
+  statEvt: document.getElementById('wb-stat-evt'),
+  mutationCount: 0,
+};
+
+function setWBStatus(state, msg) {
+  if (!WB.status) return;
+  WB.status.classList.remove('loading','ready','error');
+  WB.status.classList.add(state);
+  if (msg && WB.msg) WB.msg.textContent = msg;
+}
+
+const FLIGHTFINDER_HTML = `<!DOCTYPE html>
+<html><head><title>FlightFinder</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',-apple-system,system-ui,sans-serif;
+  background:#0a0a0f;color:#e8e8ec;padding:28px;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.04) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(233,69,96,0.04) 1px,transparent 1px);
+  background-size:40px 40px;
+  -webkit-font-smoothing:antialiased;
+}
+.hdr{display:flex;align-items:baseline;gap:14px;margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.08)}
+.logo{font-weight:700;letter-spacing:3px;font-size:18px;text-transform:uppercase}
+.logo .accent{color:#e94560}
+.tag{font-size:10px;color:#8a8a94;text-transform:uppercase;letter-spacing:1.8px}
+form{display:flex;gap:8px;margin-bottom:18px}
+input{
+  flex:1;padding:12px 16px;
+  background:rgba(255,255,255,0.03);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:8px;font-size:14px;outline:none;
+  color:#e8e8ec;font-family:inherit;
+  transition:border-color 0.15s,background 0.15s;
+}
+input::placeholder{color:#666}
+input:focus{
+  border-color:#e94560;
+  background:rgba(233,69,96,0.06);
+  box-shadow:0 0 0 3px rgba(233,69,96,0.08);
+}
+button{
+  padding:12px 22px;background:#e94560;color:#fff;
+  border:none;border-radius:8px;cursor:pointer;
+  font-weight:600;font-size:14px;font-family:inherit;
+  box-shadow:0 4px 18px rgba(233,69,96,0.25);
+  transition:transform 0.15s,box-shadow 0.15s;
+}
+button:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(233,69,96,0.35)}
+.row{
+  display:grid;
+  grid-template-columns:90px 1.1fr 90px 90px 100px;
+  gap:14px;padding:12px 14px;
+  border-bottom:1px solid rgba(255,255,255,0.05);
+  font-size:13px;align-items:center;
+}
+.row.head{
+  font-weight:600;color:#8a8a94;
+  text-transform:uppercase;letter-spacing:1.5px;
+  font-size:10px;border-bottom:1px solid rgba(255,255,255,0.12);
+  background:rgba(255,255,255,0.02);
+}
+.row .price{color:#3fb98a;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.row .stops{color:#8a8a94;font-size:12px;font-family:ui-monospace,monospace}
+.row.best{
+  background:rgba(63,185,138,0.06);
+  border-left:2px solid #3fb98a;
+  padding-left:12px;
+}
+.empty{
+  padding:36px;color:#8a8a94;text-align:center;font-size:13px;
+  font-family:ui-monospace,monospace;
+}
+.summary{
+  margin-top:18px;padding:14px 16px;
+  background:rgba(233,69,96,0.06);
+  border:1px solid rgba(233,69,96,0.20);
+  border-radius:8px;font-size:13px;line-height:1.7;
+  font-family:ui-monospace,monospace;color:#b8b8c0;
+}
+.summary b{color:#e8e8ec;font-weight:600}
+.summary .ok{color:#3fb98a}
+</style></head>
+<body>
+<div class="hdr">
+  <div class="logo">flight<span class="accent">finder</span></div>
+  <div class="tag">running entirely in webassembly &middot; no server</div>
+</div>
+<form id="f">
+  <input id="q" placeholder="destination &mdash; try tokyo, london, bali" autocomplete="off" />
+  <button type="submit">Search</button>
+</form>
+<div class="row head">
+  <span>Airline</span><span>Route</span><span>Time</span><span>Stops</span><span>Price</span>
+</div>
+<div id="results"></div>
+<div id="summary"></div>
+<script>
+var flights = [
+  {airline:"ANA", route:"JFK -> NRT", duration:"14h 10m", stops:"Nonstop", price:1247, dest:"tokyo"},
+  {airline:"JAL", route:"JFK -> HND", duration:"14h 35m", stops:"Nonstop", price:1312, dest:"tokyo"},
+  {airline:"United", route:"EWR -> NRT", duration:"14h 25m", stops:"Nonstop", price:1389, dest:"tokyo"},
+  {airline:"Delta", route:"JFK -> HND", duration:"14h 50m", stops:"Nonstop", price:1456, dest:"tokyo"},
+  {airline:"BA", route:"JFK -> LHR", duration:"7h 15m", stops:"Nonstop", price:582, dest:"london"},
+  {airline:"VS", route:"JFK -> LHR", duration:"7h 5m", stops:"Nonstop", price:625, dest:"london"},
+  {airline:"AA", route:"JFK -> LHR", duration:"9h 0m", stops:"1 stop", price:489, dest:"london"},
+  {airline:"Garuda", route:"JFK -> DPS", duration:"24h 0m", stops:"1 stop", price:1487, dest:"bali"},
+  {airline:"SQ", route:"JFK -> DPS", duration:"23h 30m", stops:"1 stop", price:1612, dest:"bali"}
+];
+
+function el(tag, opts) {
+  var e = document.createElement(tag);
+  if (opts) {
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.attrs) for (var k in opts.attrs) e.setAttribute(k, opts.attrs[k]);
+  }
+  return e;
+}
+function clear(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+function render(q) {
+  q = String(q || "").toLowerCase().trim();
+  var filtered = flights.filter(function(f){ return !q || f.dest.indexOf(q) !== -1; });
+  filtered.sort(function(a,b){ return a.price - b.price; });
+  var r = document.getElementById('results');
+  var s = document.getElementById('summary');
+  clear(r); clear(s);
+  if (filtered.length === 0) {
+    var empty = el('div', {cls:'empty', text:'no flights match — try tokyo, london, or bali'});
+    r.appendChild(empty);
+    return;
+  }
+  for (var i = 0; i < filtered.length; i++) {
+    var f = filtered[i];
+    var row = el('div', {cls: 'row' + (i === 0 ? ' best' : '')});
+    row.appendChild(el('span', {text: f.airline}));
+    row.appendChild(el('span', {text: f.route}));
+    row.appendChild(el('span', {text: f.duration}));
+    row.appendChild(el('span', {cls:'stops', text: f.stops}));
+    row.appendChild(el('span', {cls:'price', text: '$' + f.price}));
+    r.appendChild(row);
+  }
+  var cheapest = filtered[0];
+  var sum = 0; for (var j = 0; j < filtered.length; j++) sum += filtered[j].price;
+  var avg = Math.round(sum / filtered.length);
+  // Build summary node-by-node (no innerHTML — host's __parseHTMLFragment is
+  // unavailable, so children must be appended explicitly).
+  s.appendChild(el('span', {cls:'ok', text:'// '}));
+  s.appendChild(el('b', {text:'cheapest:'}));
+  s.appendChild(document.createTextNode(' ' + cheapest.airline + ' ' + cheapest.route + ' — '));
+  s.appendChild(el('span', {cls:'ok', text:'$' + cheapest.price}));
+  s.appendChild(document.createTextNode('  ·  '));
+  s.appendChild(el('b', {text:'avg:'}));
+  s.appendChild(document.createTextNode(' $' + avg + '  ·  '));
+  s.appendChild(el('b', {text: String(filtered.length)}));
+  s.appendChild(document.createTextNode(' result' + (filtered.length === 1 ? '' : 's')));
+}
+
+document.getElementById('f').addEventListener('submit', function(e){
+  e.preventDefault();
+  render(document.getElementById('q').value);
+});
+document.getElementById('q').addEventListener('input', function(e){
+  render(e.target.value);
+});
+
+render("");
+</` + `script>
+</body></html>`;
+
+const FLIGHTFINDER_SNAPSHOT = {
+  html: FLIGHTFINDER_HTML,
+  // scripts intentionally omitted — loadStatic() will auto-extract <script>
+  // blocks from the HTML so the page's logic actually runs in QuickJS.
+  baseUrl: 'wasm://flightfinder.demo/',
+};
+
+async function loadWasmBrowserOnce() {
+  if (WB.loaded || WB.loading) return;
+  WB.loading = true;
+  try {
+    setWBStatus('loading', 'Fetching QuickJS WebAssembly (~400 KB)…');
+    const { PageLoader } = await import('/web/wasmbrowser/loader.js?ts=' + Date.now());
+    setWBStatus('loading', 'Booting QuickJS VM…');
+    WB.iframe = document.getElementById('wb-frame');
+    WB.loader = new PageLoader(WB.iframe, msg => {
+      // Update status with loader log lines for transparency.
+      if (WB.msg) WB.msg.textContent = msg;
+    });
+    await WB.loader.init();
+    setWBStatus('loading', 'Seeding virtual DOM with FlightFinder snapshot…');
+    await WB.loader.loadStatic(FLIGHTFINDER_SNAPSHOT);
+    WB.loaded = true;
+    // Count nodes after seeding.
+    try {
+      const tree = WB.loader.engine.eval('__serializeDOM()');
+      let count = 0;
+      (function walk(n){ count++; if (n.children) n.children.forEach(walk); })(tree);
+      WB.statNodes.textContent = count;
+    } catch {}
+    setWBStatus('ready', 'QuickJS ready · click & type inside ↑');
+    // Patch bridge.flush to keep mutation counter live for the status bar.
+    const originalFlush = WB.loader.bridge.flush.bind(WB.loader.bridge);
+    WB.loader.bridge.flush = function(){
+      const before = WB.mutationCount;
+      const muts = WB.loader.engine.eval('__getMutations()');
+      if (muts && muts.length) {
+        WB.mutationCount += muts.length;
+        // Re-feed the mutations through the original applyMutation logic.
+        const doc = WB.iframe.contentDocument;
+        if (doc) {
+          for (const m of muts) {
+            try { WB.loader.bridge._applyMutation(m, doc); } catch (e){}
+          }
+        }
+      }
+      if (WB.mutationCount !== before) {
+        WB.statMut.textContent = WB.mutationCount;
+      }
+    };
+  } catch (e) {
+    console.error('[wbrowser]', e);
+    setWBStatus('error', 'Failed: ' + (e && e.message ? e.message : e));
+  } finally {
+    WB.loading = false;
+  }
+}
+
+// Lazy-load on intersection — keeps the brand hero light.
+(function(){
+  const section = document.getElementById('wbrowser');
+  if (!section) return;
+  if ('IntersectionObserver' in window) {
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          obs.disconnect();
+          loadWasmBrowserOnce();
+        }
+      });
+    }, { threshold: 0.05, rootMargin: '300px 0px' });
+    obs.observe(section);
+  } else {
+    loadWasmBrowserOnce();
+  }
+
+  // Wire the quick-action chips below the iframe — they type a query into the
+  // input and dispatch the submit, so the visitor immediately sees the WASM
+  // dispatching events into the sandbox.
+  document.querySelectorAll('.wb-tab').forEach(tab => {
+    tab.addEventListener('click', async () => {
+      if (!WB.loaded) await loadWasmBrowserOnce();
+      if (!WB.loader) return;
+      const q = tab.getAttribute('data-q') || '';
+      try {
+        WB.loader.engine.eval(
+          '(function(){var i=document.getElementById("q");if(i){i.value=' +
+          JSON.stringify(q) +
+          ';var ev=new Event("input",{bubbles:true});ev.value=' +
+          JSON.stringify(q) +
+          ';i.dispatchEvent(ev);}})()'
+        );
+        WB.loader.engine.vm.runtime.executePendingJobs();
+        WB.loader.engine.tick && WB.loader.engine.tick();
+        WB.loader.bridge.flush();
+        WB.statEvt.textContent = q ? 'tab:' + q : 'tab:all';
+        // Mirror the input value into the real iframe input so the visitor
+        // sees what was typed.
+        try {
+          const realInput = WB.iframe.contentDocument.getElementById('q');
+          if (realInput) realInput.value = q;
+        } catch {}
+      } catch (e) {
+        console.warn('[wbrowser] tab click', e);
+      }
+    });
+  });
+
+  // Update last-event tag whenever the user clicks/types in the iframe.
+  document.addEventListener('click', e => {
+    if (!WB.iframe || !WB.iframe.contains(e.target)) return;
+    WB.statEvt.textContent = 'click';
+  }, true);
 })();
 </script>
 </body>
