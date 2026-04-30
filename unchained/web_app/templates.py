@@ -2113,13 +2113,48 @@ a{color:inherit;text-decoration:none}
 .btn-ghost:hover{
   border-color:var(--accent);background:rgba(233,69,96,0.06);
 }
+/* ── Morphing 3-stage poem — kept from V2 ── */
 .poem{
   font-family:'Cormorant Garamond',serif;
-  font-size:15px;line-height:1.7;
-  font-style:italic;color:var(--muted);
-  margin-top:8px;max-width:480px;
+  font-size:clamp(20px,2.2vw,24px);
+  line-height:1.7;font-style:italic;
+  color:var(--text);opacity:0.92;
+  max-width:520px;margin:6px 0 26px;
 }
-@media (max-width:880px){.poem{margin-left:auto;margin-right:auto}}
+@media (max-width:880px){.poem{margin-left:auto;margin-right:auto;text-align:center}}
+.poem .line{
+  display:block;position:relative;height:1.7em;
+  animation:poemFadeIn 1s ease-out both;
+}
+.poem .line:nth-child(1){animation-delay:0.3s}
+.poem .line:nth-child(2){animation-delay:0.9s}
+.poem .line:nth-child(3){animation-delay:1.5s}
+@keyframes poemFadeIn{
+  from{opacity:0;transform:translateY(10px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.poem .line .stage{
+  position:absolute;left:0;right:0;
+  transition:opacity 1s ease, filter 1s ease;
+  opacity:0;filter:blur(6px);
+}
+.poem .line .stage.s1{position:relative;opacity:1;filter:blur(0)}
+.poem.stage-2 .line:nth-child(1) .s1{opacity:0;filter:blur(6px);transition-delay:0s}
+.poem.stage-2 .line:nth-child(1) .s2{opacity:1;filter:blur(0);transition-delay:0s}
+.poem.stage-2 .line:nth-child(2) .s1{opacity:0;filter:blur(6px);transition-delay:0.3s}
+.poem.stage-2 .line:nth-child(2) .s2{opacity:1;filter:blur(0);transition-delay:0.3s}
+.poem.stage-2 .line:nth-child(3) .s1,
+.poem.stage-2 .line:nth-child(3) .s2,
+.poem.stage-2 .line:nth-child(3) .s3{transition-delay:0.6s}
+.poem.stage-3 .line .s1{opacity:0;filter:blur(6px)}
+.poem.stage-3 .line .s2{opacity:0;filter:blur(6px)}
+.poem.stage-3 .line .s3{opacity:1;filter:blur(0)}
+.poem.stage-3 .line:nth-child(1) .s2,
+.poem.stage-3 .line:nth-child(1) .s3{transition-delay:0s}
+.poem.stage-3 .line:nth-child(2) .s2,
+.poem.stage-3 .line:nth-child(2) .s3{transition-delay:0.3s}
+.poem.stage-3 .line:nth-child(3) .s2,
+.poem.stage-3 .line:nth-child(3) .s3{transition-delay:0.6s}
 
 /* Hero right: agent preview card */
 .hero-right{
@@ -2424,17 +2459,29 @@ a{color:inherit;text-decoration:none}
 <section class="hero">
   <div class="hero-left">
     <div class="wordmark">Un<span>chain</span>ed</div>
+    <div class="poem" id="poem">
+      <span class="line">
+        <span class="stage s1">Chains fall from my wrists</span>
+        <span class="stage s2">Tasks fall from my hours</span>
+        <span class="stage s3">You prompt what you need</span>
+      </span>
+      <span class="line">
+        <span class="stage s1">Wind rushes where walls once stood</span>
+        <span class="stage s2">Wind drives where walls once stood</span>
+        <span class="stage s3">A browser agent does it for you</span>
+      </span>
+      <span class="line">
+        <span class="stage s1">I am sky, unchained</span>
+        <span class="stage s2">I am sky, unchained</span>
+        <span class="stage s3">You are sky, unchained</span>
+      </span>
+    </div>
     <h1>An AI agent that drives <em>your real Chrome</em> &mdash; with your logins, cookies, and sessions intact.</h1>
     <p class="subhead">Tell Unchained what you need online in plain English. It searches, compares, and monitors the web for you &mdash; no copy-paste, no API key required to start.</p>
     <div class="hero-ctas">
       <a href="/demo" class="btn-primary">Try it free &rarr;</a>
       <a href="#watch" class="btn-ghost">Watch it work</a>
     </div>
-    <p class="poem">
-      <em>Chains fall from my wrists.<br>
-      Wind drives where walls once stood.<br>
-      You are sky, unchained.</em>
-    </p>
   </div>
   <div class="hero-right hero-preview" aria-hidden="true">
     <div class="hero-preview-head">
@@ -2807,6 +2854,19 @@ if ('IntersectionObserver' in window) {
   var mockEl = document.getElementById('mock-section');
   if (mockEl) mockObserver.observe(mockEl);
 }
+
+// Haiku morph — cycle through 3 stages every 6s (kept from V2)
+(function(){
+  var poem = document.getElementById('poem');
+  if (!poem) return;
+  var stages = ['', 'stage-2', 'stage-3'];
+  var idx = 0;
+  setTimeout(function cycle(){
+    idx = (idx + 1) % stages.length;
+    poem.className = 'poem' + (stages[idx] ? ' ' + stages[idx] : '');
+    setTimeout(cycle, 6000);
+  }, 4000);
+})();
 </script>
 </body>
 </html>"""
