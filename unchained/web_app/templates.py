@@ -2971,18 +2971,6 @@ a{color:inherit;text-decoration:none}
 .bubble.asst td.best-price{color:var(--mint);font-weight:600}
 .bubble.asst p{margin:6px 0}
 .bubble.asst strong{color:var(--text)}
-
-/* V3 banner — to make it visible during A/B comparison */
-.v-badge{
-  position:fixed;bottom:14px;right:14px;z-index:100;
-  background:rgba(233,69,96,0.18);
-  border:1px solid var(--accent);
-  color:#ffd5dd;font-size:11px;font-weight:600;
-  letter-spacing:1.5px;text-transform:uppercase;
-  padding:6px 12px;border-radius:999px;
-  font-family:ui-monospace,monospace;
-}
-.v-badge a{color:#ffd5dd;margin-left:8px;text-decoration:underline}
 </style>
 </head>
 <body>
@@ -3309,7 +3297,6 @@ a{color:inherit;text-decoration:none}
   <div class="imprint">UNCHAINED &mdash; Your Browser. Your Data. No walls.</div>
 </footer>
 
-<div class="v-badge">UI v3 &middot; <a href="/?ui=v2">switch to v2</a></div>
 
 <script>
 // Haiku morph — cycle through 3 stages every 6s (kept from V2)
