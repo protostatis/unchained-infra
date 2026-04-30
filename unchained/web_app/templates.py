@@ -2772,7 +2772,7 @@ a{color:inherit;text-decoration:none}
       <a href="#get-started">Get Started</a>
       <a href="#use-cases">Use Cases</a>
       <a href="/mcp">MCP</a>
-      <a href="/test" class="signin">Sign in</a>
+      <a href="/setup" class="signin">Sign in</a>
     </div>
   </div>
 </nav>
