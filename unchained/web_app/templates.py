@@ -2246,12 +2246,37 @@ a{color:inherit;text-decoration:none}
   max-width:680px;margin:0 auto 28px;text-align:center;
 }
 .wb-wrap{
+  position:relative;
   border:1px solid var(--border);border-radius:14px;
   background:linear-gradient(180deg,#13131c 0%,#0c0c14 100%);
   box-shadow:0 30px 80px rgba(0,0,0,0.5),
              0 0 0 1px rgba(93,155,255,0.06),
              0 0 60px rgba(93,155,255,0.04);
   overflow:hidden;
+  isolation:isolate;
+}
+/* Breathing accent halo behind the WASM container — pulses faster
+ * while a scenario is running, slow ambient otherwise. */
+.wb-wrap::before{
+  content:'';position:absolute;
+  inset:-2px;border-radius:14px;
+  background:
+    radial-gradient(ellipse at 50% 0%,  rgba(93,155,255,0.20), transparent 55%),
+    radial-gradient(ellipse at 50% 100%, rgba(233,69,96,0.14), transparent 55%);
+  filter:blur(22px);z-index:-1;opacity:0.55;
+  animation:wbHalo 6s ease-in-out infinite;
+  pointer-events:none;
+}
+.wb-wrap:has(.wb-status.running)::before{
+  animation:wbHalo 1.8s ease-in-out infinite;
+  opacity:0.85;
+}
+@keyframes wbHalo{
+  0%,100% { transform:scale(1);    opacity:0.45; }
+  50%     { transform:scale(1.06); opacity:0.75; }
+}
+@media (prefers-reduced-motion:reduce){
+  .wb-wrap::before{animation:none}
 }
 .wb-status{
   display:flex;align-items:center;gap:10px;
@@ -2272,7 +2297,17 @@ a{color:inherit;text-decoration:none}
   color:var(--muted);font-size:11px;letter-spacing:1px;
   text-transform:uppercase;
 }
-.wb-status .stat b{color:var(--text-soft);font-weight:600}
+.wb-status .stat b{
+  color:var(--text-soft);font-weight:600;
+  display:inline-block;
+  transition:transform 0.18s, color 0.18s;
+}
+.wb-status .stat b.flash{animation:statFlash 0.55s ease-out}
+@keyframes statFlash{
+  0%   { transform:scale(1.35); color:var(--mint); }
+  60%  { transform:scale(1.05); color:var(--mint); }
+  100% { transform:scale(1);    color:var(--text-soft); }
+}
 .wb-fakebar{
   display:flex;align-items:center;gap:10px;
   padding:10px 14px;border-bottom:1px solid var(--border);
@@ -2296,6 +2331,14 @@ a{color:inherit;text-decoration:none}
   font-size:9.5px;font-weight:700;letter-spacing:1.2px;
   padding:3px 8px;border-radius:4px;
   text-transform:uppercase;flex-shrink:0;
+  animation:vmTagPulse 3.2s ease-in-out infinite;
+}
+@keyframes vmTagPulse{
+  0%,100% { box-shadow:0 0 0 0 rgba(93,155,255,0); }
+  50%     { box-shadow:0 0 0 6px rgba(93,155,255,0.10); border-color:rgba(93,155,255,0.65); }
+}
+@media (prefers-reduced-motion:reduce){
+  .wb-vm-tag{animation:none}
 }
 .wb-frame-wrap{
   position:relative;background:#fff;
@@ -2380,7 +2423,17 @@ a{color:inherit;text-decoration:none}
 .watch-prompt.active{
   border-color:var(--accent);
   border-left-color:var(--accent);
+  border-left-width:3px;
   background:rgba(233,69,96,0.08);
+  box-shadow:0 0 0 0 rgba(233,69,96,0.28);
+  animation:activePromptPulse 2s ease-in-out infinite;
+}
+@keyframes activePromptPulse{
+  0%,100% { box-shadow:0 0 0 0   rgba(233,69,96,0.32); }
+  50%     { box-shadow:0 0 0 6px rgba(233,69,96,0);     }
+}
+@media (prefers-reduced-motion:reduce){
+  .watch-prompt.active{animation:none}
 }
 /* Zillow prompt — blue left border tints it as "different site" */
 .watch-prompt.z{
@@ -2423,15 +2476,36 @@ a{color:inherit;text-decoration:none}
 @keyframes bubbleIn{to{opacity:1;transform:translateY(0)}}
 .watch-action{
   display:flex;align-items:center;gap:8px;
-  padding:7px 10px;border-radius:6px;
+  padding:7px 10px 7px 14px;border-radius:6px;
   background:rgba(255,255,255,0.02);
   border:1px solid transparent;
   font-family:ui-monospace,monospace;font-size:12px;
   color:var(--text-soft);
   opacity:0;transform:translateX(-4px);
   animation:actionIn 0.32s ease-out forwards;
+  position:relative;
 }
 @keyframes actionIn{to{opacity:1;transform:translateX(0)}}
+/* Left-edge timeline stripe — turns red while running, mint when done.
+ * The stack of stripes reads as a vertical timeline of agent steps. */
+.watch-action::before{
+  content:'';position:absolute;
+  left:0;top:4px;bottom:4px;width:3px;
+  border-radius:0 2px 2px 0;
+  background:var(--accent);
+  animation:stripePulse 1.4s ease-in-out infinite;
+}
+.watch-action.done::before{
+  background:var(--mint);
+  animation:none;opacity:0.7;
+}
+@keyframes stripePulse{
+  0%,100% { opacity:0.55; box-shadow:0 0 0 0 rgba(233,69,96,0); }
+  50%     { opacity:1;    box-shadow:0 0 8px rgba(233,69,96,0.55); }
+}
+@media (prefers-reduced-motion:reduce){
+  .watch-action::before{animation:none}
+}
 .watch-action .glyph{font-size:13px;width:18px;text-align:center}
 .watch-action .label{
   font-weight:600;color:var(--text);min-width:80px;
@@ -2592,12 +2666,11 @@ a{color:inherit;text-decoration:none}
   content:'';
   width:6px;height:6px;border-radius:50%;
   background:currentColor;
-  box-shadow:0 0 0 0 currentColor;
   animation:eyebrowPulse 2.4s ease-in-out infinite;
 }
 @keyframes eyebrowPulse{
-  0%,100% { box-shadow:0 0 0 0 currentColor; opacity:0.85; }
-  50%     { box-shadow:0 0 0 5px rgba(233,69,96,0); opacity:1;    }
+  0%,100% { opacity:0.45; transform:scale(0.85); }
+  50%     { opacity:1;    transform:scale(1.15); }
 }
 @media (prefers-reduced-motion:reduce){
   .section-eyebrow::before{animation:none}
@@ -2969,7 +3042,7 @@ a{color:inherit;text-decoration:none}
 <!-- Act 3: Watch it work — live agent demo running in QuickJS-WASM -->
 <section class="wb-act" id="watch">
   <div class="section-head">
-    <div class="section-eyebrow">&#127760; See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
+    <div class="section-eyebrow">See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
     <h2>Watch it work.</h2>
     <p class="lede">Pick a prompt. Watch the agent open Kayak, parse the page, type the destination, and read the prices &mdash; every step running for real inside a WebAssembly browser sandbox right here. No real Kayak request, no backend, just real DOM mutations driving the iframe.</p>
   </div>
@@ -4089,7 +4162,11 @@ async function loadWasmBrowserOnce() {
         }
       }
       if (WB.mutationCount !== before) {
-        WB.statMut.textContent = WB.mutationCount;
+        WB.statMut.textContent = WB.mutationCount.toLocaleString();
+        // Brief flash so the visitor's eye snaps to the live counter.
+        WB.statMut.classList.remove('flash');
+        void WB.statMut.offsetWidth;
+        WB.statMut.classList.add('flash');
       }
     };
   } catch (e) {
@@ -4305,7 +4382,12 @@ async function ensureSnapshot(key) {
     const tree = WB.loader.engine.eval('__serializeDOM()');
     let count = 0;
     (function walk(n){ count++; if (n.children) n.children.forEach(walk); })(tree);
-    if (WB.statNodes) WB.statNodes.textContent = count;
+    if (WB.statNodes) {
+      WB.statNodes.textContent = count.toLocaleString();
+      WB.statNodes.classList.remove('flash');
+      void WB.statNodes.offsetWidth;
+      WB.statNodes.classList.add('flash');
+    }
   } catch {}
 }
 
