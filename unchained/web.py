@@ -62,6 +62,7 @@ from web_app.templates import (
     INSTALL_CLAIM_HTML,
     INSTALL_ONBOARD_HTML,
     LANDING_HTML,
+    LANDING_V3_HTML,
     MCP_PAGE_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
@@ -1501,9 +1502,17 @@ async def handle_google_verification(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
-    html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    return web.Response(text=html, content_type="text/html")
+    # Allow opting into the V3 redesign via ?ui=v3 (or cookie ui=v3) so V2 and V3
+    # can run side-by-side during the redesign A/B. Default remains V2.
+    variant = request.query.get("ui") or request.cookies.get("ui") or ""
+    template = LANDING_V3_HTML if variant == "v3" else LANDING_HTML
+    html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    response = web.Response(text=html, content_type="text/html")
+    if request.query.get("ui") in {"v2", "v3"}:
+        # Persist the choice for ~1 day so deep-links inside the site keep the
+        # same variant when the visitor returns to "/".
+        response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
+    return response
 
 
 async def handle_test(request: web.Request) -> web.Response:

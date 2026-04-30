@@ -1963,7 +1963,856 @@ if ('IntersectionObserver' in window) {
 </body>
 </html>"""
 
-# Promote V2 (haiku morph) as the main landing page.
+LANDING_V3_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unchained — AI Browser Agent for Everyday Web Tasks</title>
+<meta name="description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact. Search, compare, and monitor the web in plain English.">
+<link rel="canonical" href="https://unchainedsky.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/">
+<meta property="og:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta property="og:description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta property="og:site_name" content="Unchained">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta name="twitter:description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Unchained","url":"https://unchainedsky.com","applicationCategory":"BrowserApplication","operatingSystem":"macOS, Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"AI browser agent that searches, compares, and monitors the web for you. Works with your real browser and your real logins."}
+</script>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Cormorant+Garamond:ital,wght@0,400;1,400&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--surface:#111119;--surface-2:#15151e;--subtle:#222;
+  --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
+  --amber:#f5b342;--blue:#5d9bff;--mint:#3fb98a;
+  --text:#e8e8ec;--text-soft:#b8b8c0;--muted:#8a8a94;
+  --border:rgba(255,255,255,0.08);--border-strong:rgba(255,255,255,0.16);
+  --nav-h:60px;
+}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;z-index:0;
+}
+a{color:inherit;text-decoration:none}
+
+/* ── Sticky top nav ── */
+.topnav{
+  position:sticky;top:0;z-index:50;
+  height:var(--nav-h);
+  background:rgba(10,10,15,0.78);
+  backdrop-filter:saturate(140%) blur(12px);
+  -webkit-backdrop-filter:saturate(140%) blur(12px);
+  border-bottom:1px solid var(--border);
+}
+.topnav-inner{
+  max-width:1200px;margin:0 auto;padding:0 24px;
+  height:100%;display:flex;align-items:center;gap:24px;
+}
+.topnav .brand{
+  font-weight:700;letter-spacing:2px;font-size:14px;
+  text-transform:uppercase;
+}
+.topnav .brand span{color:var(--accent)}
+.topnav .links{
+  display:flex;gap:18px;margin-left:auto;align-items:center;
+}
+.topnav .links a{
+  color:var(--text-soft);font-size:14px;font-weight:500;
+  padding:6px 4px;transition:color 0.15s;
+}
+.topnav .links a:hover{color:var(--text)}
+.topnav .signin{
+  background:var(--accent);color:#fff;padding:8px 16px;
+  border-radius:6px;font-weight:600;font-size:13px;
+  box-shadow:0 2px 12px var(--accent-glow);
+  transition:transform 0.15s, box-shadow 0.15s;
+}
+.topnav .signin:hover{
+  color:#fff;transform:translateY(-1px);
+  box-shadow:0 4px 18px rgba(233,69,96,0.35);
+}
+@media (max-width:720px){
+  .topnav .links a:not(.signin){display:none}
+}
+
+/* ── Hero ── */
+.hero{
+  position:relative;z-index:1;
+  max-width:1100px;margin:0 auto;
+  padding:64px 24px 48px;
+  display:grid;grid-template-columns:1fr 1fr;gap:48px;
+  align-items:center;
+  min-height:calc(100vh - var(--nav-h) - 32px);
+}
+@media (max-width:880px){
+  .hero{grid-template-columns:1fr;gap:24px;padding-top:40px;text-align:center}
+}
+.hero-left .wordmark{
+  font-size:clamp(36px,5vw,52px);
+  font-weight:700;letter-spacing:3px;
+  margin-bottom:16px;text-transform:uppercase;
+}
+.hero-left .wordmark span{color:var(--accent)}
+.hero h1{
+  font-size:clamp(28px,4vw,42px);
+  line-height:1.15;font-weight:600;
+  letter-spacing:-0.01em;
+  margin-bottom:18px;
+}
+.hero h1 em{
+  color:var(--accent);font-style:normal;
+}
+.hero .subhead{
+  font-size:clamp(15px,1.6vw,17px);
+  color:var(--text-soft);line-height:1.55;
+  margin-bottom:28px;max-width:520px;
+}
+@media (max-width:880px){
+  .hero .subhead{margin-left:auto;margin-right:auto}
+}
+.hero-ctas{
+  display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;
+}
+@media (max-width:880px){.hero-ctas{justify-content:center}}
+.btn-primary{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--accent);color:#fff;
+  padding:13px 22px;border-radius:8px;
+  font-weight:600;font-size:15px;
+  box-shadow:0 4px 22px var(--accent-glow);
+  transition:transform 0.15s, box-shadow 0.15s;
+}
+.btn-primary:hover{
+  color:#fff;transform:translateY(-1px);
+  box-shadow:0 6px 28px rgba(233,69,96,0.4);
+}
+.btn-ghost{
+  display:inline-flex;align-items:center;gap:6px;
+  border:1px solid var(--border-strong);color:var(--text);
+  padding:12px 20px;border-radius:8px;
+  font-weight:500;font-size:15px;
+  transition:border-color 0.15s, background 0.15s;
+}
+.btn-ghost:hover{
+  border-color:var(--accent);background:rgba(233,69,96,0.06);
+}
+.poem{
+  font-family:'Cormorant Garamond',serif;
+  font-size:15px;line-height:1.7;
+  font-style:italic;color:var(--muted);
+  margin-top:8px;max-width:480px;
+}
+@media (max-width:880px){.poem{margin-left:auto;margin-right:auto}}
+
+/* Hero right: agent preview card */
+.hero-right{
+  position:relative;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:linear-gradient(180deg,#13131c 0%,#0e0e16 100%);
+  padding:18px;
+  box-shadow:0 24px 60px rgba(0,0,0,0.4),0 0 0 1px rgba(233,69,96,0.04);
+  overflow:hidden;
+}
+.hero-right::before{
+  content:'';position:absolute;inset:-1px;
+  border-radius:12px;
+  background:radial-gradient(600px 200px at 80% -10%, rgba(233,69,96,0.18), transparent 60%);
+  pointer-events:none;
+}
+.hero-preview-head{
+  display:flex;align-items:center;gap:8px;
+  padding-bottom:12px;border-bottom:1px solid var(--border);
+  margin-bottom:14px;font-size:12px;color:var(--muted);
+}
+.dot{width:10px;height:10px;border-radius:50%}
+.dot.r{background:#ff5f56}.dot.y{background:#ffbd2e}.dot.g{background:#27c93f}
+.hero-preview-url{
+  margin-left:6px;font-family:ui-monospace,monospace;
+  color:var(--text-soft);font-size:12px;
+}
+.hero-preview .user-q{
+  background:rgba(233,69,96,0.10);
+  border:1px solid rgba(233,69,96,0.25);
+  border-radius:10px;padding:10px 12px;
+  font-size:13px;color:var(--text);margin-bottom:10px;
+}
+.hero-preview .step{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px;border-radius:8px;
+  background:rgba(255,255,255,0.02);
+  font-size:12.5px;color:var(--text-soft);
+  margin-bottom:6px;
+  font-family:ui-monospace,monospace;
+}
+.hero-preview .step .check{color:var(--mint);font-weight:700}
+.hero-preview .step .label{color:var(--text)}
+
+/* ── Section heading ── */
+.section{
+  position:relative;z-index:1;
+  max-width:1100px;margin:0 auto;
+  padding:64px 24px;
+}
+.section-head{
+  text-align:center;margin-bottom:36px;
+}
+.section-eyebrow{
+  display:inline-block;
+  font-size:11px;font-weight:600;letter-spacing:2px;
+  color:var(--accent);text-transform:uppercase;
+  margin-bottom:10px;
+}
+.section h2{
+  font-size:clamp(28px,3.5vw,36px);font-weight:600;
+  letter-spacing:-0.01em;margin-bottom:10px;
+}
+.section .lede{
+  color:var(--text-soft);font-size:16px;
+  max-width:620px;margin:0 auto;line-height:1.6;
+}
+
+/* ── Watch It Work mock ── */
+.mock-wrap{
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:linear-gradient(180deg,#13131c,#0d0d14);
+  padding:22px;
+  box-shadow:0 30px 80px rgba(0,0,0,0.5);
+  position:relative;
+  max-width:880px;margin:0 auto;
+}
+.mock-chat{display:flex;flex-direction:column;gap:14px;min-height:260px}
+.mock-cta-row{
+  display:flex;justify-content:center;gap:12px;
+  margin-top:24px;
+}
+
+/* ── Lanes / Get started cards ── */
+.lanes{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:20px;
+}
+@media (max-width:880px){.lanes{grid-template-columns:1fr}}
+.lane{
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--surface);
+  padding:24px;
+  display:flex;flex-direction:column;gap:14px;
+  position:relative;
+  transition:border-color 0.18s, transform 0.18s;
+}
+.lane:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.lane-tag{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:11px;font-weight:600;letter-spacing:1.5px;
+  color:var(--accent);text-transform:uppercase;
+}
+.lane.local .lane-tag{color:var(--blue)}
+.lane.api .lane-tag{color:var(--amber)}
+.lane h3{
+  font-size:22px;font-weight:600;line-height:1.25;
+}
+.lane p{color:var(--text-soft);font-size:14.5px;line-height:1.55}
+.lane .reqs{display:flex;gap:6px;flex-wrap:wrap}
+.lane .req{
+  font-size:11px;color:var(--text-soft);
+  border:1px solid var(--border);
+  padding:3px 9px;border-radius:999px;
+  background:rgba(255,255,255,0.02);
+}
+.lane .steps{
+  display:flex;flex-direction:column;gap:6px;
+  font-size:13.5px;color:var(--text-soft);
+}
+.lane .steps .step{display:flex;gap:10px;align-items:flex-start}
+.lane .steps .num{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:20px;height:20px;border-radius:50%;
+  background:rgba(233,69,96,0.18);color:var(--accent);
+  font-size:11px;font-weight:700;
+}
+.lane.local .steps .num{background:rgba(93,155,255,0.18);color:var(--blue)}
+.lane.api .steps .num{background:rgba(245,179,66,0.18);color:var(--amber)}
+.lane .actions{
+  display:flex;gap:10px;margin-top:auto;padding-top:8px;
+}
+.btn-cta{
+  flex:1;text-align:center;
+  background:var(--accent);color:#fff;
+  padding:11px 16px;border-radius:8px;font-weight:600;font-size:14px;
+  transition:filter 0.15s,transform 0.15s;
+}
+.btn-cta:hover{color:#fff;filter:brightness(1.08);transform:translateY(-1px)}
+.lane.local .btn-cta{background:var(--blue)}
+.lane.api .btn-cta{background:var(--amber);color:#1a1a1a}
+.btn-link{
+  align-self:center;font-size:13px;font-weight:500;
+  color:var(--muted);padding:6px 4px;
+}
+.btn-link:hover{color:var(--text)}
+.lane .footnote{
+  font-size:12px;color:var(--muted);
+  border-top:1px dashed var(--border);
+  padding-top:10px;margin-top:auto;
+}
+
+/* API providers chips inside the API lane */
+.providers{
+  display:flex;flex-wrap:wrap;gap:6px;
+}
+.provider-chip{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:12px;font-weight:500;color:var(--text-soft);
+  border:1px solid var(--border);background:rgba(255,255,255,0.02);
+  padding:5px 10px;border-radius:8px;
+  transition:border-color 0.15s, color 0.15s;
+}
+.provider-chip:hover{border-color:var(--amber);color:var(--text)}
+.provider-chip .chip-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--amber);
+}
+
+/* ── Use cases ── */
+.use-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:16px;
+}
+@media (max-width:1000px){.use-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.use-grid{grid-template-columns:1fr}}
+.use-card{
+  border:1px solid var(--border);
+  border-top:3px solid var(--accent);
+  border-radius:10px;background:var(--surface);
+  padding:20px;display:flex;flex-direction:column;gap:10px;
+  transition:transform 0.18s, border-color 0.18s;
+}
+.use-card:hover{transform:translateY(-3px)}
+.use-card.c1{border-top-color:#5d9bff}
+.use-card.c2{border-top-color:#3fb98a}
+.use-card.c3{border-top-color:#f5b342}
+.use-card.c4{border-top-color:#e94560}
+.use-glyph{font-size:24px;line-height:1}
+.use-card h4{font-size:16px;font-weight:600}
+.use-card p{font-size:13.5px;color:var(--text-soft);line-height:1.5;flex:1}
+.use-link{
+  font-size:13px;font-weight:500;color:var(--accent);
+}
+.use-link:hover{filter:brightness(1.2)}
+
+/* Case study */
+.case{
+  margin-top:28px;
+  border:1px solid var(--border);
+  border-radius:12px;background:var(--surface);
+  padding:28px;
+  display:grid;grid-template-columns:1fr 1fr;gap:28px;
+  align-items:center;
+}
+@media (max-width:880px){.case{grid-template-columns:1fr}}
+.case-eyebrow{
+  font-size:11px;font-weight:600;letter-spacing:2px;
+  color:var(--accent);text-transform:uppercase;
+}
+.case h3{font-size:22px;font-weight:600;margin:8px 0 10px}
+.case p{color:var(--text-soft);font-size:14.5px;line-height:1.55;margin-bottom:14px}
+.case-receipt{
+  font-family:ui-monospace,monospace;font-size:12px;
+  background:#0c0c14;border:1px solid var(--border);
+  border-radius:8px;padding:14px;color:var(--text-soft);
+  line-height:1.6;
+}
+.case-receipt .ok{color:var(--mint)}
+.case-receipt .key{color:var(--accent)}
+
+/* ── Footer ── */
+.footer{
+  border-top:1px solid var(--border);
+  padding:28px 24px 36px;text-align:center;
+  color:var(--muted);font-size:12px;
+  position:relative;z-index:1;
+}
+.footer-links{
+  display:flex;flex-wrap:wrap;justify-content:center;
+  gap:18px;margin-bottom:14px;
+}
+.footer-links a{
+  color:var(--text-soft);font-size:13px;font-weight:500;
+}
+.footer-links a:hover{color:var(--text)}
+.footer .imprint{letter-spacing:1.5px;text-transform:uppercase;font-size:11px}
+
+/* mock-chat styles (shared with V2) */
+.bubble{padding:10px 14px;border-radius:10px;font-size:14px;opacity:0;transition:opacity 0.4s ease}
+.bubble.show{opacity:1}
+.bubble.user{background:rgba(233,69,96,0.10);border:1px solid rgba(233,69,96,0.25);align-self:flex-end;max-width:80%}
+.bubble.asst{background:rgba(255,255,255,0.025);border:1px solid var(--border);align-self:flex-start;max-width:92%;display:flex;flex-direction:column;gap:10px}
+.action-group{border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.015);overflow:hidden;opacity:0;transition:opacity 0.4s ease}
+.action-group.show{opacity:1}
+.ag-header{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2)}
+.ag-emoji{font-size:14px}
+.ag-site{font-family:ui-monospace,monospace;color:var(--text-soft);flex:1;font-size:12px}
+.ag-count{color:var(--muted);font-size:11px}
+.ag-dot{font-size:10px}
+.ag-dot.running{color:var(--accent);animation:pulse 1.4s infinite}
+.ag-dot.done{color:var(--mint)}
+.ag-steps{display:flex;flex-direction:column;gap:4px;padding:8px 10px}
+.action-step{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-soft);padding:4px 6px;border-radius:6px}
+.as-emoji{font-size:13px}
+.as-label{font-weight:600;color:var(--text);min-width:78px}
+.as-desc{color:var(--muted);flex:1;font-family:ui-monospace,monospace;font-size:11.5px}
+.as-dot{font-size:10px}
+.as-dot.running{color:var(--accent);animation:pulse 1.4s infinite}
+.as-dot.done{color:var(--mint)}
+.as-screenshot{padding:8px}
+.as-screenshot img{width:100%;border-radius:6px;border:1px solid var(--border)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.bubble.asst .text{font-size:13.5px;line-height:1.6}
+.bubble.asst table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+.bubble.asst th,.bubble.asst td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left}
+.bubble.asst th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.bubble.asst td.best-price{color:var(--mint);font-weight:600}
+.bubble.asst p{margin:6px 0}
+.bubble.asst strong{color:var(--text)}
+
+/* V3 banner — to make it visible during A/B comparison */
+.v-badge{
+  position:fixed;bottom:14px;right:14px;z-index:100;
+  background:rgba(233,69,96,0.18);
+  border:1px solid var(--accent);
+  color:#ffd5dd;font-size:11px;font-weight:600;
+  letter-spacing:1.5px;text-transform:uppercase;
+  padding:6px 12px;border-radius:999px;
+  font-family:ui-monospace,monospace;
+}
+.v-badge a{color:#ffd5dd;margin-left:8px;text-decoration:underline}
+</style>
+</head>
+<body>
+
+<!-- Top nav -->
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a href="/" class="brand">UN<span>CHAIN</span>ED</a>
+    <div class="links">
+      <a href="#watch">Demo</a>
+      <a href="#get-started">Get Started</a>
+      <a href="#use-cases">Use Cases</a>
+      <a href="/mcp">MCP</a>
+      <a href="/test" class="signin">Sign in</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-left">
+    <div class="wordmark">Un<span>chain</span>ed</div>
+    <h1>An AI agent that drives <em>your real Chrome</em> &mdash; with your logins, cookies, and sessions intact.</h1>
+    <p class="subhead">Tell Unchained what you need online in plain English. It searches, compares, and monitors the web for you &mdash; no copy-paste, no API key required to start.</p>
+    <div class="hero-ctas">
+      <a href="/demo" class="btn-primary">Try it free &rarr;</a>
+      <a href="#watch" class="btn-ghost">Watch it work</a>
+    </div>
+    <p class="poem">
+      <em>Chains fall from my wrists.<br>
+      Wind drives where walls once stood.<br>
+      You are sky, unchained.</em>
+    </p>
+  </div>
+  <div class="hero-right hero-preview" aria-hidden="true">
+    <div class="hero-preview-head">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="hero-preview-url">unchainedsky.com / chat</span>
+    </div>
+    <div class="user-q">Find me a 2BR in Brooklyn under $4,200, in-unit laundry, allows cats.</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Navigate</span> &mdash; zillow.com/brooklyn-rentals</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Filter</span> &mdash; 2BR · &lt;$4.2k · pets</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Cross-search</span> &mdash; apartments.com, craigslist</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Rank</span> &mdash; 8 matches by commute + price</div>
+    <div class="step"><span class="check" style="color:var(--accent)">&bull;</span> <span class="label">Summarize</span> &mdash; building a shortlist&hellip;</div>
+  </div>
+</section>
+
+<!-- Watch It Work -->
+<section class="section" id="watch">
+  <div class="section-head">
+    <div class="section-eyebrow">See It Live</div>
+    <h2>Watch it work</h2>
+    <p class="lede">A real conversation with the agent. It plans, navigates, takes screenshots, extracts the answer.</p>
+  </div>
+  <div class="mock-wrap" id="mock-section">
+    <div class="mock-chat" id="mock-chat"></div>
+  </div>
+  <div class="mock-cta-row">
+    <a href="/demo" class="btn-primary">Try it yourself &rarr;</a>
+    <a href="/first-look" class="btn-ghost">Open shared demo</a>
+  </div>
+</section>
+
+<!-- Get Started -->
+<section class="section" id="get-started">
+  <div class="section-head">
+    <div class="section-eyebrow">Get Started</div>
+    <h2>Pick your lane.</h2>
+    <p class="lede">No API key? Start free in 30 seconds. Already have Claude Pro/Max or ChatGPT Plus? Use your existing plan via CLI. Or bring your own API key for full model power.</p>
+  </div>
+
+  <div class="lanes">
+
+    <!-- 1. Headless Demo (no setup) -->
+    <div class="lane">
+      <div class="lane-tag">&#9889; Instant Demo &middot; No Setup</div>
+      <h3>Headless Browser Demo</h3>
+      <p>Watch an AI agent browse live on a server-side Chrome. No install, no logins from your machine.</p>
+      <div class="reqs">
+        <span class="req">Nothing to install</span>
+        <span class="req">Public sites</span>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><span>Sign in with Google</span></div>
+        <div class="step"><span class="num">2</span><span>Type a task and watch the agent work</span></div>
+      </div>
+      <div class="actions">
+        <a href="/first-look" class="btn-cta">Launch Demo &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 2. Free Tier (your browser, free models) -->
+    <div class="lane">
+      <div class="lane-tag">&#10024; Free Tier &middot; Your Chrome</div>
+      <h3>Your Browser, Free Models</h3>
+      <p>Connect your own Chrome &mdash; the agent uses your real logins, cookies, and sessions. Free-tier AI models, no API key.</p>
+      <div class="reqs">
+        <span class="req">Chrome</span>
+        <span class="req">Terminal (curl)</span>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><span>Sign in with Google</span></div>
+        <div class="step"><span class="num">2</span><span>Run the one-line install</span></div>
+        <div class="step"><span class="num">3</span><span>Chat &mdash; the agent drives your browser</span></div>
+      </div>
+      <div class="actions">
+        <a href="/trial" class="btn-cta">Start Free &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 3. Bring your own API key (consolidated) -->
+    <div class="lane api">
+      <div class="lane-tag">&#127919; Full Model Power &middot; API Key</div>
+      <h3>Bring your own API key</h3>
+      <p>Auto-provision an API key in your Chrome browser, then run any provider at full capability. ~30 seconds to set up.</p>
+      <div class="providers">
+        <a href="/setup?provider=gemini" class="provider-chip"><span class="chip-dot"></span> Gemini API &mdash; free trial</a>
+        <a href="/setup?provider=claude-sdk" class="provider-chip"><span class="chip-dot"></span> Claude API (Sonnet/Opus/Haiku)</a>
+        <a href="/setup?provider=codex-sdk" class="provider-chip"><span class="chip-dot"></span> OpenAI / Codex API</a>
+      </div>
+      <div class="footnote">Already a Claude Pro/Max or ChatGPT Plus subscriber? Skip the API key &mdash; install the Local CLI lane instead.</div>
+      <div class="actions">
+        <a href="/setup?provider=gemini" class="btn-cta">Provision a key &rarr;</a>
+        <a href="/chat-claude" class="btn-link">Have a key? Open chat &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 4. Local CLI / MCP -->
+    <div class="lane local">
+      <div class="lane-tag">&#128187; Local Agent &middot; CLI / MCP</div>
+      <h3>Run on your machine</h3>
+      <p>Install the local agent once. Drive your real Chrome from Claude Code, Codex CLI, or any MCP-compatible tool &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
+      <div class="reqs">
+        <span class="req">Chrome</span>
+        <span class="req">Claude or Codex CLI</span>
+        <span class="req">MCP-ready</span>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><span>Sign in &amp; install local agent (one-line curl)</span></div>
+        <div class="step"><span class="num">2</span><span>Open Claude Code, Codex CLI, or any MCP client</span></div>
+        <div class="step"><span class="num">3</span><span>Browser becomes a tool in every conversation</span></div>
+      </div>
+      <div class="actions">
+        <a href="/local" class="btn-cta">Install local CLI &rarr;</a>
+        <a href="/mcp" class="btn-link">MCP setup &rarr;</a>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- Use cases -->
+<section class="section" id="use-cases">
+  <div class="section-head">
+    <div class="section-eyebrow">Real Tasks</div>
+    <h2>What people actually run.</h2>
+    <p class="lede">Real conversations, real results. Each use-case page walks through the exact prompts and the agent&rsquo;s output.</p>
+  </div>
+
+  <div class="use-grid">
+    <a href="/use/apartment-hunting" class="use-card c1">
+      <div class="use-glyph">&#127968;</div>
+      <h4>Apartment Hunting</h4>
+      <p>Search Zillow, Apartments.com, and Craigslist with your exact criteria. Ranked shortlist in seconds.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/flight-comparison" class="use-card c2">
+      <div class="use-glyph">&#9992;&#65039;</div>
+      <h4>Flight Comparison</h4>
+      <p>Compare flights across Google Flights, Kayak, and airline sites. Find savings you&rsquo;d miss manually.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/competitor-monitoring" class="use-card c3">
+      <div class="use-glyph">&#128202;</div>
+      <h4>Competitor Monitoring</h4>
+      <p>Track competitor pricing, features, and reviews. Get a structured weekly briefing automatically.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/price-tracking" class="use-card c4">
+      <div class="use-glyph">&#128722;</div>
+      <h4>Price Tracking</h4>
+      <p>Compare prices across Amazon, Best Buy, Walmart, and more. Set alerts for price drops.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+  </div>
+
+  <!-- Case study with inline excerpt -->
+  <div class="case">
+    <div>
+      <div class="case-eyebrow">Case Study</div>
+      <h3>Rental Relisting on Zillow</h3>
+      <p>Market research to a published listing in one conversation. The agent researched comps, negotiated pricing, caught lease typos, scheduled tours, and published &mdash; all hands-free.</p>
+      <a href="/case-study/zillow-rental" class="btn-ghost" style="display:inline-flex">Read the case study &rarr;</a>
+    </div>
+    <div class="case-receipt">
+      <div><span class="key">prompt</span> &gt; relist 2BR Bed-Stuy, match comps</div>
+      <div><span class="ok">&#10003;</span> pulled 14 comps from Zillow + Streeteasy</div>
+      <div><span class="ok">&#10003;</span> drafted listing copy &mdash; matched neighborhood tone</div>
+      <div><span class="ok">&#10003;</span> caught 2 typos in pasted lease addendum</div>
+      <div><span class="ok">&#10003;</span> scheduled 4 tours via DM</div>
+      <div><span class="ok">&#10003;</span> published &mdash; live in 14m, $200/mo above original ask</div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="footer-links">
+    <a href="/first-look">Demo</a>
+    <a href="/trial">Free Tier</a>
+    <a href="https://search.unchainedsky.com/">Sky Search</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
+    <a href="/mcp">MCP</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
+  </div>
+  <div class="imprint">UNCHAINED &mdash; Your Browser. Your Data. No walls.</div>
+</footer>
+
+<div class="v-badge">UI v3 &middot; <a href="/?ui=v2">switch to v2</a></div>
+
+<script>
+// Mock interaction — flight comparison demo (shared verbatim with V2)
+var mockTimers = [];
+function playMock() {
+  mockTimers.forEach(function(t){ clearTimeout(t); });
+  mockTimers = [];
+  var chat = document.getElementById('mock-chat');
+  if (!chat) return;
+  chat.innerHTML = '';
+
+  function reveal(el){ requestAnimationFrame(function(){ el.classList.add('show'); }); }
+  function markDone(stepsId){
+    var steps = document.getElementById(stepsId);
+    if(!steps) return;
+    var prev = steps.querySelector('.action-step:last-child .as-dot');
+    if(prev){prev.className='as-dot done';prev.textContent='✓';}
+  }
+  function addStep(stepsId, emoji, label, desc){
+    var steps = document.getElementById(stepsId);
+    var s = document.createElement('div');
+    s.className = 'action-step';
+    s.innerHTML =
+      '<span class="as-emoji">' + emoji + '</span>' +
+      '<span class="as-label">' + label + '</span>' +
+      '<span class="as-desc">' + desc + '</span>' +
+      '<span class="as-dot running">●</span>';
+    steps.appendChild(s);
+  }
+  function drawFlightCanvas(id, site, results) {
+    var c = document.createElement('canvas');
+    c.width = 640; c.height = 280;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, 640, 280);
+    ctx.fillStyle = site.color; ctx.fillRect(0, 0, 640, 36);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(site.name, 16, 24);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '12px sans-serif';
+    ctx.fillText('NYC → Tokyo · Apr 2026 · Round trip', 200, 24);
+    var lowestIdx = 0, lowestVal = Infinity;
+    for (var j = 0; j < results.length; j++) {
+      var num = parseFloat(results[j].price.replace(/[^0-9.]/g, ''));
+      if (num < lowestVal) { lowestVal = num; lowestIdx = j; }
+    }
+    for (var i = 0; i < results.length; i++) {
+      var y = 52 + i * 56;
+      ctx.fillStyle = i === lowestIdx ? '#1a2332' : '#111820';
+      ctx.fillRect(8, y - 8, 624, 48);
+      ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(results[i].airline, 20, y + 10);
+      ctx.fillStyle = '#8b949e'; ctx.font = '11px sans-serif';
+      ctx.fillText(results[i].route, 20, y + 28);
+      ctx.fillText(results[i].duration, 340, y + 10);
+      ctx.fillStyle = results[i].stops === 'Nonstop' ? '#3fb950' : '#d29922';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(results[i].stops, 340, y + 28);
+      ctx.fillStyle = i === lowestIdx ? '#3fb950' : '#c9d1d9';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.fillText(results[i].price, 530, y + 18);
+    }
+    var imgDiv = document.createElement('div');
+    imgDiv.className = 'as-screenshot';
+    imgDiv.innerHTML = '<img src="' + c.toDataURL('image/png') + '">';
+    var ag = document.getElementById(id);
+    ag.querySelector('.ag-steps').after(imgDiv);
+  }
+
+  var timeline = [
+    {delay:0, fn:function(){
+      var b = document.createElement('div');
+      b.className = 'bubble user';
+      b.textContent = 'Find me the cheapest direct flight from NYC to Tokyo in April. Compare Google Flights and Kayak.';
+      chat.appendChild(b); reveal(b);
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:900, fn:function(){
+      var asst = document.createElement('div');
+      asst.className = 'bubble asst'; asst.id = 'mock-asst';
+      var ag = document.createElement('div');
+      ag.className = 'action-group'; ag.id = 'mock-ag1';
+      ag.innerHTML =
+        '<div class="ag-header">' +
+          '<span class="ag-emoji">🌐</span>' +
+          '<span class="ag-site">google.com/travel/flights</span>' +
+          '<span class="ag-count"></span>' +
+          '<span class="ag-dot running">●</span>' +
+        '</div>' +
+        '<div class="ag-steps" id="mock-steps1">' +
+          '<div class="action-step">' +
+            '<span class="as-emoji">🌐</span>' +
+            '<span class="as-label">Navigate</span>' +
+            '<span class="as-desc">google.com/travel/flights</span>' +
+            '<span class="as-dot running">●</span>' +
+          '</div>' +
+        '</div>';
+      asst.appendChild(ag); chat.appendChild(asst);
+      reveal(asst); reveal(ag);
+      chat.scrollTop = chat.scrollHeight;
+    }},
+    {delay:2000, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','👁','Look','map layout'); }},
+    {delay:2700, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','⌨','Type','NYC to Tokyo, April 2026'); }},
+    {delay:3500, fn:function(){
+      markDone('mock-steps1'); addStep('mock-steps1','📷','Screenshot','capture results');
+      drawFlightCanvas('mock-ag1', {name:'Google Flights', color:'#1a73e8'}, [
+        {airline:'ANA (All Nippon)', route:'JFK → NRT', duration:'14h 10m', stops:'Nonstop', price:'$1,247'},
+        {airline:'Japan Airlines', route:'JFK → HND', duration:'14h 35m', stops:'Nonstop', price:'$1,312'},
+        {airline:'United Airlines', route:'EWR → NRT', duration:'14h 25m', stops:'Nonstop', price:'$1,389'},
+        {airline:'Delta Air Lines', route:'JFK → HND', duration:'14h 50m', stops:'Nonstop', price:'$1,456'}
+      ]);
+    }},
+    {delay:4500, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','🔬','Extract','read flight prices'); }},
+    {delay:5200, fn:function(){
+      document.querySelectorAll('#mock-ag1 .as-dot').forEach(function(d){d.className='as-dot done';d.textContent='✓';});
+      var gd=document.querySelector('#mock-ag1 .ag-dot'); if(gd){gd.className='ag-dot done';gd.textContent='✓';}
+      var ct=document.querySelector('#mock-ag1 .ag-count'); if(ct) ct.textContent='5 steps';
+    }},
+    {delay:5800, fn:function(){
+      var asst=document.getElementById('mock-asst');
+      var ag=document.createElement('div'); ag.className='action-group'; ag.id='mock-ag2';
+      ag.innerHTML =
+        '<div class="ag-header">' +
+          '<span class="ag-emoji">🌐</span>' +
+          '<span class="ag-site">kayak.com/flights</span>' +
+          '<span class="ag-count"></span>' +
+          '<span class="ag-dot running">●</span>' +
+        '</div>' +
+        '<div class="ag-steps" id="mock-steps2">' +
+          '<div class="action-step">' +
+            '<span class="as-emoji">🌐</span>' +
+            '<span class="as-label">Navigate</span>' +
+            '<span class="as-desc">kayak.com/flights</span>' +
+            '<span class="as-dot running">●</span>' +
+          '</div>' +
+        '</div>';
+      asst.appendChild(ag); reveal(ag);
+    }},
+    {delay:6800, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','👁','Look','map layout'); }},
+    {delay:7400, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','⌨','Type','NYC to Tokyo, April 2026'); }},
+    {delay:8200, fn:function(){
+      markDone('mock-steps2'); addStep('mock-steps2','📷','Screenshot','capture results');
+      drawFlightCanvas('mock-ag2', {name:'Kayak', color:'#ff690f'}, [
+        {airline:'ANA (All Nippon)', route:'JFK → NRT', duration:'14h 10m', stops:'Nonstop', price:'$1,198'},
+        {airline:'Japan Airlines', route:'JFK → HND', duration:'14h 35m', stops:'Nonstop', price:'$1,295'},
+        {airline:'United Airlines', route:'EWR → NRT', duration:'14h 25m', stops:'Nonstop', price:'$1,410'},
+        {airline:'Delta Air Lines', route:'JFK → HND', duration:'14h 50m', stops:'Nonstop', price:'$1,478'}
+      ]);
+    }},
+    {delay:9200, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','🔬','Extract','read flight prices'); }},
+    {delay:9900, fn:function(){
+      document.querySelectorAll('#mock-ag2 .as-dot').forEach(function(d){d.className='as-dot done';d.textContent='✓';});
+      var gd=document.querySelector('#mock-ag2 .ag-dot'); if(gd){gd.className='ag-dot done';gd.textContent='✓';}
+      var ct=document.querySelector('#mock-ag2 .ag-count'); if(ct) ct.textContent='5 steps';
+    }},
+    {delay:10800, fn:function(){
+      var asst=document.getElementById('mock-asst');
+      var txt=document.createElement('span'); txt.className='text rendered';
+      txt.style.display='block'; txt.style.marginTop='8px';
+      txt.innerHTML =
+        '<p>Here are the cheapest nonstop flights from NYC to Tokyo in April, compared across both sites:</p>' +
+        '<table>' +
+          '<tr><th>Airline</th><th>Route</th><th>Google Flights</th><th>Kayak</th></tr>' +
+          '<tr><td>ANA</td><td>JFK → NRT</td><td>$1,247</td><td class="best-price">$1,198 ★</td></tr>' +
+          '<tr><td>JAL</td><td>JFK → HND</td><td>$1,312</td><td class="best-price">$1,295</td></tr>' +
+          '<tr><td>United</td><td>EWR → NRT</td><td class="best-price">$1,389</td><td>$1,410</td></tr>' +
+          '<tr><td>Delta</td><td>JFK → HND</td><td class="best-price">$1,456</td><td>$1,478</td></tr>' +
+        '</table>' +
+        '<p><strong>Best deal: ANA via Kayak at $1,198</strong> (nonstop JFK → NRT, 14h 10m). That’s $49 cheaper than the same flight on Google Flights.</p>';
+      asst.appendChild(txt);
+    }}
+  ];
+  timeline.forEach(function(t){ mockTimers.push(setTimeout(t.fn, t.delay)); });
+}
+
+if ('IntersectionObserver' in window) {
+  var mockObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (e.isIntersecting) { mockObserver.disconnect(); playMock(); }
+    });
+  }, {threshold: 0.3});
+  var mockEl = document.getElementById('mock-section');
+  if (mockEl) mockObserver.observe(mockEl);
+}
+</script>
+</body>
+</html>"""
+
+
+# Default landing remains V2 for now. V3 served when ?ui=v3 is requested.
 # V1 preserved as LANDING_V1_HTML for rollback.
 LANDING_HTML = LANDING_V2_HTML
 
