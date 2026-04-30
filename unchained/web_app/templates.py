@@ -2666,6 +2666,15 @@ a{color:inherit;text-decoration:none}
   transition:transform 0.15s;
 }
 .provider-chip:hover .chip-arrow{transform:translateX(2px)}
+/* Blue variant for the Local CLI lane — keeps chips visually scoped
+ * to the lane palette (amber for API, blue for Local). */
+.provider-chip.cli{background:rgba(93,155,255,0.06)}
+.provider-chip.cli:hover{
+  border-color:var(--blue);
+  background:rgba(93,155,255,0.14);
+}
+.provider-chip.cli .chip-dot{background:var(--blue)}
+.provider-chip.cli .chip-arrow{color:var(--blue)}
 
 /* ── Use cases ── */
 .use-grid{
@@ -3005,19 +3014,29 @@ a{color:inherit;text-decoration:none}
     <div class="lane local">
       <div class="lane-tag">&#128187; Local Agent &middot; CLI / MCP</div>
       <h3>Run on your machine</h3>
-      <p>Install the local agent once. Drive your real Chrome from Claude Code, Codex CLI, or any MCP-compatible tool &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
+      <p>Install the local agent once. Drive your real Chrome from your existing CLI &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
       <div class="reqs">
         <span class="req">Chrome</span>
         <span class="req">Claude or Codex CLI</span>
         <span class="req">MCP-ready</span>
       </div>
-      <div class="steps">
-        <div class="step"><span class="num">1</span><span>Sign in &amp; install local agent (one-line curl)</span></div>
-        <div class="step"><span class="num">2</span><span>Open Claude Code, Codex CLI, or any MCP client</span></div>
-        <div class="step"><span class="num">3</span><span>Browser becomes a tool in every conversation</span></div>
+      <div class="providers-label">Pick a CLI &darr;</div>
+      <div class="providers">
+        <a href="/local" class="provider-chip cli">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Claude CLI</span>
+          <span class="chip-meta">Pro &middot; Max &middot; Sonnet &middot; Opus</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/chat-codex?model=codex-cli:gpt-5.5" class="provider-chip cli">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Codex CLI</span>
+          <span class="chip-meta">ChatGPT Plus &middot; GPT-4o &middot; o1</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
       </div>
       <div class="actions">
-        <a href="/local" class="btn-cta">Install local CLI &rarr;</a>
+        <a href="/cli" class="btn-link">New here? Install guide &rarr;</a>
         <a href="/mcp" class="btn-link">MCP setup &rarr;</a>
       </div>
     </div>
