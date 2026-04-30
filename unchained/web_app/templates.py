@@ -3343,8 +3343,8 @@ body{
 <div class="layout">
   <aside class="filters">
     <h3>Stops</h3>
-    <div class="filter-row"><input type="checkbox" /> Nonstop <span class="ct" id="ct-nonstop">—</span></div>
-    <div class="filter-row"><input type="checkbox" /> 1 stop <span class="ct" id="ct-1stop">—</span></div>
+    <div class="filter-row" id="row-nonstop"><input type="checkbox" id="cb-nonstop" /> Nonstop <span class="ct" id="ct-nonstop">—</span></div>
+    <div class="filter-row"><input type="checkbox" id="cb-1stop" /> 1 stop <span class="ct" id="ct-1stop">—</span></div>
     <h3>Price</h3>
     <div class="price-range"><div class="fill"></div></div>
     <div class="price-bounds"><span id="p-lo">$0</span><span id="p-hi">$2,000</span></div>
@@ -3360,9 +3360,9 @@ body{
 
   <main>
     <div class="results-head">
-      <div class="tab active">Best <span class="hint" id="t-best">—</span></div>
-      <div class="tab">Cheapest <span class="hint" id="t-cheap">—</span></div>
-      <div class="tab">Quickest <span class="hint" id="t-quick">—</span></div>
+      <div class="tab active" id="tab-best" data-sort="best">Best <span class="hint" id="t-best">—</span></div>
+      <div class="tab" id="tab-cheap" data-sort="cheap">Cheapest <span class="hint" id="t-cheap">—</span></div>
+      <div class="tab" id="tab-quick" data-sort="quick">Quickest <span class="hint" id="t-quick">—</span></div>
     </div>
     <div class="result-meta">
       <span><b id="r-count">—</b> results</span>
@@ -3400,15 +3400,42 @@ function clear(node) { while (node.firstChild) node.removeChild(node.firstChild)
 function fmtPrice(n) { return '$' + n.toLocaleString(); }
 function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
 
-function render(q) {
-  q = String(q || "").toLowerCase().trim();
-  var filtered = flights.filter(function(f){ return !q || f.dest.indexOf(q) !== -1; });
-  filtered.sort(function(a,b){ return a.price - b.price; });
+// Filter + sort state — driven by both user clicks and agent acts.
+var pageState = { q: "", nonstopOnly: false, sort: "best" };
 
-  var nonstops = filtered.filter(function(f){return f.stops===0}).length;
-  var onestops = filtered.filter(function(f){return f.stops===1}).length;
+function applyFilters() {
+  var arr = flights.filter(function(f){ return !pageState.q || f.dest.indexOf(pageState.q) !== -1; });
+  if (pageState.nonstopOnly) arr = arr.filter(function(f){ return f.stops === 0; });
+  if (pageState.sort === "quick") {
+    arr.sort(function(a,b){ return parseInt(a.duration) - parseInt(b.duration); });
+  } else {
+    // "best" + "cheap" both sort by price for this demo (best is price + duration weighted in real life)
+    arr.sort(function(a,b){ return a.price - b.price; });
+  }
+  return arr;
+}
+
+function render() {
+  var filtered = applyFilters();
+  var allFiltered = flights.filter(function(f){ return !pageState.q || f.dest.indexOf(pageState.q) !== -1; });
+
+  var nonstops = allFiltered.filter(function(f){return f.stops===0}).length;
+  var onestops = allFiltered.filter(function(f){return f.stops===1}).length;
   setText('ct-nonstop', '(' + nonstops + ')');
   setText('ct-1stop', '(' + onestops + ')');
+
+  // Active-tab styling
+  var tabs = ['tab-best','tab-cheap','tab-quick'];
+  for (var ti = 0; ti < tabs.length; ti++) {
+    var tn = document.getElementById(tabs[ti]);
+    if (tn) tn._attributes['class'] = (tn._attributes['class'] || 'tab').replace(' active','');
+  }
+  var activeTab = document.getElementById('tab-' + (pageState.sort === 'cheap' ? 'cheap' : pageState.sort === 'quick' ? 'quick' : 'best'));
+  if (activeTab) activeTab.className = 'tab active';
+  // Update result-meta pill text
+  var pillTxt = pageState.sort === 'cheap' ? 'SORTED BY CHEAPEST' : pageState.sort === 'quick' ? 'SORTED BY QUICKEST' : 'SORTED BY BEST';
+  if (pageState.nonstopOnly) pillTxt = pillTxt + ' · NONSTOP';
+  setText('r-pill', pillTxt);
 
   var r = document.getElementById('results');
   clear(r);
@@ -3424,7 +3451,7 @@ function render(q) {
     empty.appendChild(document.createTextNode('.'));
     r.appendChild(empty);
     setText('r-count', '0');
-    setText('r-dest', q ? q : 'any');
+    setText('r-dest', pageState.q ? pageState.q : 'any');
     setText('t-best', '—');
     setText('t-cheap', '—');
     setText('t-quick', '—');
@@ -3436,8 +3463,8 @@ function render(q) {
   for (var i = 0; i < filtered.length; i++) {
     var f = filtered[i];
     var row = el('div', {cls:'result' + (i === 0 ? ' cheapest' : '')});
+    if (i === 0) row.setAttribute('id', 'result-best');
 
-    // Left: airline name + route line
     var left = el('div', {cls:'result-row'});
     left.appendChild(el('div', {cls:'airline', text: f.airline + ' · ' + f.code}));
 
@@ -3467,11 +3494,12 @@ function render(q) {
     left.appendChild(rl);
     row.appendChild(left);
 
-    // Right: price + view-deal
     var right = el('div', {cls:'result-price'});
     right.appendChild(el('div', {cls:'amt', text: fmtPrice(f.price)}));
     right.appendChild(el('div', {cls:'pp', text:'per person'}));
-    right.appendChild(el('button', {cls:'deal', text:'View Deal'}));
+    var deal = el('button', {cls:'deal', text:'View Deal'});
+    if (i === 0) deal.setAttribute('id', 'deal-best');
+    right.appendChild(deal);
     row.appendChild(right);
 
     r.appendChild(row);
@@ -3488,20 +3516,31 @@ function render(q) {
   setText('t-quick', quickest.duration + ' · ' + quickest.airline.split(' ')[0]);
 
   setText('r-count', String(filtered.length));
-  setText('r-dest', q ? q.toUpperCase() : 'any');
+  setText('r-dest', pageState.q ? pageState.q.toUpperCase() : 'any');
   setText('p-lo', fmtPrice(cheapest.price));
   setText('p-hi', fmtPrice(filtered[filtered.length - 1].price));
 }
 
 document.getElementById('q').addEventListener('input', function(e){
-  render(e.target.value);
+  pageState.q = String(e.target.value || "").toLowerCase().trim();
+  render();
 });
 document.getElementById('f').addEventListener('click', function(e){
   e.preventDefault();
-  render(document.getElementById('q').value);
+  pageState.q = String(document.getElementById('q').value || "").toLowerCase().trim();
+  render();
 });
+function bindTab(id, sort) {
+  var t = document.getElementById(id);
+  if (t) t.addEventListener('click', function(){ pageState.sort = sort; render(); });
+}
+bindTab('tab-best', 'best');
+bindTab('tab-cheap', 'cheap');
+bindTab('tab-quick', 'quick');
+var cb = document.getElementById('cb-nonstop');
+if (cb) cb.addEventListener('change', function(){ pageState.nonstopOnly = !!cb.checked; render(); });
 
-render("");
+render();
 </` + `script>
 </body></html>`;
 
@@ -3620,8 +3659,10 @@ body{
   width:32px;height:32px;border-radius:50%;
   background:rgba(255,255,255,0.92);
   display:flex;align-items:center;justify-content:center;
-  font-size:16px;color:#1f1f1f;
+  font-size:16px;color:#1f1f1f;cursor:pointer;
 }
+.photo .heart.saved{background:#ff385c;color:#fff}
+.chip.active{background:#006aff;color:#fff;border-color:#006aff;font-weight:700}
 .photo .badge{
   position:absolute;top:10px;left:10px;
   background:#fff;color:#006aff;
@@ -3752,7 +3793,14 @@ function render(q) {
 
     var photo = el('div', {cls:'photo ' + l.grad});
     if (i === 0) photo.appendChild(el('div', {cls:'badge', text:'Best Match'}));
-    photo.appendChild(el('div', {cls:'heart', text:'♡'}));
+    var heart = el('div', {cls:'heart', text:'♡'});
+    if (i === 0) heart.setAttribute('id', 'heart-best');
+    heart.addEventListener('click', function(h){ return function(){
+      var saved = (h._attributes['class'] || '').indexOf('saved') !== -1;
+      h.className = saved ? 'heart' : 'heart saved';
+      h.textContent = saved ? '♡' : '♥';
+    };}(heart));
+    photo.appendChild(heart);
     card.appendChild(photo);
 
     var info = el('div', {cls:'info'});
@@ -3789,6 +3837,24 @@ document.getElementById('f').addEventListener('click', function(e){
   e.preventDefault();
   render(document.getElementById('q').value);
 });
+var petChip = document.getElementById('pet-chip');
+if (petChip) {
+  petChip.addEventListener('click', function(){
+    var active = (petChip._attributes['class'] || '').indexOf('active') !== -1;
+    petChip.className = active ? 'chip' : 'chip active';
+    petChip.textContent = active ? 'Pets ×' : '✓ Cats OK';
+    // Auto-set query to "cats" when activating; clear when deactivating, but
+    // only if the query field currently matches the auto-state.
+    var qInput = document.getElementById('q');
+    if (qInput) {
+      if (!active) {
+        qInput.value = 'cats';
+        var ev = new Event('input', {bubbles:true}); ev.value = 'cats';
+        qInput.dispatchEvent(ev);
+      }
+    }
+  });
+}
 
 render("");
 </` + `script>
@@ -3894,14 +3960,108 @@ const SCENARIOS = {
   },
 };
 
-const ACTION_SEQUENCE = [
-  { glyph: '🌐', label: 'Navigate', delay: 350 },
-  { glyph: '👁', label: 'Look', delay: 400, desc: 'map page layout' },
-  { glyph: '⌨',       label: 'Type',   delay: 600, desc: 'destination query' },
-  { glyph: '🔍', label: 'Filter', delay: 450, desc: 'apply destination filter' },
-  { glyph: '🔬', label: 'Extract', delay: 500, desc: 'read flight prices' },
-  { glyph: '✅',       label: 'Summarize', delay: 350, desc: 'pick best match' },
-];
+// Per-snapshot agent flows. Each step optionally names an `act` that
+// drives the WASM browser via engine.eval — this is what makes the
+// iframe visibly change beyond just "type into destination". Adding a
+// step here means adding a matching ACT.<name> below.
+const SCENARIO_FLOWS = {
+  kayak: [
+    { glyph: '🌐', label: 'Navigate',     delay: 350 },
+    { glyph: '👁', label: 'Read page',    delay: 400, desc: 'parse search form + filters' },
+    { glyph: '⌨', label: 'Type',         delay: 500, act: 'typeQuery' },
+    { glyph: '☑', label: 'Toggle filter',delay: 380, desc: 'check Nonstop',       act: 'kayakNonstop' },
+    { glyph: '↕', label: 'Sort',         delay: 380, desc: 'tab → Cheapest',      act: 'kayakSortCheap' },
+    { glyph: '🔬', label: 'Extract',      delay: 450, desc: 'read airline + price + stops' },
+    { glyph: '👆', label: 'Open deal',    delay: 380, desc: 'click best View Deal',act: 'kayakOpenDeal' },
+    { glyph: '✅', label: 'Summarize',    delay: 320, desc: 'pick best match' },
+  ],
+  zillow: [
+    { glyph: '🌐', label: 'Navigate',     delay: 350 },
+    { glyph: '👁', label: 'Read page',    delay: 400, desc: 'parse listing grid' },
+    { glyph: '⌨', label: 'Type',         delay: 500, act: 'typeQuery' },
+    { glyph: '☑', label: 'Toggle filter',delay: 380, desc: 'enable Pets chip',    act: 'zillowPetsChip' },
+    { glyph: '↕', label: 'Sort',         delay: 380, desc: 'price · low → high',  act: 'zillowSortFlash' },
+    { glyph: '🔬', label: 'Extract',      delay: 450, desc: 'read price + beds + tags' },
+    { glyph: '♥', label: 'Save match',   delay: 380, desc: 'heart best listing',  act: 'zillowSaveMatch' },
+    { glyph: '✅', label: 'Summarize',    delay: 320, desc: 'pick cheapest match' },
+  ],
+};
+
+// ACT.<name>(scn) returns a Promise. Each act dispatches a click or
+// state-change event in the WASM page so the visitor sees the result.
+const ACT = {
+  typeQuery: async function(scn) {
+    const target = scn.query;
+    for (let c = 1; c <= target.length; c++) {
+      const partial = target.slice(0, c);
+      WB.loader.engine.eval(
+        '(function(){var i=document.getElementById("q");if(i){i.value=' +
+        JSON.stringify(partial) +
+        ';var ev=new Event("input",{bubbles:true});ev.value=' +
+        JSON.stringify(partial) +
+        ';i.dispatchEvent(ev);}})()'
+      );
+      WB.loader.engine.vm.runtime.executePendingJobs();
+      WB.loader.engine.tick && WB.loader.engine.tick();
+      WB.loader.bridge.flush();
+      try {
+        const realInput = WB.iframe.contentDocument.getElementById('q');
+        if (realInput) realInput.value = partial;
+      } catch {}
+      await delay(60);
+    }
+  },
+  kayakNonstop: async function() {
+    WB.loader.engine.eval(
+      '(function(){var c=document.getElementById("cb-nonstop");if(c){c.checked=true;var ev=new Event("change",{bubbles:true});c.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  kayakSortCheap: async function() {
+    WB.loader.engine.eval(
+      '(function(){var t=document.getElementById("tab-cheap");if(t){var ev=new Event("click",{bubbles:true});t.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  kayakOpenDeal: async function() {
+    // Make the cheapest View Deal flash to "✓ Selected" so the click is unmistakable.
+    WB.loader.engine.eval(
+      '(function(){var b=document.getElementById("deal-best");if(b){b.textContent="✓ Selected";b.style.background="#0fb6c2";}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  zillowPetsChip: async function() {
+    WB.loader.engine.eval(
+      '(function(){var c=document.getElementById("pet-chip");if(c){var ev=new Event("click",{bubbles:true});c.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  zillowSortFlash: async function() {
+    // Sort is already cheapest-first; flash the sort label as a visual ping.
+    WB.loader.engine.eval(
+      '(function(){var els=document.querySelectorAll(".sort b");for(var i=0;i<els.length;i++){els[i].style.background="#fff8e1";els[i].style.padding="2px 6px";els[i].style.borderRadius="3px";}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  zillowSaveMatch: async function() {
+    WB.loader.engine.eval(
+      '(function(){var h=document.getElementById("heart-best");if(h){var ev=new Event("click",{bubbles:true});h.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+};
 
 let scenarioRunning = false;
 
@@ -4029,54 +4189,33 @@ async function runScenario(key) {
 
   const targetSnap = SNAPSHOTS[scn.snapshot] || SNAPSHOTS.kayak;
   const willNavigate = WB.currentSnapshot !== scn.snapshot;
+  const flow = SCENARIO_FLOWS[scn.snapshot] || SCENARIO_FLOWS.kayak;
 
-  // Walk the action sequence — each step appears in the transcript, then the
-  // corresponding mutation happens in the iframe at the right beat.
-  for (let i = 0; i < ACTION_SEQUENCE.length; i++) {
-    const step = ACTION_SEQUENCE[i];
+  // Walk the per-snapshot flow — each step appears in the transcript, then
+  // the corresponding mutation happens in the iframe at the right beat.
+  for (let i = 0; i < flow.length; i++) {
+    const step = flow[i];
     let desc = step.desc || '';
     if (step.label === 'Navigate') desc = targetSnap.url.host + targetSnap.url.path;
-    if (step.label === 'Look') desc = scn.snapshot === 'zillow' ? 'parse listing grid' : 'parse search form';
     if (step.label === 'Type') desc = '"' + scn.query + '"';
-    if (step.label === 'Filter') desc = (scn.snapshot === 'zillow' ? 'tag = ' : 'destination = ') + scn.query;
-    if (step.label === 'Extract') desc = scn.snapshot === 'zillow' ? 'read price + beds + tags' : 'read airline + price + stops';
-    if (step.label === 'Summarize') desc = scn.snapshot === 'zillow' ? 'pick cheapest match' : 'pick best deal';
     const node = appendAction(step.glyph, step.label, desc);
     setStatEvt(step.label.toLowerCase());
     await delay(step.delay);
 
-    // Navigate step actually loads the new snapshot if it differs from the
-    // current one. The visitor sees the iframe blank → Kayak / Zillow fade in.
+    // Navigate step swaps the snapshot if needed.
     if (step.label === 'Navigate' && willNavigate) {
       await ensureSnapshot(scn.snapshot);
       resetSnapshotInput();
       await delay(120);
     }
 
-    // The Type step drives the WASM browser character by character.
-    if (step.label === 'Type') {
+    // Run the named act (typeQuery / clickNonstop / etc.) — this is what
+    // makes the iframe visibly change beyond the static URL bar.
+    if (step.act && ACT[step.act]) {
       try {
-        const target = scn.query;
-        for (let c = 1; c <= target.length; c++) {
-          const partial = target.slice(0, c);
-          WB.loader.engine.eval(
-            '(function(){var i=document.getElementById("q");if(i){i.value=' +
-            JSON.stringify(partial) +
-            ';var ev=new Event("input",{bubbles:true});ev.value=' +
-            JSON.stringify(partial) +
-            ';i.dispatchEvent(ev);}})()'
-          );
-          WB.loader.engine.vm.runtime.executePendingJobs();
-          WB.loader.engine.tick && WB.loader.engine.tick();
-          WB.loader.bridge.flush();
-          try {
-            const realInput = WB.iframe.contentDocument.getElementById('q');
-            if (realInput) realInput.value = partial;
-          } catch {}
-          await delay(60);
-        }
+        await ACT[step.act](scn);
       } catch (e) {
-        console.warn('[scenario] type step', e);
+        console.warn('[scenario] act ' + step.act, e);
       }
     }
 
@@ -4087,12 +4226,11 @@ async function runScenario(key) {
   setStatEvt('done · ' + key);
 
   // Real metrics from the run: how many actions, how many DOM mutations
-  // actually flowed through the bridge, and the wall-clock time. The
-  // pure-WASM, no-network framing is the actual story.
+  // actually flowed through the bridge, and the wall-clock time.
   const dt = Math.max(1, Math.round(performance.now() - t0));
   const mutDelta = Math.max(0, WB.mutationCount - mutBefore);
   setWBStatus('ready',
-    '✓ ' + key + ' · ' + ACTION_SEQUENCE.length + ' actions · ' +
+    '✓ ' + key + ' · ' + flow.length + ' actions · ' +
     mutDelta.toLocaleString() + ' real DOM mutations · ' +
     dt + ' ms · 0 server calls'
   );
