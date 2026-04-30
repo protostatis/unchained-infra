@@ -2994,13 +2994,13 @@ a{color:inherit;text-decoration:none}
         <a href="/setup?provider=claude-sdk" class="provider-chip">
           <span class="chip-dot"></span>
           <span class="chip-name">Claude</span>
-          <span class="chip-meta">Sonnet · Opus · Haiku</span>
+          <span class="chip-meta">Anthropic API key</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
         <a href="/setup?provider=codex-sdk" class="provider-chip">
           <span class="chip-dot"></span>
           <span class="chip-name">OpenAI / Codex</span>
-          <span class="chip-meta">GPT-4o · o1</span>
+          <span class="chip-meta">OpenAI API key</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
       </div>
@@ -3025,19 +3025,19 @@ a{color:inherit;text-decoration:none}
         <a href="/local" class="provider-chip cli">
           <span class="chip-dot"></span>
           <span class="chip-name">Claude CLI</span>
-          <span class="chip-meta">Pro &middot; Max &middot; Sonnet &middot; Opus</span>
+          <span class="chip-meta">Claude Pro &middot; Max subscription</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
         <a href="/chat-codex?model=codex-cli:gpt-5.5" class="provider-chip cli">
           <span class="chip-dot"></span>
           <span class="chip-name">Codex CLI</span>
-          <span class="chip-meta">ChatGPT Plus &middot; GPT-4o &middot; o1</span>
+          <span class="chip-meta">ChatGPT Plus subscription</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
       </div>
       <div class="actions">
-        <a href="/cli" class="btn-link">New here? Install guide &rarr;</a>
-        <a href="/mcp" class="btn-link">MCP setup &rarr;</a>
+        <a href="/cli" class="btn-link">Unchained CLI &rarr;</a>
+        <a href="/mcp" class="btn-link">MCP server &rarr;</a>
       </div>
     </div>
 
