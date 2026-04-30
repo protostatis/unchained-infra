@@ -2244,6 +2244,16 @@ a{color:inherit;text-decoration:none}
 }
 .wb-fakebar .url .scheme{color:var(--mint)}
 .wb-fakebar .url .host{color:var(--text)}
+.wb-vm-tag{
+  display:inline-flex;align-items:center;
+  background:rgba(93,155,255,0.10);
+  border:1px solid rgba(93,155,255,0.40);
+  color:var(--blue);
+  font-family:ui-monospace,monospace;
+  font-size:9.5px;font-weight:700;letter-spacing:1.2px;
+  padding:3px 8px;border-radius:4px;
+  text-transform:uppercase;flex-shrink:0;
+}
 .wb-frame-wrap{
   position:relative;background:#fff;
   min-height:520px;
@@ -2816,9 +2826,9 @@ a{color:inherit;text-decoration:none}
 <!-- Act 3: Watch it work — live agent demo running in QuickJS-WASM -->
 <section class="wb-act" id="watch">
   <div class="section-head">
-    <div class="section-eyebrow">&#127760; See It Live &middot; QuickJS-WASM &middot; No backend</div>
+    <div class="section-eyebrow">&#127760; See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
     <h2>Watch it work.</h2>
-    <p class="lede">Pick a prompt. Watch the agent navigate, type, filter, and extract &mdash; every step running for real inside a sandboxed WebAssembly browser. No backend. No network. Just real DOM mutations sync&rsquo;d to the iframe live.</p>
+    <p class="lede">Pick a prompt. Watch the agent open Kayak, parse the page, type the destination, and read the prices &mdash; every step running for real inside a WebAssembly browser sandbox right here. No real Kayak request, no backend, just real DOM mutations driving the iframe.</p>
   </div>
 
   <div class="wb-wrap">
@@ -2861,7 +2871,11 @@ a{color:inherit;text-decoration:none}
         <div class="wb-fakebar">
           <span style="color:var(--muted);">&laquo;</span>
           <span style="color:var(--muted);">&raquo;</span>
-          <div class="url"><span class="scheme">wasm://</span><span class="host">flightfinder.demo</span><span style="color:var(--muted);">/</span></div>
+          <span style="color:var(--mint);font-size:11px;">&#128274;</span>
+          <div class="url">
+            <span class="scheme">https://www.</span><span class="host">kayak.com</span><span style="color:var(--muted);">/flights/JFK-NRT/2026-04-15</span>
+          </div>
+          <span class="wb-vm-tag">WASM&nbsp;SANDBOX</span>
         </div>
         <div class="wb-frame-wrap">
           <iframe id="wb-frame" sandbox="allow-same-origin" title="WASM browser demo"></iframe>
@@ -3073,105 +3087,291 @@ function setWBStatus(state, msg) {
   if (msg && WB.msg) WB.msg.textContent = msg;
 }
 
+// Kayak-styled flight-search snapshot. Real Kayak is the canonical site
+// the agent would scrape for this kind of task; mimicking its layout makes
+// the demo feel like the agent is browsing a real consumer travel site, not
+// a custom toy. Built with createElement / appendChild only because the
+// host's __parseHTMLFragment is unavailable inside QuickJS.
 const FLIGHTFINDER_HTML = `<!DOCTYPE html>
-<html><head><title>FlightFinder</title>
+<html><head><title>JFK to NRT — Kayak</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{
-  font-family:'Inter',-apple-system,system-ui,sans-serif;
-  background:#0a0a0f;color:#e8e8ec;padding:28px;
-  background-image:
-    linear-gradient(rgba(233,69,96,0.04) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(233,69,96,0.04) 1px,transparent 1px);
-  background-size:40px 40px;
+  font-family:'Helvetica Neue',Arial,sans-serif;
+  background:#f6f8fb;color:#1d1d1d;
   -webkit-font-smoothing:antialiased;
+  font-size:14px;
 }
-.hdr{display:flex;align-items:baseline;gap:14px;margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.08)}
-.logo{font-weight:700;letter-spacing:3px;font-size:18px;text-transform:uppercase}
-.logo .accent{color:#e94560}
-.tag{font-size:10px;color:#8a8a94;text-transform:uppercase;letter-spacing:1.8px}
-form{display:flex;gap:8px;margin-bottom:18px}
-input{
-  flex:1;padding:12px 16px;
-  background:rgba(255,255,255,0.03);
-  border:1px solid rgba(255,255,255,0.10);
-  border-radius:8px;font-size:14px;outline:none;
-  color:#e8e8ec;font-family:inherit;
-  transition:border-color 0.15s,background 0.15s;
+.nav{
+  background:#fff;border-bottom:1px solid #e5e8ec;
+  padding:10px 22px;
+  display:flex;align-items:center;gap:22px;
 }
-input::placeholder{color:#666}
-input:focus{
-  border-color:#e94560;
-  background:rgba(233,69,96,0.06);
-  box-shadow:0 0 0 3px rgba(233,69,96,0.08);
+.logo{
+  font-size:22px;font-weight:800;color:#ff5722;
+  letter-spacing:-0.5px;line-height:1;
 }
-button{
-  padding:12px 22px;background:#e94560;color:#fff;
-  border:none;border-radius:8px;cursor:pointer;
-  font-weight:600;font-size:14px;font-family:inherit;
-  box-shadow:0 4px 18px rgba(233,69,96,0.25);
-  transition:transform 0.15s,box-shadow 0.15s;
+.logo .a{color:#0fb6c2}
+.logo .y{color:#fbb13c}
+.logo .second-k{color:#7eb928}
+.nav-links{display:flex;gap:18px;font-size:13px;color:#525463;font-weight:600}
+.nav-links span{padding:6px 2px;cursor:pointer}
+.nav-links span.active{color:#ff5722;border-bottom:2px solid #ff5722}
+.nav-spacer{flex:1}
+.nav-account{
+  font-size:12px;color:#525463;
+  display:inline-flex;align-items:center;gap:6px;
 }
-button:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(233,69,96,0.35)}
-.row{
-  display:grid;
-  grid-template-columns:90px 1.1fr 90px 90px 100px;
-  gap:14px;padding:12px 14px;
-  border-bottom:1px solid rgba(255,255,255,0.05);
-  font-size:13px;align-items:center;
+.nav-account .av{
+  width:24px;height:24px;border-radius:50%;
+  background:#0fb6c2;color:#fff;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;
 }
-.row.head{
-  font-weight:600;color:#8a8a94;
-  text-transform:uppercase;letter-spacing:1.5px;
-  font-size:10px;border-bottom:1px solid rgba(255,255,255,0.12);
-  background:rgba(255,255,255,0.02);
+.searchbar{
+  background:#fff;
+  padding:14px 22px;border-bottom:1px solid #e5e8ec;
+  display:flex;align-items:center;gap:6px;
 }
-.row .price{color:#3fb98a;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
-.row .stops{color:#8a8a94;font-size:12px;font-family:ui-monospace,monospace}
-.row.best{
-  background:rgba(63,185,138,0.06);
-  border-left:2px solid #3fb98a;
-  padding-left:12px;
+.field{
+  background:#fff;border:1px solid #d2d6dc;border-radius:6px;
+  padding:8px 12px;font-size:13px;color:#1d1d1d;
+  display:flex;flex-direction:column;gap:1px;
+  min-width:90px;
 }
+.field .lbl{
+  font-size:9px;text-transform:uppercase;
+  color:#8b94a3;letter-spacing:1px;font-weight:600;
+}
+.field .val{font-size:13px;font-weight:600;color:#1d1d1d}
+.field.to{flex:1;min-width:170px;padding:6px 10px}
+.field.to input{
+  border:none;outline:none;background:transparent;
+  font-family:inherit;font-size:13px;font-weight:600;
+  color:#1d1d1d;width:100%;padding:2px 0;
+}
+.field.to input::placeholder{color:#a3a9b3;font-weight:400}
+.arrow{color:#8b94a3;font-size:14px;padding:0 4px}
+.search-btn{
+  background:#ff5722;color:#fff;border:none;
+  padding:14px 22px;border-radius:6px;
+  font-weight:700;font-size:13px;cursor:pointer;
+  letter-spacing:0.3px;
+}
+.search-btn:hover{background:#e64a19}
+.layout{
+  display:grid;grid-template-columns:218px 1fr;
+  gap:16px;padding:14px 22px 24px;
+}
+.filters{
+  background:#fff;border-radius:8px;
+  border:1px solid #e5e8ec;
+  padding:14px 16px;height:fit-content;
+}
+.filters h3{
+  font-size:11px;text-transform:uppercase;
+  color:#525463;letter-spacing:0.8px;
+  margin:14px 0 8px;font-weight:700;
+}
+.filters h3:first-child{margin-top:0}
+.filter-row{
+  display:flex;align-items:center;
+  gap:8px;padding:5px 0;
+  font-size:13px;color:#1d1d1d;
+}
+.filter-row input[type=checkbox]{accent-color:#ff5722;width:14px;height:14px}
+.filter-row .ct{
+  margin-left:auto;font-size:11px;color:#8b94a3;
+  font-variant-numeric:tabular-nums;
+}
+.price-range{
+  height:6px;background:#e5e8ec;border-radius:3px;
+  position:relative;margin:8px 0 6px;
+}
+.price-range .fill{
+  position:absolute;top:0;left:8%;right:14%;
+  height:100%;background:#ff5722;border-radius:3px;
+}
+.price-range::before,.price-range::after{
+  content:'';position:absolute;top:-3px;
+  width:12px;height:12px;border-radius:50%;
+  background:#fff;border:2px solid #ff5722;
+}
+.price-range::before{left:8%}
+.price-range::after{right:14%;transform:translateX(50%)}
+.price-bounds{
+  display:flex;justify-content:space-between;
+  font-size:11px;color:#525463;font-variant-numeric:tabular-nums;
+}
+.results-head{
+  background:#fff;border:1px solid #e5e8ec;border-radius:8px;
+  margin-bottom:10px;display:flex;overflow:hidden;
+}
+.tab{
+  flex:1;padding:11px 14px;text-align:center;
+  font-size:13px;color:#525463;font-weight:600;
+  border-right:1px solid #e5e8ec;cursor:pointer;
+}
+.tab:last-child{border-right:none}
+.tab.active{
+  background:#fff8f3;color:#ff5722;
+  border-bottom:3px solid #ff5722;
+}
+.tab .hint{
+  display:block;font-size:11px;color:#8b94a3;
+  margin-top:3px;font-weight:500;
+  font-variant-numeric:tabular-nums;
+}
+.tab.active .hint{color:#ff5722}
+.result-meta{
+  font-size:13px;color:#525463;
+  padding:6px 4px 12px;display:flex;align-items:center;gap:10px;
+}
+.result-meta b{color:#1d1d1d;font-variant-numeric:tabular-nums}
+.result-meta .pill{
+  background:#fff8f3;color:#ff5722;
+  font-size:11px;font-weight:700;
+  padding:3px 8px;border-radius:10px;
+  border:1px solid #ffe0d2;
+  margin-left:auto;letter-spacing:0.5px;
+}
+.result{
+  background:#fff;border:1px solid #e5e8ec;
+  border-radius:8px;padding:14px 16px;
+  margin-bottom:8px;
+  display:grid;grid-template-columns:1fr 124px;
+  gap:14px;align-items:center;
+}
+.result.cheapest{
+  border:2px solid #ff5722;
+  box-shadow:0 4px 12px rgba(255,87,34,0.10);
+}
+.result-row .airline{
+  font-size:11px;color:#8b94a3;
+  text-transform:uppercase;letter-spacing:0.6px;
+  margin-bottom:4px;font-weight:600;
+}
+.route-line{
+  display:grid;grid-template-columns:auto 1fr auto;
+  gap:14px;align-items:center;
+}
+.airport{
+  text-align:center;font-variant-numeric:tabular-nums;
+}
+.airport .time{font-weight:700;font-size:16px;color:#1d1d1d;line-height:1}
+.airport .iata{font-size:11px;color:#8b94a3;margin-top:3px}
+.path{position:relative;padding:4px 0}
+.path .ln{
+  height:2px;background:#d2d6dc;border-radius:2px;
+  position:relative;
+}
+.path .stop{
+  position:absolute;top:50%;transform:translate(-50%,-50%);
+  width:6px;height:6px;border-radius:50%;
+  background:#ff5722;
+}
+.path .meta{
+  display:flex;justify-content:space-between;
+  font-size:10px;color:#8b94a3;margin-top:6px;
+  font-variant-numeric:tabular-nums;
+}
+.path .meta .nonstop{color:#0fb6c2;font-weight:700}
+.path .meta .stops{color:#fbb13c;font-weight:700}
+.result-price{text-align:right}
+.result-price .amt{
+  font-size:22px;font-weight:800;color:#1d1d1d;
+  font-variant-numeric:tabular-nums;line-height:1;
+}
+.result.cheapest .result-price .amt{color:#ff5722}
+.result-price .pp{
+  font-size:10px;color:#8b94a3;
+  margin-top:2px;text-transform:uppercase;letter-spacing:0.4px;
+}
+.result-price .deal{
+  display:inline-block;background:#ff5722;color:#fff;
+  border:none;padding:7px 14px;border-radius:5px;
+  font-size:11px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;cursor:pointer;
+  margin-top:8px;
+}
+.result-price .deal:hover{background:#e64a19}
 .empty{
-  padding:36px;color:#8a8a94;text-align:center;font-size:13px;
-  font-family:ui-monospace,monospace;
+  background:#fff;border:1px solid #e5e8ec;border-radius:8px;
+  padding:50px 24px;text-align:center;color:#8b94a3;
+  font-size:13px;
 }
-.summary{
-  margin-top:18px;padding:14px 16px;
-  background:rgba(233,69,96,0.06);
-  border:1px solid rgba(233,69,96,0.20);
-  border-radius:8px;font-size:13px;line-height:1.7;
-  font-family:ui-monospace,monospace;color:#b8b8c0;
-}
-.summary b{color:#e8e8ec;font-weight:600}
-.summary .ok{color:#3fb98a}
+.empty b{color:#525463}
 </style></head>
 <body>
-<div class="hdr">
-  <div class="logo">flight<span class="accent">finder</span></div>
-  <div class="tag">running entirely in webassembly &middot; no server</div>
+<div class="nav">
+  <div class="logo">k<span class="a">a</span><span class="y">y</span><span class="a">a</span><span class="second-k">k</span></div>
+  <div class="nav-links">
+    <span class="active">Flights</span>
+    <span>Hotels</span>
+    <span>Cars</span>
+    <span>Packages</span>
+    <span>Things to do</span>
+  </div>
+  <div class="nav-spacer"></div>
+  <div class="nav-account"><span class="av">U</span> Sign in</div>
 </div>
-<form id="f">
-  <input id="q" placeholder="destination &mdash; try tokyo, london, bali" autocomplete="off" />
-  <button type="submit">Search</button>
-</form>
-<div class="row head">
-  <span>Airline</span><span>Route</span><span>Time</span><span>Stops</span><span>Price</span>
+<div class="searchbar">
+  <div class="field"><span class="lbl">From</span><span class="val">JFK · New York</span></div>
+  <span class="arrow">&rarr;</span>
+  <div class="field to">
+    <span class="lbl">To</span>
+    <input id="q" placeholder="Where to?" autocomplete="off" />
+  </div>
+  <div class="field"><span class="lbl">Dates</span><span class="val">Apr 15 — Apr 22</span></div>
+  <div class="field"><span class="lbl">Travellers</span><span class="val">1 adult, Economy</span></div>
+  <button class="search-btn" id="f">Search</button>
 </div>
-<div id="results"></div>
-<div id="summary"></div>
+
+<div class="layout">
+  <aside class="filters">
+    <h3>Stops</h3>
+    <div class="filter-row"><input type="checkbox" /> Nonstop <span class="ct" id="ct-nonstop">—</span></div>
+    <div class="filter-row"><input type="checkbox" /> 1 stop <span class="ct" id="ct-1stop">—</span></div>
+    <h3>Price</h3>
+    <div class="price-range"><div class="fill"></div></div>
+    <div class="price-bounds"><span id="p-lo">$0</span><span id="p-hi">$2,000</span></div>
+    <h3>Airlines</h3>
+    <div class="filter-row"><input type="checkbox" /> ANA</div>
+    <div class="filter-row"><input type="checkbox" /> Japan Airlines</div>
+    <div class="filter-row"><input type="checkbox" /> United</div>
+    <div class="filter-row"><input type="checkbox" /> Delta</div>
+    <div class="filter-row"><input type="checkbox" /> British Airways</div>
+    <h3>Times</h3>
+    <div class="filter-row" style="font-size:12px;color:#8b94a3">Take off &middot; Landing</div>
+  </aside>
+
+  <main>
+    <div class="results-head">
+      <div class="tab active">Best <span class="hint" id="t-best">—</span></div>
+      <div class="tab">Cheapest <span class="hint" id="t-cheap">—</span></div>
+      <div class="tab">Quickest <span class="hint" id="t-quick">—</span></div>
+    </div>
+    <div class="result-meta">
+      <span><b id="r-count">—</b> results</span>
+      <span style="color:#8b94a3">&middot;</span>
+      <span>JFK &rarr; <b id="r-dest">any</b></span>
+      <span class="pill" id="r-pill">SORTED BY BEST</span>
+    </div>
+    <div id="results"></div>
+  </main>
+</div>
+
 <script>
 var flights = [
-  {airline:"ANA", route:"JFK -> NRT", duration:"14h 10m", stops:"Nonstop", price:1247, dest:"tokyo"},
-  {airline:"JAL", route:"JFK -> HND", duration:"14h 35m", stops:"Nonstop", price:1312, dest:"tokyo"},
-  {airline:"United", route:"EWR -> NRT", duration:"14h 25m", stops:"Nonstop", price:1389, dest:"tokyo"},
-  {airline:"Delta", route:"JFK -> HND", duration:"14h 50m", stops:"Nonstop", price:1456, dest:"tokyo"},
-  {airline:"BA", route:"JFK -> LHR", duration:"7h 15m", stops:"Nonstop", price:582, dest:"london"},
-  {airline:"VS", route:"JFK -> LHR", duration:"7h 5m", stops:"Nonstop", price:625, dest:"london"},
-  {airline:"AA", route:"JFK -> LHR", duration:"9h 0m", stops:"1 stop", price:489, dest:"london"},
-  {airline:"Garuda", route:"JFK -> DPS", duration:"24h 0m", stops:"1 stop", price:1487, dest:"bali"},
-  {airline:"SQ", route:"JFK -> DPS", duration:"23h 30m", stops:"1 stop", price:1612, dest:"bali"}
+  {airline:"ANA", code:"NH 9", from:"JFK", to:"NRT", dep:"11:30 AM", arr:"3:40 PM +1", duration:"14h 10m", stops:0, price:1247, dest:"tokyo"},
+  {airline:"Japan Airlines", code:"JL 5", from:"JFK", to:"HND", dep:"1:50 PM", arr:"6:25 PM +1", duration:"14h 35m", stops:0, price:1312, dest:"tokyo"},
+  {airline:"United", code:"UA 79", from:"EWR", to:"NRT", dep:"11:25 AM", arr:"3:50 PM +1", duration:"14h 25m", stops:0, price:1389, dest:"tokyo"},
+  {airline:"Delta", code:"DL 167", from:"JFK", to:"HND", dep:"4:50 PM", arr:"7:40 PM +1", duration:"14h 50m", stops:0, price:1456, dest:"tokyo"},
+  {airline:"British Airways", code:"BA 178", from:"JFK", to:"LHR", dep:"7:55 PM", arr:"7:10 AM +1", duration:"7h 15m", stops:0, price:582, dest:"london"},
+  {airline:"Virgin Atlantic", code:"VS 4", from:"JFK", to:"LHR", dep:"9:00 PM", arr:"8:05 AM +1", duration:"7h 5m", stops:0, price:625, dest:"london"},
+  {airline:"American Airlines", code:"AA 100", from:"JFK", to:"LHR", dep:"6:30 PM", arr:"3:30 AM +1", duration:"9h 0m", stops:1, price:489, dest:"london"},
+  {airline:"Garuda Indonesia", code:"GA 89", from:"JFK", to:"DPS", dep:"10:15 AM", arr:"11:15 AM +2", duration:"24h 0m", stops:1, price:1487, dest:"bali"},
+  {airline:"Singapore Airlines", code:"SQ 25", from:"JFK", to:"DPS", dep:"7:30 PM", arr:"7:00 AM +2", duration:"23h 30m", stops:1, price:1612, dest:"bali"}
 ];
 
 function el(tag, opts) {
@@ -3183,53 +3383,109 @@ function el(tag, opts) {
   }
   return e;
 }
-function clear(node) {
-  while (node.firstChild) node.removeChild(node.firstChild);
-}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function fmtPrice(n) { return '$' + n.toLocaleString(); }
+function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+
 function render(q) {
   q = String(q || "").toLowerCase().trim();
   var filtered = flights.filter(function(f){ return !q || f.dest.indexOf(q) !== -1; });
   filtered.sort(function(a,b){ return a.price - b.price; });
+
+  var nonstops = filtered.filter(function(f){return f.stops===0}).length;
+  var onestops = filtered.filter(function(f){return f.stops===1}).length;
+  setText('ct-nonstop', '(' + nonstops + ')');
+  setText('ct-1stop', '(' + onestops + ')');
+
   var r = document.getElementById('results');
-  var s = document.getElementById('summary');
-  clear(r); clear(s);
+  clear(r);
+
   if (filtered.length === 0) {
-    var empty = el('div', {cls:'empty', text:'no flights match — try tokyo, london, or bali'});
+    var empty = el('div', {cls:'empty'});
+    empty.appendChild(document.createTextNode('No flights match. Try '));
+    empty.appendChild(el('b', {text:'tokyo'}));
+    empty.appendChild(document.createTextNode(', '));
+    empty.appendChild(el('b', {text:'london'}));
+    empty.appendChild(document.createTextNode(', or '));
+    empty.appendChild(el('b', {text:'bali'}));
+    empty.appendChild(document.createTextNode('.'));
     r.appendChild(empty);
+    setText('r-count', '0');
+    setText('r-dest', q ? q : 'any');
+    setText('t-best', '—');
+    setText('t-cheap', '—');
+    setText('t-quick', '—');
+    setText('p-lo', '$0');
+    setText('p-hi', '$0');
     return;
   }
+
   for (var i = 0; i < filtered.length; i++) {
     var f = filtered[i];
-    var row = el('div', {cls: 'row' + (i === 0 ? ' best' : '')});
-    row.appendChild(el('span', {text: f.airline}));
-    row.appendChild(el('span', {text: f.route}));
-    row.appendChild(el('span', {text: f.duration}));
-    row.appendChild(el('span', {cls:'stops', text: f.stops}));
-    row.appendChild(el('span', {cls:'price', text: '$' + f.price}));
+    var row = el('div', {cls:'result' + (i === 0 ? ' cheapest' : '')});
+
+    // Left: airline name + route line
+    var left = el('div', {cls:'result-row'});
+    left.appendChild(el('div', {cls:'airline', text: f.airline + ' · ' + f.code}));
+
+    var rl = el('div', {cls:'route-line'});
+    var dep = el('div', {cls:'airport'});
+    dep.appendChild(el('div', {cls:'time', text: f.dep}));
+    dep.appendChild(el('div', {cls:'iata', text: f.from}));
+    rl.appendChild(dep);
+
+    var path = el('div', {cls:'path'});
+    var ln = el('div', {cls:'ln'});
+    if (f.stops > 0) ln.appendChild(el('div', {cls:'stop', attrs:{style:'left:50%'}}));
+    path.appendChild(ln);
+    var meta = el('div', {cls:'meta'});
+    meta.appendChild(el('span', {text: f.duration}));
+    meta.appendChild(el('span', {
+      cls: f.stops === 0 ? 'nonstop' : 'stops',
+      text: f.stops === 0 ? 'Nonstop' : (f.stops + ' stop')
+    }));
+    path.appendChild(meta);
+    rl.appendChild(path);
+
+    var arr = el('div', {cls:'airport'});
+    arr.appendChild(el('div', {cls:'time', text: f.arr}));
+    arr.appendChild(el('div', {cls:'iata', text: f.to}));
+    rl.appendChild(arr);
+    left.appendChild(rl);
+    row.appendChild(left);
+
+    // Right: price + view-deal
+    var right = el('div', {cls:'result-price'});
+    right.appendChild(el('div', {cls:'amt', text: fmtPrice(f.price)}));
+    right.appendChild(el('div', {cls:'pp', text:'per person'}));
+    right.appendChild(el('button', {cls:'deal', text:'View Deal'}));
+    row.appendChild(right);
+
     r.appendChild(row);
   }
+
+  // Header tab hints
   var cheapest = filtered[0];
-  var sum = 0; for (var j = 0; j < filtered.length; j++) sum += filtered[j].price;
-  var avg = Math.round(sum / filtered.length);
-  // Build summary node-by-node (no innerHTML — host's __parseHTMLFragment is
-  // unavailable, so children must be appended explicitly).
-  s.appendChild(el('span', {cls:'ok', text:'// '}));
-  s.appendChild(el('b', {text:'cheapest:'}));
-  s.appendChild(document.createTextNode(' ' + cheapest.airline + ' ' + cheapest.route + ' — '));
-  s.appendChild(el('span', {cls:'ok', text:'$' + cheapest.price}));
-  s.appendChild(document.createTextNode('  ·  '));
-  s.appendChild(el('b', {text:'avg:'}));
-  s.appendChild(document.createTextNode(' $' + avg + '  ·  '));
-  s.appendChild(el('b', {text: String(filtered.length)}));
-  s.appendChild(document.createTextNode(' result' + (filtered.length === 1 ? '' : 's')));
+  var quickest = filtered.slice().sort(function(a,b){
+    var pa = parseInt(a.duration); var pb = parseInt(b.duration);
+    return pa - pb;
+  })[0];
+  setText('t-best', fmtPrice(cheapest.price) + ' · ' + cheapest.duration);
+  setText('t-cheap', fmtPrice(cheapest.price) + ' · ' + cheapest.airline.split(' ')[0]);
+  setText('t-quick', quickest.duration + ' · ' + quickest.airline.split(' ')[0]);
+
+  setText('r-count', String(filtered.length));
+  setText('r-dest', q ? q.toUpperCase() : 'any');
+  setText('p-lo', fmtPrice(cheapest.price));
+  setText('p-hi', fmtPrice(filtered[filtered.length - 1].price));
 }
 
-document.getElementById('f').addEventListener('submit', function(e){
-  e.preventDefault();
-  render(document.getElementById('q').value);
-});
 document.getElementById('q').addEventListener('input', function(e){
   render(e.target.value);
+});
+document.getElementById('f').addEventListener('click', function(e){
+  e.preventDefault();
+  render(document.getElementById('q').value);
 });
 
 render("");
@@ -3240,7 +3496,7 @@ const FLIGHTFINDER_SNAPSHOT = {
   html: FLIGHTFINDER_HTML,
   // scripts intentionally omitted — loadStatic() will auto-extract <script>
   // blocks from the HTML so the page's logic actually runs in QuickJS.
-  baseUrl: 'wasm://flightfinder.demo/',
+  baseUrl: 'https://www.kayak.com/flights/JFK-NRT/2026-04-15',
 };
 
 async function loadWasmBrowserOnce() {
@@ -3414,7 +3670,7 @@ async function runScenario(key) {
   for (let i = 0; i < ACTION_SEQUENCE.length; i++) {
     const step = ACTION_SEQUENCE[i];
     let desc = step.desc || '';
-    if (step.label === 'Navigate') desc = 'wasm://flightfinder.demo/';
+    if (step.label === 'Navigate') desc = 'kayak.com/flights/JFK-NRT';
     if (step.label === 'Type') desc = '"' + scn.query + '"';
     if (step.label === 'Filter') desc = 'destination = ' + scn.query;
     const node = appendAction(step.glyph, step.label, desc);
