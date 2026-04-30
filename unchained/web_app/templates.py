@@ -1997,6 +1997,22 @@ LANDING_V3_HTML = r"""<!DOCTYPE html>
   --nav-h:60px;
 }
 html{scroll-behavior:smooth}
+
+/* Section-level scroll-snap. Uses `proximity` (not `mandatory`) so the
+ * page guides the visitor between sections without trapping them mid-
+ * section if they want to read tall content (the WASM area + lane grid).
+ * Desktop-only + bypassed when the visitor prefers reduced motion. */
+@media (min-width:880px) and (prefers-reduced-motion:no-preference){
+  html{scroll-snap-type:y proximity}
+  .hero-brand,
+  .hero-product,
+  #watch,
+  #get-started,
+  #use-cases{
+    scroll-snap-align:start;
+    scroll-margin-top:var(--nav-h);
+  }
+}
 body{
   font-family:'Inter',sans-serif;
   background:var(--bg);color:var(--text);
