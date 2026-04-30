@@ -2052,43 +2052,98 @@ a{color:inherit;text-decoration:none}
   .topnav .links a:not(.signin){display:none}
 }
 
-/* ── Hero ── */
-.hero{
+/* ── Act 1: Brand hero — ceremonial fullscreen ── */
+.hero-brand{
+  position:relative;z-index:1;
+  max-width:760px;margin:0 auto;padding:0 24px;
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;
+  min-height:calc(100vh - var(--nav-h));
+}
+.hero-brand .wordmark{
+  font-size:clamp(48px,9vw,82px);
+  font-weight:600;letter-spacing:4px;
+  text-transform:uppercase;
+  margin-bottom:48px;
+  animation:brandFade 1.2s ease-out 0.1s both;
+}
+.hero-brand .wordmark span{color:var(--accent)}
+@keyframes brandFade{
+  from{opacity:0;transform:translateY(-8px);letter-spacing:8px}
+  to{opacity:1;transform:translateY(0);letter-spacing:4px}
+}
+.hero-brand .cta-primary-big{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--accent);color:#fff;
+  padding:14px 32px;border-radius:10px;
+  font-weight:600;font-size:16px;letter-spacing:0.5px;
+  box-shadow:0 6px 28px var(--accent-glow);
+  transition:transform 0.18s, box-shadow 0.18s;
+  margin-top:36px;margin-bottom:18px;
+  animation:brandFade 1.2s ease-out 2.4s both;
+}
+.hero-brand .cta-primary-big:hover{
+  color:#fff;transform:translateY(-2px);
+  box-shadow:0 10px 40px rgba(233,69,96,0.5);
+}
+.hero-brand .tagline{
+  font-size:11px;letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);margin-top:8px;
+  animation:brandFade 1.2s ease-out 2.8s both;
+}
+.hero-brand .sky-search-link{
+  margin-top:18px;font-size:13px;color:var(--muted);
+  border-bottom:1px dashed var(--border-strong);
+  padding-bottom:2px;letter-spacing:1px;
+  animation:brandFade 1.2s ease-out 3s both;
+}
+.hero-brand .sky-search-link:hover{color:var(--text);border-color:var(--accent)}
+.hero-brand .scroll-hint{
+  position:absolute;bottom:28px;left:50%;
+  transform:translateX(-50%);
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);cursor:pointer;
+  animation:brandFade 1.2s ease-out 3.4s both;
+}
+.hero-brand .scroll-hint .arrow{
+  display:block;font-size:14px;margin-bottom:6px;
+  animation:bob 2s ease-in-out infinite;
+}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+
+/* ── Act 2: Product hero — clarifier (was the old .hero) ── */
+.hero-product{
   position:relative;z-index:1;
   max-width:1100px;margin:0 auto;
-  padding:64px 24px 48px;
-  display:grid;grid-template-columns:1fr 1fr;gap:48px;
+  padding:80px 24px 64px;
+  display:grid;grid-template-columns:1.05fr 1fr;gap:56px;
   align-items:center;
-  min-height:calc(100vh - var(--nav-h) - 32px);
 }
 @media (max-width:880px){
-  .hero{grid-template-columns:1fr;gap:24px;padding-top:40px;text-align:center}
+  .hero-product{grid-template-columns:1fr;gap:32px;text-align:center}
 }
-.hero-left .wordmark{
-  font-size:clamp(36px,5vw,52px);
-  font-weight:700;letter-spacing:3px;
-  margin-bottom:16px;text-transform:uppercase;
+.hero-product .eyebrow{
+  display:inline-block;font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;
+  color:var(--accent);margin-bottom:14px;
 }
-.hero-left .wordmark span{color:var(--accent)}
-.hero h1{
-  font-size:clamp(28px,4vw,42px);
+.hero-product h1{
+  font-size:clamp(28px,3.6vw,40px);
   line-height:1.15;font-weight:600;
   letter-spacing:-0.01em;
   margin-bottom:18px;
 }
-.hero h1 em{
-  color:var(--accent);font-style:normal;
-}
-.hero .subhead{
+.hero-product h1 em{color:var(--accent);font-style:normal}
+.hero-product .subhead{
   font-size:clamp(15px,1.6vw,17px);
-  color:var(--text-soft);line-height:1.55;
-  margin-bottom:28px;max-width:520px;
+  color:var(--text-soft);line-height:1.6;
+  margin-bottom:26px;max-width:540px;
 }
 @media (max-width:880px){
-  .hero .subhead{margin-left:auto;margin-right:auto}
+  .hero-product .subhead{margin-left:auto;margin-right:auto}
 }
 .hero-ctas{
-  display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;
+  display:flex;gap:12px;flex-wrap:wrap;
 }
 @media (max-width:880px){.hero-ctas{justify-content:center}}
 .btn-primary{
@@ -2113,15 +2168,15 @@ a{color:inherit;text-decoration:none}
 .btn-ghost:hover{
   border-color:var(--accent);background:rgba(233,69,96,0.06);
 }
-/* ── Morphing 3-stage poem — kept from V2 ── */
+/* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
 .poem{
   font-family:'Cormorant Garamond',serif;
-  font-size:clamp(20px,2.2vw,24px);
-  line-height:1.7;font-style:italic;
+  font-size:clamp(22px,3vw,28px);
+  line-height:1.85;font-style:italic;
   color:var(--text);opacity:0.92;
-  max-width:520px;margin:6px 0 26px;
+  text-align:center;max-width:560px;
 }
-@media (max-width:880px){.poem{margin-left:auto;margin-right:auto;text-align:center}}
+.hero-brand .poem{margin:0 auto}
 .poem .line{
   display:block;position:relative;height:1.7em;
   animation:poemFadeIn 1s ease-out both;
@@ -2455,27 +2510,39 @@ a{color:inherit;text-decoration:none}
   </div>
 </nav>
 
-<!-- Hero -->
-<section class="hero">
-  <div class="hero-left">
-    <div class="wordmark">Un<span>chain</span>ed</div>
-    <div class="poem" id="poem">
-      <span class="line">
-        <span class="stage s1">Chains fall from my wrists</span>
-        <span class="stage s2">Tasks fall from my hours</span>
-        <span class="stage s3">You prompt what you need</span>
-      </span>
-      <span class="line">
-        <span class="stage s1">Wind rushes where walls once stood</span>
-        <span class="stage s2">Wind drives where walls once stood</span>
-        <span class="stage s3">A browser agent does it for you</span>
-      </span>
-      <span class="line">
-        <span class="stage s1">I am sky, unchained</span>
-        <span class="stage s2">I am sky, unchained</span>
-        <span class="stage s3">You are sky, unchained</span>
-      </span>
-    </div>
+<!-- Act 1: Brand hero — fullscreen ritual -->
+<section class="hero-brand">
+  <div class="wordmark">Un<span>chain</span>ed</div>
+  <div class="poem" id="poem">
+    <span class="line">
+      <span class="stage s1">Chains fall from my wrists</span>
+      <span class="stage s2">Tasks fall from my hours</span>
+      <span class="stage s3">You prompt what you need</span>
+    </span>
+    <span class="line">
+      <span class="stage s1">Wind rushes where walls once stood</span>
+      <span class="stage s2">Wind drives where walls once stood</span>
+      <span class="stage s3">A browser agent does it for you</span>
+    </span>
+    <span class="line">
+      <span class="stage s1">I am sky, unchained</span>
+      <span class="stage s2">I am sky, unchained</span>
+      <span class="stage s3">You are sky, unchained</span>
+    </span>
+  </div>
+  <a href="/demo" class="cta-primary-big">Try it free &rarr;</a>
+  <div class="tagline">Your browser. Your data. No walls.</div>
+  <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
+  <div class="scroll-hint" onclick="document.getElementById('what').scrollIntoView({behavior:'smooth'})">
+    <span class="arrow">&#8595;</span>
+    What is it
+  </div>
+</section>
+
+<!-- Act 2: Product clarifier -->
+<section class="hero-product" id="what">
+  <div>
+    <div class="eyebrow">What it is</div>
     <h1>An AI agent that drives <em>your real Chrome</em> &mdash; with your logins, cookies, and sessions intact.</h1>
     <p class="subhead">Tell Unchained what you need online in plain English. It searches, compares, and monitors the web for you &mdash; no copy-paste, no API key required to start.</p>
     <div class="hero-ctas">
