@@ -2276,6 +2276,143 @@ a{color:inherit;text-decoration:none}
 }
 .wb-tab:hover{background:rgba(93,155,255,0.18)}
 
+/* ── Watch It Work two-pane layout: prompts/transcript + live iframe ── */
+.watch-grid{
+  display:grid;
+  grid-template-columns:380px 1fr;
+  gap:0;
+  border-top:1px solid var(--border);
+}
+@media (max-width:980px){.watch-grid{grid-template-columns:1fr}}
+.watch-side{
+  display:flex;flex-direction:column;
+  border-right:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  min-height:540px;
+}
+@media (max-width:980px){
+  .watch-side{border-right:none;border-bottom:1px solid var(--border);min-height:auto}
+}
+.watch-prompts{
+  display:flex;flex-direction:column;gap:8px;
+  padding:18px 16px 14px;
+  border-bottom:1px solid var(--border);
+}
+.watch-prompt-label{
+  font-family:ui-monospace,monospace;
+  font-size:10px;letter-spacing:1.8px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:4px;
+}
+.watch-prompt{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  background:rgba(255,255,255,0.025);
+  border:1px solid var(--border);
+  border-left:2px solid rgba(93,155,255,0.5);
+  border-radius:8px;
+  padding:10px 14px;
+  cursor:pointer;
+  text-align:left;
+  font-family:'Inter',sans-serif;
+  color:var(--text);
+  transition:transform 0.15s, border-color 0.15s, background 0.15s;
+}
+.watch-prompt:hover:not(:disabled){
+  border-color:var(--blue);
+  background:rgba(93,155,255,0.08);
+  transform:translateX(2px);
+}
+.watch-prompt:disabled{
+  opacity:0.45;cursor:wait;
+}
+.watch-prompt.active{
+  border-color:var(--accent);
+  border-left-color:var(--accent);
+  background:rgba(233,69,96,0.08);
+}
+.watch-prompt .prompt-title{
+  font-size:13.5px;font-weight:600;color:var(--text);
+}
+.watch-prompt .prompt-sub{
+  font-size:11.5px;color:var(--muted);
+  font-family:ui-monospace,monospace;
+}
+.watch-transcript{
+  flex:1;
+  padding:16px 16px 18px;
+  overflow:auto;
+  font-family:'Inter',sans-serif;
+  display:flex;flex-direction:column;gap:6px;
+  min-height:300px;
+}
+.watch-empty{
+  font-family:ui-monospace,monospace;
+  font-size:12px;color:var(--muted);
+  padding:22px 8px;text-align:center;
+  border:1px dashed var(--border);border-radius:8px;
+}
+.watch-bubble{
+  background:rgba(233,69,96,0.10);
+  border:1px solid rgba(233,69,96,0.25);
+  border-radius:10px;
+  padding:10px 12px;font-size:13px;color:var(--text);
+  margin-bottom:6px;
+  opacity:0;transform:translateY(4px);
+  animation:bubbleIn 0.4s ease-out forwards;
+}
+@keyframes bubbleIn{to{opacity:1;transform:translateY(0)}}
+.watch-action{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px;border-radius:6px;
+  background:rgba(255,255,255,0.02);
+  border:1px solid transparent;
+  font-family:ui-monospace,monospace;font-size:12px;
+  color:var(--text-soft);
+  opacity:0;transform:translateX(-4px);
+  animation:actionIn 0.32s ease-out forwards;
+}
+@keyframes actionIn{to{opacity:1;transform:translateX(0)}}
+.watch-action .glyph{font-size:13px;width:18px;text-align:center}
+.watch-action .label{
+  font-weight:600;color:var(--text);min-width:80px;
+}
+.watch-action .desc{
+  color:var(--muted);flex:1;font-size:11.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.watch-action .check{
+  font-weight:700;color:var(--accent);font-size:12px;
+  animation:pulse 1.2s infinite;
+}
+.watch-action.done{
+  background:rgba(63,185,138,0.05);
+  border-color:rgba(63,185,138,0.20);
+}
+.watch-action.done .check{color:var(--mint);animation:none}
+.watch-action.done .check::before{content:"\2713"}
+.watch-summary{
+  margin-top:8px;padding:12px 14px;
+  background:rgba(63,185,138,0.06);
+  border:1px solid rgba(63,185,138,0.22);
+  border-radius:8px;
+  font-size:13px;line-height:1.6;color:var(--text);
+  font-family:ui-monospace,monospace;
+  opacity:0;transform:translateY(4px);
+  animation:bubbleIn 0.4s ease-out 0.1s forwards;
+}
+.watch-summary .pill{
+  display:inline-block;
+  background:rgba(63,185,138,0.18);
+  color:var(--mint);
+  padding:1px 7px;border-radius:4px;
+  font-weight:600;font-size:11.5px;
+  letter-spacing:0.4px;margin-right:6px;
+}
+.watch-summary b{color:var(--text)}
+.watch-browser{
+  display:flex;flex-direction:column;
+  background:#0c0c14;
+}
+
 /* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
 .poem{
   font-family:'Cormorant Garamond',serif;
@@ -2676,12 +2813,12 @@ a{color:inherit;text-decoration:none}
   </div>
 </section>
 
-<!-- Act 3: WASM Browser — a tiny site running in your browser, no network -->
-<section class="wb-act" id="wbrowser">
+<!-- Act 3: Watch it work — live agent demo running in QuickJS-WASM -->
+<section class="wb-act" id="watch">
   <div class="section-head">
-    <div class="section-eyebrow">&#127760; QuickJS-WASM &middot; No backend</div>
-    <h2>This iframe is <em>a browser running inside your browser</em>.</h2>
-    <p class="lede">QuickJS compiled to WebAssembly, executing the page&rsquo;s JavaScript in a sandboxed VM. Mutations sync to the iframe. Click, type, submit &mdash; the events run inside WASM, not in your real browser.</p>
+    <div class="section-eyebrow">&#127760; See It Live &middot; QuickJS-WASM &middot; No backend</div>
+    <h2>Watch it work.</h2>
+    <p class="lede">Pick a prompt. The agent navigates, types, screenshots, and extracts &mdash; every step happening for real inside a sandboxed WASM browser, here on this page.</p>
   </div>
 
   <div class="wb-wrap">
@@ -2691,42 +2828,49 @@ a{color:inherit;text-decoration:none}
       <span class="stat">
         <span>nodes <b id="wb-stat-nodes">&mdash;</b></span>
         <span>mutations <b id="wb-stat-mut">&mdash;</b></span>
-        <span>last event <b id="wb-stat-evt">&mdash;</b></span>
+        <span>step <b id="wb-stat-evt">&mdash;</b></span>
       </span>
     </div>
-    <div class="wb-fakebar">
-      <span style="color:var(--muted);">&laquo;</span>
-      <span style="color:var(--muted);">&raquo;</span>
-      <div class="url"><span class="scheme">wasm://</span><span class="host">flightfinder.demo</span><span style="color:var(--muted);">/</span></div>
-    </div>
-    <div class="wb-frame-wrap">
-      <iframe id="wb-frame" sandbox="allow-same-origin" title="WASM browser demo"></iframe>
-    </div>
-    <div class="wb-tabs">
-      <span class="label">try</span>
-      <span class="wb-tab" data-q="tokyo">tokyo</span>
-      <span class="wb-tab" data-q="london">london</span>
-      <span class="wb-tab" data-q="bali">bali</span>
-      <span class="wb-tab" data-q="">all</span>
-      <span class="label" style="margin-left:auto">tip</span>
-      <span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:11.5px">click &amp; type inside the iframe &mdash; events flow into the WASM VM</span>
-    </div>
-  </div>
-</section>
 
-<!-- Watch It Work -->
-<section class="section" id="watch">
-  <div class="section-head">
-    <div class="section-eyebrow">See It Live</div>
-    <h2>Watch it work</h2>
-    <p class="lede">A real conversation with the agent. It plans, navigates, takes screenshots, extracts the answer.</p>
-  </div>
-  <div class="mock-wrap" id="mock-section">
-    <div class="mock-chat" id="mock-chat"></div>
-  </div>
-  <div class="mock-cta-row">
-    <a href="/demo" class="btn-primary">Try it yourself &rarr;</a>
-    <a href="/first-look" class="btn-ghost">Open shared demo</a>
+    <div class="watch-grid">
+      <!-- Left: prompt + action transcript -->
+      <div class="watch-side">
+        <div class="watch-prompts" id="watch-prompts">
+          <div class="watch-prompt-label">try a prompt &darr;</div>
+          <button class="watch-prompt" data-scenario="tokyo" disabled>
+            <span class="prompt-title">Cheapest flight NYC &rarr; Tokyo</span>
+            <span class="prompt-sub">compare airlines, find a deal</span>
+          </button>
+          <button class="watch-prompt" data-scenario="london" disabled>
+            <span class="prompt-title">London under $600</span>
+            <span class="prompt-sub">filter on price + non-stop</span>
+          </button>
+          <button class="watch-prompt" data-scenario="bali" disabled>
+            <span class="prompt-title">Bali on a budget</span>
+            <span class="prompt-sub">filter on destination</span>
+          </button>
+        </div>
+        <div class="watch-transcript" id="watch-transcript" aria-live="polite">
+          <div class="watch-empty">No run yet &mdash; pick a prompt above.</div>
+        </div>
+      </div>
+
+      <!-- Right: live WASM browser -->
+      <div class="watch-browser">
+        <div class="wb-fakebar">
+          <span style="color:var(--muted);">&laquo;</span>
+          <span style="color:var(--muted);">&raquo;</span>
+          <div class="url"><span class="scheme">wasm://</span><span class="host">flightfinder.demo</span><span style="color:var(--muted);">/</span></div>
+        </div>
+        <div class="wb-frame-wrap">
+          <iframe id="wb-frame" sandbox="allow-same-origin" title="WASM browser demo"></iframe>
+        </div>
+        <div class="wb-tabs">
+          <span class="label">tip</span>
+          <span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:11.5px">you can also click &amp; type inside the iframe &mdash; events flow into the WASM VM</span>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -2891,187 +3035,6 @@ a{color:inherit;text-decoration:none}
 <div class="v-badge">UI v3 &middot; <a href="/?ui=v2">switch to v2</a></div>
 
 <script>
-// Mock interaction — flight comparison demo (shared verbatim with V2)
-var mockTimers = [];
-function playMock() {
-  mockTimers.forEach(function(t){ clearTimeout(t); });
-  mockTimers = [];
-  var chat = document.getElementById('mock-chat');
-  if (!chat) return;
-  chat.innerHTML = '';
-
-  function reveal(el){ requestAnimationFrame(function(){ el.classList.add('show'); }); }
-  function markDone(stepsId){
-    var steps = document.getElementById(stepsId);
-    if(!steps) return;
-    var prev = steps.querySelector('.action-step:last-child .as-dot');
-    if(prev){prev.className='as-dot done';prev.textContent='✓';}
-  }
-  function addStep(stepsId, emoji, label, desc){
-    var steps = document.getElementById(stepsId);
-    var s = document.createElement('div');
-    s.className = 'action-step';
-    s.innerHTML =
-      '<span class="as-emoji">' + emoji + '</span>' +
-      '<span class="as-label">' + label + '</span>' +
-      '<span class="as-desc">' + desc + '</span>' +
-      '<span class="as-dot running">●</span>';
-    steps.appendChild(s);
-  }
-  function drawFlightCanvas(id, site, results) {
-    var c = document.createElement('canvas');
-    c.width = 640; c.height = 280;
-    var ctx = c.getContext('2d');
-    ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, 640, 280);
-    ctx.fillStyle = site.color; ctx.fillRect(0, 0, 640, 36);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
-    ctx.fillText(site.name, 16, 24);
-    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '12px sans-serif';
-    ctx.fillText('NYC → Tokyo · Apr 2026 · Round trip', 200, 24);
-    var lowestIdx = 0, lowestVal = Infinity;
-    for (var j = 0; j < results.length; j++) {
-      var num = parseFloat(results[j].price.replace(/[^0-9.]/g, ''));
-      if (num < lowestVal) { lowestVal = num; lowestIdx = j; }
-    }
-    for (var i = 0; i < results.length; i++) {
-      var y = 52 + i * 56;
-      ctx.fillStyle = i === lowestIdx ? '#1a2332' : '#111820';
-      ctx.fillRect(8, y - 8, 624, 48);
-      ctx.fillStyle = '#58a6ff'; ctx.font = 'bold 13px sans-serif';
-      ctx.fillText(results[i].airline, 20, y + 10);
-      ctx.fillStyle = '#8b949e'; ctx.font = '11px sans-serif';
-      ctx.fillText(results[i].route, 20, y + 28);
-      ctx.fillText(results[i].duration, 340, y + 10);
-      ctx.fillStyle = results[i].stops === 'Nonstop' ? '#3fb950' : '#d29922';
-      ctx.font = '11px sans-serif';
-      ctx.fillText(results[i].stops, 340, y + 28);
-      ctx.fillStyle = i === lowestIdx ? '#3fb950' : '#c9d1d9';
-      ctx.font = 'bold 15px sans-serif';
-      ctx.fillText(results[i].price, 530, y + 18);
-    }
-    var imgDiv = document.createElement('div');
-    imgDiv.className = 'as-screenshot';
-    imgDiv.innerHTML = '<img src="' + c.toDataURL('image/png') + '">';
-    var ag = document.getElementById(id);
-    ag.querySelector('.ag-steps').after(imgDiv);
-  }
-
-  var timeline = [
-    {delay:0, fn:function(){
-      var b = document.createElement('div');
-      b.className = 'bubble user';
-      b.textContent = 'Find me the cheapest direct flight from NYC to Tokyo in April. Compare Google Flights and Kayak.';
-      chat.appendChild(b); reveal(b);
-      chat.scrollTop = chat.scrollHeight;
-    }},
-    {delay:900, fn:function(){
-      var asst = document.createElement('div');
-      asst.className = 'bubble asst'; asst.id = 'mock-asst';
-      var ag = document.createElement('div');
-      ag.className = 'action-group'; ag.id = 'mock-ag1';
-      ag.innerHTML =
-        '<div class="ag-header">' +
-          '<span class="ag-emoji">🌐</span>' +
-          '<span class="ag-site">google.com/travel/flights</span>' +
-          '<span class="ag-count"></span>' +
-          '<span class="ag-dot running">●</span>' +
-        '</div>' +
-        '<div class="ag-steps" id="mock-steps1">' +
-          '<div class="action-step">' +
-            '<span class="as-emoji">🌐</span>' +
-            '<span class="as-label">Navigate</span>' +
-            '<span class="as-desc">google.com/travel/flights</span>' +
-            '<span class="as-dot running">●</span>' +
-          '</div>' +
-        '</div>';
-      asst.appendChild(ag); chat.appendChild(asst);
-      reveal(asst); reveal(ag);
-      chat.scrollTop = chat.scrollHeight;
-    }},
-    {delay:2000, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','👁','Look','map layout'); }},
-    {delay:2700, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','⌨','Type','NYC to Tokyo, April 2026'); }},
-    {delay:3500, fn:function(){
-      markDone('mock-steps1'); addStep('mock-steps1','📷','Screenshot','capture results');
-      drawFlightCanvas('mock-ag1', {name:'Google Flights', color:'#1a73e8'}, [
-        {airline:'ANA (All Nippon)', route:'JFK → NRT', duration:'14h 10m', stops:'Nonstop', price:'$1,247'},
-        {airline:'Japan Airlines', route:'JFK → HND', duration:'14h 35m', stops:'Nonstop', price:'$1,312'},
-        {airline:'United Airlines', route:'EWR → NRT', duration:'14h 25m', stops:'Nonstop', price:'$1,389'},
-        {airline:'Delta Air Lines', route:'JFK → HND', duration:'14h 50m', stops:'Nonstop', price:'$1,456'}
-      ]);
-    }},
-    {delay:4500, fn:function(){ markDone('mock-steps1'); addStep('mock-steps1','🔬','Extract','read flight prices'); }},
-    {delay:5200, fn:function(){
-      document.querySelectorAll('#mock-ag1 .as-dot').forEach(function(d){d.className='as-dot done';d.textContent='✓';});
-      var gd=document.querySelector('#mock-ag1 .ag-dot'); if(gd){gd.className='ag-dot done';gd.textContent='✓';}
-      var ct=document.querySelector('#mock-ag1 .ag-count'); if(ct) ct.textContent='5 steps';
-    }},
-    {delay:5800, fn:function(){
-      var asst=document.getElementById('mock-asst');
-      var ag=document.createElement('div'); ag.className='action-group'; ag.id='mock-ag2';
-      ag.innerHTML =
-        '<div class="ag-header">' +
-          '<span class="ag-emoji">🌐</span>' +
-          '<span class="ag-site">kayak.com/flights</span>' +
-          '<span class="ag-count"></span>' +
-          '<span class="ag-dot running">●</span>' +
-        '</div>' +
-        '<div class="ag-steps" id="mock-steps2">' +
-          '<div class="action-step">' +
-            '<span class="as-emoji">🌐</span>' +
-            '<span class="as-label">Navigate</span>' +
-            '<span class="as-desc">kayak.com/flights</span>' +
-            '<span class="as-dot running">●</span>' +
-          '</div>' +
-        '</div>';
-      asst.appendChild(ag); reveal(ag);
-    }},
-    {delay:6800, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','👁','Look','map layout'); }},
-    {delay:7400, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','⌨','Type','NYC to Tokyo, April 2026'); }},
-    {delay:8200, fn:function(){
-      markDone('mock-steps2'); addStep('mock-steps2','📷','Screenshot','capture results');
-      drawFlightCanvas('mock-ag2', {name:'Kayak', color:'#ff690f'}, [
-        {airline:'ANA (All Nippon)', route:'JFK → NRT', duration:'14h 10m', stops:'Nonstop', price:'$1,198'},
-        {airline:'Japan Airlines', route:'JFK → HND', duration:'14h 35m', stops:'Nonstop', price:'$1,295'},
-        {airline:'United Airlines', route:'EWR → NRT', duration:'14h 25m', stops:'Nonstop', price:'$1,410'},
-        {airline:'Delta Air Lines', route:'JFK → HND', duration:'14h 50m', stops:'Nonstop', price:'$1,478'}
-      ]);
-    }},
-    {delay:9200, fn:function(){ markDone('mock-steps2'); addStep('mock-steps2','🔬','Extract','read flight prices'); }},
-    {delay:9900, fn:function(){
-      document.querySelectorAll('#mock-ag2 .as-dot').forEach(function(d){d.className='as-dot done';d.textContent='✓';});
-      var gd=document.querySelector('#mock-ag2 .ag-dot'); if(gd){gd.className='ag-dot done';gd.textContent='✓';}
-      var ct=document.querySelector('#mock-ag2 .ag-count'); if(ct) ct.textContent='5 steps';
-    }},
-    {delay:10800, fn:function(){
-      var asst=document.getElementById('mock-asst');
-      var txt=document.createElement('span'); txt.className='text rendered';
-      txt.style.display='block'; txt.style.marginTop='8px';
-      txt.innerHTML =
-        '<p>Here are the cheapest nonstop flights from NYC to Tokyo in April, compared across both sites:</p>' +
-        '<table>' +
-          '<tr><th>Airline</th><th>Route</th><th>Google Flights</th><th>Kayak</th></tr>' +
-          '<tr><td>ANA</td><td>JFK → NRT</td><td>$1,247</td><td class="best-price">$1,198 ★</td></tr>' +
-          '<tr><td>JAL</td><td>JFK → HND</td><td>$1,312</td><td class="best-price">$1,295</td></tr>' +
-          '<tr><td>United</td><td>EWR → NRT</td><td class="best-price">$1,389</td><td>$1,410</td></tr>' +
-          '<tr><td>Delta</td><td>JFK → HND</td><td class="best-price">$1,456</td><td>$1,478</td></tr>' +
-        '</table>' +
-        '<p><strong>Best deal: ANA via Kayak at $1,198</strong> (nonstop JFK → NRT, 14h 10m). That’s $49 cheaper than the same flight on Google Flights.</p>';
-      asst.appendChild(txt);
-    }}
-  ];
-  timeline.forEach(function(t){ mockTimers.push(setTimeout(t.fn, t.delay)); });
-}
-
-if ('IntersectionObserver' in window) {
-  var mockObserver = new IntersectionObserver(function(entries) {
-    entries.forEach(function(e) {
-      if (e.isIntersecting) { mockObserver.disconnect(); playMock(); }
-    });
-  }, {threshold: 0.3});
-  var mockEl = document.getElementById('mock-section');
-  if (mockEl) mockObserver.observe(mockEl);
-}
-
 // Haiku morph — cycle through 3 stages every 6s (kept from V2)
 (function(){
   var poem = document.getElementById('poem');
@@ -3330,60 +3293,202 @@ async function loadWasmBrowserOnce() {
   }
 }
 
+// ── Scripted scenarios — searchagentsky.com style ──
+// Each scenario plays the agent's action sequence through the live WASM
+// browser. The transcript on the left shows what the agent is "doing"; the
+// iframe on the right shows the actual mutations.
+const SCENARIOS = {
+  tokyo: {
+    user: 'Find me the cheapest direct flight from NYC to Tokyo in April.',
+    query: 'tokyo',
+    summary: '<span class="pill">$1,247</span> <b>ANA · JFK → NRT</b> · nonstop · 4 results · saves $209 vs avg',
+  },
+  london: {
+    user: 'Find a London flight under $600.',
+    query: 'london',
+    summary: '<span class="pill">$489</span> <b>AA · JFK → LHR</b> (1 stop) · 2 of 3 nonstop options under $625 · saves $133 vs avg',
+  },
+  bali: {
+    user: 'I want to fly to Bali — what are my options?',
+    query: 'bali',
+    summary: '<span class="pill">$1,487</span> <b>Garuda · JFK → DPS</b> · 1 stop · saves $125 vs SQ',
+  },
+};
+
+const ACTION_SEQUENCE = [
+  { glyph: '🌐', label: 'Navigate', delay: 350 },
+  { glyph: '👁', label: 'Look', delay: 400, desc: 'map page layout' },
+  { glyph: '⌨',       label: 'Type',   delay: 600, desc: 'destination query' },
+  { glyph: '🔍', label: 'Filter', delay: 450, desc: 'apply destination filter' },
+  { glyph: '🔬', label: 'Extract', delay: 500, desc: 'read flight prices' },
+  { glyph: '✅',       label: 'Summarize', delay: 350, desc: 'pick best match' },
+];
+
+let scenarioRunning = false;
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function clearTranscript() {
+  const t = document.getElementById('watch-transcript');
+  if (t) t.innerHTML = '';
+}
+
+function appendUserBubble(text) {
+  const t = document.getElementById('watch-transcript');
+  const b = document.createElement('div');
+  b.className = 'watch-bubble';
+  b.textContent = text;
+  t.appendChild(b);
+  t.scrollTop = t.scrollHeight;
+}
+
+function appendAction(glyph, label, desc) {
+  const t = document.getElementById('watch-transcript');
+  const a = document.createElement('div');
+  a.className = 'watch-action';
+  a.innerHTML =
+    '<span class="glyph">' + glyph + '</span>' +
+    '<span class="label">' + label + '</span>' +
+    '<span class="desc">' + (desc || '') + '</span>' +
+    '<span class="check">●</span>';
+  t.appendChild(a);
+  t.scrollTop = t.scrollHeight;
+  return a;
+}
+
+function markActionDone(node) {
+  if (!node) return;
+  node.classList.add('done');
+  const c = node.querySelector('.check');
+  if (c) { c.classList.remove('check'); c.classList.add('check'); }
+}
+
+function appendSummary(html) {
+  const t = document.getElementById('watch-transcript');
+  const s = document.createElement('div');
+  s.className = 'watch-summary';
+  s.innerHTML = html;
+  t.appendChild(s);
+  t.scrollTop = t.scrollHeight;
+}
+
+function setStatEvt(txt) {
+  if (WB.statEvt) WB.statEvt.textContent = txt;
+}
+
+async function runScenario(key) {
+  if (scenarioRunning) return;
+  const scn = SCENARIOS[key];
+  if (!scn) return;
+  if (!WB.loaded) await loadWasmBrowserOnce();
+  if (!WB.loader) return;
+
+  scenarioRunning = true;
+  document.querySelectorAll('.watch-prompt').forEach(b => {
+    b.disabled = true;
+    b.classList.toggle('active', b.getAttribute('data-scenario') === key);
+  });
+
+  clearTranscript();
+  appendUserBubble(scn.user);
+
+  // Reset the iframe input to empty for the visual reset.
+  try {
+    WB.loader.engine.eval('(function(){var i=document.getElementById("q");if(i){i.value="";var ev=new Event("input",{bubbles:true});ev.value="";i.dispatchEvent(ev);}})()');
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+    const realInput = WB.iframe.contentDocument.getElementById('q');
+    if (realInput) realInput.value = '';
+  } catch {}
+
+  // Walk the action sequence — each step appears in the transcript, then the
+  // corresponding mutation happens in the iframe at the right beat.
+  for (let i = 0; i < ACTION_SEQUENCE.length; i++) {
+    const step = ACTION_SEQUENCE[i];
+    let desc = step.desc || '';
+    if (step.label === 'Navigate') desc = 'wasm://flightfinder.demo/';
+    if (step.label === 'Type') desc = '"' + scn.query + '"';
+    if (step.label === 'Filter') desc = 'destination = ' + scn.query;
+    const node = appendAction(step.glyph, step.label, desc);
+    setStatEvt(step.label.toLowerCase());
+    await delay(step.delay);
+
+    // The Type step is when we actually drive the WASM browser.
+    if (step.label === 'Type') {
+      try {
+        // Type each character so the visitor sees a real-feeling type-out.
+        const target = scn.query;
+        for (let c = 1; c <= target.length; c++) {
+          const partial = target.slice(0, c);
+          WB.loader.engine.eval(
+            '(function(){var i=document.getElementById("q");if(i){i.value=' +
+            JSON.stringify(partial) +
+            ';var ev=new Event("input",{bubbles:true});ev.value=' +
+            JSON.stringify(partial) +
+            ';i.dispatchEvent(ev);}})()'
+          );
+          WB.loader.engine.vm.runtime.executePendingJobs();
+          WB.loader.engine.tick && WB.loader.engine.tick();
+          WB.loader.bridge.flush();
+          try {
+            const realInput = WB.iframe.contentDocument.getElementById('q');
+            if (realInput) realInput.value = partial;
+          } catch {}
+          await delay(60);
+        }
+      } catch (e) {
+        console.warn('[scenario] type step', e);
+      }
+    }
+
+    markActionDone(node);
+  }
+
+  appendSummary(scn.summary);
+  setStatEvt('done · ' + key);
+
+  document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+  scenarioRunning = false;
+}
+
 // Lazy-load on intersection — keeps the brand hero light.
 (function(){
-  const section = document.getElementById('wbrowser');
+  const section = document.getElementById('watch');
   if (!section) return;
   if ('IntersectionObserver' in window) {
     const obs = new IntersectionObserver(entries => {
       entries.forEach(e => {
         if (e.isIntersecting) {
           obs.disconnect();
-          loadWasmBrowserOnce();
+          loadWasmBrowserOnce().then(() => {
+            // Enable the prompt buttons once the runtime is ready.
+            document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+            // Auto-play the first scenario so visitors see motion immediately.
+            setTimeout(() => runScenario('tokyo'), 600);
+          });
         }
       });
     }, { threshold: 0.05, rootMargin: '300px 0px' });
     obs.observe(section);
   } else {
-    loadWasmBrowserOnce();
+    loadWasmBrowserOnce().then(() => {
+      document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+    });
   }
 
-  // Wire the quick-action chips below the iframe — they type a query into the
-  // input and dispatch the submit, so the visitor immediately sees the WASM
-  // dispatching events into the sandbox.
-  document.querySelectorAll('.wb-tab').forEach(tab => {
-    tab.addEventListener('click', async () => {
-      if (!WB.loaded) await loadWasmBrowserOnce();
-      if (!WB.loader) return;
-      const q = tab.getAttribute('data-q') || '';
-      try {
-        WB.loader.engine.eval(
-          '(function(){var i=document.getElementById("q");if(i){i.value=' +
-          JSON.stringify(q) +
-          ';var ev=new Event("input",{bubbles:true});ev.value=' +
-          JSON.stringify(q) +
-          ';i.dispatchEvent(ev);}})()'
-        );
-        WB.loader.engine.vm.runtime.executePendingJobs();
-        WB.loader.engine.tick && WB.loader.engine.tick();
-        WB.loader.bridge.flush();
-        WB.statEvt.textContent = q ? 'tab:' + q : 'tab:all';
-        // Mirror the input value into the real iframe input so the visitor
-        // sees what was typed.
-        try {
-          const realInput = WB.iframe.contentDocument.getElementById('q');
-          if (realInput) realInput.value = q;
-        } catch {}
-      } catch (e) {
-        console.warn('[wbrowser] tab click', e);
-      }
+  // Wire the prompt cards.
+  document.querySelectorAll('.watch-prompt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-scenario');
+      if (key) runScenario(key);
     });
   });
 
-  // Update last-event tag whenever the user clicks/types in the iframe.
+  // Update last-event tag whenever the user clicks inside the iframe.
   document.addEventListener('click', e => {
     if (!WB.iframe || !WB.iframe.contains(e.target)) return;
-    WB.statEvt.textContent = 'click';
+    setStatEvt('click');
   }, true);
 })();
 </script>
