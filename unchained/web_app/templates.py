@@ -1996,6 +1996,7 @@ LANDING_V3_HTML = r"""<!DOCTYPE html>
   --border:rgba(255,255,255,0.08);--border-strong:rgba(255,255,255,0.16);
   --nav-h:60px;
 }
+html{scroll-behavior:smooth}
 body{
   font-family:'Inter',sans-serif;
   background:var(--bg);color:var(--text);
@@ -2009,6 +2010,27 @@ body::before{
     linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
   background-size:60px 60px;
   pointer-events:none;z-index:0;
+}
+/* Drifting accent radial that breathes behind the brand hero —
+ * subtle red ambient that gives the page a "live" feel without
+ * demanding attention. */
+body::after{
+  content:'';position:fixed;
+  width:120vw;height:120vh;left:-10vw;top:-10vh;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(233,69,96,0.06), transparent 50%),
+    radial-gradient(circle at 70% 70%, rgba(93,155,255,0.04), transparent 55%);
+  filter:blur(80px);
+  pointer-events:none;z-index:0;
+  animation:ambientDrift 24s ease-in-out infinite;
+}
+@keyframes ambientDrift{
+  0%,100% { transform:translate(0,0) scale(1);   }
+  33%     { transform:translate(-3vw,2vh) scale(1.05); }
+  66%     { transform:translate(2vw,-2vh) scale(0.97); }
+}
+@media (prefers-reduced-motion:reduce){
+  body::after{animation:none}
 }
 a{color:inherit;text-decoration:none}
 
@@ -2065,12 +2087,18 @@ a{color:inherit;text-decoration:none}
   font-weight:600;letter-spacing:4px;
   text-transform:uppercase;
   margin-bottom:48px;
-  animation:brandFade 1.2s ease-out 0.1s both;
+  animation:
+    brandFade 1.2s ease-out 0.1s both,
+    wordmarkGlow 5s ease-in-out 1.5s infinite;
 }
 .hero-brand .wordmark span{color:var(--accent)}
 @keyframes brandFade{
   from{opacity:0;transform:translateY(-8px);letter-spacing:8px}
   to{opacity:1;transform:translateY(0);letter-spacing:4px}
+}
+@keyframes wordmarkGlow{
+  0%,100% { text-shadow: 0 0 0 rgba(233,69,96,0); }
+  50%     { text-shadow: 0 0 36px rgba(233,69,96,0.30), 0 0 80px rgba(233,69,96,0.10); }
 }
 .hero-brand .cta-primary-big{
   display:inline-flex;align-items:center;gap:8px;
@@ -2081,11 +2109,25 @@ a{color:inherit;text-decoration:none}
   transition:transform 0.18s, box-shadow 0.18s;
   margin-top:36px;margin-bottom:18px;
   animation:brandFade 1.2s ease-out 2.4s both;
+  position:relative;overflow:hidden;
 }
 .hero-brand .cta-primary-big:hover{
   color:#fff;transform:translateY(-2px);
   box-shadow:0 10px 40px rgba(233,69,96,0.5);
 }
+/* Shine sweep — runs once on hover; cheap and tactile. */
+.hero-brand .cta-primary-big::before,
+.btn-primary::before,
+.btn-cta::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.18) 50%, transparent 70%);
+  transform:translateX(-100%);
+  transition:transform 0.7s cubic-bezier(0.4,0,0.2,1);
+  pointer-events:none;
+}
+.hero-brand .cta-primary-big:hover::before,
+.btn-primary:hover::before,
+.btn-cta:hover::before{transform:translateX(100%)}
 .hero-brand .tagline{
   font-size:11px;letter-spacing:3px;text-transform:uppercase;
   color:var(--muted);margin-top:8px;
@@ -2157,6 +2199,7 @@ a{color:inherit;text-decoration:none}
   font-weight:600;font-size:15px;
   box-shadow:0 4px 22px var(--accent-glow);
   transition:transform 0.15s, box-shadow 0.15s;
+  position:relative;overflow:hidden;
 }
 .btn-primary:hover{
   color:#fff;transform:translateY(-1px);
@@ -2487,6 +2530,14 @@ a{color:inherit;text-decoration:none}
   padding:18px;
   box-shadow:0 24px 60px rgba(0,0,0,0.4),0 0 0 1px rgba(233,69,96,0.04);
   overflow:hidden;
+  animation:cardFloat 6s ease-in-out infinite;
+}
+@keyframes cardFloat{
+  0%,100% { transform:translateY(0); }
+  50%     { transform:translateY(-6px); }
+}
+@media (prefers-reduced-motion:reduce){
+  .hero-right{animation:none}
 }
 .hero-right::before{
   content:'';position:absolute;inset:-1px;
@@ -2532,10 +2583,24 @@ a{color:inherit;text-decoration:none}
   text-align:center;margin-bottom:36px;
 }
 .section-eyebrow{
-  display:inline-block;
+  display:inline-flex;align-items:center;gap:8px;
   font-size:11px;font-weight:600;letter-spacing:2px;
   color:var(--accent);text-transform:uppercase;
   margin-bottom:10px;
+}
+.section-eyebrow::before{
+  content:'';
+  width:6px;height:6px;border-radius:50%;
+  background:currentColor;
+  box-shadow:0 0 0 0 currentColor;
+  animation:eyebrowPulse 2.4s ease-in-out infinite;
+}
+@keyframes eyebrowPulse{
+  0%,100% { box-shadow:0 0 0 0 currentColor; opacity:0.85; }
+  50%     { box-shadow:0 0 0 5px rgba(233,69,96,0); opacity:1;    }
+}
+@media (prefers-reduced-motion:reduce){
+  .section-eyebrow::before{animation:none}
 }
 .section h2{
   font-size:clamp(28px,3.5vw,36px);font-weight:600;
@@ -2574,9 +2639,26 @@ a{color:inherit;text-decoration:none}
   padding:24px;
   display:flex;flex-direction:column;gap:14px;
   position:relative;
-  transition:border-color 0.18s, transform 0.18s;
+  transition:border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+  isolation:isolate;
 }
-.lane:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+/* Lane gets a soft accent halo on hover that bleeds outside the card.
+ * Per-lane variants tint the halo to match the lane's identity. */
+.lane::after{
+  content:'';position:absolute;inset:-1px;
+  border-radius:13px;
+  background:radial-gradient(circle at 50% 0%, var(--accent), transparent 65%);
+  opacity:0;filter:blur(14px);z-index:-1;
+  transition:opacity 0.3s;
+}
+.lane.local::after{background:radial-gradient(circle at 50% 0%, var(--blue),  transparent 65%)}
+.lane.api::after  {background:radial-gradient(circle at 50% 0%, var(--amber), transparent 65%)}
+.lane:hover{
+  border-color:var(--border-strong);
+  transform:translateY(-3px);
+  box-shadow:0 16px 40px rgba(0,0,0,0.35);
+}
+.lane:hover::after{opacity:0.45}
 .lane-tag{
   display:inline-flex;align-items:center;gap:6px;
   font-size:11px;font-weight:600;letter-spacing:1.5px;
@@ -2616,6 +2698,7 @@ a{color:inherit;text-decoration:none}
   background:var(--accent);color:#fff;
   padding:11px 16px;border-radius:8px;font-weight:600;font-size:14px;
   transition:filter 0.15s,transform 0.15s;
+  position:relative;overflow:hidden;
 }
 .btn-cta:hover{color:#fff;filter:brightness(1.08);transform:translateY(-1px)}
 .lane.local .btn-cta{background:var(--blue)}
@@ -2683,23 +2766,46 @@ a{color:inherit;text-decoration:none}
 @media (max-width:1000px){.use-grid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:560px){.use-grid{grid-template-columns:1fr}}
 .use-card{
+  --use-color:var(--accent);
   border:1px solid var(--border);
-  border-top:3px solid var(--accent);
+  border-top:3px solid var(--use-color);
   border-radius:10px;background:var(--surface);
   padding:20px;display:flex;flex-direction:column;gap:10px;
-  transition:transform 0.18s, border-color 0.18s;
+  transition:transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+  position:relative;overflow:hidden;
 }
-.use-card:hover{transform:translateY(-3px)}
-.use-card.c1{border-top-color:#5d9bff}
-.use-card.c2{border-top-color:#3fb98a}
-.use-card.c3{border-top-color:#f5b342}
-.use-card.c4{border-top-color:#e94560}
-.use-glyph{font-size:24px;line-height:1}
-.use-card h4{font-size:16px;font-weight:600}
+.use-card.c1{--use-color:#5d9bff;border-top-color:#5d9bff}
+.use-card.c2{--use-color:#3fb98a;border-top-color:#3fb98a}
+.use-card.c3{--use-color:#f5b342;border-top-color:#f5b342}
+.use-card.c4{--use-color:#e94560;border-top-color:#e94560}
+/* A soft glow above the colored top-border that intensifies on hover */
+.use-card::before{
+  content:'';position:absolute;
+  top:-30px;left:0;right:0;height:60px;
+  background:radial-gradient(ellipse at center top, var(--use-color), transparent 60%);
+  opacity:0.10;pointer-events:none;
+  transition:opacity 0.3s;
+}
+.use-card:hover{
+  transform:translateY(-4px);
+  box-shadow:0 14px 32px rgba(0,0,0,0.35);
+}
+.use-card:hover::before{opacity:0.40}
+.use-glyph{
+  font-size:24px;line-height:1;
+  transform-origin:left center;
+  transition:transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+}
+.use-card:hover .use-glyph{transform:scale(1.18) rotate(-4deg)}
+.use-card h4{font-size:16px;font-weight:600;transition:color 0.25s}
+.use-card:hover h4{color:var(--use-color)}
 .use-card p{font-size:13.5px;color:var(--text-soft);line-height:1.5;flex:1}
 .use-link{
-  font-size:13px;font-weight:500;color:var(--accent);
+  font-size:13px;font-weight:500;color:var(--use-color);
+  display:inline-flex;align-items:center;gap:4px;
+  transition:gap 0.25s;
 }
+.use-card:hover .use-link{gap:8px}
 .use-link:hover{filter:brightness(1.2)}
 
 /* Case study */
