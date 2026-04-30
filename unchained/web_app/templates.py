@@ -2339,6 +2339,14 @@ a{color:inherit;text-decoration:none}
   border-left-color:var(--accent);
   background:rgba(233,69,96,0.08);
 }
+/* Zillow prompt — blue left border tints it as "different site" */
+.watch-prompt.z{
+  border-left-color:rgba(63,185,138,0.6);
+}
+.watch-prompt.z:hover:not(:disabled){
+  border-color:var(--mint);
+  background:rgba(63,185,138,0.08);
+}
 .watch-prompt .prompt-title{
   font-size:13.5px;font-weight:600;color:var(--text);
 }
@@ -2860,6 +2868,11 @@ a{color:inherit;text-decoration:none}
             <span class="prompt-title">Bali on a budget</span>
             <span class="prompt-sub">filter on destination</span>
           </button>
+          <div class="watch-prompt-label" style="margin-top:6px">switch sites &darr;</div>
+          <button class="watch-prompt z" data-scenario="brooklyn" disabled>
+            <span class="prompt-title">Brooklyn 2BR · cats OK</span>
+            <span class="prompt-sub">navigate to zillow.com, filter listings</span>
+          </button>
         </div>
         <div class="watch-transcript" id="watch-transcript" aria-live="polite">
           <div class="watch-empty">No run yet &mdash; pick a prompt above.</div>
@@ -2873,7 +2886,7 @@ a{color:inherit;text-decoration:none}
           <span style="color:var(--muted);">&raquo;</span>
           <span style="color:var(--mint);font-size:11px;">&#128274;</span>
           <div class="url">
-            <span class="scheme">https://www.</span><span class="host">kayak.com</span><span style="color:var(--muted);">/flights/JFK-NRT/2026-04-15</span>
+            <span class="scheme" id="wb-url-scheme">https://www.</span><span class="host" id="wb-url-host">kayak.com</span><span style="color:var(--muted);" id="wb-url-path">/flights/JFK-NRT/2026-04-15</span>
           </div>
           <span class="wb-vm-tag">WASM&nbsp;SANDBOX</span>
         </div>
@@ -3492,12 +3505,310 @@ render("");
 </` + `script>
 </body></html>`;
 
-const FLIGHTFINDER_SNAPSHOT = {
-  html: FLIGHTFINDER_HTML,
-  // scripts intentionally omitted — loadStatic() will auto-extract <script>
-  // blocks from the HTML so the page's logic actually runs in QuickJS.
-  baseUrl: 'https://www.kayak.com/flights/JFK-NRT/2026-04-15',
+// Zillow-styled rentals snapshot — Brooklyn listings filterable by tag
+// (cats, laundry, neighborhood). Same vanilla createElement constraint as
+// the Kayak snapshot since the host's __parseHTMLFragment is unavailable
+// inside QuickJS.
+const ZILLOW_HTML = `<!DOCTYPE html>
+<html><head><title>Brooklyn, NY Rentals — Zillow</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif;
+  background:#fff;color:#1f1f1f;
+  -webkit-font-smoothing:antialiased;font-size:14px;
+}
+.nav{
+  background:#fff;border-bottom:1px solid #e8e8eb;
+  padding:8px 24px;display:flex;align-items:center;gap:24px;height:56px;
+}
+.logo{
+  font-size:24px;font-weight:800;color:#006aff;
+  letter-spacing:-1.2px;line-height:1;
+}
+.nav-links{display:flex;gap:18px;font-size:14px;color:#1f1f1f;font-weight:600}
+.nav-links span{padding:6px 2px;cursor:pointer}
+.nav-links span.active{color:#1f1f1f;border-bottom:3px solid #006aff;font-weight:700}
+.nav-spacer{flex:1}
+.nav-account{
+  font-size:13px;color:#1f1f1f;font-weight:600;
+  display:inline-flex;align-items:center;gap:8px;
+}
+.nav-account .av{
+  width:28px;height:28px;border-radius:50%;
+  background:#006aff;color:#fff;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;
+}
+.searchbar{
+  background:#fff;border-bottom:1px solid #e8e8eb;
+  padding:14px 24px;display:flex;align-items:center;gap:8px;
+  flex-wrap:wrap;
+}
+.search-loc{
+  display:flex;align-items:center;gap:6px;
+  background:#fff;border:1px solid #cfcfd6;border-radius:6px;
+  padding:9px 14px;font-size:14px;font-weight:600;color:#1f1f1f;
+  flex:1;min-width:240px;
+}
+.search-loc .pin{color:#006aff;font-size:14px}
+.search-loc input{
+  border:none;outline:none;background:transparent;
+  font-family:inherit;font-size:14px;font-weight:600;color:#1f1f1f;
+  flex:1;padding:0;
+}
+.search-loc input::placeholder{color:#8b8c95;font-weight:400}
+.chip{
+  background:#fff;border:1px solid #cfcfd6;border-radius:20px;
+  padding:8px 14px;font-size:13px;color:#1f1f1f;font-weight:500;
+  cursor:pointer;
+}
+.chip:hover{background:#f4f5f7}
+.chip.active{
+  background:#006aff;color:#fff;border-color:#006aff;font-weight:600;
+}
+.search-btn{
+  background:#006aff;color:#fff;border:none;
+  padding:10px 18px;border-radius:6px;
+  font-weight:700;font-size:13px;cursor:pointer;
+}
+.tabbar{
+  border-bottom:1px solid #e8e8eb;padding:10px 24px 0;
+  display:flex;align-items:center;gap:18px;font-size:14px;
+  color:#1f1f1f;
+}
+.tabbar .tb{padding:8px 4px;cursor:pointer;color:#65686d;font-weight:500}
+.tabbar .tb.active{
+  color:#006aff;border-bottom:3px solid #006aff;font-weight:700;
+  padding-bottom:6px;
+}
+.layout{padding:14px 24px 24px}
+.head-row{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:14px;font-size:14px;color:#1f1f1f;
+}
+.head-row .title{font-size:18px;font-weight:700}
+.head-row .title .area{color:#006aff}
+.head-row .sort{
+  font-size:13px;color:#65686d;display:inline-flex;align-items:center;gap:6px;
+}
+.head-row .sort b{color:#1f1f1f;font-weight:700}
+.grid{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:14px;
+}
+@media (max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}
+.card{
+  background:#fff;border:1px solid #e8e8eb;border-radius:6px;
+  overflow:hidden;cursor:pointer;
+  transition:box-shadow 0.15s,transform 0.15s;
+}
+.card:hover{box-shadow:0 6px 18px rgba(0,0,0,0.08);transform:translateY(-1px)}
+.card.cheapest{border:2px solid #006aff;box-shadow:0 6px 16px rgba(0,106,255,0.18)}
+.photo{
+  height:160px;position:relative;
+  background:linear-gradient(135deg,#a8c8ff 0%,#5d9bff 50%,#3b6fc4 100%);
+}
+.photo.g2{background:linear-gradient(135deg,#ffd2a8 0%,#ff9b5d 50%,#c4683b 100%)}
+.photo.g3{background:linear-gradient(135deg,#a8ffce 0%,#5dffa8 50%,#3bc486 100%)}
+.photo.g4{background:linear-gradient(135deg,#d2a8ff 0%,#9b5dff 50%,#683bc4 100%)}
+.photo.g5{background:linear-gradient(135deg,#ffa8c8 0%,#ff5d9b 50%,#c43b6f 100%)}
+.photo.g6{background:linear-gradient(135deg,#a8e8ff 0%,#5dccff 50%,#3b9bc4 100%)}
+.photo.g7{background:linear-gradient(135deg,#fff5a8 0%,#ffd95d 50%,#c4a83b 100%)}
+.photo.g8{background:linear-gradient(135deg,#cccccc 0%,#888888 50%,#444444 100%)}
+.photo .heart{
+  position:absolute;top:10px;right:10px;
+  width:32px;height:32px;border-radius:50%;
+  background:rgba(255,255,255,0.92);
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;color:#1f1f1f;
+}
+.photo .badge{
+  position:absolute;top:10px;left:10px;
+  background:#fff;color:#006aff;
+  padding:3px 8px;border-radius:3px;
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;
+}
+.info{padding:12px 14px}
+.price{font-size:20px;font-weight:800;color:#1f1f1f;line-height:1}
+.card.cheapest .price{color:#006aff}
+.specs{font-size:13px;color:#1f1f1f;margin-top:4px;font-weight:500}
+.specs b{font-weight:700}
+.addr{
+  font-size:12px;color:#65686d;margin-top:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.tag{
+  background:#eef4ff;color:#006aff;
+  padding:2px 7px;border-radius:3px;
+  font-size:10.5px;font-weight:600;letter-spacing:0.2px;
+}
+.tag.no{background:#f4f5f7;color:#8b8c95}
+.empty{
+  grid-column:1/-1;padding:48px 24px;text-align:center;
+  color:#65686d;font-size:13px;
+}
+.empty b{color:#1f1f1f}
+</style></head>
+<body>
+<div class="nav">
+  <div class="logo">Zillow</div>
+  <div class="nav-links">
+    <span class="active">Rent</span>
+    <span>Buy</span>
+    <span>Sell</span>
+    <span>Home Loans</span>
+    <span>Agent finder</span>
+  </div>
+  <div class="nav-spacer"></div>
+  <div class="nav-account"><span class="av">U</span> Saved homes</div>
+</div>
+<div class="searchbar">
+  <div class="search-loc">
+    <span class="pin">&#128205;</span>
+    <input id="q" placeholder="Brooklyn, NY · For Rent · type a feature&hellip;" autocomplete="off" />
+  </div>
+  <span class="chip">Beds · 2+</span>
+  <span class="chip">Baths · 1+</span>
+  <span class="chip">Price · $4,200</span>
+  <span class="chip" id="pet-chip">Pets &times;</span>
+  <button class="search-btn" id="f">Apply</button>
+</div>
+<div class="tabbar">
+  <span class="tb active">List view</span>
+  <span class="tb">Map view</span>
+  <span class="tb">Travel time</span>
+  <span class="tb">Schools</span>
+</div>
+
+<div class="layout">
+  <div class="head-row">
+    <div class="title"><span id="r-count">—</span> rentals in <span class="area">Brooklyn, NY</span><span id="r-filter"></span></div>
+    <div class="sort">Sort: <b>Price (Low to High)</b> &or;</div>
+  </div>
+  <div class="grid" id="results"></div>
+</div>
+
+<script>
+var listings = [
+  {price:2950, beds:2, baths:1, sqft:700, addr:"512 Crown St, Crown Heights", tags:["laundry","near park"], dest:"crown heights", grad:"g7"},
+  {price:3200, beds:2, baths:1, sqft:750, addr:"123 Bedford Ave, Williamsburg", tags:["cats","laundry"], dest:"williamsburg", grad:"g1"},
+  {price:3400, beds:1, baths:1, sqft:600, addr:"88 Wyckoff Ave, Bushwick", tags:["cats","exposed brick"], dest:"bushwick", grad:"g3"},
+  {price:3650, beds:2, baths:1, sqft:820, addr:"45 Manhattan Ave, Greenpoint", tags:["dogs only","laundry"], dest:"greenpoint", grad:"g6"},
+  {price:3800, beds:2, baths:2, sqft:950, addr:"217 7th Ave, Park Slope", tags:["cats","laundry","parking"], dest:"park slope", grad:"g2"},
+  {price:4100, beds:2, baths:1, sqft:800, addr:"623 Halsey St, Bed-Stuy", tags:["cats","laundry"], dest:"bed-stuy", grad:"g4"},
+  {price:4500, beds:2, baths:2, sqft:1000, addr:"180 Kane St, Cobble Hill", tags:["doorman","gym"], dest:"cobble hill", grad:"g5"},
+  {price:2800, beds:2, baths:1, sqft:720, addr:"5519 5th Ave, Sunset Park", tags:["laundry"], dest:"sunset park", grad:"g8"}
+];
+
+function el(tag, opts) {
+  var e = document.createElement(tag);
+  if (opts) {
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.attrs) for (var k in opts.attrs) e.setAttribute(k, opts.attrs[k]);
+  }
+  return e;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function fmtPrice(n) { return '$' + n.toLocaleString() + '/mo'; }
+function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+
+function listingMatches(l, q) {
+  if (!q) return true;
+  if (l.dest.indexOf(q) !== -1) return true;
+  if (l.addr.toLowerCase().indexOf(q) !== -1) return true;
+  for (var i = 0; i < l.tags.length; i++) {
+    if (l.tags[i].toLowerCase().indexOf(q) !== -1) return true;
+  }
+  return false;
+}
+
+function render(q) {
+  q = String(q || "").toLowerCase().trim();
+  var filtered = listings.filter(function(l){ return listingMatches(l, q); });
+  filtered.sort(function(a,b){ return a.price - b.price; });
+  var r = document.getElementById('results');
+  clear(r);
+
+  if (filtered.length === 0) {
+    var empty = el('div', {cls:'empty'});
+    empty.appendChild(document.createTextNode('No rentals match. Try '));
+    empty.appendChild(el('b', {text:'cats'}));
+    empty.appendChild(document.createTextNode(', '));
+    empty.appendChild(el('b', {text:'laundry'}));
+    empty.appendChild(document.createTextNode(', or a neighborhood like '));
+    empty.appendChild(el('b', {text:'park slope'}));
+    empty.appendChild(document.createTextNode('.'));
+    r.appendChild(empty);
+    setText('r-count', '0');
+    setText('r-filter', q ? ' · matching "' + q + '"' : '');
+    return;
+  }
+
+  for (var i = 0; i < filtered.length; i++) {
+    var l = filtered[i];
+    var card = el('div', {cls:'card' + (i === 0 ? ' cheapest' : '')});
+
+    var photo = el('div', {cls:'photo ' + l.grad});
+    if (i === 0) photo.appendChild(el('div', {cls:'badge', text:'Best Match'}));
+    photo.appendChild(el('div', {cls:'heart', text:'♡'}));
+    card.appendChild(photo);
+
+    var info = el('div', {cls:'info'});
+    info.appendChild(el('div', {cls:'price', text: fmtPrice(l.price)}));
+    var specs = el('div', {cls:'specs'});
+    specs.appendChild(el('b', {text: l.beds + ' bd'}));
+    specs.appendChild(document.createTextNode(' · '));
+    specs.appendChild(el('b', {text: l.baths + ' ba'}));
+    specs.appendChild(document.createTextNode(' · ' + l.sqft + ' sqft'));
+    info.appendChild(specs);
+    info.appendChild(el('div', {cls:'addr', text: l.addr}));
+
+    var tags = el('div', {cls:'tags'});
+    for (var t = 0; t < l.tags.length; t++) {
+      var isPet = l.tags[t].indexOf('only') === -1 && l.tags[t] === 'cats';
+      tags.appendChild(el('span', {
+        cls:'tag' + (l.tags[t] === 'dogs only' ? ' no' : ''),
+        text: l.tags[t]
+      }));
+    }
+    info.appendChild(tags);
+    card.appendChild(info);
+    r.appendChild(card);
+  }
+
+  setText('r-count', String(filtered.length));
+  setText('r-filter', q ? ' · matching "' + q + '"' : '');
+}
+
+document.getElementById('q').addEventListener('input', function(e){
+  render(e.target.value);
+});
+document.getElementById('f').addEventListener('click', function(e){
+  e.preventDefault();
+  render(document.getElementById('q').value);
+});
+
+render("");
+</` + `script>
+</body></html>`;
+
+// Snapshot map keyed for the multi-site demo. Each scenario picks one.
+const SNAPSHOTS = {
+  kayak: {
+    html: FLIGHTFINDER_HTML,
+    baseUrl: 'https://www.kayak.com/flights/JFK-NRT/2026-04-15',
+    url: { scheme: 'https://www.', host: 'kayak.com', path: '/flights/JFK-NRT/2026-04-15' },
+  },
+  zillow: {
+    html: ZILLOW_HTML,
+    baseUrl: 'https://www.zillow.com/brooklyn-new-york-ny/rentals/',
+    url: { scheme: 'https://www.', host: 'zillow.com', path: '/brooklyn-new-york-ny/rentals/' },
+  },
 };
+
+const FLIGHTFINDER_SNAPSHOT = SNAPSHOTS.kayak;
 
 async function loadWasmBrowserOnce() {
   if (WB.loaded || WB.loading) return;
@@ -3513,8 +3824,9 @@ async function loadWasmBrowserOnce() {
       if (WB.msg) WB.msg.textContent = msg;
     });
     await WB.loader.init();
-    setWBStatus('loading', 'Compiling virtual DOM · seeding the FlightFinder snapshot');
-    await WB.loader.loadStatic(FLIGHTFINDER_SNAPSHOT);
+    setWBStatus('loading', 'Compiling virtual DOM · seeding kayak.com snapshot');
+    await WB.loader.loadStatic(SNAPSHOTS.kayak);
+    WB.currentSnapshot = 'kayak';
     WB.loaded = true;
     // Count nodes after seeding.
     try {
@@ -3557,19 +3869,28 @@ async function loadWasmBrowserOnce() {
 // iframe on the right shows the actual mutations.
 const SCENARIOS = {
   tokyo: {
+    snapshot: 'kayak',
     user: 'Find me the cheapest direct flight from NYC to Tokyo in April.',
     query: 'tokyo',
     summary: '<span class="pill">$1,247</span> <b>ANA · JFK → NRT</b> · nonstop · 4 results · saves $209 vs avg',
   },
   london: {
+    snapshot: 'kayak',
     user: 'Find a London flight under $600.',
     query: 'london',
     summary: '<span class="pill">$489</span> <b>AA · JFK → LHR</b> (1 stop) · 2 of 3 nonstop options under $625 · saves $133 vs avg',
   },
   bali: {
+    snapshot: 'kayak',
     user: 'I want to fly to Bali — what are my options?',
     query: 'bali',
     summary: '<span class="pill">$1,487</span> <b>Garuda · JFK → DPS</b> · 1 stop · saves $125 vs SQ',
+  },
+  brooklyn: {
+    snapshot: 'zillow',
+    user: 'Find me a 2BR in Brooklyn that allows cats.',
+    query: 'cats',
+    summary: '<span class="pill">$3,200/mo</span> <b>Williamsburg 2BR</b> · cats + laundry · 4 of 8 listings allow cats · cheapest is $400/mo under avg',
   },
 };
 
@@ -3634,6 +3955,55 @@ function setStatEvt(txt) {
   if (WB.statEvt) WB.statEvt.textContent = txt;
 }
 
+// Update the wb-fakebar URL pieces — called whenever we swap snapshots
+// so the visitor sees a "real" address bar change, not just a content swap.
+function setUrlBar(snapshotKey) {
+  const snap = SNAPSHOTS[snapshotKey];
+  if (!snap) return;
+  const s = document.getElementById('wb-url-scheme');
+  const h = document.getElementById('wb-url-host');
+  const p = document.getElementById('wb-url-path');
+  if (s) s.textContent = snap.url.scheme;
+  if (h) h.textContent = snap.url.host;
+  if (p) p.textContent = snap.url.path;
+}
+
+// Hot-swap the snapshot inside the running PageLoader. Re-uses the same
+// engine + bridge — loadStatic disposes the engine on each call so the
+// VM is genuinely fresh, but the iframe handle stays put. Updates URL bar
+// + node-count stat + currentSnapshot pointer.
+async function ensureSnapshot(key) {
+  if (!WB.loader) return;
+  if (WB.currentSnapshot === key) return;
+  const snap = SNAPSHOTS[key];
+  if (!snap) return;
+  await WB.loader.loadStatic(snap);
+  WB.currentSnapshot = key;
+  setUrlBar(key);
+  try {
+    const tree = WB.loader.engine.eval('__serializeDOM()');
+    let count = 0;
+    (function walk(n){ count++; if (n.children) n.children.forEach(walk); })(tree);
+    if (WB.statNodes) WB.statNodes.textContent = count;
+  } catch {}
+}
+
+// Reset the iframe's writable input to empty before a scenario re-runs.
+// Both Kayak and Zillow snapshots use #q for the input field, so the same
+// reset eval works for both — but if we add a snapshot with a different
+// field id later, only this helper needs to change.
+function resetSnapshotInput() {
+  if (!WB.loader) return;
+  try {
+    WB.loader.engine.eval('(function(){var i=document.getElementById("q");if(i){i.value="";var ev=new Event("input",{bubbles:true});ev.value="";i.dispatchEvent(ev);}})()');
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+    const realInput = WB.iframe.contentDocument.getElementById('q');
+    if (realInput) realInput.value = '';
+  } catch {}
+}
+
 async function runScenario(key) {
   if (scenarioRunning) return;
   const scn = SCENARIOS[key];
@@ -3655,32 +4025,37 @@ async function runScenario(key) {
   const t0 = performance.now();
   const mutBefore = WB.mutationCount;
 
-  // Reset the iframe input to empty for the visual reset.
-  try {
-    WB.loader.engine.eval('(function(){var i=document.getElementById("q");if(i){i.value="";var ev=new Event("input",{bubbles:true});ev.value="";i.dispatchEvent(ev);}})()');
-    WB.loader.engine.vm.runtime.executePendingJobs();
-    WB.loader.engine.tick && WB.loader.engine.tick();
-    WB.loader.bridge.flush();
-    const realInput = WB.iframe.contentDocument.getElementById('q');
-    if (realInput) realInput.value = '';
-  } catch {}
+  resetSnapshotInput();
+
+  const targetSnap = SNAPSHOTS[scn.snapshot] || SNAPSHOTS.kayak;
+  const willNavigate = WB.currentSnapshot !== scn.snapshot;
 
   // Walk the action sequence — each step appears in the transcript, then the
   // corresponding mutation happens in the iframe at the right beat.
   for (let i = 0; i < ACTION_SEQUENCE.length; i++) {
     const step = ACTION_SEQUENCE[i];
     let desc = step.desc || '';
-    if (step.label === 'Navigate') desc = 'kayak.com/flights/JFK-NRT';
+    if (step.label === 'Navigate') desc = targetSnap.url.host + targetSnap.url.path;
+    if (step.label === 'Look') desc = scn.snapshot === 'zillow' ? 'parse listing grid' : 'parse search form';
     if (step.label === 'Type') desc = '"' + scn.query + '"';
-    if (step.label === 'Filter') desc = 'destination = ' + scn.query;
+    if (step.label === 'Filter') desc = (scn.snapshot === 'zillow' ? 'tag = ' : 'destination = ') + scn.query;
+    if (step.label === 'Extract') desc = scn.snapshot === 'zillow' ? 'read price + beds + tags' : 'read airline + price + stops';
+    if (step.label === 'Summarize') desc = scn.snapshot === 'zillow' ? 'pick cheapest match' : 'pick best deal';
     const node = appendAction(step.glyph, step.label, desc);
     setStatEvt(step.label.toLowerCase());
     await delay(step.delay);
 
-    // The Type step is when we actually drive the WASM browser.
+    // Navigate step actually loads the new snapshot if it differs from the
+    // current one. The visitor sees the iframe blank → Kayak / Zillow fade in.
+    if (step.label === 'Navigate' && willNavigate) {
+      await ensureSnapshot(scn.snapshot);
+      resetSnapshotInput();
+      await delay(120);
+    }
+
+    // The Type step drives the WASM browser character by character.
     if (step.label === 'Type') {
       try {
-        // Type each character so the visitor sees a real-feeling type-out.
         const target = scn.query;
         for (let c = 1; c <= target.length; c++) {
           const partial = target.slice(0, c);
