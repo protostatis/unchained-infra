@@ -2631,21 +2631,41 @@ a{color:inherit;text-decoration:none}
   padding-top:10px;margin-top:auto;
 }
 
-/* API providers chips inside the API lane */
+/* API providers — clickable rows that ARE the lane's CTAs. */
+.providers-label{
+  font-size:11px;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--muted);font-weight:600;margin:6px 0 8px;
+}
 .providers{
-  display:flex;flex-wrap:wrap;gap:6px;
+  display:flex;flex-direction:column;gap:7px;
 }
 .provider-chip{
-  display:inline-flex;align-items:center;gap:5px;
-  font-size:12px;font-weight:500;color:var(--text-soft);
-  border:1px solid var(--border);background:rgba(255,255,255,0.02);
-  padding:5px 10px;border-radius:8px;
-  transition:border-color 0.15s, color 0.15s;
+  display:flex;align-items:center;gap:10px;
+  font-size:13px;color:var(--text);
+  border:1px solid var(--border);background:rgba(245,179,66,0.04);
+  padding:9px 14px;border-radius:8px;
+  transition:border-color 0.15s, background 0.15s, transform 0.15s;
 }
-.provider-chip:hover{border-color:var(--amber);color:var(--text)}
+.provider-chip:hover{
+  border-color:var(--amber);
+  background:rgba(245,179,66,0.10);
+  transform:translateX(2px);
+}
 .provider-chip .chip-dot{
-  width:6px;height:6px;border-radius:50%;background:var(--amber);
+  width:8px;height:8px;border-radius:50%;background:var(--amber);
+  flex-shrink:0;
 }
+.provider-chip .chip-name{font-weight:600;color:var(--text)}
+.provider-chip .chip-meta{
+  font-size:11.5px;color:var(--muted);
+  font-family:ui-monospace,monospace;
+  margin-left:2px;
+}
+.provider-chip .chip-arrow{
+  margin-left:auto;color:var(--amber);font-weight:600;
+  transition:transform 0.15s;
+}
+.provider-chip:hover .chip-arrow{transform:translateX(2px)}
 
 /* ── Use cases ── */
 .use-grid{
@@ -2954,15 +2974,30 @@ a{color:inherit;text-decoration:none}
       <div class="lane-tag">&#127919; Full Model Power &middot; API Key</div>
       <h3>Bring your own API key</h3>
       <p>Auto-provision an API key in your Chrome browser, then run any provider at full capability. ~30 seconds to set up.</p>
+      <div class="providers-label">Pick a provider &darr;</div>
       <div class="providers">
-        <a href="/setup?provider=gemini" class="provider-chip"><span class="chip-dot"></span> Gemini API &mdash; free trial</a>
-        <a href="/setup?provider=claude-sdk" class="provider-chip"><span class="chip-dot"></span> Claude API (Sonnet/Opus/Haiku)</a>
-        <a href="/setup?provider=codex-sdk" class="provider-chip"><span class="chip-dot"></span> OpenAI / Codex API</a>
+        <a href="/setup?provider=gemini" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Gemini</span>
+          <span class="chip-meta">free trial</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/setup?provider=claude-sdk" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Claude</span>
+          <span class="chip-meta">Sonnet · Opus · Haiku</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/setup?provider=codex-sdk" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">OpenAI / Codex</span>
+          <span class="chip-meta">GPT-4o · o1</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
       </div>
       <div class="footnote">Already a Claude Pro/Max or ChatGPT Plus subscriber? Skip the API key &mdash; install the Local CLI lane instead.</div>
       <div class="actions">
-        <a href="/setup?provider=gemini" class="btn-cta">Provision a key &rarr;</a>
-        <a href="/chat-claude" class="btn-link">Have a key? Open chat &rarr;</a>
+        <a href="/setup" class="btn-link">Already set up? Open chat &rarr;</a>
       </div>
     </div>
 
@@ -3991,7 +4026,6 @@ const SCENARIO_FLOWS = {
     { glyph: '👁', label: 'Read page',    delay: 400, desc: 'parse listing grid' },
     { glyph: '⌨', label: 'Type',         delay: 500, act: 'typeQuery' },
     { glyph: '☑', label: 'Toggle filter',delay: 380, desc: 'enable Pets chip',    act: 'zillowPetsChip' },
-    { glyph: '↕', label: 'Sort',         delay: 380, desc: 'price · low → high',  act: 'zillowSortFlash' },
     { glyph: '🔬', label: 'Extract',      delay: 450, desc: 'read price + beds + tags' },
     { glyph: '♥', label: 'Save match',   delay: 380, desc: 'heart best listing',  act: 'zillowSaveMatch' },
     { glyph: '✅', label: 'Summarize',    delay: 320, desc: 'pick cheapest match' },
@@ -4050,15 +4084,6 @@ const ACT = {
   zillowPetsChip: async function() {
     WB.loader.engine.eval(
       '(function(){var c=document.getElementById("pet-chip");if(c){var ev=new Event("click",{bubbles:true});c.dispatchEvent(ev);}})()'
-    );
-    WB.loader.engine.vm.runtime.executePendingJobs();
-    WB.loader.engine.tick && WB.loader.engine.tick();
-    WB.loader.bridge.flush();
-  },
-  zillowSortFlash: async function() {
-    // Sort is already cheapest-first; flash the sort label as a visual ping.
-    WB.loader.engine.eval(
-      '(function(){var els=document.querySelectorAll(".sort b");for(var i=0;i<els.length;i++){els[i].style.background="#fff8e1";els[i].style.padding="2px 6px";els[i].style.borderRadius="3px";}})()'
     );
     WB.loader.engine.vm.runtime.executePendingJobs();
     WB.loader.engine.tick && WB.loader.engine.tick();
