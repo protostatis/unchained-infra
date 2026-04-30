@@ -2870,8 +2870,8 @@ a{color:inherit;text-decoration:none}
           </button>
           <div class="watch-prompt-label" style="margin-top:6px">switch sites &darr;</div>
           <button class="watch-prompt z" data-scenario="brooklyn" disabled>
-            <span class="prompt-title">Brooklyn 2BR · cats OK</span>
-            <span class="prompt-sub">navigate to zillow.com, filter listings</span>
+            <span class="prompt-title">Park Slope 2BR · cats OK</span>
+            <span class="prompt-sub">type neighborhood, click Pets chip</span>
           </button>
         </div>
         <div class="watch-transcript" id="watch-transcript" aria-live="polite">
@@ -3685,6 +3685,7 @@ body{
   font-size:10.5px;font-weight:600;letter-spacing:0.2px;
 }
 .tag.no{background:#f4f5f7;color:#8b8c95}
+.tag.pet{background:#fef0e6;color:#d2691e}
 .empty{
   grid-column:1/-1;padding:48px 24px;text-align:center;
   color:#65686d;font-size:13px;
@@ -3707,7 +3708,7 @@ body{
 <div class="searchbar">
   <div class="search-loc">
     <span class="pin">&#128205;</span>
-    <input id="q" placeholder="Brooklyn, NY · For Rent · type a feature&hellip;" autocomplete="off" />
+    <input id="q" placeholder="Brooklyn, NY · neighborhood, address, or zip" autocomplete="off" />
   </div>
   <span class="chip">Beds · 2+</span>
   <span class="chip">Baths · 1+</span>
@@ -3732,14 +3733,15 @@ body{
 
 <script>
 var listings = [
+  {price:2800, beds:2, baths:1, sqft:720, addr:"5519 5th Ave, Sunset Park", tags:["laundry"], dest:"sunset park", grad:"g8"},
   {price:2950, beds:2, baths:1, sqft:700, addr:"512 Crown St, Crown Heights", tags:["laundry","near park"], dest:"crown heights", grad:"g7"},
-  {price:3200, beds:2, baths:1, sqft:750, addr:"123 Bedford Ave, Williamsburg", tags:["cats","laundry"], dest:"williamsburg", grad:"g1"},
-  {price:3400, beds:1, baths:1, sqft:600, addr:"88 Wyckoff Ave, Bushwick", tags:["cats","exposed brick"], dest:"bushwick", grad:"g3"},
+  {price:3200, beds:2, baths:1, sqft:750, addr:"123 Bedford Ave, Williamsburg", tags:["cats ok","laundry"], dest:"williamsburg", grad:"g1"},
+  {price:3400, beds:1, baths:1, sqft:600, addr:"88 Wyckoff Ave, Bushwick", tags:["cats ok","exposed brick"], dest:"bushwick", grad:"g3"},
   {price:3650, beds:2, baths:1, sqft:820, addr:"45 Manhattan Ave, Greenpoint", tags:["dogs only","laundry"], dest:"greenpoint", grad:"g6"},
-  {price:3800, beds:2, baths:2, sqft:950, addr:"217 7th Ave, Park Slope", tags:["cats","laundry","parking"], dest:"park slope", grad:"g2"},
-  {price:4100, beds:2, baths:1, sqft:800, addr:"623 Halsey St, Bed-Stuy", tags:["cats","laundry"], dest:"bed-stuy", grad:"g4"},
-  {price:4500, beds:2, baths:2, sqft:1000, addr:"180 Kane St, Cobble Hill", tags:["doorman","gym"], dest:"cobble hill", grad:"g5"},
-  {price:2800, beds:2, baths:1, sqft:720, addr:"5519 5th Ave, Sunset Park", tags:["laundry"], dest:"sunset park", grad:"g8"}
+  {price:3800, beds:2, baths:2, sqft:950, addr:"217 7th Ave, Park Slope", tags:["cats ok","laundry","parking"], dest:"park slope", grad:"g2"},
+  {price:3850, beds:2, baths:1, sqft:830, addr:"428 9th St, Park Slope", tags:["doorman","gym"], dest:"park slope", grad:"g5"},
+  {price:4100, beds:2, baths:1, sqft:800, addr:"623 Halsey St, Bed-Stuy", tags:["cats ok","laundry"], dest:"bed-stuy", grad:"g4"},
+  {price:4500, beds:2, baths:2, sqft:1000, addr:"180 Kane St, Cobble Hill", tags:["doorman","gym"], dest:"cobble hill", grad:"g5"}
 ];
 
 function el(tag, opts) {
@@ -3755,35 +3757,52 @@ function clear(node) { while (node.firstChild) node.removeChild(node.firstChild)
 function fmtPrice(n) { return '$' + n.toLocaleString() + '/mo'; }
 function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
 
-function listingMatches(l, q) {
+// Two independent filters: location (typed input) and pets (chip toggle).
+// Real Zillow works the same way — location is one input, amenities are
+// separate filter chips. The agent demo drives them as distinct actions.
+var pageState = { q: "", petsOnly: false };
+
+function locationMatches(l, q) {
   if (!q) return true;
   if (l.dest.indexOf(q) !== -1) return true;
   if (l.addr.toLowerCase().indexOf(q) !== -1) return true;
+  return false;
+}
+function petsOk(l) {
   for (var i = 0; i < l.tags.length; i++) {
-    if (l.tags[i].toLowerCase().indexOf(q) !== -1) return true;
+    if (l.tags[i] === 'cats ok') return true;
   }
   return false;
 }
+function applyFilters() {
+  var arr = listings.filter(function(l){ return locationMatches(l, pageState.q); });
+  if (pageState.petsOnly) arr = arr.filter(petsOk);
+  arr.sort(function(a,b){ return a.price - b.price; });
+  return arr;
+}
 
-function render(q) {
-  q = String(q || "").toLowerCase().trim();
-  var filtered = listings.filter(function(l){ return listingMatches(l, q); });
-  filtered.sort(function(a,b){ return a.price - b.price; });
+function render() {
+  var filtered = applyFilters();
   var r = document.getElementById('results');
   clear(r);
 
+  // Build the active-filter description for the title row
+  var bits = [];
+  if (pageState.q) bits.push('"' + pageState.q + '"');
+  if (pageState.petsOnly) bits.push('cats OK');
+  setText('r-filter', bits.length ? ' · ' + bits.join(' · ') : '');
+
   if (filtered.length === 0) {
     var empty = el('div', {cls:'empty'});
-    empty.appendChild(document.createTextNode('No rentals match. Try '));
-    empty.appendChild(el('b', {text:'cats'}));
-    empty.appendChild(document.createTextNode(', '));
-    empty.appendChild(el('b', {text:'laundry'}));
-    empty.appendChild(document.createTextNode(', or a neighborhood like '));
+    empty.appendChild(document.createTextNode('No rentals match. Try a neighborhood like '));
     empty.appendChild(el('b', {text:'park slope'}));
+    empty.appendChild(document.createTextNode(', '));
+    empty.appendChild(el('b', {text:'williamsburg'}));
+    empty.appendChild(document.createTextNode(', or '));
+    empty.appendChild(el('b', {text:'bushwick'}));
     empty.appendChild(document.createTextNode('.'));
     r.appendChild(empty);
     setText('r-count', '0');
-    setText('r-filter', q ? ' · matching "' + q + '"' : '');
     return;
   }
 
@@ -3815,10 +3834,10 @@ function render(q) {
 
     var tags = el('div', {cls:'tags'});
     for (var t = 0; t < l.tags.length; t++) {
-      var isPet = l.tags[t].indexOf('only') === -1 && l.tags[t] === 'cats';
+      var tag = l.tags[t];
       tags.appendChild(el('span', {
-        cls:'tag' + (l.tags[t] === 'dogs only' ? ' no' : ''),
-        text: l.tags[t]
+        cls: 'tag' + (tag === 'dogs only' ? ' no' : '') + (tag === 'cats ok' ? ' pet' : ''),
+        text: tag
       }));
     }
     info.appendChild(tags);
@@ -3827,36 +3846,28 @@ function render(q) {
   }
 
   setText('r-count', String(filtered.length));
-  setText('r-filter', q ? ' · matching "' + q + '"' : '');
 }
 
 document.getElementById('q').addEventListener('input', function(e){
-  render(e.target.value);
+  pageState.q = String(e.target.value || "").toLowerCase().trim();
+  render();
 });
 document.getElementById('f').addEventListener('click', function(e){
   e.preventDefault();
-  render(document.getElementById('q').value);
+  pageState.q = String(document.getElementById('q').value || "").toLowerCase().trim();
+  render();
 });
 var petChip = document.getElementById('pet-chip');
 if (petChip) {
   petChip.addEventListener('click', function(){
-    var active = (petChip._attributes['class'] || '').indexOf('active') !== -1;
-    petChip.className = active ? 'chip' : 'chip active';
-    petChip.textContent = active ? 'Pets ×' : '✓ Cats OK';
-    // Auto-set query to "cats" when activating; clear when deactivating, but
-    // only if the query field currently matches the auto-state.
-    var qInput = document.getElementById('q');
-    if (qInput) {
-      if (!active) {
-        qInput.value = 'cats';
-        var ev = new Event('input', {bubbles:true}); ev.value = 'cats';
-        qInput.dispatchEvent(ev);
-      }
-    }
+    pageState.petsOnly = !pageState.petsOnly;
+    petChip.className = pageState.petsOnly ? 'chip active' : 'chip';
+    petChip.textContent = pageState.petsOnly ? '✓ Cats OK' : 'Pets ×';
+    render();
   });
 }
 
-render("");
+render();
 </` + `script>
 </body></html>`;
 
@@ -3954,9 +3965,9 @@ const SCENARIOS = {
   },
   brooklyn: {
     snapshot: 'zillow',
-    user: 'Find me a 2BR in Brooklyn that allows cats.',
-    query: 'cats',
-    summary: '<span class="pill">$3,200/mo</span> <b>Williamsburg 2BR</b> · cats + laundry · 4 of 8 listings allow cats · cheapest is $400/mo under avg',
+    user: 'Find me a 2BR in Park Slope that allows cats.',
+    query: 'park slope',
+    summary: '<span class="pill">$3,800/mo</span> <b>217 7th Ave, Park Slope</b> · 2BR/2BA · cats + laundry + parking · only 1 of 2 Park Slope rentals allows cats',
   },
 };
 
