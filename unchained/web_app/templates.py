@@ -2567,15 +2567,28 @@ a{color:inherit;text-decoration:none}
 /* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
 .poem{
   font-family:'Cormorant Garamond',serif;
-  font-size:clamp(22px,3vw,28px);
-  line-height:1.85;font-style:italic;
+  /* Sized so the longest morph stage ("An agent moves where walls once
+   * stood" — ~38 chars italic) fits on one line at every viewport without
+   * triggering wrap or overflow-x clipping by `body{overflow-x:hidden}`. */
+  font-size:clamp(19px,2.4vw,24px);
+  line-height:1.9;font-style:italic;
   color:var(--text);opacity:0.92;
-  text-align:center;max-width:680px;
+  text-align:center;
+  /* `.hero-brand` is a flex column with `align-items:center`, which would
+   * shrink-fit `.poem` to its currently-visible (s1) content width and clip
+   * the wider s2/s3 stages on morph. `align-self:stretch` makes the poem
+   * claim the parent's full content width, capped by `max-width`. */
+  align-self:stretch;
+  width:100%;
+  max-width:min(92vw, 780px);
+  margin-left:auto;margin-right:auto;
   white-space:nowrap;
 }
 .hero-brand .poem{margin:0 auto}
 @media (max-width:720px){
-  .poem{font-size:clamp(18px,5vw,22px);max-width:92vw}
+  /* On narrow viewports, drop into a tighter font-size band — the
+   * `min(92vw, 780px)` max-width on `.poem` still applies. */
+  .poem{font-size:clamp(17px,4.5vw,21px)}
 }
 .poem .line{
   display:block;position:relative;height:1.7em;
