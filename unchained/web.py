@@ -1404,11 +1404,15 @@ _WASMBROWSER_ALLOWED = {
 async def handle_wasmbrowser_asset(request: web.Request) -> web.Response:
     """GET /web/wasmbrowser/{filename} — serve QuickJS-WASM browser assets.
 
-    These are the 5 JS files extracted from sky-search/client/wasm/ that
+    These are the 6 JS files extracted from sky-search/client/wasm/ that
     power the live WASM browser embedded in the marketing landing page.
     Allowlisted filenames only — do not let path traversal escape the dir.
     """
-    filename = request.match_info.get("filename", "")
+    raw = request.match_info.get("filename", "")
+    # Defense-in-depth: strip any path components even though the allowlist
+    # below only contains bare filenames. If the route ever broadens, this
+    # keeps "../../etc/passwd" from reaching open().
+    filename = os.path.basename(raw)
     if filename not in _WASMBROWSER_ALLOWED:
         return web.Response(status=404)
     path = os.path.join(_WASMBROWSER_DIR, filename)
@@ -1420,7 +1424,12 @@ async def handle_wasmbrowser_asset(request: web.Request) -> web.Response:
     return web.Response(
         text=body,
         content_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            # Prevent MIME-type confusion attacks: browser must honor the
+            # declared application/javascript and not sniff the body.
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

@@ -4174,7 +4174,16 @@ async function loadWasmBrowserOnce() {
     };
   } catch (e) {
     console.error('[wbrowser]', e);
-    setWBStatus('error', 'Failed: ' + (e && e.message ? e.message : e));
+    // The QuickJS WASM binary is fetched lazily from esm.sh inside
+    // engine.js. Common failure modes: CDN offline, corp proxy blocking
+    // esm.sh, ad-blocker stripping the import. Surface a clear message
+    // instead of leaking the raw exception, and keep the page usable —
+    // the rest of the landing page works fine without the live demo.
+    const msg = (e && e.message) ? e.message : String(e);
+    const friendly = /import|fetch|network|cdn|esm/i.test(msg)
+      ? 'Could not load the WebAssembly runtime (CDN unreachable). Refresh to retry, or check that esm.sh is reachable.'
+      : 'WebAssembly runtime failed to start: ' + msg;
+    setWBStatus('error', friendly);
   } finally {
     WB.loading = false;
   }
