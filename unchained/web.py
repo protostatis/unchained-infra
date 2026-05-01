@@ -62,6 +62,7 @@ from web_app.templates import (
     INSTALL_CLAIM_HTML,
     INSTALL_ONBOARD_HTML,
     LANDING_HTML,
+    LANDING_V3_HTML,
     MCP_PAGE_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
@@ -1391,6 +1392,47 @@ async def handle_favicon(request: web.Request) -> web.Response:
     )
 
 
+_WASMBROWSER_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "web_app", "static", "wasmbrowser",
+)
+_WASMBROWSER_ALLOWED = {
+    "engine.js", "dom.js", "bridge.js", "shims.js", "loader.js", "intel.js",
+}
+
+
+async def handle_wasmbrowser_asset(request: web.Request) -> web.Response:
+    """GET /web/wasmbrowser/{filename} — serve QuickJS-WASM browser assets.
+
+    These are the 6 JS files extracted from sky-search/client/wasm/ that
+    power the live WASM browser embedded in the marketing landing page.
+    Allowlisted filenames only — do not let path traversal escape the dir.
+    """
+    raw = request.match_info.get("filename", "")
+    # Defense-in-depth: strip any path components even though the allowlist
+    # below only contains bare filenames. If the route ever broadens, this
+    # keeps "../../etc/passwd" from reaching open().
+    filename = os.path.basename(raw)
+    if filename not in _WASMBROWSER_ALLOWED:
+        return web.Response(status=404)
+    path = os.path.join(_WASMBROWSER_DIR, filename)
+    try:
+        with open(path) as f:
+            body = f.read()
+    except FileNotFoundError:
+        return web.Response(status=404)
+    return web.Response(
+        text=body,
+        content_type="application/javascript",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            # Prevent MIME-type confusion attacks: browser must honor the
+            # declared application/javascript and not sniff the body.
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 _og_image_cache: bytes | None = None
 
 
@@ -1501,9 +1543,17 @@ async def handle_google_verification(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
-    html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    return web.Response(text=html, content_type="text/html")
+    # Allow opting into the V3 redesign via ?ui=v3 (or cookie ui=v3) so V2 and V3
+    # can run side-by-side during the redesign A/B. Default remains V2.
+    variant = request.query.get("ui") or request.cookies.get("ui") or ""
+    template = LANDING_V3_HTML if variant == "v3" else LANDING_HTML
+    html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    response = web.Response(text=html, content_type="text/html")
+    if request.query.get("ui") in {"v2", "v3"}:
+        # Persist the choice for ~1 day so deep-links inside the site keep the
+        # same variant when the visitor returns to "/".
+        response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
+    return response
 
 
 async def handle_test(request: web.Request) -> web.Response:

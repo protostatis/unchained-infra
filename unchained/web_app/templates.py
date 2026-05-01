@@ -1387,12 +1387,12 @@ body::before{
     </span>
     <span class="line">
       <span class="stage s1">Wind rushes where walls once stood</span>
-      <span class="stage s2">Wind drives where walls once stood</span>
+      <span class="stage s2">An agent moves where walls once stood</span>
       <span class="stage s3">A browser agent does it for you</span>
     </span>
     <span class="line">
       <span class="stage s1">I am sky, unchained</span>
-      <span class="stage s2">I am sky, unchained</span>
+      <span class="stage s2">I am unchained</span>
       <span class="stage s3">You are sky, unchained</span>
     </span>
   </div>
@@ -1963,7 +1963,2582 @@ if ('IntersectionObserver' in window) {
 </body>
 </html>"""
 
-# Promote V2 (haiku morph) as the main landing page.
+LANDING_V3_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unchained — AI Browser Agent for Everyday Web Tasks</title>
+<meta name="description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact. Search, compare, and monitor the web in plain English.">
+<link rel="canonical" href="https://unchainedsky.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://unchainedsky.com/">
+<meta property="og:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta property="og:description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact.">
+<meta property="og:image" content="https://unchainedsky.com/og-image.png">
+<meta property="og:site_name" content="Unchained">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Unchained — AI Browser Agent for Everyday Web Tasks">
+<meta name="twitter:description" content="An AI agent that drives your real Chrome — with your logins, cookies, and sessions intact.">
+<meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Unchained","url":"https://unchainedsky.com","applicationCategory":"BrowserApplication","operatingSystem":"macOS, Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"description":"AI browser agent that searches, compares, and monitors the web for you. Works with your real browser and your real logins."}
+</script>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Cormorant+Garamond:ital,wght@0,400;1,400&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--surface:#111119;--surface-2:#15151e;--subtle:#222;
+  --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
+  --amber:#f5b342;--blue:#5d9bff;--mint:#3fb98a;
+  --text:#e8e8ec;--text-soft:#b8b8c0;--muted:#8a8a94;
+  --border:rgba(255,255,255,0.08);--border-strong:rgba(255,255,255,0.16);
+  --nav-h:60px;
+}
+html{scroll-behavior:smooth}
+
+/* Section-level scroll-snap. Uses `proximity` (not `mandatory`) so the
+ * page guides the visitor between sections without trapping them mid-
+ * section if they want to read tall content (the WASM area + lane grid).
+ * Desktop-only + bypassed when the visitor prefers reduced motion. */
+@media (min-width:880px) and (prefers-reduced-motion:no-preference){
+  html{scroll-snap-type:y proximity}
+  .hero-brand,
+  .hero-product,
+  #watch,
+  #get-started,
+  #use-cases{
+    scroll-snap-align:start;
+    scroll-margin-top:var(--nav-h);
+  }
+}
+body{
+  font-family:'Inter',sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;z-index:0;
+}
+/* Drifting accent radial that breathes behind the brand hero —
+ * subtle red ambient that gives the page a "live" feel without
+ * demanding attention. */
+body::after{
+  content:'';position:fixed;
+  width:120vw;height:120vh;left:-10vw;top:-10vh;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(233,69,96,0.06), transparent 50%),
+    radial-gradient(circle at 70% 70%, rgba(93,155,255,0.04), transparent 55%);
+  filter:blur(80px);
+  pointer-events:none;z-index:0;
+  animation:ambientDrift 24s ease-in-out infinite;
+}
+@keyframes ambientDrift{
+  0%,100% { transform:translate(0,0) scale(1);   }
+  33%     { transform:translate(-3vw,2vh) scale(1.05); }
+  66%     { transform:translate(2vw,-2vh) scale(0.97); }
+}
+@media (prefers-reduced-motion:reduce){
+  body::after{animation:none}
+}
+a{color:inherit;text-decoration:none}
+
+/* ── Sticky top nav ── */
+.topnav{
+  position:sticky;top:0;z-index:50;
+  height:var(--nav-h);
+  background:rgba(10,10,15,0.78);
+  backdrop-filter:saturate(140%) blur(12px);
+  -webkit-backdrop-filter:saturate(140%) blur(12px);
+  border-bottom:1px solid var(--border);
+}
+.topnav-inner{
+  max-width:1200px;margin:0 auto;padding:0 24px;
+  height:100%;display:flex;align-items:center;gap:24px;
+}
+.topnav .brand{
+  font-weight:700;letter-spacing:2px;font-size:14px;
+  text-transform:uppercase;
+}
+.topnav .brand span{color:var(--accent)}
+.topnav .links{
+  display:flex;gap:18px;margin-left:auto;align-items:center;
+}
+.topnav .links a{
+  color:var(--text-soft);font-size:14px;font-weight:500;
+  padding:6px 4px;transition:color 0.15s;
+}
+.topnav .links a:hover{color:var(--text)}
+.topnav .signin{
+  background:var(--accent);color:#fff;padding:8px 16px;
+  border-radius:6px;font-weight:600;font-size:13px;
+  box-shadow:0 2px 12px var(--accent-glow);
+  transition:transform 0.15s, box-shadow 0.15s;
+}
+.topnav .signin:hover{
+  color:#fff;transform:translateY(-1px);
+  box-shadow:0 4px 18px rgba(233,69,96,0.35);
+}
+@media (max-width:720px){
+  .topnav .links a:not(.signin){display:none}
+}
+
+/* ── Act 1: Brand hero — ceremonial fullscreen ── */
+.hero-brand{
+  position:relative;z-index:1;
+  max-width:760px;margin:0 auto;padding:0 24px;
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;
+  min-height:calc(100vh - var(--nav-h));
+}
+.hero-brand .wordmark{
+  font-size:clamp(48px,9vw,82px);
+  font-weight:600;letter-spacing:4px;
+  text-transform:uppercase;
+  margin-bottom:48px;
+  animation:
+    brandFade 1.2s ease-out 0.1s both,
+    wordmarkGlow 5s ease-in-out 1.5s infinite;
+}
+.hero-brand .wordmark span{color:var(--accent)}
+@keyframes brandFade{
+  from{opacity:0;transform:translateY(-8px);letter-spacing:8px}
+  to{opacity:1;transform:translateY(0);letter-spacing:4px}
+}
+@keyframes wordmarkGlow{
+  0%,100% { text-shadow: 0 0 0 rgba(233,69,96,0); }
+  50%     { text-shadow: 0 0 36px rgba(233,69,96,0.30), 0 0 80px rgba(233,69,96,0.10); }
+}
+.hero-brand .cta-primary-big{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--accent);color:#fff;
+  padding:14px 32px;border-radius:10px;
+  font-weight:600;font-size:16px;letter-spacing:0.5px;
+  box-shadow:0 6px 28px var(--accent-glow);
+  transition:transform 0.18s, box-shadow 0.18s;
+  margin-top:36px;margin-bottom:18px;
+  animation:brandFade 1.2s ease-out 2.4s both;
+  position:relative;overflow:hidden;
+}
+.hero-brand .cta-primary-big:hover{
+  color:#fff;transform:translateY(-2px);
+  box-shadow:0 10px 40px rgba(233,69,96,0.5);
+}
+/* Shine sweep — runs once on hover; cheap and tactile. */
+.hero-brand .cta-primary-big::before,
+.btn-primary::before,
+.btn-cta::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.18) 50%, transparent 70%);
+  transform:translateX(-100%);
+  transition:transform 0.7s cubic-bezier(0.4,0,0.2,1);
+  pointer-events:none;
+}
+.hero-brand .cta-primary-big:hover::before,
+.btn-primary:hover::before,
+.btn-cta:hover::before{transform:translateX(100%)}
+.hero-brand .tagline{
+  font-size:11px;letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);margin-top:8px;
+  animation:brandFade 1.2s ease-out 2.8s both;
+}
+.hero-brand .sky-search-link{
+  margin-top:18px;font-size:13px;color:var(--muted);
+  border-bottom:1px dashed var(--border-strong);
+  padding-bottom:2px;letter-spacing:1px;
+  animation:brandFade 1.2s ease-out 3s both;
+}
+.hero-brand .sky-search-link:hover{color:var(--text);border-color:var(--accent)}
+.hero-brand .scroll-hint{
+  position:absolute;bottom:28px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);cursor:pointer;
+  animation:scrollHintFade 1.2s ease-out 3.4s both;
+}
+.hero-brand .scroll-hint .arrow{
+  font-size:14px;line-height:1;
+  animation:bob 2s ease-in-out infinite;
+}
+@keyframes scrollHintFade{
+  from{opacity:0;transform:translateX(-50%) translateY(12px)}
+  to{opacity:1;transform:translateX(-50%) translateY(0)}
+}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+
+/* ── Act 2: Product hero — clarifier (was the old .hero) ── */
+.hero-product{
+  position:relative;z-index:1;
+  max-width:1100px;margin:0 auto;
+  padding:80px 24px 64px;
+  display:grid;grid-template-columns:1.05fr 1fr;gap:56px;
+  align-items:center;
+}
+@media (max-width:880px){
+  .hero-product{grid-template-columns:1fr;gap:32px;text-align:center}
+}
+.hero-product .eyebrow{
+  display:inline-block;font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;
+  color:var(--accent);margin-bottom:14px;
+}
+.hero-product h1{
+  font-size:clamp(28px,3.6vw,40px);
+  line-height:1.15;font-weight:600;
+  letter-spacing:-0.01em;
+  margin-bottom:18px;
+}
+.hero-product h1 em{color:var(--accent);font-style:normal}
+.hero-product .subhead{
+  font-size:clamp(15px,1.6vw,17px);
+  color:var(--text-soft);line-height:1.6;
+  margin-bottom:26px;max-width:540px;
+}
+@media (max-width:880px){
+  .hero-product .subhead{margin-left:auto;margin-right:auto}
+}
+.hero-ctas{
+  display:flex;gap:12px;flex-wrap:wrap;
+}
+@media (max-width:880px){.hero-ctas{justify-content:center}}
+.btn-primary{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--accent);color:#fff;
+  padding:13px 22px;border-radius:8px;
+  font-weight:600;font-size:15px;
+  box-shadow:0 4px 22px var(--accent-glow);
+  transition:transform 0.15s, box-shadow 0.15s;
+  position:relative;overflow:hidden;
+}
+.btn-primary:hover{
+  color:#fff;transform:translateY(-1px);
+  box-shadow:0 6px 28px rgba(233,69,96,0.4);
+}
+.btn-ghost{
+  display:inline-flex;align-items:center;gap:6px;
+  border:1px solid var(--border-strong);color:var(--text);
+  padding:12px 20px;border-radius:8px;
+  font-weight:500;font-size:15px;
+  transition:border-color 0.15s, background 0.15s;
+}
+.btn-ghost:hover{
+  border-color:var(--accent);background:rgba(233,69,96,0.06);
+}
+
+/* ── Act 3: WASM Browser shock section ── */
+.wb-act{
+  position:relative;z-index:1;
+  max-width:1200px;margin:0 auto;
+  padding:64px 24px 64px;
+}
+.wb-act .section-head{text-align:center;margin-bottom:32px}
+.wb-act .section-eyebrow{
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(93,155,255,0.12);
+  border:1px solid rgba(93,155,255,0.35);
+  color:var(--blue);padding:5px 12px;border-radius:999px;
+  font-size:11px;font-weight:600;letter-spacing:1.5px;
+  text-transform:uppercase;margin-bottom:14px;
+}
+.wb-act h2{
+  font-size:clamp(28px,4vw,42px);font-weight:600;
+  letter-spacing:-0.01em;margin-bottom:12px;line-height:1.1;
+}
+.wb-act h2 em{
+  font-style:normal;
+  background:linear-gradient(120deg,#5d9bff 0%,#3fb98a 100%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.wb-act .lede{
+  color:var(--text-soft);font-size:16px;line-height:1.6;
+  max-width:680px;margin:0 auto 28px;text-align:center;
+}
+.wb-wrap{
+  position:relative;
+  border:1px solid var(--border);border-radius:14px;
+  background:linear-gradient(180deg,#13131c 0%,#0c0c14 100%);
+  box-shadow:0 30px 80px rgba(0,0,0,0.5),
+             0 0 0 1px rgba(93,155,255,0.06),
+             0 0 60px rgba(93,155,255,0.04);
+  overflow:hidden;
+  isolation:isolate;
+}
+/* Breathing accent halo behind the WASM container — pulses faster
+ * while a scenario is running, slow ambient otherwise. */
+.wb-wrap::before{
+  content:'';position:absolute;
+  inset:-2px;border-radius:14px;
+  background:
+    radial-gradient(ellipse at 50% 0%,  rgba(93,155,255,0.20), transparent 55%),
+    radial-gradient(ellipse at 50% 100%, rgba(233,69,96,0.14), transparent 55%);
+  filter:blur(22px);z-index:-1;opacity:0.55;
+  animation:wbHalo 6s ease-in-out infinite;
+  pointer-events:none;
+}
+.wb-wrap:has(.wb-status.running)::before{
+  animation:wbHalo 1.8s ease-in-out infinite;
+  opacity:0.85;
+}
+@keyframes wbHalo{
+  0%,100% { transform:scale(1);    opacity:0.45; }
+  50%     { transform:scale(1.06); opacity:0.75; }
+}
+@media (prefers-reduced-motion:reduce){
+  .wb-wrap::before{animation:none}
+}
+.wb-status{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 18px;font-family:ui-monospace,monospace;
+  font-size:12.5px;color:var(--text-soft);
+  border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,0.25);
+}
+.wb-status .pulse{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--muted);flex-shrink:0;
+}
+.wb-status.loading .pulse{background:var(--amber);animation:pulse 1.4s infinite}
+.wb-status.ready .pulse{background:var(--mint)}
+.wb-status.error .pulse{background:#ff5f56}
+.wb-status .stat{
+  margin-left:auto;display:flex;gap:14px;
+  color:var(--muted);font-size:11px;letter-spacing:1px;
+  text-transform:uppercase;
+}
+.wb-status .stat b{
+  color:var(--text-soft);font-weight:600;
+  display:inline-block;
+  transition:transform 0.18s, color 0.18s;
+}
+.wb-status .stat b.flash{animation:statFlash 0.55s ease-out}
+@keyframes statFlash{
+  0%   { transform:scale(1.35); color:var(--mint); }
+  60%  { transform:scale(1.05); color:var(--mint); }
+  100% { transform:scale(1);    color:var(--text-soft); }
+}
+.wb-fakebar{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  font-family:ui-monospace,monospace;font-size:12px;
+}
+.wb-fakebar .url{
+  flex:1;background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);border-radius:6px;
+  padding:6px 12px;color:var(--text-soft);
+  font-family:ui-monospace,monospace;
+}
+.wb-fakebar .url .scheme{color:var(--mint)}
+.wb-fakebar .url .host{color:var(--text)}
+.wb-vm-tag{
+  display:inline-flex;align-items:center;
+  background:rgba(93,155,255,0.10);
+  border:1px solid rgba(93,155,255,0.40);
+  color:var(--blue);
+  font-family:ui-monospace,monospace;
+  font-size:9.5px;font-weight:700;letter-spacing:1.2px;
+  padding:3px 8px;border-radius:4px;
+  text-transform:uppercase;flex-shrink:0;
+  animation:vmTagPulse 3.2s ease-in-out infinite;
+}
+@keyframes vmTagPulse{
+  0%,100% { box-shadow:0 0 0 0 rgba(93,155,255,0); }
+  50%     { box-shadow:0 0 0 6px rgba(93,155,255,0.10); border-color:rgba(93,155,255,0.65); }
+}
+@media (prefers-reduced-motion:reduce){
+  .wb-vm-tag{animation:none}
+}
+.wb-frame-wrap{
+  position:relative;background:#fff;
+  min-height:520px;
+  border-bottom:1px solid var(--border);
+}
+#wb-frame{
+  width:100%;height:520px;border:none;
+  background:#fff;display:block;
+}
+.wb-tabs{
+  display:flex;gap:6px;padding:10px 14px;
+  border-top:1px solid var(--border);
+  background:rgba(0,0,0,0.2);font-size:12px;
+  flex-wrap:wrap;
+}
+.wb-tabs .label{
+  color:var(--muted);text-transform:uppercase;
+  letter-spacing:1.5px;font-size:10px;
+  display:inline-flex;align-items:center;
+  margin-right:4px;
+}
+.wb-tab{
+  display:inline-flex;align-items:center;gap:4px;
+  background:rgba(93,155,255,0.08);
+  border:1px solid rgba(93,155,255,0.25);
+  color:var(--blue);
+  padding:4px 10px;border-radius:6px;
+  font-family:ui-monospace,monospace;font-size:11.5px;
+  cursor:pointer;transition:background 0.15s;
+}
+.wb-tab:hover{background:rgba(93,155,255,0.18)}
+
+/* ── Watch It Work two-pane layout: prompts/transcript + live iframe ── */
+.watch-grid{
+  display:grid;
+  grid-template-columns:380px 1fr;
+  gap:0;
+  border-top:1px solid var(--border);
+}
+@media (max-width:980px){.watch-grid{grid-template-columns:1fr}}
+.watch-side{
+  display:flex;flex-direction:column;
+  border-right:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  min-height:540px;
+}
+@media (max-width:980px){
+  .watch-side{border-right:none;border-bottom:1px solid var(--border);min-height:auto}
+}
+.watch-prompts{
+  display:flex;flex-direction:column;gap:8px;
+  padding:18px 16px 14px;
+  border-bottom:1px solid var(--border);
+}
+.watch-prompt-label{
+  font-family:ui-monospace,monospace;
+  font-size:10px;letter-spacing:1.8px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:4px;
+}
+.watch-prompt{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  background:rgba(255,255,255,0.025);
+  border:1px solid var(--border);
+  border-left:2px solid rgba(93,155,255,0.5);
+  border-radius:8px;
+  padding:10px 14px;
+  cursor:pointer;
+  text-align:left;
+  font-family:'Inter',sans-serif;
+  color:var(--text);
+  transition:transform 0.15s, border-color 0.15s, background 0.15s;
+}
+.watch-prompt:hover:not(:disabled){
+  border-color:var(--blue);
+  background:rgba(93,155,255,0.08);
+  transform:translateX(2px);
+}
+.watch-prompt:disabled{
+  opacity:0.45;cursor:wait;
+}
+.watch-prompt.active{
+  border-color:var(--accent);
+  border-left-color:var(--accent);
+  border-left-width:3px;
+  background:rgba(233,69,96,0.08);
+  box-shadow:0 0 0 0 rgba(233,69,96,0.28);
+  animation:activePromptPulse 2s ease-in-out infinite;
+}
+@keyframes activePromptPulse{
+  0%,100% { box-shadow:0 0 0 0   rgba(233,69,96,0.32); }
+  50%     { box-shadow:0 0 0 6px rgba(233,69,96,0);     }
+}
+@media (prefers-reduced-motion:reduce){
+  .watch-prompt.active{animation:none}
+}
+/* Zillow prompt — blue left border tints it as "different site" */
+.watch-prompt.z{
+  border-left-color:rgba(63,185,138,0.6);
+}
+.watch-prompt.z:hover:not(:disabled){
+  border-color:var(--mint);
+  background:rgba(63,185,138,0.08);
+}
+.watch-prompt .prompt-title{
+  font-size:13.5px;font-weight:600;color:var(--text);
+}
+.watch-prompt .prompt-sub{
+  font-size:11.5px;color:var(--muted);
+  font-family:ui-monospace,monospace;
+}
+.watch-transcript{
+  flex:1;
+  padding:16px 16px 18px;
+  overflow:auto;
+  font-family:'Inter',sans-serif;
+  display:flex;flex-direction:column;gap:6px;
+  min-height:300px;
+}
+.watch-empty{
+  font-family:ui-monospace,monospace;
+  font-size:12px;color:var(--muted);
+  padding:22px 8px;text-align:center;
+  border:1px dashed var(--border);border-radius:8px;
+}
+.watch-bubble{
+  background:rgba(233,69,96,0.10);
+  border:1px solid rgba(233,69,96,0.25);
+  border-radius:10px;
+  padding:10px 12px;font-size:13px;color:var(--text);
+  margin-bottom:6px;
+  opacity:0;transform:translateY(4px);
+  animation:bubbleIn 0.4s ease-out forwards;
+}
+@keyframes bubbleIn{to{opacity:1;transform:translateY(0)}}
+.watch-action{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px 7px 14px;border-radius:6px;
+  background:rgba(255,255,255,0.02);
+  border:1px solid transparent;
+  font-family:ui-monospace,monospace;font-size:12px;
+  color:var(--text-soft);
+  opacity:0;transform:translateX(-4px);
+  animation:actionIn 0.32s ease-out forwards;
+  position:relative;
+}
+@keyframes actionIn{to{opacity:1;transform:translateX(0)}}
+/* Left-edge timeline stripe — turns red while running, mint when done.
+ * The stack of stripes reads as a vertical timeline of agent steps. */
+.watch-action::before{
+  content:'';position:absolute;
+  left:0;top:4px;bottom:4px;width:3px;
+  border-radius:0 2px 2px 0;
+  background:var(--accent);
+  animation:stripePulse 1.4s ease-in-out infinite;
+}
+.watch-action.done::before{
+  background:var(--mint);
+  animation:none;opacity:0.7;
+}
+@keyframes stripePulse{
+  0%,100% { opacity:0.55; box-shadow:0 0 0 0 rgba(233,69,96,0); }
+  50%     { opacity:1;    box-shadow:0 0 8px rgba(233,69,96,0.55); }
+}
+@media (prefers-reduced-motion:reduce){
+  .watch-action::before{animation:none}
+}
+.watch-action .glyph{font-size:13px;width:18px;text-align:center}
+.watch-action .label{
+  font-weight:600;color:var(--text);min-width:80px;
+}
+.watch-action .desc{
+  color:var(--muted);flex:1;font-size:11.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.watch-action .check{
+  font-weight:700;color:var(--accent);font-size:12px;
+  animation:pulse 1.2s infinite;
+}
+.watch-action.done{
+  background:rgba(63,185,138,0.05);
+  border-color:rgba(63,185,138,0.20);
+}
+.watch-action.done .check{color:var(--mint);animation:none}
+.watch-action.done .check::before{content:"\2713"}
+.watch-summary{
+  margin-top:8px;padding:12px 14px;
+  background:rgba(63,185,138,0.06);
+  border:1px solid rgba(63,185,138,0.22);
+  border-radius:8px;
+  font-size:13px;line-height:1.6;color:var(--text);
+  font-family:ui-monospace,monospace;
+  opacity:0;transform:translateY(4px);
+  animation:bubbleIn 0.4s ease-out 0.1s forwards;
+}
+.watch-summary .pill{
+  display:inline-block;
+  background:rgba(63,185,138,0.18);
+  color:var(--mint);
+  padding:1px 7px;border-radius:4px;
+  font-weight:600;font-size:11.5px;
+  letter-spacing:0.4px;margin-right:6px;
+}
+.watch-summary b{color:var(--text)}
+.watch-browser{
+  display:flex;flex-direction:column;
+  background:#0c0c14;
+}
+
+/* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
+.poem{
+  font-family:'Cormorant Garamond',serif;
+  font-size:clamp(22px,3vw,28px);
+  line-height:1.85;font-style:italic;
+  color:var(--text);opacity:0.92;
+  text-align:center;max-width:680px;
+  white-space:nowrap;
+}
+.hero-brand .poem{margin:0 auto}
+@media (max-width:720px){
+  .poem{font-size:clamp(18px,5vw,22px);max-width:92vw}
+}
+.poem .line{
+  display:block;position:relative;height:1.7em;
+  animation:poemFadeIn 1s ease-out both;
+}
+.poem .line:nth-child(1){animation-delay:0.3s}
+.poem .line:nth-child(2){animation-delay:0.9s}
+.poem .line:nth-child(3){animation-delay:1.5s}
+@keyframes poemFadeIn{
+  from{opacity:0;transform:translateY(10px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.poem .line .stage{
+  position:absolute;left:0;right:0;
+  transition:opacity 1s ease, filter 1s ease;
+  opacity:0;filter:blur(6px);
+}
+.poem .line .stage.s1{position:relative;opacity:1;filter:blur(0)}
+.poem.stage-2 .line:nth-child(1) .s1{opacity:0;filter:blur(6px);transition-delay:0s}
+.poem.stage-2 .line:nth-child(1) .s2{opacity:1;filter:blur(0);transition-delay:0s}
+.poem.stage-2 .line:nth-child(2) .s1{opacity:0;filter:blur(6px);transition-delay:0.3s}
+.poem.stage-2 .line:nth-child(2) .s2{opacity:1;filter:blur(0);transition-delay:0.3s}
+.poem.stage-2 .line:nth-child(3) .s1,
+.poem.stage-2 .line:nth-child(3) .s2,
+.poem.stage-2 .line:nth-child(3) .s3{transition-delay:0.6s}
+.poem.stage-3 .line .s1{opacity:0;filter:blur(6px)}
+.poem.stage-3 .line .s2{opacity:0;filter:blur(6px)}
+.poem.stage-3 .line .s3{opacity:1;filter:blur(0)}
+.poem.stage-3 .line:nth-child(1) .s2,
+.poem.stage-3 .line:nth-child(1) .s3{transition-delay:0s}
+.poem.stage-3 .line:nth-child(2) .s2,
+.poem.stage-3 .line:nth-child(2) .s3{transition-delay:0.3s}
+.poem.stage-3 .line:nth-child(3) .s2,
+.poem.stage-3 .line:nth-child(3) .s3{transition-delay:0.6s}
+
+/* Hero right: agent preview card */
+.hero-right{
+  position:relative;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:linear-gradient(180deg,#13131c 0%,#0e0e16 100%);
+  padding:18px;
+  box-shadow:0 24px 60px rgba(0,0,0,0.4),0 0 0 1px rgba(233,69,96,0.04);
+  overflow:hidden;
+  animation:cardFloat 6s ease-in-out infinite;
+}
+@keyframes cardFloat{
+  0%,100% { transform:translateY(0); }
+  50%     { transform:translateY(-6px); }
+}
+@media (prefers-reduced-motion:reduce){
+  .hero-right{animation:none}
+}
+.hero-right::before{
+  content:'';position:absolute;inset:-1px;
+  border-radius:12px;
+  background:radial-gradient(600px 200px at 80% -10%, rgba(233,69,96,0.18), transparent 60%);
+  pointer-events:none;
+}
+.hero-preview-head{
+  display:flex;align-items:center;gap:8px;
+  padding-bottom:12px;border-bottom:1px solid var(--border);
+  margin-bottom:14px;font-size:12px;color:var(--muted);
+}
+.dot{width:10px;height:10px;border-radius:50%}
+.dot.r{background:#ff5f56}.dot.y{background:#ffbd2e}.dot.g{background:#27c93f}
+.hero-preview-url{
+  margin-left:6px;font-family:ui-monospace,monospace;
+  color:var(--text-soft);font-size:12px;
+}
+.hero-preview .user-q{
+  background:rgba(233,69,96,0.10);
+  border:1px solid rgba(233,69,96,0.25);
+  border-radius:10px;padding:10px 12px;
+  font-size:13px;color:var(--text);margin-bottom:10px;
+}
+.hero-preview .step{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px;border-radius:8px;
+  background:rgba(255,255,255,0.02);
+  font-size:12.5px;color:var(--text-soft);
+  margin-bottom:6px;
+  font-family:ui-monospace,monospace;
+}
+.hero-preview .step .check{color:var(--mint);font-weight:700}
+.hero-preview .step .label{color:var(--text)}
+
+/* ── Section heading ── */
+.section{
+  position:relative;z-index:1;
+  max-width:1100px;margin:0 auto;
+  padding:64px 24px;
+}
+.section-head{
+  text-align:center;margin-bottom:36px;
+}
+.section-eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:11px;font-weight:600;letter-spacing:2px;
+  color:var(--accent);text-transform:uppercase;
+  margin-bottom:10px;
+}
+.section-eyebrow::before{
+  content:'';
+  width:6px;height:6px;border-radius:50%;
+  background:currentColor;
+  animation:eyebrowPulse 2.4s ease-in-out infinite;
+}
+@keyframes eyebrowPulse{
+  0%,100% { opacity:0.45; transform:scale(0.85); }
+  50%     { opacity:1;    transform:scale(1.15); }
+}
+@media (prefers-reduced-motion:reduce){
+  .section-eyebrow::before{animation:none}
+}
+.section h2{
+  font-size:clamp(28px,3.5vw,36px);font-weight:600;
+  letter-spacing:-0.01em;margin-bottom:10px;
+}
+.section .lede{
+  color:var(--text-soft);font-size:16px;
+  max-width:620px;margin:0 auto;line-height:1.6;
+}
+
+/* ── Watch It Work mock ── */
+.mock-wrap{
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:linear-gradient(180deg,#13131c,#0d0d14);
+  padding:22px;
+  box-shadow:0 30px 80px rgba(0,0,0,0.5);
+  position:relative;
+  max-width:880px;margin:0 auto;
+}
+.mock-chat{display:flex;flex-direction:column;gap:14px;min-height:260px}
+.mock-cta-row{
+  display:flex;justify-content:center;gap:12px;
+  margin-top:24px;
+}
+
+/* ── Lanes / Get started cards ── */
+.lanes{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:20px;
+}
+@media (max-width:880px){.lanes{grid-template-columns:1fr}}
+.lane{
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--surface);
+  padding:24px;
+  display:flex;flex-direction:column;gap:14px;
+  position:relative;
+  transition:border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+  isolation:isolate;
+}
+/* Lane gets a soft accent halo on hover that bleeds outside the card.
+ * Per-lane variants tint the halo to match the lane's identity. */
+.lane::after{
+  content:'';position:absolute;inset:-1px;
+  border-radius:13px;
+  background:radial-gradient(circle at 50% 0%, var(--accent), transparent 65%);
+  opacity:0;filter:blur(14px);z-index:-1;
+  transition:opacity 0.3s;
+}
+.lane.local::after{background:radial-gradient(circle at 50% 0%, var(--blue),  transparent 65%)}
+.lane.api::after  {background:radial-gradient(circle at 50% 0%, var(--amber), transparent 65%)}
+.lane:hover{
+  border-color:var(--border-strong);
+  transform:translateY(-3px);
+  box-shadow:0 16px 40px rgba(0,0,0,0.35);
+}
+.lane:hover::after{opacity:0.45}
+.lane-tag{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:11px;font-weight:600;letter-spacing:1.5px;
+  color:var(--accent);text-transform:uppercase;
+}
+.lane.local .lane-tag{color:var(--blue)}
+.lane.api .lane-tag{color:var(--amber)}
+.lane h3{
+  font-size:22px;font-weight:600;line-height:1.25;
+}
+.lane p{color:var(--text-soft);font-size:14.5px;line-height:1.55}
+.lane .reqs{display:flex;gap:6px;flex-wrap:wrap}
+.lane .req{
+  font-size:11px;color:var(--text-soft);
+  border:1px solid var(--border);
+  padding:3px 9px;border-radius:999px;
+  background:rgba(255,255,255,0.02);
+}
+.lane .steps{
+  display:flex;flex-direction:column;gap:6px;
+  font-size:13.5px;color:var(--text-soft);
+}
+.lane .steps .step{display:flex;gap:10px;align-items:flex-start}
+.lane .steps .num{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:20px;height:20px;border-radius:50%;
+  background:rgba(233,69,96,0.18);color:var(--accent);
+  font-size:11px;font-weight:700;
+}
+.lane.local .steps .num{background:rgba(93,155,255,0.18);color:var(--blue)}
+.lane.api .steps .num{background:rgba(245,179,66,0.18);color:var(--amber)}
+.lane .actions{
+  display:flex;gap:10px;margin-top:auto;padding-top:8px;
+}
+.btn-cta{
+  flex:1;text-align:center;
+  background:var(--accent);color:#fff;
+  padding:11px 16px;border-radius:8px;font-weight:600;font-size:14px;
+  transition:filter 0.15s,transform 0.15s;
+  position:relative;overflow:hidden;
+}
+.btn-cta:hover{color:#fff;filter:brightness(1.08);transform:translateY(-1px)}
+.lane.local .btn-cta{background:var(--blue)}
+.lane.api .btn-cta{background:var(--amber);color:#1a1a1a}
+.btn-link{
+  align-self:center;font-size:13px;font-weight:500;
+  color:var(--muted);padding:6px 4px;
+}
+.btn-link:hover{color:var(--text)}
+.lane .footnote{
+  font-size:12px;color:var(--muted);
+  border-top:1px dashed var(--border);
+  padding-top:10px;margin-top:auto;
+}
+
+/* API providers — clickable rows that ARE the lane's CTAs. */
+.providers-label{
+  font-size:11px;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--muted);font-weight:600;margin:6px 0 8px;
+}
+.providers{
+  display:flex;flex-direction:column;gap:7px;
+}
+.provider-chip{
+  display:flex;align-items:center;gap:10px;
+  font-size:13px;color:var(--text);
+  border:1px solid var(--border);background:rgba(245,179,66,0.04);
+  padding:9px 14px;border-radius:8px;
+  transition:border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.provider-chip:hover{
+  border-color:var(--amber);
+  background:rgba(245,179,66,0.10);
+  transform:translateX(2px);
+}
+.provider-chip .chip-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--amber);
+  flex-shrink:0;
+}
+.provider-chip .chip-name{font-weight:600;color:var(--text)}
+.provider-chip .chip-meta{
+  font-size:11.5px;color:var(--muted);
+  font-family:ui-monospace,monospace;
+  margin-left:2px;
+}
+.provider-chip .chip-arrow{
+  margin-left:auto;color:var(--amber);font-weight:600;
+  transition:transform 0.15s;
+}
+.provider-chip:hover .chip-arrow{transform:translateX(2px)}
+/* Blue variant for the Local CLI lane — keeps chips visually scoped
+ * to the lane palette (amber for API, blue for Local). */
+.provider-chip.cli{background:rgba(93,155,255,0.06)}
+.provider-chip.cli:hover{
+  border-color:var(--blue);
+  background:rgba(93,155,255,0.14);
+}
+.provider-chip.cli .chip-dot{background:var(--blue)}
+.provider-chip.cli .chip-arrow{color:var(--blue)}
+
+/* ── Use cases ── */
+.use-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:16px;
+}
+@media (max-width:1000px){.use-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.use-grid{grid-template-columns:1fr}}
+.use-card{
+  --use-color:var(--accent);
+  border:1px solid var(--border);
+  border-top:3px solid var(--use-color);
+  border-radius:10px;background:var(--surface);
+  padding:20px;display:flex;flex-direction:column;gap:10px;
+  transition:transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+  position:relative;overflow:hidden;
+}
+.use-card.c1{--use-color:#5d9bff;border-top-color:#5d9bff}
+.use-card.c2{--use-color:#3fb98a;border-top-color:#3fb98a}
+.use-card.c3{--use-color:#f5b342;border-top-color:#f5b342}
+.use-card.c4{--use-color:#e94560;border-top-color:#e94560}
+/* A soft glow above the colored top-border that intensifies on hover */
+.use-card::before{
+  content:'';position:absolute;
+  top:-30px;left:0;right:0;height:60px;
+  background:radial-gradient(ellipse at center top, var(--use-color), transparent 60%);
+  opacity:0.10;pointer-events:none;
+  transition:opacity 0.3s;
+}
+.use-card:hover{
+  transform:translateY(-4px);
+  box-shadow:0 14px 32px rgba(0,0,0,0.35);
+}
+.use-card:hover::before{opacity:0.40}
+.use-glyph{
+  font-size:24px;line-height:1;
+  transform-origin:left center;
+  transition:transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+}
+.use-card:hover .use-glyph{transform:scale(1.18) rotate(-4deg)}
+.use-card h4{font-size:16px;font-weight:600;transition:color 0.25s}
+.use-card:hover h4{color:var(--use-color)}
+.use-card p{font-size:13.5px;color:var(--text-soft);line-height:1.5;flex:1}
+.use-link{
+  font-size:13px;font-weight:500;color:var(--use-color);
+  display:inline-flex;align-items:center;gap:4px;
+  transition:gap 0.25s;
+}
+.use-card:hover .use-link{gap:8px}
+.use-link:hover{filter:brightness(1.2)}
+
+/* Case study */
+.case{
+  margin-top:28px;
+  border:1px solid var(--border);
+  border-radius:12px;background:var(--surface);
+  padding:28px;
+  display:grid;grid-template-columns:1fr 1fr;gap:28px;
+  align-items:center;
+}
+@media (max-width:880px){.case{grid-template-columns:1fr}}
+.case-eyebrow{
+  font-size:11px;font-weight:600;letter-spacing:2px;
+  color:var(--accent);text-transform:uppercase;
+}
+.case h3{font-size:22px;font-weight:600;margin:8px 0 10px}
+.case p{color:var(--text-soft);font-size:14.5px;line-height:1.55;margin-bottom:14px}
+.case-receipt{
+  font-family:ui-monospace,monospace;font-size:12px;
+  background:#0c0c14;border:1px solid var(--border);
+  border-radius:8px;padding:14px;color:var(--text-soft);
+  line-height:1.6;
+}
+.case-receipt .ok{color:var(--mint)}
+.case-receipt .key{color:var(--accent)}
+
+/* ── Footer ── */
+.footer{
+  border-top:1px solid var(--border);
+  padding:28px 24px 36px;text-align:center;
+  color:var(--muted);font-size:12px;
+  position:relative;z-index:1;
+}
+.footer-links{
+  display:flex;flex-wrap:wrap;justify-content:center;
+  gap:18px;margin-bottom:14px;
+}
+.footer-links a{
+  color:var(--text-soft);font-size:13px;font-weight:500;
+}
+.footer-links a:hover{color:var(--text)}
+.footer .imprint{letter-spacing:1.5px;text-transform:uppercase;font-size:11px}
+
+/* mock-chat styles (shared with V2) */
+.bubble{padding:10px 14px;border-radius:10px;font-size:14px;opacity:0;transition:opacity 0.4s ease}
+.bubble.show{opacity:1}
+.bubble.user{background:rgba(233,69,96,0.10);border:1px solid rgba(233,69,96,0.25);align-self:flex-end;max-width:80%}
+.bubble.asst{background:rgba(255,255,255,0.025);border:1px solid var(--border);align-self:flex-start;max-width:92%;display:flex;flex-direction:column;gap:10px}
+.action-group{border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.015);overflow:hidden;opacity:0;transition:opacity 0.4s ease}
+.action-group.show{opacity:1}
+.ag-header{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2)}
+.ag-emoji{font-size:14px}
+.ag-site{font-family:ui-monospace,monospace;color:var(--text-soft);flex:1;font-size:12px}
+.ag-count{color:var(--muted);font-size:11px}
+.ag-dot{font-size:10px}
+.ag-dot.running{color:var(--accent);animation:pulse 1.4s infinite}
+.ag-dot.done{color:var(--mint)}
+.ag-steps{display:flex;flex-direction:column;gap:4px;padding:8px 10px}
+.action-step{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-soft);padding:4px 6px;border-radius:6px}
+.as-emoji{font-size:13px}
+.as-label{font-weight:600;color:var(--text);min-width:78px}
+.as-desc{color:var(--muted);flex:1;font-family:ui-monospace,monospace;font-size:11.5px}
+.as-dot{font-size:10px}
+.as-dot.running{color:var(--accent);animation:pulse 1.4s infinite}
+.as-dot.done{color:var(--mint)}
+.as-screenshot{padding:8px}
+.as-screenshot img{width:100%;border-radius:6px;border:1px solid var(--border)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.bubble.asst .text{font-size:13.5px;line-height:1.6}
+.bubble.asst table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+.bubble.asst th,.bubble.asst td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left}
+.bubble.asst th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.bubble.asst td.best-price{color:var(--mint);font-weight:600}
+.bubble.asst p{margin:6px 0}
+.bubble.asst strong{color:var(--text)}
+</style>
+</head>
+<body>
+
+<!-- Top nav -->
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a href="/" class="brand">UN<span>CHAIN</span>ED</a>
+    <div class="links">
+      <a href="#watch">Demo</a>
+      <a href="#get-started">Get Started</a>
+      <a href="#use-cases">Use Cases</a>
+      <a href="/mcp">MCP</a>
+      <a href="/setup" class="signin">Sign in</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Act 1: Brand hero — fullscreen ritual -->
+<section class="hero-brand">
+  <div class="wordmark">Un<span>chain</span>ed</div>
+  <div class="poem" id="poem">
+    <span class="line">
+      <span class="stage s1">Chains fall from my wrists</span>
+      <span class="stage s2">Tasks fall from my hours</span>
+      <span class="stage s3">You prompt what you need</span>
+    </span>
+    <span class="line">
+      <span class="stage s1">Wind rushes where walls once stood</span>
+      <span class="stage s2">An agent moves where walls once stood</span>
+      <span class="stage s3">A browser agent does it for you</span>
+    </span>
+    <span class="line">
+      <span class="stage s1">I am sky, unchained</span>
+      <span class="stage s2">I am unchained</span>
+      <span class="stage s3">You are sky, unchained</span>
+    </span>
+  </div>
+  <a href="/demo" class="cta-primary-big">Try it free &rarr;</a>
+  <div class="tagline">Your browser. Your data. No walls.</div>
+  <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
+  <div class="scroll-hint" onclick="document.getElementById('what').scrollIntoView({behavior:'smooth'})">
+    <span class="arrow">&#8595;</span>
+    What is it
+  </div>
+</section>
+
+<!-- Act 2: Product clarifier -->
+<section class="hero-product" id="what">
+  <div>
+    <div class="eyebrow">What it is</div>
+    <h1>An AI agent that drives <em>your real Chrome</em> &mdash; with your logins, cookies, and sessions intact.</h1>
+    <p class="subhead">Tell Unchained what you need online in plain English. It searches, compares, and monitors the web for you &mdash; no copy-paste, no API key required to start.</p>
+    <div class="hero-ctas">
+      <a href="/demo" class="btn-primary">Try it free &rarr;</a>
+      <a href="#watch" class="btn-ghost">Watch it work</a>
+    </div>
+  </div>
+  <div class="hero-right hero-preview" aria-hidden="true">
+    <div class="hero-preview-head">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="hero-preview-url">unchainedsky.com / chat</span>
+    </div>
+    <div class="user-q">Find me a 2BR in Brooklyn under $4,200, in-unit laundry, allows cats.</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Navigate</span> &mdash; zillow.com/brooklyn-rentals</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Filter</span> &mdash; 2BR · &lt;$4.2k · pets</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Cross-search</span> &mdash; apartments.com, craigslist</div>
+    <div class="step"><span class="check">&#10003;</span> <span class="label">Rank</span> &mdash; 8 matches by commute + price</div>
+    <div class="step"><span class="check" style="color:var(--accent)">&bull;</span> <span class="label">Summarize</span> &mdash; building a shortlist&hellip;</div>
+  </div>
+</section>
+
+<!-- Act 3: Watch it work — live agent demo running in QuickJS-WASM -->
+<section class="wb-act" id="watch">
+  <div class="section-head">
+    <div class="section-eyebrow">See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
+    <h2>Watch it work.</h2>
+    <p class="lede">Pick a prompt. Watch the agent open Kayak, parse the page, type the destination, and read the prices &mdash; every step running for real inside a WebAssembly browser sandbox right here. No real Kayak request, no backend, just real DOM mutations driving the iframe.</p>
+  </div>
+
+  <div class="wb-wrap">
+    <div class="wb-status loading" id="wb-status">
+      <span class="pulse"></span>
+      <span id="wb-status-msg">Booting JavaScript VM in WebAssembly&hellip;</span>
+      <span class="stat">
+        <span>vDOM nodes <b id="wb-stat-nodes">&mdash;</b></span>
+        <span>real mutations <b id="wb-stat-mut">&mdash;</b></span>
+        <span>server hits <b id="wb-stat-net">0</b></span>
+        <span>step <b id="wb-stat-evt">&mdash;</b></span>
+      </span>
+    </div>
+
+    <div class="watch-grid">
+      <!-- Left: prompt + action transcript -->
+      <div class="watch-side">
+        <div class="watch-prompts" id="watch-prompts">
+          <div class="watch-prompt-label">try a prompt &darr;</div>
+          <button class="watch-prompt" data-scenario="tokyo" disabled>
+            <span class="prompt-title">Cheapest flight NYC &rarr; Tokyo</span>
+            <span class="prompt-sub">compare airlines, find a deal</span>
+          </button>
+          <button class="watch-prompt" data-scenario="london" disabled>
+            <span class="prompt-title">London under $600</span>
+            <span class="prompt-sub">filter on price + non-stop</span>
+          </button>
+          <button class="watch-prompt" data-scenario="bali" disabled>
+            <span class="prompt-title">Bali on a budget</span>
+            <span class="prompt-sub">filter on destination</span>
+          </button>
+          <div class="watch-prompt-label" style="margin-top:6px">switch sites &darr;</div>
+          <button class="watch-prompt z" data-scenario="brooklyn" disabled>
+            <span class="prompt-title">Park Slope 2BR · cats OK</span>
+            <span class="prompt-sub">type neighborhood, click Pets chip</span>
+          </button>
+        </div>
+        <div class="watch-transcript" id="watch-transcript" aria-live="polite">
+          <div class="watch-empty">No run yet &mdash; pick a prompt above.</div>
+        </div>
+      </div>
+
+      <!-- Right: live WASM browser -->
+      <div class="watch-browser">
+        <div class="wb-fakebar">
+          <span style="color:var(--muted);">&laquo;</span>
+          <span style="color:var(--muted);">&raquo;</span>
+          <span style="color:var(--mint);font-size:11px;">&#128274;</span>
+          <div class="url">
+            <span class="scheme" id="wb-url-scheme">https://www.</span><span class="host" id="wb-url-host">kayak.com</span><span style="color:var(--muted);" id="wb-url-path">/flights/JFK-NRT/2026-04-15</span>
+          </div>
+          <span class="wb-vm-tag">WASM&nbsp;SANDBOX</span>
+        </div>
+        <div class="wb-frame-wrap">
+          <iframe id="wb-frame" sandbox="allow-same-origin" title="WASM browser demo"></iframe>
+        </div>
+        <div class="wb-tabs">
+          <span class="label">tip</span>
+          <span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:11.5px">you can also click &amp; type inside the iframe &mdash; events flow into the WASM VM</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Get Started -->
+<section class="section" id="get-started">
+  <div class="section-head">
+    <div class="section-eyebrow">Get Started</div>
+    <h2>Pick your lane.</h2>
+    <p class="lede">No API key? Start free in 30 seconds. Already have Claude Pro/Max or ChatGPT Plus? Use your existing plan via CLI. Or bring your own API key for full model power.</p>
+  </div>
+
+  <div class="lanes">
+
+    <!-- 1. Headless Demo (no setup) -->
+    <div class="lane">
+      <div class="lane-tag">&#9889; Instant Demo &middot; No Setup</div>
+      <h3>Headless Browser Demo</h3>
+      <p>Watch an AI agent browse live on a server-side Chrome. No install, no logins from your machine.</p>
+      <div class="reqs">
+        <span class="req">Nothing to install</span>
+        <span class="req">Public sites</span>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><span>Sign in with Google</span></div>
+        <div class="step"><span class="num">2</span><span>Type a task and watch the agent work</span></div>
+      </div>
+      <div class="actions">
+        <a href="/first-look" class="btn-cta">Launch Demo &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 2. Free Tier (your browser, free models) -->
+    <div class="lane">
+      <div class="lane-tag">&#10024; Free Tier &middot; Your Chrome</div>
+      <h3>Your Browser, Free Models</h3>
+      <p>Connect your own Chrome &mdash; the agent uses your real logins, cookies, and sessions. Free-tier AI models, no API key.</p>
+      <div class="reqs">
+        <span class="req">Chrome</span>
+        <span class="req">Terminal (curl)</span>
+      </div>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><span>Sign in with Google</span></div>
+        <div class="step"><span class="num">2</span><span>Run the one-line install</span></div>
+        <div class="step"><span class="num">3</span><span>Chat &mdash; the agent drives your browser</span></div>
+      </div>
+      <div class="actions">
+        <a href="/trial" class="btn-cta">Start Free &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 3. Bring your own API key (consolidated) -->
+    <div class="lane api">
+      <div class="lane-tag">&#127919; Full Model Power &middot; API Key</div>
+      <h3>Bring your own API key</h3>
+      <p>Auto-provision an API key in your Chrome browser, then run any provider at full capability. ~30 seconds to set up.</p>
+      <div class="providers-label">Pick a provider &darr;</div>
+      <div class="providers">
+        <a href="/setup?provider=gemini" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Gemini</span>
+          <span class="chip-meta">free trial</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/setup?provider=claude-sdk" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Claude</span>
+          <span class="chip-meta">Anthropic API key</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/setup?provider=codex-sdk" class="provider-chip">
+          <span class="chip-dot"></span>
+          <span class="chip-name">OpenAI / Codex</span>
+          <span class="chip-meta">OpenAI API key</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+      </div>
+      <div class="footnote">Already a Claude Pro/Max or ChatGPT Plus subscriber? Skip the API key &mdash; install the Local CLI lane instead.</div>
+      <div class="actions">
+        <a href="/setup" class="btn-link">Already set up? Open chat &rarr;</a>
+      </div>
+    </div>
+
+    <!-- 4. Local CLI / MCP -->
+    <div class="lane local">
+      <div class="lane-tag">&#128187; Local Agent &middot; CLI / MCP</div>
+      <h3>Run on your machine</h3>
+      <p>Install the local agent once. Drive your real Chrome from your existing CLI &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
+      <div class="reqs">
+        <span class="req">Chrome</span>
+        <span class="req">Claude or Codex CLI</span>
+        <span class="req">MCP-ready</span>
+      </div>
+      <div class="providers-label">Pick a CLI &darr;</div>
+      <div class="providers">
+        <a href="/local" class="provider-chip cli">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Claude CLI</span>
+          <span class="chip-meta">Claude Pro &middot; Max subscription</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/chat-codex?model=codex-cli:gpt-5.5" class="provider-chip cli">
+          <span class="chip-dot"></span>
+          <span class="chip-name">Codex CLI</span>
+          <span class="chip-meta">ChatGPT Plus subscription</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+      </div>
+      <div class="actions">
+        <a href="/cli" class="btn-link">Unchained CLI &rarr;</a>
+        <a href="/mcp" class="btn-link">MCP server &rarr;</a>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- Use cases -->
+<section class="section" id="use-cases">
+  <div class="section-head">
+    <div class="section-eyebrow">Real Tasks</div>
+    <h2>What people actually run.</h2>
+    <p class="lede">Real conversations, real results. Each use-case page walks through the exact prompts and the agent&rsquo;s output.</p>
+  </div>
+
+  <div class="use-grid">
+    <a href="/use/apartment-hunting" class="use-card c1">
+      <div class="use-glyph">&#127968;</div>
+      <h4>Apartment Hunting</h4>
+      <p>Search Zillow, Apartments.com, and Craigslist with your exact criteria. Ranked shortlist in seconds.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/flight-comparison" class="use-card c2">
+      <div class="use-glyph">&#9992;&#65039;</div>
+      <h4>Flight Comparison</h4>
+      <p>Compare flights across Google Flights, Kayak, and airline sites. Find savings you&rsquo;d miss manually.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/competitor-monitoring" class="use-card c3">
+      <div class="use-glyph">&#128202;</div>
+      <h4>Competitor Monitoring</h4>
+      <p>Track competitor pricing, features, and reviews. Get a structured weekly briefing automatically.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+    <a href="/use/price-tracking" class="use-card c4">
+      <div class="use-glyph">&#128722;</div>
+      <h4>Price Tracking</h4>
+      <p>Compare prices across Amazon, Best Buy, Walmart, and more. Set alerts for price drops.</p>
+      <span class="use-link">See how &rarr;</span>
+    </a>
+  </div>
+
+  <!-- Case study with inline excerpt -->
+  <div class="case">
+    <div>
+      <div class="case-eyebrow">Case Study</div>
+      <h3>Rental Relisting on Zillow</h3>
+      <p>Market research to a published listing in one conversation. The agent researched comps, negotiated pricing, caught lease typos, scheduled tours, and published &mdash; all hands-free.</p>
+      <a href="/case-study/zillow-rental" class="btn-ghost" style="display:inline-flex">Read the case study &rarr;</a>
+    </div>
+    <div class="case-receipt">
+      <div><span class="key">prompt</span> &gt; relist 2BR Bed-Stuy, match comps</div>
+      <div><span class="ok">&#10003;</span> pulled 14 comps from Zillow + Streeteasy</div>
+      <div><span class="ok">&#10003;</span> drafted listing copy &mdash; matched neighborhood tone</div>
+      <div><span class="ok">&#10003;</span> caught 2 typos in pasted lease addendum</div>
+      <div><span class="ok">&#10003;</span> scheduled 4 tours via DM</div>
+      <div><span class="ok">&#10003;</span> published &mdash; live in 14m, $200/mo above original ask</div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="footer-links">
+    <a href="/first-look">Demo</a>
+    <a href="/trial">Free Tier</a>
+    <a href="https://search.unchainedsky.com/">Sky Search</a>
+    <a href="/use/apartment-hunting">Apartments</a>
+    <a href="/use/flight-comparison">Flights</a>
+    <a href="/use/competitor-monitoring">Competitors</a>
+    <a href="/use/price-tracking">Prices</a>
+    <a href="/mcp">MCP</a>
+    <a href="mailto:__CONTACT_EMAIL__">Contact</a>
+  </div>
+  <div class="imprint">UNCHAINED &mdash; Your Browser. Your Data. No walls.</div>
+</footer>
+
+
+<script>
+// Haiku morph — cycle through 3 stages every 6s (kept from V2)
+(function(){
+  var poem = document.getElementById('poem');
+  if (!poem) return;
+  var stages = ['', 'stage-2', 'stage-3'];
+  var idx = 0;
+  setTimeout(function cycle(){
+    idx = (idx + 1) % stages.length;
+    poem.className = 'poem' + (stages[idx] ? ' ' + stages[idx] : '');
+    setTimeout(cycle, 6000);
+  }, 4000);
+})();
+
+</script>
+
+<!-- ── WASM Browser boot — module script (ESM imports) ── -->
+<script type="module">
+window.WB = {
+  loaded: false,
+  loading: false,
+  loader: null,
+  iframe: null,
+  status: document.getElementById('wb-status'),
+  msg: document.getElementById('wb-status-msg'),
+  statNodes: document.getElementById('wb-stat-nodes'),
+  statMut: document.getElementById('wb-stat-mut'),
+  statEvt: document.getElementById('wb-stat-evt'),
+  mutationCount: 0,
+};
+
+function setWBStatus(state, msg) {
+  if (!WB.status) return;
+  WB.status.classList.remove('loading','ready','error');
+  WB.status.classList.add(state);
+  if (msg && WB.msg) WB.msg.textContent = msg;
+}
+
+// Kayak-styled flight-search snapshot. Real Kayak is the canonical site
+// the agent would scrape for this kind of task; mimicking its layout makes
+// the demo feel like the agent is browsing a real consumer travel site, not
+// a custom toy. Built with createElement / appendChild only because the
+// host's __parseHTMLFragment is unavailable inside QuickJS.
+const FLIGHTFINDER_HTML = `<!DOCTYPE html>
+<html><head><title>JFK to NRT — Kayak</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Helvetica Neue',Arial,sans-serif;
+  background:#f6f8fb;color:#1d1d1d;
+  -webkit-font-smoothing:antialiased;
+  font-size:14px;
+}
+.nav{
+  background:#fff;border-bottom:1px solid #e5e8ec;
+  padding:10px 22px;
+  display:flex;align-items:center;gap:22px;
+}
+.logo{
+  font-size:22px;font-weight:800;color:#ff5722;
+  letter-spacing:-0.5px;line-height:1;
+}
+.logo .a{color:#0fb6c2}
+.logo .y{color:#fbb13c}
+.logo .second-k{color:#7eb928}
+.nav-links{display:flex;gap:18px;font-size:13px;color:#525463;font-weight:600}
+.nav-links span{padding:6px 2px;cursor:pointer}
+.nav-links span.active{color:#ff5722;border-bottom:2px solid #ff5722}
+.nav-spacer{flex:1}
+.nav-account{
+  font-size:12px;color:#525463;
+  display:inline-flex;align-items:center;gap:6px;
+}
+.nav-account .av{
+  width:24px;height:24px;border-radius:50%;
+  background:#0fb6c2;color:#fff;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;
+}
+.searchbar{
+  background:#fff;
+  padding:14px 22px;border-bottom:1px solid #e5e8ec;
+  display:flex;align-items:center;gap:6px;
+}
+.field{
+  background:#fff;border:1px solid #d2d6dc;border-radius:6px;
+  padding:8px 12px;font-size:13px;color:#1d1d1d;
+  display:flex;flex-direction:column;gap:1px;
+  min-width:90px;
+}
+.field .lbl{
+  font-size:9px;text-transform:uppercase;
+  color:#8b94a3;letter-spacing:1px;font-weight:600;
+}
+.field .val{font-size:13px;font-weight:600;color:#1d1d1d}
+.field.to{flex:1;min-width:170px;padding:6px 10px}
+.field.to input{
+  border:none;outline:none;background:transparent;
+  font-family:inherit;font-size:13px;font-weight:600;
+  color:#1d1d1d;width:100%;padding:2px 0;
+}
+.field.to input::placeholder{color:#a3a9b3;font-weight:400}
+.arrow{color:#8b94a3;font-size:14px;padding:0 4px}
+.search-btn{
+  background:#ff5722;color:#fff;border:none;
+  padding:14px 22px;border-radius:6px;
+  font-weight:700;font-size:13px;cursor:pointer;
+  letter-spacing:0.3px;
+}
+.search-btn:hover{background:#e64a19}
+.layout{
+  display:grid;grid-template-columns:218px 1fr;
+  gap:16px;padding:14px 22px 24px;
+}
+.filters{
+  background:#fff;border-radius:8px;
+  border:1px solid #e5e8ec;
+  padding:14px 16px;height:fit-content;
+}
+.filters h3{
+  font-size:11px;text-transform:uppercase;
+  color:#525463;letter-spacing:0.8px;
+  margin:14px 0 8px;font-weight:700;
+}
+.filters h3:first-child{margin-top:0}
+.filter-row{
+  display:flex;align-items:center;
+  gap:8px;padding:5px 0;
+  font-size:13px;color:#1d1d1d;
+}
+.filter-row input[type=checkbox]{accent-color:#ff5722;width:14px;height:14px}
+.filter-row .ct{
+  margin-left:auto;font-size:11px;color:#8b94a3;
+  font-variant-numeric:tabular-nums;
+}
+.price-range{
+  height:6px;background:#e5e8ec;border-radius:3px;
+  position:relative;margin:8px 0 6px;
+}
+.price-range .fill{
+  position:absolute;top:0;left:8%;right:14%;
+  height:100%;background:#ff5722;border-radius:3px;
+}
+.price-range::before,.price-range::after{
+  content:'';position:absolute;top:-3px;
+  width:12px;height:12px;border-radius:50%;
+  background:#fff;border:2px solid #ff5722;
+}
+.price-range::before{left:8%}
+.price-range::after{right:14%;transform:translateX(50%)}
+.price-bounds{
+  display:flex;justify-content:space-between;
+  font-size:11px;color:#525463;font-variant-numeric:tabular-nums;
+}
+.results-head{
+  background:#fff;border:1px solid #e5e8ec;border-radius:8px;
+  margin-bottom:10px;display:flex;overflow:hidden;
+}
+.tab{
+  flex:1;padding:11px 14px;text-align:center;
+  font-size:13px;color:#525463;font-weight:600;
+  border-right:1px solid #e5e8ec;cursor:pointer;
+}
+.tab:last-child{border-right:none}
+.tab.active{
+  background:#fff8f3;color:#ff5722;
+  border-bottom:3px solid #ff5722;
+}
+.tab .hint{
+  display:block;font-size:11px;color:#8b94a3;
+  margin-top:3px;font-weight:500;
+  font-variant-numeric:tabular-nums;
+}
+.tab.active .hint{color:#ff5722}
+.result-meta{
+  font-size:13px;color:#525463;
+  padding:6px 4px 12px;display:flex;align-items:center;gap:10px;
+}
+.result-meta b{color:#1d1d1d;font-variant-numeric:tabular-nums}
+.result-meta .pill{
+  background:#fff8f3;color:#ff5722;
+  font-size:11px;font-weight:700;
+  padding:3px 8px;border-radius:10px;
+  border:1px solid #ffe0d2;
+  margin-left:auto;letter-spacing:0.5px;
+}
+.result{
+  background:#fff;border:1px solid #e5e8ec;
+  border-radius:8px;padding:14px 16px;
+  margin-bottom:8px;
+  display:grid;grid-template-columns:1fr 124px;
+  gap:14px;align-items:center;
+}
+.result.cheapest{
+  border:2px solid #ff5722;
+  box-shadow:0 4px 12px rgba(255,87,34,0.10);
+}
+.result-row .airline{
+  font-size:11px;color:#8b94a3;
+  text-transform:uppercase;letter-spacing:0.6px;
+  margin-bottom:4px;font-weight:600;
+}
+.route-line{
+  display:grid;grid-template-columns:auto 1fr auto;
+  gap:14px;align-items:center;
+}
+.airport{
+  text-align:center;font-variant-numeric:tabular-nums;
+}
+.airport .time{font-weight:700;font-size:16px;color:#1d1d1d;line-height:1}
+.airport .iata{font-size:11px;color:#8b94a3;margin-top:3px}
+.path{position:relative;padding:4px 0}
+.path .ln{
+  height:2px;background:#d2d6dc;border-radius:2px;
+  position:relative;
+}
+.path .stop{
+  position:absolute;top:50%;transform:translate(-50%,-50%);
+  width:6px;height:6px;border-radius:50%;
+  background:#ff5722;
+}
+.path .meta{
+  display:flex;justify-content:space-between;
+  font-size:10px;color:#8b94a3;margin-top:6px;
+  font-variant-numeric:tabular-nums;
+}
+.path .meta .nonstop{color:#0fb6c2;font-weight:700}
+.path .meta .stops{color:#fbb13c;font-weight:700}
+.result-price{text-align:right}
+.result-price .amt{
+  font-size:22px;font-weight:800;color:#1d1d1d;
+  font-variant-numeric:tabular-nums;line-height:1;
+}
+.result.cheapest .result-price .amt{color:#ff5722}
+.result-price .pp{
+  font-size:10px;color:#8b94a3;
+  margin-top:2px;text-transform:uppercase;letter-spacing:0.4px;
+}
+.result-price .deal{
+  display:inline-block;background:#ff5722;color:#fff;
+  border:none;padding:7px 14px;border-radius:5px;
+  font-size:11px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;cursor:pointer;
+  margin-top:8px;
+}
+.result-price .deal:hover{background:#e64a19}
+.empty{
+  background:#fff;border:1px solid #e5e8ec;border-radius:8px;
+  padding:50px 24px;text-align:center;color:#8b94a3;
+  font-size:13px;
+}
+.empty b{color:#525463}
+</style></head>
+<body>
+<div class="nav">
+  <div class="logo">k<span class="a">a</span><span class="y">y</span><span class="a">a</span><span class="second-k">k</span></div>
+  <div class="nav-links">
+    <span class="active">Flights</span>
+    <span>Hotels</span>
+    <span>Cars</span>
+    <span>Packages</span>
+    <span>Things to do</span>
+  </div>
+  <div class="nav-spacer"></div>
+  <div class="nav-account"><span class="av">U</span> Sign in</div>
+</div>
+<div class="searchbar">
+  <div class="field"><span class="lbl">From</span><span class="val">JFK · New York</span></div>
+  <span class="arrow">&rarr;</span>
+  <div class="field to">
+    <span class="lbl">To</span>
+    <input id="q" placeholder="Where to?" autocomplete="off" />
+  </div>
+  <div class="field"><span class="lbl">Dates</span><span class="val">Apr 15 — Apr 22</span></div>
+  <div class="field"><span class="lbl">Travellers</span><span class="val">1 adult, Economy</span></div>
+  <button class="search-btn" id="f">Search</button>
+</div>
+
+<div class="layout">
+  <aside class="filters">
+    <h3>Stops</h3>
+    <div class="filter-row" id="row-nonstop"><input type="checkbox" id="cb-nonstop" /> Nonstop <span class="ct" id="ct-nonstop">—</span></div>
+    <div class="filter-row"><input type="checkbox" id="cb-1stop" /> 1 stop <span class="ct" id="ct-1stop">—</span></div>
+    <h3>Price</h3>
+    <div class="price-range"><div class="fill"></div></div>
+    <div class="price-bounds"><span id="p-lo">$0</span><span id="p-hi">$2,000</span></div>
+    <h3>Airlines</h3>
+    <div class="filter-row"><input type="checkbox" /> ANA</div>
+    <div class="filter-row"><input type="checkbox" /> Japan Airlines</div>
+    <div class="filter-row"><input type="checkbox" /> United</div>
+    <div class="filter-row"><input type="checkbox" /> Delta</div>
+    <div class="filter-row"><input type="checkbox" /> British Airways</div>
+    <h3>Times</h3>
+    <div class="filter-row" style="font-size:12px;color:#8b94a3">Take off &middot; Landing</div>
+  </aside>
+
+  <main>
+    <div class="results-head">
+      <div class="tab active" id="tab-best" data-sort="best">Best <span class="hint" id="t-best">—</span></div>
+      <div class="tab" id="tab-cheap" data-sort="cheap">Cheapest <span class="hint" id="t-cheap">—</span></div>
+      <div class="tab" id="tab-quick" data-sort="quick">Quickest <span class="hint" id="t-quick">—</span></div>
+    </div>
+    <div class="result-meta">
+      <span><b id="r-count">—</b> results</span>
+      <span style="color:#8b94a3">&middot;</span>
+      <span>JFK &rarr; <b id="r-dest">any</b></span>
+      <span class="pill" id="r-pill">SORTED BY BEST</span>
+    </div>
+    <div id="results"></div>
+  </main>
+</div>
+
+<script>
+var flights = [
+  {airline:"ANA", code:"NH 9", from:"JFK", to:"NRT", dep:"11:30 AM", arr:"3:40 PM +1", duration:"14h 10m", stops:0, price:1247, dest:"tokyo"},
+  {airline:"Japan Airlines", code:"JL 5", from:"JFK", to:"HND", dep:"1:50 PM", arr:"6:25 PM +1", duration:"14h 35m", stops:0, price:1312, dest:"tokyo"},
+  {airline:"United", code:"UA 79", from:"EWR", to:"NRT", dep:"11:25 AM", arr:"3:50 PM +1", duration:"14h 25m", stops:0, price:1389, dest:"tokyo"},
+  {airline:"Delta", code:"DL 167", from:"JFK", to:"HND", dep:"4:50 PM", arr:"7:40 PM +1", duration:"14h 50m", stops:0, price:1456, dest:"tokyo"},
+  {airline:"British Airways", code:"BA 178", from:"JFK", to:"LHR", dep:"7:55 PM", arr:"7:10 AM +1", duration:"7h 15m", stops:0, price:582, dest:"london"},
+  {airline:"Virgin Atlantic", code:"VS 4", from:"JFK", to:"LHR", dep:"9:00 PM", arr:"8:05 AM +1", duration:"7h 5m", stops:0, price:625, dest:"london"},
+  {airline:"American Airlines", code:"AA 100", from:"JFK", to:"LHR", dep:"6:30 PM", arr:"3:30 AM +1", duration:"9h 0m", stops:1, price:489, dest:"london"},
+  {airline:"Garuda Indonesia", code:"GA 89", from:"JFK", to:"DPS", dep:"10:15 AM", arr:"11:15 AM +2", duration:"24h 0m", stops:1, price:1487, dest:"bali"},
+  {airline:"Singapore Airlines", code:"SQ 25", from:"JFK", to:"DPS", dep:"7:30 PM", arr:"7:00 AM +2", duration:"23h 30m", stops:1, price:1612, dest:"bali"}
+];
+
+function el(tag, opts) {
+  var e = document.createElement(tag);
+  if (opts) {
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.attrs) for (var k in opts.attrs) e.setAttribute(k, opts.attrs[k]);
+  }
+  return e;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function fmtPrice(n) { return '$' + n.toLocaleString(); }
+function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+
+// Filter + sort state — driven by both user clicks and agent acts.
+var pageState = { q: "", nonstopOnly: false, sort: "best" };
+
+function applyFilters() {
+  var arr = flights.filter(function(f){ return !pageState.q || f.dest.indexOf(pageState.q) !== -1; });
+  if (pageState.nonstopOnly) arr = arr.filter(function(f){ return f.stops === 0; });
+  if (pageState.sort === "quick") {
+    arr.sort(function(a,b){ return parseInt(a.duration) - parseInt(b.duration); });
+  } else {
+    // "best" + "cheap" both sort by price for this demo (best is price + duration weighted in real life)
+    arr.sort(function(a,b){ return a.price - b.price; });
+  }
+  return arr;
+}
+
+function render() {
+  var filtered = applyFilters();
+  var allFiltered = flights.filter(function(f){ return !pageState.q || f.dest.indexOf(pageState.q) !== -1; });
+
+  var nonstops = allFiltered.filter(function(f){return f.stops===0}).length;
+  var onestops = allFiltered.filter(function(f){return f.stops===1}).length;
+  setText('ct-nonstop', '(' + nonstops + ')');
+  setText('ct-1stop', '(' + onestops + ')');
+
+  // Active-tab styling
+  var tabs = ['tab-best','tab-cheap','tab-quick'];
+  for (var ti = 0; ti < tabs.length; ti++) {
+    var tn = document.getElementById(tabs[ti]);
+    if (tn) tn._attributes['class'] = (tn._attributes['class'] || 'tab').replace(' active','');
+  }
+  var activeTab = document.getElementById('tab-' + (pageState.sort === 'cheap' ? 'cheap' : pageState.sort === 'quick' ? 'quick' : 'best'));
+  if (activeTab) activeTab.className = 'tab active';
+  // Update result-meta pill text
+  var pillTxt = pageState.sort === 'cheap' ? 'SORTED BY CHEAPEST' : pageState.sort === 'quick' ? 'SORTED BY QUICKEST' : 'SORTED BY BEST';
+  if (pageState.nonstopOnly) pillTxt = pillTxt + ' · NONSTOP';
+  setText('r-pill', pillTxt);
+
+  var r = document.getElementById('results');
+  clear(r);
+
+  if (filtered.length === 0) {
+    var empty = el('div', {cls:'empty'});
+    empty.appendChild(document.createTextNode('No flights match. Try '));
+    empty.appendChild(el('b', {text:'tokyo'}));
+    empty.appendChild(document.createTextNode(', '));
+    empty.appendChild(el('b', {text:'london'}));
+    empty.appendChild(document.createTextNode(', or '));
+    empty.appendChild(el('b', {text:'bali'}));
+    empty.appendChild(document.createTextNode('.'));
+    r.appendChild(empty);
+    setText('r-count', '0');
+    setText('r-dest', pageState.q ? pageState.q : 'any');
+    setText('t-best', '—');
+    setText('t-cheap', '—');
+    setText('t-quick', '—');
+    setText('p-lo', '$0');
+    setText('p-hi', '$0');
+    return;
+  }
+
+  for (var i = 0; i < filtered.length; i++) {
+    var f = filtered[i];
+    var row = el('div', {cls:'result' + (i === 0 ? ' cheapest' : '')});
+    if (i === 0) row.setAttribute('id', 'result-best');
+
+    var left = el('div', {cls:'result-row'});
+    left.appendChild(el('div', {cls:'airline', text: f.airline + ' · ' + f.code}));
+
+    var rl = el('div', {cls:'route-line'});
+    var dep = el('div', {cls:'airport'});
+    dep.appendChild(el('div', {cls:'time', text: f.dep}));
+    dep.appendChild(el('div', {cls:'iata', text: f.from}));
+    rl.appendChild(dep);
+
+    var path = el('div', {cls:'path'});
+    var ln = el('div', {cls:'ln'});
+    if (f.stops > 0) ln.appendChild(el('div', {cls:'stop', attrs:{style:'left:50%'}}));
+    path.appendChild(ln);
+    var meta = el('div', {cls:'meta'});
+    meta.appendChild(el('span', {text: f.duration}));
+    meta.appendChild(el('span', {
+      cls: f.stops === 0 ? 'nonstop' : 'stops',
+      text: f.stops === 0 ? 'Nonstop' : (f.stops + ' stop')
+    }));
+    path.appendChild(meta);
+    rl.appendChild(path);
+
+    var arr = el('div', {cls:'airport'});
+    arr.appendChild(el('div', {cls:'time', text: f.arr}));
+    arr.appendChild(el('div', {cls:'iata', text: f.to}));
+    rl.appendChild(arr);
+    left.appendChild(rl);
+    row.appendChild(left);
+
+    var right = el('div', {cls:'result-price'});
+    right.appendChild(el('div', {cls:'amt', text: fmtPrice(f.price)}));
+    right.appendChild(el('div', {cls:'pp', text:'per person'}));
+    var deal = el('button', {cls:'deal', text:'View Deal'});
+    if (i === 0) deal.setAttribute('id', 'deal-best');
+    right.appendChild(deal);
+    row.appendChild(right);
+
+    r.appendChild(row);
+  }
+
+  // Header tab hints
+  var cheapest = filtered[0];
+  var quickest = filtered.slice().sort(function(a,b){
+    var pa = parseInt(a.duration); var pb = parseInt(b.duration);
+    return pa - pb;
+  })[0];
+  setText('t-best', fmtPrice(cheapest.price) + ' · ' + cheapest.duration);
+  setText('t-cheap', fmtPrice(cheapest.price) + ' · ' + cheapest.airline.split(' ')[0]);
+  setText('t-quick', quickest.duration + ' · ' + quickest.airline.split(' ')[0]);
+
+  setText('r-count', String(filtered.length));
+  setText('r-dest', pageState.q ? pageState.q.toUpperCase() : 'any');
+  setText('p-lo', fmtPrice(cheapest.price));
+  setText('p-hi', fmtPrice(filtered[filtered.length - 1].price));
+}
+
+document.getElementById('q').addEventListener('input', function(e){
+  pageState.q = String(e.target.value || "").toLowerCase().trim();
+  render();
+});
+document.getElementById('f').addEventListener('click', function(e){
+  e.preventDefault();
+  pageState.q = String(document.getElementById('q').value || "").toLowerCase().trim();
+  render();
+});
+function bindTab(id, sort) {
+  var t = document.getElementById(id);
+  if (t) t.addEventListener('click', function(){ pageState.sort = sort; render(); });
+}
+bindTab('tab-best', 'best');
+bindTab('tab-cheap', 'cheap');
+bindTab('tab-quick', 'quick');
+var cb = document.getElementById('cb-nonstop');
+if (cb) cb.addEventListener('change', function(){ pageState.nonstopOnly = !!cb.checked; render(); });
+
+render();
+</` + `script>
+</body></html>`;
+
+// Zillow-styled rentals snapshot — Brooklyn listings filterable by tag
+// (cats, laundry, neighborhood). Same vanilla createElement constraint as
+// the Kayak snapshot since the host's __parseHTMLFragment is unavailable
+// inside QuickJS.
+const ZILLOW_HTML = `<!DOCTYPE html>
+<html><head><title>Brooklyn, NY Rentals — Zillow</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif;
+  background:#fff;color:#1f1f1f;
+  -webkit-font-smoothing:antialiased;font-size:14px;
+}
+.nav{
+  background:#fff;border-bottom:1px solid #e8e8eb;
+  padding:8px 24px;display:flex;align-items:center;gap:24px;height:56px;
+}
+.logo{
+  font-size:24px;font-weight:800;color:#006aff;
+  letter-spacing:-1.2px;line-height:1;
+}
+.nav-links{display:flex;gap:18px;font-size:14px;color:#1f1f1f;font-weight:600}
+.nav-links span{padding:6px 2px;cursor:pointer}
+.nav-links span.active{color:#1f1f1f;border-bottom:3px solid #006aff;font-weight:700}
+.nav-spacer{flex:1}
+.nav-account{
+  font-size:13px;color:#1f1f1f;font-weight:600;
+  display:inline-flex;align-items:center;gap:8px;
+}
+.nav-account .av{
+  width:28px;height:28px;border-radius:50%;
+  background:#006aff;color:#fff;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;
+}
+.searchbar{
+  background:#fff;border-bottom:1px solid #e8e8eb;
+  padding:14px 24px;display:flex;align-items:center;gap:8px;
+  flex-wrap:wrap;
+}
+.search-loc{
+  display:flex;align-items:center;gap:6px;
+  background:#fff;border:1px solid #cfcfd6;border-radius:6px;
+  padding:9px 14px;font-size:14px;font-weight:600;color:#1f1f1f;
+  flex:1;min-width:240px;
+}
+.search-loc .pin{color:#006aff;font-size:14px}
+.search-loc input{
+  border:none;outline:none;background:transparent;
+  font-family:inherit;font-size:14px;font-weight:600;color:#1f1f1f;
+  flex:1;padding:0;
+}
+.search-loc input::placeholder{color:#8b8c95;font-weight:400}
+.chip{
+  background:#fff;border:1px solid #cfcfd6;border-radius:20px;
+  padding:8px 14px;font-size:13px;color:#1f1f1f;font-weight:500;
+  cursor:pointer;
+}
+.chip:hover{background:#f4f5f7}
+.chip.active{
+  background:#006aff;color:#fff;border-color:#006aff;font-weight:600;
+}
+.search-btn{
+  background:#006aff;color:#fff;border:none;
+  padding:10px 18px;border-radius:6px;
+  font-weight:700;font-size:13px;cursor:pointer;
+}
+.tabbar{
+  border-bottom:1px solid #e8e8eb;padding:10px 24px 0;
+  display:flex;align-items:center;gap:18px;font-size:14px;
+  color:#1f1f1f;
+}
+.tabbar .tb{padding:8px 4px;cursor:pointer;color:#65686d;font-weight:500}
+.tabbar .tb.active{
+  color:#006aff;border-bottom:3px solid #006aff;font-weight:700;
+  padding-bottom:6px;
+}
+.layout{padding:14px 24px 24px}
+.head-row{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:14px;font-size:14px;color:#1f1f1f;
+}
+.head-row .title{font-size:18px;font-weight:700}
+.head-row .title .area{color:#006aff}
+.head-row .sort{
+  font-size:13px;color:#65686d;display:inline-flex;align-items:center;gap:6px;
+}
+.head-row .sort b{color:#1f1f1f;font-weight:700}
+.grid{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:14px;
+}
+@media (max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}
+.card{
+  background:#fff;border:1px solid #e8e8eb;border-radius:6px;
+  overflow:hidden;cursor:pointer;
+  transition:box-shadow 0.15s,transform 0.15s;
+}
+.card:hover{box-shadow:0 6px 18px rgba(0,0,0,0.08);transform:translateY(-1px)}
+.card.cheapest{border:2px solid #006aff;box-shadow:0 6px 16px rgba(0,106,255,0.18)}
+.photo{
+  height:160px;position:relative;
+  background:linear-gradient(135deg,#a8c8ff 0%,#5d9bff 50%,#3b6fc4 100%);
+}
+.photo.g2{background:linear-gradient(135deg,#ffd2a8 0%,#ff9b5d 50%,#c4683b 100%)}
+.photo.g3{background:linear-gradient(135deg,#a8ffce 0%,#5dffa8 50%,#3bc486 100%)}
+.photo.g4{background:linear-gradient(135deg,#d2a8ff 0%,#9b5dff 50%,#683bc4 100%)}
+.photo.g5{background:linear-gradient(135deg,#ffa8c8 0%,#ff5d9b 50%,#c43b6f 100%)}
+.photo.g6{background:linear-gradient(135deg,#a8e8ff 0%,#5dccff 50%,#3b9bc4 100%)}
+.photo.g7{background:linear-gradient(135deg,#fff5a8 0%,#ffd95d 50%,#c4a83b 100%)}
+.photo.g8{background:linear-gradient(135deg,#cccccc 0%,#888888 50%,#444444 100%)}
+.photo .heart{
+  position:absolute;top:10px;right:10px;
+  width:32px;height:32px;border-radius:50%;
+  background:rgba(255,255,255,0.92);
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;color:#1f1f1f;cursor:pointer;
+}
+.photo .heart.saved{background:#ff385c;color:#fff}
+.chip.active{background:#006aff;color:#fff;border-color:#006aff;font-weight:700}
+.photo .badge{
+  position:absolute;top:10px;left:10px;
+  background:#fff;color:#006aff;
+  padding:3px 8px;border-radius:3px;
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;
+}
+.info{padding:12px 14px}
+.price{font-size:20px;font-weight:800;color:#1f1f1f;line-height:1}
+.card.cheapest .price{color:#006aff}
+.specs{font-size:13px;color:#1f1f1f;margin-top:4px;font-weight:500}
+.specs b{font-weight:700}
+.addr{
+  font-size:12px;color:#65686d;margin-top:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.tag{
+  background:#eef4ff;color:#006aff;
+  padding:2px 7px;border-radius:3px;
+  font-size:10.5px;font-weight:600;letter-spacing:0.2px;
+}
+.tag.no{background:#f4f5f7;color:#8b8c95}
+.tag.pet{background:#fef0e6;color:#d2691e}
+.empty{
+  grid-column:1/-1;padding:48px 24px;text-align:center;
+  color:#65686d;font-size:13px;
+}
+.empty b{color:#1f1f1f}
+</style></head>
+<body>
+<div class="nav">
+  <div class="logo">Zillow</div>
+  <div class="nav-links">
+    <span class="active">Rent</span>
+    <span>Buy</span>
+    <span>Sell</span>
+    <span>Home Loans</span>
+    <span>Agent finder</span>
+  </div>
+  <div class="nav-spacer"></div>
+  <div class="nav-account"><span class="av">U</span> Saved homes</div>
+</div>
+<div class="searchbar">
+  <div class="search-loc">
+    <span class="pin">&#128205;</span>
+    <input id="q" placeholder="Brooklyn, NY · neighborhood, address, or zip" autocomplete="off" />
+  </div>
+  <span class="chip">Beds · 2+</span>
+  <span class="chip">Baths · 1+</span>
+  <span class="chip">Price · $4,200</span>
+  <span class="chip" id="pet-chip">Pets &times;</span>
+  <button class="search-btn" id="f">Apply</button>
+</div>
+<div class="tabbar">
+  <span class="tb active">List view</span>
+  <span class="tb">Map view</span>
+  <span class="tb">Travel time</span>
+  <span class="tb">Schools</span>
+</div>
+
+<div class="layout">
+  <div class="head-row">
+    <div class="title"><span id="r-count">—</span> rentals in <span class="area">Brooklyn, NY</span><span id="r-filter"></span></div>
+    <div class="sort">Sort: <b>Price (Low to High)</b> &or;</div>
+  </div>
+  <div class="grid" id="results"></div>
+</div>
+
+<script>
+var listings = [
+  {price:2800, beds:2, baths:1, sqft:720, addr:"5519 5th Ave, Sunset Park", tags:["laundry"], dest:"sunset park", grad:"g8"},
+  {price:2950, beds:2, baths:1, sqft:700, addr:"512 Crown St, Crown Heights", tags:["laundry","near park"], dest:"crown heights", grad:"g7"},
+  {price:3200, beds:2, baths:1, sqft:750, addr:"123 Bedford Ave, Williamsburg", tags:["cats ok","laundry"], dest:"williamsburg", grad:"g1"},
+  {price:3400, beds:1, baths:1, sqft:600, addr:"88 Wyckoff Ave, Bushwick", tags:["cats ok","exposed brick"], dest:"bushwick", grad:"g3"},
+  {price:3650, beds:2, baths:1, sqft:820, addr:"45 Manhattan Ave, Greenpoint", tags:["dogs only","laundry"], dest:"greenpoint", grad:"g6"},
+  {price:3800, beds:2, baths:2, sqft:950, addr:"217 7th Ave, Park Slope", tags:["cats ok","laundry","parking"], dest:"park slope", grad:"g2"},
+  {price:3850, beds:2, baths:1, sqft:830, addr:"428 9th St, Park Slope", tags:["doorman","gym"], dest:"park slope", grad:"g5"},
+  {price:4100, beds:2, baths:1, sqft:800, addr:"623 Halsey St, Bed-Stuy", tags:["cats ok","laundry"], dest:"bed-stuy", grad:"g4"},
+  {price:4500, beds:2, baths:2, sqft:1000, addr:"180 Kane St, Cobble Hill", tags:["doorman","gym"], dest:"cobble hill", grad:"g5"}
+];
+
+function el(tag, opts) {
+  var e = document.createElement(tag);
+  if (opts) {
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.attrs) for (var k in opts.attrs) e.setAttribute(k, opts.attrs[k]);
+  }
+  return e;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function fmtPrice(n) { return '$' + n.toLocaleString() + '/mo'; }
+function setText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+
+// Two independent filters: location (typed input) and pets (chip toggle).
+// Real Zillow works the same way — location is one input, amenities are
+// separate filter chips. The agent demo drives them as distinct actions.
+var pageState = { q: "", petsOnly: false };
+
+function locationMatches(l, q) {
+  if (!q) return true;
+  if (l.dest.indexOf(q) !== -1) return true;
+  if (l.addr.toLowerCase().indexOf(q) !== -1) return true;
+  return false;
+}
+function petsOk(l) {
+  for (var i = 0; i < l.tags.length; i++) {
+    if (l.tags[i] === 'cats ok') return true;
+  }
+  return false;
+}
+function applyFilters() {
+  var arr = listings.filter(function(l){ return locationMatches(l, pageState.q); });
+  if (pageState.petsOnly) arr = arr.filter(petsOk);
+  arr.sort(function(a,b){ return a.price - b.price; });
+  return arr;
+}
+
+function render() {
+  var filtered = applyFilters();
+  var r = document.getElementById('results');
+  clear(r);
+
+  // Build the active-filter description for the title row
+  var bits = [];
+  if (pageState.q) bits.push('"' + pageState.q + '"');
+  if (pageState.petsOnly) bits.push('cats OK');
+  setText('r-filter', bits.length ? ' · ' + bits.join(' · ') : '');
+
+  if (filtered.length === 0) {
+    var empty = el('div', {cls:'empty'});
+    empty.appendChild(document.createTextNode('No rentals match. Try a neighborhood like '));
+    empty.appendChild(el('b', {text:'park slope'}));
+    empty.appendChild(document.createTextNode(', '));
+    empty.appendChild(el('b', {text:'williamsburg'}));
+    empty.appendChild(document.createTextNode(', or '));
+    empty.appendChild(el('b', {text:'bushwick'}));
+    empty.appendChild(document.createTextNode('.'));
+    r.appendChild(empty);
+    setText('r-count', '0');
+    return;
+  }
+
+  for (var i = 0; i < filtered.length; i++) {
+    var l = filtered[i];
+    var card = el('div', {cls:'card' + (i === 0 ? ' cheapest' : '')});
+
+    var photo = el('div', {cls:'photo ' + l.grad});
+    if (i === 0) photo.appendChild(el('div', {cls:'badge', text:'Best Match'}));
+    var heart = el('div', {cls:'heart', text:'♡'});
+    if (i === 0) heart.setAttribute('id', 'heart-best');
+    heart.addEventListener('click', function(h){ return function(){
+      var saved = (h._attributes['class'] || '').indexOf('saved') !== -1;
+      h.className = saved ? 'heart' : 'heart saved';
+      h.textContent = saved ? '♡' : '♥';
+    };}(heart));
+    photo.appendChild(heart);
+    card.appendChild(photo);
+
+    var info = el('div', {cls:'info'});
+    info.appendChild(el('div', {cls:'price', text: fmtPrice(l.price)}));
+    var specs = el('div', {cls:'specs'});
+    specs.appendChild(el('b', {text: l.beds + ' bd'}));
+    specs.appendChild(document.createTextNode(' · '));
+    specs.appendChild(el('b', {text: l.baths + ' ba'}));
+    specs.appendChild(document.createTextNode(' · ' + l.sqft + ' sqft'));
+    info.appendChild(specs);
+    info.appendChild(el('div', {cls:'addr', text: l.addr}));
+
+    var tags = el('div', {cls:'tags'});
+    for (var t = 0; t < l.tags.length; t++) {
+      var tag = l.tags[t];
+      tags.appendChild(el('span', {
+        cls: 'tag' + (tag === 'dogs only' ? ' no' : '') + (tag === 'cats ok' ? ' pet' : ''),
+        text: tag
+      }));
+    }
+    info.appendChild(tags);
+    card.appendChild(info);
+    r.appendChild(card);
+  }
+
+  setText('r-count', String(filtered.length));
+}
+
+document.getElementById('q').addEventListener('input', function(e){
+  pageState.q = String(e.target.value || "").toLowerCase().trim();
+  render();
+});
+document.getElementById('f').addEventListener('click', function(e){
+  e.preventDefault();
+  pageState.q = String(document.getElementById('q').value || "").toLowerCase().trim();
+  render();
+});
+var petChip = document.getElementById('pet-chip');
+if (petChip) {
+  petChip.addEventListener('click', function(){
+    pageState.petsOnly = !pageState.petsOnly;
+    petChip.className = pageState.petsOnly ? 'chip active' : 'chip';
+    petChip.textContent = pageState.petsOnly ? '✓ Cats OK' : 'Pets ×';
+    render();
+  });
+}
+
+render();
+</` + `script>
+</body></html>`;
+
+// Snapshot map keyed for the multi-site demo. Each scenario picks one.
+const SNAPSHOTS = {
+  kayak: {
+    html: FLIGHTFINDER_HTML,
+    baseUrl: 'https://www.kayak.com/flights/JFK-NRT/2026-04-15',
+    url: { scheme: 'https://www.', host: 'kayak.com', path: '/flights/JFK-NRT/2026-04-15' },
+  },
+  zillow: {
+    html: ZILLOW_HTML,
+    baseUrl: 'https://www.zillow.com/brooklyn-new-york-ny/rentals/',
+    url: { scheme: 'https://www.', host: 'zillow.com', path: '/brooklyn-new-york-ny/rentals/' },
+  },
+};
+
+const FLIGHTFINDER_SNAPSHOT = SNAPSHOTS.kayak;
+
+async function loadWasmBrowserOnce() {
+  if (WB.loaded || WB.loading) return;
+  WB.loading = true;
+  try {
+    setWBStatus('loading', 'Fetching QuickJS engine · ~400 KB compressed');
+    const { PageLoader } = await import('/web/wasmbrowser/loader.js?ts=' + Date.now());
+    setWBStatus('loading', 'Booting a JavaScript runtime inside a WebAssembly sandbox…');
+    WB.iframe = document.getElementById('wb-frame');
+    WB.loader = new PageLoader(WB.iframe, msg => {
+      // Loader-internal log lines surface here verbatim — visitors see the
+      // real engine boot stages instead of a static spinner.
+      if (WB.msg) WB.msg.textContent = msg;
+    });
+    await WB.loader.init();
+    setWBStatus('loading', 'Compiling virtual DOM · seeding kayak.com snapshot');
+    await WB.loader.loadStatic(SNAPSHOTS.kayak);
+    WB.currentSnapshot = 'kayak';
+    WB.loaded = true;
+    // Count nodes after seeding.
+    try {
+      const tree = WB.loader.engine.eval('__serializeDOM()');
+      let count = 0;
+      (function walk(n){ count++; if (n.children) n.children.forEach(walk); })(tree);
+      WB.statNodes.textContent = count;
+    } catch {}
+    setWBStatus('ready', 'Sandboxed VM running · 0 server hits this page · pick a prompt →');
+    // Patch bridge.flush to keep mutation counter live for the status bar.
+    const originalFlush = WB.loader.bridge.flush.bind(WB.loader.bridge);
+    WB.loader.bridge.flush = function(){
+      const before = WB.mutationCount;
+      const muts = WB.loader.engine.eval('__getMutations()');
+      if (muts && muts.length) {
+        WB.mutationCount += muts.length;
+        // Re-feed the mutations through the original applyMutation logic.
+        const doc = WB.iframe.contentDocument;
+        if (doc) {
+          for (const m of muts) {
+            try { WB.loader.bridge._applyMutation(m, doc); } catch (e){}
+          }
+        }
+      }
+      if (WB.mutationCount !== before) {
+        WB.statMut.textContent = WB.mutationCount.toLocaleString();
+        // Brief flash so the visitor's eye snaps to the live counter.
+        WB.statMut.classList.remove('flash');
+        void WB.statMut.offsetWidth;
+        WB.statMut.classList.add('flash');
+      }
+    };
+  } catch (e) {
+    console.error('[wbrowser]', e);
+    // The QuickJS WASM binary is fetched lazily from esm.sh inside
+    // engine.js. Common failure modes: CDN offline, corp proxy blocking
+    // esm.sh, ad-blocker stripping the import. Surface a clear message
+    // instead of leaking the raw exception, and keep the page usable —
+    // the rest of the landing page works fine without the live demo.
+    const msg = (e && e.message) ? e.message : String(e);
+    const friendly = /import|fetch|network|cdn|esm/i.test(msg)
+      ? 'Could not load the WebAssembly runtime (CDN unreachable). Refresh to retry, or check that esm.sh is reachable.'
+      : 'WebAssembly runtime failed to start: ' + msg;
+    setWBStatus('error', friendly);
+  } finally {
+    WB.loading = false;
+  }
+}
+
+// ── Scripted scenarios — searchagentsky.com style ──
+// Each scenario plays the agent's action sequence through the live WASM
+// browser. The transcript on the left shows what the agent is "doing"; the
+// iframe on the right shows the actual mutations.
+const SCENARIOS = {
+  tokyo: {
+    snapshot: 'kayak',
+    user: 'Find me the cheapest direct flight from NYC to Tokyo in April.',
+    query: 'tokyo',
+    summary: '<span class="pill">$1,247</span> <b>ANA · JFK → NRT</b> · nonstop · 4 results · saves $209 vs avg',
+  },
+  london: {
+    snapshot: 'kayak',
+    user: 'Find a London flight under $600.',
+    query: 'london',
+    summary: '<span class="pill">$489</span> <b>AA · JFK → LHR</b> (1 stop) · 2 of 3 nonstop options under $625 · saves $133 vs avg',
+  },
+  bali: {
+    snapshot: 'kayak',
+    user: 'I want to fly to Bali — what are my options?',
+    query: 'bali',
+    summary: '<span class="pill">$1,487</span> <b>Garuda · JFK → DPS</b> · 1 stop · saves $125 vs SQ',
+  },
+  brooklyn: {
+    snapshot: 'zillow',
+    user: 'Find me a 2BR in Park Slope that allows cats.',
+    query: 'park slope',
+    summary: '<span class="pill">$3,800/mo</span> <b>217 7th Ave, Park Slope</b> · 2BR/2BA · cats + laundry + parking · only 1 of 2 Park Slope rentals allows cats',
+  },
+};
+
+// Per-snapshot agent flows. Each step optionally names an `act` that
+// drives the WASM browser via engine.eval — this is what makes the
+// iframe visibly change beyond just "type into destination". Adding a
+// step here means adding a matching ACT.<name> below.
+const SCENARIO_FLOWS = {
+  kayak: [
+    { glyph: '🌐', label: 'Navigate',     delay: 350 },
+    { glyph: '👁', label: 'Read page',    delay: 400, desc: 'parse search form + filters' },
+    { glyph: '⌨', label: 'Type',         delay: 500, act: 'typeQuery' },
+    { glyph: '☑', label: 'Toggle filter',delay: 380, desc: 'check Nonstop',       act: 'kayakNonstop' },
+    { glyph: '↕', label: 'Sort',         delay: 380, desc: 'tab → Cheapest',      act: 'kayakSortCheap' },
+    { glyph: '🔬', label: 'Extract',      delay: 450, desc: 'read airline + price + stops' },
+    { glyph: '👆', label: 'Open deal',    delay: 380, desc: 'click best View Deal',act: 'kayakOpenDeal' },
+    { glyph: '✅', label: 'Summarize',    delay: 320, desc: 'pick best match' },
+  ],
+  zillow: [
+    { glyph: '🌐', label: 'Navigate',     delay: 350 },
+    { glyph: '👁', label: 'Read page',    delay: 400, desc: 'parse listing grid' },
+    { glyph: '⌨', label: 'Type',         delay: 500, act: 'typeQuery' },
+    { glyph: '☑', label: 'Toggle filter',delay: 380, desc: 'enable Pets chip',    act: 'zillowPetsChip' },
+    { glyph: '🔬', label: 'Extract',      delay: 450, desc: 'read price + beds + tags' },
+    { glyph: '♥', label: 'Save match',   delay: 380, desc: 'heart best listing',  act: 'zillowSaveMatch' },
+    { glyph: '✅', label: 'Summarize',    delay: 320, desc: 'pick cheapest match' },
+  ],
+};
+
+// ACT.<name>(scn) returns a Promise. Each act dispatches a click or
+// state-change event in the WASM page so the visitor sees the result.
+const ACT = {
+  typeQuery: async function(scn) {
+    const target = scn.query;
+    for (let c = 1; c <= target.length; c++) {
+      const partial = target.slice(0, c);
+      WB.loader.engine.eval(
+        '(function(){var i=document.getElementById("q");if(i){i.value=' +
+        JSON.stringify(partial) +
+        ';var ev=new Event("input",{bubbles:true});ev.value=' +
+        JSON.stringify(partial) +
+        ';i.dispatchEvent(ev);}})()'
+      );
+      WB.loader.engine.vm.runtime.executePendingJobs();
+      WB.loader.engine.tick && WB.loader.engine.tick();
+      WB.loader.bridge.flush();
+      try {
+        const realInput = WB.iframe.contentDocument.getElementById('q');
+        if (realInput) realInput.value = partial;
+      } catch {}
+      await delay(60);
+    }
+  },
+  kayakNonstop: async function() {
+    WB.loader.engine.eval(
+      '(function(){var c=document.getElementById("cb-nonstop");if(c){c.checked=true;var ev=new Event("change",{bubbles:true});c.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  kayakSortCheap: async function() {
+    WB.loader.engine.eval(
+      '(function(){var t=document.getElementById("tab-cheap");if(t){var ev=new Event("click",{bubbles:true});t.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  kayakOpenDeal: async function() {
+    // Make the cheapest View Deal flash to "✓ Selected" so the click is unmistakable.
+    WB.loader.engine.eval(
+      '(function(){var b=document.getElementById("deal-best");if(b){b.textContent="✓ Selected";b.style.background="#0fb6c2";}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  zillowPetsChip: async function() {
+    WB.loader.engine.eval(
+      '(function(){var c=document.getElementById("pet-chip");if(c){var ev=new Event("click",{bubbles:true});c.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+  zillowSaveMatch: async function() {
+    WB.loader.engine.eval(
+      '(function(){var h=document.getElementById("heart-best");if(h){var ev=new Event("click",{bubbles:true});h.dispatchEvent(ev);}})()'
+    );
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+  },
+};
+
+let scenarioRunning = false;
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function clearTranscript() {
+  const t = document.getElementById('watch-transcript');
+  if (t) t.innerHTML = '';
+}
+
+function appendUserBubble(text) {
+  const t = document.getElementById('watch-transcript');
+  const b = document.createElement('div');
+  b.className = 'watch-bubble';
+  b.textContent = text;
+  t.appendChild(b);
+  t.scrollTop = t.scrollHeight;
+}
+
+function appendAction(glyph, label, desc) {
+  const t = document.getElementById('watch-transcript');
+  const a = document.createElement('div');
+  a.className = 'watch-action';
+  a.innerHTML =
+    '<span class="glyph">' + glyph + '</span>' +
+    '<span class="label">' + label + '</span>' +
+    '<span class="desc">' + (desc || '') + '</span>' +
+    '<span class="check">●</span>';
+  t.appendChild(a);
+  t.scrollTop = t.scrollHeight;
+  return a;
+}
+
+function markActionDone(node) {
+  if (!node) return;
+  node.classList.add('done');
+  const c = node.querySelector('.check');
+  if (c) { c.classList.remove('check'); c.classList.add('check'); }
+}
+
+function appendSummary(html) {
+  const t = document.getElementById('watch-transcript');
+  const s = document.createElement('div');
+  s.className = 'watch-summary';
+  s.innerHTML = html;
+  t.appendChild(s);
+  t.scrollTop = t.scrollHeight;
+}
+
+function setStatEvt(txt) {
+  if (WB.statEvt) WB.statEvt.textContent = txt;
+}
+
+// Update the wb-fakebar URL pieces — called whenever we swap snapshots
+// so the visitor sees a "real" address bar change, not just a content swap.
+function setUrlBar(snapshotKey) {
+  const snap = SNAPSHOTS[snapshotKey];
+  if (!snap) return;
+  const s = document.getElementById('wb-url-scheme');
+  const h = document.getElementById('wb-url-host');
+  const p = document.getElementById('wb-url-path');
+  if (s) s.textContent = snap.url.scheme;
+  if (h) h.textContent = snap.url.host;
+  if (p) p.textContent = snap.url.path;
+}
+
+// Hot-swap the snapshot inside the running PageLoader. Re-uses the same
+// engine + bridge — loadStatic disposes the engine on each call so the
+// VM is genuinely fresh, but the iframe handle stays put. Updates URL bar
+// + node-count stat + currentSnapshot pointer.
+async function ensureSnapshot(key) {
+  if (!WB.loader) return;
+  if (WB.currentSnapshot === key) return;
+  const snap = SNAPSHOTS[key];
+  if (!snap) return;
+  await WB.loader.loadStatic(snap);
+  WB.currentSnapshot = key;
+  setUrlBar(key);
+  try {
+    const tree = WB.loader.engine.eval('__serializeDOM()');
+    let count = 0;
+    (function walk(n){ count++; if (n.children) n.children.forEach(walk); })(tree);
+    if (WB.statNodes) {
+      WB.statNodes.textContent = count.toLocaleString();
+      WB.statNodes.classList.remove('flash');
+      void WB.statNodes.offsetWidth;
+      WB.statNodes.classList.add('flash');
+    }
+  } catch {}
+}
+
+// Reset the iframe's writable input to empty before a scenario re-runs.
+// Both Kayak and Zillow snapshots use #q for the input field, so the same
+// reset eval works for both — but if we add a snapshot with a different
+// field id later, only this helper needs to change.
+function resetSnapshotInput() {
+  if (!WB.loader) return;
+  try {
+    WB.loader.engine.eval('(function(){var i=document.getElementById("q");if(i){i.value="";var ev=new Event("input",{bubbles:true});ev.value="";i.dispatchEvent(ev);}})()');
+    WB.loader.engine.vm.runtime.executePendingJobs();
+    WB.loader.engine.tick && WB.loader.engine.tick();
+    WB.loader.bridge.flush();
+    const realInput = WB.iframe.contentDocument.getElementById('q');
+    if (realInput) realInput.value = '';
+  } catch {}
+}
+
+async function runScenario(key) {
+  if (scenarioRunning) return;
+  const scn = SCENARIOS[key];
+  if (!scn) return;
+  if (!WB.loaded) await loadWasmBrowserOnce();
+  if (!WB.loader) return;
+
+  scenarioRunning = true;
+  document.querySelectorAll('.watch-prompt').forEach(b => {
+    b.disabled = true;
+    b.classList.toggle('active', b.getAttribute('data-scenario') === key);
+  });
+
+  clearTranscript();
+  appendUserBubble(scn.user);
+  setWBStatus('running', 'Agent driving the WASM browser…');
+
+  // Track timing + mutations for the post-run metric tally.
+  const t0 = performance.now();
+  const mutBefore = WB.mutationCount;
+
+  resetSnapshotInput();
+
+  const targetSnap = SNAPSHOTS[scn.snapshot] || SNAPSHOTS.kayak;
+  const willNavigate = WB.currentSnapshot !== scn.snapshot;
+  const flow = SCENARIO_FLOWS[scn.snapshot] || SCENARIO_FLOWS.kayak;
+
+  // Walk the per-snapshot flow — each step appears in the transcript, then
+  // the corresponding mutation happens in the iframe at the right beat.
+  for (let i = 0; i < flow.length; i++) {
+    const step = flow[i];
+    let desc = step.desc || '';
+    if (step.label === 'Navigate') desc = targetSnap.url.host + targetSnap.url.path;
+    if (step.label === 'Type') desc = '"' + scn.query + '"';
+    const node = appendAction(step.glyph, step.label, desc);
+    setStatEvt(step.label.toLowerCase());
+    await delay(step.delay);
+
+    // Navigate step swaps the snapshot if needed.
+    if (step.label === 'Navigate' && willNavigate) {
+      await ensureSnapshot(scn.snapshot);
+      resetSnapshotInput();
+      await delay(120);
+    }
+
+    // Run the named act (typeQuery / clickNonstop / etc.) — this is what
+    // makes the iframe visibly change beyond the static URL bar.
+    if (step.act && ACT[step.act]) {
+      try {
+        await ACT[step.act](scn);
+      } catch (e) {
+        console.warn('[scenario] act ' + step.act, e);
+      }
+    }
+
+    markActionDone(node);
+  }
+
+  appendSummary(scn.summary);
+  setStatEvt('done · ' + key);
+
+  // Real metrics from the run: how many actions, how many DOM mutations
+  // actually flowed through the bridge, and the wall-clock time.
+  const dt = Math.max(1, Math.round(performance.now() - t0));
+  const mutDelta = Math.max(0, WB.mutationCount - mutBefore);
+  setWBStatus('ready',
+    '✓ ' + key + ' · ' + flow.length + ' actions · ' +
+    mutDelta.toLocaleString() + ' real DOM mutations · ' +
+    dt + ' ms · 0 server calls'
+  );
+
+  document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+  scenarioRunning = false;
+}
+
+// Lazy-load on intersection — keeps the brand hero light.
+(function(){
+  const section = document.getElementById('watch');
+  if (!section) return;
+  if ('IntersectionObserver' in window) {
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          obs.disconnect();
+          loadWasmBrowserOnce().then(() => {
+            // Enable the prompt buttons once the runtime is ready.
+            document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+            // Auto-play the first scenario so visitors see motion immediately.
+            setTimeout(() => runScenario('tokyo'), 600);
+          });
+        }
+      });
+    }, { threshold: 0.05, rootMargin: '300px 0px' });
+    obs.observe(section);
+  } else {
+    loadWasmBrowserOnce().then(() => {
+      document.querySelectorAll('.watch-prompt').forEach(b => { b.disabled = false; });
+    });
+  }
+
+  // Wire the prompt cards.
+  document.querySelectorAll('.watch-prompt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-scenario');
+      if (key) runScenario(key);
+    });
+  });
+
+  // Update last-event tag whenever the user clicks inside the iframe.
+  document.addEventListener('click', e => {
+    if (!WB.iframe || !WB.iframe.contains(e.target)) return;
+    setStatEvt('click');
+  }, true);
+})();
+</script>
+</body>
+</html>"""
+
+
+# Default landing remains V2 for now. V3 served when ?ui=v3 is requested.
 # V1 preserved as LANDING_V1_HTML for rollback.
 LANDING_HTML = LANDING_V2_HTML
 
