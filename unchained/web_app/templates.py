@@ -4538,9 +4538,10 @@ async function runScenario(key) {
 </html>"""
 
 
-# Default landing remains V2 for now. V3 served when ?ui=v3 is requested.
+# V3 is now the default landing. V2 still served on ?ui=v2 (cookie persists
+# 24h via handle_index) so previous visitors and bookmarks keep working.
 # V1 preserved as LANDING_V1_HTML for rollback.
-LANDING_HTML = LANDING_V2_HTML
+LANDING_HTML = LANDING_V3_HTML
 
 
 # ---------------------------------------------------------------------------
