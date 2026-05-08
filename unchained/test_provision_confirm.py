@@ -310,7 +310,7 @@ class TestCodexProvisioningHooks(unittest.TestCase):
         mock_codex_sdk.assert_called_once_with("u3", "k3", "p3")
 
         url = _spawn_provider_agent("codex-cli", "u4", "k4", "p4")
-        self.assertEqual(url, "/chat-codex?model=codex-cli:gpt-5.5")
+        self.assertEqual(url, "/local?provider=codex-cli")
 
         url = _spawn_provider_agent("unknown", "u5", "k5", "p5")
         self.assertIsNone(url)

@@ -618,7 +618,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>Open the chat page</div>
       </div>
       <a href="/setup?provider=codex-sdk" class="card-btn">Setup &#8594;</a>
-      <a href="/chat-codex" class="card-btn card-btn-secondary">Open Chat &#8594;</a>
+      <a href="/local?provider=codex-cli" class="card-btn card-btn-secondary">Open Chat &#8594;</a>
     </div>
     </div>
 
@@ -656,7 +656,7 @@ body::before{
         <div class="step"><span class="step-num">1</span>Install local agent and Codex CLI</div>
         <div class="step"><span class="step-num">2</span>Choose Codex CLI models in chat</div>
       </div>
-      <a href="/chat-codex?model=codex-cli:gpt-5.5" class="card-btn">Open Chat &#8594;</a>
+      <a href="/local?provider=codex-cli" class="card-btn">Open Chat &#8594;</a>
     </div>
 
     <!-- Unchained CLI -->
@@ -1523,7 +1523,7 @@ body::before{
         <div class="step"><span class="step-num">2</span>Open the chat page</div>
       </div>
       <a href="/setup?provider=codex-sdk" class="card-btn">Setup &#8594;</a>
-      <a href="/chat-codex" class="card-btn card-btn-secondary">Open Chat &#8594;</a>
+      <a href="/local?provider=codex-cli" class="card-btn card-btn-secondary">Open Chat &#8594;</a>
     </div>
     </div>
 
@@ -1561,7 +1561,7 @@ body::before{
         <div class="step"><span class="step-num">1</span>Install local agent and Codex CLI</div>
         <div class="step"><span class="step-num">2</span>Choose Codex CLI models in chat</div>
       </div>
-      <a href="/chat-codex?model=codex-cli:gpt-5.5" class="card-btn">Open Chat &#8594;</a>
+      <a href="/local?provider=codex-cli" class="card-btn">Open Chat &#8594;</a>
     </div>
 
     <!-- MCP -->
@@ -3224,7 +3224,7 @@ a{color:inherit;text-decoration:none}
           <span class="chip-meta">Claude Pro &middot; Max subscription</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
-        <a href="/chat-codex?model=codex-cli:gpt-5.5" class="provider-chip cli">
+        <a href="/local?provider=codex-cli" class="provider-chip cli">
           <span class="chip-dot"></span>
           <span class="chip-name">Codex CLI</span>
           <span class="chip-meta">ChatGPT Plus subscription</span>
@@ -16509,7 +16509,7 @@ function providerLabel(provider) {
 
 function providerChatUrl(provider) {
   if (provider === 'claude-sdk') return '/chat-claude';
-  if (provider === 'codex-cli') return '/chat-codex?model=codex-cli:gpt-5.5';
+  if (provider === 'codex-cli') return '/local?provider=codex-cli';
   return provider === 'gemini' ? '/chat-gemini' : '/chat-codex';
 }
 

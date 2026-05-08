@@ -119,7 +119,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
             "/local": "client-update-btn",
             "/setup": "setup-client-update-btn",
             "/install": "install-client-update-btn",
-            "/chat-codex": "client-update-btn",
+            "/local?provider=codex-cli": "client-update-btn",
         }
         for path, marker in expected_pages.items():
             with self.subTest(path=path):
