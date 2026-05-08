@@ -109,8 +109,10 @@ async def handle_chat_codex_page(request: web.Request) -> web.Response:
     if core._is_pending_user(auth_info):
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    core._track_redirect(request, "/local?provider=codex-cli", reason="legacy_route_alias")
-    raise web.HTTPFound("/local?provider=codex-cli")
+    model = request.query.get("model", "").strip().lower()
+    target = "/local?provider=codex-cli" if model.startswith("codex-cli:") else "/local?provider=codex-sdk"
+    core._track_redirect(request, target, reason="legacy_route_alias")
+    raise web.HTTPFound(target)
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
@@ -429,7 +431,7 @@ async def handle_local_page(request: web.Request) -> web.Response:
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
     provider = request.query.get("provider", "").strip().lower()
-    html_source = core.CHAT_CODEX_HTML if provider == "codex-cli" else core.CLAUDE_CHAT_HTML
+    html_source = core.CHAT_CODEX_HTML if provider in {"codex-cli", "codex-sdk"} else core.CLAUDE_CHAT_HTML
     html = core.inject_google_client_id(html_source, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 

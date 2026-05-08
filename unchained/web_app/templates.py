@@ -16510,7 +16510,8 @@ function providerLabel(provider) {
 function providerChatUrl(provider) {
   if (provider === 'claude-sdk') return '/chat-claude';
   if (provider === 'codex-cli') return '/local?provider=codex-cli';
-  return provider === 'gemini' ? '/chat-gemini' : '/chat-codex';
+  if (provider === 'codex-sdk') return '/local?provider=codex-sdk';
+  return provider === 'gemini' ? '/chat-gemini' : '/local';
 }
 
 function updateProvisionUiTexts() {

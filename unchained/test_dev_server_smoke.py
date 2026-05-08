@@ -117,15 +117,19 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
             "/": "Get Started",
             "/tab": "Ready for navigation",
             "/local": "client-update-btn",
+            "/local?provider=codex-cli": "client-update-btn",
             "/setup": "setup-client-update-btn",
             "/install": "install-client-update-btn",
-            "/local?provider=codex-cli": "client-update-btn",
         }
         for path, marker in expected_pages.items():
             with self.subTest(path=path):
                 page = await self._client.get(path)
                 self.assertEqual(page.status_code, 200)
                 self.assertIn(marker, page.text)
+
+        response = await self._client.get("/chat-codex?model=codex-cli:gpt-5.5")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["location"], "/local?provider=codex-cli")
 
         self.assertTrue(login["agent_id"].startswith("claude-"))
 
