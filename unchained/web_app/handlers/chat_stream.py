@@ -48,7 +48,7 @@ def _broadcast_overlay(session_id: str, event: dict) -> None:
 
 
 def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
-                     prompt_text: str, user_id: str = "", slot: int | None = None) -> None:
+                     prompt_text: str, user_id: str = "", model: str = "", slot: int | None = None) -> None:
     """Inject the overlay panel via direct CDP and start outbox poller.
 
     Uses cloud_tools.run_js() — same path as DDM, click, navigate.
@@ -86,12 +86,14 @@ def _inject_overlay(core, session_id: str, agent_id: str, tab_id: str,
                 agent_id=agent_id,
                 tab_id=tab_id,
                 user_id=user_id,
+                model=model,
                 slot=slot,
             )
             core._overlay_sessions[session_id] = overlay
         else:
             overlay.agent_id = agent_id
             overlay.tab_id = tab_id
+            overlay.model = model
             if slot is not None:
                 overlay.slot = slot
 
@@ -751,7 +753,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     overlay_tab = tab_id or "auto"
     if not guest_mode and not is_openrouter:
         _inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message,
-                        user_id=auth_info.get("user_id", ""), slot=slot)
+                        user_id=auth_info.get("user_id", ""), model=model, slot=slot)
 
     resp = web.StreamResponse(
         status=200,
