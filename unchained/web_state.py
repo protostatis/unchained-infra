@@ -25,6 +25,7 @@ class OverlaySessionState:
     agent_id: str
     tab_id: str  # concrete tab ID or "auto" (bridge resolves to active tab)
     user_id: str
+    model: str = ""
     slot: int | None = None
     injected: bool = False
     pending_events: list = field(default_factory=list)  # buffered before bridge injection

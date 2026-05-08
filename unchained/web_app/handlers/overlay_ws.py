@@ -44,6 +44,8 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         "message": message,
         "req_id": req_id,
     }
+    if overlay.model:
+        ws_msg["model"] = overlay.model
     if overlay.tab_id:
         ws_msg["tab_id"] = overlay.tab_id
     if overlay.slot is not None:

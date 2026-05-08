@@ -24,14 +24,25 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+def _discard_task(coro):
+    coro.close()
+    return MagicMock()
+
+
 class TestOverlayAutoTabInjection(unittest.TestCase):
     """Regression: PR #156 rejected tab_id='auto', breaking local bridge overlay."""
 
     def setUp(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.create_task_patcher = patch(
+            "web_app.handlers.chat_stream.asyncio.create_task",
+            side_effect=_discard_task,
+        )
+        self.create_task_patcher.start()
 
     def tearDown(self):
+        self.create_task_patcher.stop()
         self.loop.close()
 
     def test_inject_overlay_accepts_auto(self):
@@ -100,8 +111,14 @@ class TestOverlayInjectionErrorPath(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.create_task_patcher = patch(
+            "web_app.handlers.chat_stream.asyncio.create_task",
+            side_effect=_discard_task,
+        )
+        self.create_task_patcher.start()
 
     def tearDown(self):
+        self.create_task_patcher.stop()
         self.loop.close()
 
     def test_injection_failure_does_not_mark_injected(self):
@@ -212,6 +229,44 @@ class TestOverlayAutoTabDownstreamConsumers(unittest.TestCase):
             ws_msg["tab_id"] = overlay.tab_id
         self.assertNotIn("tab_id", ws_msg)
 
+    def test_route_followup_forwards_model(self):
+        """Overlay follow-ups should preserve the active model lane."""
+        from web_state import OverlaySessionState
+        from web_app.handlers.overlay_ws import _route_followup
+
+        core = MagicMock()
+        overlay = OverlaySessionState(
+            session_id="s-model-001",
+            agent_id="agent-1",
+            tab_id="auto",
+            user_id="u1",
+            model="codex-cli:gpt-5.5",
+            injected=True,
+        )
+        agent_ws = MagicMock()
+        agent_ws.closed = False
+        agent_ws.send_json = AsyncMock(return_value=None)
+        core._overlay_sessions = {"s-model-001": overlay}
+        core._chat_agents = {"agent-1": agent_ws}
+        core._session_agents = {}
+        core._response_queues = {}
+        core._response_req_ids = {}
+        core._session_last_active = {}
+
+        async def _run_route():
+            with patch("web_app.handlers.overlay_ws._core", return_value=core), \
+                 patch("web_app.handlers.overlay_ws.asyncio.create_task", side_effect=_discard_task):
+                await _route_followup(core, "s-model-001", "follow up")
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_run_route())
+        finally:
+            loop.close()
+
+        sent_msg = agent_ws.send_json.await_args.args[0]
+        self.assertEqual(sent_msg["model"], "codex-cli:gpt-5.5")
+
 
 class TestOverlayConcurrentSessions(unittest.TestCase):
     """Verify concurrent sessions with 'auto' don't corrupt each other's state."""
@@ -219,8 +274,14 @@ class TestOverlayConcurrentSessions(unittest.TestCase):
     def setUp(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.create_task_patcher = patch(
+            "web_app.handlers.chat_stream.asyncio.create_task",
+            side_effect=_discard_task,
+        )
+        self.create_task_patcher.start()
 
     def tearDown(self):
+        self.create_task_patcher.stop()
         self.loop.close()
 
     def test_two_auto_sessions_get_separate_state(self):
