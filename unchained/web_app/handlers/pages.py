@@ -102,15 +102,17 @@ async def handle_chat_gemini_page(request: web.Request) -> web.Response:
 
 
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
-    """Serve the Codex chat HTML page (per-user provisioned key)."""
+    """Redirect legacy Codex CLI chat route to the shared local page."""
     core = _core()
     core._track_page_view(request)
     auth_info = core._authenticate(request)
     if core._is_pending_user(auth_info):
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = core.inject_google_client_id(core.CHAT_CODEX_HTML, core.GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    model = request.query.get("model", "").strip().lower()
+    target = "/local?provider=codex-cli" if model.startswith("codex-cli:") else "/local?provider=codex-sdk"
+    core._track_redirect(request, target, reason="legacy_route_alias")
+    raise web.HTTPFound(target)
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
@@ -428,7 +430,9 @@ async def handle_local_page(request: web.Request) -> web.Response:
     if core._is_pending_user(auth_info):
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = core.inject_google_client_id(core.CLAUDE_CHAT_HTML, core.GOOGLE_CLIENT_ID)
+    provider = request.query.get("provider", "").strip().lower()
+    html_source = core.CHAT_CODEX_HTML if provider in {"codex-cli", "codex-sdk"} else core.CLAUDE_CHAT_HTML
+    html = core.inject_google_client_id(html_source, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 

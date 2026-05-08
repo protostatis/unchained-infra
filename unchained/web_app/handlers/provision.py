@@ -53,9 +53,9 @@ def spawn_provider_agent(
         return "/chat-claude"
     if provider == "codex-sdk":
         core._spawn_codex_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-codex"
+        return "/local?provider=codex-sdk"
     if provider == "codex-cli":
-        return "/chat-codex?model=codex-cli:gpt-5.5"
+        return "/local?provider=codex-cli"
     return None
 
 
