@@ -102,7 +102,6 @@ CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
 CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
-CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -2013,34 +2012,8 @@ async def handle_message_codex(
     codex_tool_items: dict[str, tuple[str, str]] = {}
     codex_tool_start_times: dict[str, float] = {}  # item_id -> monotonic start
     SEARCH_TIMEOUT_S = float(os.environ.get("SEARCH_TIMEOUT_S", "60"))
-    timed_out = False
-    deadline = time.monotonic() + CODEX_MAX_RUNTIME_S if CODEX_MAX_RUNTIME_S > 0 else None
 
-    while True:
-        read_timeout = 1.0
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                break
-            read_timeout = min(read_timeout, max(0.05, remaining))
-        # Check for stalled search tools
-        if SEARCH_TIMEOUT_S > 0 and codex_tool_start_times:
-            now = time.monotonic()
-            for _tid, _tstart in list(codex_tool_start_times.items()):
-                elapsed = now - _tstart
-                if elapsed > SEARCH_TIMEOUT_S:
-                    tool_name = codex_tool_items.get(_tid, ("search", ""))[0]
-                    log.info("[%s] Search tool %s stalled after %.0fs, killing subprocess", sid, tool_name, elapsed)
-                    timed_out = True
-                    error_text = f"Search timed out after {int(elapsed)}s — please try again"
-                    break
-            if timed_out:
-                break
-        try:
-            raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=read_timeout)
-        except asyncio.TimeoutError:
-            continue
+    async for raw_line in proc.stdout:
         if not raw_line:
             break
         line = raw_line.decode(errors="replace").strip()
@@ -2191,23 +2164,7 @@ async def handle_message_codex(
                 error_text = msg.strip()
             continue
 
-    if timed_out:
-        if not error_text:
-            error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except Exception:
-            proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except Exception:
-                proc.kill()
-            await proc.wait()
-    else:
-        await proc.wait()
+    await proc.wait()
 
     # Preferred fallback: Codex CLI can write the final assistant text to a file.
     if not response:
@@ -2223,9 +2180,6 @@ async def handle_message_codex(
     if not response and streamed_text:
         response = streamed_text.strip()
 
-    if timed_out and not response:
-        response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
-
     if proc.returncode and proc.returncode < 0:
         proc_pid = getattr(proc, "pid", None)
         was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
@@ -2240,11 +2194,8 @@ async def handle_message_codex(
                 pass
             return
         if not response:
-            if timed_out:
-                response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
-            else:
-                sig = -proc.returncode
-                response = f"Codex CLI terminated unexpectedly (signal {sig})."
+            sig = -proc.returncode
+            response = f"Codex CLI terminated unexpectedly (signal {sig})."
 
     if not response:
         stderr_text = (await proc.stderr.read()).decode(errors="replace").strip()
