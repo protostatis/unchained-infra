@@ -92,6 +92,8 @@ def _format_tab_id_for_display(real_id: str, slot: str) -> str:
 
 def cmd(action, **kwargs):
     payload = {"action": action, "tab_id": TAB_ID, **kwargs}
+    # session_id lets the server reuse the bridge chosen for this chat turn;
+    # bridge_agent_id is a validated fallback when no session map exists yet.
     if CHAT_SESSION_ID:
         payload["session_id"] = CHAT_SESSION_ID
     if BRIDGE_AGENT_ID:

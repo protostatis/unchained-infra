@@ -8481,9 +8481,6 @@ async function checkAgentStatus() {
       updateAgentStatusUI({
         chat_connected: data.gemini_connected || false,
         bridge_connected: !!data.bridge_connected,
-        active_bridge_profile: data.active_bridge_profile || data.bridge_profile || '',
-        bridge_profile: data.bridge_profile || '',
-        bridge_status_reason: data.bridge_status_reason || '',
         mismatch: !!data.mismatch,
       });
       if (data.gemini_agent_id && !_userName) {
@@ -9049,9 +9046,6 @@ _API_CHAT_GEMINI_STATUS_POLL_SNIPPET = "fetch('/web/chat/status?gemini=1')"
 _API_CHAT_GEMINI_STATUS_UPDATE_SNIPPET = """      updateAgentStatusUI({
         chat_connected: data.gemini_connected || false,
         bridge_connected: !!data.bridge_connected,
-        active_bridge_profile: data.active_bridge_profile || data.bridge_profile || '',
-        bridge_profile: data.bridge_profile || '',
-        bridge_status_reason: data.bridge_status_reason || '',
         mismatch: !!data.mismatch,
       });"""
 
@@ -9120,9 +9114,6 @@ _API_CHAT_CLAUDE_SDK_REPLACEMENTS = (
         """      updateAgentStatusUI({
         chat_connected: data.claude_sdk_connected || false,
         bridge_connected: !!data.bridge_connected,
-        active_bridge_profile: data.active_bridge_profile || data.bridge_profile || '',
-        bridge_profile: data.bridge_profile || '',
-        bridge_status_reason: data.bridge_status_reason || '',
         mismatch: !!data.mismatch,
       });""",
         "Claude SDK status update mapping",
@@ -9221,9 +9212,6 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
         """      updateAgentStatusUI({
         chat_connected: data.codex_connected || false,
         bridge_connected: !!data.bridge_connected,
-        active_bridge_profile: data.active_bridge_profile || data.bridge_profile || '',
-        bridge_profile: data.bridge_profile || '',
-        bridge_status_reason: data.bridge_status_reason || '',
         mismatch: !!data.mismatch,
       });""",
         "Codex status update mapping",

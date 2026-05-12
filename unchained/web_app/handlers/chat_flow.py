@@ -684,6 +684,9 @@ async def check_relay_agent(agent_id: str) -> bool:
             additional_headers=core._relay_auth_headers() or None,
         ) as ws:
             try:
+                # A connected agent leaves the CDP socket idle until the client sends.
+                # Immediate close means the relay accepted the handshake but rejected
+                # this agent/auth, so do not count the bridge as online.
                 await asyncio.wait_for(ws.recv(), timeout=0.25)
             except asyncio.TimeoutError:
                 await ws.close()
@@ -744,18 +747,23 @@ async def list_relay_agents_for_auth(auth_info: dict) -> list[dict]:
         url = f"{scheme}://{relay_host}/api/agents"
     else:
         url = f"{scheme}://{relay_host}:{relay_port}/api/agents"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                timeout=3,
-                headers={"Authorization": f"Bearer {key}"},
-            )
-        if not resp.is_success:
-            return []
-        agents = resp.json()
-    except Exception:
-        return []
+    agents = []
+    timeout = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=2.0)
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+            if not resp.is_success:
+                return []
+            agents = resp.json()
+            break
+        except Exception:
+            if attempt == 1:
+                return []
+            await asyncio.sleep(0.1)
     if not isinstance(agents, list):
         return []
     out: list[dict] = []
@@ -799,10 +807,19 @@ async def resolve_bridge_agent(
         profile = normalize_bridge_profile(raw_profile)
         expected_agent_id = bridge_agent_id_for_profile(auth_info, profile)
 
-    connected = await core._check_relay_agent(expected_agent_id) if expected_agent_id else False
+    resolution_error = False
+    try:
+        connected = await core._check_relay_agent(expected_agent_id) if expected_agent_id else False
+    except Exception:
+        connected = False
+        resolution_error = True
     available: list[dict] = []
     if not connected:
-        agents = await core._list_relay_agents_for_auth(auth_info)
+        try:
+            agents = await core._list_relay_agents_for_auth(auth_info)
+        except Exception:
+            agents = []
+            resolution_error = True
         available = [a for a in agents if _is_bridge_agent_for_auth(auth_info, a.get("agent_id", ""))]
     by_id = {a["agent_id"]: a for a in available if a.get("agent_id")}
 
@@ -825,10 +842,10 @@ async def resolve_bridge_agent(
         and len(available) > 1
         and expected_agent_id not in by_id
     )
-    status_reason = "online" if connected else "offline"
+    status_reason = "online" if connected else ("resolution_error" if resolution_error else "offline")
     if selection_required:
         status_reason = "profile_required"
-    elif explicit_profile and not connected and profile != "default":
+    elif explicit_profile and not connected and profile != "default" and not resolution_error:
         status_reason = "profile_offline"
 
     return {
@@ -921,10 +938,25 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         )
         core._attach_first_look_guest_cookies(guest_resp, request, guest_id)
         return guest_resp
-    bridge_info = await core._resolve_bridge_agent(
-        auth_info,
-        request.query.get("bridge_profile") if "bridge_profile" in request.query else None,
-    )
+    try:
+        bridge_info = await core._resolve_bridge_agent(
+            auth_info,
+            request.query.get("bridge_profile") if "bridge_profile" in request.query else None,
+        )
+    except Exception as e:
+        log.warning("[chat-status] bridge resolution failed: %s", e)
+        fallback_agent = auth_info.get("agent_id", "")
+        bridge_info = {
+            "bridge_agent_id": fallback_agent,
+            "active_bridge_agent_id": fallback_agent,
+            "bridge_profile": "default",
+            "active_bridge_profile": "default",
+            "bridge_connected": False,
+            "bridge_configured": bool(fallback_agent),
+            "available_bridge_profiles": [],
+            "bridge_selection_required": False,
+            "bridge_status_reason": "resolution_error",
+        }
     bridge_agent_id = bridge_info.get("bridge_agent_id", "")
     agent_id = auth_info.get("agent_id", "")
     ws = core._chat_agents.get(agent_id)

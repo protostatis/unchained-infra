@@ -1705,16 +1705,38 @@ async def handle_cmd(request: web.Request) -> web.Response:
     session_id = str(body.get("session_id") or body.get("chat_session_id") or "").strip()
     requested_bridge_agent = str(body.get("bridge_agent_id") or "").strip()
     agent_id = auth_info.get("agent_id")
+    agent_source = "auth"
     mapped_agent_id = _session_agent_map.get(session_id) if session_id else ""
     if mapped_agent_id:
         agent_id = mapped_agent_id
+        agent_source = "session_map"
     else:
-        bridge_info = await _resolve_bridge_agent(
-            auth_info,
-            preferred_agent_id=requested_bridge_agent,
-        )
-        agent_id = bridge_info.get("bridge_agent_id") or agent_id
+        try:
+            bridge_info = await _resolve_bridge_agent(
+                auth_info,
+                preferred_agent_id=requested_bridge_agent,
+            )
+            resolved_agent_id = bridge_info.get("bridge_agent_id")
+            if resolved_agent_id:
+                agent_id = resolved_agent_id
+                agent_source = "bridge"
+        except Exception as e:
+            _trace(
+                "cmd.bridge_resolution_error",
+                req_id=req_id,
+                user_id=auth_info.get("user_id", ""),
+                requested_bridge_agent=requested_bridge_agent or "-",
+                error=str(e)[:160],
+            )
     tab_id = body.get("tab_id", "auto")
+    _trace(
+        "cmd.agent_resolved",
+        req_id=req_id,
+        agent_id=agent_id or "-",
+        source=agent_source,
+        session_id=session_id or "-",
+        requested_bridge_agent=requested_bridge_agent or "-",
+    )
     _trace(
         "cmd.in",
         req_id=req_id,

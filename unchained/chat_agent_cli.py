@@ -117,6 +117,8 @@ def _sanitize_bridge_profile(name: str) -> str:
 
 
 BRIDGE_PROFILE = _sanitize_bridge_profile(os.environ.get("CDP_PROFILE", "default"))
+# Default-profile bridges intentionally use the account-scoped agent ID; only
+# named bridge profiles receive a relay suffix.
 BRIDGE_AGENT_ID = (
     AGENT_ID if not AGENT_ID or BRIDGE_PROFILE == "default" else f"{AGENT_ID}-{BRIDGE_PROFILE}"
 )
