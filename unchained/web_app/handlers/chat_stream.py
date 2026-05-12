@@ -675,11 +675,17 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             status=400,
         )
 
-    cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else agent_id
+    bridge_info = {}
+    if not use_headless:
+        bridge_info = await core._resolve_bridge_agent(
+            auth_info,
+            body.get("bridge_profile") if "bridge_profile" in body else None,
+        )
+    cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else (bridge_info.get("bridge_agent_id") or agent_id)
 
     tab_id = core._session_tabs.get(session_id)
     if selected_profile_path:
-        allowed_paths = await _allowed_profile_paths(core, agent_id)
+        allowed_paths = await _allowed_profile_paths(core, cdp_agent_id)
         if selected_profile_path not in allowed_paths:
             core._response_queues.pop(session_id, None)
             return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
@@ -725,6 +731,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             ws_msg["tab_id"] = tab_id
         if not selected_profile_path:
             core._session_profile_paths.pop(session_id, None)
+        if cdp_agent_id:
+            core._session_agent_map[session_id] = cdp_agent_id
         core._session_last_active[session_id] = time.time()
         await ws.send_json(ws_msg)
         core._trace(

@@ -1641,6 +1641,8 @@ from web_app.handlers.chat_flow import (
     handle_chat_slots,
     handle_chat_status,
     handle_chat_switch,
+    list_relay_agents_for_auth as _list_relay_agents_for_auth,
+    resolve_bridge_agent as _resolve_bridge_agent,
     resolve_chat_agent_id as _resolve_chat_agent_id,
 )
 from web_app.handlers.chat_stream import handle_chat_cancel, handle_chat_msg, handle_chat_ws
@@ -1700,8 +1702,41 @@ async def handle_cmd(request: web.Request) -> web.Response:
 
     req_id = _request_id(request)
     action = body.get("action")
-    agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
+    session_id = str(body.get("session_id") or body.get("chat_session_id") or "").strip()
+    requested_bridge_agent = str(body.get("bridge_agent_id") or "").strip()
+    agent_id = auth_info.get("agent_id")
+    agent_source = "auth"
+    mapped_agent_id = _session_agent_map.get(session_id) if session_id else ""
+    if mapped_agent_id:
+        agent_id = mapped_agent_id
+        agent_source = "session_map"
+    else:
+        try:
+            bridge_info = await _resolve_bridge_agent(
+                auth_info,
+                preferred_agent_id=requested_bridge_agent,
+            )
+            resolved_agent_id = bridge_info.get("bridge_agent_id")
+            if resolved_agent_id:
+                agent_id = resolved_agent_id
+                agent_source = "bridge"
+        except Exception as e:
+            _trace(
+                "cmd.bridge_resolution_error",
+                req_id=req_id,
+                user_id=auth_info.get("user_id", ""),
+                requested_bridge_agent=requested_bridge_agent or "-",
+                error=str(e)[:160],
+            )
     tab_id = body.get("tab_id", "auto")
+    _trace(
+        "cmd.agent_resolved",
+        req_id=req_id,
+        agent_id=agent_id or "-",
+        source=agent_source,
+        session_id=session_id or "-",
+        requested_bridge_agent=requested_bridge_agent or "-",
+    )
     _trace(
         "cmd.in",
         req_id=req_id,

@@ -683,10 +683,182 @@ async def check_relay_agent(agent_id: str) -> bool:
             open_timeout=3,
             additional_headers=core._relay_auth_headers() or None,
         ) as ws:
+            try:
+                # A connected agent leaves the CDP socket idle until the client sends.
+                # Immediate close means the relay accepted the handshake but rejected
+                # this agent/auth, so do not count the bridge as online.
+                await asyncio.wait_for(ws.recv(), timeout=0.25)
+            except asyncio.TimeoutError:
+                await ws.close()
+                return True
+            except websockets.exceptions.ConnectionClosed:
+                return False
             await ws.close()
             return True
     except Exception:
         return False
+
+
+def normalize_bridge_profile(raw: object) -> str:
+    """Normalize a relay bridge profile name the same way the local bridge does."""
+    profile = str(raw or "").strip() or "default"
+    profile = profile.replace(" ", "_").replace(".", "_")
+    profile = re.sub(r"[^a-zA-Z0-9_-]", "", profile)[:32]
+    return profile or "default"
+
+
+def bridge_agent_id_for_profile(auth_info: dict, profile: object = "default") -> str:
+    """Return the relay agent id for this user's browser bridge profile."""
+    base = str(auth_info.get("agent_id", "") or "").strip()
+    if not base:
+        return ""
+    normalized = normalize_bridge_profile(profile)
+    return base if normalized == "default" else f"{base}-{normalized}"
+
+
+def _profile_from_bridge_agent_id(auth_info: dict, agent_id: str) -> str:
+    base = str(auth_info.get("agent_id", "") or "").strip()
+    aid = str(agent_id or "").strip()
+    if not base or aid == base:
+        return "default"
+    prefix = f"{base}-"
+    if aid.startswith(prefix):
+        return normalize_bridge_profile(aid[len(prefix):])
+    return "default"
+
+
+def _is_bridge_agent_for_auth(auth_info: dict, agent_id: str) -> bool:
+    base = str(auth_info.get("agent_id", "") or "").strip()
+    aid = str(agent_id or "").strip()
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", aid):
+        return False
+    return bool(base and (aid == base or aid.startswith(f"{base}-")))
+
+
+async def list_relay_agents_for_auth(auth_info: dict) -> list[dict]:
+    """Return relay-connected bridge agents owned by the authenticated user."""
+    key = str(auth_info.get("key", "") or "").strip()
+    if not key:
+        return []
+    core = _core()
+    relay_host, relay_port = core._parse_relay()
+    scheme = "https" if relay_port == 443 else "http"
+    if relay_port in (443, 80):
+        url = f"{scheme}://{relay_host}/api/agents"
+    else:
+        url = f"{scheme}://{relay_host}:{relay_port}/api/agents"
+    agents = []
+    timeout = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=2.0)
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+            if not resp.is_success:
+                return []
+            agents = resp.json()
+            break
+        except Exception:
+            if attempt == 1:
+                return []
+            await asyncio.sleep(0.1)
+    if not isinstance(agents, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        aid = str(agent.get("agent_id", "") or "").strip()
+        if not _is_bridge_agent_for_auth(auth_info, aid) or aid in seen:
+            continue
+        profile = normalize_bridge_profile(
+            agent.get("profile") or _profile_from_bridge_agent_id(auth_info, aid)
+        )
+        seen.add(aid)
+        out.append({"agent_id": aid, "profile": profile, "connected": True})
+    out.sort(key=lambda a: (a.get("profile") != "default", a.get("profile", ""), a.get("agent_id", "")))
+    return out
+
+
+async def resolve_bridge_agent(
+    auth_info: dict,
+    preferred_profile: object | None = None,
+    preferred_agent_id: str = "",
+) -> dict:
+    """Resolve the browser bridge independently from the account-scoped chat agent."""
+    core = _core()
+    base_agent_id = str(auth_info.get("agent_id", "") or "").strip()
+    local_caps = core._chat_agent_caps.get(base_agent_id, {}) if base_agent_id else {}
+    explicit_profile = preferred_profile is not None
+    raw_profile = preferred_profile
+    if raw_profile is None:
+        raw_profile = local_caps.get("bridge_profile") or ""
+        explicit_profile = bool(raw_profile)
+    requested_agent = str(preferred_agent_id or "").strip()
+
+    if requested_agent and _is_bridge_agent_for_auth(auth_info, requested_agent):
+        profile = _profile_from_bridge_agent_id(auth_info, requested_agent)
+        expected_agent_id = requested_agent
+        explicit_profile = True
+    else:
+        profile = normalize_bridge_profile(raw_profile)
+        expected_agent_id = bridge_agent_id_for_profile(auth_info, profile)
+
+    resolution_error = False
+    try:
+        connected = await core._check_relay_agent(expected_agent_id) if expected_agent_id else False
+    except Exception:
+        connected = False
+        resolution_error = True
+    available: list[dict] = []
+    if not connected:
+        try:
+            agents = await core._list_relay_agents_for_auth(auth_info)
+        except Exception:
+            agents = []
+            resolution_error = True
+        available = [a for a in agents if _is_bridge_agent_for_auth(auth_info, a.get("agent_id", ""))]
+    by_id = {a["agent_id"]: a for a in available if a.get("agent_id")}
+
+    if expected_agent_id in by_id:
+        connected = True
+        profile = normalize_bridge_profile(by_id[expected_agent_id].get("profile", profile))
+    elif not explicit_profile and available:
+        default_agent = base_agent_id
+        selected = by_id.get(default_agent)
+        if selected is None and len(available) == 1:
+            selected = available[0]
+        if selected is not None:
+            expected_agent_id = selected["agent_id"]
+            profile = normalize_bridge_profile(selected.get("profile", "default"))
+            connected = True
+
+    selection_required = (
+        not explicit_profile
+        and not connected
+        and len(available) > 1
+        and expected_agent_id not in by_id
+    )
+    status_reason = "online" if connected else ("resolution_error" if resolution_error else "offline")
+    if selection_required:
+        status_reason = "profile_required"
+    elif explicit_profile and not connected and profile != "default" and not resolution_error:
+        status_reason = "profile_offline"
+
+    return {
+        "bridge_agent_id": expected_agent_id,
+        "active_bridge_agent_id": expected_agent_id,
+        "bridge_profile": profile,
+        "active_bridge_profile": profile,
+        "bridge_connected": connected,
+        "bridge_configured": bool(expected_agent_id),
+        "available_bridge_profiles": available,
+        "bridge_selection_required": selection_required,
+        "bridge_status_reason": status_reason,
+    }
 
 
 def resolve_chat_agent_id(auth_info: dict, model: str) -> str:
@@ -766,15 +938,32 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         )
         core._attach_first_look_guest_cookies(guest_resp, request, guest_id)
         return guest_resp
-    bridge_agent_id = auth_info.get("agent_id", "")
-    agent_id = bridge_agent_id
+    try:
+        bridge_info = await core._resolve_bridge_agent(
+            auth_info,
+            request.query.get("bridge_profile") if "bridge_profile" in request.query else None,
+        )
+    except Exception as e:
+        log.warning("[chat-status] bridge resolution failed: %s", e)
+        fallback_agent = auth_info.get("agent_id", "")
+        bridge_info = {
+            "bridge_agent_id": fallback_agent,
+            "active_bridge_agent_id": fallback_agent,
+            "bridge_profile": "default",
+            "active_bridge_profile": "default",
+            "bridge_connected": False,
+            "bridge_configured": bool(fallback_agent),
+            "available_bridge_profiles": [],
+            "bridge_selection_required": False,
+            "bridge_status_reason": "resolution_error",
+        }
+    bridge_agent_id = bridge_info.get("bridge_agent_id", "")
+    agent_id = auth_info.get("agent_id", "")
     ws = core._chat_agents.get(agent_id)
     chat_connected = ws is not None and not ws.closed
     connected = chat_connected
     chat_only = request.query.get("chat_only") == "1"
-    bridge_connected = False
-    if bridge_agent_id:
-        bridge_connected = await core._check_relay_agent(bridge_agent_id)
+    bridge_connected = bool(bridge_info.get("bridge_connected"))
     if not connected and agent_id and not chat_only:
         connected = bridge_connected
 
@@ -883,6 +1072,13 @@ async def handle_chat_status(request: web.Request) -> web.Response:
     resp["chat_agent_id"] = agent_id
     resp["bridge_connected"] = bridge_connected
     resp["bridge_agent_id"] = bridge_agent_id
+    resp["active_bridge_agent_id"] = bridge_info.get("active_bridge_agent_id", bridge_agent_id)
+    resp["bridge_profile"] = bridge_info.get("bridge_profile", "default")
+    resp["active_bridge_profile"] = bridge_info.get("active_bridge_profile", "default")
+    resp["available_bridge_profiles"] = bridge_info.get("available_bridge_profiles", [])
+    resp["bridge_selection_required"] = bool(bridge_info.get("bridge_selection_required"))
+    resp["bridge_status_reason"] = bridge_info.get("bridge_status_reason", "offline")
+    resp["bridge_configured"] = bool(bridge_info.get("bridge_configured"))
     resp["client_agent_id"] = local_client_agent_id
     resp["client_connected"] = local_client_connected
     resp.update(_client_version_status(core._chat_agent_caps.get(local_client_agent_id, {})))

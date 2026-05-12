@@ -33,6 +33,8 @@ API_KEY = os.environ.get("UNCHAINED_API_KEY", "")
 API_URL = os.environ.get("UNCHAINED_API_URL", "https://api.unchainedsky.com")
 DEFAULT_NEW_TAB_PATH = "/tab"
 TAB_ID = os.environ.get("CDP_TAB_ID", "auto")
+BRIDGE_AGENT_ID = os.environ.get("CDP_AGENT_ID", "")
+CHAT_SESSION_ID = os.environ.get("UNCHAINED_CHAT_SESSION_ID", "")
 CDP_HOST = os.environ.get("CDP_HOST", "127.0.0.1")
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
 DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
@@ -89,7 +91,14 @@ def _format_tab_id_for_display(real_id: str, slot: str) -> str:
 
 
 def cmd(action, **kwargs):
-    body = json.dumps({"action": action, "tab_id": TAB_ID, **kwargs}).encode()
+    payload = {"action": action, "tab_id": TAB_ID, **kwargs}
+    # session_id lets the server reuse the bridge chosen for this chat turn;
+    # bridge_agent_id is a validated fallback when no session map exists yet.
+    if CHAT_SESSION_ID:
+        payload["session_id"] = CHAT_SESSION_ID
+    if BRIDGE_AGENT_ID:
+        payload["bridge_agent_id"] = BRIDGE_AGENT_ID
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{API_URL}/web/cmd",
         data=body,
