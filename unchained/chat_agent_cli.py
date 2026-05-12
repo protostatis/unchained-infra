@@ -108,6 +108,19 @@ AGENT_ID = ""
 if KEY:
     AGENT_ID = f"claude-{hashlib.sha256(KEY.encode()).hexdigest()[:8]}"
 
+
+def _sanitize_bridge_profile(name: str) -> str:
+    name = str(name or "").strip() or "default"
+    name = name.replace(" ", "_").replace(".", "_")
+    name = re.sub(r"[^a-zA-Z0-9_-]", "", name)
+    return name[:32] or "default"
+
+
+BRIDGE_PROFILE = _sanitize_bridge_profile(os.environ.get("CDP_PROFILE", "default"))
+BRIDGE_AGENT_ID = (
+    AGENT_ID if not AGENT_ID or BRIDGE_PROFILE == "default" else f"{AGENT_ID}-{BRIDGE_PROFILE}"
+)
+
 # Check if CLAUDE.md exists (Claude Code auto-loads it from CWD or parent dirs)
 _claude_md_found = (
     os.path.exists(os.path.join(CWD, "CLAUDE.md"))
@@ -1328,10 +1341,10 @@ def _make_emitter(ws, sid: str, req_id: str):
     return emit
 
 
-def check_chrome_bridge() -> bool:
+def check_chrome_bridge(cdp_agent_id: str = "") -> bool:
     """Test that chrome_bridge.py is connected to the relay."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     try:
@@ -1419,6 +1432,7 @@ async def handle_message_claude(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -1471,7 +1485,7 @@ async def handle_message_claude(
     log.info("  Calling Claude (model=%s)%s...", cli_model, f"  (resume {claude_sid[:12]})" if is_resume else " (new)")
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
@@ -1872,6 +1886,7 @@ async def handle_message_claude(
                 user_text,
                 model,
                 tab_id=tab_id,
+                cdp_agent_id=cdp_agent_id,
                 scheduler_armed=scheduler_armed,
                 scheduler_grant_id=scheduler_grant_id,
                 req_id=req_id,
@@ -1893,6 +1908,7 @@ async def handle_message_codex(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -1948,7 +1964,7 @@ async def handle_message_codex(
     )
 
     env = dict(os.environ)
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
@@ -2248,6 +2264,7 @@ async def handle_message(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -2268,6 +2285,7 @@ async def handle_message(
             user_text,
             model,
             tab_id=tab_id,
+            cdp_agent_id=cdp_agent_id,
             scheduler_armed=scheduler_armed,
             scheduler_grant_id=scheduler_grant_id,
             req_id=req_id,
@@ -2288,6 +2306,7 @@ async def handle_message(
         user_text,
         model,
         tab_id=tab_id,
+        cdp_agent_id=cdp_agent_id,
         scheduler_armed=scheduler_armed,
         scheduler_grant_id=scheduler_grant_id,
         req_id=req_id,
@@ -2302,6 +2321,8 @@ async def main():
 
     # Preflight: verify CLAUDE.md, version, and chrome_bridge
     print(f"Agent: {AGENT_ID}")
+    if BRIDGE_AGENT_ID and BRIDGE_AGENT_ID != AGENT_ID:
+        print(f"Browser bridge: {BRIDGE_AGENT_ID} (profile={BRIDGE_PROFILE})")
     if _claude_md_found:
         print("CLAUDE.md: loaded")
     else:
@@ -2313,7 +2334,7 @@ async def main():
         print(f"\n  {update_msg}\n")
 
     print("Checking Chrome bridge connectivity...")
-    if not check_chrome_bridge():
+    if not check_chrome_bridge(BRIDGE_AGENT_ID):
         print("WARNING: Chrome bridge offline — browser tools will fail.")
         print("The agent will still work with WebFetch/WebSearch only.\n")
     if not _cli_binary_available(CLAUDE_BIN):
@@ -2346,6 +2367,8 @@ async def main():
                     "client_version": _local_version(),
                     "remote_update": True,
                     "remote_research_desk_install": _remote_research_desk_install_supported(),
+                    "bridge_profile": BRIDGE_PROFILE,
+                    "bridge_agent_id": BRIDGE_AGENT_ID,
                 },
             }))
             resp = json.loads(await ws.recv())
@@ -2359,6 +2382,7 @@ async def main():
                     user_text = msg["message"]
                     msg_model = msg.get("model", "")
                     msg_tab_id = msg.get("tab_id", "auto")
+                    msg_cdp_agent_id = str(msg.get("agent_id") or BRIDGE_AGENT_ID or AGENT_ID)
                     # Sync active slot from the UI so messages go to the
                     # conversation the user is actually viewing.
                     msg_slot = msg.get("slot")
@@ -2394,6 +2418,7 @@ async def main():
                             user_text,
                             msg_model,
                             tab_id=msg_tab_id,
+                            cdp_agent_id=msg_cdp_agent_id,
                             scheduler_armed=msg_scheduler_armed,
                             scheduler_grant_id=msg_scheduler_grant_id,
                             req_id=msg_req_id,

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.96"  # chrome_bridge: also filter chrome:// from page_tabs fallback + Page.bringToFront on resolved tab — Chrome 147 AIM was hijacking Page.navigate even after the pages_only filter excluded it from auto-resolve
+VERSION = "0.3.97"  # profile-aware bridge routing: chat remains account-scoped while browser bridge can use CDP_PROFILE-scoped relay agent IDs
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -1789,9 +1789,10 @@ def _patch_chat_agent_cli(source: str) -> str:
     )
     # Set API URL for the HTTP-based cdp_tool.py
     source = source.replace(
-        '    env["CDP_AGENT_ID"] = AGENT_ID\n'
+        '    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID\n'
         '    env["CDP_RELAY_HOST"] = RELAY_HOST\n'
         '    env["CDP_RELAY_PORT"] = str(RELAY_PORT)',
+        '    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID\n'
         '    env["UNCHAINED_API_URL"] = f"https://{RELAY_HOST}"',
     )
     return source

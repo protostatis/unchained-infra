@@ -72,9 +72,12 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("server_version", data)
         self.assertFalse(data["client_connected"])
 
+    @patch("web._list_relay_agents_for_auth", new_callable=AsyncMock)
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
-    async def test_chat_only_status_reports_mismatch_independently(self, mock_auth, mock_check_relay):
+    async def test_chat_only_status_reports_mismatch_independently(
+        self, mock_auth, mock_check_relay, mock_list_relay_agents
+    ):
         mock_auth.return_value = {
             "user_id": "u-test",
             "agent_id": "claude-expected",
@@ -83,6 +86,7 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
             "email": "dev@example.com",
         }
         mock_check_relay.return_value = False
+        mock_list_relay_agents.return_value = []
         web._chat_agents["claude-other"] = SimpleNamespace(closed=False)
         web._chat_agent_users["claude-other"] = "u-test"
 
@@ -94,6 +98,60 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(data["bridge_connected"])
         self.assertTrue(data["mismatch"])
         self.assertEqual(data["mismatch_agent_id"], "claude-other")
+
+    @patch("web._list_relay_agents_for_auth", new_callable=AsyncMock)
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_status_uses_only_connected_profile_bridge(
+        self, mock_auth, mock_check_relay, mock_list_relay_agents
+    ):
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        mock_check_relay.return_value = False
+        mock_list_relay_agents.return_value = [
+            {"agent_id": "claude-abc12345-panicradar_ai", "profile": "panicradar_ai", "connected": True}
+        ]
+
+        request = SimpleNamespace(query={"chat_only": "1", "model": "claude-sonnet-4-6"})
+        response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertTrue(data["bridge_connected"])
+        self.assertEqual(data["bridge_agent_id"], "claude-abc12345-panicradar_ai")
+        self.assertEqual(data["active_bridge_profile"], "panicradar_ai")
+
+    @patch("web._list_relay_agents_for_auth", new_callable=AsyncMock)
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_chat_status_keeps_preferred_profile_offline_when_missing(
+        self, mock_auth, mock_check_relay, mock_list_relay_agents
+    ):
+        mock_auth.return_value = {
+            "user_id": "u-test",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+            "key": "uc_live_test",
+            "email": "dev@example.com",
+        }
+        web._chat_agent_caps["claude-abc12345"] = {"bridge_profile": "panicradar_ai"}
+        mock_check_relay.return_value = False
+        mock_list_relay_agents.return_value = [
+            {"agent_id": "claude-abc12345-other", "profile": "other", "connected": True}
+        ]
+
+        request = SimpleNamespace(query={"chat_only": "1", "model": "claude-sonnet-4-6"})
+        response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertFalse(data["bridge_connected"])
+        self.assertEqual(data["bridge_agent_id"], "claude-abc12345-panicradar_ai")
+        self.assertEqual(data["active_bridge_profile"], "panicradar_ai")
+        self.assertEqual(data["bridge_status_reason"], "profile_offline")
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")

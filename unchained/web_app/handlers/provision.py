@@ -24,7 +24,8 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
     profiles = signup_agent.list_chrome_profiles()
 
     if not profiles:
-        agent_id = auth_info.get("agent_id", "")
+        bridge_info = await core._resolve_bridge_agent(auth_info)
+        agent_id = bridge_info.get("bridge_agent_id") or auth_info.get("agent_id", "")
         if agent_id:
             relay_host, relay_port = core._parse_relay()
             profiles = await core.provision_helpers.fetch_relay_profiles(
