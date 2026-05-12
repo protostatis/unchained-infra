@@ -83,6 +83,7 @@ Possible `error` values: `invalid_request`, `unsupported_grant_type`,
 ## Redirect URI allowlist
 
 Production:
+- `https://analytics.unchainedsky.com/auth/callback`
 - `https://searchagentsky.com/auth/callback`
 - `https://search.unchainedsky.com/auth/callback`
 
@@ -102,7 +103,7 @@ A production-hosted provider always rejects localhost redirect URIs.
 
 ## Test plan
 
-1. Visit `/auth/login?redirect_uri=https://searchagentsky.com/auth/callback&scope=share&state=abc`
+1. Visit `/auth/login?redirect_uri=https://analytics.unchainedsky.com/auth/callback&scope=share&state=abc`
 2. Not logged in → Google Sign-In → redirect to `/auth/callback?code=...&state=abc`
 3. Already logged in → immediate redirect with code
 4. `POST /auth/token` with the code → returns `access_token`
