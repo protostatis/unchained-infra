@@ -2997,7 +2997,7 @@ a{color:inherit;text-decoration:none}
       <a href="#get-started">Get Started</a>
       <a href="#use-cases">Use Cases</a>
       <a href="/mcp">MCP</a>
-      <a href="/setup" class="signin">Sign in</a>
+      <a href="/local" class="signin">Sign in / Sign up</a>
     </div>
   </div>
 </nav>
@@ -3202,7 +3202,7 @@ a{color:inherit;text-decoration:none}
       </div>
       <div class="footnote">Already a Claude Pro/Max or ChatGPT Plus subscriber? Skip the API key &mdash; install the Local CLI lane instead.</div>
       <div class="actions">
-        <a href="/setup" class="btn-link">Already set up? Open chat &rarr;</a>
+        <a href="/local" class="btn-link">Already set up? Open chat &rarr;</a>
       </div>
     </div>
 
