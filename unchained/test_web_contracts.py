@@ -169,6 +169,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_landing_auth_cta_points_to_auth_entry(self):
+        self.assertIn('href="/local" class="signin">Sign in / Sign up</a>', web.LANDING_HTML)
+        self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
+
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
