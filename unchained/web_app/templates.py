@@ -13516,6 +13516,208 @@ body{
 </style>"""
 
 
+_FIRST_LOOK_CANVAS_STYLE = """<style id="first-look-canvas-theme">
+body.first-look-canvas{
+  overflow:hidden;
+  background:#05070b!important;
+}
+body.first-look-canvas::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    linear-gradient(rgba(126,160,194,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(126,160,194,0.045) 1px, transparent 1px),
+    radial-gradient(760px 360px at 18% 90%, rgba(92,212,138,0.13), transparent 62%),
+    radial-gradient(900px 420px at 82% 8%, rgba(255,107,74,0.15), transparent 64%);
+  background-size:56px 56px,56px 56px,auto,auto;
+}
+body.first-look-canvas #main{
+  max-width:none!important;margin:0!important;border:0!important;box-shadow:none!important;
+  height:100dvh;position:relative;overflow:hidden;background:#05070b!important;
+}
+body.first-look-canvas #workspace{
+  position:relative!important;display:block!important;flex:1!important;min-height:0!important;
+  padding:0!important;gap:0!important;overflow:hidden!important;background:transparent!important;
+}
+body.first-look-canvas #topbar{
+  position:absolute;top:18px;left:18px;right:18px;z-index:30;
+  padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;
+  box-shadow:none!important;backdrop-filter:none!important;pointer-events:none;
+}
+body.first-look-canvas #topbar .left,
+body.first-look-canvas #topbar .nav{
+  pointer-events:auto;position:absolute;top:0;
+  border:1px solid rgba(124,145,171,0.28)!important;border-radius:999px!important;
+  background:rgba(7,10,15,0.72)!important;box-shadow:0 14px 42px rgba(0,0,0,0.28);
+  backdrop-filter:blur(18px);
+}
+body.first-look-canvas #topbar .left{display:none!important}
+body.first-look-canvas #topbar .nav{right:0;padding:6px!important}
+body.first-look-canvas #topbar .nav a{
+  background:rgba(255,255,255,0.035)!important;
+}
+body.first-look-canvas #topbar .agent{
+  background:rgba(255,107,74,0.13)!important;border-color:rgba(255,107,74,0.46)!important;
+}
+body.first-look-canvas #model-notice{
+  position:absolute;top:66px;left:50%;transform:translateX(-50%);z-index:24;
+  width:auto;max-width:min(720px,calc(100vw - 48px));margin:0!important;padding:9px 15px!important;
+  border:1px solid rgba(240,213,139,0.26)!important;border-radius:999px!important;
+  background:rgba(45,37,21,0.74)!important;box-shadow:0 16px 48px rgba(0,0,0,0.24);
+  text-align:center;backdrop-filter:blur(16px);
+}
+body.first-look-canvas #live-pane{
+  position:absolute;inset:0;z-index:1;display:block!important;width:100%!important;min-width:0!important;
+  border:0!important;background:#05070b!important;overflow:hidden;
+}
+body.first-look-canvas #live-window{
+  position:absolute;inset:0;display:block!important;padding:0!important;background:transparent!important;
+}
+body.first-look-canvas #live-window-bar{
+  position:absolute;top:16px;left:16px;right:16px;z-index:5;height:36px;
+  border:1px solid rgba(124,145,171,0.28)!important;border-bottom:0!important;
+  border-radius:18px 18px 0 0!important;background:rgba(14,17,22,0.82)!important;
+  box-shadow:0 18px 60px rgba(0,0,0,0.32);backdrop-filter:blur(16px);
+}
+body.first-look-canvas #url-bar{
+  position:absolute;top:52px;left:16px;right:16px;z-index:5;
+  min-height:28px;border:1px solid rgba(124,145,171,0.28)!important;border-top:0!important;
+  background:rgba(10,12,15,0.76)!important;backdrop-filter:blur(16px);
+}
+body.first-look-canvas #live-canvas-wrap{
+  position:absolute;inset:80px 16px 16px 16px;z-index:2;width:auto!important;min-height:0!important;
+  border:1px solid rgba(124,145,171,0.28)!important;border-top:0!important;
+  border-radius:0 0 22px 22px!important;overflow:hidden;
+  background:
+    radial-gradient(780px 380px at 50% 50%, rgba(33,47,60,0.45), transparent 70%),
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+    #050607!important;
+  background-size:auto,48px 48px,48px 48px,auto;
+  align-items:stretch!important;justify-content:stretch!important;
+}
+body.first-look-canvas #preview-image{width:100%!important;height:100%!important;object-fit:contain!important;object-position:center top;background:#050607!important}
+body.first-look-canvas #preview-empty{
+  position:absolute!important;inset:0!important;display:flex!important;align-items:center!important;justify-content:center!important;
+  color:#c6cedc!important;font-size:16px!important;letter-spacing:0.02em;
+  background:linear-gradient(180deg,transparent,rgba(0,0,0,0.22));
+}
+body.first-look-canvas #live-pane-head{
+  display:none!important;
+}
+body.first-look-canvas #preview-note{
+  position:absolute;left:18px;bottom:18px;z-index:8;min-height:0!important;max-width:min(520px,40vw);
+  padding:10px 13px!important;border:1px solid rgba(124,145,171,0.24);border-radius:14px;
+  background:rgba(7,10,15,0.7);backdrop-filter:blur(16px);box-shadow:0 16px 46px rgba(0,0,0,0.24);
+}
+body.first-look-canvas .steps-wrap{
+  position:absolute;left:18px;bottom:66px;z-index:8;width:min(480px,34vw);max-height:92px!important;
+  padding:10px 12px!important;border:1px solid rgba(124,145,171,0.24)!important;border-radius:16px;
+  background:rgba(7,10,15,0.68);backdrop-filter:blur(16px);box-shadow:0 16px 46px rgba(0,0,0,0.22);
+}
+body.first-look-canvas #chat-pane{
+  position:absolute;right:18px;top:92px;bottom:18px;z-index:12;width:min(540px,calc(100vw - 36px));
+  height:auto;min-height:0;display:flex!important;flex-direction:column;
+  border:1px solid rgba(124,145,171,0.32)!important;border-radius:26px!important;overflow:hidden;
+  background:linear-gradient(180deg,rgba(12,16,23,0.82),rgba(7,10,15,0.9))!important;
+  box-shadow:0 26px 80px rgba(0,0,0,0.44), inset 0 1px 0 rgba(255,255,255,0.06)!important;
+  backdrop-filter:blur(22px);
+}
+.chat-collapse-btn{
+  align-self:flex-end;margin:12px 12px 0;padding:7px 11px;border:1px solid rgba(124,145,171,0.28);
+  border-radius:999px;background:rgba(255,255,255,0.045);color:#cbd4e3;
+  font-family:var(--mono);font-size:10px;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;
+}
+.chat-collapse-btn:hover,.chat-collapse-btn:focus-visible{
+  outline:none;border-color:rgba(255,107,74,0.6);color:#ffd5cb;background:rgba(255,107,74,0.12);
+}
+body.first-look-chat-collapsed #chat-pane{
+  top:auto;bottom:18px;width:auto;min-height:0;border-radius:999px!important;
+  background:rgba(7,10,15,0.78)!important;
+}
+body.first-look-chat-collapsed #chat,
+body.first-look-chat-collapsed #inputbar{display:none!important}
+body.first-look-chat-collapsed .chat-collapse-btn{margin:0;padding:11px 15px}
+body.first-look-canvas #chat{padding:22px!important;gap:12px!important}
+body.first-look-canvas #chat-hints{
+  height:auto!important;min-height:0!important;align-items:stretch!important;text-align:left!important;
+  justify-content:flex-start!important;padding:4px 0 8px!important;
+}
+body.first-look-canvas .hint-badge{align-self:flex-start;margin-bottom:14px;background:rgba(255,255,255,0.04)!important}
+body.first-look-canvas .hint-title{font-size:28px!important;line-height:1.05!important;letter-spacing:-0.02em;text-align:left!important}
+body.first-look-canvas .hint-sub{max-width:none!important;text-align:left!important;margin-bottom:16px!important}
+body.first-look-canvas .hint-examples{max-width:none!important;gap:9px!important}
+body.first-look-canvas .hint-item{
+  width:100%;appearance:none;border:1px solid rgba(124,145,171,0.26)!important;
+  background:rgba(255,255,255,0.035)!important;color:var(--text)!important;font:inherit;
+  min-height:52px;box-shadow:none;text-align:left!important;
+}
+body.first-look-canvas .hint-item:hover,
+body.first-look-canvas .hint-item:focus-visible{
+  outline:none;border-color:rgba(255,107,74,0.76)!important;background:rgba(255,107,74,0.13)!important;
+  box-shadow:0 0 0 3px rgba(255,107,74,0.12);
+}
+body.first-look-canvas .hint-note{max-width:none!important;text-align:center!important;color:#aab5c6!important}
+body.first-look-canvas .hint-actions{margin-top:10px!important}
+body.first-look-canvas .hint-cta{background:rgba(255,107,74,0.16)!important;border:1px solid rgba(255,107,74,0.5);color:#ffd5cb!important}
+body.first-look-canvas #inputbar{
+  margin:0 14px 14px;padding:10px!important;border:1px solid rgba(124,145,171,0.24)!important;
+  border-radius:20px!important;background:rgba(7,10,15,0.7)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,0.04);
+}
+body.first-look-canvas #msginput{min-height:48px!important;border-radius:16px!important;background:rgba(15,20,27,0.86)!important}
+body.first-look-canvas #msginput:focus{box-shadow:0 0 0 3px rgba(255,107,74,0.15)!important}
+body.first-look-canvas #quota-bar{padding-left:4px;color:#aab5c6!important}
+body.first-look-canvas .bubble{max-width:96%!important}
+body.first-look-canvas .install-nudge{border-radius:14px!important;background:rgba(255,107,74,0.1)!important}
+@media (max-width: 1100px){
+  body.first-look-canvas #chat-pane{width:min(500px,calc(100vw - 40px))}
+  body.first-look-canvas #preview-note,body.first-look-canvas .steps-wrap{max-width:36vw;width:36vw}
+  body.first-look-canvas #preview-image{object-fit:cover!important;object-position:center top}
+}
+@media (max-width: 900px){
+  body.first-look-canvas #topbar{top:10px;left:10px;right:10px}
+  body.first-look-canvas #topbar .nav{right:0;max-width:78vw;overflow:auto;flex-wrap:nowrap!important}
+  body.first-look-canvas #model-notice{top:58px;left:10px;right:10px;transform:none;width:auto;max-width:none;border-radius:16px!important;text-align:left}
+  body.first-look-canvas #live-window-bar{top:10px;left:10px;right:10px;height:34px}
+  body.first-look-canvas #url-bar{top:44px;left:10px;right:10px}
+  body.first-look-canvas #live-canvas-wrap{inset:72px 10px 10px 10px;border-radius:0 0 18px 18px!important}
+  body.first-look-canvas #chat-pane{left:10px;right:10px;top:auto;bottom:10px;width:auto;height:44dvh;min-height:320px;border-radius:22px!important}
+  body.first-look-chat-collapsed #chat-pane{left:auto;right:10px;width:auto;height:auto;min-height:0;border-radius:999px!important}
+  body.first-look-canvas #chat{padding:12px!important;gap:8px!important}
+  body.first-look-canvas #chat-hints{padding:0!important}
+  body.first-look-canvas .hint-badge{margin-bottom:8px!important;font-size:10px!important;padding:5px 9px!important}
+  body.first-look-canvas .hint-title{font-size:19px!important;margin-bottom:6px!important}
+  body.first-look-canvas .hint-sub,body.first-look-canvas .hint-note{display:none!important}
+  body.first-look-canvas .hint-examples{gap:7px!important}
+  body.first-look-canvas .hint-item{min-height:42px!important;padding:9px 12px!important;font-size:13px!important}
+  body.first-look-canvas .hint-emoji{font-size:15px!important}
+  body.first-look-canvas #inputbar{margin:0 10px 10px;padding:8px!important}
+  body.first-look-canvas #msginput{min-height:42px!important;font-size:14px!important}
+  body.first-look-canvas #sendbtn,body.first-look-canvas #cancelbtn{width:42px!important;height:42px!important}
+  body.first-look-canvas #preview-note,body.first-look-canvas .steps-wrap{display:none!important}
+}
+@media (max-width: 640px){
+  body.first-look-canvas #topbar .nav{max-width:calc(100vw - 20px);overflow:auto;flex-wrap:nowrap;justify-content:flex-start}
+  body.first-look-canvas #topbar .nav a[href="/"]{display:none!important}
+  body.first-look-canvas #model-notice{display:none!important}
+  body.first-look-canvas #live-window-bar{top:10px}
+  body.first-look-canvas #url-bar{top:44px}
+  body.first-look-canvas #live-canvas-wrap{inset:72px 10px 10px 10px}
+  body.first-look-canvas #chat-pane{height:46dvh;min-height:320px}
+  body.first-look-canvas .hint-title{font-size:17px!important}
+  body.first-look-canvas .hint-badge{display:none!important}
+  body.first-look-canvas .hint-item{min-height:40px!important;padding:8px 10px!important;font-size:12px!important}
+  body.first-look-canvas .hint-actions,body.first-look-canvas .hint-footer{display:none!important}
+  body.first-look-canvas #inputbar{margin:0 10px 10px}
+}
+@media (max-width: 420px){
+  body.first-look-canvas #topbar .nav a{padding:5px 8px!important;font-size:10px!important}
+  body.first-look-canvas #chat-pane{height:48dvh;min-height:300px}
+  body.first-look-canvas .hint-title{display:none!important}
+  body.first-look-canvas .hint-item:nth-child(3){display:none!important}
+}
+</style>"""
+
+
 FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13720,21 +13922,6 @@ body{
 }
 .hint-title{font-size:20px;font-weight:600;color:var(--accent);margin-bottom:8px}
 .hint-sub{color:var(--muted);font-size:13px;margin-bottom:16px;max-width:380px;line-height:1.5}
-.hint-panels{
-  display:grid;grid-template-columns:1fr;gap:10px;width:100%;max-width:380px;margin-bottom:14px;
-}
-.hint-panel{
-  padding:14px;border:1px solid #333;border-radius:14px;background:rgba(255,255,255,0.03);text-align:left;
-}
-.hint-panel strong{
-  display:block;margin-bottom:6px;color:var(--text);font-size:13px;
-}
-.hint-panel span{
-  color:var(--muted);font-size:12px;line-height:1.6;
-}
-.hint-panel span.ok{color:#4caf50}
-.hint-panel span.warn{color:#f0d58b}
-.hint-panel span.danger{color:#ff6b6b}
 .hint-examples{display:flex;flex-direction:column;gap:8px;width:100%;max-width:380px}
 .hint-item{
   padding:12px 16px;border:1px solid #444;border-radius:12px;
@@ -13883,7 +14070,7 @@ body{
 @media(max-width:640px){.quota-grid{grid-template-columns:1fr}}
 </style>
 </head>
-<body>
+<body class="first-look-canvas">
 
 <div id="quota-modal">
   <div class="quota-box">
@@ -13914,41 +14101,39 @@ body{
     </div>
     <div class="nav">
       <a href="/">Home</a>
-      <a id="browser-cta" href="/trial">Start Free Trial</a>
+      <a id="browser-cta" href="/trial">Unlock Full Browser</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
     </div>
   </div>
 
-  <div id="model-notice" style="display:block"><strong>Live demo</strong> — watch the agent browse in real time. <a href="/trial">Start a free trial</a> to browse any site with the full agent.</div>
+  <div id="model-notice" style="display:block"><strong>Live shared browser</strong> — run a demo on selected public sites. <a href="/trial">Unlock the full browser</a> for any site.</div>
 
   <div id="workspace">
     <div id="chat-pane">
+      <button id="chat-collapse-btn" class="chat-collapse-btn" type="button" aria-expanded="true" aria-controls="chat inputbar" onclick="toggleFirstLookChat()">Hide Chat</button>
       <div id="chat">
         <div id="chat-hints">
           <div class="hint-badge" id="quota-copy">__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs &middot; selected public sites</div>
-          <div class="hint-title">Watch the shared browser work before you install anything.</div>
-          <div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>
-          <div class="hint-panels">
-            <div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>
-          </div>
+          <div class="hint-title">Run the shared browser over a live canvas.</div>
+          <div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>
           <div class="hint-examples">
-            <div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">&#128722;</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>
-            <div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">&#9992;</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>
-            <div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">&#127968;</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>
+            <button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Compare computing pioneers on Wikipedia</button>
+            <button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">&#128240;</span> Group the top Hacker News stories</button>
+            <button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</button>
           </div>
           <div class="hint-note">Tasks typically complete in 30–60 seconds</div>
-          <div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>
+          <div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>
           <div class="hint-footer">Live browser demo</div>
         </div>
       </div>
 
       <div id="inputbar">
         <div id="input-fields">
-          <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."></textarea>
+          <textarea id="msginput" rows="1" placeholder="Ask the browser to do something..."></textarea>
           <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
         </div>
-        <button id="sendbtn">&#9654;</button>
-        <button id="cancelbtn">&#9632;</button>
+        <button id="sendbtn" aria-label="Run task">&#9654;</button>
+        <button id="cancelbtn" aria-label="Cancel run">&#9632;</button>
       </div>
     </div>
 
@@ -14010,6 +14195,10 @@ let previewState = 'idle'; // 'idle'|'connecting'|'streaming'|'reconnecting'|'en
 let previewHasFrame = false;
 let previewTransportRetries = 0;
 const PREVIEW_MAX_TRANSPORT_RETRIES = 2;
+let selectedExamplePrompt = '';
+let selectedExampleUrl = '';
+let sharedBrowserReady = false;
+let sharedBrowserConfigured = false;
 
 const BROWSER_TOOL_LABELS = {
   navigate: 'Navigate',
@@ -14058,6 +14247,15 @@ function dismissQuota() {
   document.getElementById('quota-modal').classList.remove('visible');
 }
 
+function toggleFirstLookChat() {
+  const collapsed = document.body.classList.toggle('first-look-chat-collapsed');
+  const btn = document.getElementById('chat-collapse-btn');
+  if (btn) {
+    btn.textContent = collapsed ? 'Open Chat' : 'Hide Chat';
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+}
+
 function updateQuotaCopy() {
   const badge = document.getElementById('quota-copy');
   if (badge) {
@@ -14077,7 +14275,7 @@ function updateQuotaCopy() {
 function updateSendAvailability() {
   const send = document.getElementById('sendbtn');
   const input = document.getElementById('msginput');
-  const unavailable = sending || remainingGuestRuns <= 0 || !agentId;
+  const unavailable = sending || remainingGuestRuns <= 0 || !agentId || !sharedBrowserReady;
   send.disabled = unavailable;
   input.disabled = remainingGuestRuns <= 0;
 }
@@ -14093,18 +14291,15 @@ async function doNewChat() {
   chat.innerHTML =
     '<div id="chat-hints">' +
       '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
-      '<div class="hint-title">Watch the shared browser work before you install anything.</div>' +
-      '<div class="hint-sub">Try a public site. Unchained will browse and show you what it is doing in real time.</div>' +
-      '<div class="hint-panels">' +
-        '<div class="hint-panel"><strong>Shared Browser</strong><span id="shared-browser-status">Checking shared browser availability...</span></div>' +
-      '</div>' +
+      '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
+      '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
       '<div class="hint-examples">' +
-        '<div class="hint-item" data-prompt="Compare AirPods Pro 2 price on Best Buy vs Walmart" data-url="https://www.bestbuy.com/"><span class="hint-emoji">\ud83d\uded2</span> Compare AirPods Pro 2 price on Best Buy vs Walmart</div>' +
-        '<div class="hint-item" data-prompt="Find the cheapest nonstop flight from NYC to LA next month on Kayak" data-url="https://www.kayak.com/"><span class="hint-emoji">\u2708</span> Find the cheapest nonstop flight from NYC to LA next month on Kayak</div>' +
-        '<div class="hint-item" data-prompt="Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow" data-url="https://www.zillow.com/"><span class="hint-emoji">\ud83c\udfe0</span> Find top-rated 1BR apartments under $2500 in Brooklyn on Zillow</div>' +
+        '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
+        '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
+        '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
       '</div>' +
       '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
-      '<div class="hint-actions"><a class="hint-cta" href="/trial">Start Free Trial</a></div>' +
+      '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
       '<div class="hint-footer">Live browser demo</div>' +
     '</div>';
   document.querySelectorAll('.hint-item').forEach(function (item) {
@@ -14221,8 +14416,11 @@ function normalizePublicUrl(value) {
 }
 
 function extractPromptUrl() {
-  const match = String(document.getElementById('msginput').value || '').match(/https?:\/\/[^\s)]+/i);
-  return match ? normalizePublicUrl(match[0]) : '';
+  const prompt = String(document.getElementById('msginput').value || '').trim();
+  const match = prompt.match(/https?:\/\/[^\s)]+/i);
+  if (match) return normalizePublicUrl(match[0]);
+  if (selectedExampleUrl && prompt === selectedExamplePrompt) return selectedExampleUrl;
+  return '';
 }
 
 function setStatusCopy(id, text, tone) {
@@ -14641,17 +14839,24 @@ async function refreshSharedBrowserStatus() {
       agentId = data.agent_id;
       ensureSessionId();
     }
+    sharedBrowserConfigured = !!data.bridge_configured;
+    sharedBrowserReady = !!data.connected;
     if (data.connected) {
       setStatusCopy('shared-browser-status', 'Shared browser ready for guest runs.', 'ok');
     } else if (!data.bridge_configured) {
-      setStatusCopy('shared-browser-status', 'Shared browser is not configured right now.', 'danger');
+      setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
+      if (!sending) setPreviewNote('Local preview only: headless bridge is not configured, so demo runs are disabled.', 'warn');
     } else if (data.chat_connected || data.bridge_connected) {
       setStatusCopy('shared-browser-status', 'Shared browser is warming up. Try again in a moment.', 'warn');
+      if (!sending) setPreviewNote('Shared browser is warming up. Runs unlock when the bridge is ready.', 'warn');
     } else {
       setStatusCopy('shared-browser-status', 'Shared browser is unavailable right now.', 'danger');
+      if (!sending) setPreviewNote('Shared browser is unavailable right now.', 'warn');
     }
   } catch (_err) {
+    sharedBrowserReady = false;
     setStatusCopy('shared-browser-status', 'Could not check shared browser status.', 'danger');
+    if (!sending) setPreviewNote('Could not check shared browser status.', 'warn');
   }
   updateSendAvailability();
 }
@@ -14669,6 +14874,7 @@ async function loadHistory() {
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.messages || !data.messages.length) return;
+    hideHints();
     for (const msg of data.messages) {
       if (msg.role === 'user') {
         addLine('user', 'You', String(msg.content || ''));
@@ -14681,6 +14887,8 @@ async function loadHistory() {
 
 function fillExample(prompt, url) {
   const input = document.getElementById('msginput');
+  selectedExamplePrompt = String(prompt || '').trim();
+  selectedExampleUrl = normalizePublicUrl(url || '');
   input.value = prompt;
   autoGrow(input);
   requestPreflight();
@@ -14703,6 +14911,17 @@ async function doSend() {
   if (sending) return;
   const message = String(document.getElementById('msginput').value || '').trim();
   if (!message || remainingGuestRuns <= 0) return;
+  if (!sharedBrowserReady) {
+    if (!sharedBrowserConfigured) {
+      setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
+      setPreviewNote('Local preview only: headless bridge is not configured, so demo runs are disabled.', 'warn');
+    } else {
+      setStatusCopy('shared-browser-status', 'Shared browser is still warming up. Try again in a moment.', 'warn');
+      setPreviewNote('Shared browser is warming up. Try again in a moment.', 'warn');
+    }
+    updateSendAvailability();
+    return;
+  }
   if (!ensureSessionId()) {
     setStatusCopy('shared-browser-status', 'Shared browser is still warming up. Try again in a moment.', 'warn');
     updateSendAvailability();
@@ -14748,6 +14967,15 @@ async function doSend() {
         remainingGuestRuns = 0;
         updateQuotaCopy();
         addLine('system', 'Quota', 'Guest runs used up. Start a free trial to browse any site with the full agent.');
+        return;
+      }
+      if (data.error === 'headless_bridge_not_configured') {
+        sharedBrowserConfigured = false;
+        sharedBrowserReady = false;
+        updateSendAvailability();
+        setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
+        setPreviewNote('Local preview only: headless bridge is not configured, so demo runs are disabled.', 'warn');
+        addLine('system', 'Shared Browser Unavailable', 'This local server is not connected to a headless browser bridge. You can review the UI locally, but demo runs need HEADLESS_AGENT_ID and a connected headless bridge.');
         return;
       }
       addLine('system', 'Error', String(data.error || resp.statusText || 'Request failed'));
@@ -14886,6 +15114,7 @@ async function doSend() {
 
 document.getElementById('msginput').addEventListener('input', function () {
   autoGrow(this);
+  if (String(this.value || '').trim() !== selectedExamplePrompt) selectedExampleUrl = '';
   requestPreflight();
 });
 document.getElementById('sendbtn').addEventListener('click', doSend);
@@ -14940,7 +15169,17 @@ CHAT_GEMINI_HTML = _apply_modern_chat_theme(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _apply_modern_chat_theme(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _apply_modern_chat_theme(CHAT_CODEX_HTML)
 HEADLESS_DEMO_HTML = _apply_modern_chat_theme(HEADLESS_DEMO_HTML)
-FIRST_LOOK_PREVIEW_HTML = _apply_modern_chat_theme(FIRST_LOOK_PREVIEW_HTML)
+FIRST_LOOK_PREVIEW_HTML = apply_template_replacements(
+    _apply_modern_chat_theme(FIRST_LOOK_PREVIEW_HTML),
+    (
+        TemplateReplacement(
+            "</head>",
+            _FIRST_LOOK_CANVAS_STYLE + "\n</head>",
+            "first-look canvas theme injection",
+        ),
+    ),
+    template_name="first-look canvas theme injection",
+)
 
 
 # ---------------------------------------------------------------------------
