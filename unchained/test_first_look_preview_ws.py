@@ -368,6 +368,34 @@ class TestFirstLookPreviewClientJsShape(unittest.TestCase):
                 f"{marker} missing stale-WS guard",
             )
 
+    def test_shared_browser_status_has_visible_target(self):
+        """Bridge readiness copy must have a real DOM target near the send UI.
+
+        The preview note is hidden on the mobile canvas, so the status target is
+        the user's only visible explanation when the run button is disabled.
+        """
+        html = self._preview_html()
+        self.assertIn('id="shared-browser-status"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("setStatusCopy('shared-browser-status'", html)
+
+    def test_connected_status_clears_idle_preview_fallback(self):
+        """Ready status should clear stale warming/unavailable preview copy.
+
+        Keep this guarded so periodic status refreshes do not overwrite run
+        progress or the final browser frame after a run has produced output.
+        """
+        html = self._preview_html()
+        marker = "if (data.connected) {"
+        self.assertIn(marker, html)
+        connected_branch = html.split(marker, 1)[1].split(
+            "} else if (!data.bridge_configured)",
+            1,
+        )[0]
+        self.assertIn("setStatusCopy('shared-browser-status'", connected_branch)
+        self.assertIn("!sending && !previewHasFrame && previewState === 'idle'", connected_branch)
+        self.assertIn("setPreviewNote('Shared browser ready for guest runs.', 'ok')", connected_branch)
+
 
 if __name__ == "__main__":
     import unittest
