@@ -20,7 +20,17 @@ from __future__ import annotations
 import sys
 from typing import Iterable
 
-SERVICES = {"caddy", "relay", "private-core", "mcp", "web", "scheduler", "trial-agent"}
+SERVICES = {
+    "caddy",
+    "relay",
+    "private-core",
+    "mcp",
+    "unbrowser-egress",
+    "unbrowser-mcp",
+    "web",
+    "scheduler",
+    "trial-agent",
+}
 
 # Files baked into ALL service images (require full rebuild). These are the
 # Docker build context files that affect every service's image hash.
@@ -34,6 +44,10 @@ FULL_REBUILD_FILES = {
 # Caddy-only changes — graceful reload, no other service touched.
 CADDY_FILES = {
     "Caddyfile",
+}
+
+TOP_LEVEL_OWNERSHIP: dict[str, set[str]] = {
+    "Dockerfile.unbrowser-mcp": {"unbrowser-egress", "unbrowser-mcp"},
 }
 
 # Per-file ownership inside unchained/.
@@ -72,6 +86,9 @@ UNCHAINED_OWNERSHIP: dict[str, set[str]] = {
 
     # mcp entry point
     "unchained/mcp_server.py": {"mcp"},
+
+    # hosted unbrowser MCP egress proxy image
+    "unchained/unbrowser_ssrf_proxy.py": {"unbrowser-egress", "unbrowser-mcp"},
 
     # private-core engine + CDP/DDM/intel and their helpers
     "unchained/private_core_server.py": {"private-core"},
@@ -140,6 +157,8 @@ def classify_path(path: str) -> set[str]:
         return {"ALL"}
     if path in CADDY_FILES:
         return {"caddy"}
+    if path in TOP_LEVEL_OWNERSHIP:
+        return TOP_LEVEL_OWNERSHIP[path]
     if path in UNCHAINED_OWNERSHIP:
         return UNCHAINED_OWNERSHIP[path]
     for prefix, services in SUBTREE_RULES:

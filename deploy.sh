@@ -332,7 +332,7 @@ remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent web)
+expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
     echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2
@@ -344,8 +344,10 @@ EOF
 # snapshot was taken before upload; uploads have now run, so any file
 # whose hash differs from the snapshot is something this deploy changed.
 SERVICES_TO_REBUILD=""
+RECREATE_CADDY=false
 if $FORCE_FULL_DEPLOY; then
-    SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent web"
+    SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+    RECREATE_CADDY=true
 else
     echo "==> Computing changed files..."
     if (cd "$SCRIPT_DIR" && xargs -r $LOCAL_HASH_CMD 2>/dev/null < "$DEPLOYED_PATHS_FILE" | sort) > "$LOCAL_CHECKSUMS_FILE"; then
@@ -376,7 +378,8 @@ else
 
             if echo "$CLASSIFIER_OUTPUT" | grep -qx ALL; then
                 echo "    Classifier: ALL services need rebuild"
-                SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent web"
+                SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+                RECREATE_CADDY=true
             else
                 SERVICES_TO_REBUILD=$(echo "$CLASSIFIER_OUTPUT" | tr '\n' ' ' | sed 's/ *$//')
                 if [[ -z "$SERVICES_TO_REBUILD" ]]; then
@@ -388,7 +391,8 @@ else
         fi
     else
         echo "    (local checksum failed — falling back to full deploy)"
-        SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent web"
+        SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+        RECREATE_CADDY=true
     fi
     cd "$SCRIPT_DIR"
 fi
@@ -446,13 +450,22 @@ fi
 # We only touch caddy if it's in the affected services list (i.e. the
 # Caddyfile changed) or if we're doing a full deploy.
 if echo " $SERVICES_TO_REBUILD " | grep -q ' caddy '; then
-    echo "==> Reloading Caddy (graceful, no downtime)..."
-    remote_bash "$REMOTE_DIR" <<'EOF' || true
+    if $RECREATE_CADDY; then
+        echo "==> Recreating Caddy container..."
+        remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose up -d --no-deps --no-build caddy
+EOF
+    else
+        echo "==> Reloading Caddy (graceful, no downtime)..."
+        remote_bash "$REMOTE_DIR" <<'EOF' || true
 set -euo pipefail
 cd "$1"
 docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
     || docker compose restart caddy
 EOF
+    fi
 fi
 
 # Show status
