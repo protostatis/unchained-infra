@@ -7,11 +7,14 @@ the main Unchained FastMCP endpoint at `/mcp`.
 
 - Streamable HTTP: `https://unchainedsky.com/unbrowser-mcp`
 - Explicit Streamable HTTP path: `https://unchainedsky.com/unbrowser-mcp/mcp`
-- SSE compatibility path: `https://unchainedsky.com/unbrowser-mcp/sse`
 - Health/status: `https://unchainedsky.com/unbrowser-mcp/status`
 
 `Caddyfile` rewrites the exact `/unbrowser-mcp` path to the proxy's internal
 `/mcp` endpoint and strips the `/unbrowser-mcp` prefix for subpaths.
+
+SSE is intentionally not exposed on this prefixed route. `mcp-proxy` advertises
+an absolute `/messages/` callback for SSE, which would collide with the main web
+stack unless this service had its own root path or subdomain.
 
 ## Runtime
 
@@ -31,12 +34,27 @@ Current pins:
 Update `Dockerfile.unbrowser-mcp` when publishing a new hosted unbrowser MCP
 release.
 
+## Network Isolation
+
+The hosted endpoint is public and unauthenticated, so it must not get direct
+access to Unchained's internal services or metadata endpoints.
+
+- `unbrowser-mcp` is not attached to the main `app` network.
+- Caddy reaches `unbrowser-mcp` through the dedicated internal
+  `unbrowser_mcp` network.
+- `unbrowser-mcp` has no direct internet egress. It can only reach
+  `unbrowser-egress` through the dedicated internal `unbrowser_egress_proxy`
+  network.
+- `unbrowser-egress` is a small HTTP/CONNECT proxy that resolves target hosts and
+  rejects non-global addresses, including private, loopback, link-local, and
+  metadata addresses. It currently allows only ports `80` and `443`.
+- If the optional unbrowser service fails to start, Caddy still starts and serves
+  the rest of production ingress.
+
 ## Operational Notes
 
 - The route is intentionally separate from `/mcp`, which remains Unchained's
   authenticated FastMCP server for real Chrome workflows.
-- The service is attached to both `app` and `egress`: `app` lets Caddy reach it,
-  and `egress` lets unbrowser fetch public web pages.
 - The endpoint is a shared hosted process. Use it for public discovery, smoke
   tests, and directory validation. Do not replay private cookies or secrets
   through it unless per-user isolation or auth is added.

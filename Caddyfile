@@ -39,10 +39,13 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	}
 
 	# unbrowser MCP server — separate from Unchained's FastMCP /mcp endpoint.
-	# /unbrowser-mcp and /unbrowser-mcp/mcp both reach mcp-proxy's Streamable HTTP path.
+	# Streamable HTTP only; SSE's /messages callback cannot live safely under this prefix.
 	handle /unbrowser-mcp {
 		rewrite * /mcp
 		reverse_proxy unbrowser-mcp:8767
+	}
+	handle /unbrowser-mcp/sse {
+		respond "Use Streamable HTTP at /unbrowser-mcp or /unbrowser-mcp/mcp." 404
 	}
 	handle_path /unbrowser-mcp/* {
 		reverse_proxy unbrowser-mcp:8767

@@ -58,7 +58,7 @@
 | **Caddy** | 80, 443 | TLS termination (Let's Encrypt auto-cert), reverse proxy, path routing |
 | **Relay** | 8765 | WebSocket relay: agent tunnel (`/tunnel`), CDP proxy (`/cdp/*`), REST API (`/api/*`), health check |
 | **MCP** | 8766 | FastMCP server exposing DDM/intel tools for MCP-compatible clients |
-| **unbrowser MCP** | 8767 | Hosted `unbrowser --mcp` bridged to HTTP with `mcp-proxy`; routed under `/unbrowser-mcp` |
+| **unbrowser MCP** | 8767 | Hosted `unbrowser --mcp` bridged to HTTP with `mcp-proxy`; routed under `/unbrowser-mcp` on isolated networks |
 | **Web** | 8080 | Chat UI, Google OAuth login, SSE bridge to agents, download endpoint for agent package |
 | **Private Core** | 8770 | Proprietary execution service for CDP/DDM/intel operations (`/core/execute`) |
 
@@ -119,6 +119,7 @@ state and `analytics.db` for web analytics and funnel data. Treat any
 - **private_core_engine.py** — Proprietary cdp/ddm/intel implementation
 - **mcp_server.py** — FastMCP server exposing DDM/intel/CDP/provisioning tools for MCP-compatible AI clients
 - **Dockerfile.unbrowser-mcp** — Hosted unbrowser MCP bridge using `pyunbrowser` and `mcp-proxy`
+- **unbrowser_ssrf_proxy.py** — Egress guard for the public unbrowser MCP route
 
 ## Deployment
 
