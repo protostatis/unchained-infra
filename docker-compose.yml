@@ -13,6 +13,8 @@ services:
         condition: service_healthy
       mcp:
         condition: service_healthy
+      unbrowser-mcp:
+        condition: service_healthy
       web:
         condition: service_started
     networks:
@@ -87,6 +89,23 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8766,timeout=2); c.request('GET','/mcp'); r=c.getresponse(); c.close(); assert r.status<500,r.status"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  unbrowser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    networks:
+      - app
+      - egress
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
       interval: 5s
       timeout: 3s
       retries: 3

@@ -1,0 +1,20 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN useradd -m -u 10001 -s /bin/bash unchained \
+    && mkdir -p /app /data \
+    && chown -R unchained:unchained /app /data
+
+RUN pip install --no-cache-dir \
+    mcp-proxy==0.12.0 \
+    pyunbrowser==0.0.14
+
+ENV PYTHONUNBUFFERED=1
+ENV HOME=/home/unchained
+
+EXPOSE 8767
+
+USER 10001:10001
+
+CMD ["mcp-proxy", "--host", "0.0.0.0", "--port", "8767", "--pass-environment", "--", "unbrowser", "--mcp"]
