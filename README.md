@@ -137,6 +137,8 @@ unchained-infra/
   production MCP against your local Chrome bridge
 - [docs/mcp-frontend-route-plan.md](./docs/mcp-frontend-route-plan.md): plan for
   a public `/mcp` onboarding route and positioning copy
+- [docs/unbrowser-mcp-route.md](./docs/unbrowser-mcp-route.md): hosted
+  unbrowser MCP route and deployment notes
 - [docs/you-navigate-demo.md](./docs/you-navigate-demo.md): local setup and
   reward-critic framing for the "Unchained drives. You navigate." demo
 - [docs/split-repo-setup.md](./docs/split-repo-setup.md): CI and private-core overlay
