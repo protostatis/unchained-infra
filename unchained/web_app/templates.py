@@ -7464,6 +7464,28 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
+}
+
 function appendText(bubble, text) {
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
@@ -7482,7 +7504,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -8863,6 +8885,28 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
+}
+
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
@@ -8880,7 +8924,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -10832,6 +10876,28 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
+}
+
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
@@ -10849,7 +10915,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -12979,6 +13045,28 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
+}
+
 function appendText(bubble, text) {
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
@@ -12997,7 +13085,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -14383,18 +14471,24 @@ function sanitizeHtml(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('[onload],[onerror],[onclick],[onmouseover],[onfocus],[onblur]').forEach(function(el) {
-    el.removeAttribute('onload');el.removeAttribute('onerror');el.removeAttribute('onclick');
-    el.removeAttribute('onmouseover');el.removeAttribute('onfocus');el.removeAttribute('onblur');
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
   });
-  tmp.querySelectorAll('a[href^="javascript:"]').forEach(function(el) { el.removeAttribute('href'); });
   return tmp.innerHTML;
 }
 
 function renderMarkdown(el, raw) {
   if (typeof marked !== 'undefined') {
     try {
-      el.innerHTML = sanitizeHtml(marked.parse(raw));
+      el.innerHTML = sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
       el.classList.add('rendered');
     } catch (_err) {
       el.textContent = raw;

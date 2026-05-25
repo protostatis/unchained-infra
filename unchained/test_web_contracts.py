@@ -173,6 +173,28 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('href="/local" class="signin">Sign in / Sign up</a>', web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
 
+    def test_chat_markdown_rendering_sanitizes_assistant_output(self):
+        chat_templates = {
+            "TRIAL_CHAT_HTML": web.TRIAL_CHAT_HTML,
+            "CHAT_GEMINI_HTML": web.CHAT_GEMINI_HTML,
+            "CHAT_CLAUDE_SDK_HTML": web.CHAT_CLAUDE_SDK_HTML,
+            "CHAT_CODEX_HTML": web.CHAT_CODEX_HTML,
+            "CLAUDE_CHAT_HTML": web.CLAUDE_CHAT_HTML,
+        }
+        for name, html in chat_templates.items():
+            with self.subTest(template=name):
+                self.assertNotIn("span.innerHTML = marked.parse(bubble._rawText);", html)
+                self.assertIn("span.innerHTML = renderSafeMarkdown(bubble._rawText);", html)
+                self.assertIn("marked.parse(esc(String(raw == null ? '' : raw)))", html)
+                self.assertIn("name.indexOf('on') === 0", html)
+                self.assertIn("javascript:|vbscript:|data:", html)
+
+        self.assertNotIn("sanitizeHtml(marked.parse(raw))", web.FIRST_LOOK_PREVIEW_HTML)
+        self.assertIn(
+            "sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))))",
+            web.FIRST_LOOK_PREVIEW_HTML,
+        )
+
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
