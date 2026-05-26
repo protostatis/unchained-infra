@@ -13641,7 +13641,7 @@ body.first-look-chat-collapsed #chat-pane{
 }
 body.first-look-chat-collapsed #chat,
 body.first-look-chat-collapsed #inputbar{display:none!important}
-body.first-look-chat-collapsed .chat-controls{margin:0}
+body.first-look-chat-collapsed .chat-controls{margin:0;gap:6px}
 body.first-look-chat-collapsed .chat-control-btn{padding:11px 15px}
 body.first-look-canvas #chat{padding:22px!important;gap:12px!important}
 body.first-look-canvas #chat-hints{
@@ -14117,7 +14117,7 @@ body{
     <div id="chat-pane">
       <div class="chat-controls">
         <button id="new-chat-btn" class="chat-control-btn" type="button" onclick="doNewChat()">New Chat</button>
-        <button id="chat-collapse-btn" class="chat-control-btn chat-collapse-btn" type="button" aria-expanded="true" aria-controls="chat inputbar" onclick="toggleFirstLookChat()">Hide Chat</button>
+        <button id="chat-collapse-btn" class="chat-control-btn" type="button" aria-expanded="true" aria-controls="chat inputbar" onclick="toggleFirstLookChat()">Hide Chat</button>
       </div>
       <div id="chat">
         <div id="chat-hints">

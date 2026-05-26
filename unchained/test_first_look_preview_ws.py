@@ -390,6 +390,7 @@ class TestFirstLookPreviewClientJsShape(unittest.TestCase):
         controls = html.split('<div class="chat-controls">', 1)[1].split('<div id="chat">', 1)[0]
         self.assertIn('id="new-chat-btn"', controls)
         self.assertIn('id="chat-collapse-btn"', controls)
+        self.assertNotIn('class="chat-control-btn chat-collapse-btn"', controls)
 
 
 if __name__ == "__main__":
