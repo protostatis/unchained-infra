@@ -2,6 +2,7 @@
 
 TOP_LEVEL_CONTEXT_FILES=(
     "Dockerfile"
+    "Dockerfile.unbrowser-mcp"
     "docker-compose.yml"
     "Caddyfile"
 )
@@ -21,6 +22,7 @@ UNCHAINED_RUNTIME_FILES=(
     "domain_policy.py"
     "api.py"
     "mcp_server.py"
+    "unbrowser_ssrf_proxy.py"
     "orchestrator.py"
     "cdp.py"
     "ddm.py"

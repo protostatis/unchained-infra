@@ -8,6 +8,57 @@ from web_app.template_transforms import (
     apply_template_replacements,
 )
 
+
+_SAFE_MARKDOWN_RENDERER_MARKER = "__SAFE_MARKDOWN_RENDERER_JS__"
+
+_SAFE_MARKDOWN_RENDERER_JS = """function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base,svg,math,picture,source,video,audio').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '')
+        .replace(/[\\u0000-\\u001F\\u007F\\s\\u00A0\\u1680\\u180E\\u2000-\\u200D\\u2028\\u2029\\u202F\\u205F\\u2060\\u3000\\uFEFF]+/g, '')
+        .toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href' || name === 'formaction') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+// Raw assistant HTML is intentionally displayed as text; markdown still renders.
+function escapeMarkdownHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(escapeMarkdownHtml(raw)));
+}"""
+
+
+def _inject_safe_markdown_renderer(html: str, *, template_name: str) -> str:
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                _SAFE_MARKDOWN_RENDERER_MARKER,
+                _SAFE_MARKDOWN_RENDERER_JS,
+                "safe markdown renderer",
+            ),
+        ),
+        template_name=template_name,
+    )
+
 BRANDED_TAB_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7464,6 +7515,8 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+__SAFE_MARKDOWN_RENDERER_JS__
+
 function appendText(bubble, text) {
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
@@ -7482,7 +7535,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -8863,6 +8916,8 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+__SAFE_MARKDOWN_RENDERER_JS__
+
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
@@ -8880,7 +8935,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -10832,6 +10887,8 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+__SAFE_MARKDOWN_RENDERER_JS__
+
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
@@ -10849,7 +10906,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -12979,6 +13036,8 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
+__SAFE_MARKDOWN_RENDERER_JS__
+
 function appendText(bubble, text) {
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
@@ -12997,7 +13056,7 @@ function appendText(bubble, text) {
   ensureMarkedConfigured();
   if (typeof marked !== 'undefined') {
     try {
-      span.innerHTML = marked.parse(bubble._rawText);
+      span.innerHTML = renderSafeMarkdown(bubble._rawText);
       span.classList.add('rendered');
     } catch(e) {
       span.textContent = bubble._rawText;
@@ -13672,6 +13731,11 @@ body.first-look-canvas #inputbar{
 body.first-look-canvas #msginput{min-height:48px!important;border-radius:16px!important;background:rgba(15,20,27,0.86)!important}
 body.first-look-canvas #msginput:focus{box-shadow:0 0 0 3px rgba(255,107,74,0.15)!important}
 body.first-look-canvas #quota-bar{padding-left:4px;color:#aab5c6!important}
+body.first-look-canvas #shared-browser-status{padding-left:4px;color:#aab5c6!important;font-size:11px!important;line-height:1.35!important}
+body.first-look-canvas #shared-browser-status.ok{color:#b9f1d8!important}
+body.first-look-canvas #shared-browser-status.warn{color:#f7d996!important}
+body.first-look-canvas #shared-browser-status.danger{color:#f3aa9f!important}
+body.first-look-canvas #shared-browser-status.subtle{color:#aab5c6!important}
 body.first-look-canvas .bubble{max-width:96%!important}
 body.first-look-canvas .install-nudge{border-radius:14px!important;background:rgba(255,107,74,0.1)!important}
 @media (max-width: 1100px){
@@ -13991,6 +14055,13 @@ body{
   padding:4px 0 0;font-size:11px;color:var(--muted);
 }
 #quota-bar strong{color:var(--text)}
+#shared-browser-status{
+  padding:0 0 2px;font-size:11px;line-height:1.35;color:var(--muted);
+}
+#shared-browser-status.ok{color:#b9f1d8}
+#shared-browser-status.warn{color:#f7d996}
+#shared-browser-status.danger{color:#f3aa9f}
+#shared-browser-status.subtle{color:var(--muted)}
 
 /* === Steps === */
 .steps-wrap{
@@ -14139,6 +14210,7 @@ body{
         <div id="input-fields">
           <textarea id="msginput" rows="1" placeholder="Ask the browser to do something..."></textarea>
           <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
         <button id="sendbtn" aria-label="Run task">&#9654;</button>
         <button id="cancelbtn" aria-label="Cancel run">&#9632;</button>
@@ -14374,22 +14446,12 @@ function ensureAssistantLine() {
   return currentAssistantEl;
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('[onload],[onerror],[onclick],[onmouseover],[onfocus],[onblur]').forEach(function(el) {
-    el.removeAttribute('onload');el.removeAttribute('onerror');el.removeAttribute('onclick');
-    el.removeAttribute('onmouseover');el.removeAttribute('onfocus');el.removeAttribute('onblur');
-  });
-  tmp.querySelectorAll('a[href^="javascript:"]').forEach(function(el) { el.removeAttribute('href'); });
-  return tmp.innerHTML;
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function renderMarkdown(el, raw) {
   if (typeof marked !== 'undefined') {
     try {
-      el.innerHTML = sanitizeHtml(marked.parse(raw));
+      el.innerHTML = renderSafeMarkdown(raw);
       el.classList.add('rendered');
     } catch (_err) {
       el.textContent = raw;
@@ -14855,6 +14917,9 @@ async function refreshSharedBrowserStatus() {
     sharedBrowserReady = !!data.connected;
     if (data.connected) {
       setStatusCopy('shared-browser-status', 'Shared browser ready for guest runs.', 'ok');
+      if (!sending && !previewHasFrame && previewState === 'idle') {
+        setPreviewNote('Shared browser ready for guest runs.', 'ok');
+      }
     } else if (!data.bridge_configured) {
       setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
       if (!sending) setPreviewNote('Local preview only: headless bridge is not configured, so demo runs are disabled.', 'warn');
@@ -15603,6 +15668,14 @@ CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _inject_sidebar(CHAT_CODEX_HTML)
+
+TRIAL_CHAT_HTML = _inject_safe_markdown_renderer(TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML")
+CHAT_GEMINI_HTML = _inject_safe_markdown_renderer(CHAT_GEMINI_HTML, template_name="CHAT_GEMINI_HTML")
+CHAT_CLAUDE_SDK_HTML = _inject_safe_markdown_renderer(CHAT_CLAUDE_SDK_HTML, template_name="CHAT_CLAUDE_SDK_HTML")
+CHAT_CODEX_HTML = _inject_safe_markdown_renderer(CHAT_CODEX_HTML, template_name="CHAT_CODEX_HTML")
+HEADLESS_DEMO_HTML = _inject_safe_markdown_renderer(HEADLESS_DEMO_HTML, template_name="HEADLESS_DEMO_HTML")
+CLAUDE_CHAT_HTML = _inject_safe_markdown_renderer(CLAUDE_CHAT_HTML, template_name="CLAUDE_CHAT_HTML")
+FIRST_LOOK_PREVIEW_HTML = _inject_safe_markdown_renderer(FIRST_LOOK_PREVIEW_HTML, template_name="FIRST_LOOK_PREVIEW_HTML")
 
 # Backward-compat alias used by older tests and tooling.
 # Older tests assert an inline model expression in doSend().

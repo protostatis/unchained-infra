@@ -30,6 +30,8 @@ live at the repo root.
   quickstart for controlling local Chrome through MCP
 - [mcp-frontend-route-plan.md](./mcp-frontend-route-plan.md): implementation
   plan for a public `/mcp` onboarding route
+- [unbrowser-mcp-route.md](./unbrowser-mcp-route.md): hosted unbrowser MCP
+  route and deployment notes
 - [../unchained/benchmark/README.md](../unchained/benchmark/README.md): local
   benchmark runner and safety procedure
 - [../unchained/README.md](../unchained/README.md): package-level tool and agent notes
