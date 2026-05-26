@@ -13601,6 +13601,7 @@ body.first-look-canvas #preview-empty{
   color:#c6cedc!important;font-size:16px!important;letter-spacing:0.02em;
   background:linear-gradient(180deg,transparent,rgba(0,0,0,0.22));
 }
+body.first-look-canvas #live-canvas-wrap.preview-has-frame #preview-empty{display:none!important}
 body.first-look-canvas #live-pane-head{
   display:none!important;
 }
@@ -13622,12 +13623,16 @@ body.first-look-canvas #chat-pane{
   box-shadow:0 26px 80px rgba(0,0,0,0.44), inset 0 1px 0 rgba(255,255,255,0.06)!important;
   backdrop-filter:blur(22px);
 }
-.chat-collapse-btn{
-  align-self:flex-end;margin:12px 12px 0;padding:7px 11px;border:1px solid rgba(124,145,171,0.28);
+.chat-controls{
+  align-self:flex-end;display:flex;gap:8px;margin:12px 12px 0;
+}
+.chat-control-btn{
+  padding:7px 11px;border:1px solid rgba(124,145,171,0.28);
   border-radius:999px;background:rgba(255,255,255,0.045);color:#cbd4e3;
   font-family:var(--mono);font-size:10px;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;
+  text-decoration:none;
 }
-.chat-collapse-btn:hover,.chat-collapse-btn:focus-visible{
+.chat-control-btn:hover,.chat-control-btn:focus-visible{
   outline:none;border-color:rgba(255,107,74,0.6);color:#ffd5cb;background:rgba(255,107,74,0.12);
 }
 body.first-look-chat-collapsed #chat-pane{
@@ -13636,7 +13641,8 @@ body.first-look-chat-collapsed #chat-pane{
 }
 body.first-look-chat-collapsed #chat,
 body.first-look-chat-collapsed #inputbar{display:none!important}
-body.first-look-chat-collapsed .chat-collapse-btn{margin:0;padding:11px 15px}
+body.first-look-chat-collapsed .chat-controls{margin:0}
+body.first-look-chat-collapsed .chat-control-btn{padding:11px 15px}
 body.first-look-canvas #chat{padding:22px!important;gap:12px!important}
 body.first-look-canvas #chat-hints{
   height:auto!important;min-height:0!important;align-items:stretch!important;text-align:left!important;
@@ -14102,7 +14108,6 @@ body{
     <div class="nav">
       <a href="/">Home</a>
       <a id="browser-cta" href="/trial">Unlock Full Browser</a>
-      <a href="#" onclick="doNewChat();return false">New Chat</a>
     </div>
   </div>
 
@@ -14110,7 +14115,10 @@ body{
 
   <div id="workspace">
     <div id="chat-pane">
-      <button id="chat-collapse-btn" class="chat-collapse-btn" type="button" aria-expanded="true" aria-controls="chat inputbar" onclick="toggleFirstLookChat()">Hide Chat</button>
+      <div class="chat-controls">
+        <button id="new-chat-btn" class="chat-control-btn" type="button" onclick="doNewChat()">New Chat</button>
+        <button id="chat-collapse-btn" class="chat-control-btn chat-collapse-btn" type="button" aria-expanded="true" aria-controls="chat inputbar" onclick="toggleFirstLookChat()">Hide Chat</button>
+      </div>
       <div id="chat">
         <div id="chat-hints">
           <div class="hint-badge" id="quota-copy">__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs &middot; selected public sites</div>
@@ -14612,6 +14620,7 @@ function openPreviewSocket() {
 // time to pick up the new src before the old one becomes invalid.
 let previewFrameCount = 0;
 function updatePreview(imageB64, note, modeLabel, mimeType) {
+  const wrap = document.getElementById('live-canvas-wrap');
   const img = document.getElementById('preview-image');
   const ph = document.getElementById('preview-empty');
   if (!img) return;
@@ -14640,6 +14649,7 @@ function updatePreview(imageB64, note, modeLabel, mimeType) {
     setTimeout(function () { try { URL.revokeObjectURL(oldUrl); } catch (_e) {} }, 250);
   }
   img.style.display = 'block';
+  if (wrap) wrap.classList.add('preview-has-frame');
   if (ph) ph.style.display = 'none';
   previewHasFrame = true;
   previewFrameCount += 1;
@@ -14698,6 +14708,8 @@ function resetPreview() {
     delete img.dataset.previewBlobUrl;
   }
   if (img) img.style.display = 'none';
+  const wrap = document.getElementById('live-canvas-wrap');
+  if (wrap) wrap.classList.remove('preview-has-frame');
   const ph = document.getElementById('preview-empty');
   if (ph) ph.style.display = '';
   setBrowserUrl('');
