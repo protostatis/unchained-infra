@@ -76,6 +76,10 @@ jobs:
           done
           $SCP_CMD "${BENCHMARK_UPLOAD[@]}" $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/benchmark/
 
+          # Keep the modular web_app package in sync with web.py imports.
+          $SSH_CMD "rm -rf $REMOTE_DIR/unchained/web_app && mkdir -p $REMOTE_DIR/unchained"
+          $SCP_CMD -r unchained/web_app $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/
+
           # Ship native installer artifacts (.exe, .pkg, .dmg, build scripts).
           # Without this step, prebuilt installer binaries never reach prod and
           # /web/download-installer keeps serving whatever was last uploaded.
