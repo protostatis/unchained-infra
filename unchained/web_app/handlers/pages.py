@@ -9,7 +9,7 @@ from aiohttp import web
 
 from web_app.core import get_core as _core
 from web_app.research_desk_page import build_research_desk_html as _build_research_desk_html
-from web_app.templates import FIRST_LOOK_PREVIEW_HTML
+from web_app.templates import FIRST_LOOK_PREVIEW_HTML, UNBROWSER_PAGE_HTML
 
 
 async def handle_install_page(request: web.Request) -> web.Response:
@@ -42,6 +42,14 @@ async def handle_mcp_page(request: web.Request) -> web.Response:
     core = _core()
     core._track_page_view(request)
     html = core.inject_google_client_id(core.MCP_PAGE_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_unbrowser_page(request: web.Request) -> web.Response:
+    """Serve the public unbrowser landing page."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.inject_google_client_id(UNBROWSER_PAGE_HTML, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 
