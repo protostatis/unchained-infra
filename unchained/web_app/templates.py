@@ -8,6 +8,56 @@ from web_app.template_transforms import (
     apply_template_replacements,
 )
 
+
+_SAFE_MARKDOWN_RENDERER_MARKER = "__SAFE_MARKDOWN_RENDERER_JS__"
+
+_SAFE_MARKDOWN_RENDERER_JS = """function sanitizeHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('*').forEach(function(el) {
+    Array.from(el.attributes).forEach(function(attr) {
+      const name = attr.name.toLowerCase();
+      const value = String(attr.value || '')
+        .replace(/[\\u0000-\\u001F\\u007F\\s\\u00A0\\u1680\\u180E\\u2000-\\u200D\\u2028\\u2029\\u202F\\u205F\\u2060\\u3000\\uFEFF]+/g, '')
+        .toLowerCase();
+      if (name.indexOf('on') === 0 || name === 'style') {
+        el.removeAttribute(attr.name);
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tmp.innerHTML;
+}
+
+function escapeMarkdownHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderSafeMarkdown(raw) {
+  return sanitizeHtml(marked.parse(escapeMarkdownHtml(raw)));
+}"""
+
+
+def _inject_safe_markdown_renderer(html: str, *, template_name: str) -> str:
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                _SAFE_MARKDOWN_RENDERER_MARKER,
+                _SAFE_MARKDOWN_RENDERER_JS,
+                "safe markdown renderer",
+            ),
+        ),
+        template_name=template_name,
+    )
+
 BRANDED_TAB_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7464,27 +7514,7 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('*').forEach(function(el) {
-    Array.from(el.attributes).forEach(function(attr) {
-      const name = attr.name.toLowerCase();
-      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
-      if (name.indexOf('on') === 0 || name === 'style') {
-        el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
-        el.removeAttribute(attr.name);
-      }
-    });
-  });
-  return tmp.innerHTML;
-}
-
-function renderSafeMarkdown(raw) {
-  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
   // Remove thinking indicator if present
@@ -8885,27 +8915,7 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('*').forEach(function(el) {
-    Array.from(el.attributes).forEach(function(attr) {
-      const name = attr.name.toLowerCase();
-      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
-      if (name.indexOf('on') === 0 || name === 'style') {
-        el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
-        el.removeAttribute(attr.name);
-      }
-    });
-  });
-  return tmp.innerHTML;
-}
-
-function renderSafeMarkdown(raw) {
-  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
@@ -10876,27 +10886,7 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('*').forEach(function(el) {
-    Array.from(el.attributes).forEach(function(attr) {
-      const name = attr.name.toLowerCase();
-      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
-      if (name.indexOf('on') === 0 || name === 'style') {
-        el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
-        el.removeAttribute(attr.name);
-      }
-    });
-  });
-  return tmp.innerHTML;
-}
-
-function renderSafeMarkdown(raw) {
-  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
   const thinking = bubble.querySelector('.thinking');
@@ -13045,27 +13035,7 @@ function ensureMarkedConfigured() {
   marked.use({ extensions: [blockMath, inlineMath] });
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('*').forEach(function(el) {
-    Array.from(el.attributes).forEach(function(attr) {
-      const name = attr.name.toLowerCase();
-      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
-      if (name.indexOf('on') === 0 || name === 'style') {
-        el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
-        el.removeAttribute(attr.name);
-      }
-    });
-  });
-  return tmp.innerHTML;
-}
-
-function renderSafeMarkdown(raw) {
-  return sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
   // Remove thinking indicator if present
@@ -14467,28 +14437,12 @@ function ensureAssistantLine() {
   return currentAssistantEl;
 }
 
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
-  tmp.querySelectorAll('*').forEach(function(el) {
-    Array.from(el.attributes).forEach(function(attr) {
-      const name = attr.name.toLowerCase();
-      const value = String(attr.value || '').replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase();
-      if (name.indexOf('on') === 0 || name === 'style') {
-        el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
-        el.removeAttribute(attr.name);
-      }
-    });
-  });
-  return tmp.innerHTML;
-}
+__SAFE_MARKDOWN_RENDERER_JS__
 
 function renderMarkdown(el, raw) {
   if (typeof marked !== 'undefined') {
     try {
-      el.innerHTML = sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))));
+      el.innerHTML = renderSafeMarkdown(raw);
       el.classList.add('rendered');
     } catch (_err) {
       el.textContent = raw;
@@ -15701,6 +15655,14 @@ CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _inject_sidebar(CHAT_CODEX_HTML)
+
+TRIAL_CHAT_HTML = _inject_safe_markdown_renderer(TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML")
+CHAT_GEMINI_HTML = _inject_safe_markdown_renderer(CHAT_GEMINI_HTML, template_name="CHAT_GEMINI_HTML")
+CHAT_CLAUDE_SDK_HTML = _inject_safe_markdown_renderer(CHAT_CLAUDE_SDK_HTML, template_name="CHAT_CLAUDE_SDK_HTML")
+CHAT_CODEX_HTML = _inject_safe_markdown_renderer(CHAT_CODEX_HTML, template_name="CHAT_CODEX_HTML")
+HEADLESS_DEMO_HTML = _inject_safe_markdown_renderer(HEADLESS_DEMO_HTML, template_name="HEADLESS_DEMO_HTML")
+CLAUDE_CHAT_HTML = _inject_safe_markdown_renderer(CLAUDE_CHAT_HTML, template_name="CLAUDE_CHAT_HTML")
+FIRST_LOOK_PREVIEW_HTML = _inject_safe_markdown_renderer(FIRST_LOOK_PREVIEW_HTML, template_name="FIRST_LOOK_PREVIEW_HTML")
 
 # Backward-compat alias used by older tests and tooling.
 # Older tests assert an inline model expression in doSend().

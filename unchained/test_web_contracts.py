@@ -180,18 +180,23 @@ class TestWebTemplateContracts(unittest.TestCase):
             "CHAT_CLAUDE_SDK_HTML": web.CHAT_CLAUDE_SDK_HTML,
             "CHAT_CODEX_HTML": web.CHAT_CODEX_HTML,
             "CLAUDE_CHAT_HTML": web.CLAUDE_CHAT_HTML,
+            "HEADLESS_DEMO_HTML": web.HEADLESS_DEMO_HTML,
         }
         for name, html in chat_templates.items():
             with self.subTest(template=name):
+                self.assertNotIn("__SAFE_MARKDOWN_RENDERER_JS__", html)
                 self.assertNotIn("span.innerHTML = marked.parse(bubble._rawText);", html)
                 self.assertIn("span.innerHTML = renderSafeMarkdown(bubble._rawText);", html)
-                self.assertIn("marked.parse(esc(String(raw == null ? '' : raw)))", html)
+                self.assertIn("marked.parse(escapeMarkdownHtml(raw))", html)
+                self.assertIn("function escapeMarkdownHtml(value)", html)
                 self.assertIn("name.indexOf('on') === 0", html)
+                self.assertIn("\\u2000-\\u200D", html)
                 self.assertIn("javascript:|vbscript:|data:", html)
 
         self.assertNotIn("sanitizeHtml(marked.parse(raw))", web.FIRST_LOOK_PREVIEW_HTML)
+        self.assertNotIn("__SAFE_MARKDOWN_RENDERER_JS__", web.FIRST_LOOK_PREVIEW_HTML)
         self.assertIn(
-            "sanitizeHtml(marked.parse(esc(String(raw == null ? '' : raw))))",
+            "sanitizeHtml(marked.parse(escapeMarkdownHtml(raw)))",
             web.FIRST_LOOK_PREVIEW_HTML,
         )
 
