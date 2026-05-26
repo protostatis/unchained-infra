@@ -68,6 +68,7 @@ from web_app.templates import (
     SCHEDULER_HTML,
     SETUP_HTML,
     TRIAL_CHAT_HTML,
+    UNBROWSER_PAGE_HTML,
 )
 
 log = logging.getLogger(__name__)
@@ -253,6 +254,7 @@ def _trace(event: str, **fields):
 
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
+    "/unbrowser",
     "/mcp-guide",
     "/mcp",
     "/privacy",
@@ -1490,6 +1492,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         published = []
     pages = [
         ("https://unchainedsky.com/", "1.0", "weekly"),
+        ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),

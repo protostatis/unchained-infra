@@ -50,6 +50,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/"),
+            ("GET", "/unbrowser"),
             ("GET", "/tab"),
             ("GET", "/mcp-guide"),
             ("GET", "/test"),
@@ -139,6 +140,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_chat_pages_exported(self):
         templates = [
             "LANDING_HTML",
+            "UNBROWSER_PAGE_HTML",
             "BRANDED_TAB_HTML",
             "HTML",
             "TRIAL_CHAT_HTML",
@@ -172,6 +174,12 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_landing_auth_cta_points_to_auth_entry(self):
         self.assertIn('href="/local" class="signin">Sign in / Sign up</a>', web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
+
+    def test_unbrowser_page_links_public_directories(self):
+        self.assertIn("https://smithery.ai/servers/protostatis-dev/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
 
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
