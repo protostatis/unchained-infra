@@ -440,6 +440,14 @@ def test_deploy_script_uploads_research_desk_vendor_tree():
     assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
 
 
+def test_github_deploy_workflow_uploads_web_app_package():
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow = (repo_root / ".github" / "workflows" / "deploy.yml").read_text()
+    assert "Keep the modular web_app package in sync with web.py imports" in workflow
+    assert "rm -rf $REMOTE_DIR/unchained/web_app" in workflow
+    assert "$SCP_CMD -r unchained/web_app $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/" in workflow
+
+
 def test_research_desk_package_image_smoke_script_checks_built_image():
     repo_root = Path(__file__).resolve().parent.parent
     smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
