@@ -191,6 +191,9 @@ class TestWebTemplateContracts(unittest.TestCase):
                 self.assertIn("function escapeMarkdownHtml(value)", html)
                 self.assertIn("name.indexOf('on') === 0", html)
                 self.assertIn("\\u2000-\\u200D", html)
+                self.assertIn("svg,math,picture,source,video,audio", html)
+                self.assertIn("name === 'formaction'", html)
+                self.assertIn("Raw assistant HTML is intentionally displayed as text", html)
                 self.assertIn("javascript:|vbscript:|data:", html)
 
         self.assertNotIn("sanitizeHtml(marked.parse(raw))", web.FIRST_LOOK_PREVIEW_HTML)

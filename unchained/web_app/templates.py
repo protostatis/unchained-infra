@@ -14,7 +14,7 @@ _SAFE_MARKDOWN_RENDERER_MARKER = "__SAFE_MARKDOWN_RENDERER_JS__"
 _SAFE_MARKDOWN_RENDERER_JS = """function sanitizeHtml(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
-  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base').forEach(function(el) { el.remove(); });
+  tmp.querySelectorAll('script,iframe,object,embed,form,input,button,style,link,meta,base,svg,math,picture,source,video,audio').forEach(function(el) { el.remove(); });
   tmp.querySelectorAll('*').forEach(function(el) {
     Array.from(el.attributes).forEach(function(attr) {
       const name = attr.name.toLowerCase();
@@ -23,7 +23,7 @@ _SAFE_MARKDOWN_RENDERER_JS = """function sanitizeHtml(html) {
         .toLowerCase();
       if (name.indexOf('on') === 0 || name === 'style') {
         el.removeAttribute(attr.name);
-      } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript:|vbscript:|data:)/.test(value)) {
+      } else if ((name === 'href' || name === 'src' || name === 'xlink:href' || name === 'formaction') && /^(javascript:|vbscript:|data:)/.test(value)) {
         el.removeAttribute(attr.name);
       }
     });
@@ -31,6 +31,7 @@ _SAFE_MARKDOWN_RENDERER_JS = """function sanitizeHtml(html) {
   return tmp.innerHTML;
 }
 
+// Raw assistant HTML is intentionally displayed as text; markdown still renders.
 function escapeMarkdownHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
