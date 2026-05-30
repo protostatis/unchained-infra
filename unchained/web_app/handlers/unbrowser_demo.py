@@ -150,8 +150,8 @@ async def handle_unbrowser_stream(request: web.Request) -> web.StreamResponse:
             "X-Accel-Buffering": "no",
         },
     )
-    await response.prepare(request)
     try:
+        await response.prepare(request)
         await _run_scan(response, scenario)
     except (ConnectionResetError, asyncio.CancelledError):
         raise
