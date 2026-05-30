@@ -211,6 +211,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
 
+    def test_unbrowser_page_live_demo_contract(self):
+        self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
+
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 

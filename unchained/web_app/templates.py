@@ -1058,8 +1058,22 @@ h1{font-size:clamp(44px,8vw,104px);line-height:.88;letter-spacing:-.06em;margin:
 .note p{margin:0 0 12px;line-height:1.5;color:#413529}
 .directory{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
 .chip{font-family:"Courier New",monospace;font-size:12px;border:1px solid var(--rule);background:#fff9eb;padding:8px 10px;text-decoration:none}
+.demo{border:2px solid var(--rule);background:rgba(255,249,235,.9);box-shadow:12px 12px 0 var(--shadow);padding:22px;margin:0 0 42px}
+.demo-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
+.demo-head h2{font-size:clamp(28px,4vw,46px);line-height:.95;letter-spacing:-.05em;margin:0}
+.demo-head p{max-width:520px;line-height:1.5;color:#4b3e34;margin:8px 0 0;font-size:15px}
+.demo-pill{font-family:"Courier New",monospace;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--rule);padding:8px 10px;background:var(--panel-2);white-space:nowrap}
+.demo-layout{display:grid;grid-template-columns:minmax(0,.9fr) minmax(330px,.62fr);gap:18px;align-items:start}
+.demo-prompts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px}
+.demo-prompt{border:2px solid rgba(36,26,18,.55);background:#fff9eb;padding:10px;text-align:left;cursor:pointer;font-family:"Courier New",monospace;transition:transform .15s ease,background .15s ease,border-color .15s ease}
+.demo-prompt:hover,.demo-prompt.active{background:#efe2c8;border-color:var(--rule);transform:translateY(-1px)}
+.demo-prompt strong,.demo-prompt span{display:block}.demo-prompt strong{font-size:12px;text-transform:uppercase;letter-spacing:.06em}.demo-prompt span{margin-top:4px;color:#5c5045;font-family:Georgia,"Times New Roman",serif;font-size:13px;line-height:1.25}
+.demo-run{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.demo-run .btn{border-radius:0;box-shadow:4px 4px 0 var(--rule);cursor:pointer}.demo-run .btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:4px 4px 0 var(--rule)}.demo-note{font-size:13px;color:#5c5045;line-height:1.4}
+.demo-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px}.demo-metric{border:1px solid var(--rule);background:var(--panel-2);padding:10px;font-family:"Courier New",monospace}.demo-metric span{display:block;font-size:10px;text-transform:uppercase;color:#6d6257}.demo-metric strong{display:block;margin-top:4px;font-size:20px}
+.demo-sources{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}.demo-source{border:1px solid rgba(36,26,18,.55);background:#fffdf4;padding:10px;min-height:112px;cursor:pointer}.demo-source:hover,.demo-source.previewed{background:#efe2c8}.demo-source.pinned{outline:2px solid var(--orange)}.demo-source h3{margin:0 0 4px;font-family:"Courier New",monospace;font-size:13px}.demo-source p{margin:0;color:#5c5045;font-size:12px;line-height:1.25}.demo-source .preview{margin-top:8px;color:#17130f;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.demo-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.demo-meta span,.demo-status{font-family:"Courier New",monospace;font-size:10px;border:1px solid rgba(36,26,18,.45);padding:3px 5px;text-transform:uppercase;background:#fff9eb}.demo-status.ok{color:var(--green)}.demo-status.partial{color:var(--orange)}.demo-status.blocked,.demo-status.error{color:#b42318}
+.demo-inspector{position:sticky;top:18px;border:2px solid var(--rule);background:#18130e;color:#f4ead8;padding:16px;max-height:72vh;overflow:auto}.demo-inspector .eyebrow{margin-bottom:8px;color:#f3ba63}.demo-inspector h3{margin:0 0 8px;font-size:24px;line-height:1}.demo-url{display:block;color:#86c5ff;font-family:"Courier New",monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:10px}.demo-kv{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}.demo-kv span{font-family:"Courier New",monospace;font-size:10px;border:1px solid rgba(244,234,216,.3);padding:4px 6px;text-transform:uppercase}.demo-section{border:1px solid rgba(244,234,216,.18);padding:10px;margin-top:8px}.demo-section strong{display:block;color:#9dff69;font-family:"Courier New",monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}.demo-section p,.demo-section li{font-size:13px;line-height:1.35}.demo-section ul{margin:0;padding-left:18px}.demo-brief{margin-top:14px;border:2px solid var(--rule);background:var(--panel-2);padding:14px}.demo-brief h3{margin:0 0 8px;font-size:22px}.demo-brief p{margin:0;color:#4b3e34;line-height:1.45}.demo-brief .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.demo-brief .tags span{font-family:"Courier New",monospace;font-size:10px;text-transform:uppercase;border:1px solid var(--rule);padding:4px 6px;background:#fff9eb}
 .footer{margin-top:48px;padding-top:18px;border-top:2px solid var(--rule);display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;color:var(--muted);font-family:"Courier New",monospace;font-size:12px}
-@media(max-width:860px){.hero,.strip{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.artifact{transform:none}.nav{align-items:flex-start;flex-direction:column}.nav-links{justify-content:flex-start}.wrap{padding-top:18px}.hero{padding-top:42px}}
+@media(max-width:860px){.hero,.strip,.demo-layout{grid-template-columns:1fr}.grid,.demo-prompts,.demo-metrics{grid-template-columns:1fr}.artifact{transform:none}.nav{align-items:flex-start;flex-direction:column}.nav-links{justify-content:flex-start}.wrap{padding-top:18px}.hero{padding-top:42px}.demo-inspector{position:static;max-height:none}}
 </style>
 </head>
 <body>
@@ -1105,6 +1119,43 @@ ssrf_guard: enabled</pre>
     <article class="card"><div class="num">03</div><h2>Escalation ready</h2><p>When a site needs real browser fidelity, auth, extensions, or human-in-the-loop control, hand off to Unchained instead of pretending a tiny runtime is Chrome.</p></article>
   </section>
 
+  <section class="demo" id="live-demo" aria-label="Live unbrowser public-web scan demo">
+    <div class="demo-head">
+      <div>
+        <div class="eyebrow">Live fixed-source scan</div>
+        <h2>Try the cheap pass before Chrome.</h2>
+        <p>Choose a public source set. The page launches real <code>unbrowser navigate</code> fetches, streams each result, flags hard pages, and estimates full-browser sessions avoided.</p>
+      </div>
+      <span class="demo-pill">No arbitrary URLs</span>
+    </div>
+    <div class="demo-layout">
+      <div>
+        <div id="ub-prompts" class="demo-prompts" aria-label="Demo scan presets"></div>
+        <div class="demo-run">
+          <button id="ub-run" class="btn" type="button">Run live scan</button>
+          <span class="demo-note">Fixed public URLs only. If the server lacks the unbrowser binary, the run reports that honestly.</span>
+        </div>
+        <div class="demo-metrics" aria-label="Live scan metrics">
+          <div class="demo-metric"><span>Sources</span><strong id="ub-metric-sources">0</strong></div>
+          <div class="demo-metric"><span>Fetched</span><strong id="ub-metric-ok">0</strong></div>
+          <div class="demo-metric"><span>Hard pages</span><strong id="ub-metric-hard">0</strong></div>
+          <div class="demo-metric"><span>Facts</span><strong id="ub-metric-facts">0</strong></div>
+        </div>
+        <div id="ub-sources" class="demo-sources" aria-live="polite"></div>
+        <div id="ub-brief" class="demo-brief" hidden>
+          <h3>Scan brief</h3>
+          <p></p>
+          <div class="tags"></div>
+        </div>
+      </div>
+      <aside id="ub-inspector" class="demo-inspector" aria-live="polite">
+        <div class="eyebrow">Latest retrieval</div>
+        <h3>Waiting for source list</h3>
+        <p>Pick a preset to queue public sources. Hover any source for details; click to pin it.</p>
+      </aside>
+    </div>
+  </section>
+
   <section class="strip" aria-label="MCP setup">
     <div class="code">{
   "mcpServers": {
@@ -1129,6 +1180,35 @@ ssrf_guard: enabled</pre>
       </div>
     </div>
   </section>
+
+  <script>
+  (function(){
+    var state={scenarios:[],current:null,cards:new Map(),results:new Map(),eventSource:null,pinned:null,latest:null,preview:null,facts:0};
+    var els={prompts:document.getElementById('ub-prompts'),run:document.getElementById('ub-run'),sources:document.getElementById('ub-sources'),inspector:document.getElementById('ub-inspector'),brief:document.getElementById('ub-brief'),metricSources:document.getElementById('ub-metric-sources'),metricOk:document.getElementById('ub-metric-ok'),metricHard:document.getElementById('ub-metric-hard'),metricFacts:document.getElementById('ub-metric-facts')};
+    function esc(v){return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]})}
+    function fmt(n){return new Intl.NumberFormat('en-US').format(n||0)}
+    function compact(v,n){var s=String(v||'').replace(/\s+/g,' ').trim();return s.length>n?s.slice(0,n-3)+'...':s}
+    function statusLabel(s){return s==='ok'?'unbrowser':s==='partial'?'partial':s==='blocked'?'bot wall':s==='error'?'error':'queued'}
+    function updateMetrics(){var ok=0,hard=0;state.results.forEach(function(r){if(r.status==='ok')ok++;if(r.status==='partial'||r.status==='blocked'||r.status==='error')hard++});els.metricSources.textContent=fmt(state.results.size);els.metricOk.textContent=fmt(ok);els.metricHard.textContent=fmt(hard);els.metricFacts.textContent=fmt(state.facts)}
+    function renderPrompts(){els.prompts.innerHTML=state.scenarios.map(function(s,i){return '<button class="demo-prompt '+(i===0?'active':'')+'" type="button" data-id="'+esc(s.id)+'"><strong>'+esc(s.label)+'</strong><span>'+esc(s.description)+'</span></button>'}).join('');els.prompts.querySelectorAll('button').forEach(function(btn){btn.addEventListener('click',function(){selectScenario(btn.dataset.id)})})}
+    function selectScenario(id){state.current=state.scenarios.find(function(s){return s.id===id})||state.scenarios[0];els.prompts.querySelectorAll('button').forEach(function(btn){btn.classList.toggle('active',btn.dataset.id===state.current.id)});resetRunState();renderSources(state.current.sources||[]);renderInspector(null,'Latest retrieval','Sources queued','Run the scan to retrieve live page metadata.');}
+    function resetRunState(){if(state.eventSource){state.eventSource.close();state.eventSource=null}state.cards.clear();state.results.clear();state.pinned=null;state.latest=null;state.preview=null;state.facts=0;els.sources.innerHTML='';els.brief.hidden=true;els.brief.querySelector('p').textContent='';els.brief.querySelector('.tags').innerHTML='';updateMetrics();els.run.disabled=false;els.run.textContent='Run live scan'}
+    function renderSources(sources){els.sources.innerHTML='';sources.forEach(function(src){var card=document.createElement('article');card.className='demo-source';card.dataset.id=src.id;card.tabIndex=0;card.innerHTML='<h3>'+esc(src.name)+'</h3><p>'+esc(src.category||'Public source')+'</p><p class="preview">Queued public URL</p><div class="demo-meta"><span class="demo-status">queued</span><span class="chars">0 chars</span><span class="facts">waiting</span></div>';card.addEventListener('mouseenter',function(){previewSource(src.id)});card.addEventListener('mouseleave',restorePreview);card.addEventListener('focus',function(){previewSource(src.id)});card.addEventListener('blur',restorePreview);card.addEventListener('click',function(){pinSource(src.id)});els.sources.appendChild(card);state.cards.set(src.id,card)})}
+    function setStarted(src){var card=state.cards.get(src.id);if(!card)return;card.querySelector('.demo-status').textContent='scanning';card.querySelector('.preview').textContent='unbrowser process launched...'}
+    function setResult(r){state.results.set(r.id,r);state.latest=r.id;var card=state.cards.get(r.id);if(card){card.className='demo-source '+esc(r.status||'ok');card.querySelector('.demo-status').className='demo-status '+esc(r.status||'ok');card.querySelector('.demo-status').textContent=statusLabel(r.status);card.querySelector('.chars').textContent=fmt(r.chars)+' chars';card.querySelector('.facts').textContent=fmt(r.facts)+' facts';card.querySelector('.preview').textContent=cardPreview(r)}if(state.preview===r.id){renderInspector(r,'Hover preview')}else if(!state.pinned){renderInspector(r,'Latest retrieval')}else if(state.pinned===r.id){renderInspector(r,'Pinned source')}updateMetrics()}
+    function cardPreview(r){var p=r.preview||{};if(p.challenge)return 'Blocked by '+(p.challenge.provider||r.route||'challenge');return (p.headings&&p.headings[0])||(p.links&&p.links[0]&&p.links[0].text)||p.title||p.url||'Retrieved page metadata'}
+    function previewSource(id){state.preview=id;state.cards.forEach(function(card,k){card.classList.toggle('previewed',k===id)});var r=state.results.get(id);if(r)renderInspector(r,'Hover preview');else renderQueued(id,'Hover preview')}
+    function restorePreview(){state.preview=null;state.cards.forEach(function(card){card.classList.remove('previewed')});if(state.pinned&&state.results.has(state.pinned))renderInspector(state.results.get(state.pinned),'Pinned source');else if(state.latest&&state.results.has(state.latest))renderInspector(state.results.get(state.latest),'Latest retrieval')}
+    function pinSource(id){state.pinned=id;state.cards.forEach(function(card,k){card.classList.toggle('pinned',k===id)});var r=state.results.get(id);if(r)renderInspector(r,'Pinned source');else renderQueued(id,'Pinned source')}
+    function renderQueued(id,label){var card=state.cards.get(id);renderInspector(null,label,card?card.querySelector('h3').textContent:'Queued source','This public URL is queued or still retrieving.')}
+    function renderInspector(r,label,title,message){if(!r){els.inspector.innerHTML='<div class="eyebrow">'+esc(label)+'</div><h3>'+esc(title)+'</h3><p>'+esc(message||'')+'</p>';return}var p=r.preview||{},d=p.density||{},heads=p.headings||[],links=p.links||[],structures=p.structure||[],challenge=p.challenge;els.inspector.innerHTML='<div class="eyebrow">'+esc(label)+'</div><h3>'+esc(r.name||p.title||'Source')+'</h3><a class="demo-url" href="'+esc(p.url||r.url||'#')+'" target="_blank" rel="noreferrer">'+esc(p.url||r.url||'No URL')+'</a><div class="demo-kv"><span>HTTP '+esc(p.httpStatus||'--')+'</span><span>'+fmt(d.bodyTextChars||r.chars||0)+' chars</span><span>'+fmt(d.links||0)+' links</span><span>'+fmt(d.headings||heads.length)+' headings</span><span>'+esc(r.route||'unbrowser')+'</span></div>'+(challenge?'<div class="demo-section"><strong>Challenge detected</strong><p>'+esc(challenge.provider||'bot wall')+': '+esc(challenge.reason||'site requested browser escalation')+'</p></div>':'')+'<div class="demo-section"><strong>Title</strong><p>'+esc(p.title||'No title extracted')+'</p></div><div class="demo-section"><strong>Top headings</strong>'+miniList(heads,'No headings surfaced.')+'</div><div class="demo-section"><strong>Top links</strong>'+linkList(links)+'</div><div class="demo-section"><strong>Structure</strong>'+miniList(structures,'No structure returned.')+'</div>'}
+    function miniList(items,empty){if(!items.length)return '<p>'+esc(empty)+'</p>';return '<ul>'+items.map(function(x){return '<li>'+esc(x)+'</li>'}).join('')+'</ul>'}
+    function linkList(items){if(!items.length)return '<p>No high-signal links returned.</p>';return '<ul>'+items.map(function(x){return '<li>'+esc(x.text||'Untitled')+'<br><small>'+esc(compact(x.href||'',80))+'</small></li>'}).join('')+'</ul>'}
+    function start(){if(!state.current)return;resetRunState();renderSources(state.current.sources||[]);els.run.disabled=true;els.run.textContent='Scanning...';var es=new EventSource('/web/unbrowser/stream?scenario='+encodeURIComponent(state.current.id));state.eventSource=es;es.addEventListener('source_started',function(e){setStarted(JSON.parse(e.data))});es.addEventListener('source_result',function(e){setResult(JSON.parse(e.data))});es.addEventListener('fact_extracted',function(){state.facts++;updateMetrics()});es.addEventListener('brief_ready',function(e){var b=JSON.parse(e.data);els.brief.hidden=false;els.brief.querySelector('p').textContent=b.summary||'Scan complete.';els.brief.querySelector('.tags').innerHTML=(b.citations||[]).map(function(c){return '<span>'+esc(c)+'</span>'}).join('')});es.addEventListener('done',function(){es.close();state.eventSource=null;els.run.disabled=false;els.run.textContent='Run live scan'});es.onerror=function(){es.close();state.eventSource=null;els.run.disabled=false;els.run.textContent='Run live scan';renderInspector(null,'Scan stopped','Live scan unavailable','The server could not complete this scan. The unbrowser binary may be missing or busy.')};}
+    els.run.addEventListener('click',start);
+    fetch('/web/unbrowser/sources').then(function(r){return r.json()}).then(function(data){state.scenarios=data||[];renderPrompts();selectScenario((state.scenarios[0]||{}).id)}).catch(function(){renderInspector(null,'Demo unavailable','Could not load source presets','The static unbrowser page still works, but the live demo endpoints are unavailable.')});
+  })();
+  </script>
 
   <footer class="footer">
     <span>unbrowser by Unchained</span>
