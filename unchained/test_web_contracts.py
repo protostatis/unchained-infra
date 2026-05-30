@@ -7,6 +7,7 @@ These tests protect public routes and exported template contracts while
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 import unittest
@@ -51,6 +52,9 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/favicon.svg"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
+            ("GET", "/web/unbrowser/sources"),
+            ("GET", "/web/unbrowser/runtime"),
+            ("GET", "/web/unbrowser/stream"),
             ("GET", "/tab"),
             ("GET", "/mcp-guide"),
             ("GET", "/test"),
@@ -210,6 +214,24 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
+
+    def test_unbrowser_page_live_demo_contract(self):
+        self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/runtime", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
+
+    def test_web_image_installs_unbrowser_binary_package(self):
+        dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+        self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
+
+    def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
+        from web_app.handlers.unbrowser_demo import SCENARIOS
+
+        self.assertIn("crypto-prices", SCENARIOS)
+        for scenario in SCENARIOS.values():
+            self.assertGreaterEqual(len(scenario.sources), 16, scenario.id)
 
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
