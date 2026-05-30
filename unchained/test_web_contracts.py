@@ -51,6 +51,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/favicon.svg"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
+            ("GET", "/web/unbrowser/sources"),
+            ("GET", "/web/unbrowser/stream"),
             ("GET", "/tab"),
             ("GET", "/mcp-guide"),
             ("GET", "/test"),
@@ -215,6 +217,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
         self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
         self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
 
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html

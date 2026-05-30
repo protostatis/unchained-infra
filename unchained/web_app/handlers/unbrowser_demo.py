@@ -32,66 +32,130 @@ class Scenario:
     description: str
     sources: tuple[Source, ...]
     bullets: tuple[str, ...]
+    prompt: str = ""
+    meta: str = ""
 
 
 SCENARIOS: dict[str, Scenario] = {
     "ai-agents": Scenario(
         id="ai-agents",
         label="AI agent market",
-        description="Browser-agent infrastructure, extraction APIs, and monitoring tools.",
+        description="Scan sites about browser automation and AI web tools.",
         sources=(
             Source("browserbase", "Browserbase", "Browser-agent infra", "https://www.browserbase.com"),
+            Source("hyperbrowser", "Hyperbrowser", "Browser-agent infra", "https://www.hyperbrowser.ai"),
             Source("browserless", "Browserless", "Browser automation", "https://www.browserless.io"),
             Source("steel", "Steel", "Headless browser API", "https://www.steel.dev"),
             Source("browseruse", "Browser Use", "Web agents", "https://browser-use.com"),
             Source("firecrawl", "Firecrawl", "AI web extraction", "https://www.firecrawl.dev"),
             Source("agentql", "AgentQL", "AI web query layer", "https://www.agentql.com"),
+            Source("tavily", "Tavily", "Agent search API", "https://www.tavily.com"),
             Source("exa", "Exa", "AI search", "https://exa.ai"),
             Source("jina", "Jina Reader", "URL to markdown", "https://jina.ai/reader"),
+            Source("browseai", "Browse AI", "No-code web monitor", "https://www.browse.ai"),
+            Source("visualping", "Visualping", "Change detection", "https://visualping.io"),
+            Source("distill", "Distill", "Website monitoring", "https://distill.io"),
+            Source("klue", "Klue", "Competitive intelligence", "https://www.klue.com"),
+            Source("crayon", "Crayon", "Competitive intelligence", "https://www.crayon.co"),
+            Source("apify", "Apify", "Scraping platform", "https://www.apify.com"),
+            Source("diffbot", "Diffbot", "Knowledge graph extraction", "https://www.diffbot.com"),
+            Source("scrapingbee", "ScrapingBee", "Scraping API", "https://www.scrapingbee.com"),
         ),
         bullets=(
-            "Cheap first-pass retrieval works best on public, text-rich product pages.",
-            "The useful handoff is explicit: fetch cheaply first, escalate to Chrome only when needed.",
+            "The strongest market split is infra vs application: browser primitives, extraction APIs, and business monitoring workflows.",
+            "unbrowser is the margin engine: cheap broad coverage and explicit challenge detection before escalating expensive browser work.",
         ),
+        prompt="What changed this week in AI browser-agent infrastructure?",
+        meta="Tech news / developer forums / product pages",
     ),
     "news": Scenario(
         id="news",
         label="News coverage",
-        description="Major public news pages and known blocker/fallback cases.",
+        description="Fetch major public news pages and show blocker cases.",
         sources=(
             Source("hackernews", "Hacker News", "Tech news", "https://news.ycombinator.com/best"),
             Source("bbcnews", "BBC News", "Major news", "https://www.bbc.com/news"),
             Source("guardian", "The Guardian", "Major news", "https://www.theguardian.com/international"),
             Source("npr", "NPR", "Public radio news", "https://www.npr.org/sections/news/"),
+            Source("nytimes", "NYTimes", "Major news", "https://www.nytimes.com"),
+            Source("aljazeera", "Al Jazeera", "Global news", "https://www.aljazeera.com"),
             Source("reuters", "Reuters", "Major news", "https://www.reuters.com", "blocked"),
+            Source("cnn", "CNN", "Major news", "https://edition.cnn.com", "partial"),
             Source("lobsters", "Lobste.rs", "Developer news", "https://lobste.rs"),
         ),
         bullets=(
             "News pages make freshness, citations, and source coverage easy to understand.",
             "Blocker detection matters because news sites vary widely in bot-wall and JS behavior.",
         ),
+        prompt="latest news headlines across major sources",
+        meta="Reuters / BBC / NPR / AP",
+    ),
+    "betting": Scenario(
+        id="betting",
+        label="Betting odds pages",
+        description="Try odds pages where JavaScript-heavy tables often need fallback.",
+        sources=(
+            Source("oddsshark-nba", "OddsShark NBA", "Sports odds", "https://www.oddsshark.com/nba/odds", "fallback"),
+            Source("oddsshark-mlb", "OddsShark MLB", "Sports odds", "https://www.oddsshark.com/mlb/odds", "fallback"),
+            Source("covers-nba", "Covers NBA", "Sports odds", "https://www.covers.com/sport/basketball/nba/odds", "partial"),
+            Source("vegasinsider", "VegasInsider", "Sports odds", "https://www.vegasinsider.com/nba/odds/las-vegas/"),
+            Source("actionnetwork", "Action Network", "Betting analysis", "https://www.actionnetwork.com/nba/odds", "partial"),
+            Source("cbssports-betting", "CBS Sports Betting", "Betting content", "https://www.cbssports.com/betting"),
+            Source("espn-betting", "ESPN Betting", "Betting content", "https://www.espn.com/betting", "blocked"),
+            Source("fanduel", "FanDuel", "Sportsbook", "https://www.fanduel.com", "partial"),
+        ),
+        bullets=(
+            "Odds pages create a visceral demo because users can see fast-changing tables and hard-page routing.",
+            "A production odds agent needs jurisdiction-aware compliance and responsible-gambling guardrails.",
+        ),
+        prompt="latest betting odds and NBA moneylines",
+        meta="Sportsbooks / odds boards / blockers",
+    ),
+    "public-data": Scenario(
+        id="public-data",
+        label="Public data sources",
+        description="Scan government, policy, and public data pages.",
+        sources=(
+            Source("census", "US Census Stories", "Government data", "https://www.census.gov/library/stories/2026.html"),
+            Source("eff", "EFF Deeplinks", "Digital rights", "https://www.eff.org/deeplinks"),
+            Source("statista", "Statista Charts", "Market data", "https://www.statista.com/chart/"),
+            Source("wikipedia-events", "Wikipedia Current Events", "Current events", "https://en.wikipedia.org/wiki/Portal:Current_events"),
+            Source("bbcfuture", "BBC Future", "Science and environment", "https://www.bbc.com/future"),
+            Source("ssa", "Social Security COLA", "Government data", "https://www.ssa.gov/oact/cola/central.html", "partial"),
+            Source("nature", "Nature Articles", "Research", "https://www.nature.com/nature/articles", "partial"),
+        ),
+        bullets=(
+            "Public-data monitoring is enterprise-friendly because sources are stable and citation-grade.",
+            "The moat is normalization: dates, agencies, affected industries, and source provenance.",
+        ),
+        prompt="census policy data about AI adoption",
+        meta="Census / NIST / OECD / public docs",
     ),
     "developer-docs": Scenario(
         id="developer-docs",
         label="Developer docs",
-        description="Public documentation pages for docs search and change-monitoring agents.",
+        description="Fetch docs pages and inspect headings, links, and versioned references.",
         sources=(
             Source("mdn", "MDN Web Docs", "Web platform docs", "https://developer.mozilla.org/en-US/"),
             Source("node-docs", "Node.js Docs", "Runtime docs", "https://nodejs.org/en/docs"),
             Source("python-docs", "Python Docs", "Language docs", "https://docs.python.org/3/"),
             Source("react-docs", "React Docs", "Frontend docs", "https://react.dev"),
             Source("next-docs", "Next.js Docs", "Framework docs", "https://nextjs.org/docs"),
+            Source("vite-docs", "Vite Docs", "Build tool docs", "https://vite.dev/guide/"),
+            Source("kubernetes-docs", "Kubernetes Docs", "Infrastructure docs", "https://kubernetes.io/docs/home/"),
             Source("docker-docs", "Docker Docs", "Container docs", "https://docs.docker.com/"),
         ),
         bullets=(
             "Docs pages are public, structured, and rich with headings and internal links.",
             "A production docs agent would track changed sections, deprecations, and versioned URLs.",
         ),
+        prompt="developer docs updates for React Node Python and MDN",
+        meta="MDN / React / Node / Python",
     ),
     "security": Scenario(
         id="security",
         label="Security advisories",
-        description="CVE, advisory, and security-research pages for public risk monitoring.",
+        description="Scan public CVE, advisory, and security research pages.",
         sources=(
             Source("cisa-kev", "CISA KEV", "Known exploited vulns", "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"),
             Source("nvd", "NVD", "Vulnerability database", "https://nvd.nist.gov/vuln"),
@@ -99,27 +163,53 @@ SCENARIOS: dict[str, Scenario] = {
             Source("cloudflare-security", "Cloudflare Security", "Security research", "https://blog.cloudflare.com/tag/security/"),
             Source("project-zero", "Project Zero", "Vulnerability research", "https://googleprojectzero.blogspot.com/"),
             Source("openssf", "OpenSSF", "Open source security", "https://openssf.org/blog/"),
+            Source("snyk-vulns", "Snyk Vuln DB", "Vulnerability database", "https://security.snyk.io"),
         ),
         bullets=(
             "Security monitoring needs source attribution, affected products, and fast public-page triage.",
             "Cheap broad coverage is useful before escalating hard pages into a full browser session.",
         ),
+        prompt="security advisories CVE vulnerabilities CISA NVD GitHub",
+        meta="CISA / NVD / GitHub / OpenSSF",
     ),
-    "public-data": Scenario(
-        id="public-data",
-        label="Public data sources",
-        description="Government, policy, research, and public data pages.",
+    "startups": Scenario(
+        id="startups",
+        label="Startup launches",
+        description="Watch launch feeds and show where directories resist cheap retrieval.",
         sources=(
-            Source("census", "US Census Stories", "Government data", "https://www.census.gov/library/stories/2026.html"),
-            Source("eff", "EFF Deeplinks", "Digital rights", "https://www.eff.org/deeplinks"),
-            Source("wikipedia-events", "Wikipedia Current Events", "Current events", "https://en.wikipedia.org/wiki/Portal:Current_events"),
-            Source("ssa", "Social Security COLA", "Government data", "https://www.ssa.gov/oact/cola/central.html", "partial"),
-            Source("nature", "Nature Articles", "Research", "https://www.nature.com/nature/articles", "partial"),
+            Source("producthunt-live", "Product Hunt", "Launch directory", "https://www.producthunt.com", "blocked"),
+            Source("hn-show", "HN Show", "Builder launches", "https://news.ycombinator.com/show"),
+            Source("github-trending", "GitHub Trending", "Developer projects", "https://github.com/trending"),
+            Source("techcrunch-startups", "TechCrunch Startups", "Startup news", "https://techcrunch.com/category/startups/"),
+            Source("yc-companies", "YC Companies", "Startup directory", "https://www.ycombinator.com/companies"),
+            Source("yc-launches", "YC Launches", "Startup launches", "https://www.ycombinator.com/launches"),
+            Source("indiehackers-products", "Indie Hackers", "Indie products", "https://www.indiehackers.com/products"),
         ),
         bullets=(
-            "Public-data monitoring is enterprise-friendly because sources are stable and citeable.",
-            "The moat is normalization: dates, agencies, affected industries, and source provenance.",
+            "Startup monitoring is easy to understand: scan public launch surfaces and summarize who shipped what.",
+            "This scenario deliberately includes blocker-prone pages so the demo can show honest fallback behavior.",
         ),
+        prompt="startup launches product hunt yc hacker news github trending",
+        meta="Product Hunt / HN / YC / GitHub",
+    ),
+    "research": Scenario(
+        id="research",
+        label="Research papers",
+        description="Scan preprint, paper index, and journal pages for research monitoring.",
+        sources=(
+            Source("arxiv-ai", "arXiv cs.AI", "Preprint feed", "https://arxiv.org/list/cs.AI/recent"),
+            Source("arxiv-lg", "arXiv cs.LG", "ML preprints", "https://arxiv.org/list/cs.LG/recent"),
+            Source("pubmed-ai", "PubMed AI", "Biomedical research", "https://pubmed.ncbi.nlm.nih.gov/?term=artificial+intelligence"),
+            Source("nature-mi", "Nature Machine Intelligence", "Research journal", "https://www.nature.com/natmachintell/", "partial"),
+            Source("paperswithcode", "Papers with Code", "ML papers", "https://paperswithcode.com/"),
+            Source("openreview", "OpenReview", "Conference papers", "https://openreview.net/"),
+        ),
+        bullets=(
+            "Research feeds are public, text-dense, and citation-friendly sources for cheap first-pass retrieval.",
+            "A production research agent should deduplicate papers, classify methods, and remember prior scans.",
+        ),
+        prompt="research papers arxiv pubmed openreview machine learning",
+        meta="arXiv / PubMed / OpenReview",
     ),
 }
 
@@ -323,7 +413,7 @@ def _build_brief(results: list[dict[str, Any]], facts: list[dict[str, Any]], sce
     total = len(results)
     ok = sum(1 for item in results if item.get("status") == "ok")
     partial = sum(1 for item in results if item.get("status") == "partial")
-    blocked = sum(1 for item in results if item.get("status") in {"blocked", "error"})
+    blocked = sum(1 for item in results if item.get("status") in {"blocked", "error", "fallback"})
     avoided = round((ok / total) * 100) if total else 0
     citations = list(dict.fromkeys(cite for fact in facts for cite in fact.get("citations", [])))[:12]
     return {
@@ -339,6 +429,8 @@ def _scenario_payload(scenario: Scenario, *, mode: str = "queued") -> dict[str, 
         "scenarioId": scenario.id,
         "label": scenario.label,
         "description": scenario.description,
+        "prompt": scenario.prompt,
+        "meta": scenario.meta,
         "mode": mode,
         "router": "fixed preset",
         "sourceCount": len(scenario.sources),
