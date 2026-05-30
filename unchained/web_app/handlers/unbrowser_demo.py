@@ -11,6 +11,8 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 from aiohttp import web
@@ -82,6 +84,13 @@ SCENARIOS: dict[str, Scenario] = {
             Source("reuters", "Reuters", "Major news", "https://www.reuters.com", "blocked"),
             Source("cnn", "CNN", "Major news", "https://edition.cnn.com", "partial"),
             Source("lobsters", "Lobste.rs", "Developer news", "https://lobste.rs"),
+            Source("apnews", "AP News", "Wire news", "https://apnews.com"),
+            Source("cbsnews", "CBS News", "Major news", "https://www.cbsnews.com"),
+            Source("nbcnews", "NBC News", "Major news", "https://www.nbcnews.com"),
+            Source("politico", "Politico", "Policy news", "https://www.politico.com"),
+            Source("thehill", "The Hill", "Policy news", "https://thehill.com"),
+            Source("axios", "Axios", "Briefing news", "https://www.axios.com"),
+            Source("semafor", "Semafor", "Global news", "https://www.semafor.com"),
         ),
         bullets=(
             "News pages make freshness, citations, and source coverage easy to understand.",
@@ -103,6 +112,14 @@ SCENARIOS: dict[str, Scenario] = {
             Source("cbssports-betting", "CBS Sports Betting", "Betting content", "https://www.cbssports.com/betting"),
             Source("espn-betting", "ESPN Betting", "Betting content", "https://www.espn.com/betting", "blocked"),
             Source("fanduel", "FanDuel", "Sportsbook", "https://www.fanduel.com", "partial"),
+            Source("oddsshark-nfl", "OddsShark NFL", "Sports odds", "https://www.oddsshark.com/nfl/odds", "fallback"),
+            Source("covers-mlb", "Covers MLB", "Sports odds", "https://www.covers.com/sport/baseball/mlb/odds", "partial"),
+            Source("vegasinsider-mlb", "VegasInsider MLB", "Sports odds", "https://www.vegasinsider.com/mlb/odds/las-vegas/"),
+            Source("draftkings", "DraftKings", "Sportsbook", "https://sportsbook.draftkings.com", "partial"),
+            Source("betmgm", "BetMGM", "Sportsbook", "https://sports.betmgm.com/en/sports", "partial"),
+            Source("caesars", "Caesars Sportsbook", "Sportsbook", "https://www.caesars.com/sportsbook-and-casino", "partial"),
+            Source("bet365", "bet365", "Sportsbook", "https://www.bet365.com", "blocked"),
+            Source("sportsline", "SportsLine", "Betting analysis", "https://www.sportsline.com"),
         ),
         bullets=(
             "Odds pages create a visceral demo because users can see fast-changing tables and hard-page routing.",
@@ -110,6 +127,35 @@ SCENARIOS: dict[str, Scenario] = {
         ),
         prompt="latest betting odds and NBA moneylines",
         meta="Sportsbooks / odds boards / blockers",
+    ),
+    "crypto-prices": Scenario(
+        id="crypto-prices",
+        label="Crypto prices",
+        description="Fetch public market pages that move throughout the day.",
+        sources=(
+            Source("coingecko", "CoinGecko", "Crypto prices", "https://www.coingecko.com/en"),
+            Source("coinmarketcap", "CoinMarketCap", "Crypto prices", "https://coinmarketcap.com", "partial"),
+            Source("coinbase-prices", "Coinbase Prices", "Exchange prices", "https://www.coinbase.com/price"),
+            Source("binance-markets", "Binance Markets", "Exchange markets", "https://www.binance.com/en/markets", "partial"),
+            Source("kraken-prices", "Kraken Prices", "Exchange prices", "https://www.kraken.com/prices"),
+            Source("cryptocom-price", "Crypto.com Price", "Exchange prices", "https://crypto.com/price"),
+            Source("gemini-prices", "Gemini Prices", "Exchange prices", "https://www.gemini.com/prices"),
+            Source("okx-prices", "OKX Prices", "Exchange markets", "https://www.okx.com/markets/prices", "partial"),
+            Source("bybit-markets", "Bybit Markets", "Exchange markets", "https://www.bybit.com/en/markets", "partial"),
+            Source("bitstamp-markets", "Bitstamp Markets", "Exchange markets", "https://www.bitstamp.net/markets"),
+            Source("bitfinex-markets", "Bitfinex Markets", "Exchange markets", "https://www.bitfinex.com/markets", "partial"),
+            Source("coindesk-bitcoin", "CoinDesk Bitcoin", "Crypto price page", "https://www.coindesk.com/price/bitcoin"),
+            Source("yahoo-btc", "Yahoo BTC-USD", "Market quote", "https://finance.yahoo.com/quote/BTC-USD", "partial"),
+            Source("investing-btc", "Investing BTC/USD", "Market quote", "https://www.investing.com/crypto/bitcoin/btc-usd", "partial"),
+            Source("tradingview-crypto", "TradingView Crypto", "Market screener", "https://www.tradingview.com/markets/cryptocurrencies/prices-all/", "partial"),
+            Source("cointelegraph-markets", "Cointelegraph Markets", "Market news", "https://cointelegraph.com/markets"),
+        ),
+        bullets=(
+            "Crypto market pages are useful for proving freshness because titles, tables, and quote modules change throughout the day.",
+            "This is a public-web retrieval demo only; it shows live fetch timing and hard-page routing, not financial advice.",
+        ),
+        prompt="current crypto price pages BTC ETH market movers",
+        meta="CoinGecko / Coinbase / Binance / market pages",
     ),
     "public-data": Scenario(
         id="public-data",
@@ -123,6 +169,15 @@ SCENARIOS: dict[str, Scenario] = {
             Source("bbcfuture", "BBC Future", "Science and environment", "https://www.bbc.com/future"),
             Source("ssa", "Social Security COLA", "Government data", "https://www.ssa.gov/oact/cola/central.html", "partial"),
             Source("nature", "Nature Articles", "Research", "https://www.nature.com/nature/articles", "partial"),
+            Source("datagov", "Data.gov", "Government data", "https://data.gov"),
+            Source("fred", "FRED", "Economic data", "https://fred.stlouisfed.org"),
+            Source("bls", "BLS Releases", "Labor data", "https://www.bls.gov/news.release/"),
+            Source("noaa-climate", "NOAA Climate", "Climate data", "https://www.noaa.gov/climate"),
+            Source("cdc-data", "CDC Data", "Public health data", "https://data.cdc.gov"),
+            Source("worldbank", "World Bank Data", "Global data", "https://data.worldbank.org"),
+            Source("oecd-data", "OECD Data", "Policy data", "https://data.oecd.org"),
+            Source("imf-data", "IMF Data", "Economic data", "https://www.imf.org/en/Data"),
+            Source("eurostat", "Eurostat", "European statistics", "https://ec.europa.eu/eurostat"),
         ),
         bullets=(
             "Public-data monitoring is enterprise-friendly because sources are stable and citation-grade.",
@@ -144,6 +199,14 @@ SCENARIOS: dict[str, Scenario] = {
             Source("vite-docs", "Vite Docs", "Build tool docs", "https://vite.dev/guide/"),
             Source("kubernetes-docs", "Kubernetes Docs", "Infrastructure docs", "https://kubernetes.io/docs/home/"),
             Source("docker-docs", "Docker Docs", "Container docs", "https://docs.docker.com/"),
+            Source("deno-docs", "Deno Docs", "Runtime docs", "https://docs.deno.com"),
+            Source("bun-docs", "Bun Docs", "Runtime docs", "https://bun.sh/docs"),
+            Source("typescript-docs", "TypeScript Docs", "Language docs", "https://www.typescriptlang.org/docs/"),
+            Source("rust-book", "Rust Book", "Language docs", "https://doc.rust-lang.org/book/"),
+            Source("go-docs", "Go Docs", "Language docs", "https://go.dev/doc/"),
+            Source("postgres-docs", "PostgreSQL Docs", "Database docs", "https://www.postgresql.org/docs/current/"),
+            Source("tailwind-docs", "Tailwind Docs", "CSS docs", "https://tailwindcss.com/docs"),
+            Source("svelte-docs", "Svelte Docs", "Frontend docs", "https://svelte.dev/docs/svelte/overview"),
         ),
         bullets=(
             "Docs pages are public, structured, and rich with headings and internal links.",
@@ -164,6 +227,15 @@ SCENARIOS: dict[str, Scenario] = {
             Source("project-zero", "Project Zero", "Vulnerability research", "https://googleprojectzero.blogspot.com/"),
             Source("openssf", "OpenSSF", "Open source security", "https://openssf.org/blog/"),
             Source("snyk-vulns", "Snyk Vuln DB", "Vulnerability database", "https://security.snyk.io"),
+            Source("cve-org", "CVE.org", "Vulnerability database", "https://www.cve.org"),
+            Source("cert-vuls", "CERT/CC Vuls", "Vulnerability notes", "https://kb.cert.org/vuls/"),
+            Source("msrc", "MSRC Update Guide", "Vendor advisories", "https://msrc.microsoft.com/update-guide"),
+            Source("google-security", "Google Security Blog", "Security research", "https://security.googleblog.com"),
+            Source("cisa-advisories", "CISA Advisories", "Security advisories", "https://www.cisa.gov/news-events/cybersecurity-advisories"),
+            Source("redhat-cves", "Red Hat CVEs", "Vendor advisories", "https://access.redhat.com/security/security-updates/cve"),
+            Source("ubuntu-notices", "Ubuntu Notices", "Vendor advisories", "https://ubuntu.com/security/notices"),
+            Source("debian-security", "Debian Security", "Vendor advisories", "https://www.debian.org/security/"),
+            Source("osv", "OSV.dev", "Open source vulns", "https://osv.dev/list"),
         ),
         bullets=(
             "Security monitoring needs source attribution, affected products, and fast public-page triage.",
@@ -184,6 +256,15 @@ SCENARIOS: dict[str, Scenario] = {
             Source("yc-companies", "YC Companies", "Startup directory", "https://www.ycombinator.com/companies"),
             Source("yc-launches", "YC Launches", "Startup launches", "https://www.ycombinator.com/launches"),
             Source("indiehackers-products", "Indie Hackers", "Indie products", "https://www.indiehackers.com/products"),
+            Source("betalist", "BetaList", "Startup directory", "https://betalist.com"),
+            Source("startupstash", "Startup Stash", "Startup directory", "https://www.startupstash.com"),
+            Source("failory", "Failory Startups", "Startup stories", "https://www.failory.com/startups"),
+            Source("sifted", "Sifted Startups", "Startup news", "https://sifted.eu/startups"),
+            Source("tech-eu", "Tech.eu Startups", "Startup news", "https://tech.eu/startups/"),
+            Source("venturebeat", "VentureBeat Business", "Startup news", "https://venturebeat.com/category/business/"),
+            Source("eu-startups", "EU-Startups", "Startup news", "https://www.eu-startups.com"),
+            Source("seedtable", "Seedtable", "Startup directory", "https://www.seedtable.com/startups"),
+            Source("startupblink", "StartupBlink", "Startup directory", "https://www.startupblink.com/startups", "partial"),
         ),
         bullets=(
             "Startup monitoring is easy to understand: scan public launch surfaces and summarize who shipped what.",
@@ -203,6 +284,16 @@ SCENARIOS: dict[str, Scenario] = {
             Source("nature-mi", "Nature Machine Intelligence", "Research journal", "https://www.nature.com/natmachintell/", "partial"),
             Source("paperswithcode", "Papers with Code", "ML papers", "https://paperswithcode.com/"),
             Source("openreview", "OpenReview", "Conference papers", "https://openreview.net/"),
+            Source("semantic-scholar", "Semantic Scholar", "Paper search", "https://www.semanticscholar.org"),
+            Source("crossref", "Crossref", "Research metadata", "https://www.crossref.org"),
+            Source("doaj", "DOAJ", "Open access journals", "https://doaj.org"),
+            Source("plos-one", "PLOS ONE", "Research journal", "https://journals.plos.org/plosone/"),
+            Source("science-journal", "Science", "Research journal", "https://www.science.org/journal/science", "partial"),
+            Source("cell", "Cell", "Research journal", "https://www.cell.com/cell/home", "partial"),
+            Source("elife", "eLife", "Research journal", "https://elifesciences.org"),
+            Source("cvf-openaccess", "CVF Open Access", "Computer vision papers", "https://openaccess.thecvf.com/menu"),
+            Source("acl-anthology", "ACL Anthology", "NLP papers", "https://aclanthology.org"),
+            Source("hf-papers", "Hugging Face Papers", "AI paper feed", "https://huggingface.co/papers"),
         ),
         bullets=(
             "Research feeds are public, text-dense, and citation-friendly sources for cheap first-pass retrieval.",
@@ -214,6 +305,7 @@ SCENARIOS: dict[str, Scenario] = {
 }
 
 _SCAN_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("UNBROWSER_DEMO_MAX_CONCURRENT", "2")))
+_SOURCE_CONCURRENCY = max(1, int(os.environ.get("UNBROWSER_DEMO_SOURCE_CONCURRENT", "4")))
 _SOURCE_TIMEOUT_SECONDS = float(os.environ.get("UNBROWSER_DEMO_SOURCE_TIMEOUT", "25"))
 
 
@@ -261,7 +353,8 @@ async def _run_scan(response: web.StreamResponse, scenario: Scenario) -> None:
 
     results: list[dict[str, Any]] = []
     facts: list[dict[str, Any]] = []
-    tasks = [asyncio.create_task(_fetch_source(source)) for source in sources]
+    source_semaphore = asyncio.Semaphore(_SOURCE_CONCURRENCY)
+    tasks = [asyncio.create_task(_fetch_source_bounded(source, source_semaphore)) for source in sources]
     try:
         for task in asyncio.as_completed(tasks):
             result = await task
@@ -279,6 +372,11 @@ async def _run_scan(response: web.StreamResponse, scenario: Scenario) -> None:
     await _write_event(response, "brief_ready", _build_brief(results, facts, scenario))
     await _write_event(response, "done", {"message": "Live scan complete"})
     await response.write_eof()
+
+
+async def _fetch_source_bounded(source: Source, semaphore: asyncio.Semaphore) -> dict[str, Any]:
+    async with semaphore:
+        return await _fetch_source(source)
 
 
 async def _fetch_source(source: Source) -> dict[str, Any]:
@@ -335,6 +433,7 @@ def _parsed_result(source: Source, parsed: dict[str, Any], ms: int) -> dict[str,
         "ms": ms,
         "chars": chars,
         "facts": 0,
+        "retrievedAt": _utc_now(),
         "preview": _preview(source, parsed),
         "raw": parsed,
         "source": source,
@@ -349,6 +448,7 @@ def _error_result(source: Source, started: float, reason: str) -> dict[str, Any]
         "ms": int((time.monotonic() - started) * 1000),
         "chars": 0,
         "facts": 0,
+        "retrievedAt": _utc_now(),
         "preview": {
             "title": source.name,
             "url": source.url,
@@ -456,3 +556,7 @@ def _useful(text: str | None) -> bool:
 def _compact(text: str, max_length: int) -> str:
     clean = " ".join(str(text or "").split())
     return clean if len(clean) <= max_length else clean[: max_length - 3] + "..."
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

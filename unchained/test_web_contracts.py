@@ -219,6 +219,13 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
         self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
 
+    def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
+        from web_app.handlers.unbrowser_demo import SCENARIOS
+
+        self.assertIn("crypto-prices", SCENARIOS)
+        for scenario in SCENARIOS.values():
+            self.assertGreaterEqual(len(scenario.sources), 16, scenario.id)
+
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html
 
