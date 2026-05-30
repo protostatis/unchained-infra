@@ -24,6 +24,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/", "handle_index"),
     ("GET", "/unbrowser", "web_app.handlers.pages:handle_unbrowser_page"),
     ("GET", "/web/unbrowser/sources", "web_app.handlers.unbrowser_demo:handle_unbrowser_sources"),
+    ("GET", "/web/unbrowser/runtime", "web_app.handlers.unbrowser_demo:handle_unbrowser_runtime"),
     ("GET", "/web/unbrowser/stream", "web_app.handlers.unbrowser_demo:handle_unbrowser_stream"),
     ("GET", "/tab", "web_app.handlers.pages:handle_tab_page"),
     ("GET", "/mcp-guide", "web_app.handlers.pages:handle_mcp_guide_page"),

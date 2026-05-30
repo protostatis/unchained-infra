@@ -7,6 +7,7 @@ These tests protect public routes and exported template contracts while
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 import unittest
@@ -52,6 +53,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/"),
             ("GET", "/unbrowser"),
             ("GET", "/web/unbrowser/sources"),
+            ("GET", "/web/unbrowser/runtime"),
             ("GET", "/web/unbrowser/stream"),
             ("GET", "/tab"),
             ("GET", "/mcp-guide"),
@@ -215,9 +217,14 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_unbrowser_page_live_demo_contract(self):
         self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/runtime", web.UNBROWSER_PAGE_HTML)
         self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
         self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
         self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
+
+    def test_web_image_installs_unbrowser_binary_package(self):
+        dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+        self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
 
     def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
         from web_app.handlers.unbrowser_demo import SCENARIOS

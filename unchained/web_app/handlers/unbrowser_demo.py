@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -307,12 +308,19 @@ SCENARIOS: dict[str, Scenario] = {
 _SCAN_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("UNBROWSER_DEMO_MAX_CONCURRENT", "2")))
 _SOURCE_CONCURRENCY = max(1, int(os.environ.get("UNBROWSER_DEMO_SOURCE_CONCURRENT", "4")))
 _SOURCE_TIMEOUT_SECONDS = float(os.environ.get("UNBROWSER_DEMO_SOURCE_TIMEOUT", "25"))
+_UNBROWSER_COMMAND = os.environ.get("UNBROWSER_DEMO_BIN", "unbrowser")
 
 
 async def handle_unbrowser_sources(request: web.Request) -> web.Response:
     """Return fixed demo source sets for the `/unbrowser` page."""
     del request
     return web.json_response([_scenario_payload(scenario) for scenario in SCENARIOS.values()])
+
+
+async def handle_unbrowser_runtime(request: web.Request) -> web.Response:
+    """Report whether the web backend can launch the unbrowser binary."""
+    del request
+    return web.json_response(_runtime_payload())
 
 
 async def handle_unbrowser_stream(request: web.Request) -> web.StreamResponse:
@@ -384,7 +392,7 @@ async def _fetch_source(source: Source) -> dict[str, Any]:
     proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "unbrowser",
+            _UNBROWSER_COMMAND,
             "navigate",
             source.url,
             "--json",
@@ -540,6 +548,15 @@ def _scenario_payload(scenario: Scenario, *, mode: str = "queued") -> dict[str, 
 
 def _source_payload(source: Source) -> dict[str, Any]:
     return {"id": source.id, "name": source.name, "category": source.category, "url": source.url, "expected": source.expected}
+
+
+def _runtime_payload() -> dict[str, Any]:
+    return {
+        "unbrowserAvailable": bool(shutil.which(_UNBROWSER_COMMAND)),
+        "command": _UNBROWSER_COMMAND,
+        "source": "PATH",
+        "installPackage": "pyunbrowser==0.0.14",
+    }
 
 
 async def _write_event(response: web.StreamResponse, event: str, payload: dict[str, Any]) -> None:
