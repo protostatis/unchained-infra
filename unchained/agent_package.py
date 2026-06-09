@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.77"  # install uv on client + fix CWD patch for packaged agents
+VERSION = "0.3.97"  # profile-aware bridge routing: chat remains account-scoped while browser bridge can use CDP_PROFILE-scoped relay agent IDs
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -91,11 +91,12 @@ _START_SH = r"""#!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
 
-DAEMON=false
+DAEMON=true
 ENABLE_AUTOSTART=false
 DISABLE_AUTOSTART=false
 for arg in "$@"; do
   case "$arg" in
+    --foreground|-f) DAEMON=false ;;
     --daemon|-d) DAEMON=true ;;
     --enable-autostart) ENABLE_AUTOSTART=true ;;
     --disable-autostart) DISABLE_AUTOSTART=true ;;
@@ -117,6 +118,12 @@ install_autostart() {
     echo "Autostart setup skipped: launchctl not found."
     return 0
   fi
+  if [[ "$(id -u)" == "0" ]]; then
+    echo "ERROR: Do not run --enable-autostart with sudo."
+    echo "  LaunchAgents run as your user — root access is not needed."
+    echo "  Run: ./start.sh --enable-autostart"
+    return 1
+  fi
   mkdir -p "$HOME/Library/LaunchAgents"
   cat > "$AUTOSTART_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -129,10 +136,20 @@ install_autostart() {
   <array>
     <string>/bin/bash</string>
     <string>$SCRIPT_PATH</string>
+    <string>--daemon</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <!-- KeepAlive=false: start.sh --daemon forks the supervised loop into a
+       background subshell and exits 0 quickly. The supervised loop is the
+       supervisor (it has the crash circuit breaker + rollback). KeepAlive=true
+       would loop infinitely re-spawning start.sh whenever it returns. -->
   <key>KeepAlive</key>
+  <false/>
+  <!-- AbandonProcessGroup=true: when start.sh --daemon exits after forking,
+       launchd should NOT kill its child processes. The forked supervised loop
+       must keep running. Default false would tear down the whole process tree. -->
+  <key>AbandonProcessGroup</key>
   <true/>
   <key>WorkingDirectory</key>
   <string>$AGENT_DIR</string>
@@ -144,8 +161,8 @@ install_autostart() {
 </plist>
 PLIST
   launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   launchctl enable "gui/$(id -u)/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$AUTOSTART_PLIST"
   echo "Autostart enabled: $AUTOSTART_LABEL"
   echo "LaunchAgent: $AUTOSTART_PLIST"
 }
@@ -170,7 +187,10 @@ if $DISABLE_AUTOSTART; then
   exit 0
 fi
 
-if $ENABLE_AUTOSTART && ! $DAEMON; then
+if $ENABLE_AUTOSTART; then
+  # Register launchd plist + exit. RunAtLoad=true causes launchd to immediately
+  # spawn `start.sh --daemon`, which forks the supervised loop. So this single
+  # command both starts the daemon now AND persists across reboots.
   install_autostart
   exit 0
 fi
@@ -271,10 +291,14 @@ PY
   unset UNCHAINED_INSTALL_TOKEN
 fi
 
+# launchd starts with a minimal PATH; add common CLI locations before any checks.
+# Homebrew/system installs are placed ahead of ~/.local/bin so stale local shims do not win.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
+
 # Ensure uv is available (handles python resolution across all platforms)
 if ! command -v uv >/dev/null 2>&1; then
   echo "Installing uv..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
@@ -288,10 +312,6 @@ fi
 
 # Activate venv so Claude's Bash tool finds the right python
 source .venv/bin/activate
-
-# launchd starts with a minimal PATH; add common CLI locations, but keep
-# Homebrew/system installs ahead of ~/.local/bin so stale local shims do not win.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
 if [ -z "${CLAUDE_BIN:-}" ] && command -v claude >/dev/null 2>&1; then
   export CLAUDE_BIN="$(command -v claude)"
 fi
@@ -310,17 +330,21 @@ if $DAEMON; then
   LOGFILE="$(pwd)/agent.log"
   PIDFILE="$(pwd)/.agent.pid"
 
-  # Check if already running
-  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "Agent is already running (PID $(cat "$PIDFILE"))."
-    echo "Stop: ./stop.sh"
-    exit 0
+  # Check if already running — verify cmdline to guard against stale PID files
+  # (after reboot the PID slot may be reused by an unrelated process)
+  if [ -f "$PIDFILE" ]; then
+    _OLD_PID="$(cat "$PIDFILE")"
+    if kill -0 "$_OLD_PID" 2>/dev/null && \
+       ps -p "$_OLD_PID" -o args= 2>/dev/null | grep -q "start\.sh\|chat_agent_cli"; then
+      echo "Agent is already running (PID $_OLD_PID)."
+      echo "Stop: ./stop.sh"
+      exit 0
+    fi
+    rm -f "$PIDFILE"
   fi
 
-  if $ENABLE_AUTOSTART; then
-    install_autostart
-  fi
-
+  # Daemon mode runs the supervised loop in a background subshell. It does
+  # NOT touch launchd — autostart is opt-in via `--enable-autostart`.
   echo "Starting in daemon mode..."
   echo "Log file: $LOGFILE"
 
@@ -411,8 +435,8 @@ if $DAEMON; then
     BRIDGE_SUP_PID=$!
     sleep 2
 
-    echo "[$(date)] Starting chat agent..."
-    # caffeinate -i prevents macOS App Nap from suspending the agent
+    # caffeinate -i prevents macOS App Nap from suspending the agent.
+    # supervised_loop prints "Starting chat agent..." itself.
     AGENT_CMD=(env PYTHONUNBUFFERED=1 python unchained/chat_agent_cli.py)
     if command -v caffeinate &>/dev/null; then
       AGENT_CMD=(caffeinate -i -- "${AGENT_CMD[@]}")
@@ -692,39 +716,47 @@ function Find-PythonCommand() {
 }
 
 function Install-PythonRuntime() {
-  $pythonVersion = "3.13.2"
-  $installerName = "python-$pythonVersion-amd64.exe"
-  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
-  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
-
-  Write-Host "Python 3.8+ not found. Installing Python runtime..."
+  # Use uv as the Python package feed: arch-aware (works on x86_64 + ARM64),
+  # and avoids the python.org direct installer's ARM-incompatibility silent failure.
+  # Local 'Continue' preference: uv emits warnings to stderr (e.g. shim collision)
+  # that would otherwise be promoted to terminating errors by the script-wide 'Stop'.
+  $oldPref = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
-    $installArgs = @(
-      "/quiet",
-      "InstallAllUsers=0",
-      "Include_test=0",
-      "Include_doc=0",
-      "Include_dev=0",
-      "Include_pip=1",
-      "Include_launcher=1",
-      "InstallLauncherAllUsers=0",
-      "PrependPath=1",
-      "SimpleInstall=1"
-    )
-    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
-    if (-not $proc -or $proc.ExitCode -ne 0) {
+    Write-Host "Python 3.8+ not found. Installing uv to manage Python..."
+    Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    $uvBin = $null
+    foreach ($cand in @(
+      (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+      "$env:LOCALAPPDATA\Programs\uv\uv.exe"
+    )) {
+      if (Test-Path $cand) { $uvBin = $cand; break }
+    }
+    if (-not $uvBin) {
+      $uvBin = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $uvBin -or -not (Test-Path $uvBin)) {
+      Write-Host "ERROR: uv installer did not produce uv.exe."
       return $false
     }
-    # Refresh PATH from registry for this process.
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+
+    Write-Host "Installing Python 3.13 via uv..."
+    # --force overwrites any stale executable shim from a prior partial install.
+    & $uvBin python install 3.13 --force 2>&1 | ForEach-Object { Write-Host $_ }
+    # uv exits 0 even when shim install warns; check that python is actually resolvable.
+    $pythonPath = (& $uvBin python find 3.13 2>&1 | Select-Object -Last 1).ToString().Trim()
+    if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
+      Write-Host "ERROR: 'uv python find 3.13' returned no usable path: $pythonPath"
+      return $false
+    }
+    $pythonDir = Split-Path $pythonPath -Parent
+    $env:Path = "$pythonDir;$env:Path"
     return $true
   } catch {
+    Write-Host "ERROR: Install-PythonRuntime failed: $($_.Exception.Message)"
     return $false
   } finally {
-    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+    $ErrorActionPreference = $oldPref
   }
 }
 
@@ -1193,7 +1225,7 @@ if (Test-Path "requirements.txt") {
   $newReqs = Get-Content "requirements.txt" -Raw
 }
 if ($oldReqs -ne $newReqs -and (Test-Path ".\.venv\Scripts\python.exe")) {
-  Write-Host "Dependencies changed — reinstalling..."
+  Write-Host "Dependencies changed -- reinstalling..."
   & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
 }
 
@@ -1367,23 +1399,26 @@ echo "  Then restart Claude Code for tools to take effect."
 echo ""
 echo "To start the agent:"
 echo "  cd $INSTALL_DIR"
-echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
-echo "  ./start.sh --daemon   # background (close terminal safely)"
+echo "  ./start.sh                  # background daemon"
+echo "  ./start.sh --enable-autostart   # background daemon + reboot autostart"
+echo "  ./start.sh --foreground         # foreground mode (see output, Ctrl+C to stop)"
 echo ""
 if [ -t 0 ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
   echo ""
 elif [ -e /dev/tty ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r </dev/tty || REPLY=n
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r </dev/tty || REPLY=n
   echo ""
 else
   echo "Non-interactive — run ./start.sh manually."
   REPLY=n
 fi
-if [[ $REPLY =~ ^[Dd]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh --daemon
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+  true
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh
+  cd "$INSTALL_DIR" && ./start.sh --foreground
+else
+  cd "$INSTALL_DIR" && ./start.sh --enable-autostart
 fi
 """
 
@@ -1477,26 +1512,28 @@ echo "=== Installation complete ==="
 echo "Location: $INSTALL_DIR"
 echo ""
 echo "To start the agent:"
-echo "  ./start.sh            # foreground (see output, Ctrl+C to stop)"
-echo "  ./start.sh --daemon   # background (close terminal safely)"
-echo "  ./start.sh --enable-autostart   # start daemon on reboot/login (macOS)"
-echo "  ./start.sh --disable-autostart  # remove reboot/login autostart"
-echo "  ./stop.sh             # stop background agent"
+echo "  ./start.sh                      # background daemon (one-shot)"
+echo "  ./start.sh --enable-autostart   # background daemon + autostart on reboot"
+echo "  ./start.sh --disable-autostart  # remove reboot autostart"
+echo "  ./start.sh --foreground         # foreground mode (see output, Ctrl+C to stop)"
+echo "  ./stop.sh                       # stop daemon"
 echo ""
 if [ -t 0 ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r
   echo ""
 elif [ -e /dev/tty ]; then
-  read -p "Start now? [d]aemon / [f]oreground / [N]o: " -n 1 -r </dev/tty || REPLY=n
+  read -p "Start now? [D]aemon (default) / [f]oreground / [n]o: " -n 1 -r </dev/tty || REPLY=n
   echo ""
 else
   echo "Non-interactive — run ./start.sh manually."
   REPLY=n
 fi
-if [[ $REPLY =~ ^[Dd]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh --daemon
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+  true
 elif [[ $REPLY =~ ^[Ff]$ ]]; then
-  cd "$INSTALL_DIR" && ./start.sh
+  cd "$INSTALL_DIR" && ./start.sh --foreground
+else
+  cd "$INSTALL_DIR" && ./start.sh --enable-autostart
 fi
 """
 
@@ -1550,39 +1587,47 @@ function Find-PythonCommand() {
 }
 
 function Install-PythonRuntime() {
-  $pythonVersion = "3.13.2"
-  $installerName = "python-$pythonVersion-amd64.exe"
-  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
-  $tmpInstaller = Join-Path $env:TEMP ("unchained-" + $installerName)
-
-  Write-Host "Python 3.8+ not found. Installing Python runtime..."
+  # Use uv as the Python package feed: arch-aware (works on x86_64 + ARM64),
+  # and avoids the python.org direct installer's ARM-incompatibility silent failure.
+  # Local 'Continue' preference: uv emits warnings to stderr (e.g. shim collision)
+  # that would otherwise be promoted to terminating errors by the script-wide 'Stop'.
+  $oldPref = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tmpInstaller
-    $installArgs = @(
-      "/quiet",
-      "InstallAllUsers=0",
-      "Include_test=0",
-      "Include_doc=0",
-      "Include_dev=0",
-      "Include_pip=1",
-      "Include_launcher=1",
-      "InstallLauncherAllUsers=0",
-      "PrependPath=1",
-      "SimpleInstall=1"
-    )
-    $proc = Start-Process -FilePath $tmpInstaller -ArgumentList $installArgs -PassThru -Wait
-    if (-not $proc -or $proc.ExitCode -ne 0) {
+    Write-Host "Python 3.8+ not found. Installing uv to manage Python..."
+    Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1")
+    $uvBin = $null
+    foreach ($cand in @(
+      (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+      "$env:LOCALAPPDATA\Programs\uv\uv.exe"
+    )) {
+      if (Test-Path $cand) { $uvBin = $cand; break }
+    }
+    if (-not $uvBin) {
+      $uvBin = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $uvBin -or -not (Test-Path $uvBin)) {
+      Write-Host "ERROR: uv installer did not produce uv.exe."
       return $false
     }
-    # Refresh PATH from registry for this process.
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = (($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+
+    Write-Host "Installing Python 3.13 via uv..."
+    # --force overwrites any stale executable shim from a prior partial install.
+    & $uvBin python install 3.13 --force 2>&1 | ForEach-Object { Write-Host $_ }
+    # uv exits 0 even when shim install warns; check that python is actually resolvable.
+    $pythonPath = (& $uvBin python find 3.13 2>&1 | Select-Object -Last 1).ToString().Trim()
+    if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
+      Write-Host "ERROR: 'uv python find 3.13' returned no usable path: $pythonPath"
+      return $false
+    }
+    $pythonDir = Split-Path $pythonPath -Parent
+    $env:Path = "$pythonDir;$env:Path"
     return $true
   } catch {
+    Write-Host "ERROR: Install-PythonRuntime failed: $($_.Exception.Message)"
     return $false
   } finally {
-    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+    $ErrorActionPreference = $oldPref
   }
 }
 
@@ -1744,9 +1789,10 @@ def _patch_chat_agent_cli(source: str) -> str:
     )
     # Set API URL for the HTTP-based cdp_tool.py
     source = source.replace(
-        '    env["CDP_AGENT_ID"] = AGENT_ID\n'
+        '    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID\n'
         '    env["CDP_RELAY_HOST"] = RELAY_HOST\n'
         '    env["CDP_RELAY_PORT"] = str(RELAY_PORT)',
+        '    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID\n'
         '    env["UNCHAINED_API_URL"] = f"https://{RELAY_HOST}"',
     )
     return source
@@ -1771,7 +1817,7 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 3. Opens Chrome with remote debugging enabled
 4. Connects Chrome to the Unchained relay server
 5. Starts the chat agent (waits for messages from the web UI)
-6. Optional: enable reboot/login autostart via `./start.sh --enable-autostart` (macOS)
+6. Runs as a background daemon. Run `./start.sh --enable-autostart` once to also register macOS reboot autostart.
 
 ## Requirements
 
@@ -1860,6 +1906,13 @@ def _add_source_files(zf: zipfile.ZipFile, src_dir: str, prefix: str):
         zf.writestr(f"{prefix}/{dest}", content)
 
 
+def _ps1(content: str) -> str:
+    """PowerShell loads .ps1 as ANSI by default; prefix a UTF-8 BOM so any
+    non-ASCII character in script bodies (em-dashes, smart quotes, etc.) is
+    parsed as UTF-8 instead of breaking string terminators."""
+    return content if content.startswith("﻿") else "﻿" + content
+
+
 def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> bytes:
     """Build an in-memory ZIP file with the agent package.
 
@@ -1895,9 +1948,9 @@ def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> b
         zf.writestr(info, _STOP_SH)
 
         # Windows scripts
-        zf.writestr("unchained-agent/start.ps1", _START_PS1)
-        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
-        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/start.ps1", _ps1(_START_PS1))
+        zf.writestr("unchained-agent/stop.ps1", _ps1(_STOP_PS1))
+        zf.writestr("unchained-agent/update.ps1", _ps1(_UPDATE_PS1))
         zf.writestr("unchained-agent/start.bat", _START_BAT)
         zf.writestr("unchained-agent/stop.bat", _STOP_BAT)
         zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
@@ -1935,14 +1988,14 @@ def build_update_zip() -> bytes:
         info = zipfile.ZipInfo("unchained-agent/update.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _UPDATE_SH)
-        zf.writestr("unchained-agent/update.ps1", _UPDATE_PS1)
+        zf.writestr("unchained-agent/update.ps1", _ps1(_UPDATE_PS1))
         zf.writestr("unchained-agent/update.bat", _UPDATE_BAT)
 
         # stop.sh (executable) so installed agents pick up stop/autostart fixes.
         info = zipfile.ZipInfo("unchained-agent/stop.sh")
         info.external_attr = 0o755 << 16
         zf.writestr(info, _STOP_SH)
-        zf.writestr("unchained-agent/stop.ps1", _STOP_PS1)
+        zf.writestr("unchained-agent/stop.ps1", _ps1(_STOP_PS1))
 
         # CLAUDE.md
         claude_md_path = os.path.join(src_dir, "CLAUDE.md")

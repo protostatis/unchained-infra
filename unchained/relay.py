@@ -82,6 +82,9 @@ class Relay:
             ("Content-Type", "application/json"),
         ]), body)
 
+    def _is_websocket_upgrade(self, headers: Headers | None) -> bool:
+        return (headers.get("Upgrade", "") if headers else "").lower() == "websocket"
+
     def _get_bearer_token(self, headers: Headers | None) -> str:
         auth_header = headers.get("Authorization", "") if headers else ""
         if auth_header.startswith("Bearer "):
@@ -189,6 +192,7 @@ class Relay:
         print(f"[relay] client endpoint: ws://{self.host}:{self.port}/cdp/<agent_id>/<tab_id>")
         async with websockets.serve(self._route, self.host, self.port,
                                     max_size=50 * 1024 * 1024,
+                                    ping_interval=120,  # WS-level safety net; app heartbeat is primary
                                     process_request=self._process_request):
             await asyncio.Future()  # run forever
 
@@ -197,6 +201,8 @@ class Relay:
         del connection
         full_path = request.path
         path = urllib.parse.urlsplit(full_path).path
+        if path == "/health" and not self._is_websocket_upgrade(request.headers):
+            return self._json_response(200, "OK", {"status": "ok", "agents": len(self.agents)})
         # GET /api/agents — list connected agents
         if path == "/api/agents":
             auth_info, internal, reason = self._authorize_headers(request.headers)

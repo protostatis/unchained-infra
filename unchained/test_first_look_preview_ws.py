@@ -368,6 +368,58 @@ class TestFirstLookPreviewClientJsShape(unittest.TestCase):
                 f"{marker} missing stale-WS guard",
             )
 
+    def test_placeholder_hidden_by_frame_class(self):
+        """Canvas theme uses !important display for the empty placeholder.
+
+        Inline ``style.display = 'none'`` is not enough to hide it once a
+        browser frame renders, so the live canvas needs a more specific class
+        selector plus JS add/remove hooks.
+        """
+        html = self._preview_html()
+        self.assertIn(
+            "body.first-look-canvas #live-canvas-wrap.preview-has-frame #preview-empty{display:none!important}",
+            html,
+        )
+        self.assertIn("wrap.classList.add('preview-has-frame')", html)
+        self.assertIn("wrap.classList.remove('preview-has-frame')", html)
+
+    def test_new_chat_control_lives_with_chat_toggle(self):
+        html = self._preview_html()
+        topbar = html.split('<div id="topbar">', 1)[1].split('<div id="model-notice"', 1)[0]
+        self.assertNotIn("New Chat", topbar)
+        controls = html.split('<div class="chat-controls">', 1)[1].split('<div id="chat">', 1)[0]
+        self.assertIn('id="new-chat-btn"', controls)
+        self.assertIn('id="chat-collapse-btn"', controls)
+        self.assertNotIn('class="chat-control-btn chat-collapse-btn"', controls)
+
+    def test_shared_browser_status_has_visible_target(self):
+        """Bridge readiness copy must have a real DOM target near the send UI.
+
+        The preview note is hidden on the mobile canvas, so the status target is
+        the user's only visible explanation when the run button is disabled.
+        """
+        html = self._preview_html()
+        self.assertIn('id="shared-browser-status"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("setStatusCopy('shared-browser-status'", html)
+
+    def test_connected_status_clears_idle_preview_fallback(self):
+        """Ready status should clear stale warming/unavailable preview copy.
+
+        Keep this guarded so periodic status refreshes do not overwrite run
+        progress or the final browser frame after a run has produced output.
+        """
+        html = self._preview_html()
+        marker = "if (data.connected) {"
+        self.assertIn(marker, html)
+        connected_branch = html.split(marker, 1)[1].split(
+            "} else if (!data.bridge_configured)",
+            1,
+        )[0]
+        self.assertIn("setStatusCopy('shared-browser-status'", connected_branch)
+        self.assertIn("!sending && !previewHasFrame && previewState === 'idle'", connected_branch)
+        self.assertIn("setPreviewNote('Shared browser ready for guest runs.', 'ok')", connected_branch)
+
 
 if __name__ == "__main__":
     import unittest

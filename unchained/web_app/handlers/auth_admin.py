@@ -6,7 +6,7 @@ import hmac
 import os
 import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -65,6 +65,73 @@ def _normalized_email(value: object) -> str:
     if email in {"none", "null"}:
         return ""
     return email
+
+
+def _send_signup_emails(
+    core,
+    *,
+    user: dict,
+    email: str,
+    name: str,
+    user_type: str,
+    is_trial_branch: bool,
+) -> None:
+    # The auto_approve_pending_users trigger may have flipped the user to
+    # 'approved' before we get here, so branch on the post-trigger status
+    # rather than assuming pending.
+    approved = user.get("status") == "approved"
+    display = name or email
+
+    if approved:
+        core.send_email(
+            email,
+            "Unchained — You're in!",
+            f"<p>Hi {display},</p>"
+            "<p>Your account has been approved! "
+            '<a href="https://api.unchainedsky.com/chat">Visit unchainedsky.com/chat</a> to get started.</p>'
+            "<p>— The Unchained Team</p>",
+        )
+    elif is_trial_branch:
+        core.send_email(
+            email,
+            "Unchained — Trial access enabled (account review pending)",
+            f"<p>Hi {display},</p>"
+            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
+            "<p>We'll notify you once your full account is approved.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+    else:
+        core.send_email(
+            email,
+            "Unchained — Sign-up request received",
+            f"<p>Hi {display},</p>"
+            "<p>We received your request to join Unchained. "
+            "We're reviewing it now and will get back to you shortly.</p>"
+            "<p>— The Unchained Team</p>",
+        )
+
+    if approved:
+        admin_subject = f"New Unchained sign-up (auto-approved): {email}"
+        admin_body = (
+            f"<p>New {user_type} sign-up: <b>{display}</b> ({email}).</p>"
+            "<p>Status: <b>auto-approved</b>.</p>"
+        )
+    elif is_trial_branch:
+        admin_subject = f"New trial sign-up (pending review): {email}"
+        admin_body = (
+            f"<p>New trial/demo user: <b>{display}</b> ({email}).</p>"
+            "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>"
+        )
+    else:
+        admin_subject = f"New Unchained sign-up: {email}"
+        admin_body = (
+            f"<p>New sign-up request from <b>{display}</b> ({email}).</p>"
+            f"<p>Source: <b>{user_type}</b></p>"
+            f"<p>Approve: <code>POST /admin/approve</code> with body "
+            f'<code>{{"email": "{email}"}}</code></p>'
+        )
+    for admin in core.ADMIN_EMAILS:
+        core.send_email(admin, admin_subject, admin_body)
 
 
 def _facebook_oauth_config() -> tuple[str, str, str, str]:
@@ -385,44 +452,27 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
 
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
 
     resp = web.json_response(
         {
@@ -760,42 +810,26 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
     resp = _redirect(pending=True)
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
@@ -1180,42 +1214,26 @@ async def handle_github_callback(request: web.Request) -> web.Response:
             status_code=200,
         )
 
-        core.send_email(
-            email,
-            "Unchained — Trial access enabled (account review pending)",
-            f"<p>Hi {name or email},</p>"
-            "<p>Your account review is still pending, but you can start using Trial/Demo now.</p>"
-            "<p>We'll notify you once your full account is approved.</p>"
-            "<p>— The Unchained Team</p>",
+        _send_signup_emails(
+            core,
+            user=user,
+            email=email,
+            name=name,
+            user_type="trial",
+            is_trial_branch=True,
         )
-        for admin in core.ADMIN_EMAILS:
-            core.send_email(
-                admin,
-                f"New trial sign-up (pending review): {email}",
-                f"<p>New trial/demo user: <b>{name}</b> ({email}).</p>"
-                "<p>Status: <b>pending review</b> (trial/demo access enabled).</p>",
-            )
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
     session_token = core.create_session_token(user["user_id"], email)
-    core.send_email(
-        email,
-        "Unchained — Sign-up request received",
-        f"<p>Hi {name or email},</p>"
-        "<p>We received your request to join Unchained. "
-        "We're reviewing it now and will get back to you shortly.</p>"
-        "<p>— The Unchained Team</p>",
+    _send_signup_emails(
+        core,
+        user=user,
+        email=email,
+        name=name,
+        user_type=user_type,
+        is_trial_branch=False,
     )
-    for admin in core.ADMIN_EMAILS:
-        core.send_email(
-            admin,
-            f"New Unchained sign-up: {email}",
-            f"<p>New sign-up request from <b>{name}</b> ({email}).</p>"
-            f"<p>Source: <b>{user_type}</b></p>"
-            f"<p>Approve: <code>POST /admin/approve</code> with body "
-            f'<code>{{"email": "{email}"}}</code></p>',
-        )
     resp = _redirect(pending=True)
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
@@ -1340,6 +1358,252 @@ async def handle_dev_auth(request: web.Request) -> web.Response:
     resp = web.json_response({"ok": True, "agent_id": agent_id, "email": email})
     core._set_session_cookie(resp, token, request)
     return resp
+
+
+# ---------------------------------------------------------------------------
+# External auth redirect (cross-origin login for sky-search, etc.)
+# ---------------------------------------------------------------------------
+
+_AUTH_LOGIN_ALLOWED_ORIGINS = {
+    "https://analytics.unchainedsky.com",
+    "https://searchagentsky.com",
+    "https://search.unchainedsky.com",
+}
+_AUTH_LOGIN_ALLOWED_ORIGINS_DEV = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+}
+_AUTH_LOGIN_IDENTITY_TTL = 24 * 3600  # 24 hours
+
+
+_AUTH_CODE_TTL = 120  # seconds — one-time codes expire after 2 minutes
+
+
+def _validate_redirect_uri(uri: str, *, allow_dev: bool = False) -> bool:
+    """Check redirect_uri against the allowlist (origin + /auth/callback path)."""
+    if not uri:
+        return False
+    parsed = urlparse(uri)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    allowed = _AUTH_LOGIN_ALLOWED_ORIGINS
+    if allow_dev:
+        allowed = allowed | _AUTH_LOGIN_ALLOWED_ORIGINS_DEV
+    return origin in allowed and parsed.path == "/auth/callback"
+
+
+def _mint_identity_token(user: dict) -> str:
+    """Mint a cross-origin identity JWT for external services."""
+    import jwt as pyjwt
+
+    core = _core()
+    now = int(time.time())
+    return pyjwt.encode(
+        {
+            "sub": user["user_id"],
+            "name": user.get("name", ""),
+            "email": user.get("email", ""),
+            "picture": user.get("picture", ""),
+            "aud": "sky-search",
+            "iat": now,
+            "exp": now + _AUTH_LOGIN_IDENTITY_TTL,
+        },
+        core.JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+_AUTH_LOGIN_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Unchained</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+  .card{text-align:center;padding:2rem}
+  h1{font-size:1.25rem;margin-bottom:.5rem}
+  p{font-size:.875rem;color:#8b949e;margin-bottom:1.5rem}
+  .g_id_signin{display:flex;justify-content:center;width:320px;max-width:100%;margin:0 auto}
+  #loginerr{color:#f85149;font-size:.8rem;margin-top:1rem;min-height:1.2em}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Sign in to continue</h1>
+  <p>You'll be redirected back after signing in.</p>
+  <div id="g_id_onload"
+       data-client_id="__GOOGLE_CLIENT_ID__"
+       data-callback="handleCredential"
+       data-auto_prompt="false"
+       data-context="signin"
+       data-ux_mode="popup"></div>
+  <div class="g_id_signin"
+       data-type="standard"
+       data-shape="rectangular"
+       data-theme="outline"
+       data-text="signin_with"
+       data-size="large"
+       data-logo_alignment="center"
+       data-width="320"></div>
+  <div id="loginerr"></div>
+</div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+async function handleCredential(response) {
+  var errEl = document.getElementById('loginerr');
+  errEl.textContent = '';
+  try {
+    var r = await fetch('/auth/google', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({credential: response.credential}),
+    });
+    if (!r.ok) {
+      var d = await r.json().catch(function(){return {};});
+      errEl.textContent = d.error || 'Sign-in failed';
+      return;
+    }
+    // Session cookie is set — reload to trigger the redirect
+    window.location.reload();
+  } catch(e) {
+    errEl.textContent = e.message || 'Network error';
+  }
+}
+</script>
+</body>
+</html>
+"""
+
+
+def _issue_auth_code(user: dict, redirect_uri: str, scope: str) -> str:
+    """Mint a single-use code bound to redirect_uri, persist it, and return it."""
+    core = _core()
+    code = secrets.token_hex(32)
+    now = time.time()
+    with core._auth._conn() as conn:
+        conn.execute(
+            "INSERT INTO auth_codes (code, user_id, redirect_uri, scope, created_at, expires_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (code, user["user_id"], redirect_uri, scope, now, now + _AUTH_CODE_TTL),
+        )
+    return code
+
+
+async def handle_auth_login(request: web.Request) -> web.Response:
+    """GET /auth/login — external auth redirect for cross-origin login.
+
+    If the user is already logged in, issues a short-lived one-time code and
+    redirects back to redirect_uri with ?code=<code>&state=<state>.
+    Otherwise serves a minimal Google Sign-In page; after login the page
+    reloads and hits this handler again (now with a session cookie) to
+    complete the redirect.
+    """
+    core = _core()
+    redirect_uri = request.query.get("redirect_uri", "").strip()
+    scope = request.query.get("scope", "").strip()
+    state = request.query.get("state", "").strip()
+
+    allow_dev = not core.GOOGLE_CLIENT_ID
+    if not _validate_redirect_uri(redirect_uri, allow_dev=allow_dev):
+        return web.Response(text="Invalid redirect_uri", status=400)
+
+    # Check if user is already logged in
+    auth_info = core._authenticate(request)
+    if auth_info is not None:
+        email = auth_info.get("email", "")
+        user = core._auth.find_user_by_email(email) if email else None
+        if user and user.get("status", "approved") == "approved":
+            code = _issue_auth_code(user, redirect_uri, scope)
+            sep = "&" if "?" in redirect_uri else "?"
+            location = f"{redirect_uri}{sep}code={code}"
+            if state:
+                location += f"&state={state}"
+            return web.HTTPFound(location)
+
+    # Not logged in — serve login page
+    html = core.inject_google_client_id(_AUTH_LOGIN_PAGE, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_auth_token(request: web.Request) -> web.Response:
+    """POST /auth/token — exchange a one-time auth code for an identity JWT."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"error": "invalid_request", "error_description": "Body must be JSON."},
+            status=400,
+        )
+
+    grant_type = body.get("grant_type", "")
+    code = body.get("code", "").strip()
+    redirect_uri = body.get("redirect_uri", "").strip()
+
+    if grant_type != "authorization_code":
+        return web.json_response({"error": "unsupported_grant_type"}, status=400)
+    if not code or not redirect_uri:
+        return web.json_response(
+            {"error": "invalid_request", "error_description": "code and redirect_uri are required."},
+            status=400,
+        )
+
+    core = _core()
+    now = time.time()
+    with core._auth._conn() as conn:
+        row = conn.execute(
+            "SELECT user_id, redirect_uri, scope, expires_at, used FROM auth_codes WHERE code = ?",
+            (code,),
+        ).fetchone()
+
+        if row is None:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "Code not found."}, status=400
+            )
+
+        db_user_id, db_redirect_uri, db_scope, expires_at, used = row
+
+        if used:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "Code already used."}, status=400
+            )
+        if now > expires_at:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "Code expired."}, status=400
+            )
+        if redirect_uri != db_redirect_uri:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "redirect_uri mismatch."}, status=400
+            )
+
+        # Mark consumed before issuing token (prevent replay)
+        conn.execute("UPDATE auth_codes SET used = 1 WHERE code = ?", (code,))
+
+        user_row = conn.execute(
+            "SELECT user_id, email, name, picture FROM users WHERE user_id = ?",
+            (db_user_id,),
+        ).fetchone()
+
+    if user_row is None:
+        return web.json_response(
+            {"error": "invalid_grant", "error_description": "User not found."}, status=400
+        )
+
+    user = {
+        "user_id": user_row[0],
+        "email": user_row[1],
+        "name": user_row[2] or "",
+        "picture": user_row[3] or "",
+    }
+    token = _mint_identity_token(user)
+    return web.json_response({
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": _AUTH_LOGIN_IDENTITY_TTL,
+        "scope": db_scope,
+    })
 
 
 async def handle_auth_me(request: web.Request) -> web.Response:

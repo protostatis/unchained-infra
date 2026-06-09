@@ -7,6 +7,7 @@ These tests protect public routes and exported template contracts while
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 import unittest
@@ -50,6 +51,10 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/"),
+            ("GET", "/unbrowser"),
+            ("GET", "/web/unbrowser/sources"),
+            ("GET", "/web/unbrowser/runtime"),
+            ("GET", "/web/unbrowser/stream"),
             ("GET", "/tab"),
             ("GET", "/mcp-guide"),
             ("GET", "/test"),
@@ -139,6 +144,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_chat_pages_exported(self):
         templates = [
             "LANDING_HTML",
+            "UNBROWSER_PAGE_HTML",
             "BRANDED_TAB_HTML",
             "HTML",
             "TRIAL_CHAT_HTML",
@@ -168,6 +174,64 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('id="f-model"', web.SCHEDULER_HTML)
         self.assertIn("getSchedulerModelValue()", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
+
+    def test_landing_auth_cta_points_to_auth_entry(self):
+        self.assertIn('href="/local" class="signin">Sign in / Sign up</a>', web.LANDING_HTML)
+        self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
+
+    def test_chat_markdown_rendering_sanitizes_assistant_output(self):
+        chat_templates = {
+            "TRIAL_CHAT_HTML": web.TRIAL_CHAT_HTML,
+            "CHAT_GEMINI_HTML": web.CHAT_GEMINI_HTML,
+            "CHAT_CLAUDE_SDK_HTML": web.CHAT_CLAUDE_SDK_HTML,
+            "CHAT_CODEX_HTML": web.CHAT_CODEX_HTML,
+            "CLAUDE_CHAT_HTML": web.CLAUDE_CHAT_HTML,
+            "HEADLESS_DEMO_HTML": web.HEADLESS_DEMO_HTML,
+        }
+        for name, html in chat_templates.items():
+            with self.subTest(template=name):
+                self.assertNotIn("__SAFE_MARKDOWN_RENDERER_JS__", html)
+                self.assertNotIn("span.innerHTML = marked.parse(bubble._rawText);", html)
+                self.assertIn("span.innerHTML = renderSafeMarkdown(bubble._rawText);", html)
+                self.assertIn("marked.parse(escapeMarkdownHtml(raw))", html)
+                self.assertIn("function escapeMarkdownHtml(value)", html)
+                self.assertIn("name.indexOf('on') === 0", html)
+                self.assertIn("\\u2000-\\u200D", html)
+                self.assertIn("svg,math,picture,source,video,audio", html)
+                self.assertIn("name === 'formaction'", html)
+                self.assertIn("Raw assistant HTML is intentionally displayed as text", html)
+                self.assertIn("javascript:|vbscript:|data:", html)
+
+        self.assertNotIn("sanitizeHtml(marked.parse(raw))", web.FIRST_LOOK_PREVIEW_HTML)
+        self.assertNotIn("__SAFE_MARKDOWN_RENDERER_JS__", web.FIRST_LOOK_PREVIEW_HTML)
+        self.assertIn(
+            "sanitizeHtml(marked.parse(escapeMarkdownHtml(raw)))",
+            web.FIRST_LOOK_PREVIEW_HTML,
+        )
+
+    def test_unbrowser_page_links_public_directories(self):
+        self.assertIn("https://smithery.ai/servers/protostatis-dev/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
+
+    def test_unbrowser_page_live_demo_contract(self):
+        self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/runtime", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
+
+    def test_web_image_installs_unbrowser_binary_package(self):
+        dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+        self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
+
+    def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
+        from web_app.handlers.unbrowser_demo import SCENARIOS
+
+        self.assertIn("crypto-prices", SCENARIOS)
+        for scenario in SCENARIOS.values():
+            self.assertGreaterEqual(len(scenario.sources), 16, scenario.id)
 
     def test_research_desk_page_renders_phase3_connect_markers(self):
         from web_app.handlers.pages import _build_research_desk_html

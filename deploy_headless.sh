@@ -66,6 +66,9 @@ else
     "${SSH_CMD[@]}" "cd \"$REMOTE_DIR\" && cp \"$(basename "$ENV_FILE")\" .env && chmod 600 .env && docker compose -f docker-compose.headless.yml --env-file .env up -d --build"
 fi
 
+echo "==> Pruning build cache..."
+"${SSH_CMD[@]}" "docker builder prune -af"
+
 echo ""
 echo "==> Headless stack status:"
 "${SSH_CMD[@]}" "docker compose -f \"$REMOTE_DIR/docker-compose.headless.yml\" --env-file \"$REMOTE_DIR/.env\" ps"

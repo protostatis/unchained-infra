@@ -103,7 +103,7 @@ if command -v launchctl >/dev/null 2>&1; then
   if [ -n "$USER_UID" ]; then
     launchctl asuser "$USER_UID" osascript <<'OSA' >/dev/null 2>&1 || true
 tell application "Terminal"
-  do script "cd \"$HOME/unchained-agent\" && ./start.sh --daemon"
+  do script "cd \"$HOME/unchained-agent\" && ./start.sh --enable-autostart"
   activate
 end tell
 OSA

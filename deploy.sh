@@ -38,11 +38,76 @@ remote_bash() {
 }
 
 FORCE_BUILD=false
-if [[ "${1:-}" == "--build" ]]; then
-    FORCE_BUILD=true
+FORCE_FULL_DEPLOY=false
+for arg in "$@"; do
+    case "$arg" in
+        --build)
+            FORCE_BUILD=true
+            ;;
+        --full)
+            FORCE_FULL_DEPLOY=true
+            ;;
+    esac
+done
+
+# Smart-deploy snapshot files. The remote snapshot is taken BEFORE any
+# upload (but AFTER local prep — overlay + rhythm copy) so that diffing
+# it against the post-upload local state yields the set of files this
+# deploy actually changes. The list is fed to deploy/classify_changes.py
+# to decide which services need a rebuild.
+REMOTE_CHECKSUMS_FILE="$(mktemp -t uc_remote_checksums.XXXXXX)"
+LOCAL_CHECKSUMS_FILE="$(mktemp -t uc_local_checksums.XXXXXX)"
+DEPLOYED_PATHS_FILE="$(mktemp -t uc_deployed_paths.XXXXXX)"
+trap 'rm -f "$REMOTE_CHECKSUMS_FILE" "$LOCAL_CHECKSUMS_FILE" "$DEPLOYED_PATHS_FILE"' EXIT
+
+# Pick the local SHA-256 tool. macOS without GNU coreutils has `shasum`
+# but not `sha256sum`; Linux has `sha256sum`. Both produce the same
+# `<hash>  <path>` output format so they're interchangeable for diff.
+# Remote (EC2 Linux) always has sha256sum — no detection needed there.
+if command -v sha256sum >/dev/null 2>&1; then
+    LOCAL_HASH_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    LOCAL_HASH_CMD="shasum -a 256"
+else
+    echo "ERROR: need either sha256sum or shasum installed locally" >&2
+    exit 1
 fi
 
+# Emit the relative paths of every file that this deploy will upload.
+# Used to bound the checksum scan to files that actually exist on both
+# sides so the diff doesn't catch local-only dev cruft (.venv, tests,
+# benchmark data, etc.). Must be called AFTER overlay + rhythm copy so
+# the local files are in their final pre-upload state.
+emit_deployed_paths() {
+    local f
+    for f in "${TOP_LEVEL_CONTEXT_FILES[@]}"; do
+        printf '%s\n' "$f"
+    done
+    for f in "${UNCHAINED_RUNTIME_FILES[@]}"; do
+        printf '%s\n' "unchained/$f"
+    done
+    for f in "${BENCHMARK_CONTEXT_FILES[@]}"; do
+        printf '%s\n' "unchained/benchmark/$f"
+    done
+    find unchained/web_app -type f \
+        -not -path "*/__pycache__/*" -not -name "*.pyc" 2>/dev/null
+    find unchained/installers -maxdepth 1 -type f 2>/dev/null
+    for f in "${RESEARCH_DESK_VENDOR_ROOT_FILES[@]}"; do
+        printf '%s\n' "research_desk_vendor/$f"
+    done
+    find research_desk_vendor/unchained_pyreplab -maxdepth 1 -type f -name "*.py" \
+        2>/dev/null
+    # NOTE: rhythm is intentionally excluded. The local rhythm copy step
+    # produces a nested layout (rhythm/rhythm/__init__.py) while remote
+    # SCP flattens it (rhythm/__init__.py), so path-based diff would
+    # always show false positives. Use `--full` if you change rhythm.
+}
+
 echo "==> Deploying to $EC2_HOST"
+
+if $FORCE_FULL_DEPLOY; then
+    echo "    Mode: --full (skipping change classification, rebuilding everything)"
+fi
 
 # Auto-install private core overlay when available.
 if [[ -x "$INSTALL_PRIVATE_CORE_SCRIPT" && -d "$PRIVATE_CORE_SRC" ]]; then
@@ -95,6 +160,29 @@ do
         exit 1
     fi
 done
+
+# Build the deployed-paths list now that overlay+rhythm prep is done.
+# The list is reused for the remote snapshot below and the local snapshot
+# after upload.
+emit_deployed_paths | sort -u > "$DEPLOYED_PATHS_FILE"
+DEPLOYED_PATHS_COUNT=$(wc -l < "$DEPLOYED_PATHS_FILE" | awk '{print $1}')
+
+# Snapshot remote file checksums BEFORE upload so we can later detect
+# what this deploy actually changed. Files in the deployed list that
+# don't exist on the remote (new files) are silently skipped — they'll
+# show up in the post-upload local snapshot but not here, which the
+# diff treats as "added" → triggers correct service rebuild.
+if ! $FORCE_FULL_DEPLOY; then
+    echo "==> Snapshotting remote file checksums ($DEPLOYED_PATHS_COUNT paths)..."
+    if "${SSH_CMD[@]}" "cd $REMOTE_DIR && xargs -r sha256sum 2>/dev/null | sort" \
+            < "$DEPLOYED_PATHS_FILE" > "$REMOTE_CHECKSUMS_FILE"
+    then
+        echo "    $(wc -l < "$REMOTE_CHECKSUMS_FILE" | awk '{print $1}') file(s) hashed on remote."
+    else
+        echo "    (snapshot failed — falling back to full deploy)"
+        FORCE_FULL_DEPLOY=true
+    fi
+fi
 
 # Upload top-level files
 echo "==> Uploading config files..."
@@ -237,64 +325,151 @@ else
     echo "==> Rhythm not found locally — keeping existing remote rhythm."
 fi
 
-# Rebuild images (without restarting containers yet)
-echo "==> Building container images..."
-if $FORCE_BUILD; then
-    remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-cd "$1"
-docker compose build --no-cache
-EOF
-else
-    remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-cd "$1"
-docker compose build
-EOF
-fi
-
-# Staged restart: bring up backend services first, then MCP and dependents
-# second. docker-compose.yml health checks + depends_on conditions gate
-# startup ordering — MCP won't start until relay and private-core are healthy.
-#
-# Verify the hard-coded service lists match docker-compose.yml.
+# Verify the docker-compose service list hasn't changed since this script
+# was written. If services are added/removed, the classifier needs updating.
 echo "==> Verifying service list matches docker-compose.yml..."
 remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent web)
+expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
-    echo "ERROR: docker-compose.yml services changed — update staged lists in deploy.sh" >&2
+    echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2
     exit 1
 fi
 EOF
 
-echo "==> Restarting backend services (relay, private-core)..."
-remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-cd "$1"
-docker compose up -d --no-deps relay private-core
-EOF
+# Compute the diff between this deploy and the previous one. The remote
+# snapshot was taken before upload; uploads have now run, so any file
+# whose hash differs from the snapshot is something this deploy changed.
+SERVICES_TO_REBUILD=""
+CADDY_RECREATE_REQUIRED=false
+if $FORCE_FULL_DEPLOY; then
+    SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+    # --full skips file-level classification, so compose/network changes can't
+    # be ruled out. Reload first later, then recreate if needed.
+    CADDY_RECREATE_REQUIRED=true
+else
+    echo "==> Computing changed files..."
+    if (cd "$SCRIPT_DIR" && xargs -r $LOCAL_HASH_CMD 2>/dev/null < "$DEPLOYED_PATHS_FILE" | sort) > "$LOCAL_CHECKSUMS_FILE"; then
+        # diff outputs lines like:
+        #   < <hash>  <path>          (only on remote — file was deleted)
+        #   > <hash>  <path>          (only on local — file is new)
+        #   < <oldhash> <path>        (changed: appears with both < and >)
+        #   > <newhash> <path>
+        # We want unique paths from < and > lines.
+        # `|| true` because diff exits 1 when files differ (the normal case),
+        # which would otherwise trip set -e + pipefail.
+        CHANGED_FILES=$(diff "$REMOTE_CHECKSUMS_FILE" "$LOCAL_CHECKSUMS_FILE" \
+            | awk '/^[<>]/ {print $3}' | sort -u || true)
 
-# Let compose handle health-check gating: MCP depends_on relay/private-core
-# with condition: service_healthy, so it will wait for backends automatically.
-echo "==> Restarting remaining services (web, mcp, scheduler, trial-agent)..."
-remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-cd "$1"
-docker compose up -d web mcp scheduler trial-agent
-EOF
+        if [[ -z "$CHANGED_FILES" ]]; then
+            echo "    No file changes detected. Nothing to rebuild."
+        else
+            CHANGED_COUNT=$(echo "$CHANGED_FILES" | wc -l | awk '{print $1}')
+            echo "    $CHANGED_COUNT file(s) changed:"
+            echo "$CHANGED_FILES" | head -10 | sed 's/^/      /'
+            if [[ "$CHANGED_COUNT" -gt 10 ]]; then
+                echo "      ... and $((CHANGED_COUNT - 10)) more"
+            fi
 
-# Refresh Caddy after upstream containers are recreated.
-# This avoids stale/no-such-host upstream resolution windows after deploys.
-echo "==> Restarting Caddy reverse proxy..."
-remote_bash "$REMOTE_DIR" <<'EOF'
+            # Run the classifier
+            CLASSIFIER_OUTPUT=$(echo "$CHANGED_FILES" \
+                | python3 "$SCRIPT_DIR/deploy/classify_changes.py" 2>&1)
+
+            if echo "$CLASSIFIER_OUTPUT" | grep -qx ALL; then
+                echo "    Classifier: ALL services need rebuild"
+                SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+                if echo "$CHANGED_FILES" | grep -qx 'docker-compose.yml'; then
+                    CADDY_RECREATE_REQUIRED=true
+                fi
+            else
+                SERVICES_TO_REBUILD=$(echo "$CLASSIFIER_OUTPUT" | tr '\n' ' ' | sed 's/ *$//')
+                if [[ -z "$SERVICES_TO_REBUILD" ]]; then
+                    echo "    Classifier: no services need rebuild (docs/test changes only)"
+                else
+                    echo "    Classifier: rebuilding [$SERVICES_TO_REBUILD]"
+                fi
+            fi
+        fi
+    else
+        echo "    (local checksum failed — falling back to full deploy)"
+        SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+        # Unknown change set: be conservative after attempting graceful reload.
+        CADDY_RECREATE_REQUIRED=true
+    fi
+    cd "$SCRIPT_DIR"
+fi
+
+# Build affected services. caddy uses a public image (no build context)
+# so we filter it out of the build list. `|| true` guards against grep -v
+# exiting 1 when SERVICES_TO_REBUILD is empty (no matches → grep returns 1).
+BUILD_SERVICES=$(echo "$SERVICES_TO_REBUILD" | tr ' ' '\n' | grep -v '^$' | grep -v '^caddy$' | tr '\n' ' ' | sed 's/ *$//' || true)
+
+if [[ -n "$BUILD_SERVICES" ]]; then
+    echo "==> Building images for: $BUILD_SERVICES"
+    if $FORCE_BUILD; then
+        remote_bash "$REMOTE_DIR" "$BUILD_SERVICES" <<'EOF'
 set -euo pipefail
 cd "$1"
-docker compose restart caddy
+read -r -a build_services <<< "$2"
+docker compose build --no-cache "${build_services[@]}"
 EOF
+    else
+        remote_bash "$REMOTE_DIR" "$BUILD_SERVICES" <<'EOF'
+set -euo pipefail
+cd "$1"
+read -r -a build_services <<< "$2"
+docker compose build "${build_services[@]}"
+EOF
+    fi
+else
+    echo "==> No images to build."
+fi
+
+# Recreate affected service containers. We use --no-deps --no-build so:
+#   --no-deps: dependent services (e.g. scheduler depends on web) are NOT
+#              recreated unless they're in our affected list. Their existing
+#              connections survive and they'll auto-reconnect if needed.
+#   --no-build: skip the build step we already did above.
+#
+# Each service recreate is a ~3-5s window for that service only; other
+# services keep serving the entire time.
+RESTART_SERVICES=$(echo "$SERVICES_TO_REBUILD" | tr ' ' '\n' | grep -v '^$' | grep -v '^caddy$' | tr '\n' ' ' | sed 's/ *$//' || true)
+
+if [[ -n "$RESTART_SERVICES" ]]; then
+    echo "==> Recreating containers: $RESTART_SERVICES"
+    remote_bash "$REMOTE_DIR" "$RESTART_SERVICES" <<'EOF'
+set -euo pipefail
+cd "$1"
+read -r -a restart_services <<< "$2"
+docker compose up -d --no-deps --no-build "${restart_services[@]}"
+EOF
+else
+    echo "==> No service containers to recreate."
+fi
+
+# Caddy: prefer graceful reload over restart. caddy reload re-reads the
+# Caddyfile and updates upstream resolutions in-place with zero downtime.
+# Recreate only if reload fails or compose/network changes may need to apply.
+if echo " $SERVICES_TO_REBUILD " | grep -q ' caddy '; then
+    echo "==> Reloading Caddy (graceful when possible)..."
+    remote_bash "$REMOTE_DIR" "$CADDY_RECREATE_REQUIRED" <<'EOF'
+set -euo pipefail
+cd "$1"
+recreate_required="$2"
+if docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+    if [[ "$recreate_required" != "true" ]]; then
+        exit 0
+    fi
+    echo "    Caddy reload succeeded; recreating to apply compose/network changes..."
+else
+    echo "    Caddy reload failed; recreating container..."
+fi
+docker compose up -d --no-deps --no-build caddy
+EOF
+fi
 
 # Show status
 echo ""
@@ -348,6 +523,25 @@ if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" == "1" ]]; then
     fi
 else
     echo "==> Keeping overlaid private-core files (set DEPLOY_RESTORE_WORKTREE=1 to auto-restore)."
+fi
+
+echo ""
+
+# Prune stale docker images and build cache on the remote to prevent the
+# 10GB root partition from filling up between deploys. Images older than
+# a week that aren't referenced by any running container get freed. This
+# is a belt-and-suspenders hedge against the disk-full build failure we
+# hit on 2026-04-11 when docker had accumulated 181 images / 3.7 GB of
+# stale layers. Runs AFTER the successful deploy so nothing the new
+# containers depend on is touched. Errors are swallowed — pruning is
+# best-effort, we don't want a prune failure to fail the deploy.
+if [[ "${DEPLOY_PRUNE_OLD_IMAGES:-1}" == "1" ]]; then
+    echo "==> Pruning old docker images + build cache (older than 7 days)..."
+    remote_bash "$REMOTE_DIR" <<'EOF' || echo "    (prune failed, ignoring)"
+set +e
+docker image prune -f --filter "until=168h" 2>&1 | tail -1
+docker builder prune -f --filter "until=168h" 2>&1 | tail -1
+EOF
 fi
 
 echo ""

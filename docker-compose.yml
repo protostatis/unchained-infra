@@ -18,6 +18,7 @@ services:
     networks:
       - edge
       - app
+      - unbrowser_mcp
     restart: unless-stopped
 
   relay:
@@ -34,7 +35,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8765),2); s.close()"]
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8765,timeout=2); c.request('GET','/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -87,6 +88,46 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8766,timeout=2); c.request('GET','/mcp'); r=c.getresponse(); c.close(); assert r.status<500,r.status"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  unbrowser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    depends_on:
+      unbrowser-egress:
+        condition: service_healthy
+    networks:
+      - unbrowser_mcp
+      - unbrowser_egress_proxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  unbrowser-egress:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    command: ["python", "unbrowser_ssrf_proxy.py", "--host", "0.0.0.0", "--port", "8888"]
+    expose:
+      - "8888"
+    environment:
+      - UNBROWSER_PROXY_ALLOWED_PORTS=80,443
+    networks:
+      - unbrowser_egress_proxy
+      - egress
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8888),2); s.close()"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -190,5 +231,9 @@ volumes:
 networks:
   edge:
   egress:
+  unbrowser_mcp:
+    internal: true
+  unbrowser_egress_proxy:
+    internal: true
   app:
     internal: true

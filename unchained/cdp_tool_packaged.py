@@ -33,10 +33,26 @@ API_KEY = os.environ.get("UNCHAINED_API_KEY", "")
 API_URL = os.environ.get("UNCHAINED_API_URL", "https://api.unchainedsky.com")
 DEFAULT_NEW_TAB_PATH = "/tab"
 TAB_ID = os.environ.get("CDP_TAB_ID", "auto")
+BRIDGE_AGENT_ID = os.environ.get("CDP_AGENT_ID", "")
+CHAT_SESSION_ID = os.environ.get("UNCHAINED_CHAT_SESSION_ID", "")
 CDP_HOST = os.environ.get("CDP_HOST", "127.0.0.1")
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
 DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
                           os.path.join(os.path.expanduser("~"), ".unchained"))
+
+
+def _active_prov_slot():
+    """Return the provisioned-Chrome slot id when the session is bound to one.
+
+    The chat agent exports CDP_TAB_ID="prov-<slot>-<real_id>" for provisioned
+    sessions. Returns "" when not in a provisioned session.
+    """
+    if not TAB_ID.startswith("prov-"):
+        return ""
+    parts = TAB_ID.split("-", 2)
+    if len(parts) < 3 or not parts[1]:
+        return ""
+    return parts[1]
 
 
 def _resolve_cdp_port():
@@ -46,12 +62,9 @@ def _resolve_cdp_port():
     read the provisioned Chrome's port from its state file instead of using
     the default port (9222).
     """
-    if not TAB_ID.startswith("prov-"):
+    slot = _active_prov_slot()
+    if not slot:
         return CDP_PORT
-    parts = TAB_ID.split("-", 2)
-    if len(parts) < 3:
-        return CDP_PORT
-    slot = parts[1]
     state_file = os.path.join(DATA_DIR, "provision_slots", f"{slot}.json")
     try:
         with open(state_file) as f:
@@ -64,8 +77,28 @@ def _resolve_cdp_port():
     return CDP_PORT
 
 
+def _format_tab_id_for_display(real_id: str, slot: str) -> str:
+    """Produce the tab id form the agent should pass back via --tab.
+
+    For provisioned sessions, the bridge expects "prov-<slot>-<real_id>" so
+    it routes commands to the correct Chrome instance. Default sessions use
+    the bare 12-char prefix.
+    """
+    short = real_id[:12]
+    if slot:
+        return f"prov-{slot}-{short}"
+    return short
+
+
 def cmd(action, **kwargs):
-    body = json.dumps({"action": action, "tab_id": TAB_ID, **kwargs}).encode()
+    payload = {"action": action, "tab_id": TAB_ID, **kwargs}
+    # session_id lets the server reuse the bridge chosen for this chat turn;
+    # bridge_agent_id is a validated fallback when no session map exists yet.
+    if CHAT_SESSION_ID:
+        payload["session_id"] = CHAT_SESSION_ID
+    if BRIDGE_AGENT_ID:
+        payload["bridge_agent_id"] = BRIDGE_AGENT_ID
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{API_URL}/web/cmd",
         data=body,
@@ -138,14 +171,13 @@ def main():
             i += 1
     args = filtered
 
-    # When the session uses a provisioned Chrome, keep "auto" within
-    # the same provision slot so the agent doesn't fall back to the
-    # default/guest Chrome.
-    if tab_id == "auto" and TAB_ID.startswith("prov-"):
-        # TAB_ID format: prov-{slot}-{real_id}
-        parts = TAB_ID.split("-", 2)
-        if len(parts) >= 3 and parts[1]:
-            tab_id = f"prov-{parts[1]}-auto"
+    # When the session uses a provisioned Chrome, the bridge routes by
+    # tab id prefix: bare ids hit default Chrome (9222), prov-prefixed ids
+    # hit the provisioned Chrome's port. Rewrite any non-prov-prefixed
+    # value the agent passes so it stays inside the active slot.
+    prov_slot = _active_prov_slot()
+    if prov_slot and tab_id and not tab_id.startswith("prov-"):
+        tab_id = f"prov-{prov_slot}-{tab_id}"
 
     try:
         # --- Tab management: call Chrome's local HTTP API directly ---
@@ -153,7 +185,7 @@ def main():
             tabs = _chrome_tabs()
             print(f"=== Open Tabs ({len(tabs)}) ===")
             for t in tabs:
-                tid = t["id"][:12]
+                tid = _format_tab_id_for_display(t["id"], prov_slot)
                 title = (t.get("title") or "(no title)")[:50]
                 url = (t.get("url") or "")[:80]
                 print(f"  {tid}  {title}  {url}")
@@ -165,13 +197,14 @@ def main():
                 f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/new?{url}", method="PUT")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 tab_info = json.loads(resp.read())
-            new_id = tab_info["id"][:12]
-            print(f"Created tab {new_id}")
+            new_id_short = tab_info["id"][:12]
+            new_display = _format_tab_id_for_display(tab_info["id"], prov_slot)
+            print(f"Created tab {new_display}")
             tabs = _chrome_tabs()
             for t in tabs:
-                tid = t["id"][:12]
+                tid = _format_tab_id_for_display(t["id"], prov_slot)
                 title = (t.get("title") or "(no title)")[:50]
-                marker = " *" if t["id"].startswith(new_id) else ""
+                marker = " *" if t["id"].startswith(new_id_short) else ""
                 print(f"  {tid}  {title}{marker}")
             return
 
@@ -180,7 +213,14 @@ def main():
                 print("Usage: cdp_tool.py close-tab <tab_id>", file=sys.stderr)
                 sys.exit(1)
             tabs = _chrome_tabs()
-            matches = [t for t in tabs if t["id"].startswith(args[0])]
+            # Accept either bare ids or the prov-<slot>-<id> form printed by
+            # `tabs` / `new-tab` when in a provisioned session.
+            target = args[0]
+            if target.startswith("prov-"):
+                parts = target.split("-", 2)
+                if len(parts) >= 3:
+                    target = parts[2]
+            matches = [t for t in tabs if t["id"].startswith(target)]
             if not matches:
                 print(f"Tab {args[0]} not found", file=sys.stderr)
                 sys.exit(1)
@@ -191,7 +231,7 @@ def main():
             req = urllib.request.Request(
                 f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/close/{close_id}", method="PUT")
             urllib.request.urlopen(req, timeout=5)
-            print(f"Closed tab {close_id[:12]}")
+            print(f"Closed tab {_format_tab_id_for_display(close_id, prov_slot)}")
             return
 
         # --- Browser commands: go through server API ---

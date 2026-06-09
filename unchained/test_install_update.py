@@ -440,6 +440,14 @@ def test_deploy_script_uploads_research_desk_vendor_tree():
     assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
 
 
+def test_github_deploy_workflow_uploads_web_app_package():
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow = (repo_root / ".github" / "workflows" / "deploy.yml").read_text()
+    assert "Keep the modular web_app package in sync with web.py imports" in workflow
+    assert "rm -rf $REMOTE_DIR/unchained/web_app" in workflow
+    assert "$SCP_CMD -r unchained/web_app $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/" in workflow
+
+
 def test_research_desk_package_image_smoke_script_checks_built_image():
     repo_root = Path(__file__).resolve().parent.parent
     smoke_script = (repo_root / "deploy" / "research_desk_package_image_smoke.sh").read_text()
@@ -851,6 +859,27 @@ def test_openrouter_token_usage_tracking():
         os.unlink(db_path)
 
 
+def test_create_pending_user_returns_post_trigger_state():
+    """create_pending_user must reflect the auto_approve_pending_users trigger.
+
+    The trigger flips status='pending' -> 'approved' on insert and issues an
+    api_key, so callers in the signup flow can branch on the returned status
+    to send the right welcome email.
+    """
+    from auth import Auth
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        auth = Auth(db_path=db_path)
+        user = auth.create_pending_user("auto-approved@example.com", "Auto Approved", "", user_type="claude")
+        assert user["status"] == "approved", f"expected status='approved' from trigger, got: {user}"
+        assert user["api_key"], f"expected api_key issued by trigger, got: {user}"
+        assert user["user_type"] == "claude", f"user_type lost: {user}"
+        print("  create_pending_user reflects auto_approve trigger output")
+    finally:
+        os.unlink(db_path)
+
+
 def test_approve_user_keeps_existing_api_key():
     from auth import Auth
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -1245,11 +1274,11 @@ def test_chat_html_has_model_dropdown():
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
     assert 'id="modelsel"' in CHAT_HTML, "Model select element missing"
     assert "claude-sonnet-4-6" in CHAT_HTML, "Sonnet model option missing"
-    assert "claude-opus-4-6" in CHAT_HTML, "Opus model option missing"
+    assert "claude-opus-4-7" in CHAT_HTML, "Opus model option missing"
     assert "claude-haiku-4-5-20251001" in CHAT_HTML, "Haiku model option missing"
     # Sonnet should be the first (default) option
     sonnet_pos = CHAT_HTML.index("claude-sonnet-4-6")
-    opus_pos = CHAT_HTML.index("claude-opus-4-6")
+    opus_pos = CHAT_HTML.index("claude-opus-4-7")
     haiku_pos = CHAT_HTML.index("claude-haiku-4-5-20251001")
     assert sonnet_pos < opus_pos, "Sonnet should be first option (default)"
     assert opus_pos < haiku_pos, "Opus should be second option"
@@ -1449,7 +1478,7 @@ def test_cli_agent_model_map():
     # Import the map directly — chat_agent_cli has side effects but _MODEL_CLI_MAP is safe
     # since it's defined before the main() call
     expected = {
-        "claude-opus-4-6": "opus",
+        "claude-opus-4-7": "opus",
         "claude-sonnet-4-6": "sonnet",
         "claude-haiku-4-5-20251001": "haiku",
     }
@@ -1597,6 +1626,7 @@ if __name__ == "__main__":
         ("auth: cleanup_expired_tokens", test_cleanup_expired_tokens),
         ("auth: openrouter budget tracking", test_openrouter_budget_tracking),
         ("auth: openrouter token usage tracking", test_openrouter_token_usage_tracking),
+        ("auth: create_pending_user reflects trigger", test_create_pending_user_returns_post_trigger_state),
         ("auth: approve_user keeps existing API key", test_approve_user_keeps_existing_api_key),
         ("chat_agent_cli: _parse_version", test_parse_version),
         ("web: new handlers importable", test_web_imports),

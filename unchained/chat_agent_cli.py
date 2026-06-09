@@ -100,14 +100,28 @@ RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
 CWD = os.path.expanduser("~/unchained-agent/unchained")
 CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
 CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
-DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.1-codex-mini")
+DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
-CODEX_MAX_RUNTIME_S = int(os.environ.get("CODEX_MAX_RUNTIME_S", "0"))
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
 if KEY:
     AGENT_ID = f"claude-{hashlib.sha256(KEY.encode()).hexdigest()[:8]}"
+
+
+def _sanitize_bridge_profile(name: str) -> str:
+    name = str(name or "").strip() or "default"
+    name = name.replace(" ", "_").replace(".", "_")
+    name = re.sub(r"[^a-zA-Z0-9_-]", "", name)
+    return name[:32] or "default"
+
+
+BRIDGE_PROFILE = _sanitize_bridge_profile(os.environ.get("CDP_PROFILE", "default"))
+# Default-profile bridges intentionally use the account-scoped agent ID; only
+# named bridge profiles receive a relay suffix.
+BRIDGE_AGENT_ID = (
+    AGENT_ID if not AGENT_ID or BRIDGE_PROFILE == "default" else f"{AGENT_ID}-{BRIDGE_PROFILE}"
+)
 
 # Check if CLAUDE.md exists (Claude Code auto-loads it from CWD or parent dirs)
 _claude_md_found = (
@@ -219,6 +233,23 @@ def _load_claude_session() -> dict:
     """Load saved claude session mapping from the active slot."""
     data = _load_chat()
     return data.get("claude_session", {})
+
+
+def _claude_session_exists(claude_sid: str) -> bool:
+    """Return True if Claude CLI's local JSONL for this session id is still on disk.
+
+    Without this check, calling `claude --resume <stale-id>` causes Claude to
+    silently start a fresh session (with no prior context). The agent then
+    saves the new id over the stale one and the conversation appears to
+    "forget" everything. See bug investigation 2026-04-26 ("Chat C" context
+    loss in slot 3).
+    """
+    if not claude_sid:
+        return False
+    project_dir = CWD.replace("/", "-")
+    return os.path.exists(
+        os.path.expanduser(f"~/.claude/projects/{project_dir}/{claude_sid}.jsonl")
+    )
 
 
 def _save_codex_session(chat_session_id: str, codex_sid: str, model: str = ""):
@@ -1312,10 +1343,10 @@ def _make_emitter(ws, sid: str, req_id: str):
     return emit
 
 
-def check_chrome_bridge() -> bool:
+def check_chrome_bridge(cdp_agent_id: str = "") -> bool:
     """Test that chrome_bridge.py is connected to the relay."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     try:
@@ -1340,7 +1371,7 @@ def check_chrome_bridge() -> bool:
 
 # Map Anthropic model IDs to Claude Code CLI model names
 _MODEL_CLI_MAP = {
-    "claude-opus-4-6": "opus",
+    "claude-opus-4-7": "opus",
     "claude-sonnet-4-6": "sonnet",
     "claude-haiku-4-5-20251001": "haiku",
 }
@@ -1403,6 +1434,7 @@ async def handle_message_claude(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -1415,6 +1447,14 @@ async def handle_message_claude(
     _append_message("user", user_text)
 
     claude_sid = claude_sessions.get(sid)
+    if claude_sid and not _claude_session_exists(claude_sid):
+        log.info(
+            "[%s] Saved Claude session %s no longer on disk; treating as fresh",
+            sid, claude_sid[:12],
+        )
+        claude_sessions.pop(sid, None)
+        _context_injected.discard((sid, "claude"))
+        claude_sid = None
     is_resume = claude_sid is not None
 
     # Context fallback: if no resume session but slot has history, inject summary
@@ -1447,7 +1487,7 @@ async def handle_message_claude(
     log.info("  Calling Claude (model=%s)%s...", cli_model, f"  (resume {claude_sid[:12]})" if is_resume else " (new)")
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
@@ -1848,6 +1888,7 @@ async def handle_message_claude(
                 user_text,
                 model,
                 tab_id=tab_id,
+                cdp_agent_id=cdp_agent_id,
                 scheduler_armed=scheduler_armed,
                 scheduler_grant_id=scheduler_grant_id,
                 req_id=req_id,
@@ -1869,6 +1910,7 @@ async def handle_message_codex(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -1924,7 +1966,7 @@ async def handle_message_codex(
     )
 
     env = dict(os.environ)
-    env["CDP_AGENT_ID"] = AGENT_ID
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
     env["CDP_RELAY_HOST"] = RELAY_HOST
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
@@ -1988,34 +2030,8 @@ async def handle_message_codex(
     codex_tool_items: dict[str, tuple[str, str]] = {}
     codex_tool_start_times: dict[str, float] = {}  # item_id -> monotonic start
     SEARCH_TIMEOUT_S = float(os.environ.get("SEARCH_TIMEOUT_S", "60"))
-    timed_out = False
-    deadline = time.monotonic() + CODEX_MAX_RUNTIME_S if CODEX_MAX_RUNTIME_S > 0 else None
 
-    while True:
-        read_timeout = 1.0
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                break
-            read_timeout = min(read_timeout, max(0.05, remaining))
-        # Check for stalled search tools
-        if SEARCH_TIMEOUT_S > 0 and codex_tool_start_times:
-            now = time.monotonic()
-            for _tid, _tstart in list(codex_tool_start_times.items()):
-                elapsed = now - _tstart
-                if elapsed > SEARCH_TIMEOUT_S:
-                    tool_name = codex_tool_items.get(_tid, ("search", ""))[0]
-                    log.info("[%s] Search tool %s stalled after %.0fs, killing subprocess", sid, tool_name, elapsed)
-                    timed_out = True
-                    error_text = f"Search timed out after {int(elapsed)}s — please try again"
-                    break
-            if timed_out:
-                break
-        try:
-            raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=read_timeout)
-        except asyncio.TimeoutError:
-            continue
+    async for raw_line in proc.stdout:
         if not raw_line:
             break
         line = raw_line.decode(errors="replace").strip()
@@ -2166,23 +2182,7 @@ async def handle_message_codex(
                 error_text = msg.strip()
             continue
 
-    if timed_out:
-        if not error_text:
-            error_text = f"timed out after {CODEX_MAX_RUNTIME_S}s"
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except Exception:
-            proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except Exception:
-                proc.kill()
-            await proc.wait()
-    else:
-        await proc.wait()
+    await proc.wait()
 
     # Preferred fallback: Codex CLI can write the final assistant text to a file.
     if not response:
@@ -2198,9 +2198,6 @@ async def handle_message_codex(
     if not response and streamed_text:
         response = streamed_text.strip()
 
-    if timed_out and not response:
-        response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
-
     if proc.returncode and proc.returncode < 0:
         proc_pid = getattr(proc, "pid", None)
         was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
@@ -2215,11 +2212,8 @@ async def handle_message_codex(
                 pass
             return
         if not response:
-            if timed_out:
-                response = error_text or f"Codex CLI timed out after {CODEX_MAX_RUNTIME_S}s"
-            else:
-                sig = -proc.returncode
-                response = f"Codex CLI terminated unexpectedly (signal {sig})."
+            sig = -proc.returncode
+            response = f"Codex CLI terminated unexpectedly (signal {sig})."
 
     if not response:
         stderr_text = (await proc.stderr.read()).decode(errors="replace").strip()
@@ -2272,6 +2266,7 @@ async def handle_message(
     user_text: str,
     model: str = "",
     tab_id: str = "auto",
+    cdp_agent_id: str = "",
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
@@ -2292,6 +2287,7 @@ async def handle_message(
             user_text,
             model,
             tab_id=tab_id,
+            cdp_agent_id=cdp_agent_id,
             scheduler_armed=scheduler_armed,
             scheduler_grant_id=scheduler_grant_id,
             req_id=req_id,
@@ -2312,6 +2308,7 @@ async def handle_message(
         user_text,
         model,
         tab_id=tab_id,
+        cdp_agent_id=cdp_agent_id,
         scheduler_armed=scheduler_armed,
         scheduler_grant_id=scheduler_grant_id,
         req_id=req_id,
@@ -2326,6 +2323,8 @@ async def main():
 
     # Preflight: verify CLAUDE.md, version, and chrome_bridge
     print(f"Agent: {AGENT_ID}")
+    if BRIDGE_AGENT_ID and BRIDGE_AGENT_ID != AGENT_ID:
+        print(f"Browser bridge: {BRIDGE_AGENT_ID} (profile={BRIDGE_PROFILE})")
     if _claude_md_found:
         print("CLAUDE.md: loaded")
     else:
@@ -2337,7 +2336,7 @@ async def main():
         print(f"\n  {update_msg}\n")
 
     print("Checking Chrome bridge connectivity...")
-    if not check_chrome_bridge():
+    if not check_chrome_bridge(BRIDGE_AGENT_ID):
         print("WARNING: Chrome bridge offline — browser tools will fail.")
         print("The agent will still work with WebFetch/WebSearch only.\n")
     if not _cli_binary_available(CLAUDE_BIN):
@@ -2370,6 +2369,8 @@ async def main():
                     "client_version": _local_version(),
                     "remote_update": True,
                     "remote_research_desk_install": _remote_research_desk_install_supported(),
+                    "bridge_profile": BRIDGE_PROFILE,
+                    "bridge_agent_id": BRIDGE_AGENT_ID,
                 },
             }))
             resp = json.loads(await ws.recv())
@@ -2383,6 +2384,7 @@ async def main():
                     user_text = msg["message"]
                     msg_model = msg.get("model", "")
                     msg_tab_id = msg.get("tab_id", "auto")
+                    msg_cdp_agent_id = str(msg.get("agent_id") or BRIDGE_AGENT_ID or AGENT_ID)
                     # Sync active slot from the UI so messages go to the
                     # conversation the user is actually viewing.
                     msg_slot = msg.get("slot")
@@ -2418,6 +2420,7 @@ async def main():
                             user_text,
                             msg_model,
                             tab_id=msg_tab_id,
+                            cdp_agent_id=msg_cdp_agent_id,
                             scheduler_armed=msg_scheduler_armed,
                             scheduler_grant_id=msg_scheduler_grant_id,
                             req_id=msg_req_id,

@@ -24,7 +24,11 @@ async def handle_provision_profiles(request: web.Request) -> web.Response:
     profiles = signup_agent.list_chrome_profiles()
 
     if not profiles:
-        agent_id = auth_info.get("agent_id", "")
+        try:
+            bridge_info = await core._resolve_bridge_agent(auth_info)
+            agent_id = bridge_info.get("bridge_agent_id") or auth_info.get("agent_id", "")
+        except Exception:
+            agent_id = auth_info.get("agent_id", "")
         if agent_id:
             relay_host, relay_port = core._parse_relay()
             profiles = await core.provision_helpers.fetch_relay_profiles(
@@ -53,9 +57,9 @@ def spawn_provider_agent(
         return "/chat-claude"
     if provider == "codex-sdk":
         core._spawn_codex_sdk_agent(user_id, unchained_key, provider_key)
-        return "/chat-codex"
+        return "/local?provider=codex-sdk"
     if provider == "codex-cli":
-        return "/chat-codex?model=codex-cli:gpt-5.1-codex-mini"
+        return "/local?provider=codex-cli"
     return None
 
 

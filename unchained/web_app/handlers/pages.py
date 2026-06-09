@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urlsplit
 
 from aiohttp import web
 
 
 from web_app.core import get_core as _core
-from web_app.templates import FIRST_LOOK_PREVIEW_HTML
+from web_app.research_desk_page import build_research_desk_html as _build_research_desk_html
+from web_app.templates import FIRST_LOOK_PREVIEW_HTML, UNBROWSER_PAGE_HTML
 
 
 async def handle_install_page(request: web.Request) -> web.Response:
@@ -45,6 +45,14 @@ async def handle_mcp_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_unbrowser_page(request: web.Request) -> web.Response:
+    """Serve the public unbrowser landing page."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.inject_google_client_id(UNBROWSER_PAGE_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
 async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     """Serve markdown-rendered MCP setup + route-plan docs."""
     core = _core()
@@ -57,327 +65,6 @@ def _build_first_look_preview_html(*, prompt_limit: int, remaining: int) -> str:
     html = html.replace("__FIRST_LOOK_GUEST_LIMIT__", str(max(1, int(prompt_limit))))
     html = html.replace("__FIRST_LOOK_GUEST_REMAINING__", str(max(0, int(remaining))))
     return html
-
-
-def _safe_research_desk_sign_in_url(value: str) -> str:
-    text = str(value or "/trial").strip()
-    if not text:
-        return "/trial"
-    parts = urlsplit(text)
-    if parts.scheme or parts.netloc:
-        return "/trial"
-    if not text.startswith("/") or text.startswith("//"):
-        return "/trial"
-    return text
-
-
-def _build_research_desk_html(*, authenticated: bool, sign_in_url: str = "/trial") -> str:
-    auth_literal = "true" if authenticated else "false"
-    install_label = (
-        "Install / Update Research Desk"
-        if authenticated
-        else "Sign In to Install Research Desk"
-    )
-    install_card_copy = (
-        "Use <strong>Install / Update Research Desk</strong> above to install the package and ask the local client to run setup, start the bridge, and start the local desk automatically."
-        if authenticated
-        else "Sign in first, then use <strong>Sign In to Install Research Desk</strong> above to install the package onto this machine through the already-running local client."
-    )
-    sign_in_url_literal = json.dumps(_safe_research_desk_sign_in_url(sign_in_url))
-    html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Research Desk | Unchained</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <style>
-    :root{--bg:#08111b;--panel:#10202b;--panel2:#132733;--line:rgba(183,205,214,0.16);--text:#edf4f5;--muted:#9ab0b7;--accent:#7be0b8;--accent2:#f4c55c}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);font-family:"Iowan Old Style","Palatino Linotype","Book Antiqua",serif;background:radial-gradient(circle at top left, rgba(123,224,184,0.12), transparent 32%),radial-gradient(circle at top right, rgba(244,197,92,0.10), transparent 24%),linear-gradient(180deg,#071018 0%,#08111b 55%,#050a0f 100%)}
-    .shell{max-width:1160px;margin:0 auto;padding:32px 18px 64px}.hero,.grid{display:grid;gap:18px}.hero{grid-template-columns:1.15fr 0.85fr;margin-bottom:18px}.grid{grid-template-columns:0.92fr 1.08fr}
-    .panel{border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg, rgba(19,39,51,0.94), rgba(10,20,27,0.94));padding:22px;box-shadow:0 20px 70px rgba(0,0,0,0.28);backdrop-filter:blur(10px)}
-    .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}.eyebrow::before{content:"";width:10px;height:10px;border-radius:999px;background:var(--accent);box-shadow:0 0 18px rgba(123,224,184,0.55)}
-    h1{margin:0 0 10px;font-size:clamp(32px,5vw,56px);line-height:0.96;letter-spacing:-0.04em}h2{margin:0 0 10px;font-size:28px;line-height:1.05;letter-spacing:-0.03em}p{margin:0;color:var(--muted);line-height:1.6}
-    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.btn,.pill{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;text-decoration:none}
-    .btn{padding:12px 18px;border:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}.btn.primary{background:linear-gradient(90deg,var(--accent),#a8f7d9);color:#062018;border:none}.btn.secondary{background:rgba(255,255,255,0.04);color:var(--text)}.btn.disabled{opacity:0.45;pointer-events:none;cursor:default}
-    .chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.pill{padding:8px 12px;border:1px solid var(--line);background:rgba(255,255,255,0.03);color:var(--muted);font-size:12px}
-    .status-shell,.capsule-list{display:grid;gap:12px}.status-card,.capsule-card,.watch-card{border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,0.02)}
-    .status-card strong{display:block;margin-bottom:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent2)}
-    .capsule-card h3,.watch-card h3{margin:0 0 6px;font-size:20px}.capsule-meta,.watch-meta{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.status-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.muted-note{margin-top:12px;font-size:13px;color:var(--muted)}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:6px}
-    .stage-rail{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:12px 0}.stage-step{border:1px solid var(--line);border-radius:14px;padding:10px 8px;background:rgba(255,255,255,0.02);min-height:62px}.stage-step strong,.watch-stat strong{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase}.stage-step span{display:block;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.3}.stage-step.done{border-color:rgba(123,224,184,0.34);background:rgba(123,224,184,0.08)}.stage-step.done strong{color:var(--accent)}.stage-step.active{border-color:rgba(244,197,92,0.48);background:rgba(244,197,92,0.10)}.stage-step.active strong{color:var(--accent2)}.watch-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}.watch-stat{border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(255,255,255,0.02)}.watch-stat em{display:block;margin-top:6px;color:var(--text);font-style:normal;font-size:18px;line-height:1.1}.watch-stat small{display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.35}
-    .watch-card{display:none}.watch-card.visible{display:block}
-    @media (max-width:900px){.hero,.grid{grid-template-columns:1fr}.stage-rail,.watch-stats{grid-template-columns:1fr 1fr}}
-    @media (max-width:640px){.stage-rail,.watch-stats{grid-template-columns:1fr}}
-  </style>
-</head>
-<body>
-  <main class="shell">
-    <section class="hero">
-      <div class="panel">
-        <div class="eyebrow">Research Desk</div>
-        <h1>From first look to a local dataframe and notebook.</h1>
-        <p>Research Desk is the local product for turning a live web question into a shaped object, then opening <code>Lab Notes</code> with the right dataframe already loaded. This page only checks whether your local desk is running and what it has already shaped.</p>
-        <div class="chips">
-          <span class="pill">local-first</span>
-          <span class="pill">browser to dataframe</span>
-          <span class="pill">pyreplab backed</span>
-        </div>
-        <div class="actions">
-          <button id="install-local-research-desk" class="btn secondary" type="button">__RESEARCH_DESK_INSTALL_LABEL__</button>
-          <a class="btn secondary" href="/install">Install Local Agent</a>
-          <a id="open-local-desk" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Local Desk</a>
-          <button id="connect-local-desk" class="btn secondary disabled" type="button" aria-disabled="true">Connect to Local Desk</button>
-          <button id="create-local-mission" class="btn secondary disabled" type="button" aria-disabled="true">Create Mission in Local Desk</button>
-          <a class="btn secondary" href="/first-look">Back to First Look</a>
-          <a class="btn secondary" href="/mcp-guide">MCP Guide</a>
-        </div>
-        <p id="connect-note" class="muted-note">Hosted connection is available after the local desk is detected.</p>
-      </div>
-      <div class="panel">
-        <div class="eyebrow">Local Setup</div>
-        <div class="status-shell">
-          <div class="status-card"><strong>1. Install the local agent</strong><p>Use <a href="/install" style="color:var(--accent)">the installer flow</a> if the Unchained local client is not installed on this machine yet.</p></div>
-          <div class="status-card"><strong>2. Install Research Desk</strong><p>__RESEARCH_DESK_INSTALL_CARD_COPY__</p></div>
-          <div class="status-card"><strong>3. Automatic bootstrap</strong><p>After install starts, the local client tries to run setup, start the browser bridge, and start the local desk for you.</p></div>
-          <div class="status-card"><strong>4. Manual fallback</strong><p>If automatic bootstrap does not finish, run <code>python3 -m unchained_pyreplab bridge-start</code> and then <code>python3 -m unchained_pyreplab serve --open --reload</code>.</p></div>
-          <div class="status-card"><strong>5. Return here</strong><p>This page probes <code>127.0.0.1:8766</code> for the local status and recent mission summaries.</p></div>
-        </div>
-      </div>
-    </section>
-    <section class="grid">
-      <div class="panel">
-        <div class="eyebrow">Local Status</div>
-        <h2 id="status-title">Checking for a running desk...</h2>
-        <p id="status-copy">Trying <code>http://127.0.0.1:8766/web/research-desk/status</code>.</p>
-        <div id="status-chips" class="chips"></div>
-        <div class="status-actions">
-          <button id="retry-local-desk" class="btn secondary" type="button">Check Again</button>
-        </div>
-        <p id="status-note" class="muted-note">This page will keep checking for a local desk for about one minute.</p>
-      </div>
-      <div class="panel">
-        <div class="eyebrow">Recent Missions</div>
-        <h2>Your local desk stays local.</h2>
-        <p style="margin-bottom:16px">This hosted page only reads the local summary surface. It does not execute notebook cells or mutate capsules.</p>
-        <div id="mission-watch" class="watch-card">
-          <strong style="display:block;margin-bottom:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Current handoff</strong>
-          <h3 id="mission-watch-title">No hosted mission yet.</h3>
-          <p id="mission-watch-copy" class="muted">Create a local Mission from the current first-look prompt to watch it progress here.</p>
-          <div id="mission-watch-stage-rail" class="stage-rail"></div>
-          <div id="mission-watch-stats" class="watch-stats"></div>
-          <div id="mission-watch-meta" class="watch-meta"></div>
-          <div class="actions" style="margin-top:12px">
-            <a id="mission-watch-preferred-link" class="btn primary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Current Best View</a>
-            <a id="mission-watch-mission-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Mission</a>
-            <a id="mission-watch-lab-link" class="btn secondary disabled" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" aria-disabled="true" tabindex="-1">Open Lab Notes</a>
-            <button id="run-local-next-step" class="btn secondary disabled" type="button" aria-disabled="true">Run Next Step</button>
-          </div>
-        </div>
-        <div id="capsule-list" class="capsule-list"><div class="capsule-card"><p>Waiting for local Research Desk...</p></div></div>
-      </div>
-    </section>
-  </main>
-  <script>
-    const RESEARCH_DESK_INSTALL_AUTHENTICATED = __RESEARCH_DESK_INSTALL_AUTHENTICATED__;
-    const RESEARCH_DESK_SIGN_IN_URL = __RESEARCH_DESK_SIGN_IN_URL__;
-    const FALLBACK_LOCAL_URL = 'http://127.0.0.1:8766/';
-    const STATUS_URL = FALLBACK_LOCAL_URL + 'web/research-desk/status';
-    const CAPSULES_URL = FALLBACK_LOCAL_URL + 'web/research-desk/capsules?limit=8';
-    const LOCAL_PROBE_TIMEOUT_MS = 5000;
-    const RESEARCH_DESK_LAUNCHER_FALLBACK = 'python3 -m unchained_pyreplab';
-    const POLL_INTERVAL_MS = 3000;
-    const MAX_AUTO_POLL_ATTEMPTS = 20;
-    const HANDSHAKE_POLL_INTERVAL_MS = 1500;
-    const MAX_HANDSHAKE_POLL_ATTEMPTS = 40;
-    const MISSION_WATCH_POLL_INTERVAL_MS = 2500;
-    const MAX_MISSION_WATCH_ATTEMPTS = 20;
-    const MAX_IDENTICAL_MISSION_STATES = 6;
-    const MAX_TRANSIENT_HANDSHAKE_NOT_READY = 5;
-    const FIRST_LOOK_PROMPT_KEY = 'unchained_first_look_last_prompt';
-    const FIRST_LOOK_SESSION_KEY = 'unchained_first_look_last_session';
-    const HANDSHAKE_TOKEN_KEY = 'research-desk-handshake-token';
-    const HANDSHAKE_TOKEN_EXPIRES_KEY = 'research-desk-handshake-token-expires-at';
-    const PENDING_HANDSHAKE_KEY = 'research-desk-pending-handshake';
-    const MISSION_WATCH_URL_KEY = 'research-desk-mission-watch-url';
-    const MISSION_WATCH_STATE_KEY = 'research-desk-mission-watch-state';
-    const WATCH_STAGE_ORDER = [['planning','Mission'],['scouting','Scout'],['capturing','Gather'],['shaping','Shape'],['analysis','Lab Notes']];
-    const MAX_HANDOFF_PROMPT_CHARS = 4000;
-    const MAX_URL_PROMPT_CHARS = 500;
-    const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
-    let deskPollAttempts = 0;
-    let deskPollTimer = null;
-    let deskLoadInFlight = false;
-    let latestDeskRequestId = 0;
-    let deskWasDetected = false;
-    let latestDeskStatus = null;
-    let handshakePollTimer = null;
-    let approvedHandshakeToken = '';
-    let handshakeInFlight = false;
-    let missionWatchTimer = null;
-    let missionWatchUrl = '';
-    let missionWatchAttempts = 0;
-    let missionWatchStableCount = 0;
-    let missionWatchLastSignature = '';
-    let missionWatchVisible = false;
-    let missionCanAdvance = false;
-    let pendingHandshakeState = null;
-    let missionWatchSnapshot = null;
-    let handshakeNotReadyCount = 0;
-    let sessionRestored = false;
-    let installInFlight = false;
-    let installRetryTimer = null;
-    let installRetryAttempts = 0;
-    const INSTALL_UPDATE_RETRY_INTERVAL_MS = 5000;
-    const MAX_INSTALL_UPDATE_RETRIES = 12;
-    function updateInstallButton(){const button=document.getElementById('install-local-research-desk');if(!button) return;if(installInFlight){button.textContent='Preparing Research Desk...';button.classList.remove('primary');button.classList.add('secondary');button.disabled=true;button.setAttribute('aria-disabled','true');return;}if(RESEARCH_DESK_INSTALL_AUTHENTICATED){button.textContent='Install / Update Research Desk';button.classList.remove('primary');button.classList.add('secondary');button.disabled=false;button.removeAttribute('aria-disabled');return;}button.textContent='Sign In to Install Research Desk';button.classList.remove('secondary');button.classList.add('primary');button.disabled=false;button.removeAttribute('aria-disabled');}
-    function chip(text){const span=document.createElement('span');span.className='pill';span.textContent=text;return span;}
-    function safeLocalUrl(value){try{const url=new URL(String(value||FALLBACK_LOCAL_URL));if(url.protocol!=='http:'&&url.protocol!=='https:') return FALLBACK_LOCAL_URL;const host=url.hostname.toLowerCase();/* any localhost port is accepted intentionally */if(host!=='127.0.0.1'&&host!=='localhost') return FALLBACK_LOCAL_URL;return url.toString();}catch(_err){return FALLBACK_LOCAL_URL;}}
-    function safeOptionalLocalUrl(value){if(value===undefined||value===null||String(value).trim()==='') return '';try{const url=new URL(String(value));if(url.protocol!=='http:'&&url.protocol!=='https:') return '';const host=url.hostname.toLowerCase();/* any localhost port is accepted intentionally */if(host!=='127.0.0.1'&&host!=='localhost') return '';return url.toString();}catch(_err){return '';}}
-    function sanitizeBearerToken(value){return String(value||'').replace(/[\\r\\n]+/g,'').replace(/[^\\x21-\\x7E]/g,'').trim();}
-    function normalizeHandoffPrompt(value){return String(value||'').replace(/[\\u0000-\\u001f\\u007f]+/g,' ').trim().slice(0,MAX_HANDOFF_PROMPT_CHARS);}
-    function normalizeSourceSessionId(value){const text=String(value||'').trim();return SESSION_ID_RE.test(text)?text:'';}
-    /* Reconnect recovery keeps the short-lived hosted handshake token in sessionStorage so reloads can resume locally. This accepts same-origin script access in exchange for tab-scoped recovery. */
-    function sessionValue(key){try{return window.sessionStorage.getItem(key)||'';}catch(_err){return '';}}
-    function setSessionValue(key, value){try{if(value===undefined||value===null||String(value)===''){window.sessionStorage.removeItem(key);}else{window.sessionStorage.setItem(key, String(value));}}catch(_err){}}
-    function sessionJson(key){try{const raw=window.sessionStorage.getItem(key);return raw ? JSON.parse(raw) : null;}catch(_err){return null;}}
-    function setSessionJson(key, value){try{if(!value){window.sessionStorage.removeItem(key);}else{window.sessionStorage.setItem(key, JSON.stringify(value));}}catch(_err){}}
-    function watchStageIndex(data){const stage=String(data?.stage||'planning');if(Boolean(data?.lab_ready)||stage==='analysis') return 4;const idx=WATCH_STAGE_ORDER.findIndex((item)=>item[0]===stage);return idx>=0 ? idx : 0;}
-    function statCard(label, value, hint){const card=document.createElement('div');card.className='watch-stat';const title=document.createElement('strong');title.textContent=label;const primary=document.createElement('em');primary.textContent=value;const sub=document.createElement('small');sub.textContent=hint;card.appendChild(title);card.appendChild(primary);card.appendChild(sub);return card;}
-    function finiteNumber(value, fallback){const num=Number(value);return Number.isFinite(num) ? num : fallback;}
-    function currentPromptFromContext(){try{const qs=new URLSearchParams(window.location.search);const prompt=normalizeHandoffPrompt(qs.get('prompt')||'');if(prompt){try{const next=new URL(window.location.href);next.searchParams.delete('prompt');next.searchParams.delete('session_id');window.history.replaceState({},'',next.pathname+(next.searchParams.toString()?('?'+next.searchParams.toString()):''));}catch(_err){}return prompt;}return normalizeHandoffPrompt(window.localStorage.getItem(FIRST_LOOK_PROMPT_KEY)||'');}catch(_err){return '';}}
-    function currentSourceSessionId(){try{const qs=new URLSearchParams(window.location.search);const value=normalizeSourceSessionId(qs.get('session_id')||'');if(value) return value;return normalizeSourceSessionId(window.localStorage.getItem(FIRST_LOOK_SESSION_KEY)||'');}catch(_err){return '';}}
-    function computeMissionAdvanceReady(){return Boolean(approvedHandshakeToken)&&Boolean(missionWatchVisible)&&Boolean(missionCanAdvance)&&Boolean(safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_advance_url));}
-    function clearApprovedHandshake(){approvedHandshakeToken='';setSessionValue(HANDSHAKE_TOKEN_KEY,'');setSessionValue(HANDSHAKE_TOKEN_EXPIRES_KEY,'');}
-    function persistApprovedHandshake(token, expiresAtEpoch){const safeToken=sanitizeBearerToken(token);const expiresAt=Number(expiresAtEpoch||0);if(!safeToken||!Number.isFinite(expiresAt)||expiresAt<=0){clearApprovedHandshake();return '';}approvedHandshakeToken=safeToken;setSessionValue(HANDSHAKE_TOKEN_KEY,safeToken);setSessionValue(HANDSHAKE_TOKEN_EXPIRES_KEY,String(expiresAt));return safeToken;}
-    function restoreApprovedHandshake(){const safeToken=sanitizeBearerToken(sessionValue(HANDSHAKE_TOKEN_KEY));const expiresAt=Number(sessionValue(HANDSHAKE_TOKEN_EXPIRES_KEY)||0);if(!safeToken||!Number.isFinite(expiresAt)||expiresAt<=Date.now()/1000){clearApprovedHandshake();return '';}approvedHandshakeToken=safeToken;return safeToken;}
-    function clearPendingHandshake(){handshakeInFlight=false;pendingHandshakeState=null;setSessionJson(PENDING_HANDSHAKE_KEY,null);}
-    function persistPendingHandshake(statusUrl, requestId){const safeStatusUrl=safeOptionalLocalUrl(statusUrl);const safeRequestId=String(requestId||'').trim();if(!safeStatusUrl||!safeRequestId){clearPendingHandshake();return;}pendingHandshakeState={statusUrl:safeStatusUrl,requestId:safeRequestId,startAttempt:0};setSessionJson(PENDING_HANDSHAKE_KEY,{status_url:safeStatusUrl,request_id:safeRequestId,stored_at_epoch:Date.now()/1000});}
-    function restorePendingHandshake(){const saved=sessionJson(PENDING_HANDSHAKE_KEY);const safeStatusUrl=safeOptionalLocalUrl(saved?.status_url||'');const safeRequestId=String(saved?.request_id||'').trim();const storedAtEpoch=Number(saved?.stored_at_epoch||0);if(!safeStatusUrl||!safeRequestId){clearPendingHandshake();return null;}handshakeInFlight=true;const elapsedSeconds=Number.isFinite(storedAtEpoch)&&storedAtEpoch>0 ? Math.max(0, (Date.now()/1000)-storedAtEpoch) : 0;const startAttempt=Math.min(Math.floor(elapsedSeconds/(HANDSHAKE_POLL_INTERVAL_MS/1000)), MAX_HANDSHAKE_POLL_ATTEMPTS);pendingHandshakeState={statusUrl:safeStatusUrl,requestId:safeRequestId,startAttempt};return pendingHandshakeState;}
-    function clearMissionWatchState(resetView){setSessionValue(MISSION_WATCH_URL_KEY,'');setSessionJson(MISSION_WATCH_STATE_KEY,null);missionWatchUrl='';missionWatchSnapshot=null;missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';if(resetView) renderMissionWatch(null);}
-    function persistMissionWatchState(url, data){const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){clearMissionWatchState(false);return;}const previousUrl=missionWatchUrl;missionWatchUrl=safeUrl;setSessionValue(MISSION_WATCH_URL_KEY,safeUrl);/* Preserve the existing snapshot while the watch URL stays the same; URL changes intentionally drop the old snapshot. */if(previousUrl!==safeUrl){missionWatchSnapshot=null;setSessionJson(MISSION_WATCH_STATE_KEY,null);}if(data&&data.ok){missionWatchSnapshot=data;setSessionJson(MISSION_WATCH_STATE_KEY,{url:safeUrl,data});}}
-    function restoreMissionWatchState(){const safeUrl=safeOptionalLocalUrl(sessionValue(MISSION_WATCH_URL_KEY));const saved=sessionJson(MISSION_WATCH_STATE_KEY);if(!safeUrl){clearMissionWatchState(false);return false;}missionWatchUrl=safeUrl;missionWatchSnapshot=saved&&saved.data&&saved.data.ok ? saved.data : null;if(missionWatchSnapshot){renderMissionWatch(missionWatchSnapshot);}return true;}
-    function restoreStoredDeskSession(){const pending=restorePendingHandshake();const restoredToken=restoreApprovedHandshake();const restoredWatch=restoreMissionWatchState();sessionRestored=Boolean(pending||restoredToken||restoredWatch);if(pending){setConnectNote('Resuming the pending local approval check from your last hosted session...');return;}if(restoredToken&&restoredWatch){setConnectNote('Restored the last local mission snapshot while reconnecting to Research Desk.');return;}if(restoredToken){setConnectNote('Restored the approved local connection. Rechecking Research Desk now.');return;}if(restoredWatch){setConnectNote('Restored the last local mission snapshot while reconnecting to Research Desk.');}}
-    function setMissionWatchLink(link, href, label, enabled){if(!link) return;link.textContent=label;link.href=enabled ? href : '#';link.classList.toggle('disabled', !enabled);link.setAttribute('aria-disabled', enabled ? 'false' : 'true');if(enabled){link.removeAttribute('tabindex');}else{link.setAttribute('tabindex','-1');}}
-    function renderMissionWatch(data){
-      const card=document.getElementById('mission-watch');
-      const title=document.getElementById('mission-watch-title');
-      const copy=document.getElementById('mission-watch-copy');
-      const stageRail=document.getElementById('mission-watch-stage-rail');
-      const stats=document.getElementById('mission-watch-stats');
-      const meta=document.getElementById('mission-watch-meta');
-      const preferredLink=document.getElementById('mission-watch-preferred-link');
-      const missionLink=document.getElementById('mission-watch-mission-link');
-      const labLink=document.getElementById('mission-watch-lab-link');
-      const nextButton=document.getElementById('run-local-next-step');
-      if(!card||!title||!copy||!stageRail||!stats||!meta||!preferredLink||!missionLink||!labLink||!nextButton) return;
-      if(!data||!data.ok){
-        missionWatchVisible=false;
-        missionCanAdvance=false;
-        card.classList.remove('visible');
-        missionWatchUrl='';
-        missionWatchSnapshot=null;
-        missionWatchAttempts=0;
-        missionWatchStableCount=0;
-        missionWatchLastSignature='';
-        stageRail.innerHTML='';
-        stats.innerHTML='';
-        setMissionWatchLink(preferredLink, '#', 'Open Current Best View', false);
-        setMissionWatchLink(missionLink, '#', 'Open Mission', false);
-        setMissionWatchLink(labLink, '#', 'Open Lab Notes', false);
-        nextButton.classList.add('disabled');
-        nextButton.setAttribute('aria-disabled','true');
-        nextButton.disabled=true;
-        if(missionWatchTimer){window.clearTimeout(missionWatchTimer);missionWatchTimer=null;}
-        return;
-      }
-      missionWatchVisible=true;
-      missionCanAdvance=Boolean(data.can_advance);
-      card.classList.add('visible');
-      title.textContent=String(data.capsule_name||'mission');
-      copy.textContent=String(data.blocked_reason||(data.advance_busy ? ('Running '+String(data.active_action_kind||data.autopilot_next_label||'next step')+' in the local desk.') : '')||data.autopilot_next_label||data.next_step||'Mission is progressing in the local desk.');
-      stageRail.innerHTML='';
-      const activeStageIndex=watchStageIndex(data);
-      const rowCount=finiteNumber(data.primary_row_count, 0);
-      const reviewedPageCount=finiteNumber(data.reviewed_page_count, 0);
-      const acceptedLikeFraction=finiteNumber(data.accepted_like_fraction, -1);
-      const qaLabel=acceptedLikeFraction >= 0 ? (Math.round(acceptedLikeFraction*100)+'%') : 'pending';
-      const qaHint=reviewedPageCount > 0 ? ('Reviewed '+reviewedPageCount+' pages') : 'No reviewed pages yet';
-      const statusHint=String(data.blocked_reason||'').trim() || 'Hosted watch is live';
-      WATCH_STAGE_ORDER.forEach((item, idx)=>{const stage=document.createElement('div');stage.className='stage-step '+(idx<activeStageIndex?'done':(idx===activeStageIndex?'active':'pending'));const label=document.createElement('strong');label.textContent=item[1];const detail=document.createElement('span');if(idx===activeStageIndex){detail.textContent=String(data.autopilot_next_label||data.next_step||data.readiness_status||'Current step');}else if(idx<activeStageIndex){detail.textContent='Completed';}else{detail.textContent='Waiting';}stage.appendChild(label);stage.appendChild(detail);stageRail.appendChild(stage);});
-      stats.innerHTML='';
-      stats.appendChild(statCard('Object', String(data.primary_object_name||'pending'), String(data.readiness_status||'planned')));
-      stats.appendChild(statCard('Rows', String(rowCount), String(data.advance_busy ? 'Local step still running' : 'Shaped rows so far')));
-      stats.appendChild(statCard('QA', qaLabel, qaHint));
-      stats.appendChild(statCard('Status', String(data.advance_busy ? 'running' : 'idle'), statusHint));
-      stats.appendChild(statCard('Next', String(data.autopilot_next_label||'Open local desk'), String(data.autopilot_next_stage||data.stage||'planning')));
-      const qaCounts=Object.entries(data.qa_status_counts||{}).filter((entry)=>Number(entry[1]||0)>0).slice(0,3).map((entry)=>String(entry[0])+': '+String(entry[1]));
-      stats.appendChild(statCard('Reviewed', String(reviewedPageCount), qaCounts.length ? qaCounts.join(' · ') : 'Waiting for reviewed pages'));
-      meta.innerHTML='';
-      const badges=[
-        String(data.stage||'planning'),
-        String(data.readiness_status||'planned'),
-        String(data.primary_object_name||'object pending'),
-        String(data.advance_busy ? 'running' : 'idle'),
-        String(rowCount+' rows'),
-        String(reviewedPageCount > 0 ? ('pages '+reviewedPageCount) : 'pages pending'),
-        String(acceptedLikeFraction >= 0 ? ('qa '+Math.round(acceptedLikeFraction*100)+'%') : 'qa pending'),
-      ];
-      badges.forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});
-      const missionUrl=safeOptionalLocalUrl(data.mission_url_abs||data.mission_url||'');
-      const labUrl=safeOptionalLocalUrl(data.lab_url_abs||data.capsule_url_abs||data.capsule_url||'');
-      const preferredUrl=safeOptionalLocalUrl(data.preferred_open_url_abs||(Boolean(data.lab_ready)?labUrl:'')||missionUrl||'');
-      const preferredLabel=String(data.preferred_open_label||(Boolean(data.lab_ready)&&Boolean(labUrl)?'Open Lab Notes':'Open Mission'));
-      setMissionWatchLink(preferredLink, preferredUrl||'#', preferredLabel, Boolean(preferredUrl));
-      setMissionWatchLink(missionLink, missionUrl||'#', 'Open Mission', Boolean(missionUrl));
-      setMissionWatchLink(labLink, labUrl||'#', 'Open Lab Notes', Boolean(labUrl)&&Boolean(data.lab_ready));
-      const nextReady=computeMissionAdvanceReady();
-      nextButton.classList.toggle('disabled',!nextReady);
-      nextButton.setAttribute('aria-disabled',nextReady?'false':'true');
-      nextButton.disabled=!nextReady;
-      nextButton.textContent=String(data.autopilot_next_label||'Run Next Step');
-    }
-    function scheduleMissionWatch(url){if(missionWatchTimer) window.clearTimeout(missionWatchTimer);const safeUrl=safeOptionalLocalUrl(url);if(!safeUrl){clearMissionWatchState(false);return;}if(missionWatchUrl!==safeUrl){missionWatchAttempts=0;missionWatchStableCount=0;missionWatchLastSignature='';}persistMissionWatchState(safeUrl, null);if(missionWatchAttempts>=MAX_MISSION_WATCH_ATTEMPTS){setConnectNote('Mission watch timed out. Open the local desk to continue from there.');return;}missionWatchTimer=window.setTimeout(async()=>{missionWatchTimer=null;missionWatchAttempts+=1;try{const resp=await fetch(safeUrl,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){if(resp.status>=500&&missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');return;}const data=await resp.json();renderMissionWatch(data);if(!data.ok){clearMissionWatchState(false);return;}persistMissionWatchState(safeUrl, data);const readiness=String(data.readiness_status||'');const signature=[String(data.stage||''),readiness,String(data.primary_row_count||0),String(data.next_step||''),String(data.autopilot_next_label||''),String(data.advance_busy||false)].join('|');if(Boolean(data.lab_ready)){/* Keep polling after Lab Notes becomes ready so the links and next-step state stay fresh while the local desk settles. */setConnectNote('This mission is ready for Lab Notes. Continue there or keep the local desk open for deeper analysis.');}else if(data.advance_busy){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');scheduleMissionWatch(safeUrl);return;}if(signature===missionWatchLastSignature){missionWatchStableCount+=1;}else{missionWatchLastSignature=signature;missionWatchStableCount=0;}if(['final_ready','blocked'].includes(readiness)) return;if(missionWatchStableCount>=MAX_IDENTICAL_MISSION_STATES){setConnectNote('Mission watch paused because the local state stopped changing. Open the local desk to continue.');return;}scheduleMissionWatch(safeUrl);}catch(_err){if(missionWatchUrl===safeUrl&&missionWatchAttempts<MAX_MISSION_WATCH_ATTEMPTS){scheduleMissionWatch(safeUrl);return;}setConnectNote('Mission watch stopped after repeated local status failures. Open the local desk to continue.');}},MISSION_WATCH_POLL_INTERVAL_MS);}
-    function setLaunchReady(ready, href){const link=document.getElementById('open-local-desk');if(!link) return;link.href=safeLocalUrl(href);link.classList.toggle('disabled', !ready);link.setAttribute('aria-disabled', ready ? 'false' : 'true');if(ready){link.removeAttribute('tabindex');}else{link.setAttribute('tabindex','-1');}}
-    function setConnectReady(ready){const button=document.getElementById('connect-local-desk');if(!button) return;const enabled=Boolean(ready)&&!handshakeInFlight;button.classList.toggle('disabled', !enabled);button.setAttribute('aria-disabled', enabled ? 'false' : 'true');button.disabled=!enabled;}
-    function setMissionCreateReady(ready){const button=document.getElementById('create-local-mission');if(!button) return;button.classList.toggle('disabled', !ready);button.setAttribute('aria-disabled', ready ? 'false' : 'true');button.disabled=!ready;}
-    function setMissionAdvanceReady(ready){const button=document.getElementById('run-local-next-step');if(!button) return;button.classList.toggle('disabled', !ready);button.setAttribute('aria-disabled', ready ? 'false' : 'true');button.disabled=!ready;}
-    function setConnectNote(text){const el=document.getElementById('connect-note');if(el) el.textContent=text;}
-    function setStatusNote(text){const el=document.getElementById('status-note');if(el) el.textContent=text;}
-    function resetCapsulesWaiting(text){const root=document.getElementById('capsule-list');if(!root) return;root.innerHTML='';const card=document.createElement('div');card.className='capsule-card';const body=document.createElement('p');body.textContent=text;card.appendChild(body);root.appendChild(card);}
-    async function fetchLocalJson(url){const resp=await fetch(url,{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS)});if(!resp.ok) throw new Error('local request failed');return await resp.json();}
-    function clearInstallRetry(){if(installRetryTimer){window.clearTimeout(installRetryTimer);installRetryTimer=null;}}
-    async function requestResearchDeskInstall(){const resp=await fetch('/web/chat/install-research-desk',{method:'POST',credentials:'include',cache:'no-store'});const data=await resp.json();if(resp.status===401){setConnectNote('Sign in to unchainedsky.com first, then retry the Research Desk install.');window.location.href=RESEARCH_DESK_SIGN_IN_URL;return {kind:'unauth'};}if(resp.status===409&&Boolean(data.update_required)){return {kind:'update_required',data};}if(resp.status===503||resp.status===504){return {kind:'retryable',data};}if(!resp.ok||!data.ok) throw new Error(String(data.error||'Research Desk install failed to start.'));return {kind:'installing',data};}
-    async function requestLocalClientUpdate(){const resp=await fetch('/web/chat/update-client',{method:'POST',credentials:'include',cache:'no-store'});const data=await resp.json();if(resp.status===401){setConnectNote('Sign in to unchainedsky.com first, then retry the local client update.');window.location.href=RESEARCH_DESK_SIGN_IN_URL;return {kind:'unauth'};}if(resp.status===409&&String(data.error||'').includes('already current')) return {kind:'already_current',data};if(!resp.ok||!data.ok) throw new Error(String(data.error||'Could not start the local client update.'));return {kind:'updating',data};}
-    function finishInstallFlow(message){installInFlight=false;clearInstallRetry();updateInstallButton();setConnectNote(message);}
-    function scheduleResearchDeskInstallRetry(){clearInstallRetry();if(installRetryAttempts>=MAX_INSTALL_UPDATE_RETRIES){finishInstallFlow('The local client update started, but Research Desk install could not be retried automatically yet. Retry Install / Update Research Desk once the local client reconnects.');return;}installRetryTimer=window.setTimeout(async()=>{installRetryTimer=null;installRetryAttempts+=1;try{const result=await requestResearchDeskInstall();if(result.kind==='installing'){const launcherPrefix=String(result.data.launcher_prefix||RESEARCH_DESK_LAUNCHER_FALLBACK).trim()||RESEARCH_DESK_LAUNCHER_FALLBACK;finishInstallFlow('Research Desk install started. The local client is running `'+launcherPrefix+' setup`, starting the browser bridge, starting the local desk automatically, and opening it locally when ready. Keep this page open while detection retries.');return;}if(result.kind==='retryable'||result.kind==='update_required'){setConnectNote('Waiting for the local client to finish updating and reconnect before retrying Research Desk install...');scheduleResearchDeskInstallRetry();return;}if(result.kind==='unauth'){finishInstallFlow('Sign in to unchainedsky.com first, then retry the Research Desk install.');return;}}catch(err){finishInstallFlow(String(err?.message||'Could not resume the Research Desk install after updating the local client.'));}},INSTALL_UPDATE_RETRY_INTERVAL_MS);}
-    function scheduleDeskProbe(){if(deskPollTimer||deskPollAttempts>=MAX_AUTO_POLL_ATTEMPTS||document.hidden) return;deskPollTimer=window.setTimeout(()=>{deskPollTimer=null;deskPollAttempts+=1;loadDeskState({silent:true});},POLL_INTERVAL_MS);}
-    function clearDeskProbe(){if(deskPollTimer){window.clearTimeout(deskPollTimer);deskPollTimer=null;}}
-    function renderMissingDeskState(){latestDeskStatus=null;missionWatchVisible=false;missionCanAdvance=false;const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');const chips=document.getElementById('status-chips');const hasRecoveryState=Boolean(approvedHandshakeToken||handshakeInFlight||missionWatchUrl||missionWatchSnapshot);title.textContent='Local Research Desk not detected yet.';copy.innerHTML='If the Unchained local client is not installed yet, use <a href="/install" style="color:var(--accent)">the installer flow</a>. If the local client is already running, use <strong>'+(RESEARCH_DESK_INSTALL_AUTHENTICATED?'Install / Update Research Desk':'Sign In to Install Research Desk')+'</strong> above, then start the local bridge and local desk on this machine and click <strong>Check Again</strong>.';chips.innerHTML='';chips.appendChild(chip('agent install: /install'));chips.appendChild(chip('1. python3 -m unchained_pyreplab bridge-start'));chips.appendChild(chip('2. python3 -m unchained_pyreplab serve --open --reload'));chips.appendChild(chip('3. keep this page open'));setLaunchReady(false, FALLBACK_LOCAL_URL);setConnectReady(false);setMissionCreateReady(false);setMissionAdvanceReady(false);if(handshakePollTimer){window.clearTimeout(handshakePollTimer);handshakePollTimer=null;}if(hasRecoveryState){setConnectNote('Local desk looks offline right now. The last mission snapshot is still shown below while this page keeps retrying.');}else{clearApprovedHandshake();clearPendingHandshake();clearMissionWatchState(true);setConnectNote(RESEARCH_DESK_INSTALL_AUTHENTICATED ? 'Hosted connection becomes available after the local desk is detected and ready.' : 'Sign in to unchainedsky.com first, then install Research Desk through your local client.');}setStatusNote(deskPollAttempts >= MAX_AUTO_POLL_ATTEMPTS ? 'Automatic checking paused. Install or start the local desk, then click Check Again.' : 'Still checking every few seconds for a local desk on this machine.');resetCapsulesWaiting('Waiting for a running local Research Desk before showing recent missions.');scheduleDeskProbe();}
-    function renderStatus(data){latestDeskStatus=data;deskWasDetected=true;clearDeskProbe();const title=document.getElementById('status-title');const copy=document.getElementById('status-copy');const chips=document.getElementById('status-chips');const launchUrl=safeLocalUrl(data.local_urls?.home);const configuredProvider=String(data.provider?.configured_provider||'unknown');const browserClient=String(data.provider?.browser_client||'');const trialStatus=String(data.trial?.status||'unknown');const launchReady=('launch_ready' in (data||{})) ? Boolean(data.launch_ready) : true;const handshakeStartUrl=safeOptionalLocalUrl(data.handshake?.start_url);const handshakeStatusUrl=safeOptionalLocalUrl(data.handshake?.status_url);const missionCreateUrl=safeOptionalLocalUrl(data.handshake?.actions?.mission_create_url);const handshakeReady=Boolean(data.handshake?.supported)&&launchReady&&Boolean(handshakeStartUrl)&&Boolean(handshakeStatusUrl);if(handshakeReady){handshakeNotReadyCount=0;}else{handshakeNotReadyCount+=1;if(handshakePollTimer){window.clearTimeout(handshakePollTimer);handshakePollTimer=null;}if(handshakeNotReadyCount>=MAX_TRANSIENT_HANDSHAKE_NOT_READY){clearApprovedHandshake();clearPendingHandshake();}}chips.innerHTML='';title.textContent=launchReady ? 'Local Research Desk detected.' : 'Local Research Desk found, but setup is incomplete.';copy.textContent='Hosted Unchained can see the local status surface. Use the local app for the full workflow and local notebook execution.';chips.appendChild(chip('provider: '+configuredProvider));chips.appendChild(chip('agent mode: '+String(data.provider?.agent_mode||'unknown')));if(browserClient) chips.appendChild(chip('browser client: '+browserClient));chips.appendChild(chip('trial: '+trialStatus));chips.appendChild(chip('bridge key: '+(data.bridge?.api_key_present?'present':'missing')));chips.appendChild(chip('agent: '+String(data.bridge?.agent_id||'not found')));chips.appendChild(chip('pyreplab: '+(data.pyreplab?.available?'ready':'missing')));chips.appendChild(chip('capsules: '+String(data.capsules?.count||0)));if(Array.isArray(data.missing) && data.missing.length) chips.appendChild(chip('missing: '+data.missing.join(', ')));setLaunchReady(launchReady, launchUrl);setConnectReady(handshakeReady);setMissionCreateReady(Boolean(approvedHandshakeToken)&&handshakeReady&&Boolean(missionCreateUrl));setMissionAdvanceReady(computeMissionAdvanceReady());if(handshakeInFlight){setConnectNote('Resuming the pending local approval check from your last hosted session...');}else if(approvedHandshakeToken){setConnectNote('Hosted connection approved. You can now create or advance a local Mission from here.');}else{setConnectNote(handshakeReady ? 'You can now request a trusted hosted connection to this local desk.' : 'Finish local setup before requesting a hosted connection.');}setStatusNote(launchReady ? 'Local Research Desk is ready. Open it directly or stay here to review local mission summaries.' : 'Local Research Desk responded, but setup is still incomplete. Fix the missing items in the local app, then try again.');if(handshakeReady&&handshakeInFlight&&!handshakePollTimer&&pendingHandshakeState){scheduleHandshakePoll(pendingHandshakeState.statusUrl, pendingHandshakeState.requestId, pendingHandshakeState.startAttempt||0);}if(missionWatchUrl&&!missionWatchTimer){scheduleMissionWatch(missionWatchUrl);}}
-    function renderCapsules(data){const root=document.getElementById('capsule-list');root.innerHTML='';const rows=Array.isArray(data.capsules)?data.capsules:[];if(!rows.length){const emptyCard=document.createElement('div');emptyCard.className='capsule-card';const emptyText=document.createElement('p');emptyText.textContent='No local missions yet.';emptyCard.appendChild(emptyText);root.appendChild(emptyCard);return;}rows.forEach((row)=>{const el=document.createElement('article');el.className='capsule-card';const title=document.createElement('h3');title.textContent=String(row.capsule_name||'mission');const task=document.createElement('p');task.textContent=String(row.task||'').trim()||'No task summary yet.';const meta=document.createElement('div');meta.className='capsule-meta';const objectName=String(row.primary_object_name||'not shaped');const rowCount=Number(row.primary_row_count||0);const readiness=String(row.readiness_status||'planned');[objectName, `${rowCount} rows`, readiness].forEach((value)=>{const badge=document.createElement('span');badge.className='pill';badge.textContent=value;meta.appendChild(badge);});const next=document.createElement('p');next.textContent=String(row.next_step||'').trim()||'Open the local desk to continue.';el.appendChild(title);el.appendChild(task);el.appendChild(meta);el.appendChild(next);root.appendChild(el);});}
-    function scheduleHandshakePoll(statusUrl, requestId, attempt){if(handshakePollTimer) window.clearTimeout(handshakePollTimer);const tries=Number(attempt||0);if(tries>=MAX_HANDSHAKE_POLL_ATTEMPTS){clearPendingHandshake();setConnectReady(Boolean(latestDeskStatus?.handshake?.supported)&&Boolean(('launch_ready' in (latestDeskStatus||{})) ? latestDeskStatus.launch_ready : true));setConnectNote('Timed out waiting for local approval. Try connecting again.');setMissionCreateReady(false);setMissionAdvanceReady(false);return;}handshakePollTimer=window.setTimeout(async()=>{handshakePollTimer=null;try{const pollUrl=new URL(statusUrl);pollUrl.searchParams.set('request_id', requestId);const resp=await fetch(pollUrl.toString(),{mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(5000)});if(!resp.ok){clearPendingHandshake();setConnectReady(Boolean(latestDeskStatus?.handshake?.supported)&&Boolean(('launch_ready' in (latestDeskStatus||{})) ? latestDeskStatus.launch_ready : true));setMissionCreateReady(false);setMissionAdvanceReady(false);setConnectNote('Local approval check failed. Try connecting again.');return;}const data=await resp.json();if(data.status==='approved'){clearPendingHandshake();persistApprovedHandshake(data.session_token, data.token_expires_at_epoch);setConnectReady(Boolean(latestDeskStatus?.handshake?.supported)&&Boolean(('launch_ready' in (latestDeskStatus||{})) ? latestDeskStatus.launch_ready : true));setMissionCreateReady(Boolean(approvedHandshakeToken)&&Boolean(safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_create_url)));setMissionAdvanceReady(computeMissionAdvanceReady());setConnectNote('Hosted connection approved. Local session token is ready for the next action.');return;}if(data.status==='denied'){clearPendingHandshake();clearApprovedHandshake();setConnectReady(Boolean(latestDeskStatus?.handshake?.supported)&&Boolean(('launch_ready' in (latestDeskStatus||{})) ? latestDeskStatus.launch_ready : true));setMissionCreateReady(false);setMissionAdvanceReady(false);setConnectNote('Hosted connection was denied in the local desk.');return;}const remainingSeconds=Math.max(0, Math.ceil(((MAX_HANDSHAKE_POLL_ATTEMPTS-(tries+1))*HANDSHAKE_POLL_INTERVAL_MS)/1000));setConnectNote('Waiting for local approval... about '+remainingSeconds+'s left.');scheduleHandshakePoll(statusUrl, requestId, tries+1);}catch(_err){const remainingSeconds=Math.max(0, Math.ceil(((MAX_HANDSHAKE_POLL_ATTEMPTS-(tries+1))*HANDSHAKE_POLL_INTERVAL_MS)/1000));setConnectNote('Waiting for local approval... about '+remainingSeconds+'s left.');scheduleHandshakePoll(statusUrl, requestId, tries+1);}},HANDSHAKE_POLL_INTERVAL_MS);}
-    async function loadDeskState(options){const opts=options||{};if(deskLoadInFlight) return;deskLoadInFlight=true;const requestId=++latestDeskRequestId;try{const statusData=await fetchLocalJson(STATUS_URL);if(requestId!==latestDeskRequestId) return;renderStatus(statusData);try{const capsulesData=await fetchLocalJson(CAPSULES_URL);if(requestId!==latestDeskRequestId) return;renderCapsules(capsulesData);}catch(_err){if(requestId!==latestDeskRequestId) return;resetCapsulesWaiting('Local Research Desk is running, but recent mission summaries are still loading.');}}catch(err){if(requestId!==latestDeskRequestId) return;if(!opts.silent) deskPollAttempts=0;if(opts.silent&&deskWasDetected){setStatusNote('Local Research Desk was previously detected. Recheck failed, but the current connected view is preserved.');return;}renderMissingDeskState();}finally{deskLoadInFlight=false;}}
-    document.getElementById('retry-local-desk')?.addEventListener('click', ()=>{if(deskLoadInFlight) return;deskPollAttempts=0;clearDeskProbe();setStatusNote('Checking again for the local desk...');loadDeskState();});
-    document.getElementById('install-local-research-desk')?.addEventListener('click', async()=>{const button=document.getElementById('install-local-research-desk');if(!button||button.disabled) return;if(!RESEARCH_DESK_INSTALL_AUTHENTICATED){setConnectNote('Sign in to unchainedsky.com first, then retry the Research Desk install.');window.location.href=RESEARCH_DESK_SIGN_IN_URL;return;}clearInstallRetry();installRetryAttempts=0;installInFlight=true;updateInstallButton();setConnectNote('Starting Research Desk install on this machine through the local client...');try{const result=await requestResearchDeskInstall();if(result.kind==='installing'){const launcherPrefix=String(result.data.launcher_prefix||RESEARCH_DESK_LAUNCHER_FALLBACK).trim()||RESEARCH_DESK_LAUNCHER_FALLBACK;finishInstallFlow('Research Desk install started. The local client is running `'+launcherPrefix+' setup`, starting the browser bridge, starting the local desk automatically, and opening it locally when ready. Keep this page open while detection retries.');return;}if(result.kind==='update_required'){if(!Boolean(result.data.update_supported)){throw new Error(String(result.data.error||'Update the local client first, then retry Research Desk install.'));}const clientVersion=String(result.data.client_version||'unknown');const requiredVersion=String(result.data.required_client_version||'0.3.65');setConnectNote('Your local client is still on '+clientVersion+'. Updating it to at least '+requiredVersion+' before retrying Research Desk install...');const updateResult=await requestLocalClientUpdate();if(updateResult.kind==='unauth'){finishInstallFlow('Sign in to unchainedsky.com first, then retry the local client update.');return;}if(updateResult.kind==='already_current'){setConnectNote('The local client is already current. Retrying Research Desk install now...');scheduleResearchDeskInstallRetry();return;}setConnectNote('Local client update started. Waiting for it to reconnect before retrying Research Desk install...');scheduleResearchDeskInstallRetry();return;}if(result.kind==='retryable'){setConnectNote('The local client is reconnecting. Retrying Research Desk install automatically...');scheduleResearchDeskInstallRetry();return;}if(result.kind==='unauth'){finishInstallFlow('Sign in to unchainedsky.com first, then retry the Research Desk install.');return;}}catch(err){finishInstallFlow(String(err?.message||'Could not start the Research Desk install. Make sure the local client is signed in and online, then try again.'));}});
-    document.getElementById('connect-local-desk')?.addEventListener('click', async()=>{if(handshakeInFlight) return;const startUrl=safeOptionalLocalUrl(latestDeskStatus?.handshake?.start_url);const statusUrl=safeOptionalLocalUrl(latestDeskStatus?.handshake?.status_url);if(!startUrl||!statusUrl) return;handshakeInFlight=true;setConnectReady(false);clearApprovedHandshake();setMissionCreateReady(false);setMissionAdvanceReady(false);setConnectNote('Requesting local approval...');try{const body=new URLSearchParams({client_label:'Unchained First Look',requested_scope:'mission:create mission:advance'});const resp=await fetch(startUrl,{method:'POST',mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,signal:AbortSignal.timeout(5000)});if(!resp.ok) throw new Error('handshake start failed');const data=await resp.json();const approvalUrl=safeOptionalLocalUrl(data.approval_url);if(approvalUrl){const approvalWindow=window.open(approvalUrl,'_blank','noopener');if(approvalWindow){setConnectNote('Approve the request in the local desk tab that just opened.');}else{setConnectNote('Approval tab could not be opened. Open the local desk manually and approve the pending request there.');}}else{setConnectNote('Approval tab could not be opened. Open the local desk manually and approve the pending request there.');}if(data.request_id){persistPendingHandshake(statusUrl,String(data.request_id));scheduleHandshakePoll(statusUrl,String(data.request_id),0);}else{clearPendingHandshake();setConnectReady(true);setConnectNote('Local desk did not return a request ID. Try connecting again.');}}catch(_err){clearPendingHandshake();setConnectReady(true);setConnectNote('Could not start the local approval flow. Make sure Research Desk is still running, then try again.');}});
-    document.getElementById('create-local-mission')?.addEventListener('click', async()=>{const missionCreateUrl=safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_create_url);const safeToken=sanitizeBearerToken(approvedHandshakeToken);if(!safeToken||!missionCreateUrl) return;const handoffPrompt=currentPromptFromContext()||'Continue this First Look in Research Desk';setConnectNote('Creating a local Mission from hosted Unchained...');try{const body=new URLSearchParams({mission_prompt:handoffPrompt,source_route:'/first-look',source_session_id:currentSourceSessionId()});const resp=await fetch(missionCreateUrl,{method:'POST',mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/x-www-form-urlencoded','Authorization':'Bearer '+safeToken},body,signal:AbortSignal.timeout(5000)});const data=await resp.json();if(!resp.ok||!data.ok) throw new Error('mission create failed');if(data.mission_url){const missionUrl=safeLocalUrl(new URL(String(data.mission_url), FALLBACK_LOCAL_URL).toString());window.open(missionUrl,'_blank','noopener');}const statusUrl=safeOptionalLocalUrl(data.mission_status_url ? new URL(String(data.mission_status_url), FALLBACK_LOCAL_URL).toString() : '');if(statusUrl){persistMissionWatchState(statusUrl, null);scheduleMissionWatch(statusUrl);}setConnectNote('Local Mission created successfully. Research Desk opened it in a new tab.');}catch(_err){setConnectNote('Could not create the local Mission. Try reconnecting to the local desk first.');}});
-    document.getElementById('run-local-next-step')?.addEventListener('click', async()=>{const missionAdvanceUrl=safeOptionalLocalUrl(latestDeskStatus?.handshake?.actions?.mission_advance_url);const safeToken=sanitizeBearerToken(approvedHandshakeToken);const capsuleName=String(document.getElementById('mission-watch-title')?.textContent||'').trim();if(!safeToken||!missionAdvanceUrl||!capsuleName) return;setConnectNote('Running the next local Mission step...');setMissionAdvanceReady(false);try{const body=new URLSearchParams({capsule_name:capsuleName});const resp=await fetch(missionAdvanceUrl,{method:'POST',mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/x-www-form-urlencoded','Authorization':'Bearer '+safeToken},body,signal:AbortSignal.timeout(5000)});const data=await resp.json();if(resp.status===429&&data.error==='advance_busy'){setConnectNote('The local desk is still running the current step. This page will keep watching for the result.');if(missionWatchUrl) scheduleMissionWatch(missionWatchUrl);setMissionAdvanceReady(false);return;}if(!resp.ok||!data.ok) throw new Error('mission advance failed');if(data.mission) renderMissionWatch(data.mission);const statusUrl=safeOptionalLocalUrl(data.mission?.mission_status_url||missionWatchUrl);if(statusUrl) scheduleMissionWatch(statusUrl);setConnectNote(String(data.message||'Local Mission step completed.'));}catch(_err){setConnectNote('Could not run the next local Mission step. Open the local desk to continue or reconnect first.');setMissionAdvanceReady(computeMissionAdvanceReady());}});
-    document.addEventListener('visibilitychange', ()=>{if(document.hidden){clearDeskProbe();return;}if(!deskLoadInFlight) loadDeskState({silent:true});});
-    window.addEventListener('beforeunload', ()=>{clearDeskProbe();clearInstallRetry();if(handshakePollTimer){window.clearTimeout(handshakePollTimer);handshakePollTimer=null;}if(missionWatchTimer){window.clearTimeout(missionWatchTimer);missionWatchTimer=null;}});
-    updateInstallButton();
-    if(!RESEARCH_DESK_INSTALL_AUTHENTICATED){setConnectNote('Sign in to unchainedsky.com first, then install Research Desk through your local client.');}
-    restoreStoredDeskSession();
-    const existingPrompt=currentPromptFromContext();if(existingPrompt&&!sessionRestored&&RESEARCH_DESK_INSTALL_AUTHENTICATED){setConnectNote('Ready to hand off the current first-look prompt into your local desk once the connection is approved.');}
-    loadDeskState();
-  </script>
-</body>
-</html>"""
-    return (
-        html.replace("__RESEARCH_DESK_INSTALL_AUTHENTICATED__", auth_literal)
-        .replace("__RESEARCH_DESK_INSTALL_LABEL__", install_label)
-        .replace("__RESEARCH_DESK_INSTALL_CARD_COPY__", install_card_copy)
-        .replace("__RESEARCH_DESK_SIGN_IN_URL__", sign_in_url_literal)
-    )
 
 
 async def handle_research_desk_page(request: web.Request) -> web.Response:
@@ -423,15 +110,17 @@ async def handle_chat_gemini_page(request: web.Request) -> web.Response:
 
 
 async def handle_chat_codex_page(request: web.Request) -> web.Response:
-    """Serve the Codex chat HTML page (per-user provisioned key)."""
+    """Redirect legacy Codex CLI chat route to the shared local page."""
     core = _core()
     core._track_page_view(request)
     auth_info = core._authenticate(request)
     if core._is_pending_user(auth_info):
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = core.inject_google_client_id(core.CHAT_CODEX_HTML, core.GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    model = request.query.get("model", "").strip().lower()
+    target = "/local?provider=codex-cli" if model.startswith("codex-cli:") else "/local?provider=codex-sdk"
+    core._track_redirect(request, target, reason="legacy_route_alias")
+    raise web.HTTPFound(target)
 
 
 async def handle_chat_claude_page(request: web.Request) -> web.Response:
@@ -749,7 +438,9 @@ async def handle_local_page(request: web.Request) -> web.Response:
     if core._is_pending_user(auth_info):
         core._track_redirect(request, "/trial", reason="pending_user_gate", auth_info=auth_info)
         raise web.HTTPFound("/trial")
-    html = core.inject_google_client_id(core.CLAUDE_CHAT_HTML, core.GOOGLE_CLIENT_ID)
+    provider = request.query.get("provider", "").strip().lower()
+    html_source = core.CHAT_CODEX_HTML if provider in {"codex-cli", "codex-sdk"} else core.CLAUDE_CHAT_HTML
+    html = core.inject_google_client_id(html_source, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
 
 

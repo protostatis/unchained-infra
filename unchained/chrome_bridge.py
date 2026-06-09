@@ -1005,6 +1005,7 @@ class Agent:
         # share the same namespace; collision is astronomically unlikely.
         self._tab_leases: dict[int, str] = {}   # channel → Chrome tab ID
         self._leased_tabs: set[str] = set()     # Chrome tab IDs currently leased
+        self._stealth_injected_tabs: set[str] = set()  # tabs that already have stealth
         self._last_prov_reconcile_ts = 0.0
 
     def _reconcile_prov_chromes(self, force: bool = False):
@@ -1107,13 +1108,17 @@ class Agent:
 
     def _relaunch_chrome(self) -> bool:
         """Try to relaunch Chrome if it's not reachable."""
-        return _ensure_chrome(
+        result = _ensure_chrome(
             self.cdp_host,
             self.cdp_port,
             self.profile,
             self._headless,
             relay_url=self.relay_url,
         )
+        if result:
+            # New Chrome process — previous stealth injections are gone.
+            self._stealth_injected_tabs.clear()
+        return result
 
     def _cleanup_orphan_tabs(self):
         """Close all Chrome tabs except one (headless only).
@@ -1164,7 +1169,8 @@ class Agent:
         """Single connection lifecycle: connect → auth → message loop."""
         self._watchdog_triggered = False
         async with websockets.connect(self.relay_url,
-                                      max_size=50 * 1024 * 1024) as ws:
+                                      max_size=50 * 1024 * 1024,
+                                      ping_interval=120) as ws:  # WS-level safety net; app heartbeat is primary
             self.ws = ws
             self._backoff = 1  # reset on successful connect
             await self._authenticate()
@@ -1224,7 +1230,10 @@ class Agent:
         elif t == "http":
             await self._handle_http(msg)
         elif t == "ws_open":
-            await self._handle_ws_open(msg)
+            # Fire-and-forget: stealth inject can block for seconds on pages
+            # that flood CDP events (e.g. CAPTCHAs), starving the tunnel
+            # message loop and delaying pong processing + new channel opens.
+            asyncio.create_task(self._handle_ws_open(msg))
         elif t == "ws_send":
             await self._handle_ws_send(msg)
         elif t == "ws_close":
@@ -1369,10 +1378,50 @@ class Agent:
             chrome_ws = await websockets.connect(ws_url,
                                                  max_size=50 * 1024 * 1024)
             # Skip stealth on browser-level connections — no page context.
-            # The agent's per-tab connection already has stealth injected.
+            # Also skip on tabs that already have stealth injected (e.g.
+            # screencast poll reopening the same tab every second).
+            # addScriptToEvaluateOnNewDocument persists across navigations
+            # so re-injection is unnecessary and wastes time — especially
+            # on pages that flood CDP events where the inject recv() loop
+            # can block for the full 5s timeout per command.
+            resolved = self._extract_tab_id_from_ws_url(ws_url)
+
+            # Force the resolved tab to foreground BEFORE forwarding any
+            # cloud commands. Chrome 147+ silently routes Page.navigate
+            # to the omnibox AI Mode (AIM) popup target instead of the
+            # requested tab when the requested tab isn't the active
+            # foreground page — content ends up rendering inside the URL
+            # bar dropdown rather than the visible tab. Verified
+            # empirically: without this call, navigate(example.com) on
+            # the visible tab's WS rewrites the chrome://omnibox-popup
+            # target's URL to example.com and leaves the visible tab
+            # untouched. With this call, the visible tab navigates
+            # correctly and the AIM target stays at chrome://. See
+            # field-report investigation 2026-04-29.
             if tab_id != "browser":
                 try:
+                    bid = random.randint(2**28, 2**30)
+                    await chrome_ws.send(json.dumps(
+                        {"id": bid, "method": "Page.bringToFront"}
+                    ))
+                    while True:
+                        raw = await asyncio.wait_for(chrome_ws.recv(), timeout=2)
+                        msg = json.loads(raw)
+                        if msg.get("id") == bid:
+                            break
+                except Exception as e:
+                    # Best-effort: failure here shouldn't block tab usage.
+                    print(f"[agent] Page.bringToFront failed (non-fatal): {e}")
+
+            need_stealth = (
+                tab_id != "browser"
+                and resolved
+                and resolved not in self._stealth_injected_tabs
+            )
+            if need_stealth:
+                try:
                     await self._inject_stealth(chrome_ws)
+                    self._stealth_injected_tabs.add(resolved)
                 except Exception as e:
                     # Best-effort: stealth failure should not block tab usage.
                     print(f"[agent] stealth inject failed (non-fatal): {e}")
@@ -1627,7 +1676,14 @@ class Agent:
                     f"Provisioned Chrome (slot '{slot}') is no longer running. "
                     f"Re-provision with cdp_provision_launch to continue."
                 )
-            page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
+            # Also exclude chrome:// / devtools:// from page_tabs so the
+            # 'auto' fallback path (which uses page_tabs when pages_only
+            # is exhausted) cannot return the omnibox AIM popup target.
+            page_tabs = [
+                t for t in tabs
+                if t.get("type") in ("page", "popup")
+                and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+            ]
             if real_id == "auto":
                 # Reuse existing lease for this channel
                 if channel >= 0 and channel in self._tab_leases:
@@ -1638,8 +1694,18 @@ class Agent:
                     # Leased tab was closed externally — release stale lease
                     self._tab_leases.pop(channel, None)
                     self._leased_tabs.discard(leased_id)
-                # Auto prefers page tabs; fall back to popup only if no pages
-                pages_only = [t for t in tabs if t.get("type") == "page"]
+                # Auto prefers page tabs; fall back to popup only if no pages.
+                # Exclude chrome:// targets — Chrome 147+ exposes the omnibox
+                # AI dropdown (chrome://omnibox-popup.top-chrome/...) as a
+                # type=page target with no associated OS window. If 'auto'
+                # picks one of those, every Page.navigate routed through this
+                # connection lands inside the URL-bar dropdown instead of a
+                # real tab the user can see.
+                pages_only = [
+                    t for t in tabs
+                    if t.get("type") == "page"
+                    and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+                ]
                 # Filter out tabs leased by other channels
                 if channel >= 0:
                     available = [t for t in pages_only if t["id"] not in self._leased_tabs]
@@ -1700,8 +1766,24 @@ class Agent:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as resp:
             tabs = json.loads(resp.read())
-        page_tabs = [t for t in tabs if t.get("type") in ("page", "popup")]
-        pages_only = [t for t in tabs if t.get("type") == "page"]
+        # Also exclude chrome:// / devtools:// from page_tabs so the
+        # 'auto' fallback path (which uses page_tabs when pages_only is
+        # exhausted) cannot return the omnibox AIM popup target.
+        page_tabs = [
+            t for t in tabs
+            if t.get("type") in ("page", "popup")
+            and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+        ]
+        # Exclude chrome:// / devtools:// internal targets (omnibox AIM
+        # dropdown in Chrome 147+, devtools://, etc) from auto-resolution
+        # candidates. Same rationale as the provisioned-Chrome path above:
+        # those targets are window-less and stealing them for navigates
+        # makes the user's tab content render inside the URL-bar dropdown.
+        pages_only = [
+            t for t in tabs
+            if t.get("type") == "page"
+            and not (t.get("url") or "").startswith(("chrome://", "devtools://"))
+        ]
         if tab_id == "auto":
             # Reuse existing lease for this channel
             if channel >= 0 and channel in self._tab_leases:
@@ -2620,8 +2702,15 @@ def _ensure_chrome(
             "--disable-dev-shm-usage",
             "--mute-audio",
             "--hide-scrollbars",
-            "--window-size=1920,1080",
-            "--ozone-override-screen-size=1920,1080",
+            # 4:3 (1440x1080) instead of 16:9 (1920x1080) so the first-look
+            # preview panel (CSS aspect-ratio: 4/3 on #live-canvas-wrap)
+            # receives a frame with no letterboxing. 1440px width still
+            # renders desktop layouts correctly for the demo sites (Best Buy,
+            # Walmart, Kayak, Zillow), avoiding the mobile-breakpoint snap
+            # that would occur below ~1024px. The screencast fits the square-
+            # ish preview container natively.
+            "--window-size=1440,1080",
+            "--ozone-override-screen-size=1440,1080",
         ])
         # Root-run Chromium still needs --no-sandbox; non-root containers do not.
         if hasattr(os, "geteuid") and os.geteuid() == 0:

@@ -8,6 +8,17 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		-Server
 	}
 
+	# Per-request access log to stderr in JSON. Lands in
+	# `docker compose logs caddy` (mixed with TLS/proxy errors).
+	# Captures method, path, status, latency, remote_ip, headers
+	# (User-Agent, Referer) — useful for funnel/origin analysis
+	# when a new user signs up. Default rotation is handled by
+	# Docker's json-file driver.
+	log {
+		output stderr
+		format json
+	}
+
 	request_body {
 		max_size 10MB
 	}
@@ -25,6 +36,19 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	# REST API — orchestrator uses these
 	handle /api/* {
 		reverse_proxy relay:8765
+	}
+
+	# unbrowser MCP server — separate from Unchained's FastMCP /mcp endpoint.
+	# Streamable HTTP only; SSE's /messages callback cannot live safely under this prefix.
+	handle /unbrowser-mcp {
+		rewrite * /mcp
+		reverse_proxy unbrowser-mcp:8767
+	}
+	handle /unbrowser-mcp/sse {
+		respond "Use Streamable HTTP at /unbrowser-mcp or /unbrowser-mcp/mcp." 404
+	}
+	handle_path /unbrowser-mcp/* {
+		reverse_proxy unbrowser-mcp:8767
 	}
 
 	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server

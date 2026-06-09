@@ -271,7 +271,7 @@ class TestCodexProvisioningHooks(unittest.TestCase):
             "codexsdk-abc12345",
         )
         self.assertEqual(
-            _resolve_chat_agent_id(auth_info, "codex-cli:gpt-5-codex"),
+            _resolve_chat_agent_id(auth_info, "codex-cli:gpt-5.5"),
             "claude-abc12345",
         )
 
@@ -286,8 +286,8 @@ class TestCodexProvisioningHooks(unittest.TestCase):
     def test_chat_codex_html_has_codex_model_prefixes(self):
         from web import CHAT_CODEX_HTML
         self.assertIn("codex-sdk:codex-mini-latest", CHAT_CODEX_HTML)
-        self.assertIn("codex-cli:gpt-5.1-codex-mini", CHAT_CODEX_HTML)
-        self.assertIn("codex-cli:gpt-5-codex", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.5", CHAT_CODEX_HTML)
+        self.assertIn("codex-sdk:gpt-5.5", CHAT_CODEX_HTML)
         self.assertIn("/web/chat/status?codex=1", CHAT_CODEX_HTML)
         self.assertNotIn("geminiProvisioned", CHAT_CODEX_HTML)
 
@@ -306,11 +306,11 @@ class TestCodexProvisioningHooks(unittest.TestCase):
         mock_claude_sdk.assert_called_once_with("u2", "k2", "p2")
 
         url = _spawn_provider_agent("codex-sdk", "u3", "k3", "p3")
-        self.assertEqual(url, "/chat-codex")
+        self.assertEqual(url, "/local?provider=codex-sdk")
         mock_codex_sdk.assert_called_once_with("u3", "k3", "p3")
 
         url = _spawn_provider_agent("codex-cli", "u4", "k4", "p4")
-        self.assertEqual(url, "/chat-codex?model=codex-cli:gpt-5.1-codex-mini")
+        self.assertEqual(url, "/local?provider=codex-cli")
 
         url = _spawn_provider_agent("unknown", "u5", "k5", "p5")
         self.assertIsNone(url)

@@ -124,7 +124,7 @@ chmod +x "$DEST/start.sh" "$DEST/stop.sh" "$DEST/update.sh" 2>/dev/null || true
 if command -v osascript >/dev/null 2>&1; then
   osascript <<'OSA' >/dev/null 2>&1 || true
 tell application "Terminal"
-  do script "cd \"$HOME/unchained-agent\" && ./start.sh --daemon"
+  do script "cd \"$HOME/unchained-agent\" && ./start.sh --enable-autostart"
   activate
 end tell
 OSA

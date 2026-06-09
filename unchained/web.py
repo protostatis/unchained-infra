@@ -62,10 +62,13 @@ from web_app.templates import (
     INSTALL_CLAIM_HTML,
     INSTALL_ONBOARD_HTML,
     LANDING_HTML,
+    LANDING_V2_HTML,
+    LANDING_V3_HTML,
     MCP_PAGE_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
     TRIAL_CHAT_HTML,
+    UNBROWSER_PAGE_HTML,
 )
 
 log = logging.getLogger(__name__)
@@ -167,8 +170,8 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
     float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
 )
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3.1-flash-lite-preview").strip()
-    or "google/gemini-3.1-flash-lite-preview"
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "xiaomi/mimo-v2-flash").strip()
+    or "xiaomi/mimo-v2-flash"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()
@@ -251,6 +254,7 @@ def _trace(event: str, **fields):
 
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
+    "/unbrowser",
     "/mcp-guide",
     "/mcp",
     "/privacy",
@@ -674,7 +678,8 @@ _session_tabs = _state.session_tabs  # session_id -> Chrome tab_id
 _session_profile_paths = _state.session_profile_paths  # session_id -> selected Chrome profile path
 _session_last_active = _state.session_last_active  # session_id -> timestamp
 _session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
-_STALE_TAB_SECONDS = 5 * 60  # 5 minutes — headless worker has limited RAM
+_STALE_TAB_SECONDS = 5 * 60  # 5 minutes — first-look guest sessions (headless, limited RAM)
+_STALE_TAB_SECONDS_AGENT = 60 * 60  # 60 minutes — logged-in agent sessions (Chrome on user's machine)
 _stale_tab_task: asyncio.Task | None = None
 _tabs_pending_close = _state.tabs_pending_close  # tab_id -> (agent_id, retry_count)
 _MAX_CLOSE_RETRIES = 3
@@ -685,6 +690,7 @@ _gemini_last_active = _state.gemini_last_active  # agent_id -> last msg timestam
 _gemini_spawn_lock = _state.gemini_spawn_lock  # prevents duplicate spawn race
 _GEMINI_IDLE_TIMEOUT = 600
 _gemini_cleanup_task: asyncio.Task | None = None
+_headless_watchdog_task: asyncio.Task | None = None
 _scheduler_turn_grants = _state.scheduler_turn_grants  # grant_id -> {user_id, session_id, expires_at}
 _SCHEDULER_TURN_GRANT_TTL = 5 * 60
 
@@ -1135,6 +1141,7 @@ from web_app.runtime_tabs import (
     close_session_tab as _close_session_tab,
     create_session_tab as _create_session_tab,
     ensure_session_tab as _ensure_session_tab,
+    headless_agent_watchdog_loop as _headless_agent_watchdog_loop,
     session_cdp_url as _session_cdp_url,
     stale_tab_cleanup_loop as _stale_tab_cleanup_loop,
 )
@@ -1388,6 +1395,47 @@ async def handle_favicon(request: web.Request) -> web.Response:
     )
 
 
+_WASMBROWSER_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "web_app", "static", "wasmbrowser",
+)
+_WASMBROWSER_ALLOWED = {
+    "engine.js", "dom.js", "bridge.js", "shims.js", "loader.js", "intel.js",
+}
+
+
+async def handle_wasmbrowser_asset(request: web.Request) -> web.Response:
+    """GET /web/wasmbrowser/{filename} — serve QuickJS-WASM browser assets.
+
+    These are the 6 JS files extracted from sky-search/client/wasm/ that
+    power the live WASM browser embedded in the marketing landing page.
+    Allowlisted filenames only — do not let path traversal escape the dir.
+    """
+    raw = request.match_info.get("filename", "")
+    # Defense-in-depth: strip any path components even though the allowlist
+    # below only contains bare filenames. If the route ever broadens, this
+    # keeps "../../etc/passwd" from reaching open().
+    filename = os.path.basename(raw)
+    if filename not in _WASMBROWSER_ALLOWED:
+        return web.Response(status=404)
+    path = os.path.join(_WASMBROWSER_DIR, filename)
+    try:
+        with open(path) as f:
+            body = f.read()
+    except FileNotFoundError:
+        return web.Response(status=404)
+    return web.Response(
+        text=body,
+        content_type="application/javascript",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            # Prevent MIME-type confusion attacks: browser must honor the
+            # declared application/javascript and not sniff the body.
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 _og_image_cache: bytes | None = None
 
 
@@ -1444,6 +1492,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         published = []
     pages = [
         ("https://unchainedsky.com/", "1.0", "weekly"),
+        ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
@@ -1498,9 +1547,22 @@ async def handle_google_verification(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    del request
-    html = LANDING_HTML.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
-    return web.Response(text=html, content_type="text/html")
+    # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
+    # break the v2/v3 escape hatches. Default falls back to LANDING_HTML.
+    variant = request.query.get("ui") or request.cookies.get("ui") or ""
+    if variant == "v3":
+        template = LANDING_V3_HTML
+    elif variant == "v2":
+        template = LANDING_V2_HTML
+    else:
+        template = LANDING_HTML
+    html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    response = web.Response(text=html, content_type="text/html")
+    if request.query.get("ui") in {"v2", "v3"}:
+        # Persist the choice for ~1 day so deep-links inside the site keep the
+        # same variant when the visitor returns to "/".
+        response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
+    return response
 
 
 async def handle_test(request: web.Request) -> web.Response:
@@ -1582,6 +1644,8 @@ from web_app.handlers.chat_flow import (
     handle_chat_slots,
     handle_chat_status,
     handle_chat_switch,
+    list_relay_agents_for_auth as _list_relay_agents_for_auth,
+    resolve_bridge_agent as _resolve_bridge_agent,
     resolve_chat_agent_id as _resolve_chat_agent_id,
 )
 from web_app.handlers.chat_stream import handle_chat_cancel, handle_chat_msg, handle_chat_ws
@@ -1641,8 +1705,41 @@ async def handle_cmd(request: web.Request) -> web.Response:
 
     req_id = _request_id(request)
     action = body.get("action")
-    agent_id = auth_info.get("agent_id")  # Never trust client-supplied agent_id
+    session_id = str(body.get("session_id") or body.get("chat_session_id") or "").strip()
+    requested_bridge_agent = str(body.get("bridge_agent_id") or "").strip()
+    agent_id = auth_info.get("agent_id")
+    agent_source = "auth"
+    mapped_agent_id = _session_agent_map.get(session_id) if session_id else ""
+    if mapped_agent_id:
+        agent_id = mapped_agent_id
+        agent_source = "session_map"
+    else:
+        try:
+            bridge_info = await _resolve_bridge_agent(
+                auth_info,
+                preferred_agent_id=requested_bridge_agent,
+            )
+            resolved_agent_id = bridge_info.get("bridge_agent_id")
+            if resolved_agent_id:
+                agent_id = resolved_agent_id
+                agent_source = "bridge"
+        except Exception as e:
+            _trace(
+                "cmd.bridge_resolution_error",
+                req_id=req_id,
+                user_id=auth_info.get("user_id", ""),
+                requested_bridge_agent=requested_bridge_agent or "-",
+                error=str(e)[:160],
+            )
     tab_id = body.get("tab_id", "auto")
+    _trace(
+        "cmd.agent_resolved",
+        req_id=req_id,
+        agent_id=agent_id or "-",
+        source=agent_source,
+        session_id=session_id or "-",
+        requested_bridge_agent=requested_bridge_agent or "-",
+    )
     _trace(
         "cmd.in",
         req_id=req_id,
@@ -1894,24 +1991,30 @@ def _register_routes(app: web.Application):
 
 async def _on_startup(app_: web.Application):
     del app_
-    global _stale_tab_task, _gemini_cleanup_task
+    global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
     _state.stale_tab_task = asyncio.create_task(_stale_tab_cleanup_loop())
     _state.gemini_cleanup_task = asyncio.create_task(_cleanup_idle_gemini_agents())
+    _state.headless_watchdog_task = asyncio.create_task(_headless_agent_watchdog_loop())
     _stale_tab_task = _state.stale_tab_task
     _gemini_cleanup_task = _state.gemini_cleanup_task
+    _headless_watchdog_task = _state.headless_watchdog_task
 
 
 async def _on_cleanup(app_: web.Application):
     del app_
-    global _stale_tab_task, _gemini_cleanup_task
+    global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
     if _state.stale_tab_task:
         _state.stale_tab_task.cancel()
     if _state.gemini_cleanup_task:
         _state.gemini_cleanup_task.cancel()
+    if _state.headless_watchdog_task:
+        _state.headless_watchdog_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
+    _state.headless_watchdog_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
+    _headless_watchdog_task = None
     # Close persistent HTTP client for private-core.
     try:
         from private_core_client import get_private_core_client

@@ -25,6 +25,7 @@ class OverlaySessionState:
     agent_id: str
     tab_id: str  # concrete tab ID or "auto" (bridge resolves to active tab)
     user_id: str
+    model: str = ""
     slot: int | None = None
     injected: bool = False
     pending_events: list = field(default_factory=list)  # buffered before bridge injection
@@ -49,6 +50,7 @@ class ChatRuntimeState:
     gemini_last_active: dict[str, float] = field(default_factory=dict)
     gemini_spawn_lock: LockType = field(default_factory=threading.Lock)
     gemini_cleanup_task: asyncio.Task | None = None
+    headless_watchdog_task: asyncio.Task | None = None
     scheduler_turn_grants: dict[str, dict[str, object]] = field(default_factory=dict)
     pending_provision: dict[str, tuple[str, str, float]] = field(default_factory=dict)
     provision_cooldowns: dict[str, float] = field(default_factory=dict)
