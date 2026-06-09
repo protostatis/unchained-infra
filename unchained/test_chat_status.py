@@ -74,6 +74,37 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
 
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
+    async def test_first_look_guest_status_survives_bridge_probe_error(
+        self, mock_auth, mock_check_relay
+    ):
+        mock_auth.return_value = None
+        mock_check_relay.side_effect = RuntimeError("relay down")
+        request = SimpleNamespace(
+            query={"first_look_guest": "1"},
+            headers={},
+            scheme="http",
+            host="127.0.0.1",
+            cookies={},
+        )
+
+        with (
+            patch.object(web, "HEADLESS_AGENT_ID", "headless-test"),
+            patch.object(web, "TRIAL_AGENT_ID", "trial-test"),
+        ):
+            web._chat_agents["trial-test"] = SimpleNamespace(closed=False)
+            response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertFalse(data["connected"])
+        self.assertTrue(data["chat_connected"])
+        self.assertFalse(data["bridge_connected"])
+        self.assertTrue(data["bridge_configured"])
+        self.assertTrue(data["guest"])
+        mock_check_relay.assert_awaited_once_with("headless-test")
+
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
     async def test_chat_only_status_reports_mismatch_independently(self, mock_auth, mock_check_relay):
         mock_auth.return_value = {
             "user_id": "u-test",
