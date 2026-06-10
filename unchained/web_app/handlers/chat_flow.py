@@ -925,7 +925,11 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             try:
                 bridge_connected = await core._check_relay_agent(core.HEADLESS_AGENT_ID)
             except Exception as e:
-                log.warning("[chat-status] first-look bridge probe failed: %s", e)
+                log.warning(
+                    "[chat-status] first-look bridge probe failed (agent=%s): %s",
+                    core.HEADLESS_AGENT_ID,
+                    e,
+                )
         connected = chat_connected and bridge_connected
         guest_resp = web.json_response(
             {
