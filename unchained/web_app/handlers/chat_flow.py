@@ -922,7 +922,14 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         chat_connected = bool(core.TRIAL_AGENT_ID) and gws is not None and not gws.closed
         bridge_connected = False
         if core.HEADLESS_AGENT_ID:
-            bridge_connected = await core._check_relay_agent(core.HEADLESS_AGENT_ID)
+            try:
+                bridge_connected = await core._check_relay_agent(core.HEADLESS_AGENT_ID)
+            except Exception as e:
+                log.warning(
+                    "[chat-status] first-look bridge probe failed (agent=%s): %s",
+                    core.HEADLESS_AGENT_ID,
+                    e,
+                )
         connected = chat_connected and bridge_connected
         guest_resp = web.json_response(
             {

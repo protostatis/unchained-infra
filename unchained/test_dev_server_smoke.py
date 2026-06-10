@@ -100,6 +100,19 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(match, "curl_command should embed X-Install-Token header")
         return match.group(1)
 
+    async def test_first_look_guest_route_and_status(self):
+        page = await self._client.get("/first-look")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Unchained First Look Preview", page.text)
+        self.assertIn("shared-browser-status", page.text)
+
+        status = await self._client.get("/web/chat/status?first_look_guest=1")
+        self.assertEqual(status.status_code, 200, status.text)
+        data = status.json()
+        self.assertTrue(data["guest"])
+        self.assertIn("bridge_configured", data)
+        self.assertIn("bridge_connected", data)
+
     async def test_auth_and_local_pages_render_expected_dev_markers(self):
         response = await self._client.post("/web/install-token")
         self.assertEqual(response.status_code, 401)
