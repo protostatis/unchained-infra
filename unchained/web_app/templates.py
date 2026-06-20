@@ -6293,6 +6293,7 @@ TRIAL_CHAT_HTML = r"""<!DOCTYPE html>
 :root{
   --bg:#1a1a2e;--surface:#16213e;--accent:#e94560;
   --text:#eee;--muted:#888;--user-bg:#2a1a3e;--asst-bg:#1e2a3e;
+  --setup-accent:#ffb0bf;--setup-text:#ffd5dc;--setup-muted:#c7aeb6;--setup-soft:#d7deea;--setup-subtle:#9fa5b7;
   --mono:'SF Mono','Menlo','Monaco','Consolas',monospace;
 }
 body{
@@ -6525,17 +6526,66 @@ body{
 
 /* === Download banner === */
 #download-banner{
-  display:flex;align-items:center;justify-content:center;gap:12px;
-  padding:8px 16px;background:#2a1a1a;border-bottom:1px solid #444;
+  display:flex;align-items:center;justify-content:center;gap:14px;
+  padding:12px 16px;
+  background:linear-gradient(90deg,rgba(233,69,96,0.2),rgba(233,69,96,0.08));
+  border-bottom:1px solid rgba(233,69,96,0.42);
   font-size:13px;color:var(--muted);flex-shrink:0;
 }
-#download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0}
-#download-banner .detail{font-size:11px;color:#8f9199}
+#download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 320px;max-width:520px}
+#download-banner .banner-kicker{font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:var(--setup-accent);font-weight:700}
+#download-banner .detail{font-size:12px;color:#b2b7c7}
+#download-banner #banner-msg{color:var(--setup-text)}
+#download-banner #banner-detail{color:var(--setup-muted)}
+#download-banner .banner-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#download-banner .method-or{color:var(--setup-subtle);font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
+#download-banner .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #download-banner a{
-  color:var(--accent);text-decoration:none;font-weight:600;
-  border:1px solid var(--accent);padding:4px 12px;border-radius:6px;
+  color:var(--setup-text);text-decoration:none;font-weight:600;
+  border:1px solid rgba(233,69,96,0.56);background:rgba(233,69,96,0.18);
+  padding:5px 12px;border-radius:999px;font-size:12px;white-space:nowrap;
 }
-#download-banner a:hover{background:var(--accent);color:#fff}
+#download-banner a.primary{background:linear-gradient(135deg,rgba(233,69,96,0.36),rgba(233,69,96,0.18));border-color:rgba(233,69,96,0.72)}
+#download-banner a.secondary{color:var(--setup-soft);background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.16)}
+#download-banner a:hover{background:rgba(233,69,96,0.3);color:#fff}
+
+/* === Install modal === */
+#install-modal{
+  position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;
+  align-items:center;justify-content:center;
+}
+#install-modal .modal-card{
+  background:var(--surface);border:1px solid rgba(255,255,255,0.18);border-radius:14px;
+  padding:24px;max-width:520px;width:90%;position:relative;
+}
+#install-modal .modal-close{position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
+#install-modal .modal-title{color:var(--setup-text);margin-bottom:8px;font-size:16px}
+#install-modal .modal-desc{color:var(--muted);font-size:13px;margin-bottom:12px}
+#install-modal .modal-short{color:#b8becf;font-size:12px;line-height:1.4;margin:0 0 12px}
+#install-modal .install-methods{margin:0 0 14px}
+#install-modal .method-intro{margin-bottom:8px}
+#install-modal .method-intro b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+#install-modal .method-intro span{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#install-modal .method-card{display:flex;flex-direction:column;gap:4px;padding:11px;border:1px solid rgba(255,255,255,0.14);border-radius:12px;background:rgba(255,255,255,0.035);text-decoration:none}
+#install-modal .method-card.active{border-color:rgba(233,69,96,0.64);background:rgba(233,69,96,0.12)}
+#install-modal .method-card:hover{border-color:rgba(233,69,96,0.58)}
+#install-modal .method-card .method-label{color:var(--setup-accent);font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase}
+#install-modal .method-card b{color:var(--text);font-size:13px}
+#install-modal .method-card span{color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-card .method-cta{color:var(--setup-text);font-size:12px;font-weight:700;margin-top:auto}
+#install-modal .modal-code{background:var(--bg);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative}
+#install-modal .modal-code code{color:var(--text)}
+#install-modal .command-label{display:block;margin:0 0 6px;color:#c8cedb;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
+#install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+#install-modal .modal-copy{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:var(--setup-soft);padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
+#install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
+#install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
+#install-modal .modal-note{color:var(--muted);font-size:11px;margin-top:12px}
+
+#sendbtn.setup-blocked{background:#34384d;color:var(--setup-soft);cursor:not-allowed;opacity:0.9}
 
 /* === Chat hints === */
 #chat-hints{
@@ -6591,6 +6641,12 @@ body{
 #claude-request-btn:hover{opacity:0.92}
 #claude-request-btn[disabled]{opacity:0.55;cursor:not-allowed}
 @media (max-width:680px){
+  #download-banner{align-items:stretch;flex-wrap:wrap;justify-content:flex-start;gap:10px}
+  #download-banner .copy{width:100%;max-width:none}
+  #download-banner .banner-actions{width:100%;flex-wrap:wrap}
+  #download-banner .method-or{display:none}
+  #download-banner .banner-actions a{flex:1 1 160px;text-align:center}
+  #install-modal .method-grid{grid-template-columns:1fr}
   #topbar .status{
     border:none;
     padding:0;
@@ -6715,23 +6771,54 @@ body{
     <span id="turn-ctr"></span>
   </div>
 
-  <div id="download-banner" style="display:none">
-    <span id="banner-msg">Connect your browser to browse.</span>
-    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/install" id="banner-connect">Download Agent Installer</a>
+  <div id="download-banner" class="guided" style="display:none">
+    <div class="copy">
+      <span class="banner-kicker">Trial setup required</span>
+      <span id="banner-msg">Connect this computer to run browser tasks.</span>
+      <span class="detail" id="banner-detail">The browser bridge is required for trial browsing; model status is tracked separately.</span>
+    </div>
+    <div class="banner-actions">
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <span class="method-or" aria-hidden="true">or</span>
+      <span class="sr-only">or use the installer</span>
+      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+    </div>
   </div>
 
   <!-- Install modal -->
-  <div id="install-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
-    <div style="background:var(--surface);border:1px solid #444;border-radius:12px;padding:24px;max-width:520px;width:90%;position:relative">
-      <button onclick="closeInstallModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
-      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent</h3>
-      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:16px">Installs a lightweight Python agent (~2MB) that connects your Chrome browser. Run in your terminal:</p>
-      <div style="background:var(--bg);border:1px solid #333;border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative">
-        <code id="install-cmd" style="color:var(--text)">Loading...</code>
-        <button onclick="copyInstallCmd()" style="position:absolute;top:8px;right:8px;background:var(--accent);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer" id="copy-btn">Copy</button>
+  <div id="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" aria-describedby="install-modal-desc" tabindex="-1">
+    <div class="modal-card">
+      <button class="modal-close" onclick="closeInstallModal()">&times;</button>
+      <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
+      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-short" id="install-cli-requirement">No Claude or Codex CLI required for trial. This only connects your browser.</p>
+      <div class="install-methods" aria-label="Install method choices">
+        <div class="method-intro"><b>Choose one install method</b><span>Both options connect this browser for the trial. Do not run both.</span></div>
+        <div class="method-grid">
+          <div class="method-card active">
+            <span class="method-label">Option A</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
+          <a class="method-card" href="/install">
+            <span class="method-label">Option B</span>
+            <b>Installer</b>
+            <span class="method-cta">Open installer page</span>
+          </a>
+        </div>
       </div>
-      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Link expires in 15 minutes. Requires Python 3.8+ and curl.</p>
+      <p class="modal-short">After installing, leave the connector running and return here.</p>
+      <div class="modal-code">
+        <span class="command-label">Option A command</span>
+        <code id="install-cmd">Loading command...</code>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
+        <button class="modal-copy modal-retry" onclick="showTrialInstallCmd()" id="retry-btn" type="button" style="display:none">Retry Command</button>
+        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
+      </div>
+      <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
     </div>
   </div>
 
@@ -6774,7 +6861,7 @@ body{
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
               onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
+    <button id="sendbtn" onclick="doSend()" disabled>&#9654;</button>
     <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
   </div>
 </div>
@@ -7181,6 +7268,8 @@ function onModelChange(model) {
   } else {
     localStorage.setItem('unchained_model', model);
   }
+  updateTrialInstallGuidance();
+  updateSendAvailability(false);
   // Refresh model-scoped agent status immediately on selector change.
   checkAgentStatus();
 }
@@ -7192,6 +7281,10 @@ function onCustomModelInput(value) {
 
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
+let lastLocalSetupReady = false;
+let installModalAutoShown = false;
+let installModalDismissed = false;
+let installModalReturnFocus = null;
 
 function updateStatusPill(el, text, mode) {
   if (!el) return;
@@ -7199,16 +7292,113 @@ function updateStatusPill(el, text, mode) {
   el.className = 'status' + (mode ? ' ' + mode : '');
 }
 
+function trialInstallCommandLabel(reconnect) {
+  const isWin = typeof _isWindows === 'function' && _isWindows();
+  if (reconnect) return 'Reconnect this computer';
+  return isWin ? 'Get PowerShell command' : 'Get terminal command';
+}
+
+function updateTrialInstallGuidance() {
+  const req = document.getElementById('install-cli-requirement');
+  if (req) req.textContent = 'No Claude or Codex CLI required for trial. This only connects your browser.';
+}
+
+function updateSendAvailability(ready) {
+  const input = document.getElementById('msginput');
+  const btn = document.getElementById('sendbtn');
+  if (input) {
+    input.placeholder = ready ? 'Ask the agent anything...' : 'Connect the trial browser connector before sending a prompt...';
+  }
+  if (btn) {
+    btn.disabled = !ready;
+    btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    btn.classList.toggle('setup-blocked', !ready);
+    btn.title = ready ? 'Send prompt' : 'Connect this computer first';
+  }
+}
+
+function _installModalFocusable() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'))
+    .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+}
+
+function handleInstallModalKeydown(e) {
+  const modal = document.getElementById('install-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInstallModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusable = _installModalFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openInstallModal() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return;
+  if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', handleInstallModalKeydown);
+  const focusable = _installModalFocusable();
+  (focusable[0] || modal).focus({preventScroll:true});
+}
+
+function hideInstallModal(markDismissed) {
+  if (markDismissed) installModalDismissed = true;
+  const modal = document.getElementById('install-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', handleInstallModalKeydown);
+  if (installModalReturnFocus && typeof installModalReturnFocus.focus === 'function') {
+    try { installModalReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  installModalReturnFocus = null;
+}
+
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasReady) {
+  const ready = bridgeConnected;
+  if (wasReady && !ready) {
+    installModalDismissed = false;
+    installModalAutoShown = false;
+  }
+  if (ready) {
+    installModalAutoShown = false;
+    installModalDismissed = false;
+    const modal = document.getElementById('install-modal');
+    if (modal && modal.style.display === 'flex') hideInstallModal(false);
+    return;
+  }
+  const fullyOffline = !chatConnected && !bridgeConnected && !mismatch;
+  if (!fullyOffline || installModalAutoShown || installModalDismissed) return;
+  installModalAutoShown = true;
+  showTrialInstallCmd();
+}
+
 function updateAgentStatusUI(data) {
   const el = document.getElementById('agentstatus');
   const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
   const bannerMsg = document.getElementById('banner-msg');
+  const bannerDetail = document.getElementById('banner-detail');
   const bannerCurl = document.getElementById('banner-curl');
   const bannerConnect = document.getElementById('banner-connect');
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
+  const setupReady = bridgeConnected;
+  const wasSetupReady = lastLocalSetupReady;
 
   if (chatConnected) updateStatusPill(el, 'agent online', 'online');
   else if (mismatch) updateStatusPill(el, 'agent mismatch', 'warn');
@@ -7217,22 +7407,38 @@ function updateAgentStatusUI(data) {
   if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
   else updateStatusPill(bridgeEl, 'bridge offline', '');
 
-  if (bannerMsg) bannerMsg.textContent = 'Connect your browser to browse.';
-  if (bannerCurl) { const w = typeof _isWindows==='function'&&_isWindows(); bannerCurl.textContent = mismatch ? (w ? 'Reinstall (PowerShell)' : 'Reinstall (curl)') : (w ? 'Install (PowerShell)' : 'Install (curl)'); }
+  lastLocalSetupReady = setupReady;
+  updateSendAvailability(setupReady);
+  updateTrialInstallGuidance();
+  if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
+  if (bannerDetail) bannerDetail.textContent = 'Pick terminal command or installer. No Claude or Codex CLI required for trial.';
+  if (bannerCurl) {
+    bannerCurl.textContent = trialInstallCommandLabel(false);
+    bannerCurl.dataset.reconnect = '0';
+  }
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
-    if (chatConnected && bridgeConnected) {
+    if (bridgeConnected) {
       banner.style.display = 'none';
     } else {
       if (chatConnected && !bridgeConnected && bannerMsg) {
         bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
+        if (bannerDetail) bannerDetail.textContent = 'The trial agent is reachable, but browser actions still need the local connector. Run the install command here and keep it open.';
       } else if (mismatch && bannerMsg) {
         bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+        if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should run the trial browser connector.';
+        if (bannerCurl) {
+          bannerCurl.textContent = trialInstallCommandLabel(true);
+          bannerCurl.dataset.reconnect = '1';
+        }
+      } else if (bannerDetail) {
+        bannerDetail.textContent = 'The browser bridge is required for trial browsing. The install command starts the browser connector.';
       }
       banner.style.display = 'flex';
     }
   }
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasSetupReady);
 }
 
 function showMain() {
@@ -7263,6 +7469,8 @@ function showMain() {
   _persistSessionId(sessionId);
   _setActiveSlotSession(sessionId);
   _syncSlotButtons();
+  updateTrialInstallGuidance();
+  updateSendAvailability(false);
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
@@ -7816,6 +8024,10 @@ async function doSend() {
     alert('Enter a valid OpenRouter model ID like qwen/qwen3.5-flash-02-23');
     return;
   }
+  if (!lastLocalSetupReady) {
+    showBannerInstall();
+    return;
+  }
   input.value = '';
   input.style.height = 'auto';
 
@@ -7989,26 +8201,46 @@ function dismissUpgrade() {
 function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
 
 async function showBannerInstall() {
-  await showTrialInstallCmd();
+  const bannerCurl = document.getElementById('banner-curl');
+  const reconnect = bannerCurl && bannerCurl.dataset.reconnect === '1';
+  installModalDismissed = false;
+  await showTrialInstallCmd(reconnect);
 }
 
-async function showTrialInstallCmd() {
+async function showTrialInstallCmd(reconnect) {
   const isWin = _isWindows();
-  document.getElementById('install-modal-title').textContent = 'Connect Your Browser';
-  document.getElementById('install-modal-desc').textContent = isWin
-    ? 'Run this in PowerShell to connect Chrome (Python 3.8+ required):'
-    : 'Run this in your terminal to connect Chrome (Python 3 + curl required):';
-  document.getElementById('install-modal-note').textContent = 'Link expires in 15 minutes. Only installs websockets \u2014 no API key needed.';
-  const modal = document.getElementById('install-modal');
-  modal.style.display = 'flex';
-  document.getElementById('install-cmd').textContent = 'Generating link...';
+  updateTrialInstallGuidance();
+  const retryBtn = document.getElementById('retry-btn');
+  const copyBtn = document.getElementById('copy-btn');
+  document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
+  document.getElementById('install-modal-desc').textContent = reconnect
+    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this browser.' : 'Pick one: terminal command or installer to reconnect this browser.')
+    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+  document.getElementById('install-modal-note').textContent = isWin
+    ? 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+.'
+    : 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+ and curl.';
+  if (copyBtn) {
+    copyBtn.disabled = false;
+    copyBtn.textContent = 'Copy Command';
+  }
+  if (retryBtn) retryBtn.style.display = 'none';
+  openInstallModal();
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
   try {
     const r = await fetch('/trial/token', {method: 'POST'});
-    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      document.getElementById('install-cmd').textContent = 'Error: ' + (data.error || ('HTTP ' + r.status));
+      if (copyBtn) copyBtn.disabled = true;
+      if (retryBtn) retryBtn.style.display = '';
+      return;
+    }
     const data = await r.json();
     document.getElementById('install-cmd').textContent = isWin ? data.powershell_command : data.curl_command;
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+    if (copyBtn) copyBtn.disabled = true;
+    if (retryBtn) retryBtn.style.display = '';
   }
 }
 
@@ -8017,12 +8249,12 @@ function copyInstallCmd() {
   navigator.clipboard.writeText(cmd).then(() => {
     const btn = document.getElementById('copy-btn');
     btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 2000);
+    setTimeout(() => btn.textContent = 'Copy Command', 2000);
   });
 }
 
 function closeInstallModal() {
-  document.getElementById('install-modal').style.display = 'none';
+  hideInstallModal(true);
 }
 </script>
 </body>
@@ -11912,10 +12144,10 @@ body{
   display:flex;
   align-items:center;
   justify-content:center;
-  gap:12px;
-  padding:9px clamp(12px,2vw,24px);
-  background:rgba(255,107,74,0.1);
-  border-bottom:1px solid rgba(255,107,74,0.3);
+  gap:14px;
+  padding:12px clamp(12px,2vw,24px);
+  background:linear-gradient(90deg,rgba(255,107,74,0.14),rgba(255,107,74,0.06));
+  border-bottom:1px solid rgba(255,107,74,0.34);
   font-size:13px;
   color:var(--muted);
   flex-shrink:0;
@@ -11925,10 +12157,42 @@ body{
   flex-direction:column;
   min-width:0;
   gap:2px;
+  flex:1 1 320px;
+  max-width:520px;
+}
+#download-banner .banner-kicker{
+  font-size:10px;
+  letter-spacing:0.16em;
+  text-transform:uppercase;
+  color:#ffb39f;
+  font-weight:700;
 }
 #download-banner .detail{font-size:12px;color:#b5bfce}
 #download-banner #banner-msg{color:#f6d5cd}
 #download-banner #banner-detail{color:#b8a7a3}
+#download-banner .banner-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-shrink:0;
+}
+#download-banner .method-or{
+  color:#8f9aad;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+}
+#download-banner .sr-only{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
 #download-banner a{
   color:#ffd8cf;
   text-decoration:none;
@@ -11940,6 +12204,15 @@ body{
   font-size:12px;
   white-space:nowrap;
   transition:background 0.15s ease,border-color 0.15s ease;
+}
+#download-banner a.primary{
+  background:linear-gradient(135deg,rgba(255,107,74,0.34),rgba(255,107,74,0.2));
+  border-color:rgba(255,107,74,0.66);
+}
+#download-banner a.secondary{
+  color:#cbd5e1;
+  background:rgba(255,255,255,0.035);
+  border-color:rgba(255,255,255,0.14);
 }
 #download-banner a:hover{background:rgba(255,107,74,0.28);border-color:var(--accent-strong)}
 
@@ -12013,6 +12286,34 @@ body{
 }
 #install-modal .modal-title{color:#ffd5cc;margin-bottom:8px;font-size:16px}
 #install-modal .modal-desc{color:var(--muted);font-size:13px;margin-bottom:12px}
+#install-modal .modal-short{color:var(--muted);font-size:12px;line-height:1.4;margin:0 0 12px}
+#install-modal .install-methods{margin:0 0 14px}
+#install-modal .method-intro{margin-bottom:8px}
+#install-modal .method-intro b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+#install-modal .method-intro span{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#install-modal .method-card{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:11px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:rgba(255,255,255,0.025);
+  text-decoration:none;
+}
+#install-modal .method-card.active{border-color:rgba(255,107,74,0.55);background:rgba(255,107,74,0.09)}
+#install-modal .method-card:hover{border-color:rgba(255,107,74,0.5)}
+#install-modal .method-card .method-label{
+  color:#ffb39f;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+}
+#install-modal .method-card b{color:var(--text);font-size:13px}
+#install-modal .method-card span{color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-card .method-cta{color:#ffd5cc;font-size:12px;font-weight:700;margin-top:auto}
 #install-modal .modal-code{
   background:#10151d;
   border:1px solid var(--line);
@@ -12024,7 +12325,16 @@ body{
   position:relative;
 }
 #install-modal .modal-code code{color:var(--text)}
-#install-modal .modal-actions{margin-top:10px;display:flex;gap:8px}
+#install-modal .command-label{
+  display:block;
+  margin:0 0 6px;
+  color:#b8c1d1;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+#install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
 #install-modal .modal-copy{
   background:#2b313d;
   border:1px solid #3b4353;
@@ -12034,7 +12344,37 @@ body{
   font-size:12px;
   cursor:pointer;
 }
+#install-modal .modal-installer{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(255,255,255,0.035);
+  border:1px solid var(--line);
+  color:#d7deea;
+  padding:8px 12px;
+  border-radius:10px;
+  font-size:12px;
+  text-decoration:none;
+}
+#install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
+#install-modal .modal-skip{
+  background:transparent;
+  border:1px solid var(--line);
+  color:var(--muted);
+  padding:8px 12px;
+  border-radius:10px;
+  font-size:12px;
+  cursor:pointer;
+}
+#install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
 #install-modal .modal-note{color:var(--muted);font-size:11px;margin-top:12px}
+
+#sendbtn.setup-blocked{
+  background:#334155;
+  color:#cbd5e1;
+  cursor:not-allowed;
+  opacity:0.86;
+}
 
 @media (max-width: 900px){
   #main{max-width:none;border:none;box-shadow:none}
@@ -12042,6 +12382,8 @@ body{
   #topbar .nav{justify-content:flex-start}
   #profilesel{min-width:0;flex:1}
   .bubble{max-width:92%;font-size:13px}
+  #download-banner{align-items:stretch;flex-wrap:wrap;justify-content:flex-start}
+  #download-banner .copy{max-width:none}
 }
 @media (max-width: 640px){
   body{
@@ -12067,8 +12409,12 @@ body{
   #chat{padding:12px 10px}
   #inputbar{padding:10px}
   #msginput{font-size:14px}
-  #download-banner{flex-wrap:wrap;justify-content:flex-start;gap:8px}
+  #download-banner{gap:10px}
   #download-banner .copy{width:100%}
+  #download-banner .banner-actions{width:100%;flex-wrap:wrap}
+  #download-banner .method-or{display:none}
+  #download-banner .banner-actions a{flex:1 1 160px;text-align:center}
+  #install-modal .method-grid{grid-template-columns:1fr}
 }
 
 /* Archive panel */
@@ -12176,26 +12522,51 @@ body{
     <span id="turn-ctr"></span>
   </div>
 
-  <div id="download-banner" style="display:none">
+  <div id="download-banner" class="guided" style="display:none">
     <div class="copy">
-      <span id="banner-msg">Your local chat agent is offline.</span>
-      <span class="detail" id="banner-detail">Browser bridge and chat agent are tracked separately.</span>
+      <span class="banner-kicker">Local setup required</span>
+      <span id="banner-msg">Connect this computer to run browser tasks.</span>
+      <span class="detail" id="banner-detail">Status has two parts: Browser bridge and chat agent are tracked separately.</span>
     </div>
-    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
-    <a href="/install" id="banner-connect">Download Agent Installer</a>
+    <div class="banner-actions">
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <span class="method-or" aria-hidden="true">or</span>
+      <span class="sr-only">or use the installer</span>
+      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+    </div>
   </div>
 
   <!-- Install modal -->
-  <div id="install-modal">
+  <div id="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" aria-describedby="install-modal-desc" tabindex="-1">
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
-      <h3 class="modal-title" id="install-modal-title">Install Agent (curl)</h3>
-      <p class="modal-desc" id="install-modal-desc">Run this command in your terminal:</p>
+      <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
+      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-short" id="install-cli-requirement">Requires Claude CLI to be installed and logged in.</p>
+      <div class="install-methods" aria-label="Install method choices">
+        <div class="method-intro"><b>Choose one install method</b><span>Both options install the same Unchained local agent. Do not run both.</span></div>
+        <div class="method-grid">
+          <div class="method-card active">
+            <span class="method-label">Option A</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
+          <a class="method-card" href="/install">
+            <span class="method-label">Option B</span>
+            <b>Installer</b>
+            <span class="method-cta">Open installer page</span>
+          </a>
+        </div>
+      </div>
+      <p class="modal-short">After installing, leave the agent running and return here.</p>
       <div class="modal-code">
+        <span class="command-label">Option A command</span>
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
+        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
       <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
     </div>
@@ -12228,7 +12599,7 @@ body{
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
               onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
+    <button id="sendbtn" onclick="doSend()" disabled>&#9654;</button>
     <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
   </div>
 </div>
@@ -12457,6 +12828,8 @@ function _highlightSlotButtons(slot) {
 
 function onModelChange(model) {
   localStorage.setItem('unchained_model', model);
+  updateLocalCliGuidance();
+  updateSendAvailability(false);
   // Refresh model-scoped status immediately when switching lanes.
   checkAgentStatus();
 }
@@ -12529,6 +12902,9 @@ let clientUpdateError = '';
 const CLIENT_UPDATE_TIMEOUT_MS = 90000;
 let clientUpdateStartedAt = 0;
 let lastClientStatus = null;
+let lastLocalSetupReady = false;
+let installModalAutoShown = false;
+let installModalDismissed = false;
 
 function updateStatusPill(el, text, mode) {
   if (!el) return;
@@ -12573,6 +12949,104 @@ function updateClientUpdateUI(data) {
   btn.title = (localVersion && serverVersion) ? ('Local client ' + localVersion + ' / server ' + serverVersion) : 'Update and restart the local client';
 }
 
+function localInstallCommandLabel(reconnect) {
+  const isWin = typeof _isWindows === 'function' && _isWindows();
+  if (reconnect) return 'Reconnect this computer';
+  return isWin ? 'Get PowerShell command' : 'Get terminal command';
+}
+
+function localCliNameForModel() {
+  return currentModel().startsWith('codex-cli:') ? 'Codex CLI' : 'Claude CLI';
+}
+
+function updateLocalCliGuidance() {
+  const req = document.getElementById('install-cli-requirement');
+  if (req) req.textContent = 'Requires ' + localCliNameForModel() + ' to be installed and logged in.';
+}
+
+function updateSendAvailability(ready) {
+  const input = document.getElementById('msginput');
+  const btn = document.getElementById('sendbtn');
+  if (input) {
+    input.placeholder = ready ? 'Ask the agent anything...' : 'Connect the local agent before sending a prompt...';
+  }
+  if (btn) {
+    btn.disabled = !ready;
+    btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    btn.classList.toggle('setup-blocked', !ready);
+    btn.title = ready ? 'Send prompt' : 'Connect the local agent first';
+  }
+}
+
+function _installModalFocusable() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'))
+    .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+}
+
+function handleInstallModalKeydown(e) {
+  const modal = document.getElementById('install-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInstallModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusable = _installModalFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openInstallModal() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return;
+  if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', handleInstallModalKeydown);
+  const focusable = _installModalFocusable();
+  (focusable[0] || modal).focus({preventScroll:true});
+}
+
+function hideInstallModal(markDismissed) {
+  if (markDismissed) installModalDismissed = true;
+  const modal = document.getElementById('install-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', handleInstallModalKeydown);
+  if (installModalReturnFocus && typeof installModalReturnFocus.focus === 'function') {
+    try { installModalReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  installModalReturnFocus = null;
+}
+
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasReady) {
+  const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  if (wasReady && !ready) {
+    installModalDismissed = false;
+    installModalAutoShown = false;
+  }
+  if (ready) {
+    installModalAutoShown = false;
+    installModalDismissed = false;
+    const modal = document.getElementById('install-modal');
+    if (modal && modal.style.display === 'flex') hideInstallModal(false);
+    return;
+  }
+  const fullyOffline = !chatConnected && !bridgeConnected && !mismatch;
+  if (!fullyOffline || installModalAutoShown || installModalDismissed) return;
+  installModalAutoShown = true;
+  showInstallCmd();
+}
+
 async function triggerClientUpdate() {
   if (clientUpdateInFlight) return;
   clientUpdateError = '';
@@ -12608,6 +13082,9 @@ function updateAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
   const codexCliSupported = data.codex_cli_supported !== false;
+  const cliName = localCliNameForModel();
+  const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  const wasSetupReady = lastLocalSetupReady;
   if (clientUpdateInFlight) {
     if (!data.client_connected) clientUpdateSawDisconnect = true;
     else if (clientUpdateSawDisconnect || !data.client_outdated) {
@@ -12625,13 +13102,25 @@ function updateAgentStatusUI(data) {
   if (!clientUpdateInFlight && !data.client_outdated) clientUpdateError = '';
   lastClientStatus = data;
   updateClientUpdateUI(data);
-  if (bannerMsg) bannerMsg.textContent = 'Your local chat agent is offline.';
-  if (bannerDetail) bannerDetail.textContent = 'Browser bridge and chat agent are tracked separately.';
+  lastLocalSetupReady = setupReady;
+  updateSendAvailability(setupReady);
+  updateLocalCliGuidance();
+  if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-  if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Install (PowerShell)' : 'Install (curl)';
-  if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Codex CLI lane requires the local chat agent and a Codex CLI login.';
+  if (bannerCurl) {
+    bannerCurl.textContent = localInstallCommandLabel(false);
+    bannerCurl.dataset.reconnect = '0';
+  }
+  if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
+  if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
-    bannerMsg.textContent = 'Codex CLI requires an updated local chat agent package.';
+    bannerMsg.textContent = 'Update the local agent to use Codex CLI.';
+    if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for Codex CLI. Use the same install command to update/reconnect, then restart the local agent.';
+    if (bannerCurl) {
+      bannerCurl.textContent = 'Update/reconnect agent';
+      bannerCurl.dataset.reconnect = '1';
+    }
   }
 
   if (bridgeConnected) {
@@ -12640,34 +13129,41 @@ function updateAgentStatusUI(data) {
     updateStatusPill(bridgeEl, 'bridge offline', '');
   }
 
-  if (chatConnected) {
+  if (isCodexCli && !codexCliSupported) {
+    updateStatusPill(chatEl, 'codex cli needs update', 'warn');
+    if (banner) banner.style.display = 'flex';
+  } else if (chatConnected) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
     else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
       if (banner) banner.style.display = 'none';
     } else {
       if (bannerMsg) bannerMsg.textContent = 'Your browser bridge is offline.';
-      if (bannerDetail) bannerDetail.textContent = 'Chat is connected, but browser actions and setup profile detection on this machine need the bridge.';
+      if (bannerDetail) bannerDetail.textContent = 'The ' + cliName + ' chat agent is running, but browser actions still need the bridge. Run the install command here and keep it open.';
       if (banner) banner.style.display = 'flex';
     }
   } else if (mismatch) {
     updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
-    if (bannerDetail) bannerDetail.textContent = 'Your browser bridge may still be online. Reinstall only if this machine should own the active chat agent.';
+    if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
     if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-    if (bannerCurl) bannerCurl.textContent = (typeof _isWindows==='function'&&_isWindows()) ? 'Reinstall (PowerShell)' : 'Reinstall (curl)';
+    if (bannerCurl) {
+      bannerCurl.textContent = localInstallCommandLabel(true);
+      bannerCurl.dataset.reconnect = '1';
+    }
     if (banner) banner.style.display = 'flex';
   } else {
-    if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
-    else if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
+    if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
     else updateStatusPill(chatEl, 'agent offline', '');
     if (bridgeConnected) {
-      if (bannerDetail) bannerDetail.textContent = 'Browser bridge is online, so setup and browser control can still work on this machine.';
+      if (bannerMsg) bannerMsg.textContent = 'Start the local chat agent on this computer.';
+      if (bannerDetail) bannerDetail.textContent = 'Your browser bridge is online, but chat needs the local agent. Run the install command or restart the agent process.';
     } else if (bannerDetail) {
-      bannerDetail.textContent = 'Start the full local agent package to bring both browser bridge and agent online.';
+      bannerDetail.textContent = 'Status has two parts: Browser bridge and chat agent are tracked separately. The install command starts both.';
     }
     if (banner) banner.style.display = 'flex';
   }
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
 }
 
 function showMain() {
@@ -12687,6 +13183,8 @@ function showMain() {
   _persistSessionId(sessionId);
   _setActiveSlotSession(sessionId);
   _syncSlotButtons();
+  updateLocalCliGuidance();
+  updateSendAvailability(false);
   loadChatProfiles();
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
@@ -13332,6 +13830,10 @@ async function doSend() {
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
+  if (!lastLocalSetupReady) {
+    showBannerInstall();
+    return;
+  }
   removeClaudeUpgradeCard();
   input.value = '';
   input.style.height = 'auto';
@@ -13458,7 +13960,10 @@ async function doSend() {
 function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
 
 async function showBannerInstall() {
-  await showInstallCmd();
+  const bannerCurl = document.getElementById('banner-curl');
+  const reconnect = bannerCurl && bannerCurl.dataset.reconnect === '1';
+  installModalDismissed = false;
+  await showInstallCmd(reconnect);
 }
 
 function _normalizeLocalUrl(raw) {
@@ -13468,14 +13973,18 @@ function _normalizeLocalUrl(raw) {
   return s;
 }
 
-async function showInstallCmd() {
+async function showInstallCmd(reconnect) {
   const isWin = _isWindows();
-  document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
-  document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
-  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.8+.' : 'Links expire in 15 minutes. Requires Python 3.8+ and curl.';
+  updateLocalCliGuidance();
+  document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
+  document.getElementById('install-modal-desc').textContent = reconnect
+    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this computer.' : 'Pick one: terminal command or installer to reconnect this computer.')
+    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+  document.getElementById('install-modal-note').textContent = isWin
+    ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
+    : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
-  const modal = document.getElementById('install-modal');
-  modal.style.display = 'flex';
+  openInstallModal();
   document.getElementById('install-cmd').textContent = 'Generating install command...';
   try {
     const r = await fetch('/web/install-token', {method: 'POST'});
@@ -13498,7 +14007,7 @@ function copyInstallCmd() {
 }
 
 function closeInstallModal() {
-  document.getElementById('install-modal').style.display = 'none';
+  hideInstallModal(true);
 }
 </script>
 </body>
@@ -16038,51 +16547,82 @@ INSTALL_ONBOARD_HTML = r"""<!DOCTYPE html>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{
-  --bg:#0b0d10;--surface:#13171d;--line:#2a313b;--text:#e8edf3;--muted:#a7b0bc;
-  --accent:#23c483;--accent-2:#0ea5e9;--warn:#f59e0b;
+  --bg:#080a0d;--surface:#11161d;--surface-2:#151c25;--line:#273241;--line-strong:#3a4656;
+  --text:#eef3f8;--muted:#9aa7b7;--soft:#c9d4e2;--accent:#ff6b4a;--accent-2:#5cd48a;--warn:#f5bf52;
+  --mono:'SF Mono','Menlo','Monaco','Consolas',monospace;
 }
 *{box-sizing:border-box}
+html{min-height:100%}
 body{
-  margin:0;background:radial-gradient(1200px 700px at 70% -10%, #1d2c3a 0%, var(--bg) 60%);
-  color:var(--text);font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin:0;
+  min-height:100dvh;
+  color:var(--text);
+  font-family:"Avenir Next","Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  background:
+    radial-gradient(900px 520px at 8% -8%, rgba(255,107,74,0.18), transparent 60%),
+    radial-gradient(720px 420px at 92% 8%, rgba(92,212,138,0.12), transparent 58%),
+    linear-gradient(180deg,#0d1117 0%,var(--bg) 68%);
 }
-.shell{max-width:860px;margin:0 auto;padding:40px 18px 80px}
-.hero{margin-bottom:18px}
-.kicker{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent-2)}
-h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
-.sub{color:var(--muted);font-size:16px;line-height:1.6;max-width:720px}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size:54px 54px;
+  mask-image:linear-gradient(to bottom, rgba(0,0,0,0.75), transparent 82%);
+}
+a{color:#ffd5cc}
+.shell{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:34px 18px 70px}
+.topline{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:30px;color:var(--muted);font-size:12px}
+.brand{letter-spacing:0.18em;text-transform:uppercase;color:#dfe8f4;font-weight:800}
+.brand span{color:var(--accent)}
+.topline a{text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:var(--soft);background:rgba(255,255,255,0.03)}
+.layout{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(420px,1.1fr);gap:24px;align-items:start}
+.hero{position:sticky;top:28px;padding:18px 2px 0}
+.kicker{font-size:11px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent)}
+h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spacing:-0.04em;max-width:7.5ch}
+.sub{color:var(--soft);font-size:16px;line-height:1.55;max-width:480px}
+.prereq{
+  margin-top:20px;padding:14px 16px;border:1px solid rgba(255,107,74,0.25);border-radius:16px;
+  background:rgba(255,107,74,0.08);color:#ffd8cf;font-size:13px;line-height:1.45;max-width:520px;
+}
+.prereq b{display:block;color:#fff;margin-bottom:3px}
 .card{
-  margin-top:20px;background:rgba(19,23,29,0.95);border:1px solid var(--line);
-  border-radius:14px;padding:20px;
+  background:rgba(17,22,29,0.9);border:1px solid rgba(255,255,255,0.1);
+  border-radius:22px;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,0.38);backdrop-filter:blur(14px);
 }
+.card-title{font-size:22px;font-weight:800;letter-spacing:-0.02em;margin-bottom:6px}
+.card-lede{color:var(--muted);font-size:13px;line-height:1.55;margin-bottom:16px}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .pill{
-  display:inline-flex;align-items:center;border:1px solid #334155;border-radius:999px;
-  padding:4px 10px;font-size:12px;color:#c6d0dc;background:#0d1218;
+  display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;
+  padding:6px 10px;font-size:12px;color:#c6d0dc;background:#0b1118;
 }
-.pill.online{color:#90edba;border-color:#2f6f39;background:#112219}
-.pill.warn{color:#f2d18a;border-color:#7a6326;background:#1d1607}
-.safe{margin:14px 0 4px;padding-left:18px;color:#cbd5e1}
-.safe li{margin:6px 0}
+.pill.online{color:#b6ffd0;border-color:rgba(92,212,138,0.45);background:rgba(92,212,138,0.1)}
+.pill.warn{color:#ffe5a6;border-color:rgba(245,191,82,0.45);background:rgba(245,191,82,0.1)}
+.status-panel{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,0.03)}
+.status-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}
+.status-head b{font-size:13px;color:var(--text)}
+.status-head span{font-size:12px;color:var(--muted);line-height:1.35}
+.safe{margin:14px 0 4px;padding:0;display:grid;grid-template-columns:1fr;gap:8px;color:#cbd5e1;list-style:none}
+.safe li{margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,0.025);font-size:13px;color:#cbd5e1}
 .agree{
-  margin-top:12px;border:1px solid #32404f;background:#0e141b;border-radius:10px;padding:12px;
-  font-size:14px;color:#dbe7f3
+  margin-top:14px;border:1px solid rgba(255,107,74,0.28);background:rgba(255,107,74,0.07);border-radius:14px;padding:12px;
+  font-size:13px;color:#f4dfda;line-height:1.45;
 }
 .agree input{vertical-align:middle;transform:translateY(-1px)}
 .btn{
-  border:none;border-radius:10px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer;
+  border:none;border-radius:12px;padding:12px 15px;font-size:14px;font-weight:800;cursor:pointer;
 }
-.btn-primary{background:linear-gradient(135deg,#23c483,#18a96f);color:#062217}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#ff8a5c);color:#180906;box-shadow:0 12px 30px rgba(255,107,74,0.18)}
 .btn-primary:disabled{opacity:0.45;cursor:not-allowed}
-.btn-ghost{background:transparent;color:#c8d4e1;border:1px solid #3a4759}
+.btn-ghost{background:rgba(255,255,255,0.03);color:#c8d4e1;border:1px solid var(--line)}
 .cmd{
   margin-top:12px;padding:10px 12px;border:1px solid #2f3b4a;border-radius:8px;
-  background:#0b1118;color:#c8f7df;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+  background:#0b1118;color:#c8f7df;font-family:var(--mono);
   white-space:pre-wrap;word-break:break-word;font-size:12px;
 }
 .note{margin-top:10px;color:#9aa6b3;font-size:12px}
 .note.warn{color:#f9c56e}
-.status{margin-top:10px;font-size:13px;color:#cde0f5}
+.status{margin-top:10px;font-size:13px;color:#cde0f5;min-height:18px}
 .warn{color:#f9c56e}
 .runtime-actions{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:10px}
 .install-client-update-btn{
@@ -16104,12 +16644,15 @@ h1{margin:8px 0 10px;font-size:36px;line-height:1.15}
 }
 .install-client-update-note{margin-top:0;min-height:20px;line-height:1.4}
 @keyframes installClientUpdatePulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 14px rgba(245,158,11,0.16)}}
-a{color:#93d5ff}
 #auth-panel{display:none}
 #ready-panel{display:none}
-@media (max-width:680px){
-  h1{font-size:30px}
-  .shell{padding-top:30px}
+@media (max-width:900px){
+  .shell{padding-top:24px}
+  .topline{margin-bottom:18px}
+  .layout{grid-template-columns:1fr}
+  .hero{position:relative;top:auto;padding-top:0}
+  h1{font-size:42px;max-width:none}
+  .card{padding:16px;border-radius:18px}
   .pill{
     border:none;
     padding:0;
@@ -16123,54 +16666,76 @@ a{color:#93d5ff}
 </head>
 <body>
   <div class="shell">
-    <div class="hero">
-      <div class="kicker">Secure Installer</div>
-      <h1>Install Unchained</h1>
-      <div class="sub">One guided download from this website. No terminal required for normal onboarding.</div>
+    <div class="topline">
+      <a class="brand" href="/">UN<span>CHAIN</span>ED</a>
+      <a href="/local">Back to local chat</a>
     </div>
 
-    <div class="card" id="auth-panel">
-      <div style="font-size:18px;font-weight:600;margin-bottom:6px">Sign in first</div>
-      <div class="sub" style="font-size:14px">You need to be signed in before downloading your personalized installer.</div>
-      <div class="row" style="margin-top:12px">
-        <a class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center" href="/local?next=%2Finstall">Sign In</a>
-      </div>
-    </div>
+    <div class="layout">
+      <section class="hero">
+        <div class="kicker">Secure local agent</div>
+        <h1>Connect this computer.</h1>
+        <div class="sub">Download the Unchained agent, leave it running, and return to chat when both local status pills are online.</div>
+        <div class="prereq"><b>Before you install</b>For local chat, Claude CLI or Codex CLI should already be installed and logged in. This installer only adds the Unchained browser agent.</div>
+      </section>
 
-    <div class="card" id="ready-panel">
-      <div class="row">
-        <span class="pill">Detected OS: <strong id="os-label" style="margin-left:6px">macOS</strong></span>
-        <span class="pill">Signed Installer Flow</span>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <span class="pill" id="install-agentstatus">agent offline</span>
-        <span class="pill" id="install-bridgestatus">bridge offline</span>
-      </div>
-      <div class="note" id="install-runtime-status">Checking local agent status...</div>
-      <div class="runtime-actions">
-        <button class="btn btn-ghost install-client-update-btn" id="install-client-update-btn" type="button" onclick="triggerInstallClientUpdate()">Client current</button>
-        <span class="note install-client-update-note" id="install-client-update-note"></span>
-      </div>
+      <div>
+        <div class="card" id="auth-panel">
+          <div class="card-title">Sign in first</div>
+          <div class="card-lede">Your installer is personalized to your account, so sign in before downloading.</div>
+          <div class="row">
+            <a class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center" href="/local?next=%2Finstall">Sign In</a>
+          </div>
+        </div>
 
-      <ul class="safe">
-        <li>Installer download is issued from your authenticated account session.</li>
-        <li>Downloads a native installer binary for your OS (.dmg/.pkg or .msi/.exe).</li>
-        <li>Fallback shell installers are disabled in the one-click flow.</li>
-      </ul>
+        <div class="card" id="ready-panel">
+          <div class="card-title">Download installer</div>
+          <div class="card-lede">Use the native installer for this device. ZIP is only a fallback for unsupported systems.</div>
 
-      <div class="agree">
-        <label>
-          <input type="checkbox" id="agree-box" onchange="refreshInstallButton()">
-          I agree to install the local Unchained agent on this device and allow it to automate my browser sessions.
-        </label>
+          <div class="row">
+            <span class="pill">Detected OS: <strong id="os-label" style="margin-left:6px">macOS</strong></span>
+            <span class="pill">Signed Installer Flow</span>
+          </div>
+
+          <div class="status-panel">
+            <div class="status-head">
+              <div>
+                <b>Local connection</b>
+                <span>Refreshes automatically after install.</span>
+              </div>
+              <div class="row">
+                <span class="pill" id="install-agentstatus">agent offline</span>
+                <span class="pill" id="install-bridgestatus">bridge offline</span>
+              </div>
+            </div>
+            <div class="note" id="install-runtime-status">Checking local agent status...</div>
+            <div class="runtime-actions">
+              <button class="btn btn-ghost install-client-update-btn" id="install-client-update-btn" type="button" onclick="triggerInstallClientUpdate()">Client current</button>
+              <span class="note install-client-update-note" id="install-client-update-note"></span>
+            </div>
+          </div>
+
+          <ul class="safe">
+            <li>Installer download is issued from your authenticated account session.</li>
+            <li>Downloads a native installer binary for your OS (.dmg/.pkg or .msi/.exe).</li>
+            <li>Fallback shell installers are disabled in the one-click flow.</li>
+          </ul>
+
+          <div class="agree">
+            <label>
+              <input type="checkbox" id="agree-box" onchange="refreshInstallButton()">
+              I agree to install the local Unchained agent on this device and allow it to automate my browser sessions.
+            </label>
+          </div>
+
+          <div class="row" style="margin-top:14px">
+            <button class="btn btn-primary" id="install-btn" onclick="startInstall()" disabled>Download Installer</button>
+            <a class="btn btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-agent">Download ZIP</a>
+          </div>
+
+          <div class="status" id="install-status"></div>
+        </div>
       </div>
-
-      <div class="row" style="margin-top:14px">
-        <button class="btn btn-primary" id="install-btn" onclick="startInstall()" disabled>Download Installer</button>
-        <a class="btn btn-ghost" style="text-decoration:none;display:inline-flex;align-items:center" href="/web/download-agent">Download ZIP</a>
-      </div>
-
-      <div class="status" id="install-status"></div>
     </div>
   </div>
 

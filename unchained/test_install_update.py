@@ -1053,8 +1053,22 @@ def test_chat_html_has_install_modal():
     assert "copyInstallCmd" in CHAT_HTML, "copyInstallCmd JS missing"
     assert "closeInstallModal" in CHAT_HTML, "closeInstallModal JS missing"
     assert "Download Agent Installer" in CHAT_HTML, "installer download button missing"
-    assert "Install (curl)" in CHAT_HTML, "curl install option missing"
-    assert "Install Agent (curl)" in CHAT_HTML, "curl modal title missing"
+    assert "Get terminal command" in CHAT_HTML, "terminal install option missing"
+    assert "Connect this computer" in CHAT_HTML, "connect modal title missing"
+    assert "Choose one install method" in CHAT_HTML, "install method choice copy missing"
+    assert "Do not run both" in CHAT_HTML, "either/or install guidance missing"
+    assert "Requires Claude CLI to be installed and logged in." in CHAT_HTML, "default CLI prerequisite copy missing"
+    assert "localCliNameForModel()" in CHAT_HTML, "CLI prerequisite should follow selected lane"
+    assert "Requires Claude CLI or Codex CLI already installed and logged in." not in CHAT_HTML, "generic CLI prerequisite copy should be gone"
+    assert "Install (curl)" not in CHAT_HTML, "stale curl install label should be gone from local chat"
+    assert "Install Agent (curl)" not in CHAT_HTML, "stale curl modal title should be gone from local chat"
+    assert "sr-only" in CHAT_HTML, "accessible either/or text missing"
+    assert 'role="dialog"' in CHAT_HTML, "install modal dialog role missing"
+    assert "handleInstallModalKeydown" in CHAT_HTML, "install modal focus trap missing"
+    assert '<button id="sendbtn" onclick="doSend()" disabled>' in CHAT_HTML, "local send button should default disabled before status loads"
+    assert "to reconnect this computer" in CHAT_HTML, "reconnect modal copy missing"
+    assert "btn.disabled = !ready" in CHAT_HTML, "send button should be disabled semantically when setup is blocked"
+    assert "Use the same install command to update/reconnect" in CHAT_HTML, "Codex update copy should clarify install/update flow"
     assert "Copy Command" in CHAT_HTML, "copy command button missing"
     assert "download" in CHAT_HTML.lower(), "download link missing"
     assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-connect"'), "curl action should come before connect"
@@ -1245,15 +1259,29 @@ def test_gemini_chat_has_install_banner():
     print("  CHAT_GEMINI_HTML has installer banner + curl modal")
 
 
-def test_trial_chat_has_bridge_status_pill():
-    """Verify trial chat template shows separate chat+bridge status and status updater uses both flags."""
+def test_trial_chat_has_guided_install_ux():
+    """Verify trial chat template shows local setup status and guided install UX."""
     from web import TRIAL_CHAT_HTML
     assert 'id="agentstatus"' in TRIAL_CHAT_HTML, "trial chat agent status pill missing"
     assert 'id="bridgestatus"' in TRIAL_CHAT_HTML, "trial chat bridge status pill missing"
     assert "chat_connected" in TRIAL_CHAT_HTML, "trial status updater missing chat_connected handling"
     assert "bridge_connected" in TRIAL_CHAT_HTML, "trial status updater missing bridge_connected handling"
     assert "fetch('/web/chat/status?model='" in TRIAL_CHAT_HTML, "trial status polling endpoint missing"
-    print("  TRIAL_CHAT_HTML has chat+bridge status pills")
+    assert "Trial setup required" in TRIAL_CHAT_HTML, "trial guided setup banner missing"
+    assert "Choose one install method" in TRIAL_CHAT_HTML, "trial install method choice copy missing"
+    assert "Do not run both" in TRIAL_CHAT_HTML, "trial either/or install guidance missing"
+    assert "No Claude or Codex CLI required for trial" in TRIAL_CHAT_HTML, "trial prerequisite copy missing"
+    assert "maybeAutoOpenInstallModal" in TRIAL_CHAT_HTML, "trial auto-open install behavior missing"
+    assert "lastLocalSetupReady" in TRIAL_CHAT_HTML, "trial send readiness guard missing"
+    assert "sr-only" in TRIAL_CHAT_HTML, "trial accessible either/or text missing"
+    assert 'role="dialog"' in TRIAL_CHAT_HTML, "trial install modal dialog role missing"
+    assert "handleInstallModalKeydown" in TRIAL_CHAT_HTML, "trial install modal focus trap missing"
+    assert '<button id="sendbtn" onclick="doSend()" disabled>' in TRIAL_CHAT_HTML, "trial send button should default disabled before status loads"
+    assert "Retry Command" in TRIAL_CHAT_HTML, "trial install command retry missing"
+    assert "--setup-accent" in TRIAL_CHAT_HTML, "trial setup color variables missing"
+    assert "to reconnect this browser" in TRIAL_CHAT_HTML, "trial reconnect modal copy missing"
+    assert "btn.disabled = !ready" in TRIAL_CHAT_HTML, "trial send button should be disabled semantically when setup is blocked"
+    print("  TRIAL_CHAT_HTML has chat+bridge status pills + guided install UX")
 
 
 def test_admin_page_shows_openrouter_spend_column():
@@ -1644,7 +1672,7 @@ if __name__ == "__main__":
         ("web: claim-start has rate/capacity guards", test_claim_start_has_rate_limit_and_capacity_guards),
         ("web: public base URL ignores untrusted host header", test_public_base_url_ignores_untrusted_host_header),
         ("web: CHAT_GEMINI_HTML has install banner", test_gemini_chat_has_install_banner),
-        ("web: TRIAL_CHAT_HTML has bridge status", test_trial_chat_has_bridge_status_pill),
+        ("web: TRIAL_CHAT_HTML has guided install UX", test_trial_chat_has_guided_install_ux),
         ("web: ADMIN_HTML shows OpenRouter spend column", test_admin_page_shows_openrouter_spend_column),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
