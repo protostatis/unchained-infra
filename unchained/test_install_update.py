@@ -1249,14 +1249,20 @@ def test_gemini_chat_has_install_banner():
 
 
 def test_trial_chat_has_bridge_status_pill():
-    """Verify trial chat template shows separate chat+bridge status and status updater uses both flags."""
+    """Verify trial chat template shows local setup status and guided install UX."""
     from web import TRIAL_CHAT_HTML
     assert 'id="agentstatus"' in TRIAL_CHAT_HTML, "trial chat agent status pill missing"
     assert 'id="bridgestatus"' in TRIAL_CHAT_HTML, "trial chat bridge status pill missing"
     assert "chat_connected" in TRIAL_CHAT_HTML, "trial status updater missing chat_connected handling"
     assert "bridge_connected" in TRIAL_CHAT_HTML, "trial status updater missing bridge_connected handling"
     assert "fetch('/web/chat/status?model='" in TRIAL_CHAT_HTML, "trial status polling endpoint missing"
-    print("  TRIAL_CHAT_HTML has chat+bridge status pills")
+    assert "Trial setup required" in TRIAL_CHAT_HTML, "trial guided setup banner missing"
+    assert "Choose one install method" in TRIAL_CHAT_HTML, "trial install method choice copy missing"
+    assert "Do not run both" in TRIAL_CHAT_HTML, "trial either/or install guidance missing"
+    assert "No Claude or Codex CLI required for trial" in TRIAL_CHAT_HTML, "trial prerequisite copy missing"
+    assert "maybeAutoOpenInstallModal" in TRIAL_CHAT_HTML, "trial auto-open install behavior missing"
+    assert "lastLocalSetupReady" in TRIAL_CHAT_HTML, "trial send readiness guard missing"
+    print("  TRIAL_CHAT_HTML has chat+bridge status pills + guided install UX")
 
 
 def test_admin_page_shows_openrouter_spend_column():
