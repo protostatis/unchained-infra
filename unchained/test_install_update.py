@@ -1057,7 +1057,15 @@ def test_chat_html_has_install_modal():
     assert "Connect this computer" in CHAT_HTML, "connect modal title missing"
     assert "Choose one install method" in CHAT_HTML, "install method choice copy missing"
     assert "Do not run both" in CHAT_HTML, "either/or install guidance missing"
-    assert "Requires Claude CLI or Codex CLI already installed and logged in." in CHAT_HTML, "CLI prerequisite copy missing"
+    assert "Requires Claude CLI to be installed and logged in." in CHAT_HTML, "default CLI prerequisite copy missing"
+    assert "localCliNameForModel()" in CHAT_HTML, "CLI prerequisite should follow selected lane"
+    assert "Requires Claude CLI or Codex CLI already installed and logged in." not in CHAT_HTML, "generic CLI prerequisite copy should be gone"
+    assert "Install (curl)" not in CHAT_HTML, "stale curl install label should be gone from local chat"
+    assert "Install Agent (curl)" not in CHAT_HTML, "stale curl modal title should be gone from local chat"
+    assert "sr-only" in CHAT_HTML, "accessible either/or text missing"
+    assert "to reconnect this computer" in CHAT_HTML, "reconnect modal copy missing"
+    assert "btn.disabled = !ready" in CHAT_HTML, "send button should be disabled semantically when setup is blocked"
+    assert "Use the same install command to update/reconnect" in CHAT_HTML, "Codex update copy should clarify install/update flow"
     assert "Copy Command" in CHAT_HTML, "copy command button missing"
     assert "download" in CHAT_HTML.lower(), "download link missing"
     assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-connect"'), "curl action should come before connect"
@@ -1262,6 +1270,9 @@ def test_trial_chat_has_bridge_status_pill():
     assert "No Claude or Codex CLI required for trial" in TRIAL_CHAT_HTML, "trial prerequisite copy missing"
     assert "maybeAutoOpenInstallModal" in TRIAL_CHAT_HTML, "trial auto-open install behavior missing"
     assert "lastLocalSetupReady" in TRIAL_CHAT_HTML, "trial send readiness guard missing"
+    assert "sr-only" in TRIAL_CHAT_HTML, "trial accessible either/or text missing"
+    assert "to reconnect this browser" in TRIAL_CHAT_HTML, "trial reconnect modal copy missing"
+    assert "btn.disabled = !ready" in TRIAL_CHAT_HTML, "trial send button should be disabled semantically when setup is blocked"
     print("  TRIAL_CHAT_HTML has chat+bridge status pills + guided install UX")
 
 

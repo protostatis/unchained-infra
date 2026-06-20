@@ -6538,6 +6538,7 @@ body{
 #download-banner #banner-detail{color:#c7aeb6}
 #download-banner .banner-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 #download-banner .method-or{color:#9fa5b7;font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
+#download-banner .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #download-banner a{
   color:#ffd5dc;text-decoration:none;font-weight:600;
   border:1px solid rgba(233,69,96,0.56);background:rgba(233,69,96,0.18);
@@ -6778,6 +6779,7 @@ body{
     <div class="banner-actions">
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
       <span class="method-or" aria-hidden="true">or</span>
+      <span class="sr-only">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
     </div>
   </div>
@@ -7305,15 +7307,19 @@ function updateSendAvailability(ready) {
     input.placeholder = ready ? 'Ask the agent anything...' : 'Connect the trial browser connector before sending a prompt...';
   }
   if (btn) {
-    btn.disabled = false;
+    btn.disabled = !ready;
     btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
     btn.classList.toggle('setup-blocked', !ready);
     btn.title = ready ? 'Send prompt' : 'Connect this computer first';
   }
 }
 
-function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch) {
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasReady) {
   const ready = bridgeConnected;
+  if (wasReady && !ready) {
+    installModalDismissed = false;
+    installModalAutoShown = false;
+  }
   if (ready) {
     installModalAutoShown = false;
     installModalDismissed = false;
@@ -7339,6 +7345,7 @@ function updateAgentStatusUI(data) {
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
   const setupReady = bridgeConnected;
+  const wasSetupReady = lastLocalSetupReady;
 
   if (chatConnected) updateStatusPill(el, 'agent online', 'online');
   else if (mismatch) updateStatusPill(el, 'agent mismatch', 'warn');
@@ -7352,7 +7359,10 @@ function updateAgentStatusUI(data) {
   updateTrialInstallGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
   if (bannerDetail) bannerDetail.textContent = 'Pick terminal command or installer. No Claude or Codex CLI required for trial.';
-  if (bannerCurl) bannerCurl.textContent = trialInstallCommandLabel(false);
+  if (bannerCurl) {
+    bannerCurl.textContent = trialInstallCommandLabel(false);
+    bannerCurl.dataset.reconnect = '0';
+  }
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
@@ -7365,14 +7375,17 @@ function updateAgentStatusUI(data) {
       } else if (mismatch && bannerMsg) {
         bannerMsg.textContent = 'A different local chat agent is connected for this account.';
         if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should run the trial browser connector.';
-        if (bannerCurl) bannerCurl.textContent = trialInstallCommandLabel(true);
+        if (bannerCurl) {
+          bannerCurl.textContent = trialInstallCommandLabel(true);
+          bannerCurl.dataset.reconnect = '1';
+        }
       } else if (bannerDetail) {
         bannerDetail.textContent = 'The browser bridge is required for trial browsing. The install command starts the browser connector.';
       }
       banner.style.display = 'flex';
     }
   }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch);
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasSetupReady);
 }
 
 function showMain() {
@@ -8135,17 +8148,19 @@ function dismissUpgrade() {
 function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
 
 async function showBannerInstall() {
+  const bannerCurl = document.getElementById('banner-curl');
+  const reconnect = bannerCurl && bannerCurl.dataset.reconnect === '1';
   installModalDismissed = false;
-  await showTrialInstallCmd();
+  await showTrialInstallCmd(reconnect);
 }
 
-async function showTrialInstallCmd() {
+async function showTrialInstallCmd(reconnect) {
   const isWin = _isWindows();
   updateTrialInstallGuidance();
-  document.getElementById('install-modal-title').textContent = 'Connect this computer';
-  document.getElementById('install-modal-desc').textContent = isWin
-    ? 'Pick one: PowerShell command or installer.'
-    : 'Pick one: terminal command or installer.';
+  document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
+  document.getElementById('install-modal-desc').textContent = reconnect
+    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this browser.' : 'Pick one: terminal command or installer to reconnect this browser.')
+    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+ and curl.';
@@ -12102,6 +12117,17 @@ body{
   text-transform:uppercase;
   letter-spacing:0.08em;
 }
+#download-banner .sr-only{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
 #download-banner a{
   color:#ffd8cf;
   text-decoration:none;
@@ -12440,6 +12466,7 @@ body{
     <div class="banner-actions">
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
       <span class="method-or" aria-hidden="true">or</span>
+      <span class="sr-only">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
     </div>
   </div>
@@ -12450,7 +12477,7 @@ body{
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
       <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
-      <p class="modal-short" id="install-cli-requirement">Requires Claude CLI or Codex CLI already installed and logged in.</p>
+      <p class="modal-short" id="install-cli-requirement">Requires Claude CLI to be installed and logged in.</p>
       <div class="install-methods" aria-label="Install method choices">
         <div class="method-intro"><b>Choose one install method</b><span>Both options install the same Unchained local agent. Do not run both.</span></div>
         <div class="method-grid">
@@ -12869,7 +12896,7 @@ function localCliNameForModel() {
 
 function updateLocalCliGuidance() {
   const req = document.getElementById('install-cli-requirement');
-  if (req) req.textContent = 'Requires Claude CLI or Codex CLI already installed and logged in.';
+  if (req) req.textContent = 'Requires ' + localCliNameForModel() + ' to be installed and logged in.';
 }
 
 function updateSendAvailability(ready) {
@@ -12879,15 +12906,19 @@ function updateSendAvailability(ready) {
     input.placeholder = ready ? 'Ask the agent anything...' : 'Connect the local agent before sending a prompt...';
   }
   if (btn) {
-    btn.disabled = false;
+    btn.disabled = !ready;
     btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
     btn.classList.toggle('setup-blocked', !ready);
     btn.title = ready ? 'Send prompt' : 'Connect the local agent first';
   }
 }
 
-function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported) {
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasReady) {
   const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  if (wasReady && !ready) {
+    installModalDismissed = false;
+    installModalAutoShown = false;
+  }
   if (ready) {
     installModalAutoShown = false;
     installModalDismissed = false;
@@ -12938,6 +12969,7 @@ function updateAgentStatusUI(data) {
   const codexCliSupported = data.codex_cli_supported !== false;
   const cliName = localCliNameForModel();
   const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  const wasSetupReady = lastLocalSetupReady;
   if (clientUpdateInFlight) {
     if (!data.client_connected) clientUpdateSawDisconnect = true;
     else if (clientUpdateSawDisconnect || !data.client_outdated) {
@@ -12961,13 +12993,19 @@ function updateAgentStatusUI(data) {
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
   if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-  if (bannerCurl) bannerCurl.textContent = localInstallCommandLabel(false);
+  if (bannerCurl) {
+    bannerCurl.textContent = localInstallCommandLabel(false);
+    bannerCurl.dataset.reconnect = '0';
+  }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
     bannerMsg.textContent = 'Update the local agent to use Codex CLI.';
-    if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for Codex CLI. Run the latest install command, then restart the local agent.';
-    if (bannerCurl) bannerCurl.textContent = 'Update local agent';
+    if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for Codex CLI. Use the same install command to update/reconnect, then restart the local agent.';
+    if (bannerCurl) {
+      bannerCurl.textContent = 'Update/reconnect agent';
+      bannerCurl.dataset.reconnect = '1';
+    }
   }
 
   if (bridgeConnected) {
@@ -12976,7 +13014,10 @@ function updateAgentStatusUI(data) {
     updateStatusPill(bridgeEl, 'bridge offline', '');
   }
 
-  if (chatConnected) {
+  if (isCodexCli && !codexCliSupported) {
+    updateStatusPill(chatEl, 'codex cli needs update', 'warn');
+    if (banner) banner.style.display = 'flex';
+  } else if (chatConnected) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
     else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
@@ -12991,11 +13032,13 @@ function updateAgentStatusUI(data) {
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
     if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
-    if (bannerCurl) bannerCurl.textContent = localInstallCommandLabel(true);
+    if (bannerCurl) {
+      bannerCurl.textContent = localInstallCommandLabel(true);
+      bannerCurl.dataset.reconnect = '1';
+    }
     if (banner) banner.style.display = 'flex';
   } else {
-    if (isCodexCli && !codexCliSupported) updateStatusPill(chatEl, 'codex cli needs update', 'warn');
-    else if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
+    if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
     else updateStatusPill(chatEl, 'agent offline', '');
     if (bridgeConnected) {
       if (bannerMsg) bannerMsg.textContent = 'Start the local chat agent on this computer.';
@@ -13005,7 +13048,7 @@ function updateAgentStatusUI(data) {
     }
     if (banner) banner.style.display = 'flex';
   }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported);
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
 }
 
 function showMain() {
@@ -13802,8 +13845,10 @@ async function doSend() {
 function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
 
 async function showBannerInstall() {
+  const bannerCurl = document.getElementById('banner-curl');
+  const reconnect = bannerCurl && bannerCurl.dataset.reconnect === '1';
   installModalDismissed = false;
-  await showInstallCmd();
+  await showInstallCmd(reconnect);
 }
 
 function _normalizeLocalUrl(raw) {
@@ -13813,13 +13858,13 @@ function _normalizeLocalUrl(raw) {
   return s;
 }
 
-async function showInstallCmd() {
+async function showInstallCmd(reconnect) {
   const isWin = _isWindows();
   updateLocalCliGuidance();
-  document.getElementById('install-modal-title').textContent = 'Connect this computer';
-  document.getElementById('install-modal-desc').textContent = isWin
-    ? 'Pick one: PowerShell command or installer.'
-    : 'Pick one: terminal command or installer.';
+  document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
+  document.getElementById('install-modal-desc').textContent = reconnect
+    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this computer.' : 'Pick one: terminal command or installer to reconnect this computer.')
+    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
@@ -16488,7 +16533,7 @@ h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spa
 @keyframes installClientUpdatePulse{0%,100%{box-shadow:none}50%{box-shadow:0 0 14px rgba(245,158,11,0.16)}}
 #auth-panel{display:none}
 #ready-panel{display:none}
-@media (max-width:680px){
+@media (max-width:900px){
   .shell{padding-top:24px}
   .topline{margin-bottom:18px}
   .layout{grid-template-columns:1fr}
