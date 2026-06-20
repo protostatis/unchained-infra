@@ -1335,6 +1335,35 @@ def test_codex_chat_has_three_slot_ui():
     print("  Codex chat includes 3-slot UI + backend slot calls")
 
 
+def test_codex_cli_local_chat_has_guided_setup_ux():
+    """Verify /local?provider=codex-cli renders Codex with guided local setup UX."""
+    import inspect
+    import web as web_mod
+    from web import CHAT_CODEX_HTML
+
+    local_src = inspect.getsource(web_mod.handle_local_page)
+    assert 'provider in {"codex-cli", "codex-sdk"}' in local_src, "local page should serve Codex template for codex-cli provider"
+    assert "Local setup required" in CHAT_CODEX_HTML, "Codex CLI local setup banner missing"
+    assert "Choose one install method" in CHAT_CODEX_HTML, "Codex CLI install method choice copy missing"
+    assert "Do not run both" in CHAT_CODEX_HTML, "Codex CLI either/or install guidance missing"
+    assert "Requires Codex CLI to be installed and logged in." in CHAT_CODEX_HTML, "Codex CLI prerequisite copy missing"
+    assert "providerDefault = provider === 'codex-cli'" in CHAT_CODEX_HTML, "codex-cli provider should select Codex CLI default model"
+    assert "codex-cli:gpt-5.5" in CHAT_CODEX_HTML, "Codex CLI default model missing"
+    assert 'document.querySelectorAll(\'#modelsel option[value^="codex-sdk:"]\').forEach(o => o.remove())' in CHAT_CODEX_HTML, \
+        "Codex CLI lane should hide SDK model options after CLI selection"
+    assert "maybeAutoOpenInstallModal" in CHAT_CODEX_HTML, "Codex CLI auto-open install behavior missing"
+    assert "lastLocalSetupReady" in CHAT_CODEX_HTML, "Codex CLI send readiness guard missing"
+    assert "codex_cli_supported: data.codex_cli_supported" in CHAT_CODEX_HTML, "Codex CLI support status should reach UI"
+    assert "sr-only" in CHAT_CODEX_HTML, "Codex CLI accessible either/or text missing"
+    assert 'role="dialog"' in CHAT_CODEX_HTML, "Codex CLI install modal dialog role missing"
+    assert "handleInstallModalKeydown" in CHAT_CODEX_HTML, "Codex CLI install modal focus trap missing"
+    assert '<button id="sendbtn" onclick="doSend()" disabled>' in CHAT_CODEX_HTML, "Codex CLI send button should default disabled before status loads"
+    assert "btn.disabled = !ready" in CHAT_CODEX_HTML, "Codex CLI send button should be disabled semantically when setup is blocked"
+    assert "Install (curl)" not in CHAT_CODEX_HTML, "stale curl install label should be gone from Codex local chat"
+    assert "Install Agent (curl)" not in CHAT_CODEX_HTML, "stale curl modal title should be gone from Codex local chat"
+    print("  Codex CLI local chat has guided setup UX + provider default")
+
+
 def test_chat_agent_codex_supports_slot_protocol():
     """Verify server-side Codex agent supports get_slots/switch_slot/new_chat semantics."""
     source_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_agent_codex.py")
@@ -1677,6 +1706,7 @@ if __name__ == "__main__":
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
         ("web: CHAT_CODEX_HTML has 3-slot UI", test_codex_chat_has_three_slot_ui),
+        ("web: Codex CLI local chat has guided setup UX", test_codex_cli_local_chat_has_guided_setup_ux),
         ("codex agent: supports slot protocol", test_chat_agent_codex_supports_slot_protocol),
         ("web: TRIAL_CHAT_HTML has Claude access request flow", test_trial_chat_has_claude_access_request_flow),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),

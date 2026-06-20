@@ -9747,9 +9747,15 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
     TemplateReplacement(
         _API_CHAT_CODEX_SAVED_MODEL_SNIPPET,
         """  const params = new URLSearchParams(window.location.search);
+  const provider = (params.get('provider') || '').trim().toLowerCase();
   const fromQuery = (params.get('model') || '').trim();
+  const providerDefault = provider === 'codex-cli'
+    ? 'codex-cli:gpt-5.5'
+    : (provider === 'codex-sdk' ? 'codex-sdk:codex-mini-latest' : '');
   if (fromQuery && document.querySelector('#modelsel option[value="' + CSS.escape(fromQuery) + '"]')) {
     document.getElementById('modelsel').value = fromQuery;
+  } else if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
+    document.getElementById('modelsel').value = providerDefault;
   } else {
     const saved = localStorage.getItem('unchained_codex_model');
     if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
@@ -9907,9 +9913,523 @@ checkSession();""",
     ),
 )
 
+_API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
+    TemplateReplacement(
+        """/* === Installer banner === */
+#download-banner{
+  display:none;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:#2b1f28;border-bottom:1px solid #553040;
+  font-size:13px;color:#f1c7d6;flex-shrink:0;
+}
+#download-banner a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border:1px solid var(--accent);padding:4px 12px;border-radius:6px;
+  background:transparent;
+}
+#download-banner a:hover{background:var(--accent);color:#fff}
+
+/* === Input === */""",
+        """/* === Guided local setup === */
+#download-banner{
+  display:flex;align-items:center;justify-content:center;gap:14px;
+  padding:12px 16px;
+  background:linear-gradient(90deg,rgba(233,69,96,0.2),rgba(233,69,96,0.08));
+  border-bottom:1px solid rgba(233,69,96,0.42);
+  font-size:13px;color:var(--muted);flex-shrink:0;
+}
+#download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 320px;max-width:520px}
+#download-banner .banner-kicker{font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:#ffb39f;font-weight:700}
+#download-banner .detail{font-size:12px;color:#b2b7c7}
+#download-banner #banner-msg{color:#ffd5cc}
+#download-banner #banner-detail{color:#c6adad}
+#download-banner .banner-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+#download-banner .method-or{color:#8d7780;font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
+#download-banner .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#download-banner a{
+  color:#ffd5cc;text-decoration:none;font-weight:600;
+  border:1px solid rgba(233,69,96,0.56);background:rgba(233,69,96,0.18);
+  padding:5px 12px;border-radius:999px;font-size:12px;white-space:nowrap;
+}
+#download-banner a.primary{background:linear-gradient(135deg,rgba(233,69,96,0.36),rgba(233,69,96,0.18));border-color:rgba(233,69,96,0.72)}
+#download-banner a.secondary{color:#f0c4cf;background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.16)}
+#download-banner a:hover{background:rgba(233,69,96,0.3);color:#fff}
+
+#install-modal{
+  position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;
+  align-items:center;justify-content:center;
+}
+#install-modal .modal-card{
+  background:var(--surface);border:1px solid rgba(255,255,255,0.18);border-radius:14px;
+  padding:24px;max-width:520px;width:90%;position:relative;
+}
+#install-modal .modal-close{position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
+#install-modal .modal-title{color:#ffd5cc;margin-bottom:8px;font-size:16px}
+#install-modal .modal-desc{color:var(--muted);font-size:13px;margin-bottom:12px}
+#install-modal .modal-short{color:#b8becf;font-size:12px;line-height:1.4;margin:0 0 12px}
+#install-modal .install-methods{margin:0 0 14px}
+#install-modal .method-intro{margin-bottom:8px}
+#install-modal .method-intro b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+#install-modal .method-intro span{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#install-modal .method-card{display:flex;flex-direction:column;gap:4px;padding:11px;border:1px solid rgba(255,255,255,0.14);border-radius:12px;background:rgba(255,255,255,0.035);text-decoration:none}
+#install-modal .method-card.active{border-color:rgba(233,69,96,0.64);background:rgba(233,69,96,0.12)}
+#install-modal .method-card:hover{border-color:rgba(233,69,96,0.58)}
+#install-modal .method-card .method-label{color:#ffb39f;font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase}
+#install-modal .method-card b{color:var(--text);font-size:13px}
+#install-modal .method-card span{color:var(--muted);font-size:12px;line-height:1.35}
+#install-modal .method-card .method-cta{color:#ffd5cc;font-size:12px;font-weight:700;margin-top:auto}
+#install-modal .modal-code{background:var(--bg);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative}
+#install-modal .modal-code code{color:var(--text)}
+#install-modal .command-label{display:block;margin:0 0 6px;color:#c8cedb;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
+#install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+#install-modal .modal-copy{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:#f0c4cf;padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
+#install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
+#install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
+#install-modal .modal-note{color:var(--muted);font-size:11px;margin-top:12px}
+#sendbtn.setup-blocked{background:#34384d;color:#f0c4cf;cursor:not-allowed;opacity:0.9}
+@media (max-width:680px){
+  #download-banner{align-items:stretch;flex-wrap:wrap;justify-content:flex-start;gap:10px}
+  #download-banner .copy{width:100%;max-width:none}
+  #download-banner .banner-actions{width:100%;flex-wrap:wrap}
+  #download-banner .method-or{display:none}
+  #download-banner .banner-actions a{flex:1 1 160px;text-align:center}
+  #install-modal .method-grid{grid-template-columns:1fr}
+}
+
+/* === Input === */""",
+        "Codex guided local setup CSS",
+    ),
+    TemplateReplacement(
+        """  <div id="download-banner" style="display:none">
+    <span id="banner-msg">Local chat agent is offline on this machine.</span>
+    <a href="#" onclick="showBannerInstall();return false" id="banner-curl">Install (curl)</a>
+    <a href="/install" id="banner-connect">Download Agent Installer</a>
+  </div>
+
+  <div id="install-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid #444;border-radius:12px;padding:24px;max-width:520px;width:90%;position:relative">
+      <button onclick="closeInstallModal()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+      <h3 id="install-modal-title" style="color:var(--accent);margin-bottom:8px;font-size:16px">Install Agent (curl)</h3>
+      <p id="install-modal-desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">Run this command in your terminal:</p>
+      <div style="background:var(--bg);border:1px solid #333;border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative">
+        <code id="install-cmd" style="color:var(--text)">Loading command...</code>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button onclick="copyInstallCmd()" style="background:#2f3140;border:1px solid #4a4d60;color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer" id="copy-btn">Copy Command</button>
+      </div>
+      <p id="install-modal-note" style="color:var(--muted);font-size:11px;margin-top:12px">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
+    </div>
+  </div>""",
+        """  <div id="download-banner" class="guided" style="display:none">
+    <div class="copy">
+      <span class="banner-kicker">Local setup required</span>
+      <span id="banner-msg">Connect this computer to run browser tasks.</span>
+      <span class="detail" id="banner-detail">Requires Codex CLI. Pick terminal command or installer.</span>
+    </div>
+    <div class="banner-actions">
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <span class="method-or" aria-hidden="true">or</span>
+      <span class="sr-only">or use the installer</span>
+      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+    </div>
+  </div>
+
+  <!-- Install modal -->
+  <div id="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" aria-describedby="install-modal-desc" tabindex="-1">
+    <div class="modal-card">
+      <button class="modal-close" onclick="closeInstallModal()">&times;</button>
+      <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
+      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-short" id="install-cli-requirement">Requires Codex CLI to be installed and logged in.</p>
+      <div class="install-methods" aria-label="Install method choices">
+        <div class="method-intro"><b>Choose one install method</b><span>Both options install the same Unchained local agent. Do not run both.</span></div>
+        <div class="method-grid">
+          <div class="method-card active">
+            <span class="method-label">Option A</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
+          <a class="method-card" href="/install">
+            <span class="method-label">Option B</span>
+            <b>Installer</b>
+            <span class="method-cta">Open installer page</span>
+          </a>
+        </div>
+      </div>
+      <p class="modal-short">After installing, leave the agent running and return here.</p>
+      <div class="modal-code">
+        <span class="command-label">Option A command</span>
+        <code id="install-cmd">Loading command...</code>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
+        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
+      </div>
+      <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
+    </div>
+  </div>""",
+        "Codex guided local setup markup",
+    ),
+    TemplateReplacement(
+        '<button id="sendbtn" onclick="doSend()">&#9654;</button>',
+        '<button id="sendbtn" onclick="doSend()" disabled>&#9654;</button>',
+        "Codex send button defaults disabled",
+    ),
+    TemplateReplacement(
+        """function onModelChange(model) {
+  localStorage.setItem('unchained_codex_model', model);
+}""",
+        """function onModelChange(model) {
+  localStorage.setItem('unchained_codex_model', model);
+  updateLocalCliGuidance();
+  updateSendAvailability(false);
+  checkProvisionStatus();
+  checkAgentStatus();
+}""",
+        "Codex model change setup refresh",
+    ),
+    TemplateReplacement(
+        "let lastClientStatus = null;",
+        """let lastClientStatus = null;
+let lastLocalSetupReady = false;
+let installModalAutoShown = false;
+let installModalDismissed = false;
+let installModalReturnFocus = null;""",
+        "Codex local setup state",
+    ),
+    TemplateReplacement(
+        """function updateAgentStatusUI(data) {
+  const chatEl = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
+  const banner = document.getElementById('download-banner');
+  const bannerMsg = document.getElementById('banner-msg');
+  const bannerCurl = document.getElementById('banner-curl');
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+
+  if (chatConnected) updateStatusPill(chatEl, 'agent online', 'online');
+  else if (mismatch) updateStatusPill(chatEl, 'agent mismatch', 'warn');
+  else updateStatusPill(chatEl, 'agent offline', '');
+
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'bridge offline', '');
+
+  if (bannerMsg) bannerMsg.textContent = 'Local chat agent is offline on this machine.';
+  if (bannerCurl) { const w = typeof _isWindows==='function'&&_isWindows(); bannerCurl.textContent = mismatch ? (w ? 'Reinstall (PowerShell)' : 'Reinstall (curl)') : (w ? 'Install (PowerShell)' : 'Install (curl)'); }
+
+  if (banner) {
+    if (chatConnected && bridgeConnected) {
+      banner.style.display = 'none';
+    } else {
+      if (chatConnected && !bridgeConnected && bannerMsg) {
+        bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
+      } else if (mismatch && bannerMsg) {
+        bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+      }
+      banner.style.display = 'flex';
+    }
+  }
+}""",
+        """function localInstallCommandLabel(reconnect) {
+  const isWin = typeof _isWindows === 'function' && _isWindows();
+  if (reconnect) return 'Reconnect this computer';
+  return isWin ? 'Get PowerShell command' : 'Get terminal command';
+}
+
+function localCliNameForModel() {
+  return currentModel().startsWith('codex-cli:') ? 'Codex CLI' : 'Codex API key';
+}
+
+function updateLocalCliGuidance() {
+  const req = document.getElementById('install-cli-requirement');
+  if (!req) return;
+  req.textContent = currentModel().startsWith('codex-cli:')
+    ? 'Requires Codex CLI to be installed and logged in.'
+    : 'Requires a Codex API key to be provisioned.';
+}
+
+function updateSendAvailability(ready) {
+  const input = document.getElementById('msginput');
+  const btn = document.getElementById('sendbtn');
+  if (input) {
+    input.placeholder = ready ? 'Ask the agent anything...' : 'Connect this computer before sending a prompt...';
+  }
+  if (btn) {
+    btn.disabled = !ready;
+    btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    btn.classList.toggle('setup-blocked', !ready);
+    btn.title = ready ? 'Send prompt' : 'Connect this computer first';
+  }
+}
+
+function _installModalFocusable() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'))
+    .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+}
+
+function handleInstallModalKeydown(e) {
+  const modal = document.getElementById('install-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInstallModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusable = _installModalFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openInstallModal() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return;
+  if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', handleInstallModalKeydown);
+  const focusable = _installModalFocusable();
+  (focusable[0] || modal).focus({preventScroll:true});
+}
+
+function hideInstallModal(markDismissed) {
+  if (markDismissed) installModalDismissed = true;
+  const modal = document.getElementById('install-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', handleInstallModalKeydown);
+  if (installModalReturnFocus && typeof installModalReturnFocus.focus === 'function') {
+    try { installModalReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  installModalReturnFocus = null;
+}
+
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasReady) {
+  const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  if (wasReady && !ready) {
+    installModalDismissed = false;
+    installModalAutoShown = false;
+  }
+  if (ready) {
+    installModalAutoShown = false;
+    installModalDismissed = false;
+    const modal = document.getElementById('install-modal');
+    if (modal && modal.style.display === 'flex') hideInstallModal(false);
+    return;
+  }
+  const fullyOffline = !chatConnected && !bridgeConnected && !mismatch;
+  if (!fullyOffline || installModalAutoShown || installModalDismissed) return;
+  installModalAutoShown = true;
+  showInstallCmd();
+}
+
+function updateAgentStatusUI(data) {
+  const chatEl = document.getElementById('agentstatus');
+  const bridgeEl = document.getElementById('bridgestatus');
+  const banner = document.getElementById('download-banner');
+  const bannerMsg = document.getElementById('banner-msg');
+  const bannerDetail = document.getElementById('banner-detail');
+  const bannerConnect = document.getElementById('banner-connect');
+  const bannerCurl = document.getElementById('banner-curl');
+  const model = currentModel();
+  const isCodexCli = model.startsWith('codex-cli:');
+  const chatConnected = !!data.chat_connected;
+  const bridgeConnected = !!data.bridge_connected;
+  const mismatch = !!data.mismatch;
+  const codexCliSupported = data.codex_cli_supported !== false;
+  const cliName = localCliNameForModel();
+  const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  const wasSetupReady = lastLocalSetupReady;
+
+  lastLocalSetupReady = setupReady;
+  updateSendAvailability(setupReady);
+  updateLocalCliGuidance();
+  if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
+  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerCurl) {
+    bannerCurl.textContent = localInstallCommandLabel(false);
+    bannerCurl.dataset.reconnect = '0';
+  }
+  if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
+  if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
+  if (isCodexCli && !codexCliSupported && bannerMsg) {
+    bannerMsg.textContent = 'Update the local agent to use Codex CLI.';
+    if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for Codex CLI. Use the same install command to update/reconnect, then restart the local agent.';
+    if (bannerCurl) {
+      bannerCurl.textContent = 'Update/reconnect agent';
+      bannerCurl.dataset.reconnect = '1';
+    }
+  }
+
+  if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
+  else updateStatusPill(bridgeEl, 'bridge offline', '');
+
+  if (isCodexCli && !codexCliSupported) {
+    updateStatusPill(chatEl, 'codex cli needs update', 'warn');
+    if (banner) banner.style.display = 'flex';
+  } else if (chatConnected) {
+    updateStatusPill(chatEl, isCodexCli ? 'codex cli online' : 'codex api online', 'online');
+    if (bridgeConnected) {
+      if (banner) banner.style.display = 'none';
+    } else {
+      if (bannerMsg) bannerMsg.textContent = 'Your browser bridge is offline.';
+      if (bannerDetail) bannerDetail.textContent = 'The Codex chat lane is ready, but browser actions still need the bridge. Run the install command here and keep it open.';
+      if (banner) banner.style.display = 'flex';
+    }
+  } else if (mismatch) {
+    updateStatusPill(chatEl, 'agent mismatch', 'warn');
+    if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
+    if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
+    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+    if (bannerCurl) {
+      bannerCurl.textContent = localInstallCommandLabel(true);
+      bannerCurl.dataset.reconnect = '1';
+    }
+    if (banner) banner.style.display = 'flex';
+  } else {
+    updateStatusPill(chatEl, isCodexCli ? 'codex cli offline' : 'codex api offline', '');
+    if (bridgeConnected) {
+      if (bannerMsg) bannerMsg.textContent = 'Start the local chat agent on this computer.';
+      if (bannerDetail) bannerDetail.textContent = 'Your browser bridge is online, but chat needs the local agent. Run the install command or restart the agent process.';
+    } else if (bannerDetail) {
+      bannerDetail.textContent = isCodexCli
+        ? 'Status has two parts: Browser bridge and Codex CLI agent are tracked separately. The install command starts both.'
+        : 'Status has two parts: Browser bridge and Codex chat agent are tracked separately. The install command starts both.';
+    }
+    if (banner) banner.style.display = 'flex';
+  }
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
+}""",
+        "Codex guided status and modal helpers",
+    ),
+    TemplateReplacement(
+        """      updateAgentStatusUI({
+        chat_connected: data.codex_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+      });""",
+        """      updateAgentStatusUI({
+        chat_connected: data.codex_connected || false,
+        bridge_connected: !!data.bridge_connected,
+        mismatch: !!data.mismatch,
+        codex_cli_supported: data.codex_cli_supported,
+      });""",
+        "Codex status forwards CLI support",
+    ),
+    TemplateReplacement(
+        """  _persistSessionId(sessionId);
+  loadChatProfiles();
+  checkProvisionStatus();""",
+        """  _persistSessionId(sessionId);
+  updateLocalCliGuidance();
+  updateSendAvailability(false);
+  loadChatProfiles();
+  checkProvisionStatus();""",
+        "Codex setup initializes before status poll",
+    ),
+    TemplateReplacement(
+        """async function showBannerInstall() {
+  await showInstallCmd();
+}""",
+        """async function showBannerInstall() {
+  const bannerCurl = document.getElementById('banner-curl');
+  const reconnect = bannerCurl && bannerCurl.dataset.reconnect === '1';
+  installModalDismissed = false;
+  await showInstallCmd(reconnect);
+}""",
+        "Codex banner install opens guided modal",
+    ),
+    TemplateReplacement(
+        """async function showInstallCmd() {
+  const isWin = _isWindows();
+  document.getElementById('install-modal-title').textContent = isWin ? 'Install Agent (PowerShell)' : 'Install Agent (curl)';
+  document.getElementById('install-modal-desc').textContent = isWin ? 'Run this command in PowerShell:' : 'Run this command in your terminal:';
+  document.getElementById('install-modal-note').textContent = isWin ? 'Links expire in 15 minutes. Requires Python 3.8+.' : 'Links expire in 15 minutes. Requires Python 3.8+ and curl.';
+  document.getElementById('copy-btn').textContent = 'Copy Command';
+  const modal = document.getElementById('install-modal');
+  modal.style.display = 'flex';
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    const data = await r.json();
+    const command = _normalizeLocalUrl(isWin ? (data.powershell_command || '') : (data.curl_command || ''));
+    document.getElementById('install-cmd').textContent = command || 'No install command available.';
+  } catch(e) {
+    document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+  }
+}""",
+        """async function showInstallCmd(reconnect) {
+  const isWin = _isWindows();
+  updateLocalCliGuidance();
+  document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
+  document.getElementById('install-modal-desc').textContent = reconnect
+    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this computer.' : 'Pick one: terminal command or installer to reconnect this computer.')
+    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+  document.getElementById('install-modal-note').textContent = isWin
+    ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
+    : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
+  document.getElementById('copy-btn').textContent = 'Copy Command';
+  openInstallModal();
+  document.getElementById('install-cmd').textContent = 'Generating install command...';
+  try {
+    const r = await fetch('/web/install-token', {method: 'POST'});
+    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    const data = await r.json();
+    const command = _normalizeLocalUrl(isWin ? (data.powershell_command || '') : (data.curl_command || ''));
+    document.getElementById('install-cmd').textContent = command || 'No install command available.';
+  } catch(e) {
+    document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+  }
+}""",
+        "Codex guided install command modal",
+    ),
+    TemplateReplacement(
+        """function closeInstallModal() {
+  document.getElementById('install-modal').style.display = 'none';
+}""",
+        """function closeInstallModal() {
+  hideInstallModal(true);
+}""",
+        "Codex guided modal close",
+    ),
+    TemplateReplacement(
+        """  if (!codexProvisioned && !currentModel().startsWith('codex-cli:')) {
+    alert('No Codex key provisioned. Visit /setup to get one.');
+    return;
+  }
+  const input = document.getElementById('msginput');""",
+        """  if (!codexProvisioned && !currentModel().startsWith('codex-cli:')) {
+    alert('No Codex key provisioned. Visit /setup to get one.');
+    return;
+  }
+  if (!lastLocalSetupReady) {
+    await showInstallCmd();
+    return;
+  }
+  const input = document.getElementById('msginput');""",
+        "Codex send guarded on local setup",
+    ),
+)
+
 CHAT_CODEX_HTML = apply_template_replacements(
     CHAT_GEMINI_HTML,
-    _API_CHAT_CODEX_BASE_REPLACEMENTS + _API_CHAT_CODEX_SERVER_SLOT_REPLACEMENTS,
+    _API_CHAT_CODEX_BASE_REPLACEMENTS
+    + _API_CHAT_CODEX_SERVER_SLOT_REPLACEMENTS
+    + _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS,
     template_name="CHAT_CODEX_HTML",
 )
 
