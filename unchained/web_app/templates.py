@@ -6293,6 +6293,7 @@ TRIAL_CHAT_HTML = r"""<!DOCTYPE html>
 :root{
   --bg:#1a1a2e;--surface:#16213e;--accent:#e94560;
   --text:#eee;--muted:#888;--user-bg:#2a1a3e;--asst-bg:#1e2a3e;
+  --setup-accent:#ffb0bf;--setup-text:#ffd5dc;--setup-muted:#c7aeb6;--setup-soft:#d7deea;--setup-subtle:#9fa5b7;
   --mono:'SF Mono','Menlo','Monaco','Consolas',monospace;
 }
 body{
@@ -6532,20 +6533,20 @@ body{
   font-size:13px;color:var(--muted);flex-shrink:0;
 }
 #download-banner .copy{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 320px;max-width:520px}
-#download-banner .banner-kicker{font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:#ffb0bf;font-weight:700}
+#download-banner .banner-kicker{font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:var(--setup-accent);font-weight:700}
 #download-banner .detail{font-size:12px;color:#b2b7c7}
-#download-banner #banner-msg{color:#ffd5dc}
-#download-banner #banner-detail{color:#c7aeb6}
+#download-banner #banner-msg{color:var(--setup-text)}
+#download-banner #banner-detail{color:var(--setup-muted)}
 #download-banner .banner-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
-#download-banner .method-or{color:#9fa5b7;font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
+#download-banner .method-or{color:var(--setup-subtle);font-size:11px;text-transform:uppercase;letter-spacing:0.08em}
 #download-banner .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #download-banner a{
-  color:#ffd5dc;text-decoration:none;font-weight:600;
+  color:var(--setup-text);text-decoration:none;font-weight:600;
   border:1px solid rgba(233,69,96,0.56);background:rgba(233,69,96,0.18);
   padding:5px 12px;border-radius:999px;font-size:12px;white-space:nowrap;
 }
 #download-banner a.primary{background:linear-gradient(135deg,rgba(233,69,96,0.36),rgba(233,69,96,0.18));border-color:rgba(233,69,96,0.72)}
-#download-banner a.secondary{color:#d7deea;background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.16)}
+#download-banner a.secondary{color:var(--setup-soft);background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.16)}
 #download-banner a:hover{background:rgba(233,69,96,0.3);color:#fff}
 
 /* === Install modal === */
@@ -6558,7 +6559,7 @@ body{
   padding:24px;max-width:520px;width:90%;position:relative;
 }
 #install-modal .modal-close{position:absolute;top:12px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
-#install-modal .modal-title{color:#ffd5dc;margin-bottom:8px;font-size:16px}
+#install-modal .modal-title{color:var(--setup-text);margin-bottom:8px;font-size:16px}
 #install-modal .modal-desc{color:var(--muted);font-size:13px;margin-bottom:12px}
 #install-modal .modal-short{color:#b8becf;font-size:12px;line-height:1.4;margin:0 0 12px}
 #install-modal .install-methods{margin:0 0 14px}
@@ -6569,22 +6570,22 @@ body{
 #install-modal .method-card{display:flex;flex-direction:column;gap:4px;padding:11px;border:1px solid rgba(255,255,255,0.14);border-radius:12px;background:rgba(255,255,255,0.035);text-decoration:none}
 #install-modal .method-card.active{border-color:rgba(233,69,96,0.64);background:rgba(233,69,96,0.12)}
 #install-modal .method-card:hover{border-color:rgba(233,69,96,0.58)}
-#install-modal .method-card .method-label{color:#ffb0bf;font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase}
+#install-modal .method-card .method-label{color:var(--setup-accent);font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase}
 #install-modal .method-card b{color:var(--text);font-size:13px}
 #install-modal .method-card span{color:var(--muted);font-size:12px;line-height:1.35}
-#install-modal .method-card .method-cta{color:#ffd5dc;font-size:12px;font-weight:700;margin-top:auto}
+#install-modal .method-card .method-cta{color:var(--setup-text);font-size:12px;font-weight:700;margin-top:auto}
 #install-modal .modal-code{background:var(--bg);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;word-break:break-all;position:relative}
 #install-modal .modal-code code{color:var(--text)}
 #install-modal .command-label{display:block;margin:0 0 6px;color:#c8cedb;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
 #install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
 #install-modal .modal-copy{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
-#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:#d7deea;padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
+#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:var(--setup-soft);padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
 #install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
 #install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
 #install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
 #install-modal .modal-note{color:var(--muted);font-size:11px;margin-top:12px}
 
-#sendbtn.setup-blocked{background:#34384d;color:#d7deea;cursor:not-allowed;opacity:0.9}
+#sendbtn.setup-blocked{background:#34384d;color:var(--setup-soft);cursor:not-allowed;opacity:0.9}
 
 /* === Chat hints === */
 #chat-hints{
@@ -6785,7 +6786,7 @@ body{
   </div>
 
   <!-- Install modal -->
-  <div id="install-modal">
+  <div id="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" aria-describedby="install-modal-desc" tabindex="-1">
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
@@ -6813,6 +6814,7 @@ body{
       </div>
       <div class="modal-actions">
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
+        <button class="modal-copy modal-retry" onclick="showTrialInstallCmd()" id="retry-btn" type="button" style="display:none">Retry Command</button>
         <a class="modal-installer" href="/install">Download Agent Installer</a>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
@@ -6859,7 +6861,7 @@ body{
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
               onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
+    <button id="sendbtn" onclick="doSend()" disabled>&#9654;</button>
     <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
   </div>
 </div>
@@ -7282,6 +7284,7 @@ let lastCodexCliSupported = true;
 let lastLocalSetupReady = false;
 let installModalAutoShown = false;
 let installModalDismissed = false;
+let installModalReturnFocus = null;
 
 function updateStatusPill(el, text, mode) {
   if (!el) return;
@@ -7314,6 +7317,56 @@ function updateSendAvailability(ready) {
   }
 }
 
+function _installModalFocusable() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'))
+    .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+}
+
+function handleInstallModalKeydown(e) {
+  const modal = document.getElementById('install-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInstallModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusable = _installModalFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openInstallModal() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return;
+  if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', handleInstallModalKeydown);
+  const focusable = _installModalFocusable();
+  (focusable[0] || modal).focus({preventScroll:true});
+}
+
+function hideInstallModal(markDismissed) {
+  if (markDismissed) installModalDismissed = true;
+  const modal = document.getElementById('install-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', handleInstallModalKeydown);
+  if (installModalReturnFocus && typeof installModalReturnFocus.focus === 'function') {
+    try { installModalReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  installModalReturnFocus = null;
+}
+
 function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasReady) {
   const ready = bridgeConnected;
   if (wasReady && !ready) {
@@ -7324,7 +7377,7 @@ function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, was
     installModalAutoShown = false;
     installModalDismissed = false;
     const modal = document.getElementById('install-modal');
-    if (modal && modal.style.display === 'flex') modal.style.display = 'none';
+    if (modal && modal.style.display === 'flex') hideInstallModal(false);
     return;
   }
   const fullyOffline = !chatConnected && !bridgeConnected && !mismatch;
@@ -8157,6 +8210,8 @@ async function showBannerInstall() {
 async function showTrialInstallCmd(reconnect) {
   const isWin = _isWindows();
   updateTrialInstallGuidance();
+  const retryBtn = document.getElementById('retry-btn');
+  const copyBtn = document.getElementById('copy-btn');
   document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
   document.getElementById('install-modal-desc').textContent = reconnect
     ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this browser.' : 'Pick one: terminal command or installer to reconnect this browser.')
@@ -8164,17 +8219,28 @@ async function showTrialInstallCmd(reconnect) {
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+ and curl.';
-  document.getElementById('copy-btn').textContent = 'Copy Command';
-  const modal = document.getElementById('install-modal');
-  modal.style.display = 'flex';
+  if (copyBtn) {
+    copyBtn.disabled = false;
+    copyBtn.textContent = 'Copy Command';
+  }
+  if (retryBtn) retryBtn.style.display = 'none';
+  openInstallModal();
   document.getElementById('install-cmd').textContent = 'Generating install command...';
   try {
     const r = await fetch('/trial/token', {method: 'POST'});
-    if (!r.ok) { document.getElementById('install-cmd').textContent = 'Error: ' + (await r.json()).error; return; }
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      document.getElementById('install-cmd').textContent = 'Error: ' + (data.error || ('HTTP ' + r.status));
+      if (copyBtn) copyBtn.disabled = true;
+      if (retryBtn) retryBtn.style.display = '';
+      return;
+    }
     const data = await r.json();
     document.getElementById('install-cmd').textContent = isWin ? data.powershell_command : data.curl_command;
   } catch(e) {
     document.getElementById('install-cmd').textContent = 'Error: ' + e.message;
+    if (copyBtn) copyBtn.disabled = true;
+    if (retryBtn) retryBtn.style.display = '';
   }
 }
 
@@ -8188,8 +8254,7 @@ function copyInstallCmd() {
 }
 
 function closeInstallModal() {
-  installModalDismissed = true;
-  document.getElementById('install-modal').style.display = 'none';
+  hideInstallModal(true);
 }
 </script>
 </body>
@@ -12472,7 +12537,7 @@ body{
   </div>
 
   <!-- Install modal -->
-  <div id="install-modal">
+  <div id="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-modal-title" aria-describedby="install-modal-desc" tabindex="-1">
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
@@ -12534,7 +12599,7 @@ body{
   <div id="inputbar">
     <textarea id="msginput" rows="1" placeholder="Ask the agent anything..."
               onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
-    <button id="sendbtn" onclick="doSend()">&#9654;</button>
+    <button id="sendbtn" onclick="doSend()" disabled>&#9654;</button>
     <button id="cancelbtn" onclick="doCancel()">&#9632;</button>
   </div>
 </div>
@@ -12913,6 +12978,56 @@ function updateSendAvailability(ready) {
   }
 }
 
+function _installModalFocusable() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'))
+    .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+}
+
+function handleInstallModalKeydown(e) {
+  const modal = document.getElementById('install-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInstallModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusable = _installModalFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openInstallModal() {
+  const modal = document.getElementById('install-modal');
+  if (!modal) return;
+  if (modal.style.display !== 'flex') installModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', handleInstallModalKeydown);
+  const focusable = _installModalFocusable();
+  (focusable[0] || modal).focus({preventScroll:true});
+}
+
+function hideInstallModal(markDismissed) {
+  if (markDismissed) installModalDismissed = true;
+  const modal = document.getElementById('install-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', handleInstallModalKeydown);
+  if (installModalReturnFocus && typeof installModalReturnFocus.focus === 'function') {
+    try { installModalReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  installModalReturnFocus = null;
+}
+
 function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasReady) {
   const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
   if (wasReady && !ready) {
@@ -12923,7 +13038,7 @@ function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isC
     installModalAutoShown = false;
     installModalDismissed = false;
     const modal = document.getElementById('install-modal');
-    if (modal && modal.style.display === 'flex') modal.style.display = 'none';
+    if (modal && modal.style.display === 'flex') hideInstallModal(false);
     return;
   }
   const fullyOffline = !chatConnected && !bridgeConnected && !mismatch;
@@ -13869,8 +13984,7 @@ async function showInstallCmd(reconnect) {
     ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
   document.getElementById('copy-btn').textContent = 'Copy Command';
-  const modal = document.getElementById('install-modal');
-  modal.style.display = 'flex';
+  openInstallModal();
   document.getElementById('install-cmd').textContent = 'Generating install command...';
   try {
     const r = await fetch('/web/install-token', {method: 'POST'});
@@ -13893,8 +14007,7 @@ function copyInstallCmd() {
 }
 
 function closeInstallModal() {
-  installModalDismissed = true;
-  document.getElementById('install-modal').style.display = 'none';
+  hideInstallModal(true);
 }
 </script>
 </body>
