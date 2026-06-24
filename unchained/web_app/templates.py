@@ -3284,7 +3284,7 @@ a{color:inherit;text-decoration:none}
       <a href="#get-started">Get Started</a>
       <a href="#use-cases">Use Cases</a>
       <a href="/mcp">MCP</a>
-      <a href="/local" class="signin">Sign in / Sign up</a>
+      <a href="/local" class="signin" id="landing-auth-link">Sign in / Sign up</a>
     </div>
   </div>
 </nav>
@@ -4832,6 +4832,54 @@ async function runScenario(key) {
     if (!WB.iframe || !WB.iframe.contains(e.target)) return;
     setStatEvt('click');
   }, true);
+})();
+
+// Route the header sign-in CTA back to the user's last local/API lane.
+(function(){
+  const btn = document.getElementById('landing-auth-link');
+  if (!btn) return;
+
+  function normalizeLandingRoute(raw) {
+    const fallback = '/local';
+    const value = String(raw || '').trim();
+    if (!value || value[0] !== '/' || value.startsWith('//') || value.includes('://')) return fallback;
+    let url;
+    try { url = new URL(value, window.location.origin); } catch(e) { return fallback; }
+    if (url.origin !== window.location.origin) return fallback;
+
+    const path = url.pathname;
+    const provider = (url.searchParams.get('provider') || '').trim().toLowerCase();
+    if (path === '/local') {
+      if (provider === 'codex-cli' || provider === 'codex-sdk') return '/local?provider=' + provider;
+      return '/local';
+    }
+    if (path === '/chat-claude' || path === '/chat-gemini') return path;
+    if (path === '/setup') {
+      if (provider === 'gemini' || provider === 'claude-sdk' || provider === 'codex-sdk') return '/setup?provider=' + provider;
+      return '/setup';
+    }
+    return fallback;
+  }
+
+  function landingRouteLabel(route, authenticated) {
+    const verb = authenticated ? 'Open' : 'Sign in to';
+    if (route.indexOf('provider=codex-cli') !== -1) return verb + ' Codex CLI';
+    if (route.indexOf('provider=codex-sdk') !== -1) return verb + ' Codex API';
+    if (route.indexOf('provider=claude-sdk') !== -1 || route === '/chat-claude') return verb + ' Claude API';
+    if (route.indexOf('provider=gemini') !== -1 || route === '/chat-gemini') return verb + ' Gemini API';
+    if (route === '/setup') return verb + ' API setup';
+    return authenticated ? 'Open Claude CLI' : 'Sign in / Sign up';
+  }
+
+  let storedRoute = '';
+  try { storedRoute = localStorage.getItem('unchained_last_route') || ''; } catch(e) {}
+  const route = normalizeLandingRoute(storedRoute);
+  btn.href = route;
+  btn.title = 'Continue to ' + route;
+  fetch('/auth/me', {cache:'no-store'})
+    .then(r => r.json())
+    .then(data => { btn.textContent = landingRouteLabel(route, !!data.authenticated); })
+    .catch(() => { btn.textContent = landingRouteLabel(route, false); });
 })();
 </script>
 </body>
@@ -8741,8 +8789,24 @@ function _persistSessionId(sid) {
   }
 }
 
+function _rememberLastAppRoute() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const provider = (params.get('provider') || '').trim().toLowerCase();
+    const model = typeof currentModel === 'function' ? currentModel() : '';
+    let route = window.location.pathname;
+    if (window.location.pathname === '/local') {
+      if (provider === 'codex-cli' || model.startsWith('codex-cli:')) route = '/local?provider=codex-cli';
+      else if (provider === 'codex-sdk' || model.startsWith('codex-sdk:')) route = '/local?provider=codex-sdk';
+      else route = '/local';
+    }
+    localStorage.setItem('unchained_last_route', route);
+  } catch(e) {}
+}
+
 function onModelChange(model) {
   localStorage.setItem('unchained_gemini_model', model);
+  _rememberLastAppRoute();
 }
 
 function _profileStoreKey() {
@@ -8952,7 +9016,7 @@ function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  try { localStorage.setItem('unchained_last_route', window.location.pathname); } catch(e){}
+  _rememberLastAppRoute();
   const saved = localStorage.getItem('unchained_gemini_model');
   if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
     document.getElementById('modelsel').value = saved;
@@ -10081,9 +10145,11 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
     TemplateReplacement(
         """function onModelChange(model) {
   localStorage.setItem('unchained_codex_model', model);
+  _rememberLastAppRoute();
 }""",
         """function onModelChange(model) {
   localStorage.setItem('unchained_codex_model', model);
+  _rememberLastAppRoute();
   updateLocalCliGuidance();
   updateSendAvailability(false);
   checkProvisionStatus();
@@ -13270,6 +13336,21 @@ function _persistSessionId(sid) {
   }
 }
 
+function _rememberLastAppRoute() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const provider = (params.get('provider') || '').trim().toLowerCase();
+    const model = typeof currentModel === 'function' ? currentModel() : '';
+    let route = window.location.pathname;
+    if (window.location.pathname === '/local') {
+      if (provider === 'codex-cli' || model.startsWith('codex-cli:')) route = '/local?provider=codex-cli';
+      else if (provider === 'codex-sdk' || model.startsWith('codex-sdk:')) route = '/local?provider=codex-sdk';
+      else route = '/local';
+    }
+    localStorage.setItem('unchained_last_route', route);
+  } catch(e) {}
+}
+
 function _slotLabel(n) {
   return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
 }
@@ -13348,6 +13429,7 @@ function _highlightSlotButtons(slot) {
 
 function onModelChange(model) {
   localStorage.setItem('unchained_model', model);
+  _rememberLastAppRoute();
   updateLocalCliGuidance();
   updateSendAvailability(false);
   // Refresh model-scoped status immediately when switching lanes.
@@ -13692,7 +13774,7 @@ function showMain() {
   document.getElementById('main').style.display = 'flex';
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
-  try { localStorage.setItem('unchained_last_route', window.location.pathname); } catch(e){}
+  _rememberLastAppRoute();
   const saved = localStorage.getItem('unchained_model');
   if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
     document.getElementById('modelsel').value = saved;
@@ -18004,6 +18086,25 @@ const SETUP_CLIENT_UPDATE_TIMEOUT_MS = 90000;
 let setupClientUpdateStartedAt = 0;
 let lastSetupClientStatus = null;
 
+function rememberLastRoute(route) {
+  try {
+    const value = String(route || '').trim();
+    if (!value || value[0] !== '/' || value.startsWith('//') || value.includes('://')) return;
+    localStorage.setItem('unchained_last_route', value);
+  } catch(e) {}
+}
+
+function rememberSetupRoute(provider) {
+  const p = String(provider || 'gemini').trim().toLowerCase();
+  if (p === 'claude-sdk' || p === 'codex-sdk' || p === 'gemini') {
+    rememberLastRoute('/setup?provider=' + p);
+  } else if (p === 'codex-cli') {
+    rememberLastRoute('/local?provider=codex-cli');
+  } else {
+    rememberLastRoute('/setup');
+  }
+}
+
 function _normalizeLocalUrl(raw) {
   const s = String(raw || '');
   const h = (window.location.hostname || '').toLowerCase();
@@ -18184,6 +18285,7 @@ function updateProvisionUiTexts() {
 
 function onProviderChange(provider) {
   selectedProvider = provider || 'gemini';
+  rememberSetupRoute(selectedProvider);
   updateProvisionUiTexts();
 }
 
@@ -18200,6 +18302,7 @@ async function init() {
   selectedProvider = sel ? sel.value : 'gemini';
   const qProvider = _providerFromQuery();
   if (qProvider) selectedProvider = qProvider;
+  rememberSetupRoute(selectedProvider);
   if (sel) sel.value = selectedProvider;
   if (isLocal) {
     document.getElementById('step-connect').style.display = 'none';
@@ -18410,6 +18513,7 @@ async function startProvision() {
   if (selectedProvider === 'codex-cli') {
     statusEl.className = 'provision-status done';
     statusEl.innerHTML = 'Codex CLI is local-only. Redirecting to local chat...';
+    rememberLastRoute(providerChatUrl('codex-cli'));
     setTimeout(() => { window.location.href = providerChatUrl('codex-cli'); }, 400);
     return;
   }
@@ -18466,6 +18570,7 @@ async function startProvision() {
       const resolvedProvider = data.provider || selectedProvider;
       const chatUrl = data.chat_url || providerChatUrl(resolvedProvider);
       const chatLabel = providerLabel(resolvedProvider);
+      rememberLastRoute(chatUrl);
       statusEl.className = 'provision-status done';
       statusEl.innerHTML = (data.message || 'Key already exists.') +
         ' <a href="' + escHtml(chatUrl) + '" style="color:var(--accent)">Start chatting with ' + escHtml(chatLabel) + ' &rarr;</a>';
@@ -18507,6 +18612,7 @@ async function confirmStoreKey() {
       const resolvedProvider = data.provider || selectedProvider;
       const chatUrl = data.chat_url || providerChatUrl(resolvedProvider);
       const chatLabel = providerLabel(resolvedProvider);
+      rememberLastRoute(chatUrl);
       statusEl.className = 'provision-status done';
       statusEl.innerHTML = (data.message || 'Key stored.') +
         ' <a href="' + escHtml(chatUrl) + '" style="color:var(--accent)">Start chatting with ' + escHtml(chatLabel) + ' &rarr;</a>';
@@ -18541,6 +18647,7 @@ async function saveManualKey() {
     const data = await r.json();
     if (data.status === 'success') {
       const chatUrl = data.chat_url || providerChatUrl(selectedProvider);
+      rememberLastRoute(chatUrl);
       statusEl.className = 'provision-status done';
       statusEl.innerHTML = (data.message || 'Key saved.') +
         ' <a href="' + escHtml(chatUrl) + '" style="color:var(--accent)">Start chatting with ' + escHtml(pLabel) + ' &rarr;</a>';
@@ -18620,6 +18727,7 @@ async function reprovisionKey(provider) {
   if (!confirm('Revoke current ' + provider + ' key and provision a new one with a different Chrome profile?')) return;
   await _doRevoke(provider);
   selectedProvider = provider || 'gemini';
+  rememberSetupRoute(selectedProvider);
   const sel = document.getElementById('provider-select');
   if (sel) sel.value = selectedProvider;
   updateProvisionUiTexts();
@@ -18675,6 +18783,7 @@ async function devLogin() {
   } catch(e) { errEl.textContent = e.message; }
 }
 
+rememberSetupRoute(_providerFromQuery() || selectedProvider);
 checkSession();
 </script>
 </body>

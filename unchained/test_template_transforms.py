@@ -51,6 +51,22 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
 
+    def test_landing_signin_targets_last_provider_route(self):
+        from web_app import templates
+
+        self.assertIn('id="landing-auth-link"', templates.LANDING_HTML)
+        self.assertIn("normalizeLandingRoute", templates.LANDING_HTML)
+        self.assertIn("provider=codex-cli", templates.LANDING_HTML)
+        self.assertIn("Codex CLI", templates.LANDING_HTML)
+
+    def test_chat_and_setup_pages_remember_provider_routes(self):
+        from web_app import templates
+
+        self.assertIn("_rememberLastAppRoute", templates.CLAUDE_CHAT_HTML)
+        self.assertIn("/local?provider=codex-cli", templates.CHAT_CODEX_HTML)
+        self.assertIn("rememberSetupRoute", templates.SETUP_HTML)
+        self.assertIn("unchained_last_route", templates.SETUP_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()
