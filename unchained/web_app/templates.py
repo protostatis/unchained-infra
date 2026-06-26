@@ -6220,7 +6220,7 @@ body{
   background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer;
 }
 #login button:active{opacity:0.8}
-#login #dev-login-btn{display:none;width:320px;max-width:320px;margin-top:10px}
+#login #dev-login-btn{display:none!important;width:320px;max-width:320px;margin:10px auto 0}
 #loginerr{color:#ff6b6b;font-size:14px;min-height:20px}
 
 /* === Main === */
@@ -7162,7 +7162,7 @@ let _openrouterUsage = null;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
-const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
+const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
 function _nextAfterLogin() {
@@ -7183,9 +7183,9 @@ function _redirectAfterLoginIfNeeded() {
 }
 
 function maybeShowDevLogin() {
-  if (hasGoogleOAuth || !isLocalDevHost) return;
+  if (!devAuthEnabled || !isLocalDevHost) return;
   const btn = document.getElementById('dev-login-btn');
-  if (btn) btn.style.display = 'block';
+  if (btn) btn.style.setProperty('display', 'block', 'important');
 }
 
 function _applyAuthState(data) {
@@ -12525,11 +12525,11 @@ body{
 #login button:hover{filter:brightness(1.05)}
 #login button:active{transform:translateY(1px)}
 #login #dev-login-btn{
-  display:none;
+  display:none!important;
   width:320px;
   max-width:320px;
   height:44px;
-  margin-top:10px;
+  margin:10px auto 0;
 }
 #login .trial-link{color:var(--muted);font-size:12px;margin-top:4px;text-decoration:none}
 #login .trial-link:hover{color:#c9d1df}
@@ -13474,7 +13474,7 @@ let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
 let selectedProfilePath = '';
-const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
+const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
 function _nextAfterLogin() {
@@ -13495,9 +13495,9 @@ function _redirectAfterLoginIfNeeded() {
 }
 
 function maybeShowDevLogin() {
-  if (hasGoogleOAuth || !isLocalDevHost) return;
+  if (!devAuthEnabled || !isLocalDevHost) return;
   const btn = document.getElementById('dev-login-btn');
-  if (btn) btn.style.display = 'block';
+  if (btn) btn.style.setProperty('display', 'block', 'important');
 }
 
 async function handleGoogleCredential(response) {
@@ -14958,6 +14958,7 @@ body{
 }
 #login button:active{transform:translateY(1px)}
 #login #dev-login-btn{
+  display:none!important;
   border-radius:12px!important;
   background:linear-gradient(135deg,var(--accent),var(--accent-strong))!important;
 }
@@ -17014,6 +17015,7 @@ body::after{
   color:#ffc6d2!important;
 }
 #login #dev-login-btn{
+  display:none!important;
   border-radius:16px!important;
   background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong),var(--spectrum-violet))!important;
   box-shadow:0 16px 34px rgba(233,69,96,0.24);
@@ -19466,8 +19468,8 @@ async function _doRevoke(provider) {
 }
 
 /* --- Dev auth --- */
-const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
-if (!hasGoogleOAuth) {
+const devAuthEnabled = __DEV_AUTH_ENABLED__;
+if (devAuthEnabled) {
   document.getElementById('google-auth').style.display = 'none';
   document.getElementById('dev-auth').style.display = 'block';
 }
