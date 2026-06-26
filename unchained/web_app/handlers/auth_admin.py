@@ -67,6 +67,40 @@ def _normalized_email(value: object) -> str:
     return email
 
 
+def _user_status(user: dict) -> str:
+    return user.get("status") or "approved"
+
+
+def _user_type(user: dict, fallback: str = "claude") -> str:
+    return user.get("user_type") or fallback
+
+
+def _ensure_user_api_key(core, user: dict, email: str) -> str:
+    api_key = user.get("api_key") or ""
+    if api_key:
+        return api_key
+    api_key = core._auth.create_key(user["user_id"])
+    with core._auth._conn() as conn:
+        conn.execute(
+            "UPDATE users SET api_key = ? WHERE email = ? AND api_key IS NULL",
+            (api_key, email),
+        )
+    user["api_key"] = api_key
+    return api_key
+
+
+def _ensure_trial_access(core, user: dict, email: str) -> tuple[dict, str]:
+    api_key = _ensure_user_api_key(core, user, email)
+    with core._auth._conn() as conn:
+        conn.execute(
+            "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
+            (api_key, email),
+        )
+    refreshed = core._auth.find_user_by_email(email) or user
+    refreshed["api_key"] = refreshed.get("api_key") or api_key
+    return refreshed, api_key
+
+
 def _send_signup_emails(
     core,
     *,
@@ -386,6 +420,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                     "pending": True,
                     "status": "pending",
                     "user_type": pending_user_type,
+                    "review_pending": True,
                     "claude_access_requested": pending_user_type == "claude",
                     "message": "Your sign-up request is still being reviewed. We'll notify you by email once approved.",
                 }
@@ -408,12 +443,8 @@ async def handle_google_auth(request: web.Request) -> web.Response:
 
     if source == "trial":
         user = core._auth.create_pending_user(email, name, picture, user_type="trial")
-        api_key = core._auth.create_key(user["user_id"])
-        with core._auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
-                (api_key, email),
-            )
+        user, api_key = _ensure_trial_access(core, user, email)
+        status = _user_status(user)
         agent_id = f"claude-{core._key_hash(api_key)}"
         session_token = core.create_session_token(user["user_id"], email)
         resp = web.json_response(
@@ -424,10 +455,10 @@ async def handle_google_auth(request: web.Request) -> web.Response:
                 "picture": picture,
                 "agent_id": agent_id,
                 "user_type": "trial",
-                "status": "pending",
+                "status": status,
                 "demo_prompt_count": core._auth.get_demo_count(email),
-                "demo_unlimited": False,
-                "review_pending": True,
+                "demo_unlimited": core._is_demo_unlimited(user) if status == "approved" else False,
+                "review_pending": status == "pending",
                 "claude_access_requested": False,
                 "is_admin": email.lower() in core.ADMIN_EMAILS,
             }
@@ -439,7 +470,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending"},
+            meta={"source": source, "status": status},
             status_code=200,
         )
         core._track_event(
@@ -448,7 +479,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending", "new_user": True},
+            meta={"source": source, "status": status, "new_user": True},
             status_code=200,
         )
 
@@ -463,6 +494,7 @@ async def handle_google_auth(request: web.Request) -> web.Response:
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
+    status = _user_status(user)
     session_token = core.create_session_token(user["user_id"], email)
 
     _send_signup_emails(
@@ -474,22 +506,58 @@ async def handle_google_auth(request: web.Request) -> web.Response:
         is_trial_branch=False,
     )
 
-    resp = web.json_response(
-        {
-            "pending": True,
-            "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
-        }
-    )
-    core._set_session_cookie(resp, session_token, request)
     core._track_event(
         request,
         "signup_created",
         user_id=user["user_id"],
         user_type=user_type,
         source=source,
-        meta={"source": source, "status": "pending"},
+        meta={"source": source, "status": status},
         status_code=200,
     )
+
+    if status == "approved":
+        api_key = _ensure_user_api_key(core, user, email)
+        agent_id = f"claude-{core._key_hash(api_key)}"
+        resp = web.json_response(
+            {
+                "ok": True,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "agent_id": agent_id,
+                "user_type": _user_type(user, user_type),
+                "status": "approved",
+                "demo_prompt_count": core._auth.get_demo_count(email),
+                "demo_unlimited": core._is_demo_unlimited(user),
+                "review_pending": False,
+                "claude_access_requested": False,
+                "is_admin": email.lower() in core.ADMIN_EMAILS,
+            }
+        )
+        core._set_session_cookie(resp, session_token, request)
+        core._track_event(
+            request,
+            "auth_google_success",
+            user_id=user["user_id"],
+            user_type=_user_type(user, user_type),
+            source=source,
+            meta={"source": source, "status": "approved", "new_user": True},
+            status_code=200,
+        )
+        return resp
+
+    resp = web.json_response(
+        {
+            "pending": True,
+            "status": "pending",
+            "user_type": user_type,
+            "review_pending": True,
+            "claude_access_requested": user_type == "claude",
+            "message": "Your sign-up request has been submitted. We'll review it and notify you by email.",
+        }
+    )
+    core._set_session_cookie(resp, session_token, request)
     core._track_event(
         request,
         "auth_google_pending",
@@ -782,14 +850,10 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
 
     if source == "trial":
         user = core._auth.create_pending_user(email, name, picture, user_type="trial")
-        api_key = core._auth.create_key(user["user_id"])
-        with core._auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
-                (api_key, email),
-            )
+        user, _api_key = _ensure_trial_access(core, user, email)
+        status = _user_status(user)
         session_token = core.create_session_token(user["user_id"], email)
-        resp = _redirect(pending=True)
+        resp = _redirect(pending=status == "pending")
         core._set_session_cookie(resp, session_token, request)
         core._track_event(
             request,
@@ -797,7 +861,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending"},
+            meta={"source": source, "status": status},
             status_code=200,
         )
         core._track_event(
@@ -806,7 +870,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending", "new_user": True},
+            meta={"source": source, "status": status, "new_user": True},
             status_code=200,
         )
 
@@ -821,6 +885,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
+    status = _user_status(user)
     session_token = core.create_session_token(user["user_id"], email)
     _send_signup_emails(
         core,
@@ -830,7 +895,7 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
         user_type=user_type,
         is_trial_branch=False,
     )
-    resp = _redirect(pending=True)
+    resp = _redirect(pending=status == "pending")
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
         request,
@@ -838,16 +903,16 @@ async def handle_facebook_callback(request: web.Request) -> web.Response:
         user_id=user["user_id"],
         user_type=user_type,
         source=source,
-        meta={"source": source, "status": "pending"},
+        meta={"source": source, "status": status},
         status_code=200,
     )
     core._track_event(
         request,
-        "auth_facebook_pending",
+        "auth_facebook_success" if status == "approved" else "auth_facebook_pending",
         user_id=user["user_id"],
         user_type=user_type,
         source=source,
-        meta={"source": source, "status": "pending", "new_user": True},
+        meta={"source": source, "status": status, "new_user": True},
         status_code=200,
     )
     return resp
@@ -1186,14 +1251,10 @@ async def handle_github_callback(request: web.Request) -> web.Response:
 
     if source == "trial":
         user = core._auth.create_pending_user(email, name, picture, user_type="trial")
-        api_key = core._auth.create_key(user["user_id"])
-        with core._auth._conn() as conn:
-            conn.execute(
-                "UPDATE users SET api_key = ?, user_type = 'trial' WHERE email = ?",
-                (api_key, email),
-            )
+        user, _api_key = _ensure_trial_access(core, user, email)
+        status = _user_status(user)
         session_token = core.create_session_token(user["user_id"], email)
-        resp = _redirect(pending=True)
+        resp = _redirect(pending=status == "pending")
         core._set_session_cookie(resp, session_token, request)
         core._track_event(
             request,
@@ -1201,7 +1262,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending"},
+            meta={"source": source, "status": status},
             status_code=200,
         )
         core._track_event(
@@ -1210,7 +1271,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
             user_id=user["user_id"],
             user_type="trial",
             source=source,
-            meta={"source": source, "status": "pending", "new_user": True},
+            meta={"source": source, "status": status, "new_user": True},
             status_code=200,
         )
 
@@ -1225,6 +1286,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
         return resp
 
     user = core._auth.create_pending_user(email, name, picture, user_type=user_type)
+    status = _user_status(user)
     session_token = core.create_session_token(user["user_id"], email)
     _send_signup_emails(
         core,
@@ -1234,7 +1296,7 @@ async def handle_github_callback(request: web.Request) -> web.Response:
         user_type=user_type,
         is_trial_branch=False,
     )
-    resp = _redirect(pending=True)
+    resp = _redirect(pending=status == "pending")
     core._set_session_cookie(resp, session_token, request)
     core._track_event(
         request,
@@ -1242,16 +1304,16 @@ async def handle_github_callback(request: web.Request) -> web.Response:
         user_id=user["user_id"],
         user_type=user_type,
         source=source,
-        meta={"source": source, "status": "pending"},
+        meta={"source": source, "status": status},
         status_code=200,
     )
     core._track_event(
         request,
-        "auth_github_pending",
+        "auth_github_success" if status == "approved" else "auth_github_pending",
         user_id=user["user_id"],
         user_type=user_type,
         source=source,
-        meta={"source": source, "status": "pending", "new_user": True},
+        meta={"source": source, "status": status, "new_user": True},
         status_code=200,
     )
     return resp
