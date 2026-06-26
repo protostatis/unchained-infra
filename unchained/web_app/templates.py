@@ -2334,6 +2334,23 @@ body::after{
 }
 @media (prefers-reduced-motion:reduce){
   body::after{animation:none}
+  .topnav,
+  .spectrum-prism,
+  .hero-brand .hero-kicker,
+  .hero-brand .wordmark,
+  .hero-brand .promise,
+  .hero-brand .cta-primary-big,
+  .hero-brand .cta-secondary,
+  .hero-brand .tagline,
+  .hero-brand .sky-search-link,
+  .hero-brand .scroll-hint,
+  .hero-act-strip,
+  .hero-product,
+  .wb-act,
+  .section,
+  .poem,
+  .poem .line{animation:none!important;opacity:1!important;filter:none!important;transform:none!important}
+  .hero-brand::after{animation:none!important;opacity:1!important;filter:none!important;transform:translateX(-50%) rotate(-2deg)!important}
 }
 a{color:inherit;text-decoration:none}
 
@@ -2345,6 +2362,7 @@ a{color:inherit;text-decoration:none}
   backdrop-filter:saturate(140%) blur(12px);
   -webkit-backdrop-filter:saturate(140%) blur(12px);
   border-bottom:1px solid var(--border);
+  animation:landingRestFade 0.9s ease-out 2.35s both;
 }
 .topnav-inner{
   max-width:1200px;margin:0 auto;padding:0 24px;
@@ -2380,24 +2398,119 @@ a{color:inherit;text-decoration:none}
 /* ── Act 1: Brand hero — ceremonial fullscreen ── */
 .hero-brand{
   position:relative;z-index:1;
-  max-width:760px;margin:0 auto;padding:0 24px;
+  max-width:1080px;margin:0 auto;padding:42px 24px 64px;
   display:flex;flex-direction:column;align-items:center;
   justify-content:center;text-align:center;
   min-height:calc(100vh - var(--nav-h));
+  overflow:hidden;
+  isolation:isolate;
+}
+.hero-brand::before{
+  content:'';position:absolute;z-index:-2;
+  width:120%;height:100%;
+  left:50%;top:50%;transform:translate(-50%,-50%);
+  border-radius:0;
+  background:
+    radial-gradient(circle at 49% 42%, rgba(255,255,255,0.045), transparent 10%),
+    radial-gradient(circle at 50% 50%, rgba(233,69,96,0.065), transparent 30%),
+    linear-gradient(180deg,rgba(255,255,255,0.018),transparent 28%,rgba(255,255,255,0.014) 72%,transparent);
+  filter:blur(0.2px);
+  opacity:0.68;
+}
+.hero-brand::after{
+  content:'';position:absolute;z-index:-1;
+  left:50%;bottom:12%;transform:translateX(-50%) rotate(-2deg);
+  width:min(92vw,900px);height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.10),rgba(233,69,96,0.34),rgba(255,255,255,0.10),transparent);
+  box-shadow:0 0 24px rgba(233,69,96,0.18),0 -18px 54px rgba(93,155,255,0.045);
+  animation:landingLineFade 1.15s ease-out 2.2s both;
+}
+@keyframes skyDial{to{transform:translate(-50%,-50%) rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.hero-brand::before{animation:none}}
+.spectrum-prism{
+  position:absolute;inset:0;z-index:-1;
+  pointer-events:none;overflow:hidden;
+  opacity:0.52;
+  --prism-half:clamp(56px,7.5vw,93px);
+  --beam-y:44.6%;
+  animation:landingRestFade 1.15s ease-out 2.15s both;
+}
+.spectrum-prism .beam{
+  position:absolute;height:2px;border-radius:999px;
+  transform-origin:left center;
+  filter:drop-shadow(0 0 7px currentColor);
+}
+.spectrum-prism .beam-in{
+  left:-8%;right:calc(50% + var(--prism-half));top:var(--beam-y);width:auto;
+  color:rgba(255,255,255,0.68);
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.10) 18%,rgba(255,255,255,0.62) 100%);
+  transform:rotate(-2.2deg);
+  transform-origin:right center;
+  box-shadow:0 0 16px rgba(255,255,255,0.10);
+}
+.spectrum-prism .prism-core{
+  position:absolute;left:50%;top:31.5%;transform:translateX(-50%);
+  width:clamp(112px,15vw,186px);aspect-ratio:1.05/0.92;
+  clip-path:polygon(50% 0,100% 100%,0 100%);
+  background:
+    linear-gradient(135deg,rgba(255,255,255,0.24),rgba(255,255,255,0.025) 42%,rgba(255,255,255,0.10)),
+    linear-gradient(65deg,rgba(233,69,96,0.10),rgba(93,155,255,0.10));
+  box-shadow:0 0 0 1px rgba(255,255,255,0.28),0 0 28px rgba(255,255,255,0.08);
+}
+.spectrum-prism .prism-core::after{
+  content:'';position:absolute;inset:10% 19% 14%;
+  clip-path:polygon(50% 0,100% 100%,0 100%);
+  border:1px solid rgba(255,255,255,0.14);
+  opacity:0.5;
+}
+.spectrum-prism .beam-out{
+  left:calc(50% + var(--prism-half) - 4px);top:var(--beam-y);width:48%;height:2px;
+  opacity:0.46;
+}
+.spectrum-prism .b1{color:#ff315f;background:linear-gradient(90deg,rgba(255,49,95,0.82),transparent);transform:rotate(-13deg)}
+.spectrum-prism .b2{color:#ff8a2a;background:linear-gradient(90deg,rgba(255,138,42,0.72),transparent);transform:rotate(-7deg)}
+.spectrum-prism .b3{display:none}
+.spectrum-prism .b4{color:#45ef8f;background:linear-gradient(90deg,rgba(69,239,143,0.60),transparent);transform:rotate(1deg)}
+.spectrum-prism .b5{color:#4aa7ff;background:linear-gradient(90deg,rgba(74,167,255,0.68),transparent);transform:rotate(8deg)}
+.spectrum-prism .b6{color:#b15cff;background:linear-gradient(90deg,rgba(177,92,255,0.58),transparent);transform:rotate(14deg)}
+@media (max-width:720px){
+  .spectrum-prism{opacity:0.28;--prism-half:clamp(52px,18vw,72px);--beam-y:39%}
+  .spectrum-prism .beam-in{left:-30%;right:calc(50% + var(--prism-half))}
+  .spectrum-prism .beam-out{left:calc(50% + var(--prism-half) - 4px);width:78%}
+  .spectrum-prism .prism-core{left:50%;top:25%}
+}
+.hero-brand .hero-kicker{
+  order:2;
+  display:inline-flex;align-items:center;gap:10px;
+  color:var(--muted);font-family:ui-monospace,monospace;
+  font-size:11px;letter-spacing:0.22em;text-transform:uppercase;
+  border:1px solid rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.035);
+  padding:7px 12px;border-radius:999px;margin-bottom:18px;
+  animation:landingRestFade 0.9s ease-out 2.25s both;
 }
 .hero-brand .wordmark{
-  font-size:clamp(48px,9vw,82px);
-  font-weight:600;letter-spacing:4px;
+  order:3;
+  font-size:clamp(58px,13vw,132px);
+  font-weight:600;letter-spacing:clamp(5px,1.2vw,14px);
   text-transform:uppercase;
-  margin-bottom:48px;
+  margin-bottom:8px;
   animation:
-    brandFade 1.2s ease-out 0.1s both,
-    wordmarkGlow 5s ease-in-out 1.5s infinite;
+    landingRestFade 1.1s ease-out 2.45s both,
+    wordmarkGlow 5s ease-in-out 3.7s infinite;
 }
 .hero-brand .wordmark span{color:var(--accent)}
 @keyframes brandFade{
-  from{opacity:0;transform:translateY(-8px);letter-spacing:8px}
-  to{opacity:1;transform:translateY(0);letter-spacing:4px}
+  from{opacity:0;transform:translateY(-8px)}
+  to{opacity:1;transform:translateY(0)}
+}
+@keyframes landingRestFade{
+  from{opacity:0;transform:translateY(12px);filter:blur(8px)}
+  to{opacity:1;transform:translateY(0);filter:blur(0)}
+}
+@keyframes landingLineFade{
+  from{opacity:0;filter:blur(10px)}
+  to{opacity:1;filter:blur(0)}
 }
 @keyframes wordmarkGlow{
   0%,100% { text-shadow: 0 0 0 rgba(233,69,96,0); }
@@ -2410,10 +2523,33 @@ a{color:inherit;text-decoration:none}
   font-weight:600;font-size:16px;letter-spacing:0.5px;
   box-shadow:0 6px 28px var(--accent-glow);
   transition:transform 0.18s, box-shadow 0.18s;
-  margin-top:36px;margin-bottom:18px;
-  animation:brandFade 1.2s ease-out 2.4s both;
+  margin-top:22px;margin-bottom:0;
+  animation:landingRestFade 0.95s ease-out 3.1s both;
   position:relative;overflow:hidden;
 }
+.hero-brand .promise{
+  order:4;
+  margin:18px auto 0;
+  max-width:660px;
+  color:var(--text-soft);
+  font-size:clamp(15px,1.8vw,18px);
+  line-height:1.55;
+  animation:landingRestFade 0.95s ease-out 2.9s both;
+}
+.hero-brand .hero-actions{
+  order:5;
+  display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;
+}
+.hero-brand .cta-secondary{
+  display:inline-flex;align-items:center;gap:8px;
+  margin-top:22px;margin-bottom:0;
+  padding:13px 24px;border-radius:10px;
+  border:1px solid var(--border-strong);
+  color:var(--text);font-size:15px;font-weight:600;
+  animation:landingRestFade 0.95s ease-out 3.22s both;
+  transition:border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.hero-brand .cta-secondary:hover{border-color:var(--accent);background:rgba(233,69,96,0.08);transform:translateY(-1px)}
 .hero-brand .cta-primary-big:hover{
   color:#fff;transform:translateY(-2px);
   box-shadow:0 10px 40px rgba(233,69,96,0.5);
@@ -2432,23 +2568,57 @@ a{color:inherit;text-decoration:none}
 .btn-primary:hover::before,
 .btn-cta:hover::before{transform:translateX(100%)}
 .hero-brand .tagline{
+  order:7;
   font-size:11px;letter-spacing:3px;text-transform:uppercase;
-  color:var(--muted);margin-top:8px;
-  animation:brandFade 1.2s ease-out 2.8s both;
+  color:var(--muted);margin-top:14px;
+  animation:landingRestFade 0.95s ease-out 3.65s both;
 }
 .hero-brand .sky-search-link{
+  order:8;
   margin-top:18px;font-size:13px;color:var(--muted);
   border-bottom:1px dashed var(--border-strong);
   padding-bottom:2px;letter-spacing:1px;
-  animation:brandFade 1.2s ease-out 3s both;
+  animation:landingRestFade 0.95s ease-out 3.75s both;
 }
 .hero-brand .sky-search-link:hover{color:var(--text);border-color:var(--accent)}
+.hero-act-strip{
+  order:6;
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;
+  width:min(860px,100%);margin:24px auto 0;
+  animation:landingRestFade 0.95s ease-out 3.42s both;
+}
+.hero-act-card{
+  display:block;
+  position:relative;overflow:hidden;text-align:left;
+  border:1px solid rgba(255,255,255,0.075);
+  background:linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.012));
+  border-radius:14px;padding:13px 14px;
+  box-shadow:0 12px 34px rgba(0,0,0,0.16);
+  transition:transform 0.18s ease,border-color 0.18s ease,background 0.18s ease,box-shadow 0.18s ease;
+}
+.hero-act-card::before{
+  content:'';position:absolute;inset:0 0 auto;height:2px;
+  background:linear-gradient(90deg,var(--accent),rgba(93,155,255,0.8));
+  opacity:0.42;
+}
+.hero-act-card b{display:block;color:var(--text);font-size:13px;margin-bottom:4px}
+.hero-act-card span{display:block;color:var(--muted);font-size:11.5px;line-height:1.45}
+.hero-act-card:hover,
+.hero-act-card:focus-visible{
+  transform:translateY(-2px);
+  border-color:rgba(255,255,255,0.28);
+  background:linear-gradient(180deg,rgba(255,255,255,0.085),rgba(255,255,255,0.03));
+  box-shadow:0 20px 70px rgba(0,0,0,0.34),0 0 24px rgba(233,69,96,0.12);
+  outline:none;
+}
+@media (max-width:720px){.hero-act-strip{grid-template-columns:1fr}.hero-brand{padding-top:26px}}
 .hero-brand .scroll-hint{
+  order:9;
   position:absolute;bottom:28px;left:50%;transform:translateX(-50%);
   display:flex;flex-direction:column;align-items:center;gap:4px;
   font-size:10px;letter-spacing:3px;text-transform:uppercase;
-  color:var(--muted);cursor:pointer;
-  animation:scrollHintFade 1.2s ease-out 3.4s both;
+  color:var(--muted);cursor:pointer;text-decoration:none;
+  animation:scrollHintFade 0.95s ease-out 4.05s both;
 }
 .hero-brand .scroll-hint .arrow{
   font-size:14px;line-height:1;
@@ -2467,6 +2637,7 @@ a{color:inherit;text-decoration:none}
   padding:80px 24px 64px;
   display:grid;grid-template-columns:1.05fr 1fr;gap:56px;
   align-items:center;
+  animation:landingRestFade 1s ease-out 3.6s both;
 }
 @media (max-width:880px){
   .hero-product{grid-template-columns:1fr;gap:32px;text-align:center}
@@ -2524,6 +2695,7 @@ a{color:inherit;text-decoration:none}
   position:relative;z-index:1;
   max-width:1200px;margin:0 auto;
   padding:64px 24px 64px;
+  animation:landingRestFade 1s ease-out 3.75s both;
 }
 .wb-act .section-head{text-align:center;margin-bottom:32px}
 .wb-act .section-eyebrow{
@@ -2853,12 +3025,13 @@ a{color:inherit;text-decoration:none}
 
 /* ── Morphing 3-stage poem — kept from V2, centered for brand hero ── */
 .poem{
+  order:1;
   font-family:'Cormorant Garamond',serif;
   /* Sized so the longest morph stage ("An agent moves where walls once
    * stood" — ~38 chars italic) fits on one line at every viewport without
    * triggering wrap or overflow-x clipping by `body{overflow-x:hidden}`. */
-  font-size:clamp(19px,2.4vw,24px);
-  line-height:1.9;font-style:italic;
+  font-size:clamp(23px,3.4vw,34px);
+  line-height:1.55;font-style:italic;
   color:var(--text);opacity:0.92;
   text-align:center;
   /* `.hero-brand` is a flex column with `align-items:center`, which would
@@ -2870,20 +3043,30 @@ a{color:inherit;text-decoration:none}
   max-width:min(92vw, 780px);
   margin-left:auto;margin-right:auto;
   white-space:nowrap;
+  padding:14px 18px 16px;
+  border-radius:24px;
+  background:radial-gradient(circle at 50% 0%,rgba(233,69,96,0.055),transparent 70%);
+  text-shadow:0 0 18px rgba(233,69,96,0.18),0 0 38px rgba(255,255,255,0.035);
+  animation:haikuFirstPop 1.05s cubic-bezier(0.16,1,0.3,1) both;
 }
-.hero-brand .poem{margin:0 auto}
+.hero-brand .poem{margin:0 auto 22px}
 @media (max-width:720px){
   /* On narrow viewports, drop into a tighter font-size band — the
    * `min(92vw, 780px)` max-width on `.poem` still applies. */
-  .poem{font-size:clamp(17px,4.5vw,21px)}
+  .poem{font-size:clamp(17px,4.4vw,21px);padding:14px 4px 16px;margin-bottom:20px}
 }
 .poem .line{
   display:block;position:relative;height:1.7em;
   animation:poemFadeIn 1s ease-out both;
 }
-.poem .line:nth-child(1){animation-delay:0.3s}
-.poem .line:nth-child(2){animation-delay:0.9s}
-.poem .line:nth-child(3){animation-delay:1.5s}
+.poem .line:nth-child(1){animation-delay:0.1s}
+.poem .line:nth-child(2){animation-delay:0.52s}
+.poem .line:nth-child(3){animation-delay:0.94s}
+@keyframes haikuFirstPop{
+  0%{opacity:0;transform:translateY(14px) scale(0.96);filter:blur(10px)}
+  62%{opacity:1;transform:translateY(-2px) scale(1.018);filter:blur(0)}
+  100%{opacity:0.94;transform:translateY(0) scale(1);filter:blur(0)}
+}
 @keyframes poemFadeIn{
   from{opacity:0;transform:translateY(10px)}
   to{opacity:1;transform:translateY(0)}
@@ -2968,6 +3151,7 @@ a{color:inherit;text-decoration:none}
   position:relative;z-index:1;
   max-width:1100px;margin:0 auto;
   padding:64px 24px;
+  animation:landingRestFade 1s ease-out 3.9s both;
 }
 .section-head{
   text-align:center;margin-bottom:36px;
@@ -3284,13 +3468,24 @@ a{color:inherit;text-decoration:none}
       <a href="#get-started">Get Started</a>
       <a href="#use-cases">Use Cases</a>
       <a href="/mcp">MCP</a>
-      <a href="/local" class="signin" id="landing-auth-link">Sign in / Sign up</a>
+      <a href="/local" class="signin" id="landing-auth-link">Connect My Chrome</a>
     </div>
   </div>
 </nav>
 
 <!-- Act 1: Brand hero — fullscreen ritual -->
 <section class="hero-brand">
+  <div class="spectrum-prism" aria-hidden="true">
+    <span class="beam beam-in"></span>
+    <span class="prism-core"></span>
+    <span class="beam beam-out b1"></span>
+    <span class="beam beam-out b2"></span>
+    <span class="beam beam-out b3"></span>
+    <span class="beam beam-out b4"></span>
+    <span class="beam beam-out b5"></span>
+    <span class="beam beam-out b6"></span>
+  </div>
+  <div class="hero-kicker">Act I / the chain breaks</div>
   <div class="wordmark">Un<span>chain</span>ed</div>
   <div class="poem" id="poem">
     <span class="line">
@@ -3309,23 +3504,32 @@ a{color:inherit;text-decoration:none}
       <span class="stage s3">You are sky, unchained</span>
     </span>
   </div>
-  <a href="/demo" class="cta-primary-big">Try it free &rarr;</a>
+  <p class="promise">AI browser agent for your real Chrome. Search, compare, and act on websites using your existing sessions.</p>
+  <div class="hero-actions">
+    <a href="/demo" class="cta-primary-big">Watch live demo &rarr;</a>
+    <a href="/local" class="cta-secondary">Connect my Chrome</a>
+  </div>
+  <div class="hero-act-strip" aria-label="How Unchained works">
+    <a href="/first-look" class="hero-act-card"><b>Prompt</b><span>Tell the agent what you need done on the web.</span></a>
+    <a href="/trial" class="hero-act-card"><b>Your Chrome</b><span>It moves through your real browser session.</span></a>
+    <a href="#use-cases" class="hero-act-card"><b>Result</b><span>See what people actually run.</span></a>
+  </div>
   <div class="tagline">Your browser. Your data. No walls.</div>
   <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
-  <div class="scroll-hint" onclick="document.getElementById('what').scrollIntoView({behavior:'smooth'})">
+  <a class="scroll-hint" href="#what">
     <span class="arrow">&#8595;</span>
     What is it
-  </div>
+  </a>
 </section>
 
 <!-- Act 2: Product clarifier -->
 <section class="hero-product" id="what">
   <div>
-    <div class="eyebrow">What it is</div>
+    <div class="eyebrow">Act II / What it is</div>
     <h1>An AI agent that drives <em>your real Chrome</em> &mdash; with your logins, cookies, and sessions intact.</h1>
     <p class="subhead">Tell Unchained what you need online in plain English. It searches, compares, and monitors the web for you &mdash; no copy-paste, no API key required to start.</p>
     <div class="hero-ctas">
-      <a href="/demo" class="btn-primary">Try it free &rarr;</a>
+      <a href="/demo" class="btn-primary">Watch live demo &rarr;</a>
       <a href="#watch" class="btn-ghost">Watch it work</a>
     </div>
   </div>
@@ -3346,7 +3550,7 @@ a{color:inherit;text-decoration:none}
 <!-- Act 3: Watch it work — live agent demo running in QuickJS-WASM -->
 <section class="wb-act" id="watch">
   <div class="section-head">
-    <div class="section-eyebrow">See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
+    <div class="section-eyebrow">Act III / See It Live &middot; Sandboxed WebAssembly &middot; No backend</div>
     <h2>Watch it work.</h2>
     <p class="lede">Pick a prompt. Watch the agent open Kayak, parse the page, type the destination, and read the prices &mdash; every step running for real inside a WebAssembly browser sandbox right here. No real Kayak request, no backend, just real DOM mutations driving the iframe.</p>
   </div>
@@ -3417,17 +3621,17 @@ a{color:inherit;text-decoration:none}
 <!-- Get Started -->
 <section class="section" id="get-started">
   <div class="section-head">
-    <div class="section-eyebrow">Get Started</div>
-    <h2>Pick your lane.</h2>
-    <p class="lede">No API key? Start free in 30 seconds. Already have Claude Pro/Max or ChatGPT Plus? Use your existing plan via CLI. Or bring your own API key for full model power.</p>
+    <div class="section-eyebrow">Act IV / Get Started</div>
+    <h2>Choose how to start.</h2>
+    <p class="lede">Most people should either watch the shared demo or connect their own Chrome. Developers can use MCP, and API keys are an optional upgrade for stronger models.</p>
   </div>
 
   <div class="lanes">
 
-    <!-- 1. Headless Demo (no setup) -->
+    <!-- 1. Shared Demo (no setup) -->
     <div class="lane">
-      <div class="lane-tag">&#9889; Instant Demo &middot; No Setup</div>
-      <h3>Headless Browser Demo</h3>
+      <div class="lane-tag">&#9889; Try Demo &middot; No Setup</div>
+      <h3>Shared Browser Demo</h3>
       <p>Watch an AI agent browse live on a server-side Chrome. No install, no logins from your machine.</p>
       <div class="reqs">
         <span class="req">Nothing to install</span>
@@ -3438,14 +3642,14 @@ a{color:inherit;text-decoration:none}
         <div class="step"><span class="num">2</span><span>Type a task and watch the agent work</span></div>
       </div>
       <div class="actions">
-        <a href="/first-look" class="btn-cta">Launch Demo &rarr;</a>
+        <a href="/demo" class="btn-cta">Watch Live Demo &rarr;</a>
       </div>
     </div>
 
-    <!-- 2. Free Tier (your browser, free models) -->
+    <!-- 2. Connect Chrome (free models) -->
     <div class="lane">
-      <div class="lane-tag">&#10024; Free Tier &middot; Your Chrome</div>
-      <h3>Your Browser, Free Models</h3>
+      <div class="lane-tag">&#10024; Connect My Chrome</div>
+      <h3>Your Chrome, Free Models</h3>
       <p>Connect your own Chrome &mdash; the agent uses your real logins, cookies, and sessions. Free-tier AI models, no API key.</p>
       <div class="reqs">
         <span class="req">Chrome</span>
@@ -3457,14 +3661,14 @@ a{color:inherit;text-decoration:none}
         <div class="step"><span class="num">3</span><span>Chat &mdash; the agent drives your browser</span></div>
       </div>
       <div class="actions">
-        <a href="/trial" class="btn-cta">Start Free &rarr;</a>
+        <a href="/trial" class="btn-cta">Connect My Chrome &rarr;</a>
       </div>
     </div>
 
-    <!-- 3. Bring your own API key (consolidated) -->
+    <!-- Optional: Bring your own API key -->
     <div class="lane api">
-      <div class="lane-tag">&#127919; Full Model Power &middot; API Key</div>
-      <h3>Bring your own API key</h3>
+      <div class="lane-tag">&#127919; Optional Upgrade &middot; API Key</div>
+      <h3>Add stronger model providers</h3>
       <p>Auto-provision an API key in your Chrome browser, then run any provider at full capability. ~30 seconds to set up.</p>
       <div class="providers-label">Pick a provider &darr;</div>
       <div class="providers">
@@ -3487,16 +3691,16 @@ a{color:inherit;text-decoration:none}
           <span class="chip-arrow">&rarr;</span>
         </a>
       </div>
-      <div class="footnote">Already a Claude Pro/Max or ChatGPT Plus subscriber? Skip the API key &mdash; install the Local CLI lane instead.</div>
+      <div class="footnote">Optional. You can start with the shared demo or free models first, then add Gemini, Claude, or OpenAI when you want more capability.</div>
       <div class="actions">
-        <a href="/local" class="btn-link">Already set up? Open chat &rarr;</a>
+        <a href="/local" class="btn-link">Already connected? Open chat &rarr;</a>
       </div>
     </div>
 
-    <!-- 4. Local CLI / MCP -->
+    <!-- 3. Local CLI / MCP -->
     <div class="lane local">
-      <div class="lane-tag">&#128187; Local Agent &middot; CLI / MCP</div>
-      <h3>Run on your machine</h3>
+      <div class="lane-tag">&#128187; Use With MCP / CLI</div>
+      <h3>Developer and CLI workflows</h3>
       <p>Install the local agent once. Drive your real Chrome from your existing CLI &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
       <div class="reqs">
         <span class="req">Chrome</span>
@@ -4868,7 +5072,7 @@ async function runScenario(key) {
     if (route.indexOf('provider=claude-sdk') !== -1 || route === '/chat-claude') return verb + ' Claude API';
     if (route.indexOf('provider=gemini') !== -1 || route === '/chat-gemini') return verb + ' Gemini API';
     if (route === '/setup') return verb + ' API setup';
-    return authenticated ? 'Open Claude CLI' : 'Sign in / Sign up';
+    return authenticated ? 'Open App' : 'Connect My Chrome';
   }
 
   let storedRoute = '';
@@ -6016,6 +6220,7 @@ body{
   background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer;
 }
 #login button:active{opacity:0.8}
+#login #dev-login-btn{display:none;width:320px;max-width:320px;margin-top:10px}
 #loginerr{color:#ff6b6b;font-size:14px;min-height:20px}
 
 /* === Main === */
@@ -6725,40 +6930,71 @@ body{
 .archive-item .archive-actions .restore-btn:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
 .archive-item .archive-actions .delete-btn:hover{border-color:#e53e3e;color:#e53e3e}
 .archive-empty{text-align:center;color:var(--muted,#9da7b7);padding:40px 20px;font-size:14px}
+
+/* === Login entry card === */
+#login{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,420px);
+  align-items:center;justify-content:center;min-height:100dvh;height:auto;
+  padding:40px clamp(18px,5vw,72px);gap:32px;max-width:1100px;margin:0 auto;
+  overflow-y:auto;
+}
+#login .login-copy{max-width:520px}
+#login .login-kicker{color:var(--accent);font-size:11px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;margin-bottom:14px}
+#login h1{font-size:clamp(38px,6vw,68px);line-height:0.95;color:var(--text);margin-bottom:16px;letter-spacing:-0.04em;text-transform:none}
+#login .sub{color:#c8ceda;font-size:17px;line-height:1.55;margin-bottom:0;max-width:520px}
+#login .login-card{width:100%;padding:24px;border:1px solid rgba(255,255,255,0.12);border-radius:22px;background:rgba(15,18,30,0.82);box-shadow:0 24px 70px rgba(0,0,0,0.36)}
+#login .mode-badge{display:inline-flex;margin:0 0 18px;padding:7px 12px;border-radius:999px;background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.34);color:#c4b5fd;font-size:12px;font-weight:700;letter-spacing:0.04em}
+#login .login-card-title{font-size:18px;font-weight:700;margin-bottom:6px;color:var(--text)}
+#login .login-card-copy{color:var(--muted);font-size:13px;line-height:1.5;margin-bottom:18px}
+#login .login-proof{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
+#login .login-proof div{padding:11px;border:1px solid rgba(255,255,255,0.09);border-radius:12px;background:rgba(255,255,255,0.035)}
+#login .login-proof strong{display:block;color:var(--text);font-size:12px;margin-bottom:3px}
+#login .login-proof span{display:block;color:var(--muted);font-size:11px;line-height:1.35}
+@media(max-width:860px){
+  #login{grid-template-columns:1fr;text-align:center;padding:28px 18px;gap:22px}
+  #login .login-copy{margin:0 auto}
+  #login .login-card{max-width:420px;margin:0 auto;text-align:left}
+}
+@media(max-width:520px){#login .login-proof{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
 <!-- Login -->
 <div id="login">
-  <h1>Unchained Trial</h1>
-  <div class="sub">Free AI browser agent — no API key needed</div>
-  <div style="margin:8px 0 4px;padding:6px 16px;border-radius:6px;background:#1a1a2d;border:1px solid #2d2d4a;color:#a78bfa;font-size:13px;letter-spacing:0.5px">Signing up as: <strong>Trial</strong></div>
-  <div id="g_id_onload"
-       data-client_id="__GOOGLE_CLIENT_ID__"
-       data-callback="handleGoogleCredential"
-       data-auto_prompt="false"
-       data-context="signin"
-       data-ux_mode="popup"></div>
-  <div class="g_id_signin"
-       data-type="standard"
-       data-shape="rectangular"
-       data-theme="outline"
-       data-text="signin_with"
-       data-size="large"
-       data-logo_alignment="center"
-       data-width="320"></div>
-  <div id="loginerr"></div>
-  <div class="login-why">
-    <h3>Why connect your own browser?</h3>
-    <div class="login-why-grid">
-      <div class="login-why-item"><strong>Your logins</strong><span>Already signed into Gmail, GitHub? The agent uses them.</span></div>
-      <div class="login-why-item"><strong>Your cookies</strong><span>No CAPTCHAs &mdash; sites see you, not a bot.</span></div>
-      <div class="login-why-item"><strong>Your 2FA</strong><span>Works with authenticator apps and hardware keys.</span></div>
-      <div class="login-why-item"><strong>Your IP</strong><span>Residential connection &mdash; no datacenter flags.</span></div>
+  <section class="login-copy">
+    <div class="login-kicker">Free browser agent</div>
+    <h1>Connect your Chrome.</h1>
+    <div class="sub">Start with your own browser, real sessions, and lightweight models. No API key required.</div>
+  </section>
+  <section class="login-card" aria-label="Connect Chrome sign in">
+    <div class="mode-badge">Mode: <strong>Your Chrome + free models</strong></div>
+    <div class="login-card-title">Sign in to create your connection key</div>
+    <div class="login-card-copy">Authentication only links this browser session to your account so the local agent can connect securely.</div>
+    <div id="g_id_onload"
+         data-client_id="__GOOGLE_CLIENT_ID__"
+         data-callback="handleGoogleCredential"
+         data-auto_prompt="false"
+         data-context="signin"
+         data-ux_mode="popup"></div>
+    <div class="g_id_signin"
+         data-type="standard"
+         data-shape="rectangular"
+         data-theme="outline"
+         data-text="signin_with"
+         data-size="large"
+         data-logo_alignment="center"
+         data-width="320"></div>
+    <div id="loginerr"></div>
+    <button id="dev-login-btn" onclick="devLogin()">Dev Login</button>
+    <div class="login-proof">
+      <div><strong>Your logins</strong><span>Uses sites where you are already signed in.</span></div>
+      <div><strong>Your cookies</strong><span>Sites see your normal browser session.</span></div>
+      <div><strong>Your 2FA</strong><span>You approve security prompts directly.</span></div>
+      <div><strong>Your control</strong><span>Quit the local agent to stop automation.</span></div>
     </div>
-  </div>
-  <a href="/local" style="color:#888;font-size:12px;margin-top:4px;text-decoration:none">Want full Claude access? Sign up here &rarr;</a>
+    <a href="/local" style="color:#888;font-size:12px;margin-top:16px;text-decoration:none;display:inline-block">Have Claude or Codex CLI? Use local CLI mode &rarr;</a>
+  </section>
 </div>
 
 <!-- Pending -->
@@ -6808,9 +7044,9 @@ body{
   </div>
 
   <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
   </div>
 
   <div id="agent-bar">
@@ -6926,6 +7162,8 @@ let _openrouterUsage = null;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
+const hasGoogleOAuth = !!'__GOOGLE_CLIENT_ID__';
+const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
@@ -6942,6 +7180,12 @@ function _redirectAfterLoginIfNeeded() {
   if (next === window.location.pathname) return false;
   window.location.href = next;
   return true;
+}
+
+function maybeShowDevLogin() {
+  if (hasGoogleOAuth || !isLocalDevHost) return;
+  const btn = document.getElementById('dev-login-btn');
+  if (btn) btn.style.display = 'block';
 }
 
 function _applyAuthState(data) {
@@ -6999,6 +7243,25 @@ async function handleGoogleCredential(response) {
       return;
     }
     errEl.textContent = 'Sign-in succeeded, but session was not established. Refresh and try again.';
+  } catch(e) { errEl.textContent = e.message; }
+}
+
+async function devLogin() {
+  const errEl = document.getElementById('loginerr');
+  errEl.textContent = '';
+  try {
+    const r = await fetch('/auth/dev', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: 'dev@localhost', name: 'Dev User'}),
+    });
+    const data = await r.json();
+    _applyAuthState(data);
+    if (!r.ok) { errEl.textContent = data.error || 'Dev login failed'; return; }
+    agentId = data.agent_id || '';
+    if (_redirectAfterLoginIfNeeded()) return;
+    showMain();
   } catch(e) { errEl.textContent = e.message; }
 }
 
@@ -7211,7 +7474,7 @@ function _persistSessionId(sid) {
 let activeSlot = 1;
 
 function _slotLabel(n) {
-  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+  return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
 }
 
 function _slotStateKey() {
@@ -7694,6 +7957,7 @@ async function deleteArchive(id, el) {
   } catch(e) {}
 }
 
+maybeShowDevLogin();
 checkSession();
 function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -9867,9 +10131,9 @@ _API_CHAT_CODEX_SERVER_SLOT_REPLACEMENTS = (
     TemplateReplacement(
         '  <div id="agent-bar">',
         """  <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
   </div>
 
   <div id="agent-bar">""",
@@ -9906,9 +10170,9 @@ async function loadSlots() {
       if (s.slot === activeSlot) btn.classList.add('active');
       if (s.empty) {
         btn.classList.add('empty');
-        btn.textContent = (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+        btn.textContent = (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       } else {
-        btn.textContent = s.preview || (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+        btn.textContent = s.preview || (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       }
     }
   } catch(e) {}
@@ -10535,9 +10799,9 @@ def _inject_client_slots_ui(html: str) -> str:
             TemplateReplacement(
                 '  <div id="agent-bar">',
                 """  <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
   </div>
 
   <div id="agent-bar">""",
@@ -10558,7 +10822,7 @@ def _inject_client_slots_ui(html: str) -> str:
 let activeSlot = 1;
 
 function _slotLabel(n) {
-  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+  return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
 }
 
 function _slotStateKey() {
@@ -12873,11 +13137,19 @@ body{
 #install-modal .modal-title{color:#ffd5cc;margin-bottom:8px;font-size:16px}
 #install-modal .modal-desc{color:var(--muted);font-size:13px;margin-bottom:12px}
 #install-modal .modal-short{color:var(--muted);font-size:12px;line-height:1.4;margin:0 0 12px}
-#install-modal .install-methods{margin:0 0 14px}
-#install-modal .method-intro{margin-bottom:8px}
+#install-modal .install-methods{
+  margin:0 0 14px;
+}
+#install-modal .method-intro{
+  margin-bottom:8px;
+}
 #install-modal .method-intro b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
 #install-modal .method-intro span{display:block;color:var(--muted);font-size:12px;line-height:1.35}
-#install-modal .method-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#install-modal .method-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+}
 #install-modal .method-card{
   display:flex;
   flex-direction:column;
@@ -12888,7 +13160,10 @@ body{
   background:rgba(255,255,255,0.025);
   text-decoration:none;
 }
-#install-modal .method-card.active{border-color:rgba(255,107,74,0.55);background:rgba(255,107,74,0.09)}
+#install-modal .method-card.active{
+  border-color:rgba(255,107,74,0.55);
+  background:rgba(255,107,74,0.09);
+}
 #install-modal .method-card:hover{border-color:rgba(255,107,74,0.5)}
 #install-modal .method-card .method-label{
   color:#ffb39f;
@@ -13030,8 +13305,8 @@ body{
 <!-- Login -->
 <div id="login">
   <h1>Unchained</h1>
-  <div class="sub">Full Claude-powered browser agent</div>
-  <div class="login-badge">Signing up as: <strong>Claude</strong></div>
+  <div class="sub">Connect your real Chrome to Claude CLI or Codex CLI on this computer.</div>
+  <div class="login-badge">Mode: <strong>Local CLI + your Chrome</strong></div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
        data-callback="handleGoogleCredential"
@@ -13048,7 +13323,7 @@ body{
        data-width="320"></div>
   <div id="loginerr"></div>
   <button id="dev-login-btn" onclick="devLogin()">Dev Login</button>
-  <a href="/trial" class="trial-link">Just want to try it free? Use the trial &rarr;</a>
+  <a href="/demo" class="trial-link">Just want to watch first? Open the shared demo &rarr;</a>
 </div>
 
 <!-- Pending -->
@@ -13077,7 +13352,7 @@ body{
       </div>
     </div>
     <div class="nav">
-      <a href="/trial">Free Trial</a>
+      <a href="/demo">Demo</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="#" onclick="openArchives();return false">Archives</a>
       <a href="/test" id="control-link" style="display:none">Control</a>
@@ -13097,9 +13372,9 @@ body{
   </div>
 
   <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Chat A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Chat B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Chat C</button>
+    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
+    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
+    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
   </div>
 
   <div id="agent-bar">
@@ -13352,7 +13627,7 @@ function _rememberLastAppRoute() {
 }
 
 function _slotLabel(n) {
-  return (['Chat A', 'Chat B', 'Chat C'][n - 1] || ('Chat ' + n));
+  return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
 }
 
 function _slotStateKey() {
@@ -13835,9 +14110,9 @@ async function loadSlots() {
       if (s.slot === activeSlot) btn.classList.add('active');
       if (s.empty) {
         btn.classList.add('empty');
-        btn.textContent = (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+        btn.textContent = (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       } else {
-        btn.textContent = s.preview || (['Chat A', 'Chat B', 'Chat C'][s.slot - 1] || ('Chat ' + s.slot));
+        btn.textContent = s.preview || (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       }
     }
   } catch(e) {}
@@ -14657,6 +14932,19 @@ body{
   font-weight:700;
 }
 #login .sub{color:var(--muted)!important}
+#login .login-copy h1{
+  font-size:clamp(38px,6vw,68px)!important;
+  line-height:0.95!important;
+  letter-spacing:-0.04em!important;
+  text-transform:none!important;
+  margin-bottom:16px!important;
+}
+#login .login-copy .sub{
+  color:#c8ceda!important;
+  font-size:17px!important;
+  line-height:1.55!important;
+  margin-bottom:0!important;
+}
 #login input{
   border:1px solid var(--line)!important;
   border-radius:12px!important;
@@ -15432,6 +15720,10 @@ body{
 .step-copy strong{display:block;color:var(--text);font-size:12px}
 .step-copy span{display:block;margin-top:2px;color:var(--muted);font-size:11px;line-height:1.4;word-break:break-word}
 .empty-steps{color:var(--muted);font-size:12px}
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
 
 /* === Quota modal === */
 #quota-modal{
@@ -15459,6 +15751,17 @@ body{
   text-decoration:none;letter-spacing:0.5px;transition:opacity 0.2s;
 }
 .quota-cta:hover{opacity:0.9;box-shadow:0 0 20px rgba(233,69,96,0.3)}
+.quota-secondary{
+  display:inline-block;margin-left:8px;padding:11px 18px;border-radius:8px;
+  border:1px solid #444;background:rgba(255,255,255,0.04);color:var(--text);
+  font-size:14px;font-weight:600;cursor:pointer;
+}
+.quota-secondary:hover{border-color:var(--accent);background:rgba(233,69,96,0.08)}
+.sample-proof{
+  margin:14px 0 18px;padding:12px;border:1px dashed #444;border-radius:10px;
+  background:rgba(255,255,255,0.025);text-align:left;color:var(--muted);font-size:12px;line-height:1.45;
+}
+.sample-proof strong{display:block;color:var(--text);font-size:13px;margin-bottom:4px}
 .quota-or{color:var(--muted);font-size:13px;margin:16px 0 8px}
 .quota-install{
   background:rgba(255,255,255,0.04);border:1px solid #333;border-radius:10px;
@@ -15496,17 +15799,19 @@ body{
 </head>
 <body class="first-look-canvas">
 
-<div id="quota-modal">
+<div id="quota-modal" role="dialog" aria-modal="true" aria-labelledby="quota-title" aria-describedby="quota-desc" aria-hidden="true">
   <div class="quota-box">
-    <h2>Shared demo complete</h2>
-    <p class="quota-sub">You've used your guest runs. Start a free trial to keep browsing with the full agent — no credit card required.</p>
+    <h2 id="quota-title">Shared demo complete</h2>
+    <p id="quota-desc" class="quota-sub">You've used your guest runs. You can still review a sample run, or start a free trial to keep browsing with the full agent — no credit card required.</p>
+    <div class="sample-proof"><strong>Sample proof stays available</strong>Review a canned Hacker News run with browser steps, URL state, and an example result before installing anything.</div>
+    <button class="quota-secondary" type="button" onclick="showSampleRun();dismissQuota()">View sample run</button>
+    <a href="/trial" class="quota-cta">Start Free Trial &rarr;</a>
     <div class="quota-grid">
       <div class="quota-item"><strong>Any site</strong><span>Browse the sites you actually use, not just public demos.</span></div>
       <div class="quota-item"><strong>Your logins</strong><span>Use your own cookies, sessions, and saved accounts.</span></div>
       <div class="quota-item"><strong>Stronger models</strong><span>Claude, GPT-4o, Gemini Pro — not demo-tier.</span></div>
       <div class="quota-item"><strong>No run limit</strong><span>Unlimited tasks on your own machine.</span></div>
     </div>
-    <a href="/trial" class="quota-cta">Start Free Trial &rarr;</a>
     <div class="quota-or">or install now — 30 seconds</div>
     <div class="quota-install">
       <div class="qi-label">macOS / Linux</div>
@@ -15518,6 +15823,7 @@ body{
 </div>
 
 <div id="main">
+  <h1 class="sr-only">Unchained shared browser demo</h1>
   <div id="topbar">
     <div class="left">
       <span class="agent">Guest</span>
@@ -15555,7 +15861,8 @@ body{
 
       <div id="inputbar">
         <div id="input-fields">
-          <textarea id="msginput" rows="1" placeholder="Ask the browser to do something..."></textarea>
+          <label class="sr-only" for="msginput">Task for the shared browser</label>
+          <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something..."></textarea>
           <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
           <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
@@ -15665,13 +15972,55 @@ function ensureSessionId() {
 }
 
 let quotaModalShown = false;
+function setQuotaModalVisible(visible) {
+  const modal = document.getElementById('quota-modal');
+  if (!modal) return;
+  modal.classList.toggle('visible', !!visible);
+  modal.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
 function showQuotaModal() {
   if (quotaModalShown) return;
   quotaModalShown = true;
-  document.getElementById('quota-modal').classList.add('visible');
+  setQuotaModalVisible(true);
 }
 function dismissQuota() {
-  document.getElementById('quota-modal').classList.remove('visible');
+  setQuotaModalVisible(false);
+}
+
+function showSampleRun() {
+  closePreviewSocket();
+  sending = false;
+  const chat = document.getElementById('chat');
+  if (chat) {
+    chat.innerHTML =
+      '<div class="bubble user">Open Hacker News, list the top 5 stories, group them into themes, and tell me which one a browser-tools builder should read first.</div>' +
+      '<div class="bubble asst"><div class="text rendered">' +
+        '<p><strong>Sample run:</strong> I opened Hacker News, read the front page, grouped the top stories into three themes, and picked the browser-automation story as the best first read for a tools builder.</p>' +
+        '<ul><li><strong>AI tooling:</strong> agent frameworks, model evals, and coding workflows.</li><li><strong>Infrastructure:</strong> databases, browser runtimes, and observability.</li><li><strong>Product lessons:</strong> launch notes, pricing, and reliability retrospectives.</li></ul>' +
+        '<p><strong>Recommendation:</strong> read the browser/runtime infrastructure thread first because it maps directly to extraction reliability and page-control edge cases.</p>' +
+      '</div></div>';
+  }
+  setBrowserUrl('https://news.ycombinator.com/');
+  const img = document.getElementById('preview-image');
+  if (img) img.style.display = 'none';
+  const wrap = document.getElementById('live-canvas-wrap');
+  if (wrap) wrap.classList.remove('preview-has-frame');
+  const ph = document.getElementById('preview-empty');
+  if (ph) {
+    ph.style.display = '';
+    ph.innerHTML = '<div><strong style="display:block;color:var(--text);margin-bottom:8px">Sample browser replay</strong><span style="color:var(--muted)">The live shared browser quota is used, so this canned replay shows the same browser-step proof without starting a new run.</span></div>';
+  }
+  const mode = document.getElementById('preview-mode');
+  if (mode) mode.textContent = 'sample replay';
+  setPreviewNote('Sample replay shown. Start a free trial to run a fresh browser task.', 'ok');
+  const list = document.getElementById('step-list');
+  if (list) {
+    list.innerHTML =
+      '<div class="step-item done"><span class="step-dot"></span><div class="step-copy"><strong>Navigate</strong><span>Opened https://news.ycombinator.com/</span></div></div>' +
+      '<div class="step-item done"><span class="step-dot"></span><div class="step-copy"><strong>Inspect</strong><span>Read story titles, points, comments, and outbound links.</span></div></div>' +
+      '<div class="step-item done"><span class="step-dot"></span><div class="step-copy"><strong>Summarize</strong><span>Grouped stories and picked the most relevant one for a browser-tools builder.</span></div></div>';
+  }
+  updateSendAvailability();
 }
 
 function toggleFirstLookChat() {
@@ -16120,7 +16469,10 @@ function resetPreview() {
   const wrap = document.getElementById('live-canvas-wrap');
   if (wrap) wrap.classList.remove('preview-has-frame');
   const ph = document.getElementById('preview-empty');
-  if (ph) ph.style.display = '';
+  if (ph) {
+    ph.textContent = 'The browser preview appears here after navigation.';
+    ph.style.display = '';
+  }
   setBrowserUrl('');
   document.getElementById('preview-mode').textContent = 'running';
   setPreviewNote('Starting run...', '');
@@ -16588,7 +16940,348 @@ def _apply_modern_chat_theme(html: str) -> str:
     )
 
 
+_PLAYFUL_CHAT_SKIN_STYLE = """<style id="playful-chat-skin">
+:root{
+  --bg:#090912;
+  --surface:#11111c;
+  --surface-elev:#191826;
+  --accent:#e94560;
+  --accent-strong:#ff6f91;
+  --accent-soft:rgba(233,69,96,0.17);
+  --spectrum-red:#ff315f;
+  --spectrum-orange:#ff8a2a;
+  --spectrum-yellow:#ffe45c;
+  --spectrum-green:#45ef8f;
+  --spectrum-blue:#4aa7ff;
+  --spectrum-violet:#b15cff;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;
+  background:
+    linear-gradient(rgba(233,69,96,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.03) 1px, transparent 1px),
+    radial-gradient(560px 280px at 12% 16%, rgba(233,69,96,0.22), transparent 68%),
+    radial-gradient(520px 260px at 86% 12%, rgba(74,167,255,0.16), transparent 70%),
+    radial-gradient(520px 320px at 76% 88%, rgba(177,92,255,0.13), transparent 70%);
+  background-size:54px 54px,54px 54px,auto,auto,auto;
+}
+body::after{
+  content:"";position:fixed;left:8vw;right:8vw;top:74px;height:2px;z-index:-1;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--spectrum-red),var(--spectrum-orange),var(--spectrum-yellow),var(--spectrum-green),var(--spectrum-blue),var(--spectrum-violet),transparent);
+  filter:blur(0.1px);opacity:0.48;
+  box-shadow:0 0 28px rgba(233,69,96,0.34),0 0 60px rgba(74,167,255,0.18);
+  animation:spectrumScan 8s ease-in-out infinite;
+}
+@keyframes spectrumScan{
+  0%,100%{transform:translateY(0) scaleX(0.92);opacity:0.34}
+  50%{transform:translateY(10px) scaleX(1);opacity:0.72}
+}
+#login{
+  position:relative!important;
+  isolation:isolate;
+}
+#login::before{
+  content:"";position:absolute;left:50%;top:48%;z-index:-1;pointer-events:none;
+  width:min(84vw,780px);height:min(84vw,780px);transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:
+    conic-gradient(from 225deg,transparent 0 17%,rgba(255,49,95,0.28) 20%,transparent 24% 44%,rgba(74,167,255,0.22) 48%,transparent 54% 100%),
+    radial-gradient(circle at 50% 48%,rgba(233,69,96,0.16),transparent 28%);
+  filter:blur(0.2px);opacity:0.82;
+}
+#login h1{
+  color:#fff!important;
+  text-shadow:0 0 34px rgba(233,69,96,0.26);
+}
+#login .login-kicker,
+#login .sub{position:relative;z-index:1}
+#login .login-card,
+#login .login-badge,
+#login input,
+#login button,
+#login .g_id_signin{
+  position:relative;z-index:1;
+}
+#login .login-card{
+  background:linear-gradient(180deg,rgba(22,20,34,0.88),rgba(9,9,18,0.84))!important;
+  border-color:rgba(255,255,255,0.14)!important;
+  box-shadow:0 28px 90px rgba(0,0,0,0.42),0 0 60px rgba(233,69,96,0.10)!important;
+}
+#login .login-badge,
+#login .mode-badge{
+  background:rgba(233,69,96,0.16)!important;
+  border-color:rgba(233,69,96,0.38)!important;
+  color:#ffc6d2!important;
+}
+#login #dev-login-btn{
+  border-radius:16px!important;
+  background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong),var(--spectrum-violet))!important;
+  box-shadow:0 16px 34px rgba(233,69,96,0.24);
+}
+#main{
+  border-color:rgba(255,255,255,0.08)!important;
+  background:
+    radial-gradient(700px 260px at 12% 0%, rgba(233,69,96,0.15), transparent 65%),
+    radial-gradient(620px 220px at 86% 2%, rgba(74,167,255,0.12), transparent 62%),
+    linear-gradient(180deg,rgba(18,18,30,0.96),rgba(8,8,16,0.97))!important;
+  box-shadow:0 28px 90px rgba(0,0,0,0.48),0 0 0 1px rgba(255,255,255,0.04) inset!important;
+}
+#topbar{
+  align-items:center!important;
+  background:
+    linear-gradient(90deg,rgba(233,69,96,0.18),rgba(177,92,255,0.09),rgba(74,167,255,0.12))!important;
+  border-bottom:1px solid rgba(255,255,255,0.08)!important;
+  box-shadow:0 10px 40px rgba(0,0,0,0.18);
+}
+#topbar .left{gap:10px!important;flex-wrap:wrap}
+#topbar .agent{
+  border-radius:16px!important;
+  padding:7px 11px!important;
+  background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 52%,var(--spectrum-violet))!important;
+  border:0!important;
+  color:#fff!important;
+  font-weight:800!important;
+  box-shadow:0 10px 26px rgba(233,69,96,0.28);
+  animation:softFloat 5s ease-in-out infinite;
+}
+@keyframes softFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-1px)}}
+#topbar .status-stack{flex-direction:row!important;gap:6px!important;flex-wrap:wrap}
+#topbar .status{
+  display:inline-flex!important;align-items:center;gap:6px;
+  min-height:28px;padding:5px 9px!important;
+  border:1px solid rgba(255,255,255,0.12)!important;
+  border-radius:13px!important;
+  background:rgba(255,255,255,0.055)!important;
+  color:#b8c4d6!important;
+  font-family:var(--mono)!important;font-size:10.5px!important;
+}
+#topbar .status::before{
+  content:"";width:7px;height:7px;border-radius:50%;background:#7b8798;box-shadow:0 0 10px rgba(123,135,152,0.28);
+}
+#topbar .status.online{color:#c8ffe0!important;border-color:rgba(92,212,138,0.28)!important;background:rgba(92,212,138,0.09)!important}
+#topbar .status.online::before{background:#5cd48a;box-shadow:0 0 12px rgba(92,212,138,0.55)}
+#topbar .status.warn{color:#ffe4a5!important;border-color:rgba(251,191,36,0.32)!important;background:rgba(251,191,36,0.10)!important}
+#topbar .status.warn::before{background:#fbbf24;box-shadow:0 0 12px rgba(251,191,36,0.55)}
+#topbar .nav{gap:7px!important}
+#topbar .nav a,
+#topbar .client-update{
+  border-radius:14px!important;
+  border:1px solid rgba(255,255,255,0.11)!important;
+  background:rgba(255,255,255,0.055)!important;
+  color:#d5dfed!important;
+  box-shadow:0 8px 18px rgba(0,0,0,0.14);
+}
+#topbar .nav a:hover,
+#topbar .client-update:hover{
+  transform:translateY(-1px);
+  border-color:rgba(233,69,96,0.64)!important;
+  background:rgba(233,69,96,0.16)!important;
+  color:#fff1f5!important;
+}
+.topbar-new{
+  background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 55%,var(--spectrum-violet))!important;
+  border:0!important;
+  color:#fff!important;
+  box-shadow:0 12px 28px rgba(233,69,96,0.26)!important;
+}
+.topbar-new:hover{filter:brightness(1.06);background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong),var(--spectrum-blue))!important}
+#slotbar{
+  gap:10px!important;
+  padding:10px clamp(12px,2vw,24px) 12px!important;
+  background:linear-gradient(180deg,rgba(7,10,15,0.52),rgba(7,10,15,0.22))!important;
+  border-bottom:1px solid rgba(255,255,255,0.075)!important;
+}
+#slotbar button{
+  position:relative;height:46px!important;
+  border-radius:18px!important;
+  border:1px solid rgba(255,255,255,0.11)!important;
+  background:
+    linear-gradient(90deg,rgba(255,49,95,0.18),rgba(255,138,42,0.08),rgba(74,167,255,0.13)),
+    radial-gradient(circle at 18% 20%,rgba(255,255,255,0.14),transparent 30%),
+    linear-gradient(135deg,rgba(255,255,255,0.075),rgba(255,255,255,0.025))!important;
+  color:#d5dfed!important;
+  font-size:12px!important;font-weight:800!important;letter-spacing:0.06em;
+  text-transform:uppercase;
+  padding:0 12px 0 32px!important;
+  box-shadow:0 12px 30px rgba(0,0,0,0.18),0 0 0 1px rgba(255,255,255,0.02) inset;
+  transition:transform 0.16s ease,border-color 0.16s ease,background 0.16s ease,box-shadow 0.16s ease!important;
+}
+#slotbar button::before{
+  content:"";position:absolute;left:13px;top:50%;transform:translateY(-50%);
+  width:9px;height:9px;border-radius:50%;
+  background:#6c7890;box-shadow:0 0 0 4px rgba(255,255,255,0.045);
+}
+#slotbar button::after{
+  content:"";position:absolute;left:16px;right:16px;bottom:6px;height:2px;border-radius:999px;
+  background:linear-gradient(90deg,var(--spectrum-red),var(--spectrum-yellow),var(--spectrum-blue));
+  opacity:0;transform:scaleX(0.5);transition:opacity 0.16s ease,transform 0.16s ease;
+}
+#slotbar button:hover{transform:translateY(-2px);border-color:rgba(233,69,96,0.58)!important;color:#fff!important;background:rgba(233,69,96,0.12)!important}
+#slotbar button:hover::after{opacity:0.74;transform:scaleX(1)}
+#slotbar button:active{transform:translateY(0) scale(0.99)!important}
+#slotbar button.active{
+  border-color:rgba(255,255,255,0.22)!important;
+  color:#fff!important;
+  background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 48%,var(--spectrum-violet))!important;
+  box-shadow:0 16px 42px rgba(233,69,96,0.28),0 0 0 1px rgba(255,255,255,0.22) inset;
+  animation:laneGlow 4s ease-in-out infinite;
+}
+#slotbar button.active::before{background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,0.23),0 0 16px rgba(255,255,255,0.45)}
+#slotbar button.active::after{opacity:1;transform:scaleX(1);background:linear-gradient(90deg,#fff,var(--spectrum-yellow),#fff)}
+@keyframes laneGlow{0%,100%{box-shadow:0 16px 42px rgba(233,69,96,0.24),0 0 0 1px rgba(255,255,255,0.2) inset}50%{box-shadow:0 16px 48px rgba(177,92,255,0.32),0 0 0 1px rgba(255,255,255,0.26) inset}}
+#slotbar button.empty{font-style:normal!important;color:#7f8da3!important}
+#slotbar button.empty::before{background:#48556a}
+#slotbar button.empty.active{color:#180f08!important}
+#modelrow{
+  margin:8px clamp(12px,2vw,24px) 0!important;
+  padding:9px 10px!important;
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:18px;
+  background:rgba(255,255,255,0.035);
+}
+#modelrow label{color:#ffcfb8!important;font-weight:800!important}
+#modelsel,#profilesel{
+  height:36px!important;
+  border-radius:14px!important;
+  border-color:rgba(255,255,255,0.12)!important;
+  background:rgba(7,10,15,0.64)!important;
+  box-shadow:0 8px 18px rgba(0,0,0,0.12) inset;
+}
+#chat-hints{
+  padding-top:min(7vh,72px)!important;
+}
+.hint-title{
+  font-size:clamp(28px,4vw,44px)!important;
+  line-height:1!important;
+  color:#fff!important;
+  letter-spacing:-0.04em!important;
+}
+.hint-title::after{
+  content:"";display:block;width:74px;height:5px;margin:14px auto 10px;border-radius:999px;
+  background:linear-gradient(90deg,#ff8b5f,#ffd26f,#5cd48a,#5d9bff);
+}
+.hint-sub{font-size:15px!important;color:#c2ccdc!important;max-width:520px;margin-left:auto;margin-right:auto;line-height:1.55!important}
+.hint-examples{max-width:760px!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px!important}
+.hint-item{
+  border-radius:18px!important;
+  padding:14px!important;
+  border-color:rgba(255,255,255,0.10)!important;
+  background:
+    radial-gradient(circle at 12% 18%,rgba(255,255,255,0.11),transparent 28%),
+    rgba(255,255,255,0.04)!important;
+  box-shadow:0 14px 34px rgba(0,0,0,0.18);
+}
+.hint-item:hover{transform:translateY(-2px);border-color:rgba(255,179,108,0.62)!important;background:rgba(255,179,108,0.12)!important}
+#inputbar{
+  gap:10px!important;
+  padding:12px clamp(12px,2vw,24px)!important;
+  padding-bottom:max(16px,env(safe-area-inset-bottom))!important;
+  background:linear-gradient(180deg,rgba(13,18,25,0.66),rgba(7,10,15,0.92))!important;
+  border-top:1px solid rgba(255,255,255,0.08)!important;
+}
+#msginput{
+  min-height:50px!important;
+  border-radius:22px!important;
+  padding:13px 16px!important;
+  border-color:rgba(255,255,255,0.12)!important;
+  background:rgba(255,255,255,0.065)!important;
+  box-shadow:0 12px 30px rgba(0,0,0,0.12) inset,0 0 0 1px rgba(255,255,255,0.02);
+}
+#msginput:focus{border-color:rgba(255,179,108,0.70)!important;box-shadow:0 0 0 4px rgba(255,179,108,0.14),0 12px 30px rgba(0,0,0,0.12) inset!important}
+#sendbtn,#cancelbtn{
+  width:50px!important;height:50px!important;border-radius:19px!important;
+  box-shadow:0 16px 34px rgba(255,107,74,0.22);
+}
+#sendbtn{background:linear-gradient(135deg,#ffcf6e,#ff7a59 58%,#ff5e9f)!important;color:#180f08!important;font-weight:900!important}
+#sendbtn:hover{filter:none!important;transform:translateY(-2px) rotate(-2deg)}
+#sendbtn:disabled{opacity:0.48!important;box-shadow:none!important;transform:none!important}
+#cancelbtn{background:linear-gradient(135deg,#ef5c5c,#fb7185)!important}
+#download-banner{
+  background:linear-gradient(90deg,rgba(255,207,110,0.13),rgba(255,107,74,0.10),rgba(93,155,255,0.10))!important;
+  border-bottom:1px solid rgba(255,255,255,0.09)!important;
+}
+@media (prefers-reduced-motion:reduce){
+  body::after,#topbar .agent,#slotbar button.active{animation:none!important}
+  #sendbtn:hover,#slotbar button:hover,#topbar .nav a:hover,#topbar .client-update:hover{transform:none!important}
+}
+@media(max-width:900px){
+  #main{border-left:0!important;border-right:0!important;box-shadow:none!important}
+  #topbar{padding:10px 12px!important;gap:8px!important}
+  #topbar .left{min-width:0;flex:1 1 auto}
+  #topbar .agent{max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #topbar .status{min-height:26px!important;padding:4px 8px!important;font-size:10px!important}
+  #topbar .nav{flex:0 0 auto;max-width:52vw;overflow-x:auto;flex-wrap:nowrap!important;padding-bottom:2px;scrollbar-width:none}
+  #topbar .nav::-webkit-scrollbar{display:none}
+  #topbar .nav a{white-space:nowrap;padding:7px 9px!important}
+  .topbar-new{position:sticky;right:0;z-index:2;min-width:70px;text-align:center}
+  #modelrow{margin-left:10px!important;margin-right:10px!important;overflow-x:auto;flex-wrap:nowrap!important;scrollbar-width:none}
+  #modelrow::-webkit-scrollbar{display:none}
+  #modelsel,#profilesel{min-width:180px;max-width:58vw}
+  .hint-examples{grid-template-columns:1fr!important;max-width:520px!important}
+}
+@media(max-width:760px){
+  #hint-examples,.hint-examples{grid-template-columns:1fr!important}
+  #slotbar{gap:8px!important;padding:9px 10px!important;overflow-x:auto;scrollbar-width:none}
+  #slotbar::-webkit-scrollbar{display:none}
+  #slotbar button{height:42px!important;min-width:118px;flex:0 0 38vw;font-size:11px!important;padding-left:27px!important}
+  #slotbar button::before{left:10px}
+  #chat{padding:12px 10px!important}
+  #chat-hints{padding-top:22px!important}
+  .hint-title{font-size:clamp(25px,8vw,34px)!important}
+  .hint-sub{font-size:14px!important;padding:0 8px}
+  .hint-item{padding:13px!important;border-radius:16px!important}
+  #inputbar{padding:10px!important;gap:8px!important;align-items:flex-end}
+  #msginput{min-height:48px!important;border-radius:18px!important;font-size:16px!important}
+  #sendbtn,#cancelbtn{width:48px!important;height:48px!important;border-radius:17px!important}
+  #download-banner{flex-wrap:wrap;align-items:flex-start!important;justify-content:flex-start!important;gap:9px!important;padding:10px!important}
+  #download-banner .copy{width:100%;max-width:none!important}
+  #download-banner .banner-actions{width:100%;display:flex;gap:8px;overflow:auto}
+}
+@media(max-width:560px){
+  body::after{top:56px;left:6vw;right:6vw;opacity:0.34}
+  #login{padding:22px 14px!important;gap:14px!important;min-height:100dvh!important}
+  #login::before{width:112vw;height:112vw;opacity:0.58}
+  #login h1{font-size:clamp(34px,14vw,52px)!important;line-height:0.95!important;margin-bottom:8px!important}
+  #login .sub{font-size:14px!important;line-height:1.45!important;max-width:330px!important}
+  #login .login-card{padding:18px!important;border-radius:18px!important;width:100%!important}
+  #login .login-proof{grid-template-columns:1fr!important}
+  #topbar{position:relative;align-items:flex-start!important;padding-right:92px!important}
+  #topbar .left{width:100%;align-items:flex-start!important;gap:7px!important}
+  #sidebar-toggle{margin-top:1px!important}
+  #topbar .status-stack{width:100%;gap:5px!important}
+  #topbar .status{font-size:9.5px!important;min-height:24px!important}
+  #topbar .nav{position:absolute;right:8px;top:8px;max-width:84px;overflow:visible!important;padding:0!important}
+  #topbar .nav a:not(.topbar-new){display:none!important}
+  .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;height:34px;min-width:76px!important;border-radius:14px!important;padding:0 10px!important}
+  #modelrow{display:grid!important;grid-template-columns:auto minmax(0,1fr);gap:7px!important;align-items:center}
+  #modelrow label{font-size:9px!important}
+  #modelsel,#profilesel{width:100%!important;max-width:none!important;min-width:0!important}
+  #slotbar button{flex-basis:52vw;min-width:128px}
+}
+</style>"""
+
+
+def _apply_playful_chat_skin(html: str) -> str:
+    if 'id="playful-chat-skin"' in html:
+        return html
+    if "</head>" not in html:
+        return html
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</head>",
+                _PLAYFUL_CHAT_SKIN_STYLE + "\n</head>",
+                "playful chat skin head injection",
+            ),
+        ),
+        template_name="playful chat skin injection",
+    )
+
+
 TRIAL_CHAT_HTML = _apply_modern_chat_theme(TRIAL_CHAT_HTML)
+TRIAL_CHAT_HTML = _apply_playful_chat_skin(TRIAL_CHAT_HTML)
+CLAUDE_CHAT_HTML = _apply_playful_chat_skin(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _apply_modern_chat_theme(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _apply_modern_chat_theme(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _apply_modern_chat_theme(CHAT_CODEX_HTML)
@@ -16618,6 +17311,8 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 .sidebar-title{font-size:15px;font-weight:600;color:var(--text,#edf2f7);letter-spacing:0.5px}
 .sidebar-new{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
 .sidebar-new:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+.topbar-new{font-weight:800!important;color:var(--text,#edf2f7)!important;border-color:var(--accent,#ff6b4a)!important;background:rgba(255,107,74,0.14)!important}
+.topbar-new:hover{background:rgba(255,107,74,0.24)!important}
 #sidebar-history{overflow-y:auto;flex:1;padding:8px}
 .sidebar-item{display:flex;flex-direction:column;padding:10px 12px;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px}
 .sidebar-item:hover{background:var(--surface-elev,#171d26)}
@@ -16913,8 +17608,8 @@ def _inject_sidebar(html: str) -> str:
             ),
             TemplateReplacement(
                 '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
-                "",
-                "sidebar nav new-chat removal",
+                '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n',
+                "sidebar nav quick-new replacement",
             ),
             TemplateReplacement(
                 "</div>\n<script>",
@@ -17321,6 +18016,8 @@ h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spa
             <li>Installer download is issued from your authenticated account session.</li>
             <li>Downloads a native installer binary for your OS (.dmg/.pkg or .msi/.exe).</li>
             <li>Fallback shell installers are disabled in the one-click flow.</li>
+            <li>The local agent runs on this computer and connects your Chrome to Unchained; browser automation can be stopped by quitting the agent.</li>
+            <li>Unchained sees commands, status, and extracted results needed to run tasks. Your Chrome profile stays on your machine.</li>
           </ul>
 
           <div class="agree">
@@ -17786,6 +18483,11 @@ body{
 .copy-btn{padding:6px 14px;border:1px solid #555;border-radius:6px;
   background:transparent;color:var(--muted);font-size:12px;cursor:pointer}
 .copy-btn:hover{border-color:var(--accent);color:var(--accent)}
+.trust-note{
+  margin:10px 0 12px;padding:10px 12px;border:1px solid #333;border-radius:10px;
+  background:rgba(255,255,255,0.035);color:#bbb;font-size:12px;line-height:1.55;
+}
+.trust-note strong{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
 
 /* Consent denied message */
 .consent-denied{text-align:center;padding:40px 20px;color:var(--muted);font-size:14px}
@@ -17823,7 +18525,7 @@ body{
       <li>Click "Create API key" to generate a key in your Google account</li>
       <li>Capture the key from the page response and store it encrypted on our server</li>
       <li>If Google asks you to accept Terms of Service, you'll need to do that yourself in Chrome</li>
-      <li>You can view or revoke the key any time from this page</li>
+      <li>You can paste a key manually instead, and view or revoke stored keys any time from this page</li>
     </ul>
     <div class="modal-btns">
       <button class="btn-agree" onclick="acceptConsent()">I Agree &mdash; Continue</button>
@@ -17925,6 +18627,7 @@ body{
         <span class="agent-label" id="agent-label">Agent Offline</span>
       </div>
       <p id="setup-connect-desc" style="color:var(--muted);font-size:13px;margin-bottom:10px">Run this in your terminal:</p>
+      <div class="trust-note"><strong>Local connection</strong>The agent runs on this computer and connects your Chrome over an authenticated tunnel. Quit the agent to stop browser automation.</div>
       <div class="install-cmd" id="setup-install-cmd">Loading...</div>
       <button class="copy-btn" onclick="copySetupCmd(this)">Copy</button>
       <p id="setup-connect-note" style="color:var(--muted);font-size:11px;margin-top:12px">Requires Python 3 and curl. Link expires in 15 minutes.</p>
@@ -17955,6 +18658,7 @@ body{
       <div id="relay-mode-hint" style="display:none;color:var(--muted);font-size:13px;margin-bottom:10px">
         Prefer full control? Access this page from your computer at <code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">localhost:8080/setup</code> to use visible Chrome mode.
       </div>
+      <div class="trust-note"><strong>API key handling</strong>Auto-provision opens the provider page in Chrome and stores the captured key encrypted on the server. You can use manual paste instead and revoke stored keys from this page.</div>
       <button class="provision-btn" id="provision-btn" onclick="startProvision()" disabled>
         Provision Gemini API Key
       </button>
@@ -20482,6 +21186,13 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
       border:none;text-decoration:none;
     }
     .signin-btn:hover{background:#d63b55;text-decoration:none}
+    .trust-panel{
+      display:grid;gap:8px;margin:12px 0 14px;padding:12px 14px;
+      border:1px solid rgba(255,255,255,0.1);border-radius:12px;
+      background:rgba(255,255,255,0.035);color:#a6a6b5;font-size:12.5px;
+    }
+    .trust-panel strong{color:#e8e8ec;font-size:13px}
+    .trust-panel span{display:block;line-height:1.45}
     .tools-section{
       border:1px solid #252532;border-radius:14px;background:#0e0e15;
       padding:22px 20px;margin-bottom:28px;
@@ -20555,8 +21266,13 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
           <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
             Install the Unchained agent on your Mac to bridge your local Chrome:
           </p>
+          <div class="trust-panel">
+            <strong>What this installs</strong>
+            <span>A local agent that connects your existing Chrome to Unchained over an authenticated tunnel. Your Chrome profile stays on this machine.</span>
+            <span>You can review the script first, stop automation by quitting the agent, and revoke account access from the app.</span>
+          </div>
           <div class="code-wrap" id="installer-wrap">
-            <pre class="code-block" id="installer-cmd">curl -fsSL https://api.unchainedsky.com/install.sh | bash</pre>
+            <pre class="code-block" id="installer-cmd">curl -fsSL https://unchainedsky.com/install.sh | bash</pre>
             <button class="copy-btn" onclick="copyCode('installer-cmd',this)">Copy</button>
           </div>
         </div>

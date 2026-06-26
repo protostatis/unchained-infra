@@ -1406,20 +1406,24 @@ def test_handle_chat_msg_forwards_model():
     print(f"  handle_chat_msg extracts and forwards model")
 
 
-def test_google_auth_trial_pending_has_chat_access():
-    """Verify trial/demo sign-ins stay pending but can access chat flows."""
+def test_google_auth_respects_post_trigger_signup_status():
+    """Verify signup responses branch on the persisted post-trigger status."""
     import inspect
     from web import handle_google_auth
     source = inspect.getsource(handle_google_auth)
     assert "_auth.create_pending_user(email, name, picture, user_type=\"trial\")" in source, \
         "New trial/demo sign-ins should be created with pending status"
-    assert "_auth.create_key(user[\"user_id\"])" in source, \
-        "Pending trial/demo users should receive an API key for trial/demo chat access"
-    assert "\"review_pending\": True" in source, \
-        "Trial/demo auth response should indicate review is still pending"
+    assert "_ensure_trial_access(core, user, email)" in source, \
+        "Trial/demo users should receive an API key for trial/demo chat access"
+    assert "\"review_pending\": status == \"pending\"" in source, \
+        "Auth response should only show review_pending when the stored status is pending"
+    assert '"demo_unlimited": core._is_demo_unlimited(user) if status == "approved" else False' in source, \
+        "Auto-approved trial/demo response should reflect unlimited quota state"
+    assert 'if status == "approved"' in source, \
+        "Auto-approved signups should bypass the pending review gate"
     assert "\"pending\": True" in source, \
         "Non-trial pending users should still receive pending response"
-    print("  Trial/demo sign-ins are pending but can access trial/demo chat")
+    print("  Signup auth honors post-trigger approval status")
 
 
 def test_pending_trial_restricted_from_local_and_provision_routes():
@@ -1711,7 +1715,7 @@ if __name__ == "__main__":
         ("web: TRIAL_CHAT_HTML has Claude access request flow", test_trial_chat_has_claude_access_request_flow),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
         ("web: handle_chat_msg forwards model", test_handle_chat_msg_forwards_model),
-        ("auth: trial/demo pending users can access trial/demo chat", test_google_auth_trial_pending_has_chat_access),
+        ("auth: signup honors post-trigger status", test_google_auth_respects_post_trigger_signup_status),
         ("auth: pending trial gated from local/provision routes", test_pending_trial_restricted_from_local_and_provision_routes),
         ("web: pending trial blocked from non-openrouter chat", test_handle_chat_msg_blocks_pending_trial_non_openrouter),
         ("web: handle_chat_msg openrouter budget force logic", test_handle_chat_msg_openrouter_budget_force_logic),
