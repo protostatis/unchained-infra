@@ -384,13 +384,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     except Exception:
         return web.json_response({"error": "invalid json body"}, status=400)
 
-    auth_info = core._authenticate(request)
+    wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
+    auth_info = None if wants_guest_first_look else core._authenticate(request)
     guest_mode = False
     guest_id = ""
     guest_quota_count = 0
     guest_quota_increment = False
     if auth_info is None:
-        wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
         if not wants_guest_first_look:
             return web.json_response({"error": "Not authenticated"}, status=401)
         auth_info, guest_id, guest_quota_count = core._first_look_guest_auth(request)
@@ -853,11 +853,12 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         body = {}
-    auth_info = core._authenticate(request)
+    wants_guest_first_look = bool(body.get("first_look_guest"))
+    auth_info = None if wants_guest_first_look else core._authenticate(request)
     guest_mode = False
     guest_id = ""
     if auth_info is None:
-        if not bool(body.get("first_look_guest")):
+        if not wants_guest_first_look:
             return web.json_response({"error": "Not authenticated"}, status=401)
         auth_info, guest_id, _ = core._first_look_guest_auth(request)
         guest_mode = True

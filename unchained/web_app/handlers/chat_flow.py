@@ -913,10 +913,7 @@ async def _agent_request_after_reconnect(
 async def handle_chat_status(request: web.Request) -> web.Response:
     """GET /web/chat/status — check if user's agent is connected."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        if request.query.get("first_look_guest") != "1":
-            return web.json_response({"error": "Not authenticated"}, status=401)
+    if request.query.get("first_look_guest") == "1":
         guest_auth, guest_id, _ = core._first_look_guest_auth(request)
         gws = core._chat_agents.get(core.TRIAL_AGENT_ID)
         chat_connected = bool(core.TRIAL_AGENT_ID) and gws is not None and not gws.closed
@@ -945,6 +942,9 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         )
         core._attach_first_look_guest_cookies(guest_resp, request, guest_id)
         return guest_resp
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
     try:
         bridge_info = await core._resolve_bridge_agent(
             auth_info,
@@ -1235,14 +1235,15 @@ async def handle_chat_install_research_desk(request: web.Request) -> web.Respons
 async def handle_chat_history(request: web.Request) -> web.Response:
     """GET /web/chat/history — proxy to agent for local chat history."""
     core = _core()
-    auth_info = core._authenticate(request)
     guest_mode = False
     guest_id = ""
-    if not auth_info:
-        if request.query.get("first_look_guest") != "1":
-            return web.json_response({"error": "Not authenticated"}, status=401)
+    if request.query.get("first_look_guest") == "1":
         auth_info, guest_id, _ = core._first_look_guest_auth(request)
         guest_mode = True
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
     if (guest_mode or core._is_pending_user(auth_info)) and not model:
@@ -1290,11 +1291,12 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         body = {}
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        if not bool(body.get("first_look_guest")):
-            return web.json_response({"error": "Not authenticated"}, status=401)
+    if bool(body.get("first_look_guest")):
         auth_info, _, _ = core._first_look_guest_auth(request)
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
 
     model = body.get("model", "")

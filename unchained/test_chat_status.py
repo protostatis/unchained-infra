@@ -198,6 +198,44 @@ class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["guest"])
         mock_check_relay.assert_awaited_once_with("headless-test")
 
+    @patch("web._check_relay_agent", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_first_look_guest_status_ignores_signed_in_cookie(
+        self, mock_auth, mock_check_relay
+    ):
+        mock_auth.return_value = {
+            "user_id": "u-signed-in",
+            "agent_id": "claude-local",
+            "key_hash": "local",
+            "key": "uc_live_local",
+            "email": "signed@example.com",
+        }
+        mock_check_relay.return_value = True
+        request = SimpleNamespace(
+            query={"first_look_guest": "1"},
+            headers={},
+            scheme="http",
+            host="127.0.0.1",
+            cookies={"uc_session": "signed-in-cookie"},
+        )
+
+        with (
+            patch.object(web, "HEADLESS_AGENT_ID", "headless-test"),
+            patch.object(web, "TRIAL_AGENT_ID", "trial-test"),
+        ):
+            web._chat_agents["trial-test"] = SimpleNamespace(closed=False)
+            response = await web.handle_chat_status(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["connected"])
+        self.assertTrue(data["guest"])
+        self.assertTrue(data["agent_id"].startswith("guest-"))
+        self.assertEqual(data["chat_agent_id"], "trial-test")
+        self.assertEqual(data["bridge_agent_id"], "headless-test")
+        mock_auth.assert_not_called()
+        mock_check_relay.assert_awaited_once_with("headless-test")
+
     @patch("web._list_relay_agents_for_auth", new_callable=AsyncMock)
     @patch("web._check_relay_agent", new_callable=AsyncMock)
     @patch("web._authenticate")
