@@ -201,6 +201,19 @@ class TestTemplateGithubGate(unittest.TestCase):
         ):
             html = template_utils.inject_google_client_id(template, "google-id")
         self.assertIn("/auth/github/start", html)
+        self.assertIn("margin:10px auto 0", html)
+        self.assertIn("width:min(100%,320px)", html)
+
+    def test_dev_auth_flag_is_server_rendered(self):
+        template = "<script>const devAuthEnabled = __DEV_AUTH_ENABLED__;</script>"
+
+        prod_html = template_utils.inject_google_client_id(template, "google-id")
+        self.assertIn("const devAuthEnabled = false;", prod_html)
+        self.assertNotIn("__DEV_AUTH_ENABLED__", prod_html)
+
+        dev_html = template_utils.inject_google_client_id(template, "")
+        self.assertIn("const devAuthEnabled = true;", dev_html)
+        self.assertNotIn("__DEV_AUTH_ENABLED__", dev_html)
 
 
 if __name__ == "__main__":

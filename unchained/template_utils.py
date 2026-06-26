@@ -410,7 +410,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     var style = document.createElement('style');
     style.id = 'uc-auth-btn-style';
     style.textContent = [
-      '#login #fb-login-btn,#login #gh-login-btn{width:min(100%,360px) !important;height:48px !important;border-radius:12px !important;}'
+      '#login #fb-login-btn,#login #gh-login-btn{display:block !important;width:min(100%,320px) !important;height:44px !important;border-radius:12px !important;margin:10px auto 0 !important;}'
     ].join('');
     if(document.head){
       document.head.appendChild(style);
@@ -426,7 +426,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     btn.type = 'button';
     btn.id = 'fb-login-btn';
     btn.textContent = 'Continue with Facebook';
-    btn.style.cssText = 'display:block;width:320px;height:44px;border:none;border-radius:8px;background:#1877f2;color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:10px';
+    btn.style.cssText = 'display:block;width:320px;height:44px;border:none;border-radius:8px;background:#1877f2;color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin:10px auto 0';
     btn.addEventListener('click', function(){
       var source = inferSource();
       var next = currentNextPath();
@@ -456,7 +456,7 @@ _FACEBOOK_LOGIN_SNIPPET_TEMPLATE = r"""<script data-uc-facebook-login>
     btn.type = 'button';
     btn.id = 'gh-login-btn';
     btn.textContent = 'Continue with GitHub';
-    btn.style.cssText = 'display:block;width:320px;height:44px;border:1px solid #30363d;border-radius:8px;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin-top:10px';
+    btn.style.cssText = 'display:block;width:320px;height:44px;border:1px solid #30363d;border-radius:8px;background:#0d1117;color:#f0f6fc;font-size:15px;font-weight:600;cursor:pointer;margin:10px auto 0';
     btn.addEventListener('click', function(){
       var source = inferSource();
       var next = currentNextPath();
@@ -519,6 +519,7 @@ def _inject_before_body(html: str, snippet: str) -> str:
 def inject_google_client_id(template_html: str, google_client_id: str) -> str:
     """Replace Google client placeholder and inject lightweight analytics client."""
     html = template_html.replace("__GOOGLE_CLIENT_ID__", google_client_id)
+    html = html.replace("__DEV_AUTH_ENABLED__", json.dumps(not bool(google_client_id)))
     facebook_app_id = os.environ.get("FACEBOOK_APP_ID", "").strip()
     facebook_app_secret = os.environ.get("FACEBOOK_APP_SECRET", "").strip()
     facebook_ui_enabled = os.environ.get("FACEBOOK_LOGIN_UI_ENABLED", "").strip().lower() in {
