@@ -16626,13 +16626,13 @@ async function refreshSharedBrowserStatus() {
       setStatusCopy('shared-browser-status', 'Shared browser is warming up. Try again in a moment.', 'warn');
       if (!sending) setPreviewNote('Shared browser is warming up. Runs unlock when the bridge is ready.', 'warn');
     } else {
-      setStatusCopy('shared-browser-status', 'Shared browser is unavailable right now.', 'danger');
-      if (!sending) setPreviewNote('Shared browser is unavailable right now.', 'warn');
+      setStatusCopy('shared-browser-status', 'Shared browser is reconnecting. Try again in a moment.', 'warn');
+      if (!sending) setPreviewNote('Shared browser is reconnecting. Runs unlock automatically when it is ready.', 'warn');
     }
   } catch (_err) {
     sharedBrowserReady = false;
-    setStatusCopy('shared-browser-status', 'Could not check shared browser status.', 'danger');
-    if (!sending) setPreviewNote('Could not check shared browser status.', 'warn');
+    setStatusCopy('shared-browser-status', 'Checking shared browser status again...', 'warn');
+    if (!sending) setPreviewNote('Checking shared browser status again...', 'warn');
   }
   updateSendAvailability();
 }

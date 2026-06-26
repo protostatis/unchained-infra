@@ -102,6 +102,8 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('role="dialog" aria-modal="true"', templates.FIRST_LOOK_PREVIEW_HTML)
         self.assertIn("showSampleRun", templates.FIRST_LOOK_PREVIEW_HTML)
         self.assertIn("Task for the shared browser", templates.FIRST_LOOK_PREVIEW_HTML)
+        self.assertIn("Shared browser is reconnecting. Try again in a moment.", templates.FIRST_LOOK_PREVIEW_HTML)
+        self.assertNotIn("Shared browser is unavailable right now.", templates.FIRST_LOOK_PREVIEW_HTML)
         self.assertIn("https://unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertNotIn("https://api.unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertIn("API key handling", templates.SETUP_HTML)
