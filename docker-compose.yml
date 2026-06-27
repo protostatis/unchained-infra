@@ -206,7 +206,7 @@ services:
       - relay_data:/data
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-3.1-flash-lite-preview}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-3.1-flash-lite}
       - UNCHAINED_API_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
       - UNCHAINED_SERVER=ws://web:8080
       - RELAY_HOST=relay
