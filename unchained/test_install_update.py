@@ -1499,6 +1499,8 @@ def test_openrouter_agent_emits_usage_event():
     assert ('msg.get("user_id"' in source or "msg.get('user_id'" in source), \
         "OpenRouter agent should read user_id from inbound WS message"
     assert "OpenRouter usage:" in source, "OpenRouter agent should log per-request token/cost usage"
+    assert '"OPENROUTER_RATE_RAMP_FALLBACK_MODEL",\n            self.model,' in source, \
+        "OpenRouter rate-ramp fallback should default to the configured trial model"
     print("  OpenRouter trial agent emits usage event with user context")
 
 

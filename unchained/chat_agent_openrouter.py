@@ -1486,8 +1486,8 @@ class TrialAgent:
         # the same rate-limited model.
         _FALLBACK_MODEL = os.environ.get(
             "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-        ).strip() or "nvidia/nemotron-3-super-120b-a12b:free"
+            self.model,
+        ).strip() or self.model
         if resp.status_code == 429 and _FALLBACK_MODEL != body.get("model"):
             print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
             body["model"] = _FALLBACK_MODEL
