@@ -7121,8 +7121,7 @@ body{
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="xiaomi/mimo-v2.5">Xiaomi MiMo v2.5 &mdash; Default</option>
-      <option value="google/gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite</option>
+      <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite &mdash; Default</option>
       <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
@@ -11679,7 +11678,7 @@ function dismissQuota() {
 }
 
 function currentModel() {
-  return _forcedFirstLookModel || 'xiaomi/mimo-v2.5';
+  return _forcedFirstLookModel || 'google/gemini-3.1-flash-lite';
 }
 
 function _sessionStoreKey() {
@@ -16098,7 +16097,7 @@ async function doNewChat() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: 'xiaomi/mimo-v2.5',
+        model: 'google/gemini-3.1-flash-lite',
         session_id: sessionId,
         first_look_guest: true,
       }),
@@ -16643,7 +16642,7 @@ async function loadHistory() {
   historyLoaded = true;
   try {
     const qs = new URLSearchParams({
-      model: 'xiaomi/mimo-v2.5',
+      model: 'google/gemini-3.1-flash-lite',
       session_id: sessionId,
       first_look_guest: '1'
     });
@@ -16731,7 +16730,7 @@ async function doSend() {
         message: message,
         agent_id: agentId,
         session_id: sessionId,
-        model: 'xiaomi/mimo-v2.5',
+        model: 'google/gemini-3.1-flash-lite',
         headless: true,
         first_look_guest: true
       }),
@@ -19963,7 +19962,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
           <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
-          <option value="google/gemini-3.1-flash-lite-preview">OpenRouter: Gemini 3.1 Flash Lite</option>
+          <option value="google/gemini-3.1-flash-lite">OpenRouter: Gemini 3.1 Flash Lite</option>
           <option value="qwen/qwen3.6-plus">OpenRouter: Qwen 3.6 Plus</option>
           <option value="nvidia/nemotron-3-super-120b-a12b:free">OpenRouter: NVIDIA Nemotron</option>
           <option value="qwen/qwen3.5-flash-02-23">OpenRouter: Qwen 3.5 Flash</option>
@@ -20105,7 +20104,7 @@ function formatSchedulerModel(model){
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
     'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
-    'google/gemini-3.1-flash-lite-preview':'OpenRouter: Gemini 3.1 Flash Lite',
+    'google/gemini-3.1-flash-lite':'OpenRouter: Gemini 3.1 Flash Lite',
     'qwen/qwen3.6-plus':'OpenRouter: Qwen 3.6 Plus',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'

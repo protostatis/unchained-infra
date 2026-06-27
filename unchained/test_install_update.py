@@ -1511,16 +1511,16 @@ def test_trial_chat_handles_model_forced_event():
 
 
 def test_trial_and_demo_openrouter_default_models_and_cap_options():
-    """Verify trial/demo/first-look default to MiMo and cap keeps Trinity/StepFun."""
+    """Verify trial/demo/first-look default to Gemini and cap keeps Trinity/StepFun."""
     from web import TRIAL_CHAT_HTML, HEADLESS_DEMO_HTML, FIRST_LOOK_PREVIEW_HTML
-    assert 'value="xiaomi/mimo-v2.5"' in TRIAL_CHAT_HTML, \
-        "trial model selector should default to Xiaomi MiMo v2.5"
+    assert 'value="google/gemini-3.1-flash-lite"' in TRIAL_CHAT_HTML, \
+        "trial model selector should default to Gemini 3.1 Flash Lite"
     assert "_POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free']" in TRIAL_CHAT_HTML, \
         "trial cap model allowlist should be Trinity + StepFun"
-    assert "'xiaomi/mimo-v2.5'" in HEADLESS_DEMO_HTML, \
-        "demo currentModel should default to Xiaomi MiMo v2.5"
-    assert "'xiaomi/mimo-v2.5'" in FIRST_LOOK_PREVIEW_HTML, \
-        "first-look should default to Xiaomi MiMo v2.5"
+    assert "'google/gemini-3.1-flash-lite'" in HEADLESS_DEMO_HTML, \
+        "demo currentModel should default to Gemini 3.1 Flash Lite"
+    assert "'google/gemini-3.1-flash-lite'" in FIRST_LOOK_PREVIEW_HTML, \
+        "first-look should default to Gemini 3.1 Flash Lite"
     assert "evt.type === 'model_forced'" in HEADLESS_DEMO_HTML, \
         "demo UI should handle server-forced model fallback events"
     print("  trial/demo/first-look defaults and post-cap model constraints are in place")
