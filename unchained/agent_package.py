@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.98"  # adds OpenCode CLI local lane support
+VERSION = "0.3.99"  # include launcher scripts in update ZIP for OpenCode PATH discovery
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -1206,7 +1206,7 @@ try {
 
   New-Item -ItemType Directory -Path ".\unchained" -Force | Out-Null
   Copy-Item -Path (Join-Path $srcRoot "unchained\*.py") -Destination ".\unchained" -Force -ErrorAction SilentlyContinue
-  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "update.sh", "update.ps1", "update.bat", "stop.sh", "stop.ps1")) {
+  foreach ($name in @("CLAUDE.md", "version.txt", "requirements.txt", "start.ps1", "start.bat", "update.sh", "update.ps1", "update.bat", "stop.sh", "stop.ps1")) {
     $src = Join-Path $srcRoot $name
     if (Test-Path $src) {
       Copy-Item -Path $src -Destination ".\" -Force
@@ -1976,7 +1976,7 @@ def build_agent_zip(api_key: str, relay_host: str, install_token: str = "") -> b
 
 
 def build_update_zip() -> bytes:
-    """Build an update ZIP (no .env, no start.sh, no venv).
+    """Build an update ZIP (no .env, no venv).
 
     Returns the ZIP as bytes, ready to be served as a download.
     """
@@ -1989,6 +1989,13 @@ def build_update_zip() -> bytes:
 
         # requirements.txt
         zf.writestr("unchained-agent/requirements.txt", _REQUIREMENTS)
+
+        # start scripts (executable) so launcher/path discovery fixes reach installed agents.
+        info = zipfile.ZipInfo("unchained-agent/start.sh")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, _START_SH)
+        zf.writestr("unchained-agent/start.ps1", _ps1(_START_PS1))
+        zf.writestr("unchained-agent/start.bat", _START_BAT)
 
         # update.sh (executable)
         info = zipfile.ZipInfo("unchained-agent/update.sh")
