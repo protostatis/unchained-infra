@@ -20145,6 +20145,7 @@ let editingIndex = -1;
 let historyJobId = '';
 const schedulerProfileLabels = {};
 const schedulerOpenCodeModelLabels = {};
+const SCHEDULER_OPENCODE_MODEL_CAP = 500;
 let schedulerOpenCodeModelsLoaded = false;
 let schedulerOpenCodeModelsPromise = null;
 
@@ -20229,11 +20230,11 @@ function updateSchedulerOpenCodeModelOptions(models){
   const select=document.getElementById('f-model');
   if(!select||!Array.isArray(models)||!models.length) return false;
   const current=getSchedulerModelValue();
-  const reachedModelCap=models.length>=500;
+  const reachedModelCap=models.length>=SCHEDULER_OPENCODE_MODEL_CAP;
 
   [...select.querySelectorAll('option[data-opencode-model="1"]')].forEach(opt=>opt.remove());
   Object.keys(schedulerOpenCodeModelLabels).forEach(key=>delete schedulerOpenCodeModelLabels[key]);
-  select.title=reachedModelCap?'Loaded 500 OpenCode models from your local agent. Use Custom model ID for any model not shown.':'';
+  select.title=reachedModelCap?'Loaded '+SCHEDULER_OPENCODE_MODEL_CAP+' OpenCode models from your local agent. Use Custom model ID for any model not shown.':'';
 
   const customOpt=select.querySelector('option[value="__custom__"]');
   const defaultOpt=document.createElement('option');
@@ -20256,12 +20257,12 @@ function updateSchedulerOpenCodeModelOptions(models){
     opt.dataset.opencodeModel='1';
     schedulerOpenCodeModelLabels[value]=opt.textContent;
     select.insertBefore(opt, customOpt);
-    if(seen.size>=500) break;
+    if(seen.size>=SCHEDULER_OPENCODE_MODEL_CAP) break;
   }
   if(reachedModelCap){
     const capOpt=document.createElement('option');
     capOpt.value='__opencode_models_truncated__';
-    capOpt.textContent='OpenCode CLI: 500 models loaded; use Custom for more';
+    capOpt.textContent='OpenCode CLI: '+SCHEDULER_OPENCODE_MODEL_CAP+' models loaded; use Custom for more';
     capOpt.disabled=true;
     capOpt.dataset.opencodeModel='1';
     select.insertBefore(capOpt, customOpt);
@@ -20305,6 +20306,8 @@ async function loadSchedulerOpenCodeModels(){
         await new Promise(resolve=>setTimeout(resolve,attempt*500));
       }
     }
+    console.warn('OpenCode scheduler model load exhausted retries');
+    schedulerOpenCodeModelsLoaded=true;
     return false;
   })();
   try{return await schedulerOpenCodeModelsPromise;}
