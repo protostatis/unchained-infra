@@ -144,7 +144,7 @@ def test_build_agent_zip_targets_python38_client_runtime():
     print("  Packaged client runtime is aligned to Python 3.8+")
 
 
-def test_build_update_zip_no_env_no_start():
+def test_build_update_zip_no_env_with_launchers():
     from agent_package import build_update_zip, VERSION
     zip_bytes = build_update_zip()
     assert len(zip_bytes) > 0
@@ -154,29 +154,36 @@ def test_build_update_zip_no_env_no_start():
         # Should have code files
         assert "unchained-agent/version.txt" in names
         assert "unchained-agent/requirements.txt" in names
+        assert "unchained-agent/start.sh" in names
+        assert "unchained-agent/start.ps1" in names
+        assert "unchained-agent/start.bat" in names
         assert "unchained-agent/update.sh" in names
         assert "unchained-agent/update.ps1" in names
         assert "unchained-agent/unchained/cdp_tool.py" in names
         assert "unchained-agent/unchained/scheduler_tool.py" in names
         assert "unchained-agent/stop.sh" in names
         assert "unchained-agent/stop.ps1" in names
+        start_sh = zf.read("unchained-agent/start.sh").decode()
+        assert 'command -v opencode >/dev/null 2>&1' in start_sh
+        assert 'export OPENCODE_BIN="$(command -v opencode)"' in start_sh
         stop_sh = zf.read("unchained-agent/stop.sh").decode()
         assert 'launchctl bootout "gui/$(id -u)/$AUTOSTART_LABEL"' in stop_sh
         stop_ps1 = zf.read("unchained-agent/stop.ps1").decode()
         assert 'Remove-WindowsAutostart' in stop_ps1
         update_sh = zf.read("unchained-agent/update.sh").decode()
         assert 'cp -f unchained-agent/stop.sh "$AGENT_DIR/"' in update_sh
-        assert 'chmod +x "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh"' in update_sh
+        assert 'chmod +x "$AGENT_DIR/start.sh" "$AGENT_DIR/update.sh" "$AGENT_DIR/stop.sh"' in update_sh
         update_ps1 = zf.read("unchained-agent/update.ps1").decode()
+        assert '"start.ps1"' in update_ps1
+        assert '"start.bat"' in update_ps1
         assert '"stop.sh"' in update_ps1
         assert '"stop.ps1"' in update_ps1
-        # Should NOT have .env or start.sh
+        # Should NOT have .env
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
-        assert "unchained-agent/start.sh" not in names, "start.sh should not be in update ZIP"
         # version.txt content
         v = zf.read("unchained-agent/version.txt").decode()
         assert v == VERSION
-    print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env, no start.sh; stop.sh included)")
+    print(f"  Update ZIP: {len(zip_bytes)} bytes, {len(names)} files (no .env; launchers included)")
 
 
 def test_build_research_desk_zip_contains_installable_source_tree():
@@ -1696,7 +1703,7 @@ if __name__ == "__main__":
     tests = [
         ("agent_package: version constants", test_version_constants),
         ("agent_package: build_agent_zip has version.txt + update.sh", test_build_agent_zip_contains_version_and_update),
-        ("agent_package: build_update_zip (no .env, no start.sh)", test_build_update_zip_no_env_no_start),
+        ("agent_package: build_update_zip (no .env, with launchers)", test_build_update_zip_no_env_with_launchers),
         ("agent_package: _generate_public_install_script", test_generate_public_install_script),
         ("agent_package: public install handler importable", test_public_install_script_handler_importable),
         ("agent_package: _generate_install_script", test_generate_install_script),
