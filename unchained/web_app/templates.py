@@ -6733,19 +6733,21 @@ body{
 /* === Model selector === */
 #modelrow{
   display:flex;align-items:center;gap:8px;
-  padding:4px 16px 0;flex-shrink:0;
+  padding:4px 16px 0;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;
 }
-#modelrow label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+#modelrow::-webkit-scrollbar{display:none}
+#modelrow label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;flex:0 0 auto}
 #modelsel{
   height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
   background:var(--bg);color:var(--text);font-size:12px;
-  font-family:var(--mono);cursor:pointer;
+  font-family:var(--mono);cursor:pointer;min-width:0;flex:1 1 220px;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
 #profilesel{
   height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
   background:var(--bg);color:var(--text);font-size:12px;
-  font-family:var(--mono);cursor:pointer;min-width:190px;
+  font-family:var(--mono);cursor:pointer;min-width:160px;flex:1 1 180px;
 }
 #profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
@@ -8794,13 +8796,15 @@ body{
 /* === Model selector === */
 #modelrow{
   display:flex;align-items:center;gap:8px;
-  padding:4px 16px 0;flex-shrink:0;
+  padding:4px 16px 0;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;
 }
-#modelrow label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+#modelrow::-webkit-scrollbar{display:none}
+#modelrow label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;flex:0 0 auto}
 #modelsel{
   height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;
   background:var(--bg);color:var(--text);font-size:12px;
-  font-family:var(--mono);cursor:pointer;
+  font-family:var(--mono);cursor:pointer;min-width:0;flex:1 1 220px;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
 
@@ -12890,14 +12894,18 @@ body{
   gap:8px;
   padding:8px clamp(12px,2vw,24px) 0;
   flex-shrink:0;
-  flex-wrap:wrap;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  scrollbar-width:none;
 }
+#modelrow::-webkit-scrollbar{display:none}
 #modelrow label{
   font-size:10px;
   color:var(--muted);
   text-transform:uppercase;
   letter-spacing:0.08em;
   font-family:var(--mono);
+  flex:0 0 auto;
 }
 #modelsel{
   height:32px;
@@ -12908,6 +12916,8 @@ body{
   color:var(--text);
   font-size:12px;
   font-family:var(--mono);cursor:pointer;
+  min-width:0;
+  flex:1 1 240px;
 }
 #modelsel:focus{outline:none;border-color:var(--accent)}
 #profilesel{
@@ -12920,7 +12930,8 @@ body{
   font-size:12px;
   font-family:var(--mono);
   cursor:pointer;
-  min-width:220px;
+  min-width:170px;
+  flex:1 1 190px;
 }
 #profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
@@ -15202,14 +15213,18 @@ body{
 #modelrow{
   padding:8px clamp(12px,2vw,24px) 0!important;
   gap:8px!important;
-  flex-wrap:wrap;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  scrollbar-width:none;
 }
+#modelrow::-webkit-scrollbar{display:none}
 #modelrow label{
   font-size:10px!important;
   letter-spacing:0.08em!important;
   text-transform:uppercase;
   font-family:var(--mono)!important;
   color:var(--muted)!important;
+  flex:0 0 auto;
 }
 #modelsel,#profilesel{
   height:32px!important;
@@ -15217,7 +15232,10 @@ body{
   border-radius:10px!important;
   background:var(--surface-elev)!important;
   color:var(--text)!important;
+  min-width:0;
 }
+#modelsel{flex:1 1 240px}
+#profilesel{flex:1 1 190px;min-width:170px}
 #inputbar{
   padding:10px clamp(12px,2vw,24px)!important;
   background:rgba(15,20,27,0.9)!important;
@@ -17233,20 +17251,30 @@ body::after{
 #slotbar button.empty::before{background:#48556a}
 #slotbar button.empty.active{color:#180f08!important}
 #modelrow{
+  display:flex!important;
+  align-items:center!important;
+  gap:8px!important;
+  flex-wrap:nowrap!important;
+  overflow-x:auto;
+  scrollbar-width:none;
   margin:8px clamp(12px,2vw,24px) 0!important;
   padding:9px 10px!important;
   border:1px solid rgba(255,255,255,0.08);
   border-radius:18px;
   background:rgba(255,255,255,0.035);
 }
-#modelrow label{color:#ffcfb8!important;font-weight:800!important}
+#modelrow::-webkit-scrollbar{display:none}
+#modelrow label{color:#ffcfb8!important;font-weight:800!important;flex:0 0 auto}
 #modelsel,#profilesel{
   height:36px!important;
   border-radius:14px!important;
   border-color:rgba(255,255,255,0.12)!important;
   background:rgba(7,10,15,0.64)!important;
   box-shadow:0 8px 18px rgba(0,0,0,0.12) inset;
+  min-width:0!important;
 }
+#modelsel{flex:1 1 240px!important}
+#profilesel{flex:1 1 190px!important;min-width:170px!important}
 #chat-hints{
   padding-top:min(7vh,72px)!important;
 }
@@ -17353,9 +17381,9 @@ body::after{
   #topbar .nav{position:absolute;right:8px;top:8px;max-width:84px;overflow:visible!important;padding:0!important}
   #topbar .nav a:not(.topbar-new){display:none!important}
   .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;height:34px;min-width:76px!important;border-radius:14px!important;padding:0 10px!important}
-  #modelrow{display:grid!important;grid-template-columns:auto minmax(0,1fr);gap:7px!important;align-items:center}
-  #modelrow label{font-size:9px!important}
-  #modelsel,#profilesel{width:100%!important;max-width:none!important;min-width:0!important}
+  #modelrow{display:flex!important;flex-wrap:nowrap!important;gap:6px!important;align-items:center!important;overflow-x:auto}
+  #modelrow label{font-size:9px!important;flex:0 0 auto}
+  #modelsel,#profilesel{width:auto!important;max-width:none!important;min-width:112px!important;flex:1 1 112px!important}
   #slotbar button{flex-basis:52vw;min-width:128px}
 }
 </style>"""
