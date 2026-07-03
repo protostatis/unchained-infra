@@ -20227,13 +20227,13 @@ function schedulerOpenCodeOptionLabel(modelId){
 
 function updateSchedulerOpenCodeModelOptions(models){
   const select=document.getElementById('f-model');
-  if(!select||!Array.isArray(models)||!models.length) return;
+  if(!select||!Array.isArray(models)||!models.length) return false;
   const current=getSchedulerModelValue();
-  const mayBeTruncated=models.length>=500;
+  const reachedModelCap=models.length>=500;
 
   [...select.querySelectorAll('option[data-opencode-model="1"]')].forEach(opt=>opt.remove());
   Object.keys(schedulerOpenCodeModelLabels).forEach(key=>delete schedulerOpenCodeModelLabels[key]);
-  select.title=mayBeTruncated?'Showing first 500 OpenCode models from your local agent.':'';
+  select.title=reachedModelCap?'Loaded 500 OpenCode models from your local agent. Use Custom model ID for any model not shown.':'';
 
   const customOpt=select.querySelector('option[value="__custom__"]');
   const defaultOpt=document.createElement('option');
@@ -20258,47 +20258,57 @@ function updateSchedulerOpenCodeModelOptions(models){
     select.insertBefore(opt, customOpt);
     if(seen.size>=500) break;
   }
-  if(mayBeTruncated){
+  if(reachedModelCap){
     const capOpt=document.createElement('option');
     capOpt.value='__opencode_models_truncated__';
-    capOpt.textContent='OpenCode CLI: showing first 500 models';
+    capOpt.textContent='OpenCode CLI: 500 models loaded; use Custom for more';
     capOpt.disabled=true;
     capOpt.dataset.opencodeModel='1';
     select.insertBefore(capOpt, customOpt);
   }
 
   setSchedulerModelValue(current);
-  render();
+  return true;
 }
 
 async function loadSchedulerOpenCodeModels(){
-  if(schedulerOpenCodeModelsLoaded) return;
+  if(schedulerOpenCodeModelsLoaded) return false;
   if(schedulerOpenCodeModelsPromise) return schedulerOpenCodeModelsPromise;
   schedulerOpenCodeModelsPromise=(async function(){
-    const controller=window.AbortController?new AbortController():null;
-    const timeout=controller?setTimeout(()=>controller.abort(),5000):null;
-    try{
-      // The model hint tells /web/chat/status to include OpenCode CLI capability fields.
-      const r=await fetch('/web/chat/status?chat_only=1&model='+encodeURIComponent('opencode-cli:'), controller?{signal:controller.signal}:{});
-      if(!r.ok){
-        console.warn('OpenCode scheduler model load failed: HTTP '+r.status);
-        return;
+    for(let attempt=1;attempt<=2;attempt++){
+      const controller=window.AbortController?new AbortController():null;
+      const timeout=controller?setTimeout(()=>controller.abort(),5000):null;
+      try{
+        // The model hint tells /web/chat/status to include OpenCode CLI capability fields.
+        const options=controller?{signal:controller.signal,credentials:'same-origin'}:{credentials:'same-origin'};
+        const r=await fetch('/web/chat/status?chat_only=1&model='+encodeURIComponent('opencode-cli:'),options);
+        if(!r.ok){
+          console.warn('OpenCode scheduler model load failed: HTTP '+r.status);
+        }else{
+          const data=await r.json();
+          if(!data||!('opencode_models' in data)){
+            console.warn('OpenCode scheduler model load missing opencode_models');
+          }else if(!Array.isArray(data.opencode_models)){
+            console.warn('OpenCode scheduler model load returned non-array opencode_models');
+          }else{
+            const updated=updateSchedulerOpenCodeModelOptions(data.opencode_models);
+            schedulerOpenCodeModelsLoaded=true;
+            return updated;
+          }
+        }
+      }catch(e){
+        console.warn('OpenCode scheduler model load failed on attempt '+attempt, e);
+      }finally{
+        if(timeout) clearTimeout(timeout);
       }
-      const data=await r.json();
-      if(!data||!Array.isArray(data.opencode_models)){
-        console.warn('OpenCode scheduler model load returned no model list');
-        return;
+      if(attempt<2){
+        await new Promise(resolve=>setTimeout(resolve,attempt*500));
       }
-      updateSchedulerOpenCodeModelOptions(data.opencode_models);
-    }catch(e){
-      console.warn('OpenCode scheduler model load failed', e);
-    }finally{
-      if(timeout) clearTimeout(timeout);
-      schedulerOpenCodeModelsLoaded=true;
-      schedulerOpenCodeModelsPromise=null;
     }
+    return false;
   })();
-  return schedulerOpenCodeModelsPromise;
+  try{return await schedulerOpenCodeModelsPromise;}
+  finally{schedulerOpenCodeModelsPromise=null;}
 }
 
 function syncSchedulerModelField(){
@@ -20718,7 +20728,7 @@ document.addEventListener('keydown',e=>{
       const openCodeModelsReady=loadSchedulerOpenCodeModels();
       await loadSchedulerProfiles();
       await loadJobs();
-      await openCodeModelsReady;
+      if(await openCodeModelsReady) render();
     }
   }
   catch(e){toast('Session check failed: '+e.message,'err');}

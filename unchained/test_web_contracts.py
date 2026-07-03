@@ -179,7 +179,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("AbortController", web.SCHEDULER_HTML)
         self.assertIn("console.warn('OpenCode scheduler model load failed", web.SCHEDULER_HTML)
         self.assertIn("schedulerOpenCodeModelsLoaded", web.SCHEDULER_HTML)
-        self.assertIn("showing first 500", web.SCHEDULER_HTML)
+        self.assertIn("credentials:'same-origin'", web.SCHEDULER_HTML)
+        self.assertIn("missing opencode_models", web.SCHEDULER_HTML)
+        self.assertIn("non-array opencode_models", web.SCHEDULER_HTML)
+        self.assertIn("500 models loaded; use Custom for more", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
     def test_landing_auth_cta_points_to_auth_entry(self):
