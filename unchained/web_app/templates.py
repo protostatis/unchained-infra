@@ -20057,6 +20057,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
           <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
           <option value="codex-cli:gpt-5.4-mini">Codex CLI: GPT-5.4 Mini (fast)</option>
+          <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
@@ -20143,6 +20144,10 @@ let preview = {};
 let editingIndex = -1;
 let historyJobId = '';
 const schedulerProfileLabels = {};
+const schedulerOpenCodeModelLabels = {};
+const SCHEDULER_OPENCODE_MODEL_CAP = 500;
+let schedulerOpenCodeModelsLoaded = false;
+let schedulerOpenCodeModelsPromise = null;
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -20190,6 +20195,8 @@ function getPreview(id){
 function formatSchedulerModel(model){
   const value=String(model||'').trim();
   if(!value) return 'Default: Claude CLI Opus';
+  if(value==='opencode-cli:') return 'OpenCode CLI: configured default';
+  if(schedulerOpenCodeModelLabels[value]) return schedulerOpenCodeModelLabels[value];
   const labels={
     'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
     'claude-opus-4-7':'Claude CLI: Opus 4.7',
@@ -20209,6 +20216,102 @@ function formatSchedulerModel(model){
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
   };
   return labels[value]||value;
+}
+
+function schedulerOpenCodeOptionLabel(modelId){
+  const clean=String(modelId||'').trim();
+  const parts=clean.split('/');
+  if(parts.length<2) return clean||'configured default';
+  const provider=parts.shift();
+  return 'OpenCode CLI: '+provider+' · '+parts.join('/');
+}
+
+function updateSchedulerOpenCodeModelOptions(models){
+  const select=document.getElementById('f-model');
+  if(!select||!Array.isArray(models)||!models.length) return false;
+  const current=getSchedulerModelValue();
+  const reachedModelCap=models.length>=SCHEDULER_OPENCODE_MODEL_CAP;
+
+  [...select.querySelectorAll('option[data-opencode-model="1"]')].forEach(opt=>opt.remove());
+  Object.keys(schedulerOpenCodeModelLabels).forEach(key=>delete schedulerOpenCodeModelLabels[key]);
+  select.title=reachedModelCap?'Loaded '+SCHEDULER_OPENCODE_MODEL_CAP+' OpenCode models from your local agent. Use Custom model ID for any model not shown.':'';
+
+  const customOpt=select.querySelector('option[value="__custom__"]');
+  const defaultOpt=document.createElement('option');
+  defaultOpt.value='opencode-cli:';
+  defaultOpt.textContent='OpenCode CLI: configured default';
+  defaultOpt.dataset.opencodeModel='1';
+  schedulerOpenCodeModelLabels[defaultOpt.value]=defaultOpt.textContent;
+  select.insertBefore(defaultOpt, customOpt);
+
+  const seen=new Set();
+  for(const raw of models){
+    const modelId=String(raw||'').trim();
+    // OpenCode model IDs are path-like tokens; display names with spaces are not accepted here.
+    if(!modelId||seen.has(modelId)||modelId.indexOf('/')===-1||/\s/.test(modelId)) continue;
+    seen.add(modelId);
+    const value='opencode-cli:'+modelId;
+    const opt=document.createElement('option');
+    opt.value=value;
+    opt.textContent=schedulerOpenCodeOptionLabel(modelId);
+    opt.dataset.opencodeModel='1';
+    schedulerOpenCodeModelLabels[value]=opt.textContent;
+    select.insertBefore(opt, customOpt);
+    if(seen.size>=SCHEDULER_OPENCODE_MODEL_CAP) break;
+  }
+  if(reachedModelCap){
+    const capOpt=document.createElement('option');
+    capOpt.value='__opencode_models_truncated__';
+    capOpt.textContent='OpenCode CLI: '+SCHEDULER_OPENCODE_MODEL_CAP+' models loaded; use Custom for more';
+    capOpt.disabled=true;
+    capOpt.dataset.opencodeModel='1';
+    select.insertBefore(capOpt, customOpt);
+  }
+
+  setSchedulerModelValue(current);
+  return true;
+}
+
+async function loadSchedulerOpenCodeModels(){
+  if(schedulerOpenCodeModelsLoaded) return false;
+  if(schedulerOpenCodeModelsPromise) return schedulerOpenCodeModelsPromise;
+  schedulerOpenCodeModelsPromise=(async function(){
+    for(let attempt=1;attempt<=2;attempt++){
+      const controller=window.AbortController?new AbortController():null;
+      const timeout=controller?setTimeout(()=>controller.abort(),5000):null;
+      try{
+        // The model hint tells /web/chat/status to include OpenCode CLI capability fields.
+        const options=controller?{signal:controller.signal,credentials:'same-origin'}:{credentials:'same-origin'};
+        const r=await fetch('/web/chat/status?chat_only=1&model='+encodeURIComponent('opencode-cli:'),options);
+        if(!r.ok){
+          console.warn('OpenCode scheduler model load failed: HTTP '+r.status);
+        }else{
+          const data=await r.json();
+          if(!data||!('opencode_models' in data)){
+            console.warn('OpenCode scheduler model load missing opencode_models');
+          }else if(!Array.isArray(data.opencode_models)){
+            console.warn('OpenCode scheduler model load returned non-array opencode_models');
+          }else{
+            const updated=updateSchedulerOpenCodeModelOptions(data.opencode_models);
+            schedulerOpenCodeModelsLoaded=true;
+            return updated;
+          }
+        }
+      }catch(e){
+        console.warn('OpenCode scheduler model load failed on attempt '+attempt, e);
+      }finally{
+        if(timeout) clearTimeout(timeout);
+      }
+      if(attempt<2){
+        await new Promise(resolve=>setTimeout(resolve,attempt*500));
+      }
+    }
+    console.warn('OpenCode scheduler model load exhausted retries');
+    schedulerOpenCodeModelsLoaded=true;
+    return false;
+  })();
+  try{return await schedulerOpenCodeModelsPromise;}
+  finally{schedulerOpenCodeModelsPromise=null;}
 }
 
 function syncSchedulerModelField(){
@@ -20625,8 +20728,10 @@ document.addEventListener('keydown',e=>{
 (async function init(){
   try{
     if(await checkSession()){
+      const openCodeModelsReady=loadSchedulerOpenCodeModels();
       await loadSchedulerProfiles();
       await loadJobs();
+      if(await openCodeModelsReady) render();
     }
   }
   catch(e){toast('Session check failed: '+e.message,'err');}
