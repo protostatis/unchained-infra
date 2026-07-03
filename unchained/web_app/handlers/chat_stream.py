@@ -431,6 +431,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_claude_sdk = core._is_claude_sdk_model(model)
     is_codex_sdk = core._is_codex_sdk_model(model)
     is_codex_cli = core._is_codex_cli_model(model)
+    is_opencode_cli = core._is_opencode_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
     if guest_mode and not is_openrouter:
         return web.json_response(
@@ -565,6 +566,24 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             return web.json_response(
                 {
                     "error": "Your local agent does not support Codex CLI yet. Please update/restart your local agent package and try again."
+                },
+                status=426,
+            )
+    elif is_opencode_cli:
+        local_agent_id = auth_info["agent_id"]
+        ws = core._chat_agents.get(local_agent_id)
+        if ws is None or ws.closed:
+            return web.json_response(
+                {
+                    "error": "OpenCode CLI requires your local agent connection. Open /app and connect your agent."
+                },
+                status=503,
+            )
+        caps = core._chat_agent_caps.get(local_agent_id, {})
+        if not bool(caps.get("opencode_cli")):
+            return web.json_response(
+                {
+                    "error": "Your local agent does not support OpenCode CLI yet. Please update/restart your local agent package and try again."
                 },
                 status=426,
             )
@@ -724,6 +743,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         elif is_codex_sdk:
             core._codex_sdk_last_active[chat_agent_id] = time.time()
         elif is_codex_cli:
+            core._session_last_active[session_id] = time.time()
+        elif is_opencode_cli:
             core._session_last_active[session_id] = time.time()
         if not tab_id and use_headless:
             tab_id = await core._ensure_session_tab(session_id, cdp_agent_id)

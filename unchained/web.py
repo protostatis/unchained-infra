@@ -1125,6 +1125,10 @@ def _is_codex_cli_model(model: str) -> bool:
     return (model or "").startswith("codex-cli:")
 
 
+def _is_opencode_cli_model(model: str) -> bool:
+    return (model or "").startswith("opencode-cli:")
+
+
 def _is_claude_sdk_model(model: str) -> bool:
     return (model or "").startswith("claude-sdk:")
 

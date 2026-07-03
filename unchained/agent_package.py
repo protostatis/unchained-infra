@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.97"  # profile-aware bridge routing: chat remains account-scoped while browser bridge can use CDP_PROFILE-scoped relay agent IDs
+VERSION = "0.3.98"  # adds OpenCode CLI local lane support
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -317,6 +317,9 @@ if [ -z "${CLAUDE_BIN:-}" ] && command -v claude >/dev/null 2>&1; then
 fi
 if [ -z "${CODEX_BIN:-}" ] && command -v codex >/dev/null 2>&1; then
   export CODEX_BIN="$(command -v codex)"
+fi
+if [ -z "${OPENCODE_BIN:-}" ] && command -v opencode >/dev/null 2>&1; then
+  export OPENCODE_BIN="$(command -v opencode)"
 fi
 
 # Derive agent_id from API key (same hash as chat_agent_cli.py)
@@ -1823,7 +1826,10 @@ Go to https://api.unchainedsky.com/chat to start chatting.
 
 - Python 3.8+ (macOS 12.3+ includes Python shims, but you may still need a real python.org/Homebrew install)
 - Google Chrome
-- Claude Code CLI (`claude`) — install from https://docs.anthropic.com/en/docs/claude-code
+- One local model CLI, depending on your selected lane:
+  - Claude Code CLI (`claude`) — install from https://docs.anthropic.com/en/docs/claude-code
+  - Codex CLI (`codex`) — run `codex login`
+  - OpenCode CLI (`opencode`) — run `opencode auth login`
 
 ## Troubleshooting
 
@@ -1858,7 +1864,7 @@ re-run ./start.sh for a clean restart.
     start.sh                    Main entry point — run this
     requirements.txt            Python dependencies
     unchained/chrome_bridge.py  Connects Chrome to the relay server
-    unchained/chat_agent_cli.py Chat agent (uses Claude Code CLI)
+    unchained/chat_agent_cli.py Chat agent (uses Claude, Codex, or OpenCode CLI)
     unchained/cdp_tool.py       Browser tool CLI (calls server API)
     unchained/auth.py           API key validation
 

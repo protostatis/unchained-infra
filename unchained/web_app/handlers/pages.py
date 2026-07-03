@@ -431,7 +431,7 @@ async def handle_demo_page(request: web.Request) -> web.Response:
 
 
 async def handle_local_page(request: web.Request) -> web.Response:
-    """Serve the local agent chat HTML page (Claude CLI + Codex CLI)."""
+    """Serve the local agent chat HTML page (Claude, Codex, and OpenCode CLI)."""
     core = _core()
     core._track_page_view(request)
     auth_info = core._authenticate(request)

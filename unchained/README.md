@@ -89,7 +89,7 @@ unchained-agent/
 ├── start.sh                      # Run this — sets up everything and starts the agent
 ├── requirements.txt              # Python dependencies
 └── unchained/
-    ├── chat_agent_cli.py         # Chat agent — uses Claude CLI, no API key needed
+    ├── chat_agent_cli.py         # Chat agent — uses Claude, Codex, or OpenCode CLI
     ├── chrome_bridge.py          # Tunnels your local Chrome to the relay server
     ├── scheduled_tasks.py        # Local scheduler for pre-scheduled prompts
     ├── cdp_tool.py               # Thin HTTP client — calls server API for browser tools
@@ -98,7 +98,7 @@ unchained-agent/
 
 **You only need to run `./start.sh`** — it starts both `chrome_bridge.py` and `chat_agent_cli.py` automatically.
 
-The browser intelligence tools (DOM Density Map, page intelligence, CDP engine) run on the server. When Claude calls `cdp_tool.py ddm --llm-2pass`, it makes an HTTP request to the server which runs the tools through the relay tunnel to your Chrome. This means tools get updated server-side without needing a new download.
+The browser intelligence tools (DOM Density Map, page intelligence, CDP engine) run on the server. When the selected local CLI calls `cdp_tool.py ddm --llm-2pass`, it makes an HTTP request to the server which runs the tools through the relay tunnel to your Chrome. This means tools get updated server-side without needing a new download.
 
 ### 3. Chat
 
@@ -112,14 +112,17 @@ The UI status turns green ("agent online") within 10 seconds. Type a message —
   # macOS
   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
   ```
-- **Claude CLI** installed (`claude` command available in PATH)
+- One supported local model CLI installed and authenticated:
+- Claude CLI (`claude` command available in PATH)
+- Codex CLI (`codex` command available in PATH, after `codex login`)
+- OpenCode CLI (`opencode` command available in PATH, after `opencode auth login`)
 
 ### Architecture
 
 ```
 Phone (chat UI) → EC2 server (SSE bridge)
                      ↕ WebSocket per agent
-              Your Mac: chat_agent_cli.py → claude -p → Bash → cdp_tool.py
+              Your Mac: chat_agent_cli.py → claude/codex/opencode → Bash → cdp_tool.py
                                                                     ↓ HTTP
                   EC2 server: /web/cmd → DDM / intel / CDP engine (proprietary)
                      ↕ WebSocket tunnel

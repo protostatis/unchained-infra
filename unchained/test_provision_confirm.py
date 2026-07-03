@@ -274,6 +274,10 @@ class TestCodexProvisioningHooks(unittest.TestCase):
             _resolve_chat_agent_id(auth_info, "codex-cli:gpt-5.5"),
             "claude-abc12345",
         )
+        self.assertEqual(
+            _resolve_chat_agent_id(auth_info, "opencode-cli:anthropic/claude-sonnet-4-5"),
+            "claude-abc12345",
+        )
 
     def test_setup_html_has_sdk_provider_options(self):
         from web import SETUP_HTML
@@ -290,6 +294,12 @@ class TestCodexProvisioningHooks(unittest.TestCase):
         self.assertIn("codex-sdk:gpt-5.5", CHAT_CODEX_HTML)
         self.assertIn("/web/chat/status?codex=1", CHAT_CODEX_HTML)
         self.assertNotIn("geminiProvisioned", CHAT_CODEX_HTML)
+
+    def test_chat_claude_html_has_opencode_model_prefix(self):
+        from web import CLAUDE_CHAT_HTML
+
+        self.assertIn("opencode-cli:", CLAUDE_CHAT_HTML)
+        self.assertIn("opencode_cli_supported", CLAUDE_CHAT_HTML)
 
     @patch("web._spawn_codex_sdk_agent")
     @patch("web._spawn_claude_sdk_agent")

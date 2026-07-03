@@ -72,13 +72,13 @@ state and `analytics.db` for web analytics and funnel data. Treat any
 1. User types message in chat UI (phone browser)
 2. POST /web/cmd → web.py → finds agent WebSocket in _chat_agents dict
 3. web.py sends {"type":"message","text":"..."} over WS to chat_agent_cli.py
-4. chat_agent_cli.py pipes message to Claude CLI (claude -p --allowedTools)
-5. Claude calls cdp_tool.py (e.g., ddm --llm-2pass)
+4. chat_agent_cli.py pipes message to the selected local CLI (Claude, Codex, or OpenCode)
+5. The local CLI calls cdp_tool.py (e.g., ddm --llm-2pass)
 6. cdp_tool.py → HTTP POST /web/cmd on server → cloud_tools.py
 7. cloud_tools.py calls private_core_client → private_core_server:/core/execute
 8. private_core_engine builds CDP_WS_URL → ws://relay:8765/cdp/<agent_id>/auto
 9. DDM/intel tools connect to relay, which tunnels CDP to chrome_bridge.py
-10. Results flow back: Chrome → bridge → relay → private_core_engine → cloud_tools → cdp_tool → Claude → chat_agent → web.py → SSE → phone
+10. Results flow back: Chrome → bridge → relay → private_core_engine → cloud_tools → cdp_tool → local CLI → chat_agent → web.py → SSE → phone
 ```
 
 ## Agent Authentication

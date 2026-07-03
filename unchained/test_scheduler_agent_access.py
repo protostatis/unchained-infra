@@ -355,6 +355,17 @@ class TestCodexCliEnv(unittest.TestCase):
         self.assertIn('env.pop("UNCHAINED_INSTALL_TOKEN", None)', snippet)
         self.assertIn('env["UNCHAINED_CHAT_SESSION_ID"] = sid', snippet)
 
+    def test_unarmed_opencode_turn_keeps_api_key_for_update_path(self):
+        source_path = Path(__file__).with_name("chat_agent_cli.py")
+        source = source_path.read_text()
+        start = source.index("async def handle_message_opencode(")
+        end = source.index('cmd = [OPENCODE_BIN, "run"', start)
+        snippet = source[start:end]
+
+        self.assertNotIn('env.pop("UNCHAINED_API_KEY", None)', snippet)
+        self.assertIn('env.pop("UNCHAINED_INSTALL_TOKEN", None)', snippet)
+        self.assertIn('env["UNCHAINED_CHAT_SESSION_ID"] = sid', snippet)
+
 
 if __name__ == "__main__":
     unittest.main()

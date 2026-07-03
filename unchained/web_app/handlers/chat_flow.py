@@ -874,6 +874,9 @@ def resolve_chat_agent_id(auth_info: dict, model: str) -> str:
     if core._is_codex_cli_model(model):
         # Codex CLI runs on the user's local CLI agent, same lane as Claude CLI.
         return auth_info["agent_id"]
+    if core._is_opencode_cli_model(model):
+        # OpenCode CLI runs on the user's local CLI agent, same lane as Claude CLI.
+        return auth_info["agent_id"]
     return auth_info["agent_id"]  # claude-{hash}
 
 
@@ -983,6 +986,7 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         or core._is_codex_cli_model(model_hint)
         or core._is_codex_sdk_model(model_hint)
     )
+    wants_opencode = request.query.get("opencode") == "1" or core._is_opencode_cli_model(model_hint)
     wants_claude_sdk = core._is_claude_sdk_model(model_hint) or request.query.get("claude_sdk") == "1"
 
     gemini_connected = False
@@ -1038,6 +1042,24 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             chat_connected = codex_chat_connected
             connected = codex_connected
             agent_id = codex_agent_id
+
+    opencode_connected = False
+    opencode_agent_id = ""
+    opencode_cli_supported = True
+    if wants_opencode:
+        opencode_agent_id = auth_info.get("agent_id", "")
+        ows = core._chat_agents.get(opencode_agent_id)
+        opencode_chat_connected = ows is not None and not ows.closed
+        opencode_connected = opencode_chat_connected
+        if not opencode_connected and opencode_agent_id and not chat_only:
+            opencode_connected = await core._check_relay_agent(opencode_agent_id)
+        caps = core._chat_agent_caps.get(opencode_agent_id, {})
+        opencode_cli_supported = bool(caps.get("opencode_cli")) if caps else True
+        if opencode_connected and not opencode_cli_supported:
+            opencode_connected = False
+        chat_connected = opencode_chat_connected
+        connected = opencode_connected
+        agent_id = opencode_agent_id
 
     claude_sdk_connected = False
     claude_sdk_agent_id = ""
@@ -1100,6 +1122,10 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         resp["codex_connected"] = codex_connected
         if core._is_codex_cli_model(model_hint):
             resp["codex_cli_supported"] = codex_cli_supported
+    if wants_opencode:
+        resp["opencode_agent_id"] = opencode_agent_id
+        resp["opencode_connected"] = opencode_connected
+        resp["opencode_cli_supported"] = opencode_cli_supported
     if wants_claude_sdk:
         resp["claude_sdk_agent_id"] = claude_sdk_agent_id
         resp["claude_sdk_connected"] = claude_sdk_connected

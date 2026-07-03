@@ -66,11 +66,14 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("normalizeLandingRoute", templates.LANDING_HTML)
         self.assertIn("provider=codex-cli", templates.LANDING_HTML)
         self.assertIn("Codex CLI", templates.LANDING_HTML)
+        self.assertIn("provider=opencode-cli", templates.LANDING_HTML)
+        self.assertIn("OpenCode CLI", templates.LANDING_HTML)
 
     def test_chat_and_setup_pages_remember_provider_routes(self):
         from web_app import templates
 
         self.assertIn("_rememberLastAppRoute", templates.CLAUDE_CHAT_HTML)
+        self.assertIn("/local?provider=opencode-cli", templates.CLAUDE_CHAT_HTML)
         self.assertIn("/local?provider=codex-cli", templates.CHAT_CODEX_HTML)
         self.assertIn("rememberSetupRoute", templates.SETUP_HTML)
         self.assertIn("unchained_last_route", templates.SETUP_HTML)

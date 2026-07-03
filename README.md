@@ -17,8 +17,8 @@ separate private repository.
 - `unchained/web.py`: chat UI, auth flows, scheduler UI, SSE chat transport
 - `unchained/relay.py`: WebSocket relay for browser-agent tunnels and CDP clients
 - `unchained/chrome_bridge.py`: local or headless bridge from Chrome CDP to relay
-- `unchained/chat_agent_cli.py`: local agent lanes for Claude CLI, Codex CLI, and
-  related model backends
+- `unchained/chat_agent_cli.py`: local agent lanes for Claude CLI, Codex CLI,
+  OpenCode CLI, and related model backends
 - `unchained/agent_package.py`: downloadable agent bundle generator
 - `docker-compose.yml`: production deployment topology
 - `deploy.sh` and `deploy_headless.sh`: EC2 deployment entrypoints
