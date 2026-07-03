@@ -74,6 +74,8 @@ class TestTemplateTransforms(unittest.TestCase):
 
         self.assertIn("_rememberLastAppRoute", templates.CLAUDE_CHAT_HTML)
         self.assertIn("/local?provider=opencode-cli", templates.CLAUDE_CHAT_HTML)
+        self.assertIn("updateOpenCodeModelOptions", templates.CLAUDE_CHAT_HTML)
+        self.assertIn("opencode_models", templates.CLAUDE_CHAT_HTML)
         self.assertIn("/local?provider=codex-cli", templates.CHAT_CODEX_HTML)
         self.assertIn("rememberSetupRoute", templates.SETUP_HTML)
         self.assertIn("unchained_last_route", templates.SETUP_HTML)

@@ -13600,6 +13600,57 @@ function currentModel() {
   return document.getElementById('modelsel').value;
 }
 
+function _isOpenCodeRoute() {
+  const params = new URLSearchParams(window.location.search);
+  return (params.get('provider') || '').trim().toLowerCase() === 'opencode-cli';
+}
+
+function _opencodeOptionLabel(modelId) {
+  const parts = String(modelId || '').split('/');
+  if (parts.length < 2) return modelId || 'configured default';
+  const provider = parts.shift();
+  return provider + ' · ' + parts.join('/');
+}
+
+function updateOpenCodeModelOptions(models) {
+  if (!Array.isArray(models) || !models.length) return;
+  const sel = document.getElementById('modelsel');
+  if (!sel) return;
+  const current = sel.value || '';
+  const saved = localStorage.getItem('unchained_model') || '';
+  const wantsOpenCodeOptions = _isOpenCodeRoute() || current.startsWith('opencode-cli:') || saved.startsWith('opencode-cli:');
+  if (!wantsOpenCodeOptions) return;
+  const target = current.startsWith('opencode-cli:') ? current : (saved.startsWith('opencode-cli:') ? saved : 'opencode-cli:');
+
+  const valid = [];
+  const seen = new Set();
+  for (const raw of models) {
+    const modelId = String(raw || '').trim();
+    if (!modelId || seen.has(modelId) || modelId.indexOf('/') === -1 || /\s/.test(modelId)) continue;
+    seen.add(modelId);
+    valid.push(modelId);
+    if (valid.length >= 500) break;
+  }
+  if (!valid.length) return;
+
+  sel.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = 'opencode-cli:';
+  defaultOpt.textContent = 'OpenCode CLI · configured default';
+  sel.appendChild(defaultOpt);
+  for (const modelId of valid) {
+    const opt = document.createElement('option');
+    opt.value = 'opencode-cli:' + modelId;
+    opt.textContent = _opencodeOptionLabel(modelId);
+    sel.appendChild(opt);
+  }
+  if (target && Array.from(sel.options).some(opt => opt.value === target)) {
+    sel.value = target;
+  } else {
+    sel.value = 'opencode-cli:';
+  }
+}
+
 let activeSlot = 1;
 
 function _sessionStoreKey() {
@@ -14113,6 +14164,7 @@ async function checkAgentStatus() {
       lastAgentConnected = data.connected;
       lastCodexCliSupported = data.codex_cli_supported !== false;
       lastOpenCodeCliSupported = data.opencode_cli_supported !== false;
+      updateOpenCodeModelOptions(data.opencode_models || []);
       updateAgentStatusUI(data);
     }
   } catch(e) {}

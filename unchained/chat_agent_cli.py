@@ -107,6 +107,7 @@ CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip()
 DEFAULT_OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "").strip()
 OPENCODE_AGENT = os.environ.get("OPENCODE_AGENT", "").strip()
 OPENCODE_VARIANT = os.environ.get("OPENCODE_VARIANT", "").strip()
+OPENCODE_MODELS_REFRESH = os.environ.get("OPENCODE_MODELS_REFRESH", "").strip().lower() in {"1", "true", "yes"}
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -1532,6 +1533,42 @@ def _opencode_missing_message() -> str:
     )
 
 
+def _list_opencode_models(limit: int = 500) -> list[str]:
+    """Return model IDs from the local OpenCode CLI, bounded for WS capabilities."""
+    if not _cli_binary_available(OPENCODE_BIN):
+        return []
+    cmd = [OPENCODE_BIN, "models"]
+    if OPENCODE_MODELS_REFRESH:
+        cmd.append("--refresh")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=CWD,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+    except Exception as e:
+        log.info("  OpenCode model list failed: %s", e)
+        return []
+    models: list[str] = []
+    seen: set[str] = set()
+    for raw in (proc.stdout or "").splitlines():
+        model_id = raw.strip()
+        if not model_id or model_id in seen:
+            continue
+        # `opencode models` prints one provider/model ID per line; ignore banners/noise.
+        if "/" not in model_id or any(ch.isspace() for ch in model_id):
+            continue
+        seen.add(model_id)
+        models.append(model_id)
+        if len(models) >= limit:
+            break
+    return models
+
+
 async def handle_message_claude(
     ws,
     sid: str,
@@ -2748,12 +2785,16 @@ async def main():
         try:
             print(f"Connecting to {SERVER} ...")
             ws = await websockets.connect(SERVER, ping_interval=20, ping_timeout=30)
+            opencode_models = _list_opencode_models() if _cli_binary_available(OPENCODE_BIN) else []
+            if opencode_models:
+                print(f"OpenCode models: {len(opencode_models)} available")
             await ws.send(json.dumps({
                 "key": KEY,
                 "capabilities": {
                     "claude_cli": bool(_cli_binary_available(CLAUDE_BIN)),
                     "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
                     "opencode_cli": bool(_cli_binary_available(OPENCODE_BIN)),
+                    "opencode_models": opencode_models,
                     "client_version": _local_version(),
                     "remote_update": True,
                     "remote_research_desk_install": _remote_research_desk_install_supported(),
