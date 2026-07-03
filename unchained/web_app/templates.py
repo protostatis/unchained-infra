@@ -13464,7 +13464,7 @@ body{
 
   <div id="modelrow">
     <label for="modelsel">Model</label>
-    <select id="modelsel" onchange="onModelChange(this.value)">
+    <select id="modelsel" onchange="onModelChange(this.value)" onpointerdown="refreshOpenCodeModelOptions()" onkeydown="maybeRefreshOpenCodeModelOptionsForKey(event)">
       <option value="claude-sonnet-4-6">Sonnet 4.6</option>
       <option value="claude-opus-4-7">Opus 4.7</option>
       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
@@ -13492,6 +13492,9 @@ let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
 let selectedProfilePath = '';
+let _latestOpenCodeModels = [];
+let _openCodeModelOptionsSignature = '';
+let _openCodeModelOptionsRequest = null;
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
@@ -13623,14 +13626,43 @@ function _opencodeOptionLabel(modelId) {
   return provider + ' · ' + parts.join('/');
 }
 
+function _wantsOpenCodeModelOptions() {
+  const current = currentModel();
+  const saved = localStorage.getItem('unchained_model') || '';
+  return _isOpenCodeRoute() || current.startsWith('opencode-cli:') || saved.startsWith('opencode-cli:');
+}
+
+function _cacheOpenCodeModels(models) {
+  if (Array.isArray(models)) _latestOpenCodeModels = models;
+}
+
+function maybeRefreshOpenCodeModelOptionsForKey(event) {
+  if (!event || !['Enter', ' ', 'Spacebar', 'ArrowDown'].includes(event.key)) return;
+  refreshOpenCodeModelOptions();
+}
+
+function refreshOpenCodeModelOptions() {
+  if (!_wantsOpenCodeModelOptions()) return;
+  if (_latestOpenCodeModels.length) updateOpenCodeModelOptions(_latestOpenCodeModels);
+  if (_openCodeModelOptionsRequest) return;
+  _openCodeModelOptionsRequest = fetch('/web/chat/status?chat_only=1&model=' + encodeURIComponent('opencode-cli:'))
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !Array.isArray(data.opencode_models)) return;
+      _cacheOpenCodeModels(data.opencode_models);
+      updateOpenCodeModelOptions(_latestOpenCodeModels);
+    })
+    .catch(() => {})
+    .finally(() => { _openCodeModelOptionsRequest = null; });
+}
+
 function updateOpenCodeModelOptions(models) {
   if (!Array.isArray(models) || !models.length) return;
   const sel = document.getElementById('modelsel');
   if (!sel) return;
   const current = sel.value || '';
   const saved = localStorage.getItem('unchained_model') || '';
-  const wantsOpenCodeOptions = _isOpenCodeRoute() || current.startsWith('opencode-cli:') || saved.startsWith('opencode-cli:');
-  if (!wantsOpenCodeOptions) return;
+  if (!_wantsOpenCodeModelOptions()) return;
   const target = current.startsWith('opencode-cli:') ? current : (saved.startsWith('opencode-cli:') ? saved : 'opencode-cli:');
 
   const valid = [];
@@ -13643,6 +13675,12 @@ function updateOpenCodeModelOptions(models) {
     if (valid.length >= 500) break;
   }
   if (!valid.length) return;
+  const signature = valid.join('\n');
+  if (signature === _openCodeModelOptionsSignature && Array.from(sel.options).some(opt => opt.value === target)) {
+    sel.value = target;
+    return;
+  }
+  _openCodeModelOptionsSignature = signature;
 
   sel.innerHTML = '';
   const defaultOpt = document.createElement('option');
@@ -14175,7 +14213,7 @@ async function checkAgentStatus() {
       lastAgentConnected = data.connected;
       lastCodexCliSupported = data.codex_cli_supported !== false;
       lastOpenCodeCliSupported = data.opencode_cli_supported !== false;
-      updateOpenCodeModelOptions(data.opencode_models || []);
+      _cacheOpenCodeModels(data.opencode_models || []);
       updateAgentStatusUI(data);
     }
   } catch(e) {}

@@ -1385,6 +1385,9 @@ def test_opencode_cli_local_chat_has_guided_setup_ux():
     assert "lastOpenCodeCliSupported" in CLAUDE_CHAT_HTML, "OpenCode support status guard missing"
     assert "opencode_cli_supported" in CLAUDE_CHAT_HTML, "OpenCode support status should reach UI"
     assert "opencode auth login" in CLAUDE_CHAT_HTML, "OpenCode authentication guidance missing"
+    assert "refreshOpenCodeModelOptions" in CLAUDE_CHAT_HTML, "OpenCode models should refresh from selector interaction"
+    assert "updateOpenCodeModelOptions(data.opencode_models || [])" not in CLAUDE_CHAT_HTML, \
+        "OpenCode model selector should not rebuild on every status poll"
     print("  OpenCode CLI local chat has guided setup UX + provider default")
 
 
@@ -1737,6 +1740,7 @@ if __name__ == "__main__":
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
         ("web: CHAT_CODEX_HTML has 3-slot UI", test_codex_chat_has_three_slot_ui),
         ("web: Codex CLI local chat has guided setup UX", test_codex_cli_local_chat_has_guided_setup_ux),
+        ("web: OpenCode CLI local chat has guided setup UX", test_opencode_cli_local_chat_has_guided_setup_ux),
         ("codex agent: supports slot protocol", test_chat_agent_codex_supports_slot_protocol),
         ("web: TRIAL_CHAT_HTML has Claude access request flow", test_trial_chat_has_claude_access_request_flow),
         ("web: doSend() includes model", test_chat_html_sends_model_in_fetch),
