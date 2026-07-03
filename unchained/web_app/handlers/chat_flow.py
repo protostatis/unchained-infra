@@ -1046,6 +1046,7 @@ async def handle_chat_status(request: web.Request) -> web.Response:
     opencode_connected = False
     opencode_agent_id = ""
     opencode_cli_supported = True
+    opencode_models: list[str] = []
     if wants_opencode:
         opencode_agent_id = auth_info.get("agent_id", "")
         ows = core._chat_agents.get(opencode_agent_id)
@@ -1055,6 +1056,19 @@ async def handle_chat_status(request: web.Request) -> web.Response:
             opencode_connected = await core._check_relay_agent(opencode_agent_id)
         caps = core._chat_agent_caps.get(opencode_agent_id, {})
         opencode_cli_supported = bool(caps.get("opencode_cli")) if caps else True
+        raw_models = caps.get("opencode_models") if isinstance(caps, dict) else []
+        if isinstance(raw_models, list):
+            seen_models = set()
+            for raw_model in raw_models:
+                model_id = str(raw_model or "").strip()
+                if not model_id or model_id in seen_models:
+                    continue
+                if "/" not in model_id or any(ch.isspace() for ch in model_id):
+                    continue
+                seen_models.add(model_id)
+                opencode_models.append(model_id)
+                if len(opencode_models) >= 500:
+                    break
         if opencode_connected and not opencode_cli_supported:
             opencode_connected = False
         chat_connected = opencode_chat_connected
@@ -1126,6 +1140,7 @@ async def handle_chat_status(request: web.Request) -> web.Response:
         resp["opencode_agent_id"] = opencode_agent_id
         resp["opencode_connected"] = opencode_connected
         resp["opencode_cli_supported"] = opencode_cli_supported
+        resp["opencode_models"] = opencode_models
     if wants_claude_sdk:
         resp["claude_sdk_agent_id"] = claude_sdk_agent_id
         resp["claude_sdk_connected"] = claude_sdk_connected

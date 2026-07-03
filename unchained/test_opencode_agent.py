@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -254,6 +255,33 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         event_types = [evt["type"] for evt in ws.events]
         self.assertEqual(event_types, ["tool_start", "tool_result", "text", "done"])
         self.assertEqual(ws.events[2]["data"], "Only once")
+
+    def test_opencode_model_list_parses_cli_lines(self):
+        mod = self._load_module()
+
+        def fake_run(*args, **kwargs):
+            return types.SimpleNamespace(
+                stdout=(
+                    "openai/gpt-5.5\n"
+                    "openrouter/anthropic/claude-sonnet-4.6\n"
+                    "not a model id\n"
+                    "openai/gpt-5.5\n"
+                    "opencode/mimo-v2.5-free\n"
+                )
+            )
+
+        with patch.object(mod, "_cli_binary_available", return_value=True), \
+             patch.object(mod.subprocess, "run", side_effect=fake_run):
+            models = mod._list_opencode_models()
+
+        self.assertEqual(
+            models,
+            [
+                "openai/gpt-5.5",
+                "openrouter/anthropic/claude-sonnet-4.6",
+                "opencode/mimo-v2.5-free",
+            ],
+        )
 
 
 if __name__ == "__main__":
