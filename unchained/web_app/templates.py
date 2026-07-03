@@ -3704,7 +3704,7 @@ a{color:inherit;text-decoration:none}
       <p>Install the local agent once. Drive your real Chrome from your existing CLI &mdash; no separate API key for Pro/Max/Plus subscribers.</p>
       <div class="reqs">
         <span class="req">Chrome</span>
-        <span class="req">Claude or Codex CLI</span>
+        <span class="req">Claude, Codex, or OpenCode CLI</span>
         <span class="req">MCP-ready</span>
       </div>
       <div class="providers-label">Pick a CLI &darr;</div>
@@ -3719,6 +3719,12 @@ a{color:inherit;text-decoration:none}
           <span class="chip-dot"></span>
           <span class="chip-name">Codex CLI</span>
           <span class="chip-meta">ChatGPT Plus subscription</span>
+          <span class="chip-arrow">&rarr;</span>
+        </a>
+        <a href="/local?provider=opencode-cli" class="provider-chip cli">
+          <span class="chip-dot"></span>
+          <span class="chip-name">OpenCode CLI</span>
+          <span class="chip-meta">your OpenCode providers</span>
           <span class="chip-arrow">&rarr;</span>
         </a>
       </div>
@@ -5054,7 +5060,7 @@ async function runScenario(key) {
     const path = url.pathname;
     const provider = (url.searchParams.get('provider') || '').trim().toLowerCase();
     if (path === '/local') {
-      if (provider === 'codex-cli' || provider === 'codex-sdk') return '/local?provider=' + provider;
+      if (provider === 'codex-cli' || provider === 'codex-sdk' || provider === 'opencode-cli') return '/local?provider=' + provider;
       return '/local';
     }
     if (path === '/chat-claude' || path === '/chat-gemini') return path;
@@ -5067,6 +5073,7 @@ async function runScenario(key) {
 
   function landingRouteLabel(route, authenticated) {
     const verb = authenticated ? 'Open' : 'Sign in to';
+    if (route.indexOf('provider=opencode-cli') !== -1) return verb + ' OpenCode CLI';
     if (route.indexOf('provider=codex-cli') !== -1) return verb + ' Codex CLI';
     if (route.indexOf('provider=codex-sdk') !== -1) return verb + ' Codex API';
     if (route.indexOf('provider=claude-sdk') !== -1 || route === '/chat-claude') return verb + ' Claude API';
@@ -13450,6 +13457,7 @@ body{
       <option value="claude-sonnet-4-6">Sonnet 4.6</option>
       <option value="claude-opus-4-7">Opus 4.7</option>
       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+      <option value="opencode-cli:">OpenCode CLI &middot; configured default</option>
     </select>
     <label for="profilesel">Profile</label>
     <select id="profilesel" onchange="onProfileChange(this.value)" title="Optional profile copy to avoid re-sign-in prompts">
@@ -13617,7 +13625,8 @@ function _rememberLastAppRoute() {
     const model = typeof currentModel === 'function' ? currentModel() : '';
     let route = window.location.pathname;
     if (window.location.pathname === '/local') {
-      if (provider === 'codex-cli' || model.startsWith('codex-cli:')) route = '/local?provider=codex-cli';
+      if (provider === 'opencode-cli' || model.startsWith('opencode-cli:')) route = '/local?provider=opencode-cli';
+      else if (provider === 'codex-cli' || model.startsWith('codex-cli:')) route = '/local?provider=codex-cli';
       else if (provider === 'codex-sdk' || model.startsWith('codex-sdk:')) route = '/local?provider=codex-sdk';
       else route = '/local';
     }
@@ -13772,6 +13781,7 @@ async function loadChatProfiles() {
 
 let lastAgentConnected = false;
 let lastCodexCliSupported = true;
+let lastOpenCodeCliSupported = true;
 let clientUpdateInFlight = false;
 let clientUpdateSawDisconnect = false;
 let clientUpdateError = '';
@@ -13832,7 +13842,10 @@ function localInstallCommandLabel(reconnect) {
 }
 
 function localCliNameForModel() {
-  return currentModel().startsWith('codex-cli:') ? 'Codex CLI' : 'Claude CLI';
+  const model = currentModel();
+  if (model.startsWith('opencode-cli:')) return 'OpenCode CLI';
+  if (model.startsWith('codex-cli:')) return 'Codex CLI';
+  return 'Claude CLI';
 }
 
 function updateLocalCliGuidance() {
@@ -13904,8 +13917,8 @@ function hideInstallModal(markDismissed) {
   installModalReturnFocus = null;
 }
 
-function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasReady) {
-  const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+function maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, isOpenCodeCli, opencodeCliSupported, wasReady) {
+  const ready = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported) && (!isOpenCodeCli || opencodeCliSupported);
   if (wasReady && !ready) {
     installModalDismissed = false;
     installModalAutoShown = false;
@@ -13954,12 +13967,14 @@ function updateAgentStatusUI(data) {
   const bannerCurl = document.getElementById('banner-curl');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
+  const isOpenCodeCli = model.startsWith('opencode-cli:');
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
   const codexCliSupported = data.codex_cli_supported !== false;
+  const opencodeCliSupported = data.opencode_cli_supported !== false;
   const cliName = localCliNameForModel();
-  const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported);
+  const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported) && (!isOpenCodeCli || opencodeCliSupported);
   const wasSetupReady = lastLocalSetupReady;
   if (clientUpdateInFlight) {
     if (!data.client_connected) clientUpdateSawDisconnect = true;
@@ -13990,9 +14005,19 @@ function updateAgentStatusUI(data) {
   }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
+  if (isOpenCodeCli && bannerMsg) bannerMsg.textContent = 'Connect OpenCode CLI on this computer.';
+  if (isOpenCodeCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure OpenCode is authenticated with `opencode auth login`, then wait for the OpenCode status to turn online.';
   if (isCodexCli && !codexCliSupported && bannerMsg) {
     bannerMsg.textContent = 'Update the local agent to use Codex CLI.';
     if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for Codex CLI. Use the same install command to update/reconnect, then restart the local agent.';
+    if (bannerCurl) {
+      bannerCurl.textContent = 'Update/reconnect agent';
+      bannerCurl.dataset.reconnect = '1';
+    }
+  }
+  if (isOpenCodeCli && !opencodeCliSupported && bannerMsg) {
+    bannerMsg.textContent = 'Update the local agent to use OpenCode CLI.';
+    if (bannerDetail) bannerDetail.textContent = 'Your connected package is too old for OpenCode CLI. Use the same install command to update/reconnect, then restart the local agent.';
     if (bannerCurl) {
       bannerCurl.textContent = 'Update/reconnect agent';
       bannerCurl.dataset.reconnect = '1';
@@ -14008,8 +14033,12 @@ function updateAgentStatusUI(data) {
   if (isCodexCli && !codexCliSupported) {
     updateStatusPill(chatEl, 'codex cli needs update', 'warn');
     if (banner) banner.style.display = 'flex';
+  } else if (isOpenCodeCli && !opencodeCliSupported) {
+    updateStatusPill(chatEl, 'opencode cli needs update', 'warn');
+    if (banner) banner.style.display = 'flex';
   } else if (chatConnected) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
+    else if (isOpenCodeCli) updateStatusPill(chatEl, 'opencode cli online', 'online');
     else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
       if (banner) banner.style.display = 'none';
@@ -14030,6 +14059,7 @@ function updateAgentStatusUI(data) {
     if (banner) banner.style.display = 'flex';
   } else {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
+    else if (isOpenCodeCli) updateStatusPill(chatEl, 'opencode cli offline', '');
     else updateStatusPill(chatEl, 'agent offline', '');
     if (bridgeConnected) {
       if (bannerMsg) bannerMsg.textContent = 'Start the local chat agent on this computer.';
@@ -14039,7 +14069,7 @@ function updateAgentStatusUI(data) {
     }
     if (banner) banner.style.display = 'flex';
   }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, isOpenCodeCli, opencodeCliSupported, wasSetupReady);
 }
 
 function showMain() {
@@ -14049,9 +14079,16 @@ function showMain() {
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
   _rememberLastAppRoute();
-  const saved = localStorage.getItem('unchained_model');
-  if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-    document.getElementById('modelsel').value = saved;
+  const params = new URLSearchParams(window.location.search);
+  const provider = (params.get('provider') || '').trim().toLowerCase();
+  const providerDefault = provider === 'opencode-cli' ? 'opencode-cli:' : '';
+  if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
+    document.getElementById('modelsel').value = providerDefault;
+  } else {
+    const saved = localStorage.getItem('unchained_model');
+    if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
+      document.getElementById('modelsel').value = saved;
+    }
   }
   const slotState = _ensureSlotState();
   activeSlot = slotState.active_slot;
@@ -14075,6 +14112,7 @@ async function checkAgentStatus() {
       const data = await r.json();
       lastAgentConnected = data.connected;
       lastCodexCliSupported = data.codex_cli_supported !== false;
+      lastOpenCodeCliSupported = data.opencode_cli_supported !== false;
       updateAgentStatusUI(data);
     }
   } catch(e) {}
@@ -14729,6 +14767,15 @@ async function doSend() {
   const model = currentModel();
   if (model.startsWith('codex-cli:') && !lastCodexCliSupported) {
     appendText(bubble, 'Error: Codex CLI needs an updated local agent. Please run the latest install/update command and restart your local agent.');
+    sending = false;
+    document.getElementById('sendbtn').style.display = 'block';
+    document.getElementById('cancelbtn').style.display = 'none';
+    const slotbar = document.getElementById('slotbar');
+    if (slotbar) slotbar.classList.remove('locked');
+    return;
+  }
+  if (model.startsWith('opencode-cli:') && !lastOpenCodeCliSupported) {
+    appendText(bubble, 'Error: OpenCode CLI needs an updated local agent. Please run the latest install/update command and restart your local agent.');
     sending = false;
     document.getElementById('sendbtn').style.display = 'block';
     document.getElementById('cancelbtn').style.display = 'none';

@@ -131,6 +131,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
             "/tab": "Ready for navigation",
             "/local": "client-update-btn",
             "/local?provider=codex-cli": "client-update-btn",
+            "/local?provider=opencode-cli": "client-update-btn",
             "/setup": "setup-client-update-btn",
             "/install": "install-client-update-btn",
         }

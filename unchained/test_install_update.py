@@ -84,6 +84,8 @@ def test_build_agent_zip_contains_version_and_update():
         assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"' in start_sh
         assert 'command -v claude >/dev/null 2>&1' in start_sh
         assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
+        assert 'command -v opencode >/dev/null 2>&1' in start_sh
+        assert 'export OPENCODE_BIN="$(command -v opencode)"' in start_sh
         assert 'export CLAUDE_BIN="$HOME/.local/bin/claude"' not in start_sh
         stop_sh = zf.read("unchained-agent/stop.sh").decode()
         assert 'AUTOSTART_LABEL="com.unchained.agent"' in stop_sh
@@ -104,6 +106,7 @@ def test_build_agent_zip_contains_version_and_update():
         assert "uc_live_test123" not in env
         assert "UNCHAINED_API_KEY=" in env
         assert "UNCHAINED_INSTALL_TOKEN=inst_test_bootstrap" in env
+        assert "OPENCODE_MODEL=" in env
     print(f"  ZIP size: {len(zip_bytes)} bytes, {len(names)} files")
 
 
@@ -1362,6 +1365,20 @@ def test_codex_cli_local_chat_has_guided_setup_ux():
     assert "Install (curl)" not in CHAT_CODEX_HTML, "stale curl install label should be gone from Codex local chat"
     assert "Install Agent (curl)" not in CHAT_CODEX_HTML, "stale curl modal title should be gone from Codex local chat"
     print("  Codex CLI local chat has guided setup UX + provider default")
+
+
+def test_opencode_cli_local_chat_has_guided_setup_ux():
+    """Verify /local?provider=opencode-cli uses local setup UX + provider default."""
+    from web import CLAUDE_CHAT_HTML, LANDING_HTML
+
+    assert "/local?provider=opencode-cli" in LANDING_HTML, "OpenCode landing entry missing"
+    assert "OpenCode CLI" in LANDING_HTML, "OpenCode landing label missing"
+    assert "opencode-cli:" in CLAUDE_CHAT_HTML, "OpenCode CLI model option missing"
+    assert "provider === 'opencode-cli'" in CLAUDE_CHAT_HTML, "opencode-cli provider should select OpenCode default model"
+    assert "lastOpenCodeCliSupported" in CLAUDE_CHAT_HTML, "OpenCode support status guard missing"
+    assert "opencode_cli_supported" in CLAUDE_CHAT_HTML, "OpenCode support status should reach UI"
+    assert "opencode auth login" in CLAUDE_CHAT_HTML, "OpenCode authentication guidance missing"
+    print("  OpenCode CLI local chat has guided setup UX + provider default")
 
 
 def test_chat_agent_codex_supports_slot_protocol():

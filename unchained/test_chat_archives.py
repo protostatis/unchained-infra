@@ -68,6 +68,7 @@ class TestChatAgentCliArchives(unittest.TestCase):
                     "session_id": "claude-current",
                 },
                 "codex_session": {},
+                "opencode_session": {},
             },
             1,
         )
@@ -82,6 +83,10 @@ class TestChatAgentCliArchives(unittest.TestCase):
                             "session_id": "claude-restored",
                         },
                         "codex_session": {},
+                        "opencode_session": {
+                            "chat_session_id": restored_sid,
+                            "session_id": "opencode-restored",
+                        },
                     },
                     "archived_at": 123,
                     "slot": 1,
@@ -97,6 +102,7 @@ class TestChatAgentCliArchives(unittest.TestCase):
         self.assertEqual(chat_session_id, restored_sid)
         self.assertEqual(mod._load_chat(1)["messages"][0]["content"], "restored chat")
         self.assertEqual(mod.claude_sessions.get(restored_sid), "claude-restored")
+        self.assertEqual(mod.opencode_sessions.get(restored_sid), "opencode-restored")
         self.assertNotIn(current_sid, mod.claude_sessions)
 
         previews = {entry["preview"] for entry in mod._list_archives(limit=10)}
@@ -119,6 +125,7 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
             _is_claude_sdk_model=lambda model: False,
             _is_codex_sdk_model=lambda model: False,
             _is_codex_cli_model=lambda model: False,
+            _is_opencode_cli_model=lambda model: False,
             _resolve_chat_agent_id=lambda auth_info, model: "claude-abc12345",
             _agent_request=AsyncMock(),
             _chat_agents={},

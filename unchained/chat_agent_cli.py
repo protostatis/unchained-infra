@@ -1,14 +1,15 @@
-"""chat_agent_cli.py — Local chat agent for Claude CLI and Codex CLI lanes.
+"""chat_agent_cli.py — Local chat agent for Claude, Codex, and OpenCode CLI lanes.
 
 No provider API key needed for these local CLI lanes.
 - Claude lane uses `claude -p` with `--resume` session continuity.
 - Codex lane uses `codex exec --json` with `exec resume` continuity.
+- OpenCode lane uses `opencode run --format json` with `--session` continuity.
 
 Architecture:
     Phone → EC2 web server (POST /web/chat, SSE response)
          → WebSocket bridge
          → This script (runs on your Mac)
-         → `claude -p` OR `codex exec` subprocess (selected by model prefix)
+         → `claude -p`, `codex exec`, or `opencode run` subprocess (selected by model prefix)
             → Bash → cdp_tool.py → cloud_tools → WSS to EC2 relay → Chrome
 
 Usage:
@@ -100,8 +101,12 @@ RELAY_PORT = int(os.environ.get("UNCHAINED_RELAY_PORT", "443"))
 CWD = os.path.expanduser("~/unchained-agent/unchained")
 CLAUDE_BIN = _resolve_local_cli_binary("CLAUDE_BIN", "claude")
 CODEX_BIN = _resolve_local_cli_binary("CODEX_BIN", "codex")
+OPENCODE_BIN = _resolve_local_cli_binary("OPENCODE_BIN", "opencode")
 DEFAULT_CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "low").strip().lower()
+DEFAULT_OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "").strip()
+OPENCODE_AGENT = os.environ.get("OPENCODE_AGENT", "").strip()
+OPENCODE_VARIANT = os.environ.get("OPENCODE_VARIANT", "").strip()
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -193,7 +198,7 @@ def _load_chat(slot: int | None = None) -> dict:
         with open(_slot_file(slot), "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"messages": [], "claude_session": {}, "codex_session": {}}
+        return {"messages": [], "claude_session": {}, "codex_session": {}, "opencode_session": {}}
 
 
 def _save_chat(data: dict, slot: int | None = None):
@@ -270,9 +275,27 @@ def _load_codex_session() -> dict:
     return data.get("codex_session", {})
 
 
+def _save_opencode_session(chat_session_id: str, opencode_sid: str, model: str = ""):
+    """Persist OpenCode session mapping in the active slot."""
+    data = _load_chat()
+    data["opencode_session"] = {
+        "chat_session_id": chat_session_id,
+        "session_id": opencode_sid,
+        "model": model,
+        "updated_at": time.time(),
+    }
+    _save_chat(data)
+
+
+def _load_opencode_session() -> dict:
+    """Load saved OpenCode session mapping from the active slot."""
+    data = _load_chat()
+    return data.get("opencode_session", {})
+
+
 def _chat_session_id_for_data(data: dict, fallback: str = "") -> str:
     """Return the persisted chat session id for a slot, if any."""
-    for key in ("claude_session", "codex_session"):
+    for key in ("claude_session", "codex_session", "opencode_session"):
         saved = data.get(key)
         if not isinstance(saved, dict):
             continue
@@ -387,6 +410,7 @@ def _restore_archive_into_slot(archive_id: str, slot: int | None = None) -> tupl
     # rebuild those maps wholesale for the restored slot.
     claude_sessions.clear()
     codex_sessions.clear()
+    opencode_sessions.clear()
     _context_injected.clear()
 
     saved = slot_data.get("claude_session", {})
@@ -395,6 +419,9 @@ def _restore_archive_into_slot(archive_id: str, slot: int | None = None) -> tupl
     saved_codex = slot_data.get("codex_session", {})
     if saved_codex.get("session_id") and saved_codex.get("chat_session_id"):
         codex_sessions[saved_codex["chat_session_id"]] = saved_codex["session_id"]
+    saved_opencode = slot_data.get("opencode_session", {})
+    if saved_opencode.get("session_id") and saved_opencode.get("chat_session_id"):
+        opencode_sessions[saved_opencode["chat_session_id"]] = saved_opencode["session_id"]
 
     return slot_data, _chat_session_id_for_data(slot_data)
 
@@ -404,7 +431,7 @@ def _clear_slot(slot: int | None = None):
     if slot is None:
         slot = _active_slot()
     _archive_slot(slot)
-    _save_chat({"messages": [], "claude_session": {}, "codex_session": {}}, slot)
+    _save_chat({"messages": [], "claude_session": {}, "codex_session": {}, "opencode_session": {}}, slot)
 
 
 def _get_slots_info() -> dict:
@@ -1315,14 +1342,26 @@ def _build_codex_prompt(user_text: str, *, is_resume: bool, scheduler_armed: boo
     )
 
 
+def _build_opencode_prompt(user_text: str, *, is_resume: bool, scheduler_armed: bool = False, history_context: str = "") -> str:
+    """Build OpenCode input text with browser-agent instructions."""
+    return _build_codex_prompt(
+        user_text,
+        is_resume=is_resume,
+        scheduler_armed=scheduler_armed,
+        history_context=history_context,
+    )
+
+
 # Map chat session_id → claude session_id for conversation persistence
 claude_sessions: dict[str, str] = {}
 # Map chat session_id → codex thread/session id for exec resume continuity
 codex_sessions: dict[str, str] = {}
+# Map chat session_id → OpenCode session id for run --session continuity
+opencode_sessions: dict[str, str] = {}
 
 # Track which (session_id, lane) pairs already received context injection.
-# Keyed by (sid, "claude") or (sid, "codex") so a fresh Codex thread after
-# a Claude turn (or after a Codex model switch) still gets its own injection.
+# Keyed by (sid, "claude"), (sid, "codex"), or (sid, "opencode") so a fresh
+# lane after a model switch still gets its own injection.
 _context_injected: set[tuple[str, str]] = set()
 
 # Track active subprocesses and tasks for cancel support
@@ -1389,6 +1428,18 @@ def _resolve_codex_model(model: str) -> str:
     return DEFAULT_CODEX_MODEL
 
 
+def _is_opencode_cli_model(model: str) -> bool:
+    return (model or "").startswith("opencode-cli:")
+
+
+def _resolve_opencode_model(model: str) -> str:
+    m = (model or "").strip()
+    if m.startswith("opencode-cli:"):
+        resolved = m.split(":", 1)[1].strip()
+        return resolved or DEFAULT_OPENCODE_MODEL
+    return DEFAULT_OPENCODE_MODEL
+
+
 def _collect_text_strings(obj) -> list[str]:
     """Collect likely text fragments from nested codex event objects."""
     out: list[str] = []
@@ -1426,6 +1477,52 @@ def _codex_tool_name_and_input(command: str) -> tuple[str, str]:
     if m:
         return m.group(1).lower(), cmd
     return "bash", cmd
+
+
+def _opencode_tool_name_and_input(part: dict) -> tuple[str, str]:
+    """Map OpenCode tool parts into UI tool card fields."""
+    tool = str(part.get("tool") or "tool").strip() or "tool"
+    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+    tool_input = state.get("input") if isinstance(state.get("input"), dict) else {}
+    command = str(tool_input.get("command") or "").strip()
+    if tool == "bash" and command:
+        return _codex_tool_name_and_input(command)
+    if tool == "webfetch":
+        return "webfetch", str(tool_input.get("url") or "")[:200]
+    if tool == "websearch":
+        return "websearch", str(tool_input.get("query") or "")[:200]
+    if tool in {"read", "write", "edit"}:
+        return tool, str(tool_input.get("filePath") or tool_input.get("path") or "")[:200]
+    if tool in {"glob", "grep"}:
+        return tool, str(tool_input.get("pattern") or "")[:200]
+    if tool == "task":
+        return "task", str(tool_input.get("description") or "")[:200]
+    if tool_input:
+        return tool, json.dumps(tool_input, ensure_ascii=False)[:500]
+    return tool, ""
+
+
+def _opencode_tool_output(part: dict) -> str:
+    """Extract a compact result string from an OpenCode tool part."""
+    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+    status = str(state.get("status") or "").lower()
+    if status == "error":
+        return str(state.get("error") or "tool failed").strip()
+    for key in ("output", "text", "result"):
+        value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    metadata = state.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        return json.dumps(metadata, ensure_ascii=False)[:12000]
+    return "tool completed"
+
+
+def _opencode_missing_message() -> str:
+    return (
+        f"OpenCode CLI is not installed or not on PATH. Expected `{OPENCODE_BIN}`. "
+        "Install OpenCode, run `opencode auth login`, or set `OPENCODE_BIN`."
+    )
 
 
 async def handle_message_claude(
@@ -2260,6 +2357,263 @@ async def handle_message_codex(
         pass
 
 
+async def handle_message_opencode(
+    ws,
+    sid: str,
+    user_text: str,
+    model: str = "",
+    tab_id: str = "auto",
+    cdp_agent_id: str = "",
+    scheduler_armed: bool = False,
+    scheduler_grant_id: str = "",
+    req_id: str = "",
+):
+    """Single opencode run call with JSON event parsing and session resume."""
+    emit = _make_emitter(ws, sid, req_id)
+    opencode_model = _resolve_opencode_model(model)
+
+    # Save user message locally
+    _append_message("user", user_text)
+
+    opencode_sid = opencode_sessions.get(sid)
+    if opencode_sid:
+        saved = _load_opencode_session()
+        saved_model = saved.get("model", "")
+        if saved_model != opencode_model:
+            log.info(
+                "  OpenCode model switched (%s -> %s), starting fresh session",
+                saved_model or "default",
+                opencode_model or "default",
+            )
+            opencode_sessions.pop(sid, None)
+            opencode_sid = None
+            _context_injected.discard((sid, "opencode"))
+    is_resume = bool(opencode_sid)
+
+    history_context = ""
+    if not is_resume and (sid, "opencode") not in _context_injected:
+        _context_injected.add((sid, "opencode"))
+        data = _load_chat()
+        prev_msgs = data.get("messages", [])
+        prev_msgs = prev_msgs[:-1] if prev_msgs else []
+        if prev_msgs:
+            history_lines = []
+            for m in prev_msgs[-20:]:
+                role = m.get("role", "unknown")
+                content = m.get("content", "").replace("[", "(").replace("]", ")")
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                history_lines.append(f"{role}: {content}")
+            history_context = (
+                "[Previous conversation context — the session was restarted, "
+                "here is the recent history for continuity]\n"
+                + "\n".join(history_lines)
+            )
+            log.info("  Injected %d previous messages as context (opencode)", len(prev_msgs[-20:]))
+
+    log.info(
+        "  Calling OpenCode CLI (model=%s)%s...",
+        opencode_model or "configured default",
+        f" (resume {opencode_sid[:12]})" if is_resume else " (new)",
+    )
+
+    env = dict(os.environ)
+    env["CDP_AGENT_ID"] = cdp_agent_id or BRIDGE_AGENT_ID or AGENT_ID
+    env["CDP_RELAY_HOST"] = RELAY_HOST
+    env["CDP_RELAY_PORT"] = str(RELAY_PORT)
+    env["CDP_TAB_ID"] = tab_id or "auto"
+    env["UNCHAINED_CHAT_SESSION_ID"] = sid
+    env.pop("UNCHAINED_INSTALL_TOKEN", None)
+    if scheduler_armed and scheduler_grant_id:
+        env["UNCHAINED_SCHEDULER_GRANT_ID"] = scheduler_grant_id
+    else:
+        env.pop("UNCHAINED_SCHEDULER_GRANT_ID", None)
+
+    cmd = [OPENCODE_BIN, "run", "--format", "json", "--auto", "--dir", CWD]
+    if opencode_model:
+        cmd += ["--model", opencode_model]
+    if OPENCODE_AGENT:
+        cmd += ["--agent", OPENCODE_AGENT]
+    if OPENCODE_VARIANT:
+        cmd += ["--variant", OPENCODE_VARIANT]
+    if is_resume:
+        cmd += ["--session", opencode_sid]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=CWD,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        await emit({
+            "type": "error",
+            "data": _opencode_missing_message(),
+        })
+        await emit({"type": "done"})
+        return
+    active_procs[sid] = proc
+
+    opencode_input = _build_opencode_prompt(
+        user_text,
+        is_resume=is_resume,
+        scheduler_armed=scheduler_armed,
+        history_context=history_context,
+    )
+    proc.stdin.write(opencode_input.encode())
+    await proc.stdin.drain()
+    proc.stdin.close()
+
+    response_parts: list[str] = []
+    error_text = ""
+    seen_text_parts: set[str] = set()
+    seen_tool_parts: set[str] = set()
+
+    async for raw_line in proc.stdout:
+        if not raw_line:
+            break
+        line = raw_line.decode(errors="replace").strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        event_sid = str(event.get("sessionID") or "").strip()
+        if event_sid and not opencode_sessions.get(sid):
+            opencode_sessions[sid] = event_sid
+            _save_opencode_session(sid, event_sid, model=opencode_model)
+            if not is_resume:
+                print(f"  OpenCode session: {event_sid[:12]}...")
+
+        etype = event.get("type", "")
+        if etype == "text":
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            part_id = str(part.get("id") or "").strip()
+            if part_id and part_id in seen_text_parts:
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                response_parts.append(text)
+                if part_id:
+                    seen_text_parts.add(part_id)
+            continue
+
+        if etype == "tool_use":
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            part_id = str(part.get("id") or "").strip()
+            if part_id and part_id in seen_tool_parts:
+                continue
+            if part_id:
+                seen_tool_parts.add(part_id)
+            tool_name, tool_input = _opencode_tool_name_and_input(part)
+            out = _opencode_tool_output(part)
+            await emit({
+                "type": "tool_start",
+                "name": tool_name,
+                "input": tool_input,
+            })
+
+            is_screenshot = False
+            screenshot_data = None
+            if "saved:" in out and "screenshot captured" in out:
+                try:
+                    sc_path = out.split("saved:")[1].rstrip("]").strip()
+                    with open(sc_path, "r") as f:
+                        screenshot_data = f.read()
+                    is_screenshot = _is_base64_png_blob(screenshot_data)
+                except Exception as e:
+                    log.info("  OpenCode screenshot read failed: %s", e)
+            elif _is_base64_png_blob(out):
+                screenshot_data = out
+                is_screenshot = True
+
+            if is_screenshot and screenshot_data:
+                await emit({
+                    "type": "tool_result",
+                    "name": tool_name,
+                    "data": screenshot_data,
+                    "is_screenshot": True,
+                    "visible": True,
+                })
+            else:
+                await emit({
+                    "type": "tool_result",
+                    "name": tool_name,
+                    "data": out[:12000],
+                    "is_screenshot": False,
+                    "visible": None,
+                })
+            continue
+
+        if etype == "error":
+            err = event.get("error")
+            if isinstance(err, dict):
+                data = err.get("data") if isinstance(err.get("data"), dict) else {}
+                msg = data.get("message") or err.get("message") or err.get("name")
+            else:
+                msg = err
+            if isinstance(msg, str) and msg.strip():
+                error_text = msg.strip()
+            continue
+
+    await proc.wait()
+
+    response = "\n\n".join(part for part in response_parts if part).strip()
+
+    if proc.returncode and proc.returncode < 0:
+        proc_pid = getattr(proc, "pid", None)
+        was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
+        if isinstance(proc_pid, int):
+            user_cancelled_pids.discard(proc_pid)
+        if was_user_cancel:
+            return
+        if not response:
+            sig = -proc.returncode
+            response = f"OpenCode CLI terminated unexpectedly (signal {sig})."
+
+    if not response:
+        stderr_text = (await proc.stderr.read()).decode(errors="replace").strip()
+        _stale_signals = ("session not found", "invalid session", "sessionid", "not found", "does not exist")
+        combined_err = (error_text + " " + stderr_text).lower()
+        if is_resume and any(s in combined_err for s in _stale_signals):
+            log.info(
+                "  OpenCode stale session (%s), starting fresh",
+                (error_text or stderr_text or f"exit code {proc.returncode}")[:120],
+            )
+            opencode_sessions.pop(sid, None)
+            _save_opencode_session("", "")
+            await asyncio.sleep(1)
+            return await handle_message_opencode(
+                ws,
+                sid,
+                user_text,
+                model,
+                tab_id=tab_id,
+                cdp_agent_id=cdp_agent_id,
+                scheduler_armed=scheduler_armed,
+                scheduler_grant_id=scheduler_grant_id,
+                req_id=req_id,
+            )
+        if error_text:
+            response = f"OpenCode CLI error: {error_text}"
+        elif stderr_text:
+            response = f"OpenCode CLI error: {stderr_text}"
+        elif proc.returncode != 0:
+            response = f"OpenCode CLI error: exit code {proc.returncode}"
+        else:
+            response = "OpenCode CLI finished without a final response."
+
+    _append_message("assistant", response)
+    await emit({"type": "text", "data": response})
+    await emit({"type": "done"})
+
+
 async def handle_message(
     ws,
     sid: str,
@@ -2282,6 +2636,25 @@ async def handle_message(
             await emit({"type": "done"})
             return
         return await handle_message_codex(
+            ws,
+            sid,
+            user_text,
+            model,
+            tab_id=tab_id,
+            cdp_agent_id=cdp_agent_id,
+            scheduler_armed=scheduler_armed,
+            scheduler_grant_id=scheduler_grant_id,
+            req_id=req_id,
+        )
+    if _is_opencode_cli_model(model):
+        if not _cli_binary_available(OPENCODE_BIN):
+            await emit({
+                "type": "error",
+                "data": _opencode_missing_message(),
+            })
+            await emit({"type": "done"})
+            return
+        return await handle_message_opencode(
             ws,
             sid,
             user_text,
@@ -2346,6 +2719,8 @@ async def main():
         )
     if not _cli_binary_available(CODEX_BIN):
         print(f"WARNING: {CODEX_BIN} not found in PATH — codex-cli model lane will be unavailable.")
+    if not _cli_binary_available(OPENCODE_BIN):
+        print(f"WARNING: {OPENCODE_BIN} not found in PATH — opencode-cli model lane will be unavailable.")
 
     # Restore claude session from local storage
     saved = _load_claude_session()
@@ -2356,6 +2731,10 @@ async def main():
     if saved_codex.get("session_id") and saved_codex.get("chat_session_id"):
         codex_sessions[saved_codex["chat_session_id"]] = saved_codex["session_id"]
         print(f"Restored Codex session: {saved_codex['session_id'][:12]}... for {saved_codex['chat_session_id']}")
+    saved_opencode = _load_opencode_session()
+    if saved_opencode.get("session_id") and saved_opencode.get("chat_session_id"):
+        opencode_sessions[saved_opencode["chat_session_id"]] = saved_opencode["session_id"]
+        print(f"Restored OpenCode session: {saved_opencode['session_id'][:12]}... for {saved_opencode['chat_session_id']}")
 
     while True:
         try:
@@ -2366,6 +2745,7 @@ async def main():
                 "capabilities": {
                     "claude_cli": bool(_cli_binary_available(CLAUDE_BIN)),
                     "codex_cli": bool(_cli_binary_available(CODEX_BIN)),
+                    "opencode_cli": bool(_cli_binary_available(OPENCODE_BIN)),
                     "client_version": _local_version(),
                     "remote_update": True,
                     "remote_research_desk_install": _remote_research_desk_install_supported(),
@@ -2464,6 +2844,7 @@ async def main():
                     _clear_slot(current)
                     claude_sessions.clear()
                     codex_sessions.clear()
+                    opencode_sessions.clear()
                     _context_injected.clear()
                     print(f"[chat] New chat — cleared slot {current}")
                     await ws.send(json.dumps({
@@ -2481,6 +2862,7 @@ async def main():
                     _save_meta(meta)
                     claude_sessions.clear()
                     codex_sessions.clear()
+                    opencode_sessions.clear()
                     _context_injected.clear()
                     # Restore sessions for the new slot
                     saved = _load_claude_session()
@@ -2489,6 +2871,9 @@ async def main():
                     saved_codex = _load_codex_session()
                     if saved_codex.get("session_id") and saved_codex.get("chat_session_id"):
                         codex_sessions[saved_codex["chat_session_id"]] = saved_codex["session_id"]
+                    saved_opencode = _load_opencode_session()
+                    if saved_opencode.get("session_id") and saved_opencode.get("chat_session_id"):
+                        opencode_sessions[saved_opencode["chat_session_id"]] = saved_opencode["session_id"]
                     print(f"[chat] Switched to slot {slot}")
                     await ws.send(json.dumps({
                         "type": "switch_slot_ok",
