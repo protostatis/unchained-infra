@@ -106,7 +106,7 @@ def test_build_agent_zip_contains_version_and_update():
         assert "uc_live_test123" not in env
         assert "UNCHAINED_API_KEY=" in env
         assert "UNCHAINED_INSTALL_TOKEN=inst_test_bootstrap" in env
-        assert "OPENCODE_MODEL=" in env
+        assert "OPENCODE_MODEL=" not in env
     print(f"  ZIP size: {len(zip_bytes)} bytes, {len(names)} files")
 
 

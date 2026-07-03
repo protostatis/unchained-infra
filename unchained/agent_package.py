@@ -84,7 +84,6 @@ UNCHAINED_RELAY_HOST={relay_host}
 UNCHAINED_RELAY_PORT=443
 UNCHAINED_API_URL=https://{relay_host}
 CODEX_MAX_RUNTIME_S=300
-OPENCODE_MODEL=
 """
 
 
@@ -1371,7 +1370,6 @@ UNCHAINED_RELAY_HOST=api.unchainedsky.com
 UNCHAINED_RELAY_PORT=443
 UNCHAINED_API_URL=https://api.unchainedsky.com
 CODEX_MAX_RUNTIME_S=300
-OPENCODE_MODEL=
 ENVEOF
 
 echo "[1/3] Creating Python environment..."
@@ -1465,7 +1463,6 @@ UNCHAINED_RELAY_HOST={relay_host}
 UNCHAINED_RELAY_PORT=443
 UNCHAINED_API_URL=https://{relay_host}
 CODEX_MAX_RUNTIME_S=300
-OPENCODE_MODEL=
 ENVEOF
 
 echo "Install token configured."
@@ -1499,7 +1496,6 @@ UNCHAINED_RELAY_HOST={relay_host}
 UNCHAINED_RELAY_PORT=443
 UNCHAINED_API_URL=https://{relay_host}
 CODEX_MAX_RUNTIME_S=300
-OPENCODE_MODEL=
 ENVEOF2
 
 # Setup venv
@@ -1684,7 +1680,6 @@ $envBody = @(
   "UNCHAINED_RELAY_PORT=443"
   "UNCHAINED_API_URL=https://$relayHost"
   "CODEX_MAX_RUNTIME_S=300"
-  "OPENCODE_MODEL="
 )
 Set-Content -Path (Join-Path $installDir ".env") -Value $envBody
 

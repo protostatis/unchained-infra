@@ -293,6 +293,13 @@ def _load_opencode_session() -> dict:
     return data.get("opencode_session", {})
 
 
+def _clear_opencode_session():
+    """Clear the active slot's saved OpenCode session mapping."""
+    data = _load_chat()
+    data["opencode_session"] = {}
+    _save_chat(data)
+
+
 def _chat_session_id_for_data(data: dict, fallback: str = "") -> str:
     """Return the persisted chat session id for a slot, if any."""
     for key in ("claude_session", "codex_session", "opencode_session"):
@@ -2387,6 +2394,7 @@ async def handle_message_opencode(
             )
             opencode_sessions.pop(sid, None)
             opencode_sid = None
+            _clear_opencode_session()
             _context_injected.discard((sid, "opencode"))
     is_resume = bool(opencode_sid)
 
@@ -2587,7 +2595,7 @@ async def handle_message_opencode(
                 (error_text or stderr_text or f"exit code {proc.returncode}")[:120],
             )
             opencode_sessions.pop(sid, None)
-            _save_opencode_session("", "")
+            _clear_opencode_session()
             await asyncio.sleep(1)
             return await handle_message_opencode(
                 ws,
