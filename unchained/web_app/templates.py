@@ -20057,6 +20057,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
           <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
           <option value="codex-cli:gpt-5.4-mini">Codex CLI: GPT-5.4 Mini (fast)</option>
+          <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
@@ -20143,6 +20144,7 @@ let preview = {};
 let editingIndex = -1;
 let historyJobId = '';
 const schedulerProfileLabels = {};
+const schedulerOpenCodeModelLabels = {};
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -20190,6 +20192,8 @@ function getPreview(id){
 function formatSchedulerModel(model){
   const value=String(model||'').trim();
   if(!value) return 'Default: Claude CLI Opus';
+  if(value==='opencode-cli:') return 'OpenCode CLI: configured default';
+  if(schedulerOpenCodeModelLabels[value]) return schedulerOpenCodeModelLabels[value];
   const labels={
     'claude-sonnet-4-6':'Claude CLI: Sonnet 4.6',
     'claude-opus-4-7':'Claude CLI: Opus 4.7',
@@ -20209,6 +20213,58 @@ function formatSchedulerModel(model){
     'qwen/qwen3.5-flash-02-23':'OpenRouter: Qwen 3.5 Flash'
   };
   return labels[value]||value;
+}
+
+function schedulerOpenCodeOptionLabel(modelId){
+  const clean=String(modelId||'').trim();
+  const parts=clean.split('/');
+  if(parts.length<2) return clean||'configured default';
+  const provider=parts.shift();
+  return 'OpenCode CLI: '+provider+' · '+parts.join('/');
+}
+
+function updateSchedulerOpenCodeModelOptions(models){
+  const select=document.getElementById('f-model');
+  if(!select||!Array.isArray(models)||!models.length) return;
+  const current=getSchedulerModelValue();
+
+  [...select.querySelectorAll('option[data-opencode-model="1"]')].forEach(opt=>opt.remove());
+  Object.keys(schedulerOpenCodeModelLabels).forEach(key=>delete schedulerOpenCodeModelLabels[key]);
+
+  const customOpt=select.querySelector('option[value="__custom__"]');
+  const defaultOpt=document.createElement('option');
+  defaultOpt.value='opencode-cli:';
+  defaultOpt.textContent='OpenCode CLI: configured default';
+  defaultOpt.dataset.opencodeModel='1';
+  schedulerOpenCodeModelLabels[defaultOpt.value]=defaultOpt.textContent;
+  select.insertBefore(defaultOpt, customOpt);
+
+  const seen=new Set();
+  for(const raw of models){
+    const modelId=String(raw||'').trim();
+    if(!modelId||seen.has(modelId)||modelId.indexOf('/')===-1||/\s/.test(modelId)) continue;
+    seen.add(modelId);
+    const value='opencode-cli:'+modelId;
+    const opt=document.createElement('option');
+    opt.value=value;
+    opt.textContent=schedulerOpenCodeOptionLabel(modelId);
+    opt.dataset.opencodeModel='1';
+    schedulerOpenCodeModelLabels[value]=opt.textContent;
+    select.insertBefore(opt, customOpt);
+    if(seen.size>=500) break;
+  }
+
+  setSchedulerModelValue(current);
+  render();
+}
+
+async function loadSchedulerOpenCodeModels(){
+  try{
+    const r=await fetch('/web/chat/status?chat_only=1&model='+encodeURIComponent('opencode-cli:'));
+    if(!r.ok) return;
+    const data=await r.json();
+    updateSchedulerOpenCodeModelOptions(data.opencode_models||[]);
+  }catch(e){}
 }
 
 function syncSchedulerModelField(){
@@ -20625,6 +20681,7 @@ document.addEventListener('keydown',e=>{
 (async function init(){
   try{
     if(await checkSession()){
+      await loadSchedulerOpenCodeModels();
       await loadSchedulerProfiles();
       await loadJobs();
     }
