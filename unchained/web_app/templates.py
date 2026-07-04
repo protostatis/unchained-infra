@@ -1223,6 +1223,157 @@ ssrf_guard: enabled</pre>
 # HTML — Landing V2: Haiku Morph (promoted to main landing page)
 # ---------------------------------------------------------------------------
 
+_SKY_SEARCH_STYLES = r"""/* ── Sky Search floating trigger ── */
+.sky-float-wrap{
+  position:fixed;bottom:24px;right:24px;z-index:9998;
+  animation:skyFloatIn 3.5s ease 2.5s both,
+             skyFloatPulse 3s ease-in-out 6s infinite;
+}
+.sky-float-wrap .sky-float{
+  display:inline-flex;align-items:center;gap:10px;
+  margin:0;padding:0 20px 0 14px;height:48px;
+  background:var(--accent);color:#fff;border:none;animation:none;
+  border-radius:999px;cursor:pointer;font-family:inherit;
+  font-size:14px;font-weight:600;letter-spacing:0.5px;
+  box-shadow:0 4px 20px rgba(233,69,96,0.4),0 0 60px rgba(233,69,96,0.12);
+  transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1),
+              box-shadow 0.25s ease;
+}
+.sky-float-wrap .sky-float:hover{
+  transform:scale(1.06);
+  box-shadow:0 6px 32px rgba(233,69,96,0.6),0 0 80px rgba(233,69,96,0.2);
+}
+.sky-float-wrap .sky-float:active{transform:scale(0.97)}
+.sky-float-icon{
+  font-size:18px;line-height:1;display:inline-block;
+  transition:transform 0.3s ease;
+}
+.sky-float-wrap .sky-float:hover .sky-float-icon{transform:rotate(-12deg) scale(1.15)}
+.sky-float-text{white-space:nowrap}
+@keyframes skyFloatIn{
+  0%{
+    opacity:0;
+    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1.3);
+    box-shadow:0 0 60px rgba(233,69,96,0.3);
+  }
+  9%{
+    opacity:1;
+    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1);
+    box-shadow:0 0 80px rgba(233,69,96,0.5);
+  }
+  30%{
+    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1);
+    box-shadow:0 0 80px rgba(233,69,96,0.5);
+  }
+  58%{
+    transform:translate(0,0) scale(1);
+    box-shadow:0 4px 20px rgba(233,69,96,0.4);
+  }
+  100%{
+    transform:translate(0,0) scale(1);
+    box-shadow:0 4px 20px rgba(233,69,96,0.4);
+  }
+}
+@keyframes skyFloatPulse{
+  0%,100%{box-shadow:0 4px 20px rgba(233,69,96,0.4),0 0 60px rgba(233,69,96,0.12)}
+  50%{box-shadow:0 4px 28px rgba(233,69,96,0.65),0 0 80px rgba(233,69,96,0.25)}
+}
+/* On mobile, smaller + sits above nav */
+@media (max-width:720px){
+  .sky-float-wrap{bottom:16px;right:16px}
+  .sky-float-wrap .sky-float{height:42px;padding:0 14px 0 10px;font-size:13px}
+  .sky-float-icon{font-size:16px}
+  @keyframes skyFloatIn{
+    0%{
+      opacity:0;
+      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1.3);
+      box-shadow:0 0 60px rgba(233,69,96,0.3);
+    }
+    9%{
+      opacity:1;
+      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1);
+      box-shadow:0 0 80px rgba(233,69,96,0.5);
+    }
+    30%{
+      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1);
+      box-shadow:0 0 80px rgba(233,69,96,0.5);
+    }
+    58%{
+      transform:translate(0,0) scale(1);
+      box-shadow:0 4px 20px rgba(233,69,96,0.4);
+    }
+    100%{
+      transform:translate(0,0) scale(1);
+      box-shadow:0 4px 20px rgba(233,69,96,0.4);
+    }
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .sky-float-wrap{animation:none!important;opacity:1!important;transform:none!important}
+  .sky-float-wrap .sky-float:hover{transform:scale(1.06)}
+}
+
+/* ── Sky Search modal ── */
+.modal-overlay{
+  position:fixed;inset:0;z-index:9999;
+  background:rgba(0,0,0,0.7);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;visibility:hidden;
+  transition:opacity 0.3s ease,visibility 0.3s ease;
+}
+.modal-overlay.visible{opacity:1;visibility:visible}
+.modal-content{
+  position:relative;
+  max-width:520px;width:92%;
+  max-height:calc(100dvh - 32px);overflow-y:auto;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:20px;padding:36px 32px 28px;
+  box-shadow:0 32px 64px rgba(0,0,0,0.5);
+  transform:translateY(20px);
+  transition:transform 0.3s ease;
+}
+.modal-overlay.visible .modal-content{transform:translateY(0)}
+.modal-close{
+  position:absolute;top:16px;right:18px;
+  background:none;border:none;cursor:pointer;
+  font-family:inherit;font-size:22px;line-height:1;
+  color:var(--muted);padding:4px 8px;border-radius:6px;
+  transition:color 0.2s,background 0.2s;
+}
+.modal-close:hover{color:var(--text);background:rgba(255,255,255,0.08)}
+.modal-content h2{
+  font-size:22px;font-weight:600;color:var(--text);
+  margin-bottom:6px;
+}
+.modal-sub{
+  font-size:14px;color:var(--text-soft);line-height:1.6;
+  margin-bottom:20px;
+}
+.modal-features{list-style:none;padding:0;margin:0 0 24px}
+.modal-features li{
+  position:relative;padding:10px 0 10px 20px;
+  font-size:13px;color:var(--text-soft);line-height:1.55;
+  border-top:1px solid var(--border);
+}
+.modal-features li:first-child{border-top:none}
+.modal-features li::before{
+  content:'';position:absolute;left:0;top:16px;
+  width:6px;height:6px;border-radius:50%;
+  background:var(--accent);
+}
+.modal-features li strong{color:var(--text)}
+.modal-cta{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:10px 22px;
+  background:var(--accent);color:#fff;
+  border-radius:999px;font-size:13px;font-weight:600;
+  text-decoration:none;letter-spacing:0.3px;
+  transition:box-shadow 0.2s,background 0.2s;
+}
+.modal-cta:hover{box-shadow:0 0 24px var(--accent-glow);background:var(--accent)}
+/* ── end Sky Search modal ── */"""
+
 LANDING_V2_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1251,7 +1402,8 @@ LANDING_V2_HTML = r"""<!DOCTYPE html>
 :root{
   --bg:#0a0a0f;--surface:#111119;--subtle:#222;
   --accent:#e94560;--accent-glow:rgba(233,69,96,0.15);
-  --text:#e8e8ec;--muted:#666;
+  --text:#e8e8ec;--text-soft:#b8b8c0;--muted:#666;
+  --border:rgba(255,255,255,0.08);--border-strong:rgba(255,255,255,0.16);
 }
 body{
   font-family:'Inter',sans-serif;
@@ -1400,7 +1552,7 @@ body::before{
   border:1px solid rgba(233,69,96,0.4);
   border-radius:999px;
   color:var(--accent);
-  font-size:13px;font-weight:500;letter-spacing:0.8px;
+  font-family:inherit;font-size:13px;font-weight:500;letter-spacing:0.8px;
   text-transform:uppercase;text-decoration:none;
   animation:fadeIn 1s ease-out 2.9s both;
   transition:all 0.3s ease;
@@ -1410,6 +1562,7 @@ body::before{
   box-shadow:0 0 24px var(--accent-glow);
 }
 
+<!-- SKY_SEARCH_STYLES -->
 .more-toggle-btn{
   display:flex;align-items:center;justify-content:center;gap:8px;
   margin:32px auto 0;padding:8px 0;
@@ -1685,7 +1838,6 @@ body::before{
   </div>
   <a href="/demo" class="cta">Try it free &rarr;</a>
   <div class="tagline">Your browser. Your data. No walls.</div>
-  <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
   <div class="scroll-hint" onclick="document.querySelector('.mock-section').scrollIntoView({behavior:'smooth'})">
     <span>&#8595;</span>
     watch it work
@@ -1911,6 +2063,30 @@ body::before{
       <div class="card-desc">From market research to published listing in one conversation. The agent researched comps, negotiated pricing, caught lease typos, scheduled tours, and published&mdash;all hands-free.</div>
       <a href="/case-study/zillow-rental" class="card-btn">Read Case Study &#8594;</a>
     </div>
+  </div>
+</div>
+
+<!-- Sky Search floating trigger -->
+<div class="sky-float-wrap">
+<button class="sky-search-link sky-float">
+  <span class="sky-float-icon">&#9906;</span>
+  <span class="sky-float-text">Sky Search</span>
+</button>
+</div>
+
+<!-- Sky Search modal -->
+<div id="skymodal2" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="skymodal2-title">
+  <div class="modal-content">
+    <button class="modal-close" aria-label="Close">&times;</button>
+    <h2 id="skymodal2-title">Sky Search</h2>
+    <p class="modal-sub">AI-powered search that <em>actually browses the web</em> &mdash; no install, no API keys needed.</p>
+    <ul class="modal-features">
+      <li><strong>Real browsing with rendering</strong> &mdash; visits live pages, executes JavaScript, reads the actual content, not cached excerpts.</li>
+      <li><strong>Full source audit</strong> &mdash; every fact links back to the page and element it came from. No black boxes.</li>
+      <li><strong>Works on any website</strong> &mdash; SPAs, login-walled pages, JavaScript-heavy dashboards. If Chrome renders it, Sky Search reads it.</li>
+      <li><strong>Shareable results</strong> &mdash; each search produces a canonical URL with the full audit trace and agent navigation path.</li>
+    </ul>
+    <a href="https://search.unchainedsky.com/" class="modal-cta">Try Sky Search &rarr;</a>
   </div>
 </div>
 
@@ -2246,6 +2422,37 @@ if ('IntersectionObserver' in window) {
   }, {threshold: 0.3});
   mockObserver.observe(document.getElementById('mock-section'));
 }
+// Sky Search modal helpers
+(function(){
+  var m=document.getElementById('skymodal2');
+  if(!m)return;
+  var wrap=m.previousElementSibling;
+  var trigger=wrap&&wrap.querySelector?wrap.querySelector('.sky-float'):null;
+  function openModal(){
+    m.classList.add('visible');
+    var closeBtn=m.querySelector('.modal-close');
+    if(closeBtn) setTimeout(function(){closeBtn.focus();},100);
+  }
+  function closeModal(){
+    m.classList.remove('visible');
+    if(trigger&&trigger.focus) setTimeout(function(){trigger.focus();},100);
+  }
+  m._open=openModal; m._close=closeModal;
+  m.addEventListener('click',function(e){if(e.target===this)m._close();});
+  var closeBtn=m.querySelector('.modal-close');if(closeBtn)closeBtn.addEventListener('click',m._close);
+  if(trigger) trigger.addEventListener('click',openModal);
+  document.addEventListener('keydown',function(e){
+    if(!m.classList.contains('visible'))return;
+    if(e.key==='Escape'){closeModal();return}
+    if(e.key==='Tab'){
+      var f=m.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if(!f.length)return;
+      var first=f[0],last=f[f.length-1];
+      if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}
+      else{if(document.activeElement===last){e.preventDefault();first.focus();}}
+    }
+  });
+})();
 </script>
 </body>
 </html>"""
@@ -2342,7 +2549,6 @@ body::after{
   .hero-brand .cta-primary-big,
   .hero-brand .cta-secondary,
   .hero-brand .tagline,
-  .hero-brand .sky-search-link,
   .hero-brand .scroll-hint,
   .hero-act-strip,
   .hero-product,
@@ -2574,13 +2780,15 @@ a{color:inherit;text-decoration:none}
   animation:landingRestFade 0.95s ease-out 3.65s both;
 }
 .hero-brand .sky-search-link{
-  order:8;
+  order:8;font-family:inherit;cursor:pointer;appearance:none;
   margin-top:18px;font-size:13px;color:var(--muted);
-  border-bottom:1px dashed var(--border-strong);
-  padding-bottom:2px;letter-spacing:1px;
+  border:none;border-bottom:1px dashed var(--border-strong);
+  background:none;padding:0 0 2px;letter-spacing:1px;
   animation:landingRestFade 0.95s ease-out 3.75s both;
 }
 .hero-brand .sky-search-link:hover{color:var(--text);border-color:var(--accent)}
+
+<!-- SKY_SEARCH_STYLES -->
 .hero-act-strip{
   order:6;
   display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;
@@ -3515,7 +3723,6 @@ a{color:inherit;text-decoration:none}
     <a href="#use-cases" class="hero-act-card"><b>Result</b><span>See what people actually run.</span></a>
   </div>
   <div class="tagline">Your browser. Your data. No walls.</div>
-  <a href="https://search.unchainedsky.com/" class="sky-search-link">Sky Search &rarr;</a>
   <a class="scroll-hint" href="#what">
     <span class="arrow">&#8595;</span>
     What is it
@@ -3790,6 +3997,30 @@ a{color:inherit;text-decoration:none}
     </div>
   </div>
 </section>
+
+<!-- Sky Search floating trigger -->
+<div class="sky-float-wrap">
+<button class="sky-search-link sky-float">
+  <span class="sky-float-icon">&#9906;</span>
+  <span class="sky-float-text">Sky Search</span>
+</button>
+</div>
+
+<!-- Sky Search modal -->
+<div id="skymodal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="skymodal-title">
+  <div class="modal-content">
+    <button class="modal-close" aria-label="Close">&times;</button>
+    <h2 id="skymodal-title">Sky Search</h2>
+    <p class="modal-sub">AI-powered search that <em>actually browses the web</em> &mdash; no install, no API keys needed.</p>
+    <ul class="modal-features">
+      <li><strong>Real browsing with rendering</strong> &mdash; visits live pages, executes JavaScript, reads the actual content, not cached excerpts.</li>
+      <li><strong>Full source audit</strong> &mdash; every fact links back to the page and element it came from. No black boxes.</li>
+      <li><strong>Works on any website</strong> &mdash; SPAs, login-walled pages, JavaScript-heavy dashboards. If Chrome renders it, Sky Search reads it.</li>
+      <li><strong>Shareable results</strong> &mdash; each search produces a canonical URL with the full audit trace and agent navigation path.</li>
+    </ul>
+    <a href="https://search.unchainedsky.com/" class="modal-cta">Try Sky Search &rarr;</a>
+  </div>
+</div>
 
 <!-- Footer -->
 <footer class="footer">
@@ -5092,6 +5323,37 @@ async function runScenario(key) {
     .then(data => { btn.textContent = landingRouteLabel(route, !!data.authenticated); })
     .catch(() => { btn.textContent = landingRouteLabel(route, false); });
 })();
+// Sky Search modal helpers
+(function(){
+  var m=document.getElementById('skymodal');
+  if(!m)return;
+  var wrap=m.previousElementSibling;
+  var trigger=wrap&&wrap.querySelector?wrap.querySelector('.sky-float'):null;
+  function openModal(){
+    m.classList.add('visible');
+    var closeBtn=m.querySelector('.modal-close');
+    if(closeBtn) setTimeout(function(){closeBtn.focus();},100);
+  }
+  function closeModal(){
+    m.classList.remove('visible');
+    if(trigger&&trigger.focus) setTimeout(function(){trigger.focus();},100);
+  }
+  m._open=openModal; m._close=closeModal;
+  m.addEventListener('click',function(e){if(e.target===this)m._close();});
+  var closeBtn=m.querySelector('.modal-close');if(closeBtn)closeBtn.addEventListener('click',m._close);
+  if(trigger) trigger.addEventListener('click',openModal);
+  document.addEventListener('keydown',function(e){
+    if(!m.classList.contains('visible'))return;
+    if(e.key==='Escape'){closeModal();return}
+    if(e.key==='Tab'){
+      var f=m.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if(!f.length)return;
+      var first=f[0],last=f[f.length-1];
+      if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}
+      else{if(document.activeElement===last){e.preventDefault();first.focus();}}
+    }
+  });
+})();
 </script>
 </body>
 </html>"""
@@ -5100,6 +5362,8 @@ async function runScenario(key) {
 # V3 is now the default landing. V2 still served on ?ui=v2 (cookie persists
 # 24h via handle_index) so previous visitors and bookmarks keep working.
 # V1 preserved as LANDING_V1_HTML for rollback.
+LANDING_V3_HTML = LANDING_V3_HTML.replace('<!-- SKY_SEARCH_STYLES -->', _SKY_SEARCH_STYLES)
+LANDING_V2_HTML = LANDING_V2_HTML.replace('<!-- SKY_SEARCH_STYLES -->', _SKY_SEARCH_STYLES)
 LANDING_HTML = LANDING_V3_HTML
 
 
