@@ -21,6 +21,7 @@ See also: chat_agent_sdk.py (production Anthropic SDK lane)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -1379,6 +1380,14 @@ active_tasks: dict[str, asyncio.Task] = {}
 # Using PID avoids race conditions when a new turn starts on the same session_id.
 user_cancelled_pids: set[int] = set()
 
+_OPENCODE_STALE_SIGNALS = (
+    "session not found",
+    "invalid session",
+    "sessionid",
+    "not found",
+    "does not exist",
+)
+
 
 def _make_emitter(ws, sid: str, req_id: str):
     """Return an async helper that tags every event with session_id and req_id."""
@@ -1388,6 +1397,39 @@ def _make_emitter(ws, sid: str, req_id: str):
             evt["req_id"] = req_id
         await ws.send(json.dumps(evt))
     return emit
+
+
+def _extract_opencode_error_message(event: dict) -> str:
+    """Return a best-effort error message from an OpenCode error event."""
+    err = event.get("error")
+    if isinstance(err, dict):
+        data = err.get("data") if isinstance(err.get("data"), dict) else {}
+        msg = data.get("message") or err.get("message") or err.get("name")
+    else:
+        msg = err
+    if isinstance(msg, str):
+        return msg.strip()
+    return ""
+
+
+def _is_stale_opencode_error(msg: str) -> bool:
+    """Detect stale OpenCode session errors that should trigger resume retry."""
+    low = (msg or "").lower()
+    return any(signal in low for signal in _OPENCODE_STALE_SIGNALS)
+
+
+def _kill_process(proc):
+    """Best-effort teardown for a running subprocess."""
+    proc_pid = getattr(proc, "pid", None)
+    if not isinstance(proc_pid, int):
+        return
+    try:
+        os.killpg(proc_pid, 9)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            return
 
 
 def check_chrome_bridge(cdp_agent_id: str = "") -> bool:
@@ -2513,150 +2555,178 @@ async def handle_message_opencode(
     await proc.stdin.drain()
     proc.stdin.close()
 
+    # Read stderr concurrently to avoid deadlock if provider failures produce
+    # verbose error output while stdout stream appears alive.
+    stderr_task = asyncio.create_task(proc.stderr.read())
+
     response_parts: list[str] = []
     error_text = ""
     seen_text_parts: set[str] = set()
     seen_tool_parts: set[str] = set()
 
-    async for raw_line in proc.stdout:
-        if not raw_line:
-            break
-        line = raw_line.decode(errors="replace").strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        event_sid = str(event.get("sessionID") or "").strip()
-        if event_sid and not opencode_sessions.get(sid):
-            opencode_sessions[sid] = event_sid
-            _save_opencode_session(sid, event_sid, model=opencode_model)
-            if not is_resume:
-                print(f"  OpenCode session: {event_sid[:12]}...")
-
-        etype = event.get("type", "")
-        if etype == "text":
-            part = event.get("part") if isinstance(event.get("part"), dict) else {}
-            part_id = str(part.get("id") or "").strip()
-            if part_id and part_id in seen_text_parts:
+    try:
+        async for raw_line in proc.stdout:
+            if not raw_line:
+                break
+            line = raw_line.decode(errors="replace").strip()
+            if not line:
                 continue
-            text = str(part.get("text") or "").strip()
-            if text:
-                response_parts.append(text)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_sid = str(event.get("sessionID") or "").strip()
+            if event_sid and not opencode_sessions.get(sid):
+                opencode_sessions[sid] = event_sid
+                _save_opencode_session(sid, event_sid, model=opencode_model)
+                if not is_resume:
+                    print(f"  OpenCode session: {event_sid[:12]}...")
+
+            etype = event.get("type", "")
+            if etype == "text":
+                part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                part_id = str(part.get("id") or "").strip()
+                if part_id and part_id in seen_text_parts:
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    response_parts.append(text)
+                    if part_id:
+                        seen_text_parts.add(part_id)
+                continue
+
+            if etype == "tool_use":
+                part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                part_id = str(part.get("id") or "").strip()
+                if part_id and part_id in seen_tool_parts:
+                    continue
                 if part_id:
-                    seen_text_parts.add(part_id)
-            continue
+                    seen_tool_parts.add(part_id)
+                tool_name, tool_input = _opencode_tool_name_and_input(part)
+                out = _opencode_tool_output(part)
+                await emit({
+                    "type": "tool_start",
+                    "name": tool_name,
+                    "input": tool_input,
+                })
 
-        if etype == "tool_use":
-            part = event.get("part") if isinstance(event.get("part"), dict) else {}
-            part_id = str(part.get("id") or "").strip()
-            if part_id and part_id in seen_tool_parts:
+                is_screenshot = False
+                screenshot_data = None
+                if "saved:" in out and "screenshot captured" in out:
+                    try:
+                        sc_path = out.split("saved:")[1].rstrip("]").strip()
+                        with open(sc_path, "r") as f:
+                            screenshot_data = f.read()
+                        is_screenshot = _is_base64_png_blob(screenshot_data)
+                    except Exception as e:
+                        log.info("  OpenCode screenshot read failed: %s", e)
+                elif _is_base64_png_blob(out):
+                    screenshot_data = out
+                    is_screenshot = True
+
+                if is_screenshot and screenshot_data:
+                    await emit({
+                        "type": "tool_result",
+                        "name": tool_name,
+                        "data": screenshot_data,
+                        "is_screenshot": True,
+                        "visible": True,
+                    })
+                else:
+                    await emit({
+                        "type": "tool_result",
+                        "name": tool_name,
+                        "data": out[:12000],
+                        "is_screenshot": False,
+                        "visible": None,
+                    })
                 continue
-            if part_id:
-                seen_tool_parts.add(part_id)
-            tool_name, tool_input = _opencode_tool_name_and_input(part)
-            out = _opencode_tool_output(part)
-            await emit({
-                "type": "tool_start",
-                "name": tool_name,
-                "input": tool_input,
-            })
 
-            is_screenshot = False
-            screenshot_data = None
-            if "saved:" in out and "screenshot captured" in out:
-                try:
-                    sc_path = out.split("saved:")[1].rstrip("]").strip()
-                    with open(sc_path, "r") as f:
-                        screenshot_data = f.read()
-                    is_screenshot = _is_base64_png_blob(screenshot_data)
-                except Exception as e:
-                    log.info("  OpenCode screenshot read failed: %s", e)
-            elif _is_base64_png_blob(out):
-                screenshot_data = out
-                is_screenshot = True
+            if etype == "error":
+                err_msg = _extract_opencode_error_message(event)
+                if err_msg:
+                    error_text = err_msg
+                if is_resume and _is_stale_opencode_error(error_text):
+                    continue
+                if not error_text:
+                    error_text = "OpenCode CLI error"
+                await emit({"type": "error", "data": f"OpenCode CLI error: {error_text}"})
+                await emit({"type": "done"})
+                if proc.returncode is None:
+                    _kill_process(proc)
+                return
 
-            if is_screenshot and screenshot_data:
-                await emit({
-                    "type": "tool_result",
-                    "name": tool_name,
-                    "data": screenshot_data,
-                    "is_screenshot": True,
-                    "visible": True,
-                })
-            else:
-                await emit({
-                    "type": "tool_result",
-                    "name": tool_name,
-                    "data": out[:12000],
-                    "is_screenshot": False,
-                    "visible": None,
-                })
-            continue
+        await proc.wait()
 
-        if etype == "error":
-            err = event.get("error")
-            if isinstance(err, dict):
-                data = err.get("data") if isinstance(err.get("data"), dict) else {}
-                msg = data.get("message") or err.get("message") or err.get("name")
-            else:
-                msg = err
-            if isinstance(msg, str) and msg.strip():
-                error_text = msg.strip()
-            continue
+        response = "\n\n".join(part for part in response_parts if part).strip()
 
-    await proc.wait()
+        if proc.returncode and proc.returncode < 0:
+            proc_pid = getattr(proc, "pid", None)
+            was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
+            if isinstance(proc_pid, int):
+                user_cancelled_pids.discard(proc_pid)
+            if was_user_cancel:
+                return
+            if not response:
+                sig = -proc.returncode
+                response = f"OpenCode CLI terminated unexpectedly (signal {sig})."
 
-    response = "\n\n".join(part for part in response_parts if part).strip()
-
-    if proc.returncode and proc.returncode < 0:
-        proc_pid = getattr(proc, "pid", None)
-        was_user_cancel = isinstance(proc_pid, int) and proc_pid in user_cancelled_pids
-        if isinstance(proc_pid, int):
-            user_cancelled_pids.discard(proc_pid)
-        if was_user_cancel:
-            return
         if not response:
-            sig = -proc.returncode
-            response = f"OpenCode CLI terminated unexpectedly (signal {sig})."
+            stderr_bytes = b""
+            if stderr_task is not None:
+                try:
+                    stderr_bytes = await stderr_task
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    stderr_bytes = b""
+            stderr_text = stderr_bytes.decode(errors="replace").strip()
+            combined_err = (error_text + " " + stderr_text).lower()
+            if is_resume and _is_stale_opencode_error(combined_err):
+                log.info(
+                    "  OpenCode stale session (%s), starting fresh",
+                    (error_text or stderr_text or f"exit code {proc.returncode}")[:120],
+                )
+                opencode_sessions.pop(sid, None)
+                _clear_opencode_session()
+                await asyncio.sleep(1)
+                return await handle_message_opencode(
+                    ws,
+                    sid,
+                    user_text,
+                    model,
+                    tab_id=tab_id,
+                    cdp_agent_id=cdp_agent_id,
+                    scheduler_armed=scheduler_armed,
+                    scheduler_grant_id=scheduler_grant_id,
+                    req_id=req_id,
+                )
+            if error_text:
+                response = f"OpenCode CLI error: {error_text}"
+            elif stderr_text:
+                response = f"OpenCode CLI error: {stderr_text}"
+            elif proc.returncode != 0:
+                response = f"OpenCode CLI error: exit code {proc.returncode}"
+            else:
+                response = "OpenCode CLI finished without a final response."
 
-    if not response:
-        stderr_text = (await proc.stderr.read()).decode(errors="replace").strip()
-        _stale_signals = ("session not found", "invalid session", "sessionid", "not found", "does not exist")
-        combined_err = (error_text + " " + stderr_text).lower()
-        if is_resume and any(s in combined_err for s in _stale_signals):
-            log.info(
-                "  OpenCode stale session (%s), starting fresh",
-                (error_text or stderr_text or f"exit code {proc.returncode}")[:120],
-            )
-            opencode_sessions.pop(sid, None)
-            _clear_opencode_session()
-            await asyncio.sleep(1)
-            return await handle_message_opencode(
-                ws,
-                sid,
-                user_text,
-                model,
-                tab_id=tab_id,
-                cdp_agent_id=cdp_agent_id,
-                scheduler_armed=scheduler_armed,
-                scheduler_grant_id=scheduler_grant_id,
-                req_id=req_id,
-            )
-        if error_text:
-            response = f"OpenCode CLI error: {error_text}"
-        elif stderr_text:
-            response = f"OpenCode CLI error: {stderr_text}"
-        elif proc.returncode != 0:
-            response = f"OpenCode CLI error: exit code {proc.returncode}"
-        else:
-            response = "OpenCode CLI finished without a final response."
-
-    _append_message("assistant", response)
-    await emit({"type": "text", "data": response})
-    await emit({"type": "done"})
+        _append_message("assistant", response)
+        await emit({"type": "text", "data": response})
+        await emit({"type": "done"})
+    except asyncio.CancelledError:
+        # Upstream request cancellation is handled by /web/chat/cancel. Do not
+        # inject duplicate terminal events.
+        raise
+    except Exception:
+        log.exception("OpenCode handler error for session %s", sid)
+        await emit({"type": "error", "data": "OpenCode CLI failed while handling response."})
+        await emit({"type": "done"})
+    finally:
+        if stderr_task is not None and not stderr_task.done():
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
 
 
 async def handle_message(
