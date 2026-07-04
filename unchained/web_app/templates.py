@@ -1226,6 +1226,8 @@ ssrf_guard: enabled</pre>
 _SKY_SEARCH_STYLES = r"""/* ── Sky Search floating trigger ── */
 .sky-float-wrap{
   position:fixed;bottom:24px;right:24px;z-index:9998;
+  display:inline-flex;width:auto;height:auto;
+  background:transparent;padding:0;margin:0;border:none;
   animation:skyFloatIn 3.5s ease 2.5s both,
              skyFloatPulse 3s ease-in-out 6s infinite;
 }
