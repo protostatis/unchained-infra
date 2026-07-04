@@ -8715,6 +8715,8 @@ async function doSend() {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
             appendText(bubble, 'Error: ' + evt.data);
+            try { await reader.cancel(); } catch(e) {}
+            return;
           } else if (evt.type === 'done') {
             _finalizeGroup();
             document.getElementById('agent-bar').classList.remove('active');
@@ -10112,6 +10114,8 @@ async function doSend() {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
             appendText(bubble, 'Error: ' + evt.data);
+            try { await reader.cancel(); } catch(e) {}
+            return;
           } else if (evt.type === 'done') {
             _finalizeGroup();
             document.getElementById('agent-bar').classList.remove('active');
@@ -12649,6 +12653,8 @@ async function doSend() {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
             appendText(bubble, 'Error: ' + evt.data);
+            try { await reader.cancel(); } catch(e) {}
+            return;
           } else if (evt.type === 'done') {
             _finalizeGroup();
             document.getElementById('agent-bar').classList.remove('active');
@@ -15199,6 +15205,8 @@ async function doSend() {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
             appendText(bubble, 'Error: ' + evt.data);
+            try { await reader.cancel(); } catch(e) {}
+            return;
           } else if (evt.type === 'done') {
             _finalizeGroup();
             document.getElementById('agent-bar').classList.remove('active');

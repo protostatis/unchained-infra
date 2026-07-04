@@ -818,16 +818,52 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         )
 
     stream_completed = False
+    last_stream_event_at = time.time()
+    local_cli_silence_timeout_s = 60 if (is_codex_cli or is_opencode_cli) else 0
     try:
         while True:
             try:
                 evt = await asyncio.wait_for(q.get(), timeout=15)
             except asyncio.TimeoutError:
+                if not use_headless and not is_openrouter and not guest_mode:
+                    current_ws = core._chat_agents.get(chat_agent_id)
+                    if current_ws is not ws or getattr(ws, "closed", False):
+                        evt = {
+                            "type": "error",
+                            "data": "Local agent disconnected before completing this response. Please retry after the client reconnects.",
+                            "session_id": session_id,
+                        }
+                        if req_id:
+                            evt["req_id"] = req_id
+                        await resp.write(f"data: {json.dumps(evt)}\n\n".encode())
+                        done_evt = {"type": "done", "session_id": session_id}
+                        if req_id:
+                            done_evt["req_id"] = req_id
+                        await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
+                        stream_completed = True
+                        break
+                if local_cli_silence_timeout_s and time.time() - last_stream_event_at >= local_cli_silence_timeout_s:
+                    evt = {
+                        "type": "error",
+                        "data": "Local CLI did not return a response in time. The provider may be rate-limited or stalled; please retry or switch models.",
+                        "session_id": session_id,
+                    }
+                    if req_id:
+                        evt["req_id"] = req_id
+                    await resp.write(f"data: {json.dumps(evt)}\n\n".encode())
+                    done_evt = {"type": "done", "session_id": session_id}
+                    if req_id:
+                        done_evt["req_id"] = req_id
+                    await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
+                    stream_completed = True
+                    break
                 try:
                     await resp.write(b": keepalive\n\n")
                 except (ConnectionResetError, Exception):
                     break
                 continue
+
+            last_stream_event_at = time.time()
 
             sse = f"data: {json.dumps(evt)}\n\n"
             try:
@@ -838,7 +874,18 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             # Broadcast to overlay copilot subscribers
             _broadcast_overlay(session_id, evt)
 
-            if evt.get("type") == "done" or evt.get("type") == "error":
+            if evt.get("type") == "error":
+                done_evt = {"type": "done", "session_id": session_id}
+                if req_id:
+                    done_evt["req_id"] = req_id
+                try:
+                    await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
+                except (ConnectionResetError, Exception):
+                    pass
+                stream_completed = True
+                break
+
+            if evt.get("type") == "done":
                 stream_completed = True
                 break
     finally:
