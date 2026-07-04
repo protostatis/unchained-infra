@@ -256,6 +256,37 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_types, ["tool_start", "tool_result", "text", "done"])
         self.assertEqual(ws.events[2]["data"], "Only once")
 
+    async def test_opencode_explicit_error_event_emits_done(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        lines = [
+            json.dumps(
+                {
+                    "type": "error",
+                    "sessionID": "oc-session-1",
+                    "error": {
+                        "message": "tool execution failed",
+                    },
+                }
+            )
+        ]
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return _FakeProc(lines)
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            await mod.handle_message_opencode(
+                ws,
+                "s-claude-abc12345-test",
+                "Use the browser",
+                "opencode-cli:",
+                cdp_agent_id="claude-abc12345",
+            )
+
+        event_types = [evt["type"] for evt in ws.events]
+        self.assertEqual(event_types, ["error", "done"])
+        self.assertEqual(ws.events[0]["data"], "OpenCode CLI error: tool execution failed")
+
     def test_opencode_model_list_parses_cli_lines(self):
         mod = self._load_module()
 
