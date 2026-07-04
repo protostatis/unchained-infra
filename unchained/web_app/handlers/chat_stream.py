@@ -818,6 +818,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         )
 
     stream_completed = False
+    last_stream_event_at = time.time()
+    local_cli_silence_timeout_s = 60 if (is_codex_cli or is_opencode_cli) else 0
     try:
         while True:
             try:
@@ -840,11 +842,28 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
                         stream_completed = True
                         break
+                if local_cli_silence_timeout_s and time.time() - last_stream_event_at >= local_cli_silence_timeout_s:
+                    evt = {
+                        "type": "error",
+                        "data": "Local CLI did not return a response in time. The provider may be rate-limited or stalled; please retry or switch models.",
+                        "session_id": session_id,
+                    }
+                    if req_id:
+                        evt["req_id"] = req_id
+                    await resp.write(f"data: {json.dumps(evt)}\n\n".encode())
+                    done_evt = {"type": "done", "session_id": session_id}
+                    if req_id:
+                        done_evt["req_id"] = req_id
+                    await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
+                    stream_completed = True
+                    break
                 try:
                     await resp.write(b": keepalive\n\n")
                 except (ConnectionResetError, Exception):
                     break
                 continue
+
+            last_stream_event_at = time.time()
 
             sse = f"data: {json.dumps(evt)}\n\n"
             try:
