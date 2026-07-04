@@ -1224,22 +1224,19 @@ ssrf_guard: enabled</pre>
 # ---------------------------------------------------------------------------
 
 _SKY_SEARCH_STYLES = r"""/* ── Sky Search floating trigger ── */
-.sky-float-wrap{
-  position:fixed;bottom:24px;right:24px;z-index:9998;
-  display:inline-flex;width:auto;height:auto;
-  background:transparent;padding:0;margin:0;border:none;
-  animation:skyFloatIn 3.5s ease 2.5s both,
-             skyFloatPulse 3s ease-in-out 6s infinite;
-}
+.sky-float-wrap{display:contents}
 .sky-float-wrap .sky-float{
+  position:fixed;bottom:24px;right:24px;z-index:9998;
   display:inline-flex;align-items:center;gap:10px;
   margin:0;padding:0 20px 0 14px;height:48px;
-  background:var(--accent);color:#fff;border:none;animation:none;
+  background:var(--accent);color:#fff;border:none;
   border-radius:999px;cursor:pointer;font-family:inherit;
   font-size:14px;font-weight:600;letter-spacing:0.5px;
   box-shadow:0 4px 20px rgba(233,69,96,0.4),0 0 60px rgba(233,69,96,0.12);
+  translate:calc(-50vw + 24px + 50%) calc(-50vh + 24px + 50%);
+  animation:skyFloatIn 3.5s ease 2.5s both, skyFloatPulse 3s ease-in-out 6s infinite;
   transition:transform 0.25s cubic-bezier(0.34,1.56,0.64,1),
-              box-shadow 0.25s ease;
+              box-shadow 0.25s ease, translate 0.25s ease;
 }
 .sky-float-wrap .sky-float:hover{
   transform:scale(1.06);
@@ -1255,25 +1252,20 @@ _SKY_SEARCH_STYLES = r"""/* ── Sky Search floating trigger ── */
 @keyframes skyFloatIn{
   0%{
     opacity:0;
-    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1.3);
-    box-shadow:0 0 60px rgba(233,69,96,0.3);
+    translate:calc(-50vw + 24px + 50%) calc(-50vh + 24px + 50%);
   }
   9%{
     opacity:1;
-    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1);
-    box-shadow:0 0 80px rgba(233,69,96,0.5);
+    translate:calc(-50vw + 24px + 50%) calc(-50vh + 24px + 50%);
   }
   30%{
-    transform:translate(calc(-50vw + 24px + 50%), calc(-50vh + 24px + 50%)) scale(1);
-    box-shadow:0 0 80px rgba(233,69,96,0.5);
+    translate:calc(-50vw + 24px + 50%) calc(-50vh + 24px + 50%);
   }
   58%{
-    transform:translate(0,0) scale(1);
-    box-shadow:0 4px 20px rgba(233,69,96,0.4);
+    translate:0 0;
   }
   100%{
-    transform:translate(0,0) scale(1);
-    box-shadow:0 4px 20px rgba(233,69,96,0.4);
+    translate:0 0;
   }
 }
 @keyframes skyFloatPulse{
@@ -1282,36 +1274,31 @@ _SKY_SEARCH_STYLES = r"""/* ── Sky Search floating trigger ── */
 }
 /* On mobile, smaller + sits above nav */
 @media (max-width:720px){
-  .sky-float-wrap{bottom:16px;right:16px}
-  .sky-float-wrap .sky-float{height:42px;padding:0 14px 0 10px;font-size:13px}
+  .sky-float-wrap .sky-float{bottom:16px;right:16px;height:42px;padding:0 14px 0 10px;font-size:13px;translate:calc(-50vw + 16px + 50%) calc(-50vh + 16px + 50%)}
   .sky-float-icon{font-size:16px}
   @keyframes skyFloatIn{
     0%{
       opacity:0;
-      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1.3);
-      box-shadow:0 0 60px rgba(233,69,96,0.3);
+      translate:calc(-50vw + 16px + 50%) calc(-50vh + 16px + 50%);
     }
     9%{
       opacity:1;
-      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1);
-      box-shadow:0 0 80px rgba(233,69,96,0.5);
+      translate:calc(-50vw + 16px + 50%) calc(-50vh + 16px + 50%);
     }
     30%{
-      transform:translate(calc(-50vw + 16px + 50%), calc(-50vh + 16px + 50%)) scale(1);
-      box-shadow:0 0 80px rgba(233,69,96,0.5);
+      translate:calc(-50vw + 16px + 50%) calc(-50vh + 16px + 50%);
     }
     58%{
-      transform:translate(0,0) scale(1);
-      box-shadow:0 4px 20px rgba(233,69,96,0.4);
+      translate:0 0;
     }
     100%{
-      transform:translate(0,0) scale(1);
-      box-shadow:0 4px 20px rgba(233,69,96,0.4);
+      translate:0 0;
     }
   }
 }
 @media (prefers-reduced-motion:reduce){
-  .sky-float-wrap{animation:none!important;opacity:1!important;transform:none!important}
+  .sky-float-wrap{display:contents!important}
+  .sky-float-wrap .sky-float{animation:none!important;translate:0 0!important}
   .sky-float-wrap .sky-float:hover{transform:scale(1.06)}
 }
 
