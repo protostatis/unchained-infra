@@ -17,6 +17,10 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	log {
 		output stderr
 		format json
+		sampling {
+			first 100
+			interval 1000
+		}
 	}
 
 	request_body {

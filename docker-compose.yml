@@ -20,6 +20,11 @@ services:
       - app
       - unbrowser_mcp
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   relay:
     build: .
@@ -34,9 +39,14 @@ services:
     networks:
       - app
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8765,timeout=2); c.request('GET','/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
@@ -56,9 +66,14 @@ services:
     networks:
       - app
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
@@ -86,9 +101,14 @@ services:
     networks:
       - app
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8766,timeout=2); c.request('GET','/mcp'); r=c.getresponse(); c.close(); assert r.status<500,r.status"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
@@ -106,9 +126,14 @@ services:
       - unbrowser_mcp
       - unbrowser_egress_proxy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
@@ -126,9 +151,14 @@ services:
       - unbrowser_egress_proxy
       - egress
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8888),2); s.close()"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
@@ -176,6 +206,11 @@ services:
       - app
       - egress
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   scheduler:
     build:
@@ -195,6 +230,11 @@ services:
     networks:
       - app
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   trial-agent:
     build:
@@ -222,6 +262,11 @@ services:
       - app
       - egress
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   caddy_data:
