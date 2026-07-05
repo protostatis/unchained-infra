@@ -1386,33 +1386,19 @@ class Agent:
             # can block for the full 5s timeout per command.
             resolved = self._extract_tab_id_from_ws_url(ws_url)
 
-            # Force the resolved tab to foreground BEFORE forwarding any
-            # cloud commands. Chrome 147+ silently routes Page.navigate
-            # to the omnibox AI Mode (AIM) popup target instead of the
-            # requested tab when the requested tab isn't the active
-            # foreground page — content ends up rendering inside the URL
-            # bar dropdown rather than the visible tab. Verified
-            # empirically: without this call, navigate(example.com) on
-            # the visible tab's WS rewrites the chrome://omnibox-popup
-            # target's URL to example.com and leaves the visible tab
-            # untouched. With this call, the visible tab navigates
-            # correctly and the AIM target stays at chrome://. See
-            # field-report investigation 2026-04-29.
-            if tab_id != "browser":
-                try:
-                    bid = random.randint(2**28, 2**30)
-                    await chrome_ws.send(json.dumps(
-                        {"id": bid, "method": "Page.bringToFront"}
-                    ))
-                    while True:
-                        raw = await asyncio.wait_for(chrome_ws.recv(), timeout=2)
-                        msg = json.loads(raw)
-                        if msg.get("id") == bid:
-                            break
-                except Exception as e:
-                    # Best-effort: failure here shouldn't block tab usage.
-                    print(f"[agent] Page.bringToFront failed (non-fatal): {e}")
-
+            # NOTE: Page.bringToFront was removed from here — it was
+            # originally added as a workaround for Chrome 147+ silently
+            # routing Page.navigate to the omnibox AI Mode (AIM) popup
+            # when the target tab wasn't active. However, firing it on
+            # every channel open (DDM, click, type, JS eval, etc.)
+            # caused Chrome to repeatedly steal macOS focus.
+            #
+            # The bringToFront preflight is now done server-side, only
+            # before Page.navigate commands, via _aim_safe_navigate()
+            # in the private core engine. See PR #57.
+            #
+            # need_stealth still fires per-channel — it's lightweight
+            # and doesn't affect focus.
             need_stealth = (
                 tab_id != "browser"
                 and resolved
