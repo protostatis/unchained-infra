@@ -109,6 +109,11 @@ DEFAULT_OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "").strip()
 OPENCODE_AGENT = os.environ.get("OPENCODE_AGENT", "").strip()
 OPENCODE_VARIANT = os.environ.get("OPENCODE_VARIANT", "").strip()
 OPENCODE_MODELS_REFRESH = os.environ.get("OPENCODE_MODELS_REFRESH", "").strip().lower() in {"1", "true", "yes"}
+try:
+    OPENCODE_RUN_TIMEOUT_S = float(os.environ.get("OPENCODE_RUN_TIMEOUT_S", "300"))
+except ValueError:
+    OPENCODE_RUN_TIMEOUT_S = 300.0
+    log.warning("Invalid OPENCODE_RUN_TIMEOUT_S, using default 300")
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -2443,6 +2448,18 @@ async def handle_message_codex(
         pass
 
 
+async def _opencode_timeout_guard(
+    proc: asyncio.subprocess.Process,
+    sid: str,
+    timeout_s: float,
+) -> None:
+    """Kill the opencode subprocess if it runs past the wall-clock timeout."""
+    await asyncio.sleep(timeout_s)
+    if proc.returncode is None:
+        log.warning("OpenCode timed out after %ss for session %s", timeout_s, sid)
+        _kill_process(proc)
+
+
 async def handle_message_opencode(
     ws,
     sid: str,
@@ -2558,6 +2575,11 @@ async def handle_message_opencode(
     # Read stderr concurrently to avoid deadlock if provider failures produce
     # verbose error output while stdout stream appears alive.
     stderr_task = asyncio.create_task(proc.stderr.read())
+
+    # Timeout guard: kills the subprocess if it runs past the wall-clock limit.
+    timeout_guard_task = asyncio.create_task(
+        _opencode_timeout_guard(proc, sid, OPENCODE_RUN_TIMEOUT_S)
+    )
 
     response_parts: list[str] = []
     error_text = ""
@@ -2720,13 +2742,44 @@ async def handle_message_opencode(
         raise
     except Exception:
         log.exception("OpenCode handler error for session %s", sid)
-        await emit({"type": "error", "data": "OpenCode CLI failed while handling response."})
+        # Best-effort: surface whatever context the failed process left behind
+        _err_detail = error_text or ""
+        if not _err_detail and proc is not None and proc.returncode is not None:
+            if proc.returncode < 0:
+                _err_detail = f"killed (signal {-proc.returncode})"
+            elif proc.returncode != 0:
+                _err_detail = f"exit code {proc.returncode}"
+        if not _err_detail:
+            _stderr = ""
+            if stderr_task is not None and stderr_task.done() and not stderr_task.cancelled():
+                try:
+                    _stderr = (stderr_task.result() or b"").decode(errors="replace").strip()[:400]
+                except Exception:
+                    pass
+            if _stderr:
+                _err_detail = _stderr.split("\n")[-1][:200]
+        if not _err_detail:
+            _err_detail = "OpenCode CLI failed while handling response."
+        await emit({"type": "error", "data": _err_detail})
         await emit({"type": "done"})
     finally:
-        if stderr_task is not None and not stderr_task.done():
-            stderr_task.cancel()
+        # Cancel the timeout guard so it doesn't kill a process that already
+        # completed normally.
+        if timeout_guard_task is not None and not timeout_guard_task.done():
+            timeout_guard_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
+                await timeout_guard_task
+        # Consume stderr_task — handle both running and already-failed cases
+        # so a silently stored exception doesn't mask the original error.
+        if stderr_task is not None:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            try:
                 await stderr_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.debug("OpenCode stderr reader failed for session %s", sid, exc_info=True)
 
 
 async def handle_message(
