@@ -1395,7 +1395,7 @@ class Agent:
             #
             # The bringToFront preflight is now done server-side, only
             # before Page.navigate commands, via _aim_safe_navigate()
-            # in the private core engine. See PR #XXX.
+            # in the private core engine. See PR #57.
             #
             # need_stealth still fires per-channel — it's lightweight
             # and doesn't affect focus.
