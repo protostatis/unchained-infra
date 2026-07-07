@@ -1277,12 +1277,6 @@ body {
   position:relative; letter-spacing:-0.02em;
 }
 .hero h1 em { font-style:italic; font-weight:400; color:var(--cost); }
-.hero h1 .chrome-tax-link {
-  color:inherit; text-decoration:none;
-  border-bottom:2px solid var(--cost);
-  transition:opacity 0.2s;
-}
-.hero h1 .chrome-tax-link:hover { opacity:0.7; }
 .hero-sub {
   font-size:1.1rem; color:var(--text-sec); max-width:580px;
   margin-bottom:3rem; position:relative;
@@ -1496,7 +1490,7 @@ body {
 .capability-table td.yes { color:var(--savings); }
 .capability-table td.no { color:var(--dim); }
 .capability-table td.partial { color:var(--warning); }
-.capability-table tr.highlight td { background:var(--accent-dim); }
+.capability-table td.highlight { background:var(--accent-dim); }
 .cap-icon { font-size:1.1rem; }
 
 /* SCALE */
@@ -2184,6 +2178,7 @@ function updateAll() {
   state.tasks = +document.getElementById('tasks').value;
   state.deploy = document.getElementById('deployment').value;
   state.tool = document.getElementById('current-tool').value;
+  if (state.tool === 'other') state.tool = 'playwright';
   state.llmCost = +document.getElementById('llm-cost').value;
   
   document.getElementById('sessions-val').textContent = state.sessions;
@@ -2194,7 +2189,7 @@ function updateAll() {
   renderChart('memory-chart', 'totalRam', 'Memory', fmtBytes);
   renderChart('token-chart', 'totalTokens', 'Tokens', fmt);
   renderProjection();
-  renderCapability(state.tool === 'other' ? 'playwright' : state.tool);
+  renderCapability(state.tool);
   renderScale();
   renderFullTable();
 }
@@ -2232,6 +2227,7 @@ updateAll();
 </body>
 </html>
 """
+
 
 
 
