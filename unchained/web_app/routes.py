@@ -23,6 +23,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/google83c650022d8db556.html", "handle_google_verification"),
     ("GET", "/", "handle_index"),
     ("GET", "/unbrowser", "web_app.handlers.pages:handle_unbrowser_page"),
+    ("GET", "/chrome-tax", "web_app.handlers.pages:handle_chrome_tax_page"),
     ("GET", "/web/unbrowser/sources", "web_app.handlers.unbrowser_demo:handle_unbrowser_sources"),
     ("GET", "/web/unbrowser/runtime", "web_app.handlers.unbrowser_demo:handle_unbrowser_runtime"),
     ("GET", "/web/unbrowser/stream", "web_app.handlers.unbrowser_demo:handle_unbrowser_stream"),
