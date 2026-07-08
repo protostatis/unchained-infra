@@ -64,6 +64,7 @@ from web_app.templates import (
     LANDING_HTML,
     LANDING_V2_HTML,
     LANDING_V3_HTML,
+    LANDING_V4_HTML,
     MCP_PAGE_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
@@ -1558,6 +1559,8 @@ async def handle_index(request: web.Request) -> web.Response:
         template = LANDING_V3_HTML
     elif variant == "v2":
         template = LANDING_V2_HTML
+    elif variant in {"v4", "default"}:
+        template = LANDING_V4_HTML
     else:
         template = LANDING_HTML
     html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
@@ -1566,6 +1569,8 @@ async def handle_index(request: web.Request) -> web.Response:
         # Persist the choice for ~1 day so deep-links inside the site keep the
         # same variant when the visitor returns to "/".
         response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
+    elif request.query.get("ui") in {"v4", "default"}:
+        response.del_cookie("ui", path="/")
     return response
 
 

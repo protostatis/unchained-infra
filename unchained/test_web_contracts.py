@@ -188,8 +188,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
     def test_landing_auth_cta_points_to_auth_entry(self):
-        self.assertIn('href="/local" class="signin" id="landing-auth-link">Connect My Chrome</a>', web.LANDING_HTML)
+        self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', web.LANDING_HTML)
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
+        self.assertIn("Open trial", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
 
     def test_chat_markdown_rendering_sanitizes_assistant_output(self):
