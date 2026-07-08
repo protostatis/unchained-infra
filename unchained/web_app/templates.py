@@ -6430,7 +6430,7 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 .console-step .k{color:var(--accent);font-size:.64rem;text-transform:uppercase;letter-spacing:.1em;min-width:34px}
 .scenario-card{transition:border-color .18s,box-shadow .18s,transform .18s}
 .scenario-card:hover{box-shadow:0 0 0 1px var(--border-light),0 16px 40px -28px rgba(0,0,0,.85);transform:translateY(-1px)}
-.scenario-card.active{border-color:var(--agent);background:var(--agent-dim);box-shadow:0 0 0 1px rgba(182,242,92,.32),0 0 34px -10px rgba(182,242,92,.3)}
+.scenario-card.active{border-color:var(--border-light);background:var(--agent-dim);box-shadow:0 0 34px -12px rgba(182,242,92,.32)}
 .timeline-step{opacity:0;transform:translateX(-6px)}
 .timeline-step.in{opacity:1;transform:none;transition:opacity .35s ease,transform .35s ease}
 .flow-card{transition:border-color .2s,transform .2s,box-shadow .2s}
@@ -6443,8 +6443,8 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 .cta-btn:hover{box-shadow:0 8px 30px rgba(182,242,92,.3)}
 .cta-btn{box-shadow:0 0 0 0 rgba(182,242,92,.0),0 1px 0 rgba(255,255,255,.15) inset}
 .signin{box-shadow:0 0 24px -6px rgba(255,106,61,.5)}
-.scenario-card{position:relative}
-.scenario-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--agent);transform:scaleY(0);transform-origin:top;transition:transform .2s;border-radius:2px 0 0 2px}
+.scenario-card{position:relative;margin-left:-2px;width:calc(100% + 2px)}
+.scenario-card::before{content:'';position:absolute;left:-1px;top:-1px;bottom:-1px;width:10px;border-left:2px solid var(--agent);border-top:2px solid var(--agent);border-bottom:2px solid var(--agent);border-radius:13px 0 0 13px;transform:scaleY(0);transform-origin:center;transition:transform .2s;box-shadow:-10px 0 26px -18px var(--agent)}
 .scenario-card.active::before,.scenario-card:hover::before,.scenario-card:focus-visible::before{transform:scaleY(1)}
 .scenario-card::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 7px);transform:translateX(-50%) translateY(-4px);background:var(--bg-elev);border:1px solid var(--border-light);border-radius:8px;padding:.42rem .7rem;font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-sec);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:6;box-shadow:0 14px 32px -14px rgba(0,0,0,.85)}
 .scenario-card:hover::after,.scenario-card:focus-visible::after{opacity:1;transform:translateX(-50%) translateY(0)}
