@@ -87,6 +87,8 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("font-family:'Instrument Serif',serif", templates.LANDING_HTML)
         self.assertIn("Chrome profile", templates.LANDING_HTML)
         self.assertIn("Product preview", templates.LANDING_HTML)
+        self.assertIn('aria-live="polite"', templates.LANDING_HTML)
+        self.assertIn("prefers-reduced-motion:reduce", templates.LANDING_HTML)
         self.assertIn("See what you can <em>hand off</em>", templates.LANDING_HTML)
         self.assertIn("workflow-preview", templates.LANDING_HTML)
         self.assertIn("SCENARIOS", templates.LANDING_HTML)

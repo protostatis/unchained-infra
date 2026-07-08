@@ -213,6 +213,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("ui", stale_cookie_response.cookies)
         self.assertEqual(stale_cookie_response.cookies["ui"]["max-age"], "0")
 
+        unknown_query_response = asyncio.run(_render({"ui": "unknown"}, {"ui": "v3"}))
+        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", unknown_query_response.text)
+        self.assertNotIn("ui", unknown_query_response.cookies)
+
         v3_response = asyncio.run(_render({"ui": "v3"}, {}))
         self.assertIn("AI Browser Agent for Everyday Web Tasks", v3_response.text)
         self.assertEqual(v3_response.cookies["ui"].value, "v3")
