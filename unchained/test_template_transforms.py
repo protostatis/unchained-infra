@@ -84,7 +84,8 @@ class TestTemplateTransforms(unittest.TestCase):
         from web_app import templates
 
         self.assertIn("You navigate. The agent drives.", templates.LANDING_HTML)
-        self.assertIn("font-family:'Instrument Serif',serif", templates.LANDING_HTML)
+        self.assertIn("font-family:'Familjen Grotesk',system-ui,sans-serif", templates.LANDING_HTML)
+        self.assertNotIn("Instrument Serif", templates.LANDING_HTML)
         self.assertIn("Chrome profile", templates.LANDING_HTML)
         self.assertIn("Product preview", templates.LANDING_HTML)
         self.assertIn('aria-live="polite"', templates.LANDING_HTML)
