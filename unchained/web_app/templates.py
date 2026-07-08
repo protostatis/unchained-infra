@@ -6443,8 +6443,8 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 .cta-btn:hover{box-shadow:0 8px 30px rgba(182,242,92,.3)}
 .cta-btn{box-shadow:0 0 0 0 rgba(182,242,92,.0),0 1px 0 rgba(255,255,255,.15) inset}
 .signin{box-shadow:0 0 24px -6px rgba(255,106,61,.5)}
-.scenario-card{position:relative}
-.scenario-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--agent);transform:scaleY(0);transform-origin:top;transition:transform .2s;border-radius:2px 0 0 2px}
+.scenario-card{position:relative;margin-left:-2px;width:calc(100% + 2px)}
+.scenario-card::before{content:'';position:absolute;left:-1px;top:0;bottom:0;width:2px;background:var(--agent);transform:scaleY(0);transform-origin:top;transition:transform .2s;border-radius:2px 0 0 2px}
 .scenario-card.active::before,.scenario-card:hover::before,.scenario-card:focus-visible::before{transform:scaleY(1)}
 .scenario-card::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 7px);transform:translateX(-50%) translateY(-4px);background:var(--bg-elev);border:1px solid var(--border-light);border-radius:8px;padding:.42rem .7rem;font-family:'JetBrains Mono',monospace;font-size:.68rem;color:var(--text-sec);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:6;box-shadow:0 14px 32px -14px rgba(0,0,0,.85)}
 .scenario-card:hover::after,.scenario-card:focus-visible::after{opacity:1;transform:translateX(-50%) translateY(0)}
