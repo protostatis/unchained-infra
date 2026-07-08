@@ -64,6 +64,7 @@ from web_app.templates import (
     LANDING_HTML,
     LANDING_V2_HTML,
     LANDING_V3_HTML,
+    LANDING_V4_HTML,
     MCP_PAGE_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
@@ -1552,12 +1553,17 @@ async def handle_google_verification(request: web.Request) -> web.Response:
 
 async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
-    # break the v2/v3 escape hatches. Default falls back to LANDING_HTML.
-    variant = request.query.get("ui") or request.cookies.get("ui") or ""
+    # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
+    # preview cookies are ignored on plain "/" visits so V4 is truly default.
+    query_variant = request.query.get("ui")
+    preview_cookie = request.cookies.get("ui")
+    variant = query_variant or ""
     if variant == "v3":
         template = LANDING_V3_HTML
     elif variant == "v2":
         template = LANDING_V2_HTML
+    elif variant in {"v4", "default"}:
+        template = LANDING_V4_HTML
     else:
         template = LANDING_HTML
     html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
@@ -1566,6 +1572,13 @@ async def handle_index(request: web.Request) -> web.Response:
         # Persist the choice for ~1 day so deep-links inside the site keep the
         # same variant when the visitor returns to "/".
         response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
+    elif request.query.get("ui") in {"v4", "default"}:
+        # V4 is the default landing page. Clear older preview cookies so users
+        # can explicitly return from v2/v3 without pinning another default.
+        response.del_cookie("ui", path="/")
+    elif query_variant is None and preview_cookie in {"v2", "v3"}:
+        # Clear stale preview cookies when users return to the canonical route.
+        response.del_cookie("ui", path="/")
     return response
 
 
