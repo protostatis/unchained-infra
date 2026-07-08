@@ -1553,8 +1553,11 @@ async def handle_google_verification(request: web.Request) -> web.Response:
 
 async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
-    # break the v2/v3 escape hatches. Default falls back to LANDING_HTML.
-    variant = request.query.get("ui") or request.cookies.get("ui") or ""
+    # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
+    # preview cookies are ignored on plain "/" visits so V4 is truly default.
+    query_variant = request.query.get("ui")
+    preview_cookie = request.cookies.get("ui")
+    variant = query_variant or ""
     if variant == "v3":
         template = LANDING_V3_HTML
     elif variant == "v2":
@@ -1572,6 +1575,9 @@ async def handle_index(request: web.Request) -> web.Response:
     elif request.query.get("ui") in {"v4", "default"}:
         # V4 is the default landing page. Clear older preview cookies so users
         # can explicitly return from v2/v3 without pinning another default.
+        response.del_cookie("ui", path="/")
+    elif query_variant is None and preview_cookie in {"v2", "v3"}:
+        # Clear stale preview cookies when users return to the canonical route.
         response.del_cookie("ui", path="/")
     return response
 
