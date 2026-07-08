@@ -1570,6 +1570,8 @@ async def handle_index(request: web.Request) -> web.Response:
         # same variant when the visitor returns to "/".
         response.set_cookie("ui", request.query["ui"], max_age=86400, path="/")
     elif request.query.get("ui") in {"v4", "default"}:
+        # V4 is the default landing page. Clear older preview cookies so users
+        # can explicitly return from v2/v3 without pinning another default.
         response.del_cookie("ui", path="/")
     return response
 

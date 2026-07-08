@@ -6,6 +6,7 @@ These tests protect public routes and exported template contracts while
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -192,6 +193,24 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
         self.assertIn("Open trial", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
+
+    def test_landing_v4_default_route_clears_preview_cookie(self):
+        async def _render(query: dict[str, str], cookies: dict[str, str]):
+            return await web.handle_index(SimpleNamespace(query=query, cookies=cookies))
+
+        response = asyncio.run(_render({"ui": "v4"}, {"ui": "v3"}))
+        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", response.text)
+        self.assertIn("ui", response.cookies)
+        self.assertEqual(response.cookies["ui"]["max-age"], "0")
+
+        default_response = asyncio.run(_render({"ui": "default"}, {"ui": "v2"}))
+        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", default_response.text)
+        self.assertIn("ui", default_response.cookies)
+        self.assertEqual(default_response.cookies["ui"]["max-age"], "0")
+
+        v3_response = asyncio.run(_render({"ui": "v3"}, {}))
+        self.assertIn("AI Browser Agent for Everyday Web Tasks", v3_response.text)
+        self.assertEqual(v3_response.cookies["ui"].value, "v3")
 
     def test_chat_markdown_rendering_sanitizes_assistant_output(self):
         chat_templates = {
