@@ -197,6 +197,28 @@ def _active_slot() -> int:
     return _load_meta().get("active_slot", 1)
 
 
+def _normalize_slot(value) -> int | None:
+    """Return a valid chat slot number (1-3), or None if absent/invalid."""
+    try:
+        slot = int(value)
+    except (TypeError, ValueError):
+        return None
+    return slot if slot in (1, 2, 3) else None
+
+
+def _sync_active_slot(slot: int | None, reason: str = "") -> int:
+    """Set the local active slot when the UI provides an explicit slot."""
+    if slot is None:
+        return _active_slot()
+    meta = _load_meta()
+    if meta.get("active_slot") != slot:
+        meta["active_slot"] = slot
+        _save_meta(meta)
+        if reason:
+            log.info("[chat] Synced active slot to %s from %s", slot, reason)
+    return slot
+
+
 def _load_chat(slot: int | None = None) -> dict:
     """Load chat data from a slot file. Defaults to active slot."""
     if slot is None:
@@ -3065,13 +3087,8 @@ async def main():
                     msg_cdp_agent_id = str(msg.get("agent_id") or BRIDGE_AGENT_ID or AGENT_ID)
                     # Sync active slot from the UI so messages go to the
                     # conversation the user is actually viewing.
-                    msg_slot = msg.get("slot")
-                    if msg_slot is not None and msg_slot in (1, 2, 3):
-                        meta = _load_meta()
-                        if meta.get("active_slot") != msg_slot:
-                            meta["active_slot"] = msg_slot
-                            _save_meta(meta)
-                            log.info("[%s] Synced active slot to %s from user_message", sid, msg_slot)
+                    msg_slot = _normalize_slot(msg.get("slot"))
+                    _sync_active_slot(msg_slot, "user_message")
                     msg_scheduler_armed = bool(msg.get("scheduler_armed"))
                     msg_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
                     msg_req_id = str(msg.get("req_id", "") or "").strip()
@@ -3125,7 +3142,7 @@ async def main():
                             proc.kill()
                 elif msg.get("type") == "get_history":
                     req_id = msg.get("req_id", "")
-                    slot = msg.get("slot")
+                    slot = _normalize_slot(msg.get("slot"))
                     data = _load_chat(slot)
                     payload = {
                         "type": "history_response",
@@ -3138,7 +3155,7 @@ async def main():
                     await ws.send(json.dumps(payload))
                 elif msg.get("type") == "new_chat":
                     req_id = msg.get("req_id", "")
-                    current = _active_slot()
+                    current = _sync_active_slot(_normalize_slot(msg.get("slot")), "new_chat")
                     _clear_slot(current)
                     claude_sessions.clear()
                     codex_sessions.clear()
@@ -3152,9 +3169,7 @@ async def main():
                     }))
                 elif msg.get("type") == "switch_slot":
                     req_id = msg.get("req_id", "")
-                    slot = msg.get("slot", 1)
-                    if slot not in (1, 2, 3):
-                        slot = 1
+                    slot = _normalize_slot(msg.get("slot")) or 1
                     meta = _load_meta()
                     meta["active_slot"] = slot
                     _save_meta(meta)
@@ -3195,7 +3210,8 @@ async def main():
                 elif msg.get("type") == "restore_archive":
                     req_id = msg.get("req_id", "")
                     archive_id = msg.get("archive_id", "")
-                    slot_data, chat_session_id = _restore_archive_into_slot(archive_id)
+                    current = _sync_active_slot(_normalize_slot(msg.get("slot")), "restore_archive")
+                    slot_data, chat_session_id = _restore_archive_into_slot(archive_id, current)
                     if slot_data is None:
                         await ws.send(json.dumps({
                             "type": "restore_archive_error",
@@ -3203,7 +3219,6 @@ async def main():
                             "error": "Archive not found",
                         }))
                     else:
-                        current = _active_slot()
                         print(f"[chat] Restored archive {archive_id} into slot {current}")
                         payload = {
                             "type": "restore_archive_ok",
