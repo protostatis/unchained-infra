@@ -109,6 +109,59 @@ class TestChatAgentCliArchives(unittest.TestCase):
         self.assertIn("restored chat", previews)
         self.assertIn("current chat", previews)
 
+    def test_sync_active_slot_targets_new_chat_clear(self):
+        mod = self._load_module()
+        mod._save_meta({"active_slot": 1})
+        mod._save_chat({"messages": [{"role": "user", "content": "slot one"}]}, 1)
+        mod._save_chat({"messages": [{"role": "user", "content": "slot two"}]}, 2)
+
+        current = mod._sync_active_slot(mod._normalize_slot("2"), "test")
+        mod._clear_slot(current)
+
+        self.assertEqual(current, 2)
+        self.assertEqual(mod._active_slot(), 2)
+        self.assertEqual(mod._load_chat(2)["messages"], [])
+        self.assertEqual(mod._load_chat(1)["messages"][0]["content"], "slot one")
+
+    def test_invalid_slot_does_not_sync_active_slot(self):
+        mod = self._load_module()
+        mod._save_meta({"active_slot": 1})
+
+        self.assertIsNone(mod._normalize_slot("abc"))
+        current = mod._sync_active_slot(mod._normalize_slot("abc"), "test")
+
+        self.assertEqual(current, 1)
+        self.assertEqual(mod._active_slot(), 1)
+
+    def test_restore_archive_into_explicit_slot_does_not_use_active_slot(self):
+        mod = self._load_module()
+        mod._save_meta({"active_slot": 1})
+        mod._save_chat({"messages": [{"role": "user", "content": "active slot"}]}, 1)
+        mod._save_chat({"messages": [{"role": "user", "content": "target slot"}]}, 2)
+        os.makedirs(mod.ARCHIVE_DIR, exist_ok=True)
+        with open(os.path.join(mod.ARCHIVE_DIR, "arc.json"), "w") as f:
+            json.dump(
+                {
+                    "slot_data": {
+                        "messages": [{"role": "user", "content": "restored into two"}],
+                        "claude_session": {},
+                        "codex_session": {},
+                        "opencode_session": {},
+                    },
+                    "archived_at": 123,
+                    "slot": 1,
+                    "preview": "restored into two",
+                    "message_count": 1,
+                },
+                f,
+            )
+
+        slot_data, _ = mod._restore_archive_into_slot("arc", 2)
+
+        self.assertIsNotNone(slot_data)
+        self.assertEqual(mod._load_chat(1)["messages"][0]["content"], "active slot")
+        self.assertEqual(mod._load_chat(2)["messages"][0]["content"], "restored into two")
+
 
 class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
     def _core_stub(self):
@@ -142,14 +195,52 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         }
         mock_core.return_value = core
 
-        request = SimpleNamespace(query={"model": "claude-sonnet-4-6", "session_id": "s-agent-current"})
+        request = SimpleNamespace(query={"model": "claude-sonnet-4-6", "session_id": "s-agent-current", "slot": "2"})
         response = await handle_chat_history(request)
         data = json.loads(response.body.decode())
 
         self.assertEqual(response.status, 200)
         self.assertEqual(data["session_id"], "s-agent-restored")
         self.assertEqual(data["messages"][0]["content"], "restored chat")
-        core._agent_request.assert_awaited_once()
+        core._agent_request.assert_awaited_once_with(
+            "claude-abc12345",
+            {"type": "get_history", "session_id": "s-agent-current", "slot": 2},
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_new_passes_valid_slot_to_agent(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_new
+
+        core = self._core_stub()
+        core._agent_request.return_value = {"active_slot": 3, "session_id": "s-agent-next"}
+        mock_core.return_value = core
+
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"model": "claude-sonnet-4-6", "session_id": "s-agent-current", "slot": "3"})
+        )
+        response = await handle_chat_new(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["active_slot"], 3)
+        core._agent_request.assert_awaited_once_with("claude-abc12345", {"type": "new_chat", "slot": 3})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_history_omits_invalid_slot(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_history
+
+        core = self._core_stub()
+        core._agent_request.return_value = {"messages": []}
+        mock_core.return_value = core
+
+        request = SimpleNamespace(query={"model": "claude-sonnet-4-6", "session_id": "s-agent-current", "slot": "abc"})
+        response = await handle_chat_history(request)
+
+        self.assertEqual(response.status, 200)
+        core._agent_request.assert_awaited_once_with(
+            "claude-abc12345",
+            {"type": "get_history", "session_id": "s-agent-current"},
+        )
 
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web_app.handlers.chat_flow._core")
@@ -166,7 +257,7 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         }
 
         request = SimpleNamespace(
-            json=AsyncMock(return_value={"archive_id": "arc", "model": "claude-sonnet-4-6"})
+            json=AsyncMock(return_value={"archive_id": "arc", "model": "claude-sonnet-4-6", "slot": "2"})
         )
         response = await handle_chat_restore_archive(request)
         data = json.loads(response.body.decode())
@@ -174,6 +265,11 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(data["session_id"], "s-agent-restored")
         self.assertTrue(data["ok"])
+        mock_agent_request.assert_awaited_once_with(
+            "claude-abc12345",
+            {"type": "restore_archive", "archive_id": "arc", "slot": 2},
+            timeout=10,
+        )
 
     @patch("web_app.handlers.chat_flow.asyncio.sleep", new_callable=AsyncMock)
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
@@ -262,6 +358,10 @@ class TestLocalArchiveTemplate(unittest.TestCase):
     def test_local_template_defines_slot_session_helpers(self):
         self.assertIn("function _slotStateKey() {", web.CLAUDE_CHAT_HTML)
         self.assertIn("function _setActiveSlotSession(sid) {", web.CLAUDE_CHAT_HTML)
+
+    def test_local_template_sends_slot_for_history_new_and_restore(self):
+        self.assertIn("slot: activeSlot,", web.CLAUDE_CHAT_HTML)
+        self.assertIn("archive_id: id, model: currentModel(), slot: activeSlot", web.CLAUDE_CHAT_HTML)
 
     def test_local_template_recovers_slot_state_after_failed_switch(self):
         self.assertIn("const previousState = _loadSlotState();", web.CLAUDE_CHAT_HTML)

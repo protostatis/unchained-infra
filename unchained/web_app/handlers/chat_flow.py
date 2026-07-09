@@ -53,6 +53,15 @@ def _client_version_status(caps: dict | None) -> dict:
     }
 
 
+def _normalize_chat_slot(value) -> int | None:
+    """Return a valid chat slot number (1-3), or None if absent/invalid."""
+    try:
+        slot = int(value)
+    except (TypeError, ValueError):
+        return None
+    return slot if slot in (1, 2, 3) else None
+
+
 _RESEARCH_DESK_INSTALL_MIN_CLIENT_VERSION = "0.3.65"
 _FIRST_LOOK_SIGNAL_URL_MAX = 500
 _FIRST_LOOK_SIGNAL_TEXT_MAX = 6000
@@ -1294,6 +1303,7 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     if guest_mode and not core._is_openrouter_model(model):
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     requested_session_id = request.query.get("session_id", "")
+    requested_slot = _normalize_chat_slot(request.query.get("slot"))
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
 
     if core._is_openrouter_model(model):
@@ -1309,9 +1319,10 @@ async def handle_chat_history(request: web.Request) -> web.Response:
             core._attach_first_look_guest_cookies(history_resp, request, guest_id)
         return history_resp
 
-    resp = await core._agent_request(
-        chat_agent_id, {"type": "get_history", "session_id": requested_session_id}
-    )
+    history_msg = {"type": "get_history", "session_id": requested_session_id}
+    if requested_slot is not None:
+        history_msg["slot"] = requested_slot
+    resp = await core._agent_request(chat_agent_id, history_msg)
     if resp is not None:
         payload = {"messages": resp.get("messages", [])}
         if resp.get("session_id"):
@@ -1346,6 +1357,7 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
     requested_session_id = body.get("session_id", "")
+    requested_slot = _normalize_chat_slot(body.get("slot"))
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
         old_session = core._resolve_trial_session_id(agent_id, requested_session_id)
@@ -1367,7 +1379,10 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             }
         )
 
-    resp = await core._agent_request(chat_agent_id, {"type": "new_chat"})
+    new_chat_msg = {"type": "new_chat"}
+    if requested_slot is not None:
+        new_chat_msg["slot"] = requested_slot
+    resp = await core._agent_request(chat_agent_id, new_chat_msg)
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
     result = {"ok": True, "active_slot": resp.get("active_slot", 1)}
@@ -1443,7 +1458,7 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         body = {}
-    slot = body.get("slot", 1)
+    slot = _normalize_chat_slot(body.get("slot")) or 1
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
     if core._is_pending_user(auth_info) and not model:
@@ -1485,14 +1500,16 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
     except Exception:
         body = {}
     archive_id = body.get("archive_id", "")
+    requested_slot = _normalize_chat_slot(body.get("slot"))
     if not archive_id:
         return web.json_response({"error": "archive_id required"}, status=400)
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
-    resp = await _agent_request_after_reconnect(
-        chat_agent_id, {"type": "restore_archive", "archive_id": archive_id}
-    )
+    restore_msg = {"type": "restore_archive", "archive_id": archive_id}
+    if requested_slot is not None:
+        restore_msg["slot"] = requested_slot
+    resp = await _agent_request_after_reconnect(chat_agent_id, restore_msg)
     if resp is None:
         return web.json_response(
             {"error": "Your local client is reconnecting. Wait a few seconds and retry."},

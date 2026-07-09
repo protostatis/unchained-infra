@@ -9245,6 +9245,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      slot: activeSlot,
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -9299,6 +9300,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        slot: activeSlot,
       }),
     });
     if (r.ok) {
@@ -9361,7 +9363,7 @@ async function restoreArchive(id) {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: activeSlot }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -10788,6 +10790,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      slot: activeSlot,
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -10838,6 +10841,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        slot: activeSlot,
       }),
     });
     if (r.ok) {
@@ -15754,6 +15758,7 @@ async function loadHistory() {
     const qs = new URLSearchParams({
       model: currentModel(),
       session_id: sessionId,
+      slot: activeSlot,
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
@@ -15811,6 +15816,7 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
+        slot: activeSlot,
       }),
     });
     if (r.ok) {
@@ -15873,7 +15879,7 @@ async function restoreArchive(id) {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: activeSlot }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
@@ -19127,7 +19133,7 @@ async function restoreArchive(id) {
     const r = await fetch('/web/chat/restore-archive', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ archive_id: id, model: currentModel() }),
+      body: JSON.stringify({ archive_id: id, model: currentModel(), slot: typeof activeSlot === 'number' ? activeSlot : undefined }),
     });
     if (r.ok) {
       const data = await r.json().catch(() => ({}));

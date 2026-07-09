@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.106"  # fall back to default routing when packaged cdp_tool sees stale prov tabs
+VERSION = "0.3.107"  # keep local chat slot history/control requests in sync
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
