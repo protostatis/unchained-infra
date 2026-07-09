@@ -344,6 +344,17 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCodexCliEnv(unittest.TestCase):
+    def test_claude_turn_uses_strict_mcp_config(self):
+        source_path = Path(__file__).with_name("chat_agent_cli.py")
+        source = source_path.read_text()
+        start = source.index("async def handle_message_claude(")
+        end = source.index("if is_resume:", start)
+        snippet = source[start:end]
+
+        self.assertIn('"--strict-mcp-config"', snippet)
+        self.assertIn('"--allowedTools", allowed', snippet)
+        self.assertIn('tools = ["Bash"]', snippet)
+
     def test_unarmed_codex_turn_keeps_api_key_for_update_path(self):
         source_path = Path(__file__).with_name("chat_agent_cli.py")
         source = source_path.read_text()
@@ -355,6 +366,18 @@ class TestCodexCliEnv(unittest.TestCase):
         self.assertIn('env.pop("UNCHAINED_INSTALL_TOKEN", None)', snippet)
         self.assertIn('env["UNCHAINED_CHAT_SESSION_ID"] = sid', snippet)
 
+    def test_codex_turn_disables_mcp_at_invocation_level(self):
+        source_path = Path(__file__).with_name("chat_agent_cli.py")
+        source = source_path.read_text()
+        start = source.index("async def handle_message_codex(")
+        end = source.index("proc = await asyncio.create_subprocess_exec(", start)
+        snippet = source[start:end]
+
+        self.assertIn("config_args = []", snippet)
+        self.assertIn('"--ignore-user-config"', snippet)
+        self.assertIn("Hide user-configured Codex MCP tools", source)
+        self.assertNotIn("mcp_servers.unchainedsky.enabled=false", source)
+
     def test_unarmed_opencode_turn_keeps_api_key_for_update_path(self):
         source_path = Path(__file__).with_name("chat_agent_cli.py")
         source = source_path.read_text()
@@ -365,6 +388,19 @@ class TestCodexCliEnv(unittest.TestCase):
         self.assertNotIn('env.pop("UNCHAINED_API_KEY", None)', snippet)
         self.assertIn('env.pop("UNCHAINED_INSTALL_TOKEN", None)', snippet)
         self.assertIn('env["UNCHAINED_CHAT_SESSION_ID"] = sid', snippet)
+
+    def test_opencode_turn_disables_mcp_but_not_builtin_tools(self):
+        source_path = Path(__file__).with_name("chat_agent_cli.py")
+        source = source_path.read_text()
+        start = source.index("async def handle_message_opencode(")
+        end = source.index('cmd = [OPENCODE_BIN, "run"', start)
+        snippet = source[start:end]
+
+        self.assertIn('env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content_without_mcp()', snippet)
+        self.assertIn('tools[f"{name}_*"] = False', source)
+        self.assertIn('"unchainedsky"', source)
+        self.assertNotIn('tools["bash"] = False', source)
+        self.assertNotIn('tools["websearch"] = False', source)
 
 
 if __name__ == "__main__":

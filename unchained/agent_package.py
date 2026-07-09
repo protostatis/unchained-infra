@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.102"  # move Page.bringToFront from bridge _handle_ws_open to server-side only before Page.navigate
+VERSION = "0.3.105"  # ignore Codex user config and disable MCP for local-profile routing
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

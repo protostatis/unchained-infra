@@ -1495,6 +1495,122 @@ def _resolve_opencode_model(model: str) -> str:
     return DEFAULT_OPENCODE_MODEL
 
 
+_OPENCODE_DEFAULT_DISABLED_MCP_SERVERS = ("unchainedsky",)
+
+
+def _opencode_config_file_candidates() -> list[str]:
+    """Return likely OpenCode config files whose MCP names should be disabled."""
+    candidates: list[str] = []
+
+    explicit = os.environ.get("OPENCODE_CONFIG", "").strip()
+    if explicit:
+        candidates.append(os.path.expanduser(explicit))
+
+    config_dir = os.environ.get("OPENCODE_CONFIG_DIR", "").strip()
+    if config_dir:
+        expanded = os.path.expanduser(config_dir)
+        candidates.extend([
+            os.path.join(expanded, "opencode.json"),
+            os.path.join(expanded, "opencode.jsonc"),
+        ])
+
+    global_dir = os.path.expanduser("~/.config/opencode")
+    candidates.extend([
+        os.path.join(global_dir, "opencode.json"),
+        os.path.join(global_dir, "opencode.jsonc"),
+    ])
+
+    # Project-level config can also introduce MCP servers.  OpenCode walks up
+    # from --dir until the nearest git root; this bounded walk mirrors the
+    # common case without depending on OpenCode internals.
+    current = Path(CWD).expanduser().resolve()
+    for directory in (current, *current.parents):
+        candidates.append(str(directory / "opencode.json"))
+        candidates.append(str(directory / "opencode.jsonc"))
+        if (directory / ".git").exists():
+            break
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+def _load_opencode_json(path: str) -> dict:
+    """Load an OpenCode JSON config file if it is plain JSON.
+
+    OpenCode also supports JSONC.  We intentionally do not try to parse full
+    JSONC here; failing closed still disables the built-in unchainedsky MCP
+    default below, and avoids corrupting user config with a lossy parser.
+    """
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _opencode_mcp_names_to_disable() -> set[str]:
+    """Discover configured MCP server names that should be hidden from OpenCode."""
+    names = set(_OPENCODE_DEFAULT_DISABLED_MCP_SERVERS)
+
+    inline = os.environ.get("OPENCODE_CONFIG_CONTENT", "").strip()
+    if inline:
+        try:
+            inline_data = json.loads(inline)
+        except Exception:
+            inline_data = {}
+        if isinstance(inline_data, dict) and isinstance(inline_data.get("mcp"), dict):
+            names.update(str(name) for name in inline_data["mcp"].keys() if str(name).strip())
+
+    for path in _opencode_config_file_candidates():
+        if not os.path.isfile(path):
+            continue
+        config = _load_opencode_json(path)
+        mcp = config.get("mcp")
+        if isinstance(mcp, dict):
+            names.update(str(name) for name in mcp.keys() if str(name).strip())
+    return names
+
+
+def _opencode_config_content_without_mcp() -> str:
+    """Inline OpenCode config override that disables MCP tools only.
+
+    Built-in tools such as bash, websearch, webfetch, read, grep, and glob stay
+    governed by the user's normal OpenCode config.  MCP tools are registered as
+    <server>_* tool names, so we disable both the server and its tool prefix.
+    """
+    config: dict = {}
+    inline = os.environ.get("OPENCODE_CONFIG_CONTENT", "").strip()
+    if inline:
+        try:
+            parsed = json.loads(inline)
+            if isinstance(parsed, dict):
+                config = parsed
+        except Exception:
+            log.info("  Ignoring unparsable OPENCODE_CONFIG_CONTENT while disabling MCP tools")
+
+    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+    mcp = dict(mcp)
+    tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+    tools = dict(tools)
+
+    for name in sorted(_opencode_mcp_names_to_disable()):
+        existing = mcp.get(name)
+        entry = dict(existing) if isinstance(existing, dict) else {}
+        entry["enabled"] = False
+        mcp[name] = entry
+        tools[f"{name}_*"] = False
+
+    config["mcp"] = mcp
+    config["tools"] = tools
+    return json.dumps(config, separators=(",", ":"))
+
+
 def _collect_text_strings(obj) -> list[str]:
     """Collect likely text fragments from nested codex event objects."""
     out: list[str] = []
@@ -2169,14 +2285,19 @@ async def handle_message_codex(
         tempfile.gettempdir(),
         f"unchained_codex_last_{os.getpid()}_{int(time.time() * 1000)}_{sid[-8:]}",
     )
+    # Hide user-configured Codex MCP tools at the subprocess invocation level
+    # via --ignore-user-config below.  Do not also pass partial
+    # mcp_servers.<name>.enabled=false overrides here; with user config ignored,
+    # those create invalid empty MCP server definitions.
     config_args = []
     if CODEX_REASONING_EFFORT in {"low", "medium", "high"}:
-        config_args = ["-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
+        config_args += ["-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
 
     if is_resume:
         cmd = [
             CODEX_BIN, "exec",
             *config_args,
+            "--ignore-user-config",
             "--output-last-message", output_file,
             "resume",
             "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
@@ -2189,6 +2310,7 @@ async def handle_message_codex(
         cmd = [
             CODEX_BIN, "exec",
             *config_args,
+            "--ignore-user-config",
             "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
             "--output-last-message", output_file,
             "-C", CWD, "-m", codex_model,
@@ -2527,6 +2649,10 @@ async def handle_message_opencode(
     env["CDP_RELAY_PORT"] = str(RELAY_PORT)
     env["CDP_TAB_ID"] = tab_id or "auto"
     env["UNCHAINED_CHAT_SESSION_ID"] = sid
+    # The OpenCode lane must use local browser commands through cdp_tool.py so
+    # it inherits CDP_TAB_ID/CDP_AGENT_ID.  Hide MCP browser tools from the
+    # spawned process; built-in tools like bash/websearch remain available.
+    env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content_without_mcp()
     env.pop("UNCHAINED_INSTALL_TOKEN", None)
     if scheduler_armed and scheduler_grant_id:
         env["UNCHAINED_SCHEDULER_GRANT_ID"] = scheduler_grant_id
