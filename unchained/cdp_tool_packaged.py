@@ -41,18 +41,47 @@ DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
                           os.path.join(os.path.expanduser("~"), ".unchained"))
 
 
+def _parse_prov_slot(tab_id: str = TAB_ID):
+    """Extract the provision slot from a prov-<slot>-<id> tab id."""
+    if not tab_id.startswith("prov-"):
+        return ""
+    parts = tab_id.split("-", 2)
+    if len(parts) < 3 or not parts[1]:
+        return ""
+    return parts[1]
+
+
+def _load_prov_slot_state(slot: str):
+    """Load provision slot state, returning {} when the slot is stale/missing."""
+    if not slot:
+        return {}
+    state_file = os.path.join(DATA_DIR, "provision_slots", f"{slot}.json")
+    try:
+        with open(state_file) as f:
+            state = json.loads(f.read())
+    except Exception:
+        return {}
+    try:
+        port = int(state.get("port", 0))
+    except Exception:
+        port = 0
+    if port <= 0:
+        return {}
+    return state
+
+
 def _active_prov_slot():
     """Return the provisioned-Chrome slot id when the session is bound to one.
 
     The chat agent exports CDP_TAB_ID="prov-<slot>-<real_id>" for provisioned
     sessions. Returns "" when not in a provisioned session.
     """
-    if not TAB_ID.startswith("prov-"):
+    slot = _parse_prov_slot(TAB_ID)
+    if not slot:
         return ""
-    parts = TAB_ID.split("-", 2)
-    if len(parts) < 3 or not parts[1]:
-        return ""
-    return parts[1]
+    # A stale prov-* CDP_TAB_ID can leak into a later default-profile turn.
+    # Treat it as default unless the slot still has live local state.
+    return slot if _load_prov_slot_state(slot) else ""
 
 
 def _resolve_cdp_port():
@@ -65,15 +94,10 @@ def _resolve_cdp_port():
     slot = _active_prov_slot()
     if not slot:
         return CDP_PORT
-    state_file = os.path.join(DATA_DIR, "provision_slots", f"{slot}.json")
-    try:
-        with open(state_file) as f:
-            state = json.loads(f.read())
-        port = int(state.get("port", 0))
-        if port > 0:
-            return port
-    except Exception:
-        pass
+    state = _load_prov_slot_state(slot)
+    port = int(state.get("port", 0)) if state else 0
+    if port > 0:
+        return port
     return CDP_PORT
 
 
@@ -176,6 +200,12 @@ def main():
     # hit the provisioned Chrome's port. Rewrite any non-prov-prefixed
     # value the agent passes so it stays inside the active slot.
     prov_slot = _active_prov_slot()
+    if not prov_slot and tab_id.startswith("prov-"):
+        # The chat/session may have retained a provisioned tab id after that
+        # provisioned Chrome was cleaned up.  Falling back to auto lets the
+        # default-profile bridge select its current tab instead of sending an
+        # impossible prov-* tab id to the server.
+        tab_id = "auto"
     if prov_slot and tab_id and not tab_id.startswith("prov-"):
         tab_id = f"prov-{prov_slot}-{tab_id}"
 
