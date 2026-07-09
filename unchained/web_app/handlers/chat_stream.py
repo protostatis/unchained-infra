@@ -18,6 +18,13 @@ from web_app.core import get_core as _core
 
 _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 
+# Local browser-agent turns can legitimately be quiet while the CLI is waiting
+# on a long CDP/navigation action. Keep the SSE stream alive long enough to
+# match the OpenCode lane's default local subprocess guard instead of ending a
+# turn while the local agent is still working in the background.
+_CODEX_CLI_SILENCE_TIMEOUT_S = 60
+_OPENCODE_CLI_SILENCE_TIMEOUT_S = 300
+
 
 # ---------------------------------------------------------------------------
 # Overlay copilot — direct CDP, no bridge/WS/relay involvement
@@ -819,7 +826,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     stream_completed = False
     last_stream_event_at = time.time()
-    local_cli_silence_timeout_s = 60 if (is_codex_cli or is_opencode_cli) else 0
+    local_cli_silence_timeout_s = 0
+    if is_opencode_cli:
+        local_cli_silence_timeout_s = _OPENCODE_CLI_SILENCE_TIMEOUT_S
+    elif is_codex_cli:
+        local_cli_silence_timeout_s = _CODEX_CLI_SILENCE_TIMEOUT_S
     try:
         while True:
             try:
