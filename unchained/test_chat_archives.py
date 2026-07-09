@@ -123,6 +123,16 @@ class TestChatAgentCliArchives(unittest.TestCase):
         self.assertEqual(mod._load_chat(2)["messages"], [])
         self.assertEqual(mod._load_chat(1)["messages"][0]["content"], "slot one")
 
+    def test_invalid_slot_does_not_sync_active_slot(self):
+        mod = self._load_module()
+        mod._save_meta({"active_slot": 1})
+
+        self.assertIsNone(mod._normalize_slot("abc"))
+        current = mod._sync_active_slot(mod._normalize_slot("abc"), "test")
+
+        self.assertEqual(current, 1)
+        self.assertEqual(mod._active_slot(), 1)
+
     def test_restore_archive_into_explicit_slot_does_not_use_active_slot(self):
         mod = self._load_module()
         mod._save_meta({"active_slot": 1})
@@ -214,6 +224,23 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(data["active_slot"], 3)
         core._agent_request.assert_awaited_once_with("claude-abc12345", {"type": "new_chat", "slot": 3})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_history_omits_invalid_slot(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_history
+
+        core = self._core_stub()
+        core._agent_request.return_value = {"messages": []}
+        mock_core.return_value = core
+
+        request = SimpleNamespace(query={"model": "claude-sonnet-4-6", "session_id": "s-agent-current", "slot": "abc"})
+        response = await handle_chat_history(request)
+
+        self.assertEqual(response.status, 200)
+        core._agent_request.assert_awaited_once_with(
+            "claude-abc12345",
+            {"type": "get_history", "session_id": "s-agent-current"},
+        )
 
     @patch("web_app.handlers.chat_flow.agent_request", new_callable=AsyncMock)
     @patch("web_app.handlers.chat_flow._core")

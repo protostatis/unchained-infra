@@ -432,7 +432,7 @@ def _delete_archive(archive_id: str) -> bool:
 
 
 def _restore_archive_into_slot(archive_id: str, slot: int | None = None) -> tuple[dict | None, str]:
-    """Archive the current slot, replace it with an archived chat, and restore runtime mappings."""
+    """Archive the target slot, replace it with an archived chat, and restore runtime mappings."""
     slot_data = _restore_archive(archive_id)
     if slot_data is None:
         return None, ""
