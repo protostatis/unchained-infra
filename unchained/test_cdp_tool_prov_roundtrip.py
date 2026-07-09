@@ -61,6 +61,13 @@ class ProvRoundtripTests(unittest.TestCase):
         ct = _reload_with_env(env)
         self.assertEqual(ct._active_prov_slot(), "")
 
+    def test_active_prov_slot_returns_empty_for_stale_slot(self):
+        env = dict(self.env)
+        env["CDP_TAB_ID"] = "prov-miss-AABBCCDDEEFF112233"
+        ct = _reload_with_env(env)
+        self.assertEqual(ct._active_prov_slot(), "")
+        self.assertEqual(ct._resolve_cdp_port(), 9222)
+
     def test_format_tab_id_prefixes_in_prov_mode(self):
         ct = _reload_with_env(self.env)
         out = ct._format_tab_id_for_display("AABBCCDDEEFF112233", "2ddd")
@@ -112,6 +119,14 @@ class ProvRoundtripTests(unittest.TestCase):
         self.assertIn("AABBCCDDEEFF", out)
         self.assertNotIn("prov-", out)
 
+    def test_tabs_listing_bare_ids_when_env_prov_slot_is_stale(self):
+        env = dict(self.env)
+        env["CDP_TAB_ID"] = "prov-miss-AABBCCDDEEFF112233"
+        ct = _reload_with_env(env)
+        out = self._run_main(ct, ["cdp_tool.py", "tabs"])
+        self.assertIn("AABBCCDDEEFF", out)
+        self.assertNotIn("prov-miss-", out)
+
     def test_tab_flag_bare_id_rewritten_to_prov_form(self):
         ct = _reload_with_env(self.env)
         captured = {}
@@ -153,6 +168,25 @@ class ProvRoundtripTests(unittest.TestCase):
 
         self.assertEqual(captured["kwargs"]["tab_id"],
                          "prov-2ddd-AABBCCDDEEFF")
+
+    def test_stale_env_prov_tab_falls_back_to_auto(self):
+        env = dict(self.env)
+        env["CDP_TAB_ID"] = "prov-miss-AABBCCDDEEFF112233"
+        ct = _reload_with_env(env)
+        captured = {}
+
+        def fake_cmd(action, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"data": ""}
+
+        with patch.object(ct, "cmd", side_effect=fake_cmd):
+            with patch.object(sys, "argv", ["cdp_tool.py", "ddm", "--text"]):
+                try:
+                    ct.main()
+                except SystemExit:
+                    pass
+
+        self.assertEqual(captured["kwargs"]["tab_id"], "auto")
 
 
 if __name__ == "__main__":
