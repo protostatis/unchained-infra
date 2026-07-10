@@ -63,6 +63,8 @@ async def close_session_tab(session_id: str):
     core._session_last_active.pop(session_id, None)
     if hasattr(core, "_session_profile_paths"):
         core._session_profile_paths.pop(session_id, None)
+    if hasattr(core, "_chat_preview_generations"):
+        core._chat_preview_generations.pop(session_id, None)
     if not tab_id or not agent_id:
         return
 

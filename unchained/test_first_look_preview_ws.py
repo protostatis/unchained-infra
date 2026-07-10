@@ -422,6 +422,13 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(ended["type"], "preview.ended")
         self.assertEqual(ended["reason"], "tab_changed")
         self.assertTrue(ended["retriable"])
+        self.assertEqual(ended["from_tab_id"], "TAB" * 10 + "AA")
+        self.assertEqual(ended["to_tab_id"], "NEW" * 10 + "BB")
+        self.assertEqual(
+            self.fake_core._chat_preview_generations["s-claude-abc12345-demo"],
+            1,
+            "preview generations must remain monotonic across reconnects",
+        )
 
     async def test_stale_default_tab_is_replaced_by_server_resolved_auto_target(self):
         stale = self.fake_core._session_tabs["s-claude-abc12345-demo"]
@@ -589,6 +596,11 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn("preview.action.confirmation_required", html)
         self.assertIn("function bindAgentViewInteractions", html)
         self.assertIn("Interactive semantic DOM", html)
+        self.assertIn('id="agent-view-frame-next"', html)
+        self.assertIn("agentViewSnapshotLoading", html)
+        self.assertIn("Refreshing same browser tab", html)
+        self.assertIn("function agentViewProtectVisualPlaceholders", html)
+        self.assertIn("sid !== agentViewBoundSessionId", html)
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

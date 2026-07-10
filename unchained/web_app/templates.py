@@ -18996,8 +18996,8 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-browserbar .policy{color:#baf1cc;border:1px solid rgba(110,231,161,.25);padding:3px 7px;border-radius:999px;background:rgba(110,231,161,.06)}
 .agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 42% 34%,rgba(74,167,255,.08),transparent 38%),linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#05070a;background-size:auto,48px 48px,48px 48px,auto}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
-#agent-view-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
-.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic #agent-view-frame{display:block}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
+.agent-view-semantic-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
+.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic .agent-view-semantic-frame.active{display:block}.agent-view-canvas.semantic-loading .agent-view-semantic-frame.active{pointer-events:none}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
 .agent-view-empty{width:min(420px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
 .agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(110,231,161,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
@@ -19041,7 +19041,8 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
-    <iframe id="agent-view-frame" title="Interactive semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Semantic mirror refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
     <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
@@ -19120,10 +19121,16 @@ let agentViewDocumentSeq = 0;
 let agentViewSnapshot = null;
 let agentViewRetryAllowed = true;
 let agentViewMirrorId = '';
+let agentViewBoundSessionId = '';
 let agentViewPendingConfirmation = null;
 let agentViewToastTimer = null;
 let agentViewSuppressScrollUntil = 0;
 let agentViewScrollFrame = 0;
+let agentViewActiveFrame = null;
+let agentViewRenderToken = 0;
+let agentViewSnapshotLoading = false;
+let agentViewQueuedPatches = [];
+let agentViewActivationTimer = null;
 const agentViewInputTimers = new Map();
 const agentViewBoundDocuments = new WeakSet();
 
@@ -19245,6 +19252,10 @@ function agentViewCheckedValue(element) {
 }
 
 function agentViewSendAction(context, action) {
+  if (agentViewSnapshotLoading) {
+    agentViewShowToast('The same browser tab is refreshing.', false);
+    return;
+  }
   if (!context || !agentViewMirrorId || !agentViewSocket || agentViewSocket.readyState !== WebSocket.OPEN) {
     agentViewShowToast('The shared browser is still attaching.', true);
     return;
@@ -19364,14 +19375,14 @@ function confirmAgentViewAction() {
   agentViewShowToast('Confirmed — waiting for the source page.', false);
 }
 
-function agentViewSnapshotHtml(snapshot) {
+function agentViewSnapshotHtml(snapshot, renderToken) {
   const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const adopted = Array.isArray(source.adoptedStyles) ? source.adoptedStyles : [];
   const documentCss = adopted.filter(function(entry) { return entry && entry.hostId === 'document'; }).map(function(entry) { return String(entry.css || ''); }).join('\\n');
   const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
   const observerCss = 'html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
-    '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '">' + String(source.head || '') +
+    '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
     '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
     '<\\/head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '<\\/body><\\/html>';
 }
@@ -19389,8 +19400,41 @@ function agentViewFindTarget(root, targetId) {
   return null;
 }
 
-function agentViewApplyAdoptedStyles(snapshot) {
-  const frame = document.getElementById('agent-view-frame');
+function agentViewCurrentFrame() {
+  if (agentViewActiveFrame && agentViewActiveFrame.isConnected) return agentViewActiveFrame;
+  return document.getElementById('agent-view-frame');
+}
+
+function agentViewProtectVisualPlaceholders(frame, root) {
+  const doc = frame && frame.contentDocument;
+  const scope = root && root.querySelectorAll ? root : doc;
+  if (!doc || !scope) return;
+  const placeholders = [];
+  if (scope.nodeType === 1 && scope.hasAttribute && scope.hasAttribute('data-ucm-placeholder')) placeholders.push(scope);
+  Array.prototype.push.apply(placeholders, Array.from(scope.querySelectorAll('[data-ucm-placeholder]')));
+  placeholders.forEach(function(element) {
+    const width = element.style.width || Math.max(48, Math.round(element.getBoundingClientRect().width || 0)) + 'px';
+    const height = element.style.height || Math.max(48, Math.round(element.getBoundingClientRect().height || 0)) + 'px';
+    element.style.setProperty('all', 'initial', 'important');
+    element.style.setProperty('display', 'grid', 'important');
+    element.style.setProperty('place-items', 'center', 'important');
+    element.style.setProperty('box-sizing', 'border-box', 'important');
+    element.style.setProperty('width', width, 'important');
+    element.style.setProperty('height', height, 'important');
+    element.style.setProperty('max-width', '100%', 'important');
+    element.style.setProperty('min-height', '48px', 'important');
+    element.style.setProperty('overflow', 'hidden', 'important');
+    element.style.setProperty('isolation', 'isolate', 'important');
+    element.style.setProperty('background', 'repeating-linear-gradient(135deg,#ece8df 0,#ece8df 12px,#e4dfd5 12px,#e4dfd5 24px)', 'important');
+    element.style.setProperty('border', '1px dashed #a9a296', 'important');
+    element.style.setProperty('color', '#68635b', 'important');
+    element.style.setProperty('font', '12px/1.4 system-ui,sans-serif', 'important');
+    element.style.setProperty('text-align', 'center', 'important');
+  });
+}
+
+function agentViewApplyAdoptedStyles(snapshot, frame) {
+  frame = frame || agentViewCurrentFrame();
   const doc = frame && frame.contentDocument;
   if (!doc || !Array.isArray(snapshot.adoptedStyles)) return;
   snapshot.adoptedStyles.forEach(function(entry) {
@@ -19405,19 +19449,20 @@ function agentViewApplyAdoptedStyles(snapshot) {
 }
 
 function scaleAgentViewSemanticFrame() {
-  const frame = document.getElementById('agent-view-frame');
   const canvas = document.getElementById('agent-view-canvas');
-  if (!frame || !canvas || !agentViewSnapshot) return;
+  if (!canvas || !agentViewSnapshot) return;
   const viewport = agentViewSnapshot.viewport || {};
   const width = Math.max(320, Number(viewport.width || 1280));
   const height = Math.max(240, Number(viewport.height || 720));
   const scale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height);
-  frame.style.width = width + 'px';
-  frame.style.height = height + 'px';
-  frame.style.transform = 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
+  document.querySelectorAll('.agent-view-semantic-frame').forEach(function(frame) {
+    frame.style.width = width + 'px';
+    frame.style.height = height + 'px';
+    frame.style.transform = 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
+  });
 }
 
-function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, documentSeq) {
+function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, documentSeq, resync) {
   if (!snapshot || typeof snapshot !== 'object') return;
   agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
   agentViewInputTimers.clear();
@@ -19427,23 +19472,70 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, docum
   agentViewSnapshot = snapshot;
   agentViewMirrorId = String(mirrorId || '');
   agentViewDocumentSeq = Number(documentSeq || 0);
-  const frame = document.getElementById('agent-view-frame');
+  agentViewQueuedPatches = [];
+  agentViewSnapshotLoading = true;
+  const primaryFrame = document.getElementById('agent-view-frame');
+  const secondaryFrame = document.getElementById('agent-view-frame-next');
+  const frame = agentViewActiveFrame === primaryFrame ? secondaryFrame : primaryFrame;
   const image = document.getElementById('agent-view-image');
   const canvas = document.getElementById('agent-view-canvas');
-  if (image) image.removeAttribute('src');
-  if (!frame || !canvas) return;
-  frame.onload = function() {
+  if (!frame || !canvas) { agentViewSnapshotLoading = false; return; }
+  const renderToken = ++agentViewRenderToken;
+  let activated = false;
+  canvas.classList.add('semantic-loading');
+  if (agentViewActiveFrame) {
     try {
-      agentViewApplyAdoptedStyles(snapshot);
+      const focused = agentViewActiveFrame.contentDocument && agentViewActiveFrame.contentDocument.activeElement;
+      if (focused && typeof focused.blur === 'function') focused.blur();
+      if (agentViewActiveFrame.contentWindow) agentViewActiveFrame.contentWindow.blur();
+    } catch (_err) {}
+  }
+  scaleAgentViewSemanticFrame();
+  setAgentViewState(agentViewActiveFrame ? 'Refreshing same browser tab' : 'Building interactive semantic view', false);
+
+  function activateFrame() {
+    if (activated || renderToken !== agentViewRenderToken) return;
+    const doc = frame.contentDocument;
+    if (!doc || !doc.documentElement) return;
+    const tokenMeta = doc.querySelector('meta[name="unchained-render-token"]');
+    if (!tokenMeta || Number(tokenMeta.getAttribute('content')) !== renderToken) return;
+    activated = true;
+    if (agentViewActivationTimer) clearTimeout(agentViewActivationTimer);
+    agentViewActivationTimer = null;
+    try {
+      agentViewApplyAdoptedStyles(snapshot, frame);
+      agentViewProtectVisualPlaceholders(frame, doc);
       bindAgentViewInteractions(frame);
       agentViewSuppressScrollUntil = performance.now() + 180;
       if (frame.contentWindow) frame.contentWindow.scrollTo(Number((snapshot.viewport || {}).scrollX || 0), Number((snapshot.viewport || {}).scrollY || 0));
     } catch (_err) {}
+    const previousFrame = agentViewActiveFrame;
+    agentViewActiveFrame = frame;
+    frame.classList.add('active');
+    frame.setAttribute('aria-hidden', 'false');
+    frame.removeAttribute('tabindex');
+    if (previousFrame && previousFrame !== frame) {
+      previousFrame.classList.remove('active');
+      previousFrame.setAttribute('aria-hidden', 'true');
+      previousFrame.setAttribute('tabindex', '-1');
+    }
+    if (image) image.removeAttribute('src');
     canvas.classList.remove('has-frame');
+    canvas.classList.remove('semantic-loading');
     canvas.classList.add('has-semantic');
+    agentViewSnapshotLoading = false;
     scaleAgentViewSemanticFrame();
-  };
-  frame.srcdoc = agentViewSnapshotHtml(snapshot);
+    setAgentViewState(resync ? 'Semantic live / same tab refreshed' : 'Semantic live / same browser', true);
+    const queued = agentViewQueuedPatches.splice(0);
+    for (let index = 0; index < queued.length && renderToken === agentViewRenderToken; index += 1) {
+      applyAgentViewSemanticPatch.apply(null, queued[index]);
+    }
+  }
+
+  frame.onload = activateFrame;
+  frame.srcdoc = agentViewSnapshotHtml(snapshot, renderToken);
+  if (agentViewActivationTimer) clearTimeout(agentViewActivationTimer);
+  agentViewActivationTimer = setTimeout(activateFrame, 1200);
   const location = document.getElementById('agent-view-location');
   if (location) { location.textContent = snapshot.url || 'attached target'; location.title = snapshot.url || ''; }
   const fidelity = snapshot.fidelity || {};
@@ -19458,14 +19550,18 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, docum
   if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
   const seqEl = document.getElementById('agent-view-seq');
   if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
-  setAgentViewState('Semantic live / same browser', true);
 }
 
 function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq) {
   if (!patch || !Array.isArray(patch.operations) || !agentViewSnapshot) return;
+  if (agentViewSnapshotLoading) {
+    if (agentViewQueuedPatches.length >= 32) { refreshAgentView(); return; }
+    agentViewQueuedPatches.push([patch, transportSeq, mirrorId, documentSeq]);
+    return;
+  }
   if (String(mirrorId || '') !== agentViewMirrorId) { refreshAgentView(); return; }
   if (Number(patch.previousSeq) !== agentViewDocumentSeq) { refreshAgentView(); return; }
-  const frame = document.getElementById('agent-view-frame');
+  const frame = agentViewCurrentFrame();
   const doc = frame && frame.contentDocument;
   if (!doc) { refreshAgentView(); return; }
   try {
@@ -19487,6 +19583,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq)
         const replacement = template.content.firstElementChild;
         if (!replacement) throw new Error('semantic replacement missing');
         target.replaceWith(replacement);
+        agentViewProtectVisualPlaceholders(frame, replacement);
       } else if (operation.op === 'attributes') {
         Array.from(target.attributes).forEach(function(attribute) { if (attribute.name !== 'data-ucm-id') target.removeAttribute(attribute.name); });
         const attributes = operation.attributes || {};
@@ -19506,6 +19603,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq)
         target.scrollTop = Number(operation.y || 0);
       }
     });
+    agentViewProtectVisualPlaceholders(frame, doc);
   } catch (_err) { refreshAgentView(); return; }
   agentViewDocumentSeq = Number(documentSeq == null ? (patch.seq || agentViewDocumentSeq) : documentSeq);
   if (patch.url) {
@@ -19518,12 +19616,19 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq)
 
 function stopAgentViewSocket() {
   agentViewGeneration++;
+  agentViewRenderToken++;
   agentViewMirrorId = '';
+  agentViewSnapshotLoading = false;
+  agentViewQueuedPatches = [];
   agentViewPendingConfirmation = null;
   agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
   agentViewInputTimers.clear();
   const confirmation = document.getElementById('agent-view-confirm');
   if (confirmation) confirmation.classList.remove('open');
+  const canvas = document.getElementById('agent-view-canvas');
+  if (canvas) canvas.classList.remove('semantic-loading');
+  if (agentViewActivationTimer) clearTimeout(agentViewActivationTimer);
+  agentViewActivationTimer = null;
   if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
   agentViewRetryTimer = null;
   const socket = agentViewSocket;
@@ -19541,6 +19646,7 @@ function startAgentViewSocket() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
   stopAgentViewSocket();
+  agentViewBoundSessionId = sessionId;
   agentViewRetryAllowed = true;
   const generation = agentViewGeneration;
   setAgentViewState('Attaching to agent Chrome', false);
@@ -19552,7 +19658,7 @@ function startAgentViewSocket() {
     try { event = JSON.parse(message.data); } catch (_err) { return; }
     if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
-      renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.document_seq);
+      renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.document_seq, !!event.resync);
       return;
     }
     if (event.type === 'preview.semantic.patch' && event.patch) {
@@ -19634,6 +19740,7 @@ function closeAgentView() {
   const button = document.getElementById('topbar-agent-view');
   if (button) button.setAttribute('aria-expanded', 'false');
   stopAgentViewSocket();
+  agentViewBoundSessionId = '';
   agentViewRetryAllowed = false;
 }
 
@@ -19650,8 +19757,12 @@ function ensureAgentViewForBrowserActivity() {
 
 const _agentViewSetActiveSlotSession = _setActiveSlotSession;
 _setActiveSlotSession = function(sid) {
+  const changed = !!sid && !!agentViewBoundSessionId && sid !== agentViewBoundSessionId;
   _agentViewSetActiveSlotSession(sid);
-  if (document.body.classList.contains('agent-view-open')) setTimeout(refreshAgentView, 0);
+  if (changed && document.body.classList.contains('agent-view-open')) {
+    agentViewBoundSessionId = sid;
+    setTimeout(refreshAgentView, 0);
+  }
 };
 
 document.addEventListener('keydown', function(event) {
