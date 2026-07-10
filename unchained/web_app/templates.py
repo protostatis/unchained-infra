@@ -19096,6 +19096,7 @@ let agentViewGeneration = 0;
 let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
 let agentViewSnapshot = null;
+let agentViewRetryAllowed = true;
 
 function setAgentViewState(text, live) {
   const el = document.getElementById('agent-view-state');
@@ -19292,7 +19293,7 @@ function stopAgentViewSocket() {
 }
 
 function scheduleAgentViewRetry(generation) {
-  if (!document.body.classList.contains('agent-view-open') || generation !== agentViewGeneration) return;
+  if (!agentViewRetryAllowed || !document.body.classList.contains('agent-view-open') || generation !== agentViewGeneration) return;
   if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
   agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
 }
@@ -19301,6 +19302,7 @@ function startAgentViewSocket() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
   stopAgentViewSocket();
+  agentViewRetryAllowed = true;
   const generation = agentViewGeneration;
   setAgentViewState('Attaching to agent Chrome', false);
   const socket = new WebSocket(agentViewSocketUrl());
@@ -19339,6 +19341,7 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.reconnecting') { setAgentViewState('Refreshing live view', false); return; }
     if (event.type === 'preview.ended') {
+      agentViewRetryAllowed = !!event.retriable;
       setAgentViewState(event.reason === 'tab_changed' ? 'Following new tab' : (event.retriable ? 'Reconnecting' : 'Preview paused'), false);
       if (event.retriable) scheduleAgentViewRetry(generation);
     }
@@ -19347,6 +19350,7 @@ function startAgentViewSocket() {
   socket.onclose = function() {
     if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
     agentViewSocket = null;
+    if (!agentViewRetryAllowed) return;
     setAgentViewState('Reconnecting to agent Chrome', false);
     scheduleAgentViewRetry(generation);
   };
@@ -19369,6 +19373,7 @@ function closeAgentView() {
   const button = document.getElementById('banner-agent-view');
   if (button) button.setAttribute('aria-expanded', 'false');
   stopAgentViewSocket();
+  agentViewRetryAllowed = false;
 }
 
 function refreshAgentView() {

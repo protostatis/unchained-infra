@@ -1109,6 +1109,8 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert len(runtime_scripts) == 1, "Agent View runtime should remain inside one script element"
     assert "function agentViewFindTarget" in runtime_scripts[0], "Agent View runtime was split by HTML injection"
     assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
+    assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
+    assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
     assert "Same agent / same Chrome" in CHAT_HTML, "Agent View should explain its source binding"
     assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
     assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"

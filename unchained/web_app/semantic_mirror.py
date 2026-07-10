@@ -18,6 +18,7 @@ import cloud_tools
 MIRROR_CHUNK_CHARS = 128 * 1024
 MAX_MIRROR_PAYLOAD_CHARS = 4 * 1024 * 1024
 DEFAULT_POLL_INTERVAL = 0.5
+MAX_CONSECUTIVE_CAPTURE_ERRORS = 3
 
 
 class SemanticMirrorSnapshotEvent(TypedDict):
@@ -1086,6 +1087,7 @@ async def stream_semantic_mirror(
     yield {"type": "snapshot", "snapshot": snapshot, "resync": False}
 
     empty_polls = 0
+    capture_errors = 0
     while True:
         if stop_requested and stop_requested():
             return
@@ -1093,9 +1095,19 @@ async def stream_semantic_mirror(
         await asyncio.sleep(delay)
         if stop_requested and stop_requested():
             return
-        patch = await evaluate_mirror_payload(
-            agent_id, tab_id, DRAIN_MIRROR_EXPRESSION, relay_host, relay_port
-        )
+        try:
+            patch = await evaluate_mirror_payload(
+                agent_id, tab_id, DRAIN_MIRROR_EXPRESSION, relay_host, relay_port
+            )
+            capture_errors = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            capture_errors += 1
+            empty_polls = 0
+            if capture_errors >= MAX_CONSECUTIVE_CAPTURE_ERRORS:
+                raise
+            continue
         if patch.get("resetRequired"):
             snapshot = await evaluate_mirror_payload(
                 agent_id, tab_id, INSTALL_MIRROR_EXPRESSION, relay_host, relay_port
