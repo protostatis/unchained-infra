@@ -14844,16 +14844,16 @@ body{
 
   <div id="download-banner" class="guided" style="display:none">
     <div class="copy">
-      <span class="banner-kicker">Local setup required</span>
+      <span class="banner-kicker" id="banner-kicker">Local setup required</span>
       <span id="banner-msg">Connect this computer to run browser tasks.</span>
       <span class="detail" id="banner-detail">Status has two parts: Browser bridge and chat agent are tracked separately.</span>
     </div>
     <div class="banner-actions">
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
-      <span class="method-or" aria-hidden="true">or</span>
-      <span class="sr-only">or use the installer</span>
+      <span class="method-or" id="banner-method-or" aria-hidden="true">or</span>
+      <span class="sr-only" id="banner-installer-label">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
-      <a href="http://127.0.0.1:8787" target="_blank" rel="noopener" id="banner-cockpit" class="primary" style="display:none">Open semantic cockpit</a>
+      <a href="http://127.0.0.1:8787" target="_blank" rel="noopener" id="banner-cockpit" class="primary" style="display:none">Open local semantic cockpit</a>
     </div>
   </div>
 
@@ -15504,10 +15504,13 @@ function updateAgentStatusUI(data) {
   const chatEl = document.getElementById('agentstatus');
   const bridgeEl = document.getElementById('bridgestatus');
   const banner = document.getElementById('download-banner');
+  const bannerKicker = document.getElementById('banner-kicker');
   const bannerMsg = document.getElementById('banner-msg');
   const bannerDetail = document.getElementById('banner-detail');
   const bannerConnect = document.getElementById('banner-connect');
   const bannerCurl = document.getElementById('banner-curl');
+  const bannerMethodOr = document.getElementById('banner-method-or');
+  const bannerInstallerLabel = document.getElementById('banner-installer-label');
   const model = currentModel();
   const isCodexCli = model.startsWith('codex-cli:');
   const isOpenCodeCli = model.startsWith('opencode-cli:');
@@ -15539,6 +15542,7 @@ function updateAgentStatusUI(data) {
   lastLocalSetupReady = setupReady;
   updateSendAvailability(setupReady);
   updateLocalCliGuidance();
+  if (bannerKicker) bannerKicker.textContent = 'Local setup required';
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
   if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
   if (bannerConnect) { bannerConnect.textContent = 'Download Agent Installer'; bannerConnect.style.display = ''; }
@@ -15547,6 +15551,8 @@ function updateAgentStatusUI(data) {
     bannerCurl.style.display = '';
     bannerCurl.dataset.reconnect = '0';
   }
+  if (bannerMethodOr) bannerMethodOr.style.display = '';
+  if (bannerInstallerLabel) bannerInstallerLabel.style.display = '';
   { const cl = document.getElementById('banner-cockpit'); if (cl) cl.style.display = 'none'; }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
@@ -15588,10 +15594,13 @@ function updateAgentStatusUI(data) {
     if (bridgeConnected) {
       if (isOpenCodeCli) {
         if (banner) banner.style.display = 'flex';
-        if (bannerMsg) bannerMsg.textContent = 'Semantic cockpit available.';
-        if (bannerDetail) bannerDetail.textContent = 'Open the local cockpit to observe OpenCode browser actions, tool activity, and live semantic mirrors.';
+        if (bannerKicker) bannerKicker.textContent = 'Local observer';
+        if (bannerMsg) bannerMsg.textContent = 'Open the local semantic cockpit.';
+        if (bannerDetail) bannerDetail.textContent = 'The companion must be running on this computer. It stays local and attaches to the most recent OpenCode session.';
         if (bannerCurl) bannerCurl.style.display = 'none';
         if (bannerConnect) bannerConnect.style.display = 'none';
+        if (bannerMethodOr) bannerMethodOr.style.display = 'none';
+        if (bannerInstallerLabel) bannerInstallerLabel.style.display = 'none';
         const cockpitLink = document.getElementById('banner-cockpit');
         if (cockpitLink) cockpitLink.style.display = '';
       } else {
