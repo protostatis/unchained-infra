@@ -11,6 +11,7 @@ Chrome / relay / private-core.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from aiohttp import WSMsgType
@@ -376,6 +377,15 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         resp = await self.client.request("GET", "/ws?session_id=s-claude-abc12345-demo")
         self.assertEqual(resp.status, 401)
 
+    async def test_rejects_a_foreign_websocket_origin(self):
+        resp = await self.client.request(
+            "GET",
+            "/ws?session_id=s-claude-abc12345-demo",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(resp.status, 403)
+        self.assertIn("foreign websocket origin", await resp.text())
+
     async def test_streams_semantic_snapshot_and_rebinds_when_session_tab_changes(self):
         from web_app import semantic_mirror
 
@@ -444,6 +454,141 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
             self.fake_core._session_allowed_tabs["s-claude-abc12345-demo"],
             {replacement},
         )
+
+    async def test_interactive_action_uses_server_confirmation_on_the_exact_tab(self):
+        from web_app import semantic_mirror
+
+        original_stream = semantic_mirror.stream_semantic_mirror
+        original_execute = semantic_mirror.execute_semantic_action
+        release_stream = asyncio.Event()
+        calls = []
+
+        async def fake_semantic_stream(agent_id, tab_id, **kwargs):
+            self.assertEqual(agent_id, "claude-abc12345")
+            self.assertEqual(tab_id, "TAB" * 10 + "AA")
+            self.assertIn("operation_lock", kwargs)
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "url": "https://example.test",
+                    "body": '<button data-ucm-id="ucm-1">Continue</button>',
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+            await release_stream.wait()
+
+        async def fake_execute(agent_id, tab_id, action, **kwargs):
+            calls.append((agent_id, tab_id, action, kwargs))
+            if not kwargs.get("confirmed"):
+                return {"ok": False, "reason": "confirmation-required"}
+            return {"ok": True, "reason": "ok", "navigated": False}
+
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        semantic_mirror.execute_semantic_action = fake_execute
+        try:
+            ws = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo")
+            attached = await ws.receive_json()
+            snapshot = await ws.receive_json()
+            self.assertEqual(attached["interaction"], "interactive")
+            self.assertRegex(snapshot["mirror_id"], r"^[a-f0-9]{32}$")
+
+            await ws.send_json(
+                {
+                    "type": "preview.action",
+                    "action_id": "action_1234",
+                    "mirror_id": snapshot["mirror_id"],
+                    "document_seq": snapshot["document_seq"],
+                    "action": {
+                        "targetId": "ucm-1",
+                        "kind": "click",
+                        "label": "Continue",
+                        # A client cannot self-authorize a confirmation.
+                        "confirmed": True,
+                    },
+                }
+            )
+            challenge = await ws.receive_json()
+            self.assertEqual(
+                challenge["type"], "preview.action.confirmation_required"
+            )
+            self.assertEqual(challenge["action_id"], "action_1234")
+            self.assertEqual(challenge["label"], "Continue")
+            self.assertFalse(calls[0][3].get("confirmed", False))
+            self.assertNotIn("confirmed", calls[0][2])
+
+            await ws.send_json(
+                {
+                    "type": "preview.action.confirm",
+                    "action_id": "action_1234",
+                    "confirmation_token": challenge["confirmation_token"],
+                }
+            )
+            result = await ws.receive_json()
+            self.assertEqual(result["type"], "preview.action.result")
+            self.assertTrue(result["ok"])
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(calls[1][3]["confirmed"])
+            self.assertEqual(calls[1][0:2], ("claude-abc12345", "TAB" * 10 + "AA"))
+            self.assertIs(calls[0][3]["operation_lock"], calls[1][3]["operation_lock"])
+            release_stream.set()
+            await ws.close()
+        finally:
+            release_stream.set()
+            semantic_mirror.stream_semantic_mirror = original_stream
+            semantic_mirror.execute_semantic_action = original_execute
+
+
+class TestChatPreviewActionValidation(unittest.TestCase):
+    def test_bounds_action_and_drops_client_confirmation_flag(self):
+        action_id, mirror_id, document_seq, action, label = (
+            chat_flow._parse_chat_preview_action(
+                {
+                    "type": "preview.action",
+                    "action_id": "action_5678",
+                    "mirror_id": "a" * 32,
+                    "document_seq": 4,
+                    "action": {
+                        "targetId": "ucm-z",
+                        "kind": "input",
+                        "value": "hello",
+                        "label": "Search",
+                        "confirmed": True,
+                    },
+                }
+            )
+        )
+        self.assertEqual((action_id, mirror_id, document_seq), ("action_5678", "a" * 32, 4))
+        self.assertEqual(action, {"targetId": "ucm-z", "kind": "input", "value": "hello"})
+        self.assertEqual(label, "Search")
+
+    def test_rejects_unbounded_or_non_finite_action_data(self):
+        base = {
+            "type": "preview.action",
+            "action_id": "action_9012",
+            "mirror_id": "b" * 32,
+            "document_seq": 0,
+            "action": {"targetId": "ucm-1", "kind": "scroll", "x": float("inf")},
+        }
+        with self.assertRaisesRegex(ValueError, "coordinate"):
+            chat_flow._parse_chat_preview_action(base)
+        base["action"]["x"] = 10 ** 10_000
+        with self.assertRaisesRegex(ValueError, "coordinate"):
+            chat_flow._parse_chat_preview_action(base)
+
+
+class TestInteractiveAgentViewTemplate(unittest.TestCase):
+    def test_generated_chat_has_fullscreen_interactive_agent_view(self):
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        self.assertIn('id="topbar-agent-view"', html)
+        self.assertNotIn('id="banner-agent-view"', html)
+        self.assertIn("body.agent-view-open #app-shell #main{position:fixed", html)
+        self.assertIn("pointer-events:auto", html)
+        self.assertIn("preview.action.confirmation_required", html)
+        self.assertIn("function bindAgentViewInteractions", html)
+        self.assertIn("Interactive semantic DOM", html)
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

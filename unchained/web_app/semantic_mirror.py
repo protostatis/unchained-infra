@@ -1,4 +1,4 @@
-"""Read-only semantic browser mirroring for an already-resolved agent tab.
+"""Semantic browser mirroring for an already-resolved agent tab.
 
 Capture behavior is synchronized from unchained-mirror-demo PR #2, merge
 commit 84351eca7f69f7d5e9b5eb078bfc35c1dd335273. Keep the vendored INSTALL and
@@ -33,6 +33,16 @@ class SemanticMirrorPatchEvent(TypedDict):
 
 
 SemanticMirrorEvent = SemanticMirrorSnapshotEvent | SemanticMirrorPatchEvent
+
+
+class SemanticActionInput(TypedDict, total=False):
+    targetId: str
+    kind: Literal["click", "input", "change", "key", "scroll"]
+    value: str
+    checked: bool
+    key: str
+    x: float
+    y: float
 
 
 # Vendored verbatim from mirrorCapture.ts at the merge commit cited above.
@@ -968,6 +978,150 @@ def mirror_payload_chunk_expression(offset: int, length: int, release: bool) -> 
 }})()"""
 
 
+def mirror_action_expression(
+    action: SemanticActionInput,
+    *,
+    expected_seq: int,
+    confirmed: bool = False,
+) -> str:
+    """Build a bounded action expression for the currently mirrored document."""
+    encoded_action = json.dumps(
+        {**action, "confirmed": bool(confirmed)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    safe_seq = max(0, int(expected_seq))
+    return f"""(() => {{
+  'use strict';
+  const action = {encoded_action};
+  const expectedSeq = {safe_seq};
+  const state = window[Symbol.for('unchained.mirror.capture.v1')];
+  const startUrl = location.href;
+  const finish = (ok, reason) => JSON.stringify({{
+    ok,
+    reason,
+    navigated: location.href !== startUrl || Boolean(state && state.url !== location.href),
+    currentSeq: state && Number.isSafeInteger(state.seq) ? state.seq : -1
+  }});
+
+  if (!state || !(state.idToNode instanceof Map)) return finish(false, 'mirror-not-installed');
+  if (state.seq !== expectedSeq) return finish(false, 'stale-document');
+  if (typeof action.targetId !== 'string' || !action.targetId) return finish(false, 'invalid-target');
+  const target = state.idToNode.get(action.targetId);
+  if (!target || target.nodeType !== 1 || !target.isConnected) return finish(false, 'target-not-found');
+
+  const descriptor = [
+    target.getAttribute('type') || '', target.getAttribute('name') || '',
+    target.getAttribute('id') || '', target.getAttribute('autocomplete') || '',
+    target.getAttribute('placeholder') || '', target.getAttribute('aria-label') || '',
+    target.getAttribute('inputmode') || ''
+  ].join(' ');
+  const compactDescriptor = descriptor.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const type = (target.getAttribute('type') || '').toLowerCase();
+  const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase();
+  const sensitivePattern = /(?:^|[^a-z0-9])(?:cc-?(?:number|name|csc|cvc|cvv|exp|expiry)|card-?(?:number|holder|csc|cvc|cvv|exp|expiry)|credit-?card|security-?code|one-?time-?(?:code|password)|verification-?code|passcode|otp)(?:$|[^a-z0-9])/i;
+  const formField = target.localName === 'input' || target.localName === 'textarea' || target.localName === 'select';
+  const sensitive = formField && (
+    type === 'password' || type === 'hidden' || type === 'file' || target.hasAttribute('hidden') ||
+    autocomplete === 'current-password' || autocomplete === 'new-password' ||
+    autocomplete === 'one-time-code' || autocomplete.startsWith('cc-') ||
+    sensitivePattern.test(descriptor) ||
+    /(?:cardnumber|creditcard|securitycode|onetimecode|verificationcode|passcode|cvc|cvv|csc|otp)/.test(compactDescriptor)
+  );
+  if (sensitive || (typeof state.isSensitive === 'function' && state.isSensitive(target))) {{
+    return finish(false, 'sensitive-target');
+  }}
+
+  const value = typeof action.value === 'string' ? action.value.slice(0, 16384) : '';
+  const dispatch = (name, EventType, init) => target.dispatchEvent(new EventType(name, init));
+  let confirmationControl = target;
+  for (let depth = 0; confirmationControl && depth < 32; depth += 1) {{
+    const confirmationRole = (confirmationControl.getAttribute('role') || '').toLowerCase();
+    const confirmationType = (confirmationControl.getAttribute('type') || '').toLowerCase();
+    if (confirmationControl.localName === 'button' || confirmationRole === 'button' ||
+        (confirmationControl.localName === 'input' && /^(?:button|submit|reset|image)$/.test(confirmationType))) break;
+    const parent = confirmationControl.parentElement;
+    if (parent) {{ confirmationControl = parent; continue; }}
+    const root = confirmationControl.getRootNode ? confirmationControl.getRootNode() : null;
+    confirmationControl = root && root.host && root.host.nodeType === 1 ? root.host : null;
+  }}
+  const confirmationRole = confirmationControl ? (confirmationControl.getAttribute('role') || '').toLowerCase() : '';
+  const confirmationType = confirmationControl ? (confirmationControl.getAttribute('type') || '').toLowerCase() : '';
+  const buttonLike = Boolean(confirmationControl && (
+    confirmationControl.localName === 'button' || confirmationRole === 'button' ||
+    (confirmationControl.localName === 'input' && /^(?:button|submit|reset|image)$/.test(confirmationType))
+  ));
+
+  try {{
+    if (action.kind === 'click') {{
+      if (buttonLike && action.confirmed !== true) return finish(false, 'confirmation-required');
+      if (Number.isFinite(action.x) || Number.isFinite(action.y)) {{
+        dispatch('click', MouseEvent, {{
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: Number.isFinite(action.x) ? action.x : 0,
+          clientY: Number.isFinite(action.y) ? action.y : 0,
+          view: window
+        }});
+      }} else if (typeof target.click === 'function') {{
+        target.click();
+      }} else {{
+        dispatch('click', MouseEvent, {{ bubbles: true, cancelable: true, composed: true, view: window }});
+      }}
+    }} else if (action.kind === 'input' || action.kind === 'change') {{
+      if (!formField && !target.isContentEditable) return finish(false, 'target-not-editable');
+      if (target.localName === 'input' && (type === 'checkbox' || type === 'radio')) {{
+        if (typeof action.checked !== 'boolean') return finish(false, 'checked-required');
+        target.checked = action.checked;
+      }} else if (target.isContentEditable) {{
+        target.textContent = value;
+      }} else {{
+        target.value = value;
+      }}
+      state.allowedValueIds.add(action.targetId);
+      if (action.kind === 'input') {{
+        try {{
+          dispatch('input', InputEvent, {{ bubbles: true, composed: true, inputType: 'insertText', data: null }});
+        }} catch (_error) {{
+          dispatch('input', Event, {{ bubbles: true, composed: true }});
+        }}
+      }} else {{
+        dispatch('change', Event, {{ bubbles: true, composed: true }});
+      }}
+    }} else if (action.kind === 'key') {{
+      if (action.key !== 'Enter') return finish(false, 'unsupported-key');
+      if (action.confirmed !== true && (target.form || buttonLike)) return finish(false, 'confirmation-required');
+      const init = {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true, composed: true }};
+      const proceed = dispatch('keydown', KeyboardEvent, init);
+      dispatch('keypress', KeyboardEvent, init);
+      dispatch('keyup', KeyboardEvent, init);
+      if (proceed && target.localName === 'input' && target.form && typeof target.form.requestSubmit === 'function') {{
+        target.form.requestSubmit();
+      }} else if (proceed && /^(?:a|button)$/.test(target.localName) && typeof target.click === 'function') {{
+        target.click();
+      }}
+    }} else if (action.kind === 'scroll') {{
+      const x = Number.isFinite(action.x) ? action.x : 0;
+      const y = Number.isFinite(action.y) ? action.y : 0;
+      if (target === document.body || target === document.documentElement) {{
+        window.scrollTo({{ left: x, top: y, behavior: 'auto' }});
+      }} else if (typeof target.scrollTo === 'function') {{
+        target.scrollTo({{ left: x, top: y, behavior: 'auto' }});
+      }} else {{
+        target.scrollLeft = x;
+        target.scrollTop = y;
+      }}
+    }} else {{
+      return finish(false, 'unsupported-action');
+    }}
+    return finish(true, 'ok');
+  }} catch (error) {{
+    return finish(false, error && error.name ? 'exception:' + error.name : 'exception');
+  }}
+}})()"""
+
+
 def parse_evaluation(raw: str) -> Any:
     """Parse a direct JSON result or the extra JSON-string layer some relays add."""
     if not isinstance(raw, str):
@@ -1022,7 +1176,7 @@ def _js_char_length(value: str) -> int:
     return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
 
 
-async def evaluate_mirror_payload(
+async def _evaluate_mirror_payload_unlocked(
     agent_id: str,
     tab_id: str,
     expression: str,
@@ -1063,6 +1217,59 @@ async def evaluate_mirror_payload(
     return payload
 
 
+async def evaluate_mirror_payload(
+    agent_id: str,
+    tab_id: str,
+    expression: str,
+    relay_host: str = "127.0.0.1",
+    relay_port: int = 8765,
+    *,
+    operation_lock: asyncio.Lock | None = None,
+) -> dict[str, Any]:
+    """Evaluate one capture expression under the optional per-source lock."""
+    if operation_lock is None:
+        return await _evaluate_mirror_payload_unlocked(
+            agent_id, tab_id, expression, relay_host, relay_port
+        )
+    async with operation_lock:
+        return await _evaluate_mirror_payload_unlocked(
+            agent_id, tab_id, expression, relay_host, relay_port
+        )
+
+
+async def execute_semantic_action(
+    agent_id: str,
+    tab_id: str,
+    action: SemanticActionInput,
+    *,
+    expected_seq: int,
+    confirmed: bool = False,
+    relay_host: str = "127.0.0.1",
+    relay_port: int = 8765,
+    operation_lock: asyncio.Lock | None = None,
+) -> dict[str, Any]:
+    """Execute one server-authorized semantic action on the mirrored source."""
+    expression = mirror_action_expression(
+        action,
+        expected_seq=expected_seq,
+        confirmed=confirmed,
+    )
+
+    async def run() -> dict[str, Any]:
+        raw = await cloud_tools.run_js(
+            agent_id, tab_id, expression, relay_host, relay_port
+        )
+        result = parse_evaluation(raw)
+        if not isinstance(result, dict):
+            raise ValueError("semantic action result must be a JSON object")
+        return result
+
+    if operation_lock is None:
+        return await run()
+    async with operation_lock:
+        return await run()
+
+
 async def stream_semantic_mirror(
     agent_id: str,
     tab_id: str,
@@ -1071,6 +1278,7 @@ async def stream_semantic_mirror(
     relay_port: int = 8765,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     stop_requested: Callable[[], bool] | None = None,
+    operation_lock: asyncio.Lock | None = None,
 ) -> AsyncIterator[SemanticMirrorEvent]:
     """Yield an initial snapshot and non-empty patches from an attached tab.
 
@@ -1082,7 +1290,12 @@ async def stream_semantic_mirror(
         raise ValueError("poll_interval must be greater than zero")
 
     snapshot = await evaluate_mirror_payload(
-        agent_id, tab_id, INSTALL_MIRROR_EXPRESSION, relay_host, relay_port
+        agent_id,
+        tab_id,
+        INSTALL_MIRROR_EXPRESSION,
+        relay_host,
+        relay_port,
+        operation_lock=operation_lock,
     )
     yield {"type": "snapshot", "snapshot": snapshot, "resync": False}
 
@@ -1097,7 +1310,12 @@ async def stream_semantic_mirror(
             return
         try:
             patch = await evaluate_mirror_payload(
-                agent_id, tab_id, DRAIN_MIRROR_EXPRESSION, relay_host, relay_port
+                agent_id,
+                tab_id,
+                DRAIN_MIRROR_EXPRESSION,
+                relay_host,
+                relay_port,
+                operation_lock=operation_lock,
             )
             capture_errors = 0
         except asyncio.CancelledError:
@@ -1110,7 +1328,12 @@ async def stream_semantic_mirror(
             continue
         if patch.get("resetRequired"):
             snapshot = await evaluate_mirror_payload(
-                agent_id, tab_id, INSTALL_MIRROR_EXPRESSION, relay_host, relay_port
+                agent_id,
+                tab_id,
+                INSTALL_MIRROR_EXPRESSION,
+                relay_host,
+                relay_port,
+                operation_lock=operation_lock,
             )
             empty_polls = 0
             yield {"type": "snapshot", "snapshot": snapshot, "resync": True}

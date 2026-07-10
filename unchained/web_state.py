@@ -46,6 +46,14 @@ class ChatRuntimeState:
     session_profile_paths: dict[str, str] = field(default_factory=dict)
     session_last_active: dict[str, float] = field(default_factory=dict)
     session_agent_map: dict[str, str] = field(default_factory=dict)
+    # Serializes CDP operations that target the same source document. Semantic
+    # capture/actions and /web/cmd share these locks so their evaluations do
+    # not interleave on one tab.
+    source_operation_locks: dict[tuple[str, str], asyncio.Lock] = field(
+        default_factory=dict
+    )
+    # The newest authenticated preview owns the action channel for a chat.
+    chat_preview_generations: dict[str, int] = field(default_factory=dict)
     stale_tab_task: asyncio.Task | None = None
     tabs_pending_close: dict[str, tuple[str, int]] = field(default_factory=dict)
     gemini_procs: dict[str, subprocess.Popen] = field(default_factory=dict)

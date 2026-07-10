@@ -680,6 +680,8 @@ _session_allowed_tabs = _state.session_allowed_tabs  # session_id -> server-auth
 _session_profile_paths = _state.session_profile_paths  # session_id -> selected Chrome profile path
 _session_last_active = _state.session_last_active  # session_id -> timestamp
 _session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
+_source_operation_locks = _state.source_operation_locks  # (agent_id, tab_id) -> asyncio.Lock
+_chat_preview_generations = _state.chat_preview_generations  # session_id -> latest preview generation
 _STALE_TAB_SECONDS = 5 * 60  # 5 minutes — first-look guest sessions (headless, limited RAM)
 _STALE_TAB_SECONDS_AGENT = 60 * 60  # 60 minutes — logged-in agent sessions (Chrome on user's machine)
 _stale_tab_task: asyncio.Task | None = None
@@ -1861,15 +1863,19 @@ async def handle_cmd(request: web.Request) -> web.Response:
             _session_allowed_tabs.setdefault(session_id, set()).add(tab_id)
             _session_tabs[session_id] = tab_id
             _session_last_active[session_id] = time.time()
-        payload = await run_cmd_action(
-            action=action,
-            body=body,
-            agent_id=agent_id,
-            tab_id=tab_id,
-            relay_host=relay_host,
-            relay_port=relay_port,
-            cloud_tools=cloud_tools,
+        source_lock = _source_operation_locks.setdefault(
+            (str(agent_id), str(tab_id)), asyncio.Lock()
         )
+        async with source_lock:
+            payload = await run_cmd_action(
+                action=action,
+                body=body,
+                agent_id=agent_id,
+                tab_id=tab_id,
+                relay_host=relay_host,
+                relay_port=relay_port,
+                cloud_tools=cloud_tools,
+            )
         if session_id:
             new_tab_id = ""
             if action == "new_tab":

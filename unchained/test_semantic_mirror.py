@@ -1,5 +1,6 @@
 """Focused transport tests for the hosted semantic Agent View backend."""
 
+import asyncio
 import hashlib
 import json
 import unittest
@@ -11,6 +12,8 @@ from web_app.semantic_mirror import (
     MAX_MIRROR_PAYLOAD_CHARS,
     MIRROR_CHUNK_CHARS,
     evaluate_mirror_payload,
+    execute_semantic_action,
+    mirror_action_expression,
     parse_evaluation,
     stream_semantic_mirror,
 )
@@ -36,6 +39,25 @@ class TestSemanticMirrorParsing(unittest.TestCase):
         payload = {"url": "https://example.test", "operations": []}
         self.assertEqual(parse_evaluation(_encoded(payload)), payload)
         self.assertEqual(parse_evaluation(_encoded(payload, double=True)), payload)
+
+    def test_action_expression_binds_sequence_and_keeps_server_safety_guards(self):
+        expression = mirror_action_expression(
+            {
+                "targetId": "ucm-a",
+                "kind": "input",
+                "value": "line\u2028break",
+            },
+            expected_seq=7,
+        )
+
+        self.assertIn("const expectedSeq = 7", expression)
+        self.assertIn("state.seq !== expectedSeq", expression)
+        self.assertIn("sensitive-target", expression)
+        self.assertIn("confirmation-required", expression)
+        self.assertIn("target.form || buttonLike", expression)
+        self.assertIn("confirmationControl.parentElement", expression)
+        self.assertIn("line\\u2028break", expression)
+        self.assertIn('"confirmed":false', expression)
 
 
 class TestSemanticMirrorTransport(unittest.IsolatedAsyncioTestCase):
@@ -80,6 +102,30 @@ class TestSemanticMirrorTransport(unittest.IsolatedAsyncioTestCase):
             await evaluate_mirror_payload("agent", "tab", INSTALL_MIRROR_EXPRESSION)
 
         run_js.assert_awaited_once()
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_semantic_action_runs_under_source_lock(self, run_js):
+        run_js.return_value = _encoded(
+            {"ok": True, "reason": "ok", "navigated": False, "currentSeq": 3}
+        )
+        lock = asyncio.Lock()
+
+        result = await execute_semantic_action(
+            "agent",
+            "tab",
+            {"targetId": "ucm-1", "kind": "click"},
+            expected_seq=3,
+            relay_host="relay",
+            relay_port=9999,
+            operation_lock=lock,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(lock.locked())
+        args = run_js.await_args.args
+        self.assertEqual(args[:2], ("agent", "tab"))
+        self.assertIn("const expectedSeq = 3", args[2])
+        self.assertEqual(args[3:], ("relay", 9999))
 
 
 class TestSemanticMirrorStream(unittest.IsolatedAsyncioTestCase):
