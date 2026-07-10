@@ -19149,8 +19149,8 @@ function agentViewSnapshotHtml(snapshot) {
   const observerCss = 'a,button,input,select,textarea,[contenteditable]{pointer-events:none!important}html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
     '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '">' + String(source.head || '') +
-    '<style data-ucm-adopted="document">' + documentCss + '</style><style data-ucm-observer>' + observerCss + '</style>' +
-    '</head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '</body></html>';
+    '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
+    '<\\/head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '<\\/body><\\/html>';
 }
 
 function agentViewFindTarget(root, targetId) {

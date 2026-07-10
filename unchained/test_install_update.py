@@ -1101,6 +1101,14 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert "preview.semantic.patch" in CHAT_HTML, "Agent View should apply semantic patches"
     assert "omittedSensitiveFields" in CHAT_HTML, "Agent View should expose mirror fidelity telemetry"
     assert "new-tab" in CHAT_HTML, "new-tab activity should refresh Agent View"
+    runtime_scripts = [
+        script
+        for script in re.findall(r"<script[^>]*>(.*?)</script>", CHAT_HTML, flags=re.DOTALL)
+        if "let agentViewSocket" in script
+    ]
+    assert len(runtime_scripts) == 1, "Agent View runtime should remain inside one script element"
+    assert "function agentViewFindTarget" in runtime_scripts[0], "Agent View runtime was split by HTML injection"
+    assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
     assert "Same agent / same Chrome" in CHAT_HTML, "Agent View should explain its source binding"
     assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
     assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"
