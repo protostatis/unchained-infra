@@ -362,31 +362,51 @@ async def _handle_preview_ws(
         if not agent_id:
             return web.Response(status=503, text="browser bridge unavailable")
         tab_id = str(core._session_tabs.get(sid_param, "") or "auto").strip()
-        if tab_id == "auto":
-            import cloud_tools
+        import cloud_tools
 
-            relay_host, relay_port = core._parse_relay()
-            try:
-                target_info = await cloud_tools.run_cdp_command(
-                    agent_id,
-                    "auto",
-                    "Target.getTargetInfo",
-                    {},
-                    relay_host,
-                    relay_port,
-                    bring_to_front=False,
-                )
-                tab_id = str(
-                    ((target_info or {}).get("targetInfo") or {}).get("targetId") or ""
-                ).strip()
-            except Exception as exc:
+        relay_host, relay_port = core._parse_relay()
+
+        async def resolve_preview_tab(candidate: str) -> str:
+            target_info = await cloud_tools.run_cdp_command(
+                agent_id,
+                candidate,
+                "Target.getTargetInfo",
+                {},
+                relay_host,
+                relay_port,
+                bring_to_front=False,
+            )
+            target_id = str(
+                ((target_info or {}).get("targetInfo") or {}).get("targetId") or ""
+            ).strip()
+            if not target_id:
+                raise RuntimeError("Chrome did not return a target id")
+            return candidate if candidate.startswith("prov-") else target_id
+
+        try:
+            tab_id = await resolve_preview_tab(tab_id)
+        except Exception as exc:
+            # Default Chrome may outlive a locally closed tab or an agent
+            # restart. Re-pin to the bridge-selected page rather than
+            # reconnecting forever to a dead target. Provisioned targets must
+            # not fall through to a different Chrome/profile.
+            if tab_id != "auto" and not tab_id.startswith("prov-"):
+                try:
+                    tab_id = await resolve_preview_tab("auto")
+                except Exception as fallback_exc:
+                    exc = fallback_exc
+                else:
+                    core._session_tabs[sid_param] = tab_id
+                    if hasattr(core, "_session_allowed_tabs"):
+                        core._session_allowed_tabs[sid_param] = {tab_id}
+                    exc = None
+            if exc is not None:
                 print(
                     f"[preview-fsm] sid={sid_param} target pin failed: {exc!r}",
                     flush=True,
                 )
                 return web.Response(status=503, text="browser target unavailable")
-            if not tab_id:
-                return web.Response(status=503, text="browser target unavailable")
+        else:
             core._session_tabs[sid_param] = tab_id
             if hasattr(core, "_session_allowed_tabs"):
                 core._session_allowed_tabs.setdefault(sid_param, set()).add(tab_id)

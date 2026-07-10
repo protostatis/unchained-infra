@@ -41,6 +41,7 @@ class _AuthenticatedFakeCore(_FakeCore):
     def __init__(self):
         super().__init__()
         self._session_tabs = {"s-claude-abc12345-demo": "TAB" * 10 + "AA"}
+        self._session_allowed_tabs = {"s-claude-abc12345-demo": {"TAB" * 10 + "AA"}}
         self._session_agent_map = {"s-claude-abc12345-demo": "claude-abc12345"}
         self.authenticated = True
 
@@ -327,8 +328,15 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
     async def get_application(self):
         self._original_core = chat_flow._core
         self._original_stream = cloud_tools.stream_screencast
+        self._original_cdp = cloud_tools.run_cdp_command
         self.fake_core = _AuthenticatedFakeCore()
         chat_flow._core = lambda: self.fake_core
+
+        async def fake_cdp(_agent_id, tab_id, method, *_args, **_kwargs):
+            self.assertEqual(method, "Target.getTargetInfo")
+            return {"targetInfo": {"targetId": tab_id}}
+
+        cloud_tools.run_cdp_command = fake_cdp
         app = web.Application()
         app.router.add_get("/ws", chat_flow.handle_chat_preview_ws)
         return app
@@ -336,6 +344,7 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
     async def asyncTearDown(self):
         chat_flow._core = self._original_core
         cloud_tools.stream_screencast = self._original_stream
+        cloud_tools.run_cdp_command = self._original_cdp
         await super().asyncTearDown()
 
     async def test_streams_the_exact_tab_bound_to_the_authenticated_chat_session(self):
@@ -403,6 +412,38 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(ended["type"], "preview.ended")
         self.assertEqual(ended["reason"], "tab_changed")
         self.assertTrue(ended["retriable"])
+
+    async def test_stale_default_tab_is_replaced_by_server_resolved_auto_target(self):
+        stale = self.fake_core._session_tabs["s-claude-abc12345-demo"]
+        replacement = "C" * 32
+
+        async def fake_cdp(_agent_id, tab_id, method, *_args, **_kwargs):
+            self.assertEqual(method, "Target.getTargetInfo")
+            if tab_id == stale:
+                raise RuntimeError("target not found")
+            self.assertEqual(tab_id, "auto")
+            return {"targetInfo": {"targetId": replacement}}
+
+        async def fake_stream(_agent_id, tab_id, **_kwargs):
+            self.assertEqual(tab_id, replacement)
+            yield {"type": "frame", "mime": "image/jpeg", "data": "replacement-frame"}
+
+        cloud_tools.run_cdp_command = fake_cdp
+        cloud_tools.stream_screencast = fake_stream
+        ws = await self.client.ws_connect(
+            "/ws?session_id=s-claude-abc12345-demo&transport=frames"
+        )
+        attached = await ws.receive_json()
+        frame = await ws.receive_json()
+        await ws.close()
+
+        self.assertEqual(attached["tab_id"], replacement)
+        self.assertEqual(frame["data"], "replacement-frame")
+        self.assertEqual(self.fake_core._session_tabs["s-claude-abc12345-demo"], replacement)
+        self.assertEqual(
+            self.fake_core._session_allowed_tabs["s-claude-abc12345-demo"],
+            {replacement},
+        )
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

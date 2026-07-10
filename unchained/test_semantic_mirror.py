@@ -176,6 +176,32 @@ class TestSemanticMirrorStream(unittest.IsolatedAsyncioTestCase):
 
         run_js.assert_awaited_once()
 
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_transient_navigation_error_recovers_with_resync(self, run_js):
+        initial = {"url": "https://example.test/one", "hash": "fnv1a-1"}
+        reset = {
+            "seq": 1,
+            "previousSeq": 0,
+            "operations": [],
+            "resetRequired": True,
+            "rawBytes": 100,
+        }
+        resync = {"url": "https://example.test/two", "hash": "fnv1a-2"}
+        run_js.side_effect = [
+            _encoded(initial),
+            RuntimeError("execution context destroyed"),
+            _encoded(reset),
+            _encoded(resync),
+        ]
+        stream = stream_semantic_mirror("agent", "tab")
+
+        await anext(stream)
+        self.assertEqual(
+            await anext(stream),
+            {"type": "snapshot", "snapshot": resync, "resync": True},
+        )
+        await stream.aclose()
+
 
 if __name__ == "__main__":
     unittest.main()
