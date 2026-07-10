@@ -57,6 +57,8 @@ async def close_session_tab(session_id: str):
     # Clear overlay state — the tab is being closed
     core._overlay_sessions.pop(session_id, None)
     tab_id = core._session_tabs.pop(session_id, None)
+    if hasattr(core, "_session_allowed_tabs"):
+        core._session_allowed_tabs.pop(session_id, None)
     agent_id = core._session_agent_map.pop(session_id, None)
     core._session_last_active.pop(session_id, None)
     if hasattr(core, "_session_profile_paths"):
@@ -121,6 +123,8 @@ async def ensure_session_tab(session_id: str, agent_id: str) -> str | None:
     try:
         tab_id = await create_session_tab(session_id, agent_id, clean_cookies=is_headless_agent)
         core._session_tabs[session_id] = tab_id
+        if hasattr(core, "_session_allowed_tabs"):
+            core._session_allowed_tabs[session_id] = {tab_id}
         core._session_agent_map[session_id] = agent_id
         core._session_last_active[session_id] = time.time()
         core.log.info("[tabs] Created tab %s for session %s (agent %s)", tab_id, session_id, agent_id)

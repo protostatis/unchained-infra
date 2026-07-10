@@ -346,7 +346,7 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
             yield {"type": "frame", "mime": "image/jpeg", "data": "same-browser-frame"}
 
         cloud_tools.stream_screencast = fake_stream
-        ws = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo&width=900&height=600")
+        ws = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo&width=900&height=600&transport=frames")
         attached = await ws.receive_json()
         frame = await ws.receive_json()
         await ws.close()
@@ -366,6 +366,43 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.fake_core.authenticated = False
         resp = await self.client.request("GET", "/ws?session_id=s-claude-abc12345-demo")
         self.assertEqual(resp.status, 401)
+
+    async def test_streams_semantic_snapshot_and_rebinds_when_session_tab_changes(self):
+        from web_app import semantic_mirror
+
+        original_stream = semantic_mirror.stream_semantic_mirror
+
+        async def fake_semantic_stream(agent_id, tab_id, **kwargs):
+            self.assertEqual(agent_id, "claude-abc12345")
+            self.assertEqual(tab_id, "TAB" * 10 + "AA")
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "url": "https://example.test",
+                    "body": "<main data-ucm-id=\"ucm-1\">Observed</main>",
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+            self.fake_core._session_tabs["s-claude-abc12345-demo"] = "NEW" * 10 + "BB"
+            self.assertTrue(kwargs["stop_requested"]())
+
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        try:
+            ws = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo")
+            attached = await ws.receive_json()
+            snapshot = await ws.receive_json()
+            ended = await ws.receive_json()
+            await ws.close()
+        finally:
+            semantic_mirror.stream_semantic_mirror = original_stream
+
+        self.assertEqual(attached["mode"], "semantic")
+        self.assertEqual(snapshot["type"], "preview.semantic.snapshot")
+        self.assertEqual(snapshot["snapshot"]["url"], "https://example.test")
+        self.assertEqual(ended["type"], "preview.ended")
+        self.assertEqual(ended["reason"], "tab_changed")
+        self.assertTrue(ended["retriable"])
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

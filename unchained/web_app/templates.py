@@ -9504,7 +9504,7 @@ function toolFriendlyDesc(name, input) {
   return i.slice(0,50);
 }
 
-const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','intervention','intervention_screenshot']);
+const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','new-tab','intervention','intervention_screenshot']);
 let _currentGroup = null;
 let _currentGroupSteps = 0;
 let _currentGroupDot = null;
@@ -10958,7 +10958,7 @@ function toolFriendlyDesc(name, input) {
   return i.slice(0,50);
 }
 
-const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','intervention','intervention_screenshot']);
+const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','new-tab','intervention','intervention_screenshot']);
 let _currentGroup = null;
 let _currentGroupSteps = 0;
 let _currentGroupDot = null;
@@ -13453,7 +13453,7 @@ function toolFriendlyDesc(name, input) {
   return i.slice(0,50);
 }
 
-const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','intervention','intervention_screenshot']);
+const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','new-tab','intervention','intervention_screenshot']);
 let _currentGroup = null;
 let _currentGroupSteps = 0;
 let _currentGroupDot = null;
@@ -16042,7 +16042,7 @@ function toolFriendlyDesc(name, input) {
   return i.slice(0,50);
 }
 
-const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','intervention','intervention_screenshot']);
+const BROWSER_TOOLS = new Set(['navigate','ddm','click','type','intel','screenshot','js','new-tab','intervention','intervention_screenshot']);
 let _currentGroup = null;
 let _currentGroupSteps = 0;
 let _currentGroupDot = null;
@@ -18992,17 +18992,20 @@ body.agent-view-open #sidebar{width:0;opacity:0;border-color:transparent;pointer
 .agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.05);color:#c9d3df;font-size:19px;cursor:pointer}
 .agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
 .agent-view-browserbar{min-height:38px;padding:0 13px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);background:#0c1118;color:#8290a0;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
+.agent-view-location{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#aab5c2}
 .agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(139,223,172,.5),rgba(74,167,255,.14),transparent)}
 .agent-view-browserbar .policy{color:#a9e8bf;border:1px solid rgba(139,223,172,.24);padding:3px 6px;border-radius:999px}
 .agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(74,167,255,.08),transparent 42%),#05070a}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
-.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-frame .agent-view-empty{display:none}
+#agent-view-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:none;transform-origin:center center;color-scheme:light}
+.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic #agent-view-frame{display:block}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
 .agent-view-empty{width:min(390px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
 .agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(139,223,172,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
 .agent-view-empty strong{color:#dce7da;font-size:15px}.agent-view-empty span{font-size:11px;line-height:1.6}
 .agent-view-foot{min-height:35px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid rgba(255,255,255,.08);background:#0b0f14;color:#778494;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
 .agent-view-foot strong{color:#bfe8ca;font-weight:500}
+.agent-view-fidelity{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
 @keyframes agentViewIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}
 @media(max-width:1180px){#agent-view{position:fixed;z-index:1200;inset:0 0 0 auto;width:min(760px,94vw);flex-basis:auto;box-shadow:-24px 0 80px rgba(0,0,0,.5)}body.agent-view-open #sidebar{width:260px;opacity:1;pointer-events:auto}}
 @media(max-width:640px){#agent-view{width:100vw}.agent-view-head{min-height:62px;padding:10px}.agent-view-state{max-width:130px}.agent-view-foot{font-size:8px}}
@@ -19015,12 +19018,13 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Read-only agent browse
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
-  <div class="agent-view-browserbar"><span>CDP browser</span><span class="rail"></span><span class="policy">read only</span></div>
+  <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">read only</span></div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
+    <iframe id="agent-view-frame" title="Semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer" tabindex="-1"></iframe>
     <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">CDP</div><strong>The browser will appear here.</strong><span>Send a prompt in chat. Agent View follows the exact Chrome target selected for this conversation.</span></div>
   </div>
-  <footer class="agent-view-foot"><span>Agent controls</span><strong>You observe</strong><span id="agent-view-seq">No frame yet</span></footer>
+  <footer class="agent-view-foot"><span>Agent controls</span><strong>You observe</strong><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
 </aside>"""
 
 _SIDEBAR_JS = """
@@ -19090,6 +19094,8 @@ let agentViewSocket = null;
 let agentViewRetryTimer = null;
 let agentViewGeneration = 0;
 let agentViewLastSeq = 0;
+let agentViewDocumentSeq = 0;
+let agentViewSnapshot = null;
 
 function setAgentViewState(text, live) {
   const el = document.getElementById('agent-view-state');
@@ -19113,6 +19119,167 @@ function agentViewSocketUrl() {
   const query = new URLSearchParams({session_id: sessionId, width: String(viewport.width), height: String(viewport.height)});
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return scheme + '://' + window.location.host + '/web/chat/preview/ws?' + query.toString();
+}
+
+function agentViewEscapeAttribute(value) {
+  return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function agentViewSerializeAttributes(attributes) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.keys(attributes).filter(function(name) {
+    return /^[A-Za-z_:][A-Za-z0-9_.:-]*$/.test(name) && !/^on/i.test(name) && name.toLowerCase() !== 'srcdoc';
+  }).map(function(name) {
+    return ' ' + name + '="' + agentViewEscapeAttribute(attributes[name]) + '"';
+  }).join('');
+}
+
+function agentViewSafeBase(raw) {
+  try {
+    const parsed = new URL(String(raw || ''));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : 'https://invalid.invalid/';
+  } catch (_err) { return 'https://invalid.invalid/'; }
+}
+
+function agentViewSnapshotHtml(snapshot) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const adopted = Array.isArray(source.adoptedStyles) ? source.adoptedStyles : [];
+  const documentCss = adopted.filter(function(entry) { return entry && entry.hostId === 'document'; }).map(function(entry) { return String(entry.css || ''); }).join('\\n');
+  const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
+  const observerCss = 'a,button,input,select,textarea,[contenteditable]{pointer-events:none!important}html{scroll-behavior:auto!important}';
+  return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
+    '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '">' + String(source.head || '') +
+    '<style data-ucm-adopted="document">' + documentCss + '</style><style data-ucm-observer>' + observerCss + '</style>' +
+    '</head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '</body></html>';
+}
+
+function agentViewFindTarget(root, targetId) {
+  if (!root || !targetId) return null;
+  const nodes = root.querySelectorAll ? root.querySelectorAll('[data-ucm-id]') : [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].getAttribute('data-ucm-id') === targetId) return nodes[i];
+    if (nodes[i].shadowRoot) {
+      const nested = agentViewFindTarget(nodes[i].shadowRoot, targetId);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function agentViewApplyAdoptedStyles(snapshot) {
+  const frame = document.getElementById('agent-view-frame');
+  const doc = frame && frame.contentDocument;
+  if (!doc || !Array.isArray(snapshot.adoptedStyles)) return;
+  snapshot.adoptedStyles.forEach(function(entry) {
+    if (!entry || entry.hostId === 'document' || !entry.css) return;
+    const host = agentViewFindTarget(doc, entry.hostId);
+    if (!host || !host.shadowRoot) return;
+    const style = doc.createElement('style');
+    style.setAttribute('data-ucm-adopted', entry.hostId);
+    style.textContent = String(entry.css);
+    host.shadowRoot.appendChild(style);
+  });
+}
+
+function scaleAgentViewSemanticFrame() {
+  const frame = document.getElementById('agent-view-frame');
+  const canvas = document.getElementById('agent-view-canvas');
+  if (!frame || !canvas || !agentViewSnapshot) return;
+  const viewport = agentViewSnapshot.viewport || {};
+  const width = Math.max(320, Number(viewport.width || 1280));
+  const height = Math.max(240, Number(viewport.height || 720));
+  const scale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height);
+  frame.style.width = width + 'px';
+  frame.style.height = height + 'px';
+  frame.style.transform = 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
+}
+
+function renderAgentViewSemanticSnapshot(snapshot, transportSeq) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  agentViewSnapshot = snapshot;
+  agentViewDocumentSeq = 0;
+  const frame = document.getElementById('agent-view-frame');
+  const image = document.getElementById('agent-view-image');
+  const canvas = document.getElementById('agent-view-canvas');
+  if (image) image.removeAttribute('src');
+  if (!frame || !canvas) return;
+  frame.onload = function() {
+    try {
+      agentViewApplyAdoptedStyles(snapshot);
+      if (frame.contentWindow) frame.contentWindow.scrollTo(Number((snapshot.viewport || {}).scrollX || 0), Number((snapshot.viewport || {}).scrollY || 0));
+    } catch (_err) {}
+    canvas.classList.remove('has-frame');
+    canvas.classList.add('has-semantic');
+    scaleAgentViewSemanticFrame();
+  };
+  frame.srcdoc = agentViewSnapshotHtml(snapshot);
+  const location = document.getElementById('agent-view-location');
+  if (location) { location.textContent = snapshot.url || 'attached target'; location.title = snapshot.url || ''; }
+  const fidelity = snapshot.fidelity || {};
+  const notes = [];
+  if (Number(fidelity.shadowRoots || 0)) notes.push(fidelity.shadowRoots + ' shadow');
+  if (Number(fidelity.visualRegions || 0)) notes.push(fidelity.visualRegions + ' visual placeholders');
+  if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
+  if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
+  if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
+  if (fidelity.truncated) notes.push('capture bounded');
+  const fidelityEl = document.getElementById('agent-view-fidelity');
+  if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
+  const seqEl = document.getElementById('agent-view-seq');
+  if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
+  setAgentViewState('Semantic live / same browser', true);
+}
+
+function applyAgentViewSemanticPatch(patch, transportSeq) {
+  if (!patch || !Array.isArray(patch.operations) || !agentViewSnapshot) return;
+  if (Number(patch.previousSeq) !== agentViewDocumentSeq) { refreshAgentView(); return; }
+  const frame = document.getElementById('agent-view-frame');
+  const doc = frame && frame.contentDocument;
+  if (!doc) { refreshAgentView(); return; }
+  try {
+    patch.operations.forEach(function(operation) {
+      if (!operation || typeof operation !== 'object') return;
+      if (operation.op === 'scroll' && operation.targetId === 'document') {
+        if (frame.contentWindow) frame.contentWindow.scrollTo(Number(operation.x || 0), Number(operation.y || 0));
+        return;
+      }
+      const target = agentViewFindTarget(doc, operation.targetId);
+      if (!target) throw new Error('semantic target missing');
+      if (operation.op === 'remove') target.remove();
+      else if (operation.op === 'text') target.textContent = String(operation.text || '');
+      else if (operation.op === 'replace') {
+        if (String(operation.html || '').includes('shadowrootmode')) throw new Error('shadow replacement needs resync');
+        const template = doc.createElement('template');
+        template.innerHTML = String(operation.html || '');
+        const replacement = template.content.firstElementChild;
+        if (!replacement) throw new Error('semantic replacement missing');
+        target.replaceWith(replacement);
+      } else if (operation.op === 'attributes') {
+        Array.from(target.attributes).forEach(function(attribute) { if (attribute.name !== 'data-ucm-id') target.removeAttribute(attribute.name); });
+        const attributes = operation.attributes || {};
+        Object.keys(attributes).forEach(function(name) {
+          if (/^[A-Za-z_:][A-Za-z0-9_.:-]*$/.test(name) && !/^on/i.test(name) && name.toLowerCase() !== 'srcdoc') target.setAttribute(name, String(attributes[name]));
+        });
+      } else if (operation.op === 'state') {
+        if (typeof operation.value === 'string') {
+          if (target.isContentEditable) target.textContent = operation.value;
+          else target.value = operation.value;
+        }
+        if (typeof operation.checked === 'boolean') target.checked = operation.checked;
+        if (Number.isInteger(operation.selectedIndex)) target.selectedIndex = operation.selectedIndex;
+      } else if (operation.op === 'scroll') {
+        target.scrollLeft = Number(operation.x || 0);
+        target.scrollTop = Number(operation.y || 0);
+      }
+    });
+  } catch (_err) { refreshAgentView(); return; }
+  agentViewDocumentSeq = Number(patch.seq || agentViewDocumentSeq);
+  if (patch.url) {
+    const location = document.getElementById('agent-view-location');
+    if (location) { location.textContent = patch.url; location.title = patch.url; }
+  }
+  const seqEl = document.getElementById('agent-view-seq');
+  if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
 }
 
 function stopAgentViewSocket() {
@@ -19142,7 +19309,19 @@ function startAgentViewSocket() {
     if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
     let event;
     try { event = JSON.parse(message.data); } catch (_err) { return; }
-    if (event.type === 'preview.attached') { setAgentViewState('Attached to agent Chrome', true); return; }
+    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building semantic view' : 'Attached to agent Chrome', false); return; }
+    if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
+      renderAgentViewSemanticSnapshot(event.snapshot, event.seq);
+      return;
+    }
+    if (event.type === 'preview.semantic.patch' && event.patch) {
+      applyAgentViewSemanticPatch(event.patch, event.seq);
+      return;
+    }
+    if (event.type === 'preview.semantic_unavailable') {
+      setAgentViewState('Semantic unavailable / live frames', false);
+      return;
+    }
     if (event.type === 'preview.frame' && event.data) {
       const seq = Number(event.seq || 0);
       if (seq && seq <= agentViewLastSeq) return;
@@ -19150,15 +19329,17 @@ function startAgentViewSocket() {
       const image = document.getElementById('agent-view-image');
       const canvas = document.getElementById('agent-view-canvas');
       if (image) image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
-      if (canvas) canvas.classList.add('has-frame');
+      if (canvas) { canvas.classList.remove('has-semantic'); canvas.classList.add('has-frame'); }
       const seqEl = document.getElementById('agent-view-seq');
-      if (seqEl) seqEl.textContent = 'Frame ' + seq;
+      if (seqEl) seqEl.textContent = 'Fallback frame ' + seq;
+      const fidelityEl = document.getElementById('agent-view-fidelity');
+      if (fidelityEl) fidelityEl.textContent = 'Pixel fallback';
       setAgentViewState('Live / same browser', true);
       return;
     }
     if (event.type === 'preview.reconnecting') { setAgentViewState('Refreshing live view', false); return; }
     if (event.type === 'preview.ended') {
-      setAgentViewState(event.retriable ? 'Reconnecting' : 'Preview paused', false);
+      setAgentViewState(event.reason === 'tab_changed' ? 'Following new tab' : (event.retriable ? 'Reconnecting' : 'Preview paused'), false);
       if (event.retriable) scheduleAgentViewRetry(generation);
     }
   };
@@ -19172,12 +19353,13 @@ function startAgentViewSocket() {
 }
 
 function openAgentView() {
+  const alreadyOpen = document.body.classList.contains('agent-view-open');
   document.body.classList.add('agent-view-open');
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('banner-agent-view');
   if (button) button.setAttribute('aria-expanded', 'true');
-  requestAnimationFrame(startAgentViewSocket);
+  if (!alreadyOpen || !agentViewSocket) requestAnimationFrame(startAgentViewSocket);
 }
 
 function closeAgentView() {
@@ -19192,12 +19374,12 @@ function closeAgentView() {
 function refreshAgentView() {
   if (!document.body.classList.contains('agent-view-open')) return;
   agentViewLastSeq = 0;
+  agentViewDocumentSeq = 0;
   requestAnimationFrame(startAgentViewSocket);
 }
 
 function ensureAgentViewForBrowserActivity() {
-  if (document.body.classList.contains('agent-view-open')) refreshAgentView();
-  else openAgentView();
+  if (!document.body.classList.contains('agent-view-open')) openAgentView();
 }
 
 const _agentViewSetActiveSlotSession = _setActiveSlotSession;
@@ -19209,6 +19391,7 @@ _setActiveSlotSession = function(sid) {
 document.addEventListener('keydown', function(event) {
   if (event.key === 'Escape' && document.body.classList.contains('agent-view-open')) closeAgentView();
 });
+window.addEventListener('resize', scaleAgentViewSemanticFrame);
 """
 
 _OLD_DELETE_ARCHIVE_JS = """async function deleteArchive(id, el) {
