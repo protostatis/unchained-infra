@@ -14853,6 +14853,7 @@ body{
       <span class="method-or" aria-hidden="true">or</span>
       <span class="sr-only">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <a href="http://127.0.0.1:8787" target="_blank" rel="noopener" id="banner-cockpit" class="primary" style="display:none">Open semantic cockpit</a>
     </div>
   </div>
 
@@ -15540,11 +15541,13 @@ function updateAgentStatusUI(data) {
   updateLocalCliGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
   if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
-  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerConnect) { bannerConnect.textContent = 'Download Agent Installer'; bannerConnect.style.display = ''; }
   if (bannerCurl) {
     bannerCurl.textContent = localInstallCommandLabel(false);
+    bannerCurl.style.display = '';
     bannerCurl.dataset.reconnect = '0';
   }
+  { const cl = document.getElementById('banner-cockpit'); if (cl) cl.style.display = 'none'; }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
   if (isOpenCodeCli && bannerMsg) bannerMsg.textContent = 'Connect OpenCode CLI on this computer.';
@@ -15583,7 +15586,17 @@ function updateAgentStatusUI(data) {
     else if (isOpenCodeCli) updateStatusPill(chatEl, 'opencode cli online', 'online');
     else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
-      if (banner) banner.style.display = 'none';
+      if (isOpenCodeCli) {
+        if (banner) banner.style.display = 'flex';
+        if (bannerMsg) bannerMsg.textContent = 'Semantic cockpit available.';
+        if (bannerDetail) bannerDetail.textContent = 'Open the local cockpit to observe OpenCode browser actions, tool activity, and live semantic mirrors.';
+        if (bannerCurl) bannerCurl.style.display = 'none';
+        if (bannerConnect) bannerConnect.style.display = 'none';
+        const cockpitLink = document.getElementById('banner-cockpit');
+        if (cockpitLink) cockpitLink.style.display = '';
+      } else {
+        if (banner) banner.style.display = 'none';
+      }
     } else {
       if (bannerMsg) bannerMsg.textContent = 'Your browser bridge is offline.';
       if (bannerDetail) bannerDetail.textContent = 'The ' + cliName + ' chat agent is running, but browser actions still need the bridge. Run the install command here and keep it open.';
