@@ -1085,6 +1085,24 @@ def test_chat_html_has_install_modal():
     print(f"  CHAT_HTML has install modal + buttons")
 
 
+def test_chat_html_has_opencode_cockpit_handoff():
+    """Verify the ready OpenCode route exposes a truthful localhost cockpit handoff."""
+    from web import CLAUDE_CHAT_HTML as CHAT_HTML
+
+    assert 'id="banner-cockpit"' in CHAT_HTML, "OpenCode cockpit link missing"
+    assert 'href="http://127.0.0.1:8787"' in CHAT_HTML, "cockpit should use the stable local backend URL"
+    assert "if (isOpenCodeCli)" in CHAT_HTML, "cockpit handoff should be limited to OpenCode CLI"
+    assert "The companion must be running on this computer." in CHAT_HTML, "cockpit readiness copy should not overclaim"
+    assert 'id="banner-kicker"' in CHAT_HTML, "cockpit banner kicker needs an addressable state"
+    assert 'id="banner-method-or"' in CHAT_HTML, "install-method separator needs an addressable state"
+    assert 'id="banner-installer-label"' in CHAT_HTML, "accessible installer separator needs an addressable state"
+    assert "bannerMethodOr.style.display = 'none'" in CHAT_HTML, "visible install separator should hide for cockpit mode"
+    assert "bannerInstallerLabel.style.display = 'none'" in CHAT_HTML, "accessible install separator should hide for cockpit mode"
+    assert "bannerMethodOr.style.display = ''" in CHAT_HTML, "install separator should reset when cockpit mode ends"
+    assert "bannerInstallerLabel.style.display = ''" in CHAT_HTML, "accessible separator should reset when cockpit mode ends"
+    print("  CHAT_HTML has OpenCode semantic cockpit handoff")
+
+
 def test_setup_html_has_status_and_install_banner():
     """Verify setup route preserves agent status pills and install banner."""
     from web import SETUP_HTML
@@ -1724,6 +1742,7 @@ if __name__ == "__main__":
         ("web: new handlers importable", test_web_imports),
         ("web: routes registered", test_web_routes_registered),
         ("web: CHAT_HTML has install modal", test_chat_html_has_install_modal),
+        ("web: CHAT_HTML has OpenCode cockpit handoff", test_chat_html_has_opencode_cockpit_handoff),
         ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
         ("web: native installer lookup prefers freshest artifact", test_native_installer_path_prefers_freshest_artifact),
         ("web: download-installer error omits assets_dir", test_download_installer_error_does_not_leak_assets_dir),
