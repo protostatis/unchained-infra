@@ -730,13 +730,6 @@ async def _handle_preview_ws(
             and not ws.closed
         )
 
-    def release_preview_generation() -> None:
-        if not authenticated_chat:
-            return
-        generations = getattr(core, "_chat_preview_generations", {})
-        if generations.get(sid_param) == preview_generation:
-            generations.pop(sid_param, None)
-
     async def emit_action_result(action_id: str, result: dict) -> None:
         await emit(
             {
@@ -966,19 +959,25 @@ async def _handle_preview_ws(
 
             current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
             if alive and current_tab != tab_id:
+                print(
+                    f"[preview-fsm] sid={sid_param} semantic target changed "
+                    f"from={tab_id[:12]} to={current_tab[:12]}",
+                    flush=True,
+                )
                 await emit(
                     {
                         "type": "preview.ended",
                         "reason": "tab_changed",
                         "retriable": True,
                         "frame_count": semantic_seq,
+                        "from_tab_id": tab_id,
+                        "to_tab_id": current_tab,
                     }
                 )
             if not ws.closed:
                 await ws.close()
             await stop_action_worker()
             await stop_client_watch()
-            release_preview_generation()
             print(
                 f"[preview-fsm] sid={sid_param} semantic disconnected events={semantic_seq}",
                 flush=True,
@@ -987,7 +986,6 @@ async def _handle_preview_ws(
         except asyncio.CancelledError:
             await stop_action_worker()
             await stop_client_watch()
-            release_preview_generation()
             raise
         except Exception as exc:
             mirror_state["ready"] = False
@@ -1009,12 +1007,19 @@ async def _handle_preview_ws(
             if authenticated_chat:
                 current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
                 if current_tab != tab_id:
+                    print(
+                        f"[preview-fsm] sid={sid_param} frame target changed "
+                        f"from={tab_id[:12]} to={current_tab[:12]}",
+                        flush=True,
+                    )
                     await emit(
                         {
                             "type": "preview.ended",
                             "reason": "tab_changed",
                             "retriable": True,
                             "frame_count": frame_seq,
+                            "from_tab_id": tab_id,
+                            "to_tab_id": current_tab,
                         }
                     )
                     break
@@ -1087,6 +1092,11 @@ async def _handle_preview_ws(
                     if authenticated_chat:
                         current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
                         if current_tab != tab_id:
+                            print(
+                                f"[preview-fsm] sid={sid_param} frame target changed "
+                                f"from={tab_id[:12]} to={current_tab[:12]}",
+                                flush=True,
+                            )
                             terminal_reason = "tab_changed"
                             retriable_terminal = True
                             break
@@ -1222,7 +1232,6 @@ async def _handle_preview_ws(
             await ws.close()
         await stop_action_worker()
         await stop_client_watch()
-        release_preview_generation()
         print(
             f"[preview-fsm] sid={sid_param} disconnected frames={frame_seq}",
             flush=True,

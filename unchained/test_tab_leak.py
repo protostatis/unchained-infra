@@ -68,6 +68,7 @@ class TestCloseSessionTabRetry(unittest.TestCase):
             "map": dict(self.web._session_agent_map),
             "active": dict(self.web._session_last_active),
             "pending": dict(self.web._tabs_pending_close),
+            "preview_generations": dict(self.web._chat_preview_generations),
         }
 
     def _restore_state(self):
@@ -79,18 +80,22 @@ class TestCloseSessionTabRetry(unittest.TestCase):
         self.web._session_last_active.update(self._saved["active"])
         self.web._tabs_pending_close.clear()
         self.web._tabs_pending_close.update(self._saved["pending"])
+        self.web._chat_preview_generations.clear()
+        self.web._chat_preview_generations.update(self._saved["preview_generations"])
 
     def _clear_state(self):
         self.web._session_tabs.clear()
         self.web._session_agent_map.clear()
         self.web._session_last_active.clear()
         self.web._tabs_pending_close.clear()
+        self.web._chat_preview_generations.clear()
 
     def test_successful_close_removes_from_tracking(self):
         """Tab close success: removed from all dicts, not queued for retry."""
         self.web._session_tabs["s1"] = "tab_aaa"
         self.web._session_agent_map["s1"] = "agent_1"
         self.web._session_last_active["s1"] = time.time()
+        self.web._chat_preview_generations["s1"] = 7
 
         mock_cdp_cls, _ = _make_mock_cdp(should_fail=False)
         with patch.dict("sys.modules", {"cdp": MagicMock(CDP=mock_cdp_cls)}):
@@ -99,6 +104,7 @@ class TestCloseSessionTabRetry(unittest.TestCase):
         self.assertNotIn("s1", self.web._session_tabs)
         self.assertNotIn("s1", self.web._session_agent_map)
         self.assertNotIn("s1", self.web._session_last_active)
+        self.assertNotIn("s1", self.web._chat_preview_generations)
         self.assertNotIn("tab_aaa", self.web._tabs_pending_close)
 
     def test_failed_close_queued_for_retry(self):
