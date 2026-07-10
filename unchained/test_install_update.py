@@ -1049,6 +1049,7 @@ def test_web_routes_registered():
         assert "/trial/script" in source, "header-based trial script route not registered"
         assert "/trial/windows/script" in source, "header-based trial windows script route not registered"
         assert "/web/download-installer" in source, "download-installer route not registered"
+        assert "/web/chat/preview/ws" in source, "authenticated chat Agent View route not registered"
         assert "/web/agent/version" in source, "agent version route not registered"
         assert "/web/agent/files" in source, "agent files route not registered"
         assert "/web/research-desk/files" in source, "research desk files route not registered"
@@ -1086,21 +1087,25 @@ def test_chat_html_has_install_modal():
 
 
 def test_chat_html_has_opencode_cockpit_handoff():
-    """Verify the ready OpenCode route exposes a truthful localhost cockpit handoff."""
+    """Verify OpenCode chat integrates a read-only view of its own browser."""
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
 
-    assert 'id="banner-cockpit"' in CHAT_HTML, "OpenCode cockpit link missing"
-    assert 'href="http://127.0.0.1:8787"' in CHAT_HTML, "cockpit should use the stable local backend URL"
-    assert "if (isOpenCodeCli)" in CHAT_HTML, "cockpit handoff should be limited to OpenCode CLI"
-    assert "The companion must be running on this computer." in CHAT_HTML, "cockpit readiness copy should not overclaim"
-    assert 'id="banner-kicker"' in CHAT_HTML, "cockpit banner kicker needs an addressable state"
+    assert 'id="banner-agent-view"' in CHAT_HTML, "OpenCode Agent View button missing"
+    assert 'id="agent-view"' in CHAT_HTML, "integrated browser panel missing"
+    assert 'id="agent-view-image"' in CHAT_HTML, "live browser frame missing"
+    assert "/web/chat/preview/ws" in CHAT_HTML, "Agent View should use the authenticated screencast channel"
+    assert "Same agent / same Chrome" in CHAT_HTML, "Agent View should explain its source binding"
+    assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
+    assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"
+    assert "if (isOpenCodeCli)" in CHAT_HTML, "Agent View handoff should be limited to OpenCode CLI"
+    assert 'id="banner-kicker"' in CHAT_HTML, "Agent View banner kicker needs an addressable state"
     assert 'id="banner-method-or"' in CHAT_HTML, "install-method separator needs an addressable state"
     assert 'id="banner-installer-label"' in CHAT_HTML, "accessible installer separator needs an addressable state"
     assert "bannerMethodOr.style.display = 'none'" in CHAT_HTML, "visible install separator should hide for cockpit mode"
     assert "bannerInstallerLabel.style.display = 'none'" in CHAT_HTML, "accessible install separator should hide for cockpit mode"
     assert "bannerMethodOr.style.display = ''" in CHAT_HTML, "install separator should reset when cockpit mode ends"
     assert "bannerInstallerLabel.style.display = ''" in CHAT_HTML, "accessible separator should reset when cockpit mode ends"
-    print("  CHAT_HTML has OpenCode semantic cockpit handoff")
+    print("  CHAT_HTML has integrated OpenCode Agent View")
 
 
 def test_setup_html_has_status_and_install_banner():
