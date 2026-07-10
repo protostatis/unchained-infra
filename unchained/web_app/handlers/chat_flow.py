@@ -320,8 +320,12 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
 #   elsewhere are unaffected.
 
 
-async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
-    """GET /web/first-look/preview/ws — server-owned preview state machine.
+async def _handle_preview_ws(
+    request: web.Request,
+    *,
+    authenticated_chat: bool,
+) -> web.StreamResponse:
+    """Serve the shared screencast state machine for guest or authenticated chat.
 
     Forwards private-core screencast frames to the guest browser as explicit
     protocol events (see the comment block above). The server transparently
@@ -339,18 +343,38 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     core = _core()
     sid_param = request.query.get("session_id", "")
     log.debug("request received sid=%r tabs=%s", sid_param, dict(core._session_tabs))
-    guest_auth, guest_id, _ = core._first_look_guest_auth(request)
-    try:
-        agent_id, tab_id = await _resolve_first_look_preview_target(
-            core,
-            guest_auth,
-            sid_param,
-        )
-    except web.HTTPException as exc:
-        log.warning("resolve failed: %s %s", exc.status, exc.text)
-        denied = web.Response(status=exc.status, text=exc.text)
-        core._attach_first_look_guest_cookies(denied, request, guest_id)
-        return denied
+    guest_id = ""
+    if authenticated_chat:
+        auth_info = core._authenticate(request)
+        if auth_info is None:
+            return web.Response(status=401, text="Not authenticated")
+        key_hash = str(auth_info.get("key_hash", "") or "").strip()
+        parts = sid_param.split("-")
+        if not sid_param or len(parts) < 4 or parts[0] != "s" or parts[2] != key_hash:
+            return web.Response(status=403, text="session_id not owned by authenticated user")
+        agent_id = str(core._session_agent_map.get(sid_param, "") or "").strip()
+        if not agent_id:
+            try:
+                bridge = await core._resolve_bridge_agent(auth_info, None)
+            except Exception as exc:
+                return web.Response(status=503, text=f"browser bridge unavailable: {exc}")
+            agent_id = str(bridge.get("bridge_agent_id") or auth_info.get("agent_id") or "").strip()
+        if not agent_id:
+            return web.Response(status=503, text="browser bridge unavailable")
+        tab_id = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+    else:
+        guest_auth, guest_id, _ = core._first_look_guest_auth(request)
+        try:
+            agent_id, tab_id = await _resolve_first_look_preview_target(
+                core,
+                guest_auth,
+                sid_param,
+            )
+        except web.HTTPException as exc:
+            log.warning("resolve failed: %s %s", exc.status, exc.text)
+            denied = web.Response(status=exc.status, text=exc.text)
+            core._attach_first_look_guest_cookies(denied, request, guest_id)
+            return denied
 
     # Allow explicit tab_id override for multi-tab auto-follow (ddm --new).
     #
@@ -377,7 +401,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
     #
     # TODO(unchained-infra#TBD): add per-guest tab tracking + apply a
     # strict ownership check here once the tracker exists.
-    raw_tab = request.query.get("tab_id", "")
+    raw_tab = "" if authenticated_chat else request.query.get("tab_id", "")
     if raw_tab:
         if not re.fullmatch(r"[A-Fa-f0-9]{32,64}", raw_tab):
             return web.Response(status=400, text="invalid tab_id format")
@@ -400,7 +424,8 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
 
     relay_host, relay_port = core._parse_relay()
     ws = web.WebSocketResponse(heartbeat=30)
-    core._attach_first_look_guest_cookies(ws, request, guest_id)
+    if guest_id:
+        core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
     # print() so the line is visible in docker compose logs regardless of
     # the root logger level — the web container runs without a logging
@@ -663,6 +688,16 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
         )
 
     return ws
+
+
+async def handle_first_look_preview_ws(request: web.Request) -> web.StreamResponse:
+    """GET /web/first-look/preview/ws — guest preview state machine."""
+    return await _handle_preview_ws(request, authenticated_chat=False)
+
+
+async def handle_chat_preview_ws(request: web.Request) -> web.StreamResponse:
+    """GET /web/chat/preview/ws — read-only preview of the authenticated chat browser."""
+    return await _handle_preview_ws(request, authenticated_chat=True)
 
 
 async def check_relay_agent(agent_id: str) -> bool:

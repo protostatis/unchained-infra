@@ -37,6 +37,22 @@ class _FakeCore:
         return "relay.internal", 8765
 
 
+class _AuthenticatedFakeCore(_FakeCore):
+    def __init__(self):
+        super().__init__()
+        self._session_tabs = {"s-claude-abc12345-demo": "TAB" * 10 + "AA"}
+        self._session_agent_map = {"s-claude-abc12345-demo": "claude-abc12345"}
+        self.authenticated = True
+
+    def _authenticate(self, _request):
+        if not self.authenticated:
+            return None
+        return {"agent_id": "claude-abc12345", "key_hash": "abc12345", "user_id": "user-1"}
+
+    async def _resolve_bridge_agent(self, auth_info, _requested_profile):
+        return {"bridge_agent_id": auth_info["agent_id"]}
+
+
 class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
 
     async def get_application(self):
@@ -304,6 +320,52 @@ class TestFirstLookPreviewWebSocket(AioHTTPTestCase):
         )
         self.assertEqual(resp.status, 400)
         self.assertIn("invalid tab_id", await resp.text())
+
+
+class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
+
+    async def get_application(self):
+        self._original_core = chat_flow._core
+        self._original_stream = cloud_tools.stream_screencast
+        self.fake_core = _AuthenticatedFakeCore()
+        chat_flow._core = lambda: self.fake_core
+        app = web.Application()
+        app.router.add_get("/ws", chat_flow.handle_chat_preview_ws)
+        return app
+
+    async def asyncTearDown(self):
+        chat_flow._core = self._original_core
+        cloud_tools.stream_screencast = self._original_stream
+        await super().asyncTearDown()
+
+    async def test_streams_the_exact_tab_bound_to_the_authenticated_chat_session(self):
+        captured = {}
+
+        async def fake_stream(agent_id, tab_id, **_kwargs):
+            captured.update(agent_id=agent_id, tab_id=tab_id)
+            yield {"type": "frame", "mime": "image/jpeg", "data": "same-browser-frame"}
+
+        cloud_tools.stream_screencast = fake_stream
+        ws = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo&width=900&height=600")
+        attached = await ws.receive_json()
+        frame = await ws.receive_json()
+        await ws.close()
+
+        self.assertEqual(attached["type"], "preview.attached")
+        self.assertEqual(attached["tab_id"], "TAB" * 10 + "AA")
+        self.assertEqual(frame["type"], "preview.frame")
+        self.assertEqual(frame["data"], "same-browser-frame")
+        self.assertEqual(captured, {"agent_id": "claude-abc12345", "tab_id": "TAB" * 10 + "AA"})
+
+    async def test_rejects_a_foreign_authenticated_chat_session(self):
+        resp = await self.client.request("GET", "/ws?session_id=s-claude-deadbeef-demo")
+        self.assertEqual(resp.status, 403)
+        self.assertIn("not owned", await resp.text())
+
+    async def test_rejects_an_unauthenticated_preview(self):
+        self.fake_core.authenticated = False
+        resp = await self.client.request("GET", "/ws?session_id=s-claude-abc12345-demo")
+        self.assertEqual(resp.status, 401)
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

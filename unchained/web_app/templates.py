@@ -14853,7 +14853,7 @@ body{
       <span class="method-or" id="banner-method-or" aria-hidden="true">or</span>
       <span class="sr-only" id="banner-installer-label">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
-      <a href="http://127.0.0.1:8787" target="_blank" rel="noopener" id="banner-cockpit" class="primary" style="display:none">Open local semantic cockpit</a>
+      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
 
@@ -15553,7 +15553,7 @@ function updateAgentStatusUI(data) {
   }
   if (bannerMethodOr) bannerMethodOr.style.display = '';
   if (bannerInstallerLabel) bannerInstallerLabel.style.display = '';
-  { const cl = document.getElementById('banner-cockpit'); if (cl) cl.style.display = 'none'; }
+  { const av = document.getElementById('banner-agent-view'); if (av) av.style.display = 'none'; }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
   if (isOpenCodeCli && bannerMsg) bannerMsg.textContent = 'Connect OpenCode CLI on this computer.';
@@ -15594,15 +15594,15 @@ function updateAgentStatusUI(data) {
     if (bridgeConnected) {
       if (isOpenCodeCli) {
         if (banner) banner.style.display = 'flex';
-        if (bannerKicker) bannerKicker.textContent = 'Local observer';
-        if (bannerMsg) bannerMsg.textContent = 'Open the local semantic cockpit.';
-        if (bannerDetail) bannerDetail.textContent = 'The companion must be running on this computer. It stays local and attaches to the most recent OpenCode session.';
+        if (bannerKicker) bannerKicker.textContent = 'Agent view';
+        if (bannerMsg) bannerMsg.textContent = 'Chat and browser are ready together.';
+        if (bannerDetail) bannerDetail.textContent = 'Prompt here; the read-only browser pane follows the same CDP Chrome controlled by your agent.';
         if (bannerCurl) bannerCurl.style.display = 'none';
         if (bannerConnect) bannerConnect.style.display = 'none';
         if (bannerMethodOr) bannerMethodOr.style.display = 'none';
         if (bannerInstallerLabel) bannerInstallerLabel.style.display = 'none';
-        const cockpitLink = document.getElementById('banner-cockpit');
-        if (cockpitLink) cockpitLink.style.display = '';
+        const agentViewButton = document.getElementById('banner-agent-view');
+        if (agentViewButton) agentViewButton.style.display = '';
       } else {
         if (banner) banner.style.display = 'none';
       }
@@ -18975,6 +18975,54 @@ _SIDEBAR_BODY = """<div id="app-shell">
 </aside>
 """
 
+_AGENT_VIEW_STYLE = """<style id="agent-view-panel">
+#sidebar{transition:width .22s ease,opacity .18s ease,border-color .18s ease}
+#agent-view{display:none;min-width:0;width:min(48vw,820px);flex:0 0 min(48vw,820px);position:relative;overflow:hidden;background:#080b10;border-left:1px solid rgba(255,255,255,.10);color:var(--text,#edf2f7)}
+body.agent-view-open #agent-view{display:flex;flex-direction:column;animation:agentViewIn .22s cubic-bezier(.2,.8,.2,1) both}
+body.agent-view-open #sidebar{width:0;opacity:0;border-color:transparent;pointer-events:none}
+.agent-view-launch{color:#172018;border:1px solid rgba(139,223,172,.68);background:linear-gradient(135deg,#8bdfac,#c7f36e);padding:6px 13px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;cursor:pointer;box-shadow:0 8px 24px rgba(139,223,172,.12)}
+.agent-view-launch:hover{filter:brightness(1.06);transform:translateY(-1px)}
+.agent-view-head{display:flex;align-items:center;gap:12px;min-height:68px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.09);background:linear-gradient(135deg,rgba(139,223,172,.12),rgba(74,167,255,.07) 54%,rgba(8,11,16,.96))}
+.agent-view-title{min-width:0;display:grid;gap:3px;flex:1}
+.agent-view-kicker{font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8bdfac}
+.agent-view-title strong{font-size:16px;letter-spacing:-.02em;color:#f3f8f1}
+.agent-view-state{display:inline-flex;align-items:center;gap:7px;max-width:210px;color:#9aa8b8;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-view-state::before{content:"";width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#758093;box-shadow:0 0 12px rgba(117,128,147,.35)}
+.agent-view-state.live{color:#bff3d0}.agent-view-state.live::before{background:#6ee7a1;box-shadow:0 0 14px rgba(110,231,161,.62)}
+.agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.05);color:#c9d3df;font-size:19px;cursor:pointer}
+.agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
+.agent-view-browserbar{min-height:38px;padding:0 13px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);background:#0c1118;color:#8290a0;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
+.agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(139,223,172,.5),rgba(74,167,255,.14),transparent)}
+.agent-view-browserbar .policy{color:#a9e8bf;border:1px solid rgba(139,223,172,.24);padding:3px 6px;border-radius:999px}
+.agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(74,167,255,.08),transparent 42%),#05070a}
+#agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
+.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-frame .agent-view-empty{display:none}
+.agent-view-empty{width:min(390px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
+.agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(139,223,172,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
+.agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
+.agent-view-empty strong{color:#dce7da;font-size:15px}.agent-view-empty span{font-size:11px;line-height:1.6}
+.agent-view-foot{min-height:35px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid rgba(255,255,255,.08);background:#0b0f14;color:#778494;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
+.agent-view-foot strong{color:#bfe8ca;font-weight:500}
+@keyframes agentViewIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}
+@media(max-width:1180px){#agent-view{position:fixed;z-index:1200;inset:0 0 0 auto;width:min(760px,94vw);flex-basis:auto;box-shadow:-24px 0 80px rgba(0,0,0,.5)}body.agent-view-open #sidebar{width:260px;opacity:1;pointer-events:auto}}
+@media(max-width:640px){#agent-view{width:100vw}.agent-view-head{min-height:62px;padding:10px}.agent-view-state{max-width:130px}.agent-view-foot{font-size:8px}}
+@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after{animation:none}}
+</style>"""
+
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Read-only agent browser view" aria-hidden="true">
+  <header class="agent-view-head">
+    <div class="agent-view-title"><span class="agent-view-kicker">Same agent / same Chrome</span><strong>Agent View</strong></div>
+    <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
+    <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
+  </header>
+  <div class="agent-view-browserbar"><span>CDP browser</span><span class="rail"></span><span class="policy">read only</span></div>
+  <div id="agent-view-canvas" class="agent-view-canvas">
+    <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
+    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">CDP</div><strong>The browser will appear here.</strong><span>Send a prompt in chat. Agent View follows the exact Chrome target selected for this conversation.</span></div>
+  </div>
+  <footer class="agent-view-foot"><span>Agent controls</span><strong>You observe</strong><span id="agent-view-seq">No frame yet</span></footer>
+</aside>"""
+
 _SIDEBAR_JS = """
 function _relativeDate(ts) {
   var d = new Date(ts * 1000);
@@ -19034,6 +19082,132 @@ document.addEventListener('click', function(e) {
       document.body.classList.remove('sidebar-open');
     }
   }
+});
+"""
+
+_AGENT_VIEW_JS = """
+let agentViewSocket = null;
+let agentViewRetryTimer = null;
+let agentViewGeneration = 0;
+let agentViewLastSeq = 0;
+
+function setAgentViewState(text, live) {
+  const el = document.getElementById('agent-view-state');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('live', !!live);
+}
+
+function agentViewViewport() {
+  const canvas = document.getElementById('agent-view-canvas');
+  const rect = canvas ? canvas.getBoundingClientRect() : {width: 960, height: 720};
+  const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
+  return {
+    width: Math.max(480, Math.round((rect.width || 960) * dpr)),
+    height: Math.max(320, Math.round((rect.height || 720) * dpr)),
+  };
+}
+
+function agentViewSocketUrl() {
+  const viewport = agentViewViewport();
+  const query = new URLSearchParams({session_id: sessionId, width: String(viewport.width), height: String(viewport.height)});
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return scheme + '://' + window.location.host + '/web/chat/preview/ws?' + query.toString();
+}
+
+function stopAgentViewSocket() {
+  agentViewGeneration++;
+  if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
+  agentViewRetryTimer = null;
+  const socket = agentViewSocket;
+  agentViewSocket = null;
+  if (socket && socket.readyState < 2) { try { socket.close(); } catch (_err) {} }
+}
+
+function scheduleAgentViewRetry(generation) {
+  if (!document.body.classList.contains('agent-view-open') || generation !== agentViewGeneration) return;
+  if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
+  agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
+}
+
+function startAgentViewSocket() {
+  if (!document.body.classList.contains('agent-view-open')) return;
+  if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
+  stopAgentViewSocket();
+  const generation = agentViewGeneration;
+  setAgentViewState('Attaching to agent Chrome', false);
+  const socket = new WebSocket(agentViewSocketUrl());
+  agentViewSocket = socket;
+  socket.onmessage = function(message) {
+    if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
+    let event;
+    try { event = JSON.parse(message.data); } catch (_err) { return; }
+    if (event.type === 'preview.attached') { setAgentViewState('Attached to agent Chrome', true); return; }
+    if (event.type === 'preview.frame' && event.data) {
+      const seq = Number(event.seq || 0);
+      if (seq && seq <= agentViewLastSeq) return;
+      agentViewLastSeq = seq;
+      const image = document.getElementById('agent-view-image');
+      const canvas = document.getElementById('agent-view-canvas');
+      if (image) image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
+      if (canvas) canvas.classList.add('has-frame');
+      const seqEl = document.getElementById('agent-view-seq');
+      if (seqEl) seqEl.textContent = 'Frame ' + seq;
+      setAgentViewState('Live / same browser', true);
+      return;
+    }
+    if (event.type === 'preview.reconnecting') { setAgentViewState('Refreshing live view', false); return; }
+    if (event.type === 'preview.ended') {
+      setAgentViewState(event.retriable ? 'Reconnecting' : 'Preview paused', false);
+      if (event.retriable) scheduleAgentViewRetry(generation);
+    }
+  };
+  socket.onerror = function() { setAgentViewState('Preview unavailable', false); };
+  socket.onclose = function() {
+    if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
+    agentViewSocket = null;
+    setAgentViewState('Reconnecting to agent Chrome', false);
+    scheduleAgentViewRetry(generation);
+  };
+}
+
+function openAgentView() {
+  document.body.classList.add('agent-view-open');
+  const panel = document.getElementById('agent-view');
+  if (panel) panel.setAttribute('aria-hidden', 'false');
+  const button = document.getElementById('banner-agent-view');
+  if (button) button.setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(startAgentViewSocket);
+}
+
+function closeAgentView() {
+  document.body.classList.remove('agent-view-open');
+  const panel = document.getElementById('agent-view');
+  if (panel) panel.setAttribute('aria-hidden', 'true');
+  const button = document.getElementById('banner-agent-view');
+  if (button) button.setAttribute('aria-expanded', 'false');
+  stopAgentViewSocket();
+}
+
+function refreshAgentView() {
+  if (!document.body.classList.contains('agent-view-open')) return;
+  agentViewLastSeq = 0;
+  requestAnimationFrame(startAgentViewSocket);
+}
+
+function ensureAgentViewForBrowserActivity() {
+  if (document.body.classList.contains('agent-view-open')) refreshAgentView();
+  else openAgentView();
+}
+
+const _agentViewSetActiveSlotSession = _setActiveSlotSession;
+_setActiveSlotSession = function(sid) {
+  _agentViewSetActiveSlotSession(sid);
+  if (document.body.classList.contains('agent-view-open')) setTimeout(refreshAgentView, 0);
+};
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape' && document.body.classList.contains('agent-view-open')) closeAgentView();
 });
 """
 
@@ -19222,12 +19396,16 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar archive injection",
         )
 
+    has_agent_view = 'id="banner-agent-view"' in html
+    shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
+    runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
+
     html = apply_template_replacements(
         html,
         (
             TemplateReplacement(
                 "</head>",
-                _SIDEBAR_STYLE + "\n</head>",
+                _SIDEBAR_STYLE + (_AGENT_VIEW_STYLE if has_agent_view else "") + "\n</head>",
                 "sidebar style injection",
             ),
             TemplateReplacement(
@@ -19247,7 +19425,7 @@ def _inject_sidebar(html: str) -> str:
             ),
             TemplateReplacement(
                 "</div>\n<script>",
-                "</div>\n</div>\n<script>",
+                shell_close,
                 "sidebar shell close injection",
             ),
             TemplateReplacement(
@@ -19265,12 +19443,25 @@ def _inject_sidebar(html: str) -> str:
             ),
             TemplateReplacement(
                 "\ncheckSession();\n",
-                _SIDEBAR_JS + "\ncheckSession();\n",
+                runtime_js + "\ncheckSession();\n",
                 "sidebar runtime injection",
             ),
         ),
         template_name="sidebar injection",
     )
+
+    if has_agent_view:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    "  if (BROWSER_TOOLS.has(name)) {",
+                    "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity();",
+                    "agent view auto-open on browser activity",
+                ),
+            ),
+            template_name="agent view activity hook injection",
+        )
 
     if '      <a href="#" onclick="openArchives();return false">Archives</a>\n' in html:
         html = apply_template_replacements(
