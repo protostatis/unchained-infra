@@ -1089,16 +1089,19 @@ def test_chat_html_has_install_modal():
 
 
 def test_chat_html_has_opencode_cockpit_handoff():
-    """Verify OpenCode chat integrates a read-only view of its own browser."""
+    """Verify OpenCode chat integrates its interactive semantic browser."""
     from web import CLAUDE_CHAT_HTML as CHAT_HTML
 
-    assert 'id="banner-agent-view"' in CHAT_HTML, "OpenCode Agent View button missing"
+    assert 'id="topbar-agent-view"' in CHAT_HTML, "OpenCode Agent View topbar button missing"
+    assert 'id="banner-agent-view"' not in CHAT_HTML, "legacy Agent View banner button should be removed"
     assert 'id="agent-view"' in CHAT_HTML, "integrated browser panel missing"
     assert 'id="agent-view-image"' in CHAT_HTML, "live browser frame missing"
     assert 'id="agent-view-frame"' in CHAT_HTML, "isolated semantic renderer missing"
     assert "/web/chat/preview/ws" in CHAT_HTML, "Agent View should use the authenticated screencast channel"
     assert "preview.semantic.snapshot" in CHAT_HTML, "Agent View should render semantic snapshots"
     assert "preview.semantic.patch" in CHAT_HTML, "Agent View should apply semantic patches"
+    assert "preview.action.confirmation_required" in CHAT_HTML, "Agent View should confirm consequential page actions"
+    assert "function bindAgentViewInteractions" in CHAT_HTML, "semantic DOM interaction bridge missing"
     assert "omittedSensitiveFields" in CHAT_HTML, "Agent View should expose mirror fidelity telemetry"
     assert "new-tab" in CHAT_HTML, "new-tab activity should refresh Agent View"
     runtime_scripts = [
@@ -1111,7 +1114,8 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
-    assert "Same agent / same Chrome" in CHAT_HTML, "Agent View should explain its source binding"
+    assert "Shared semantic browser" in CHAT_HTML, "Agent View should explain its semantic source"
+    assert "Actions route through your session-owned agent" in CHAT_HTML, "Agent View should explain action ownership"
     assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
     assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"
     assert "if (isOpenCodeCli)" in CHAT_HTML, "Agent View handoff should be limited to OpenCode CLI"

@@ -15553,7 +15553,7 @@ function updateAgentStatusUI(data) {
   }
   if (bannerMethodOr) bannerMethodOr.style.display = '';
   if (bannerInstallerLabel) bannerInstallerLabel.style.display = '';
-  { const av = document.getElementById('banner-agent-view'); if (av) av.style.display = 'none'; }
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = ''; }
   if (isCodexCli && bannerMsg) bannerMsg.textContent = 'Connect Codex CLI on this computer.';
   if (isCodexCli && bannerDetail) bannerDetail.textContent = 'Run the local agent here, make sure Codex CLI is logged in, then wait for the Codex status to turn online.';
   if (isOpenCodeCli && bannerMsg) bannerMsg.textContent = 'Connect OpenCode CLI on this computer.';
@@ -15593,15 +15593,15 @@ function updateAgentStatusUI(data) {
     else updateStatusPill(chatEl, 'agent online', 'online');
     if (bridgeConnected) {
       if (isOpenCodeCli) {
-        if (banner) banner.style.display = 'flex';
+        if (banner) banner.style.display = 'none';
         if (bannerKicker) bannerKicker.textContent = 'Agent view';
         if (bannerMsg) bannerMsg.textContent = 'Chat and browser are ready together.';
-        if (bannerDetail) bannerDetail.textContent = 'Prompt here; the read-only browser pane follows the same CDP Chrome controlled by your agent.';
+        if (bannerDetail) bannerDetail.textContent = 'Prompt here or use Agent View; both operate the same CDP Chrome controlled by your agent.';
         if (bannerCurl) bannerCurl.style.display = 'none';
         if (bannerConnect) bannerConnect.style.display = 'none';
         if (bannerMethodOr) bannerMethodOr.style.display = 'none';
         if (bannerInstallerLabel) bannerInstallerLabel.style.display = 'none';
-        const agentViewButton = document.getElementById('banner-agent-view');
+        const agentViewButton = document.getElementById('topbar-agent-view');
         if (agentViewButton) agentViewButton.style.display = '';
       } else {
         if (banner) banner.style.display = 'none';
@@ -18977,54 +18977,76 @@ _SIDEBAR_BODY = """<div id="app-shell">
 
 _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 #sidebar{transition:width .22s ease,opacity .18s ease,border-color .18s ease}
-#agent-view{display:none;min-width:0;width:min(48vw,820px);flex:0 0 min(48vw,820px);position:relative;overflow:hidden;background:#080b10;border-left:1px solid rgba(255,255,255,.10);color:var(--text,#edf2f7)}
-body.agent-view-open #agent-view{display:flex;flex-direction:column;animation:agentViewIn .22s cubic-bezier(.2,.8,.2,1) both}
-body.agent-view-open #sidebar{width:0;opacity:0;border-color:transparent;pointer-events:none}
-.agent-view-launch{color:#172018;border:1px solid rgba(139,223,172,.68);background:linear-gradient(135deg,#8bdfac,#c7f36e);padding:6px 13px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;cursor:pointer;box-shadow:0 8px 24px rgba(139,223,172,.12)}
-.agent-view-launch:hover{filter:brightness(1.06);transform:translateY(-1px)}
-.agent-view-head{display:flex;align-items:center;gap:12px;min-height:68px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.09);background:linear-gradient(135deg,rgba(139,223,172,.12),rgba(74,167,255,.07) 54%,rgba(8,11,16,.96))}
-.agent-view-title{min-width:0;display:grid;gap:3px;flex:1}
-.agent-view-kicker{font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8bdfac}
-.agent-view-title strong{font-size:16px;letter-spacing:-.02em;color:#f3f8f1}
-.agent-view-state{display:inline-flex;align-items:center;gap:7px;max-width:210px;color:#9aa8b8;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#agent-view{display:none;color:var(--text,#edf2f7)}
+.topbar-agent-view{font-weight:800!important;color:#d8ffe5!important;border-color:rgba(110,231,161,.55)!important;background:rgba(110,231,161,.10)!important}
+.topbar-agent-view:hover{color:#f4fff7!important;border-color:#6ee7a1!important;background:rgba(110,231,161,.18)!important}
+.agent-view-head{position:relative;z-index:8;display:flex;align-items:center;gap:14px;min-height:58px;padding:8px 16px;border-bottom:1px solid rgba(183,205,228,.15);background:rgba(7,10,14,.88);box-shadow:0 12px 40px rgba(0,0,0,.20);backdrop-filter:blur(18px)}
+.agent-view-mark{width:31px;height:31px;display:grid;place-items:center;border:1px solid rgba(110,231,161,.42);border-radius:50%;color:#98efb7;background:radial-gradient(circle,rgba(110,231,161,.18),transparent 68%);font:700 9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.08em}
+.agent-view-title{min-width:0;display:grid;gap:1px}
+.agent-view-kicker{font-family:var(--mono,'IBM Plex Mono',monospace);font-size:8px;letter-spacing:.19em;text-transform:uppercase;color:#7f8c9d}
+.agent-view-title strong{font-size:14px;letter-spacing:-.01em;color:#eef7f0}
+.agent-view-state{display:inline-flex;align-items:center;gap:7px;margin-left:auto;max-width:230px;color:#9aa8b8;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .agent-view-state::before{content:"";width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#758093;box-shadow:0 0 12px rgba(117,128,147,.35)}
 .agent-view-state.live{color:#bff3d0}.agent-view-state.live::before{background:#6ee7a1;box-shadow:0 0 14px rgba(110,231,161,.62)}
-.agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.05);color:#c9d3df;font-size:19px;cursor:pointer}
+.agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:50%;background:rgba(255,255,255,.05);color:#c9d3df;font-size:18px;cursor:pointer}
 .agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
-.agent-view-browserbar{min-height:38px;padding:0 13px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);background:#0c1118;color:#8290a0;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
-.agent-view-location{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#aab5c2}
-.agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(139,223,172,.5),rgba(74,167,255,.14),transparent)}
-.agent-view-browserbar .policy{color:#a9e8bf;border:1px solid rgba(139,223,172,.24);padding:3px 6px;border-radius:999px}
-.agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(74,167,255,.08),transparent 42%),#05070a}
+.agent-view-browserbar{position:relative;z-index:7;min-height:34px;padding:0 16px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(183,205,228,.13);background:rgba(10,14,20,.92);color:#788697;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:8px;letter-spacing:.08em;text-transform:uppercase}
+.agent-view-location{max-width:min(58vw,820px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#b5c0cd}
+.agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(110,231,161,.52),rgba(74,167,255,.12),transparent)}
+.agent-view-browserbar .policy{color:#baf1cc;border:1px solid rgba(110,231,161,.25);padding:3px 7px;border-radius:999px;background:rgba(110,231,161,.06)}
+.agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 42% 34%,rgba(74,167,255,.08),transparent 38%),linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#05070a;background-size:auto,48px 48px,48px 48px,auto}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
-#agent-view-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:none;transform-origin:center center;color-scheme:light}
+#agent-view-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
 .agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic #agent-view-frame{display:block}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
-.agent-view-empty{width:min(390px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
-.agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(139,223,172,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
+.agent-view-empty{width:min(420px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
+.agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(110,231,161,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
 .agent-view-empty strong{color:#dce7da;font-size:15px}.agent-view-empty span{font-size:11px;line-height:1.6}
-.agent-view-foot{min-height:35px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid rgba(255,255,255,.08);background:#0b0f14;color:#778494;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
-.agent-view-foot strong{color:#bfe8ca;font-weight:500}
-.agent-view-fidelity{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
-@keyframes agentViewIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}
-@media(max-width:1180px){#agent-view{position:fixed;z-index:1200;inset:0 0 0 auto;width:min(760px,94vw);flex-basis:auto;box-shadow:-24px 0 80px rgba(0,0,0,.5)}body.agent-view-open #sidebar{width:260px;opacity:1;pointer-events:auto}}
-@media(max-width:640px){#agent-view{width:100vw}.agent-view-head{min-height:62px;padding:10px}.agent-view-state{max-width:130px}.agent-view-foot{font-size:8px}}
-@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after{animation:none}}
+.agent-view-foot{position:relative;z-index:7;min-height:31px;padding:0 16px;display:flex;align-items:center;gap:12px;border-top:1px solid rgba(183,205,228,.13);background:rgba(8,11,16,.94);color:#778494;font:8px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
+.agent-view-foot strong{color:#bfe8ca;font-weight:500}.agent-view-foot .spacer{flex:1}
+.agent-view-fidelity{min-width:0;max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.agent-view-confirm{display:none;position:absolute;z-index:20;left:18px;bottom:22px;width:min(560px,calc(100% - 500px));padding:14px 15px;border:1px solid rgba(255,184,107,.38);border-radius:18px;background:rgba(20,16,12,.94);box-shadow:0 24px 72px rgba(0,0,0,.46);backdrop-filter:blur(18px);color:#f3e5d4}
+.agent-view-confirm.open{display:flex;align-items:center;gap:14px;animation:agentConfirmIn .18s ease-out both}
+.agent-view-confirm-copy{display:grid;gap:3px;min-width:0;flex:1}.agent-view-confirm-copy b{font-size:12px}.agent-view-confirm-copy span{font-size:10px;color:#b9a997;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-view-confirm button{border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:7px 11px;background:rgba(255,255,255,.05);color:#d8d2cb;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer}.agent-view-confirm .approve{border-color:rgba(255,184,107,.54);background:rgba(255,184,107,.14);color:#ffe4c2}
+.agent-view-toast{position:absolute;z-index:19;left:18px;bottom:18px;max-width:min(420px,calc(100% - 36px));padding:9px 12px;border:1px solid rgba(183,205,228,.20);border-radius:12px;background:rgba(7,10,15,.82);color:#aab6c5;font:9px var(--mono,'IBM Plex Mono',monospace);opacity:0;transform:translateY(7px);pointer-events:none;transition:.18s ease;backdrop-filter:blur(14px)}
+.agent-view-toast.show{opacity:1;transform:none}.agent-view-toast.error{color:#ffc0b4;border-color:rgba(255,107,74,.35)}
+body.agent-view-open{overflow:hidden;background:#05070a!important}
+body.agent-view-open #agent-view{display:flex;position:fixed;z-index:1100;inset:0;min-width:0;flex-direction:column;overflow:hidden;background:#05070a;animation:agentViewIn .24s cubic-bezier(.2,.8,.2,1) both}
+body.agent-view-open #sidebar{display:none!important}
+body.agent-view-open #app-shell #main{position:fixed!important;z-index:1250;right:22px;top:104px;bottom:22px;width:min(440px,calc(100vw - 44px));height:auto!important;min-height:0;flex:none!important;border:1px solid rgba(183,205,228,.26)!important;border-radius:23px!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.88),rgba(7,10,15,.94))!important;box-shadow:0 28px 90px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06)!important;backdrop-filter:blur(22px)}
+body.agent-view-open #main #topbar{min-height:48px;padding:7px 9px!important;background:rgba(8,12,17,.72)!important;border-bottom:1px solid rgba(183,205,228,.14)!important}
+body.agent-view-open #main #topbar .left{display:none!important}
+body.agent-view-open #main #topbar .nav{margin-left:auto;gap:6px;flex-wrap:nowrap}
+body.agent-view-open #main #topbar .nav a:not(.topbar-new):not(.topbar-agent-view){display:none!important}
+body.agent-view-open #main #slotbar,body.agent-view-open #main #agent-bar{display:none!important}
+body.agent-view-open #main #modelrow{padding:8px 10px 0!important}
+body.agent-view-open #main #chat{padding:14px 12px!important;gap:9px!important}
+body.agent-view-open #main #chat-hints{padding-top:14px!important}
+body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
+body.agent-view-open #download-banner{display:none!important}
+@keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media(max-width:760px){.agent-view-head{min-height:52px;padding:7px 10px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-state{max-width:135px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:54vw}.agent-view-foot{padding:0 10px}.agent-view-fidelity{display:none}body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:10px;width:auto;height:44dvh!important;min-height:300px;border-radius:20px!important}.agent-view-confirm{left:10px;bottom:calc(44dvh + 22px);width:calc(100% - 20px)}}
+@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{max-width:105px}.agent-view-browserbar .policy{display:none}body.agent-view-open #app-shell #main{height:47dvh!important;min-height:290px}.agent-view-confirm{bottom:calc(47dvh + 22px);padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
+@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open{animation:none}}
 </style>"""
 
-_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Read-only agent browser view" aria-hidden="true">
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true">
   <header class="agent-view-head">
-    <div class="agent-view-title"><span class="agent-view-kicker">Same agent / same Chrome</span><strong>Agent View</strong></div>
+    <span class="agent-view-mark" aria-hidden="true">UC</span>
+    <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
-  <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">read only</span></div>
+  <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
-    <iframe id="agent-view-frame" title="Semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer" tabindex="-1"></iframe>
-    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">CDP</div><strong>The browser will appear here.</strong><span>Send a prompt in chat. Agent View follows the exact Chrome target selected for this conversation.</span></div>
+    <iframe id="agent-view-frame" title="Interactive semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
+    <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
+    <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
   </div>
-  <footer class="agent-view-foot"><span>Agent controls</span><strong>You observe</strong><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
+  <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
 </aside>"""
 
 _SIDEBAR_JS = """
@@ -19097,6 +19119,13 @@ let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
 let agentViewSnapshot = null;
 let agentViewRetryAllowed = true;
+let agentViewMirrorId = '';
+let agentViewPendingConfirmation = null;
+let agentViewToastTimer = null;
+let agentViewSuppressScrollUntil = 0;
+let agentViewScrollFrame = 0;
+const agentViewInputTimers = new Map();
+const agentViewBoundDocuments = new WeakSet();
 
 function setAgentViewState(text, live) {
   const el = document.getElementById('agent-view-state');
@@ -19142,12 +19171,205 @@ function agentViewSafeBase(raw) {
   } catch (_err) { return 'https://invalid.invalid/'; }
 }
 
+function agentViewShowToast(text, error) {
+  const toast = document.getElementById('agent-view-toast');
+  if (!toast) return;
+  if (agentViewToastTimer) clearTimeout(agentViewToastTimer);
+  toast.textContent = String(text || '').slice(0, 240);
+  toast.classList.toggle('error', !!error);
+  toast.classList.add('show');
+  agentViewToastTimer = setTimeout(function() { toast.classList.remove('show'); }, 2600);
+}
+
+function agentViewOwnTargetId(element) {
+  if (!element || element.nodeType !== 1 || !element.getAttribute) return '';
+  return String(element.getAttribute('data-ucm-id') || '').trim().slice(0, 64);
+}
+
+function agentViewParentAcrossShadow(element) {
+  if (!element) return null;
+  if (element.parentElement) return element.parentElement;
+  const root = element.getRootNode ? element.getRootNode() : null;
+  return root && root.host && root.host.nodeType === 1 ? root.host : null;
+}
+
+function agentViewClosestIdentified(element) {
+  for (let current = element; current; current = agentViewParentAcrossShadow(current)) {
+    if (agentViewOwnTargetId(current)) return current;
+  }
+  return null;
+}
+
+function agentViewElementLabel(element) {
+  if (!element || element.nodeType !== 1) return '';
+  const direct = element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('alt') || element.getAttribute('title') || element.getAttribute('name');
+  if (direct) return String(direct).replace(/\\s+/g, ' ').trim().slice(0, 240);
+  const text = typeof element.innerText === 'string' ? element.innerText : element.textContent;
+  return String(text || '').replace(/\\s+/g, ' ').trim().slice(0, 240);
+}
+
+function agentViewSensitiveControl(element) {
+  if (!element || element.nodeType !== 1 || !/^(?:input|textarea|select)$/.test(element.localName)) return false;
+  const type = String(element.getAttribute('type') || '').toLowerCase();
+  const autocomplete = String(element.getAttribute('autocomplete') || '').toLowerCase();
+  const descriptor = [type,element.getAttribute('name'),element.getAttribute('id'),autocomplete,element.getAttribute('placeholder'),element.getAttribute('aria-label'),element.getAttribute('inputmode')].join(' ').toLowerCase().replace(/[^a-z0-9]/g,'');
+  return /^(?:password|hidden|file)$/.test(type) || /^(?:current-password|new-password|one-time-code)$/.test(autocomplete) || autocomplete.indexOf('cc-') === 0 || /(?:cardnumber|creditcard|securitycode|onetimecode|verificationcode|passcode|cvc|cvv|csc|otp)/.test(descriptor);
+}
+
+function agentViewActionContext(event) {
+  const path = event && typeof event.composedPath === 'function' ? event.composedPath() : [event && event.target];
+  let origin = null;
+  let interactive = null;
+  for (let i = 0; i < path.length; i++) {
+    const node = path[i];
+    if (!node || node.nodeType !== 1) continue;
+    if (!origin) origin = node;
+    if (!interactive && node.matches && node.matches('a,area,button,input,select,textarea,summary,[contenteditable="true"],[role]')) interactive = node;
+  }
+  const identified = agentViewClosestIdentified(interactive || origin);
+  const targetId = agentViewOwnTargetId(identified);
+  if (!identified || !targetId) return null;
+  return {element: interactive || identified, targetId: targetId};
+}
+
+function agentViewControlValue(element) {
+  if (!element || agentViewSensitiveControl(element)) return undefined;
+  if (/^(?:input|textarea|select)$/.test(element.localName)) return String(element.value == null ? '' : element.value).slice(0, 16384);
+  if (element.isContentEditable) return String(element.innerText || '').slice(0, 16384);
+  return undefined;
+}
+
+function agentViewCheckedValue(element) {
+  const type = element && String(element.getAttribute('type') || '').toLowerCase();
+  return element && element.localName === 'input' && /^(?:checkbox|radio)$/.test(type) ? !!element.checked : undefined;
+}
+
+function agentViewSendAction(context, action) {
+  if (!context || !agentViewMirrorId || !agentViewSocket || agentViewSocket.readyState !== WebSocket.OPEN) {
+    agentViewShowToast('The shared browser is still attaching.', true);
+    return;
+  }
+  if (agentViewSensitiveControl(context.element)) {
+    agentViewShowToast('Sensitive fields stay in the source browser and cannot be mirrored.', true);
+    return;
+  }
+  const actionId = self.crypto && typeof self.crypto.randomUUID === 'function' ? self.crypto.randomUUID() : 'av-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  const payload = Object.assign({
+    targetId: context.targetId,
+    label: agentViewElementLabel(context.element),
+  }, action || {});
+  try {
+    agentViewSocket.send(JSON.stringify({
+      type: 'preview.action',
+      action_id: actionId,
+      mirror_id: agentViewMirrorId,
+      document_seq: agentViewDocumentSeq,
+      action: payload,
+    }));
+  } catch (_err) {
+    agentViewShowToast('Could not send that page action.', true);
+  }
+}
+
+function agentViewScheduleInput(context, action) {
+  const previous = agentViewInputTimers.get(context.targetId);
+  if (previous) clearTimeout(previous);
+  agentViewInputTimers.set(context.targetId, setTimeout(function() {
+    agentViewInputTimers.delete(context.targetId);
+    agentViewSendAction(context, action);
+  }, 140));
+}
+
+function bindAgentViewInteractions(frame) {
+  const doc = frame && frame.contentDocument;
+  if (!doc || agentViewBoundDocuments.has(doc)) return;
+  agentViewBoundDocuments.add(doc);
+  doc.addEventListener('submit', function(event) { event.preventDefault(); }, true);
+  doc.addEventListener('click', function(event) {
+    const context = agentViewActionContext(event);
+    const origin = event.target && event.target.nodeType === 1 ? event.target : null;
+    if (origin && origin.closest && origin.closest('a[href],area[href],button,input[type="submit"],input[type="image"],[role="button"]')) event.preventDefault();
+    if (!context) return;
+    agentViewSendAction(context, {
+      kind: 'click',
+      value: agentViewControlValue(context.element),
+      checked: agentViewCheckedValue(context.element),
+      x: Math.round(Number(event.clientX || 0)),
+      y: Math.round(Number(event.clientY || 0)),
+    });
+  }, true);
+  doc.addEventListener('auxclick', function(event) { if (event.target && event.target.closest && event.target.closest('a[href],area[href]')) event.preventDefault(); }, true);
+  doc.addEventListener('input', function(event) {
+    const context = agentViewActionContext(event);
+    if (!context) return;
+    agentViewScheduleInput(context, {kind:'input',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
+  }, true);
+  doc.addEventListener('change', function(event) {
+    const context = agentViewActionContext(event);
+    if (!context) return;
+    agentViewSendAction(context, {kind:'change',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
+  }, true);
+  doc.addEventListener('keydown', function(event) {
+    if (event.key !== 'Enter') return;
+    const context = agentViewActionContext(event);
+    if (!context) return;
+    event.preventDefault();
+    agentViewSendAction(context, {kind:'key',key:'Enter',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
+  }, true);
+  doc.addEventListener('scroll', function(event) {
+    if (performance.now() < agentViewSuppressScrollUntil) return;
+    if (agentViewScrollFrame) return;
+    agentViewScrollFrame = requestAnimationFrame(function() {
+      agentViewScrollFrame = 0;
+      const target = event.target && event.target.nodeType === 1 ? event.target : (doc.scrollingElement || doc.documentElement || doc.body);
+      const identified = agentViewClosestIdentified(target);
+      const targetId = agentViewOwnTargetId(identified);
+      if (!identified || !targetId) return;
+      const isDocument = target === doc.scrollingElement || target === doc.documentElement || target === doc.body;
+      agentViewSendAction({element:identified,targetId:targetId}, {
+        kind:'scroll',
+        x:Math.round(isDocument ? frame.contentWindow.scrollX : Number(target.scrollLeft || 0)),
+        y:Math.round(isDocument ? frame.contentWindow.scrollY : Number(target.scrollTop || 0)),
+      });
+    });
+  }, true);
+}
+
+function showAgentViewConfirmation(event) {
+  agentViewPendingConfirmation = event;
+  const dialog = document.getElementById('agent-view-confirm');
+  const label = document.getElementById('agent-view-confirm-label');
+  if (label) label.textContent = 'Activate “' + String(event.label || 'this control').slice(0, 160) + '” in the source browser?';
+  if (dialog) dialog.classList.add('open');
+}
+
+function cancelAgentViewConfirmation() {
+  agentViewPendingConfirmation = null;
+  const dialog = document.getElementById('agent-view-confirm');
+  if (dialog) dialog.classList.remove('open');
+  agentViewShowToast('Page action cancelled.', false);
+}
+
+function confirmAgentViewAction() {
+  const pending = agentViewPendingConfirmation;
+  agentViewPendingConfirmation = null;
+  const dialog = document.getElementById('agent-view-confirm');
+  if (dialog) dialog.classList.remove('open');
+  if (!pending || !agentViewSocket || agentViewSocket.readyState !== WebSocket.OPEN) return;
+  agentViewSocket.send(JSON.stringify({
+    type:'preview.action.confirm',
+    action_id:pending.action_id,
+    confirmation_token:pending.confirmation_token,
+  }));
+  agentViewShowToast('Confirmed — waiting for the source page.', false);
+}
+
 function agentViewSnapshotHtml(snapshot) {
   const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const adopted = Array.isArray(source.adoptedStyles) ? source.adoptedStyles : [];
   const documentCss = adopted.filter(function(entry) { return entry && entry.hostId === 'document'; }).map(function(entry) { return String(entry.css || ''); }).join('\\n');
   const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
-  const observerCss = 'a,button,input,select,textarea,[contenteditable]{pointer-events:none!important}html{scroll-behavior:auto!important}';
+  const observerCss = 'html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
     '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '">' + String(source.head || '') +
     '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
@@ -19195,10 +19417,16 @@ function scaleAgentViewSemanticFrame() {
   frame.style.transform = 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
 }
 
-function renderAgentViewSemanticSnapshot(snapshot, transportSeq) {
+function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, documentSeq) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
+  agentViewInputTimers.clear();
+  agentViewPendingConfirmation = null;
+  const confirmation = document.getElementById('agent-view-confirm');
+  if (confirmation) confirmation.classList.remove('open');
   agentViewSnapshot = snapshot;
-  agentViewDocumentSeq = 0;
+  agentViewMirrorId = String(mirrorId || '');
+  agentViewDocumentSeq = Number(documentSeq || 0);
   const frame = document.getElementById('agent-view-frame');
   const image = document.getElementById('agent-view-image');
   const canvas = document.getElementById('agent-view-canvas');
@@ -19207,6 +19435,8 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq) {
   frame.onload = function() {
     try {
       agentViewApplyAdoptedStyles(snapshot);
+      bindAgentViewInteractions(frame);
+      agentViewSuppressScrollUntil = performance.now() + 180;
       if (frame.contentWindow) frame.contentWindow.scrollTo(Number((snapshot.viewport || {}).scrollX || 0), Number((snapshot.viewport || {}).scrollY || 0));
     } catch (_err) {}
     canvas.classList.remove('has-frame');
@@ -19231,8 +19461,9 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq) {
   setAgentViewState('Semantic live / same browser', true);
 }
 
-function applyAgentViewSemanticPatch(patch, transportSeq) {
+function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq) {
   if (!patch || !Array.isArray(patch.operations) || !agentViewSnapshot) return;
+  if (String(mirrorId || '') !== agentViewMirrorId) { refreshAgentView(); return; }
   if (Number(patch.previousSeq) !== agentViewDocumentSeq) { refreshAgentView(); return; }
   const frame = document.getElementById('agent-view-frame');
   const doc = frame && frame.contentDocument;
@@ -19241,6 +19472,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq) {
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
       if (operation.op === 'scroll' && operation.targetId === 'document') {
+        agentViewSuppressScrollUntil = performance.now() + 180;
         if (frame.contentWindow) frame.contentWindow.scrollTo(Number(operation.x || 0), Number(operation.y || 0));
         return;
       }
@@ -19269,12 +19501,13 @@ function applyAgentViewSemanticPatch(patch, transportSeq) {
         if (typeof operation.checked === 'boolean') target.checked = operation.checked;
         if (Number.isInteger(operation.selectedIndex)) target.selectedIndex = operation.selectedIndex;
       } else if (operation.op === 'scroll') {
+        agentViewSuppressScrollUntil = performance.now() + 180;
         target.scrollLeft = Number(operation.x || 0);
         target.scrollTop = Number(operation.y || 0);
       }
     });
   } catch (_err) { refreshAgentView(); return; }
-  agentViewDocumentSeq = Number(patch.seq || agentViewDocumentSeq);
+  agentViewDocumentSeq = Number(documentSeq == null ? (patch.seq || agentViewDocumentSeq) : documentSeq);
   if (patch.url) {
     const location = document.getElementById('agent-view-location');
     if (location) { location.textContent = patch.url; location.title = patch.url; }
@@ -19285,6 +19518,12 @@ function applyAgentViewSemanticPatch(patch, transportSeq) {
 
 function stopAgentViewSocket() {
   agentViewGeneration++;
+  agentViewMirrorId = '';
+  agentViewPendingConfirmation = null;
+  agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
+  agentViewInputTimers.clear();
+  const confirmation = document.getElementById('agent-view-confirm');
+  if (confirmation) confirmation.classList.remove('open');
   if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
   agentViewRetryTimer = null;
   const socket = agentViewSocket;
@@ -19311,13 +19550,34 @@ function startAgentViewSocket() {
     if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
     let event;
     try { event = JSON.parse(message.data); } catch (_err) { return; }
-    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building semantic view' : 'Attached to agent Chrome', false); return; }
+    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
-      renderAgentViewSemanticSnapshot(event.snapshot, event.seq);
+      renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.document_seq);
       return;
     }
     if (event.type === 'preview.semantic.patch' && event.patch) {
-      applyAgentViewSemanticPatch(event.patch, event.seq);
+      applyAgentViewSemanticPatch(event.patch, event.seq, event.mirror_id, event.document_seq);
+      return;
+    }
+    if (event.type === 'preview.action.confirmation_required') {
+      showAgentViewConfirmation(event);
+      return;
+    }
+    if (event.type === 'preview.action.result') {
+      if (event.ok) {
+        agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
+      } else {
+        const reason = String(event.reason || 'action-failed');
+        const messages = {
+          'sensitive-target':'Sensitive fields cannot be controlled from the mirror.',
+          'stale-document':'The page changed before that action could run.',
+          'target-not-found':'That control changed. Refreshing the semantic view.',
+          'preview-superseded':'A newer Agent View owns this chat session.',
+          'action-queue-full':'The page is busy. Try again in a moment.',
+        };
+        agentViewShowToast(messages[reason] || 'Page action was not applied: ' + reason, true);
+        if (reason === 'stale-document' || reason === 'target-not-found' || reason === 'mirror-not-installed') setTimeout(refreshAgentView, 120);
+      }
       return;
     }
     if (event.type === 'preview.semantic_unavailable') {
@@ -19325,6 +19585,7 @@ function startAgentViewSocket() {
       return;
     }
     if (event.type === 'preview.frame' && event.data) {
+      agentViewMirrorId = '';
       const seq = Number(event.seq || 0);
       if (seq && seq <= agentViewLastSeq) return;
       agentViewLastSeq = seq;
@@ -19361,7 +19622,7 @@ function openAgentView() {
   document.body.classList.add('agent-view-open');
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'false');
-  const button = document.getElementById('banner-agent-view');
+  const button = document.getElementById('topbar-agent-view');
   if (button) button.setAttribute('aria-expanded', 'true');
   if (!alreadyOpen || !agentViewSocket) requestAnimationFrame(startAgentViewSocket);
 }
@@ -19370,7 +19631,7 @@ function closeAgentView() {
   document.body.classList.remove('agent-view-open');
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
-  const button = document.getElementById('banner-agent-view');
+  const button = document.getElementById('topbar-agent-view');
   if (button) button.setAttribute('aria-expanded', 'false');
   stopAgentViewSocket();
   agentViewRetryAllowed = false;
@@ -19585,6 +19846,21 @@ def _inject_sidebar(html: str) -> str:
         )
 
     has_agent_view = 'id="banner-agent-view"' in html
+    if has_agent_view:
+        html = apply_template_replacements(
+            html,
+            (
+                TemplateReplacement(
+                    '      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>\n',
+                    "",
+                    "legacy Agent View banner button removal",
+                ),
+            ),
+            template_name="agent view banner cleanup",
+        )
+    quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
+    if has_agent_view:
+        quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
     shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
     runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
 
@@ -19606,11 +19882,11 @@ def _inject_sidebar(html: str) -> str:
                 '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
                 "sidebar toggle injection",
             ),
-            TemplateReplacement(
-                '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
-                '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n',
-                "sidebar nav quick-new replacement",
-            ),
+                TemplateReplacement(
+                    '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
+                    quick_new_nav,
+                    "sidebar nav quick-new replacement",
+                ),
             TemplateReplacement(
                 "</div>\n<script>",
                 shell_close,

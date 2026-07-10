@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
 import logging
+import math
 import re
+import secrets
+import time
 import uuid
 from urllib.parse import urlsplit
 
 import httpx
-from aiohttp import web
+from aiohttp import WSMsgType, web
 
 from challenge_detection import detect_challenge
 from domain_policy import execution_policy_for_url
@@ -88,6 +93,95 @@ _FIRST_LOOK_PREVIEW_MAX_TRANSPARENT_RECONNECTS = 5
 # Backoff between transparent reconnects. Keep small so the preview feels
 # continuous; private-core's reattach is cheap.
 _FIRST_LOOK_PREVIEW_RECONNECT_BACKOFF_S = 0.5
+
+_CHAT_PREVIEW_ACTION_QUEUE_MAX = 24
+_CHAT_PREVIEW_CONFIRM_TTL_S = 30.0
+_CHAT_PREVIEW_VALUE_MAX = 16_384
+_CHAT_PREVIEW_LABEL_MAX = 240
+_CHAT_PREVIEW_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_CHAT_PREVIEW_MIRROR_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_CHAT_PREVIEW_TARGET_ID_RE = re.compile(r"^ucm-[a-z0-9]{1,16}$")
+_CHAT_PREVIEW_CONFIRM_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{24,128}$")
+
+
+def _same_origin_preview_request(request: web.Request) -> bool:
+    """Reject browser WebSocket handshakes initiated by a foreign origin."""
+    origin = str(request.headers.get("Origin", "") or "").strip()
+    if not origin:
+        # Non-browser test/diagnostic clients may omit Origin. Browsers include
+        # it, which is the CSRF boundary this check is intended to enforce.
+        return True
+    parsed = urlsplit(origin)
+    forwarded_scheme = str(request.headers.get("X-Forwarded-Proto", "") or "")
+    expected_scheme = (forwarded_scheme.split(",")[0].strip() or request.scheme).lower()
+    forwarded_host = str(request.headers.get("X-Forwarded-Host", "") or "")
+    expected_host = (forwarded_host.split(",")[0].strip() or request.host).lower()
+    return parsed.scheme.lower() == expected_scheme and parsed.netloc.lower() == expected_host
+
+
+def _parse_chat_preview_action(payload: object) -> tuple[str, str, int, dict, str]:
+    """Validate and bound one interactive semantic action message."""
+    if not isinstance(payload, dict) or payload.get("type") != "preview.action":
+        raise ValueError("unsupported action message")
+    action_id = str(payload.get("action_id", "") or "")
+    mirror_id = str(payload.get("mirror_id", "") or "")
+    document_seq = payload.get("document_seq")
+    raw_action = payload.get("action")
+    if not _CHAT_PREVIEW_ACTION_ID_RE.fullmatch(action_id):
+        raise ValueError("invalid action id")
+    if not _CHAT_PREVIEW_MIRROR_ID_RE.fullmatch(mirror_id):
+        raise ValueError("invalid mirror id")
+    if (
+        isinstance(document_seq, bool)
+        or not isinstance(document_seq, int)
+        or document_seq < 0
+        or document_seq > 2_147_483_647
+    ):
+        raise ValueError("invalid document sequence")
+    if not isinstance(raw_action, dict):
+        raise ValueError("invalid semantic action")
+
+    target_id = str(raw_action.get("targetId", "") or "")
+    kind = str(raw_action.get("kind", "") or "")
+    if not _CHAT_PREVIEW_TARGET_ID_RE.fullmatch(target_id):
+        raise ValueError("invalid semantic target")
+    if kind not in {"click", "input", "change", "key", "scroll"}:
+        raise ValueError("unsupported semantic action")
+
+    action: dict = {"targetId": target_id, "kind": kind}
+    if "value" in raw_action:
+        value = raw_action.get("value")
+        if not isinstance(value, str) or len(value) > _CHAT_PREVIEW_VALUE_MAX:
+            raise ValueError("invalid semantic action value")
+        action["value"] = value
+    if "checked" in raw_action:
+        checked = raw_action.get("checked")
+        if not isinstance(checked, bool):
+            raise ValueError("invalid semantic action checked state")
+        action["checked"] = checked
+    if "key" in raw_action:
+        if raw_action.get("key") != "Enter":
+            raise ValueError("unsupported semantic action key")
+        action["key"] = "Enter"
+    for name in ("x", "y"):
+        if name not in raw_action:
+            continue
+        coordinate = raw_action.get(name)
+        if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+            raise ValueError("invalid semantic action coordinate")
+        try:
+            numeric_coordinate = float(coordinate)
+        except (OverflowError, ValueError):
+            raise ValueError("invalid semantic action coordinate") from None
+        if not math.isfinite(numeric_coordinate):
+            raise ValueError("invalid semantic action coordinate")
+        action[name] = max(-10_000_000, min(10_000_000, numeric_coordinate))
+
+    raw_label = raw_action.get("label", "")
+    if raw_label is not None and not isinstance(raw_label, str):
+        raise ValueError("invalid semantic action label")
+    label = str(raw_label or "")[:_CHAT_PREVIEW_LABEL_MAX]
+    return action_id, mirror_id, document_seq, action, label
 
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:
@@ -348,6 +442,8 @@ async def _handle_preview_ws(
         auth_info = core._authenticate(request)
         if auth_info is None:
             return web.Response(status=401, text="Not authenticated")
+        if not _same_origin_preview_request(request):
+            return web.Response(status=403, text="foreign websocket origin")
         key_hash = str(auth_info.get("key_hash", "") or "").strip()
         parts = sid_param.split("-")
         if not sid_param or len(parts) < 4 or parts[0] != "s" or parts[2] != key_hash:
@@ -471,22 +567,37 @@ async def _handle_preview_ws(
     import cloud_tools
 
     relay_host, relay_port = core._parse_relay()
+    source_locks = getattr(core, "_source_operation_locks", None)
+    if source_locks is None:
+        source_locks = {}
+        setattr(core, "_source_operation_locks", source_locks)
+    source_lock = source_locks.setdefault((agent_id, tab_id), asyncio.Lock())
+
+    preview_generation = 0
+    if authenticated_chat:
+        preview_generations = getattr(core, "_chat_preview_generations", None)
+        if preview_generations is None:
+            preview_generations = {}
+            setattr(core, "_chat_preview_generations", preview_generations)
+        preview_generation = int(preview_generations.get(sid_param, 0)) + 1
+        preview_generations[sid_param] = preview_generation
+
     ws = web.WebSocketResponse(heartbeat=30)
     if guest_id:
         core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
     client_closed = asyncio.Event()
-
-    async def watch_client_close() -> None:
-        try:
-            async for _message in ws:
-                pass
-        finally:
-            client_closed.set()
-
-    client_watch_task = asyncio.create_task(watch_client_close())
+    send_lock = asyncio.Lock()
+    action_queue: asyncio.Queue[dict] | None = (
+        asyncio.Queue(maxsize=_CHAT_PREVIEW_ACTION_QUEUE_MAX)
+        if authenticated_chat
+        else None
+    )
+    client_watch_task: asyncio.Task | None = None
 
     async def stop_client_watch() -> None:
+        if client_watch_task is None:
+            return
         if not client_watch_task.done():
             client_watch_task.cancel()
         try:
@@ -528,10 +639,10 @@ async def _handle_preview_ws(
             return False
         event.setdefault("v", _FIRST_LOOK_PREVIEW_PROTOCOL_VERSION)
         try:
-            await ws.send_json(event)
+            async with send_lock:
+                await ws.send_json(event)
             return True
         except asyncio.CancelledError:
-            await stop_client_watch()
             raise
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             return False
@@ -541,6 +652,48 @@ async def _handle_preview_ws(
                 flush=True,
             )
             return False
+
+    async def watch_client_close() -> None:
+        try:
+            async for message in ws:
+                if (
+                    action_queue is None
+                    or message.type != WSMsgType.TEXT
+                    or not message.data
+                ):
+                    continue
+                try:
+                    payload = json.loads(message.data)
+                except (TypeError, json.JSONDecodeError):
+                    await emit(
+                        {
+                            "type": "preview.action.result",
+                            "action_id": "invalid",
+                            "ok": False,
+                            "reason": "invalid-message",
+                        }
+                    )
+                    continue
+                if not isinstance(payload, dict) or payload.get("type") not in {
+                    "preview.action",
+                    "preview.action.confirm",
+                }:
+                    continue
+                try:
+                    action_queue.put_nowait(payload)
+                except asyncio.QueueFull:
+                    await emit(
+                        {
+                            "type": "preview.action.result",
+                            "action_id": str(payload.get("action_id", "invalid"))[:128],
+                            "ok": False,
+                            "reason": "action-queue-full",
+                        }
+                    )
+        finally:
+            client_closed.set()
+
+    client_watch_task = asyncio.create_task(watch_client_close())
 
     semantic_requested = (
         authenticated_chat and request.query.get("transport", "semantic") != "frames"
@@ -552,19 +705,220 @@ async def _handle_preview_ws(
             "width": width,
             "height": height,
             "mode": "semantic" if semantic_requested else "frames",
+            "interaction": "interactive" if semantic_requested else "observer",
         }
     )
 
+    mirror_state: dict[str, object] = {
+        "ready": False,
+        "mirror_id": "",
+        "document_seq": 0,
+    }
+    pending_confirmations: dict[str, dict[str, object]] = {}
+    seen_action_ids: dict[str, float] = {}
+    action_worker_task: asyncio.Task | None = None
+
+    def preview_is_current() -> bool:
+        if not authenticated_chat:
+            return False
+        generations = getattr(core, "_chat_preview_generations", {})
+        current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+        return (
+            generations.get(sid_param) == preview_generation
+            and current_tab == tab_id
+            and not client_closed.is_set()
+            and not ws.closed
+        )
+
+    def release_preview_generation() -> None:
+        if not authenticated_chat:
+            return
+        generations = getattr(core, "_chat_preview_generations", {})
+        if generations.get(sid_param) == preview_generation:
+            generations.pop(sid_param, None)
+
+    async def emit_action_result(action_id: str, result: dict) -> None:
+        await emit(
+            {
+                "type": "preview.action.result",
+                "action_id": action_id,
+                "ok": bool(result.get("ok")),
+                "reason": str(result.get("reason", "action-failed"))[:160],
+                "navigated": bool(result.get("navigated")),
+                "mirror_id": str(mirror_state.get("mirror_id", "")),
+                "document_seq": int(mirror_state.get("document_seq", 0)),
+            }
+        )
+
+    async def stop_action_worker() -> None:
+        if action_worker_task is None:
+            return
+        if not action_worker_task.done():
+            action_worker_task.cancel()
+        try:
+            await action_worker_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(
+                f"[preview-action] sid={sid_param} worker failed: {exc!r}",
+                flush=True,
+            )
+
     if semantic_requested and alive:
-        # Prefer the semantic observer synchronized from mirror-demo PR #2.
-        # It evaluates only against the already-resolved chat target and has
-        # no action channel. The established screencast below remains a
-        # compatibility fallback when a page disallows semantic capture.
-        from web_app.semantic_mirror import stream_semantic_mirror
+        # Prefer the semantic transport synchronized from mirror-demo PR #2.
+        # Actions are validated here, bound to this exact authorized target,
+        # and serialized with capture and /web/cmd CDP operations.
+        from web_app.semantic_mirror import (
+            execute_semantic_action,
+            stream_semantic_mirror,
+        )
+
+        async def run_action_worker() -> None:
+            assert action_queue is not None
+            while True:
+                payload = await action_queue.get()
+                now = time.monotonic()
+                for old_action_id, created_at in list(seen_action_ids.items()):
+                    if now - created_at > 120:
+                        seen_action_ids.pop(old_action_id, None)
+                for old_action_id, pending in list(pending_confirmations.items()):
+                    if now > float(pending.get("expires_at", 0)):
+                        pending_confirmations.pop(old_action_id, None)
+
+                if not preview_is_current():
+                    await emit_action_result(
+                        str(payload.get("action_id", "invalid"))[:128],
+                        {"ok": False, "reason": "preview-superseded"},
+                    )
+                    continue
+
+                if payload.get("type") == "preview.action.confirm":
+                    action_id = str(payload.get("action_id", "") or "")
+                    token = str(payload.get("confirmation_token", "") or "")
+                    pending = pending_confirmations.get(action_id)
+                    if (
+                        not _CHAT_PREVIEW_ACTION_ID_RE.fullmatch(action_id)
+                        or not _CHAT_PREVIEW_CONFIRM_TOKEN_RE.fullmatch(token)
+                        or pending is None
+                        or now > float(pending.get("expires_at", 0))
+                        or not hmac.compare_digest(token, str(pending.get("token", "")))
+                    ):
+                        await emit_action_result(
+                            action_id[:128] or "invalid",
+                            {"ok": False, "reason": "invalid-confirmation"},
+                        )
+                        continue
+                    pending_confirmations.pop(action_id, None)
+                    if (
+                        pending.get("mirror_id") != mirror_state.get("mirror_id")
+                        or pending.get("document_seq") != mirror_state.get("document_seq")
+                    ):
+                        await emit_action_result(
+                            action_id,
+                            {"ok": False, "reason": "stale-document"},
+                        )
+                        continue
+                    try:
+                        result = await execute_semantic_action(
+                            agent_id,
+                            tab_id,
+                            pending["action"],
+                            expected_seq=int(pending["document_seq"]),
+                            confirmed=True,
+                            relay_host=relay_host,
+                            relay_port=relay_port,
+                            operation_lock=source_lock,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        print(
+                            f"[preview-action] sid={sid_param} confirm failed: {exc!r}",
+                            flush=True,
+                        )
+                        result = {"ok": False, "reason": "action-failed"}
+                    await emit_action_result(action_id, result)
+                    continue
+
+                try:
+                    action_id, mirror_id, document_seq, action, label = (
+                        _parse_chat_preview_action(payload)
+                    )
+                except ValueError as exc:
+                    await emit_action_result(
+                        str(payload.get("action_id", "invalid"))[:128],
+                        {"ok": False, "reason": str(exc)},
+                    )
+                    continue
+                if action_id in seen_action_ids:
+                    await emit_action_result(
+                        action_id,
+                        {"ok": False, "reason": "duplicate-action"},
+                    )
+                    continue
+                seen_action_ids[action_id] = now
+                if (
+                    not mirror_state.get("ready")
+                    or mirror_id != mirror_state.get("mirror_id")
+                    or document_seq != mirror_state.get("document_seq")
+                ):
+                    await emit_action_result(
+                        action_id,
+                        {"ok": False, "reason": "stale-document"},
+                    )
+                    continue
+                try:
+                    result = await execute_semantic_action(
+                        agent_id,
+                        tab_id,
+                        action,
+                        expected_seq=document_seq,
+                        relay_host=relay_host,
+                        relay_port=relay_port,
+                        operation_lock=source_lock,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(
+                        f"[preview-action] sid={sid_param} action failed: {exc!r}",
+                        flush=True,
+                    )
+                    result = {"ok": False, "reason": "action-failed"}
+
+                if result.get("reason") == "confirmation-required":
+                    token = secrets.token_urlsafe(24)
+                    pending_confirmations[action_id] = {
+                        "token": token,
+                        "action": action,
+                        "mirror_id": mirror_id,
+                        "document_seq": document_seq,
+                        "expires_at": time.monotonic() + _CHAT_PREVIEW_CONFIRM_TTL_S,
+                    }
+                    await emit(
+                        {
+                            "type": "preview.action.confirmation_required",
+                            "action_id": action_id,
+                            "confirmation_token": token,
+                            "label": label or "this control",
+                            "kind": action.get("kind", "click"),
+                            "expires_in": int(_CHAT_PREVIEW_CONFIRM_TTL_S),
+                        }
+                    )
+                    continue
+                await emit_action_result(action_id, result)
+
+        action_worker_task = asyncio.create_task(run_action_worker())
 
         def semantic_target_changed() -> bool:
             current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
-            return client_closed.is_set() or ws.closed or current_tab != tab_id
+            return (
+                client_closed.is_set()
+                or ws.closed
+                or current_tab != tab_id
+                or not preview_is_current()
+            )
 
         semantic_seq = 0
         try:
@@ -574,23 +928,37 @@ async def _handle_preview_ws(
                 relay_host=relay_host,
                 relay_port=relay_port,
                 stop_requested=semantic_target_changed,
+                operation_lock=source_lock,
             ):
                 semantic_seq += 1
                 if mirror_event["type"] == "snapshot":
+                    mirror_state["ready"] = True
+                    mirror_state["mirror_id"] = uuid.uuid4().hex
+                    mirror_state["document_seq"] = 0
+                    pending_confirmations.clear()
                     alive = await emit(
                         {
                             "type": "preview.semantic.snapshot",
                             "snapshot": mirror_event["snapshot"],
                             "resync": mirror_event["resync"],
                             "seq": semantic_seq,
+                            "mirror_id": mirror_state["mirror_id"],
+                            "document_seq": 0,
                         }
                     )
                 else:
+                    mirror_state["document_seq"] = int(
+                        mirror_event["patch"].get(
+                            "seq", mirror_state.get("document_seq", 0)
+                        )
+                    )
                     alive = await emit(
                         {
                             "type": "preview.semantic.patch",
                             "patch": mirror_event["patch"],
                             "seq": semantic_seq,
+                            "mirror_id": mirror_state["mirror_id"],
+                            "document_seq": mirror_state["document_seq"],
                         }
                     )
                 if not alive:
@@ -608,16 +976,22 @@ async def _handle_preview_ws(
                 )
             if not ws.closed:
                 await ws.close()
+            await stop_action_worker()
             await stop_client_watch()
+            release_preview_generation()
             print(
                 f"[preview-fsm] sid={sid_param} semantic disconnected events={semantic_seq}",
                 flush=True,
             )
             return ws
         except asyncio.CancelledError:
+            await stop_action_worker()
             await stop_client_watch()
+            release_preview_generation()
             raise
         except Exception as exc:
+            mirror_state["ready"] = False
+            pending_confirmations.clear()
             print(
                 f"[preview-fsm] sid={sid_param} semantic unavailable; "
                 f"falling back to frames: {exc!r}",
@@ -846,7 +1220,9 @@ async def _handle_preview_ws(
     finally:
         if not ws.closed:
             await ws.close()
+        await stop_action_worker()
         await stop_client_watch()
+        release_preview_generation()
         print(
             f"[preview-fsm] sid={sid_param} disconnected frames={frame_seq}",
             flush=True,
@@ -861,7 +1237,7 @@ async def handle_first_look_preview_ws(request: web.Request) -> web.StreamRespon
 
 
 async def handle_chat_preview_ws(request: web.Request) -> web.StreamResponse:
-    """GET /web/chat/preview/ws — read-only preview of the authenticated chat browser."""
+    """GET /web/chat/preview/ws — interactive semantic view of the chat browser."""
     return await _handle_preview_ws(request, authenticated_chat=True)
 
 
