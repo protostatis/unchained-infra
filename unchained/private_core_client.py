@@ -307,6 +307,7 @@ class PrivateCoreClient:
         relay_host: str,
         relay_port: int,
         overlay: bool = False,
+        bring_to_front: bool = True,
     ) -> dict:
         return await self.execute(
             OP_RUN_CDP_COMMAND,
@@ -317,6 +318,7 @@ class PrivateCoreClient:
             relay_host=relay_host,
             relay_port=relay_port,
             overlay=overlay,
+            bring_to_front=bring_to_front,
         )
 
     async def run_js(self, agent_id: str, tab_id: str, expression: str, relay_host: str, relay_port: int, overlay: bool = False) -> str:
@@ -330,7 +332,7 @@ class PrivateCoreClient:
             overlay=overlay,
         )
 
-    async def navigate(self, agent_id: str, tab_id: str, url: str, relay_host: str, relay_port: int) -> str:
+    async def navigate(self, agent_id: str, tab_id: str, url: str, relay_host: str, relay_port: int, *, bring_to_front: bool = True) -> str:
         return await self.execute(
             OP_NAVIGATE,
             agent_id=agent_id,
@@ -338,6 +340,7 @@ class PrivateCoreClient:
             url=url,
             relay_host=relay_host,
             relay_port=relay_port,
+            bring_to_front=bring_to_front,
         )
 
     async def click(self, agent_id: str, tab_id: str, x: int = 0, y: int = 0,

@@ -676,6 +676,7 @@ _response_req_ids = _state.response_req_ids  # session_id -> expected req_id
 _session_agents = _state.session_agents  # session_id -> agent_id that handled it
 _agent_req_queues = _state.agent_req_queues  # req_id -> one-shot response queue
 _session_tabs = _state.session_tabs  # session_id -> Chrome tab_id
+_session_allowed_tabs = _state.session_allowed_tabs  # session_id -> server-authorized Chrome tabs
 _session_profile_paths = _state.session_profile_paths  # session_id -> selected Chrome profile path
 _session_last_active = _state.session_last_active  # session_id -> timestamp
 _session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
@@ -1710,6 +1711,45 @@ from web_app.handlers.provision import (
 # /web/cmd — Direct CDP command dispatch
 # ---------------------------------------------------------------------------
 
+
+def _chat_session_owned_by_auth(session_id: str, auth_info: dict) -> bool:
+    """Return whether an authenticated key owns a chat session id."""
+    key_hash = str(auth_info.get("key_hash") or "").strip()
+    parts = session_id.split("-")
+    return bool(
+        key_hash
+        and len(parts) >= 4
+        and parts[0] == "s"
+        and parts[2] == key_hash
+    )
+
+
+def _canonical_session_tab(raw_tab_id: str, active_tab_id: str) -> str:
+    """Keep newly-created tabs in the active provision slot, when present."""
+    raw = str(raw_tab_id or "").strip()
+    active = str(active_tab_id or "").strip()
+    if not raw or raw == "auto" or raw.startswith("prov-"):
+        return raw
+    if active.startswith("prov-"):
+        parts = active.split("-", 2)
+        if len(parts) == 3 and parts[1]:
+            return f"prov-{parts[1]}-{raw}"
+    return raw
+
+
+def _resolve_authorized_session_tab(requested_tab: str, allowed_tabs: set[str]) -> str | None:
+    """Resolve one exact server-authorized tab from an agent-facing prefix."""
+    requested = str(requested_tab or "").strip()
+    if not requested or requested == "auto":
+        return None
+    matches = [
+        candidate
+        for candidate in allowed_tabs
+        if candidate == requested or candidate.startswith(requested)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 async def handle_cmd(request: web.Request) -> web.Response:
     auth_info = _authenticate(request)
     if auth_info is None:
@@ -1723,6 +1763,8 @@ async def handle_cmd(request: web.Request) -> web.Response:
     req_id = _request_id(request)
     action = body.get("action")
     session_id = str(body.get("session_id") or body.get("chat_session_id") or "").strip()
+    if session_id and not _chat_session_owned_by_auth(session_id, auth_info):
+        return web.json_response({"error": "chat session not owned by authenticated user"}, status=403)
     requested_bridge_agent = str(body.get("bridge_agent_id") or "").strip()
     agent_id = auth_info.get("agent_id")
     agent_source = "auth"
@@ -1748,7 +1790,32 @@ async def handle_cmd(request: web.Request) -> web.Response:
                 requested_bridge_agent=requested_bridge_agent or "-",
                 error=str(e)[:160],
             )
-    tab_id = body.get("tab_id", "auto")
+    requested_tab_id = str(body.get("tab_id") or "auto").strip()
+    tab_id = requested_tab_id
+    if session_id:
+        active_tab_id = str(_session_tabs.get(session_id) or "").strip()
+        allowed_tabs = _session_allowed_tabs.setdefault(session_id, set())
+        if active_tab_id:
+            allowed_tabs.add(active_tab_id)
+        if requested_tab_id == "auto" and active_tab_id:
+            tab_id = active_tab_id
+        elif requested_tab_id != "auto":
+            authorized_tab = _resolve_authorized_session_tab(requested_tab_id, allowed_tabs)
+            if authorized_tab is None:
+                return web.json_response(
+                    {"error": "tab is not authorized for this chat session"},
+                    status=403,
+                )
+            tab_id = authorized_tab
+        if tab_id != "auto":
+            # The exact server-authorized target used by the agent becomes
+            # the observer target for this chat turn.
+            _session_tabs[session_id] = tab_id
+            _session_last_active[session_id] = time.time()
+        if action == "navigate":
+            # Hosted chat is observed in Agent View. Navigating the physical
+            # headed Chrome must not bring it over the chat UI.
+            body["bring_to_front"] = False
     _trace(
         "cmd.agent_resolved",
         req_id=req_id,
@@ -1776,6 +1843,24 @@ async def handle_cmd(request: web.Request) -> web.Response:
     import cloud_tools
 
     try:
+        if session_id and tab_id == "auto" and action != "rhythm_query":
+            target_info = await cloud_tools.run_cdp_command(
+                agent_id,
+                "auto",
+                "Target.getTargetInfo",
+                {},
+                relay_host,
+                relay_port,
+                bring_to_front=False,
+            )
+            tab_id = str(
+                ((target_info or {}).get("targetInfo") or {}).get("targetId") or ""
+            ).strip()
+            if not tab_id:
+                raise RuntimeError("Chrome did not return an active target id")
+            _session_allowed_tabs.setdefault(session_id, set()).add(tab_id)
+            _session_tabs[session_id] = tab_id
+            _session_last_active[session_id] = time.time()
         payload = await run_cmd_action(
             action=action,
             body=body,
@@ -1785,6 +1870,22 @@ async def handle_cmd(request: web.Request) -> web.Response:
             relay_port=relay_port,
             cloud_tools=cloud_tools,
         )
+        if session_id:
+            new_tab_id = ""
+            if action == "new_tab":
+                new_tab_id = str(payload.get("tab_id") or "").strip()
+            elif action == "ddm" and "--new" in (body.get("flags") or []):
+                match = re.search(r"(?:^|\n)Tab:\s*([A-Za-z0-9-]{8,160})", str(payload.get("data") or ""))
+                if match:
+                    new_tab_id = match.group(1)
+            if new_tab_id:
+                canonical_tab = _canonical_session_tab(new_tab_id, tab_id)
+                _session_allowed_tabs.setdefault(session_id, set()).add(canonical_tab)
+                _session_tabs[session_id] = canonical_tab
+                _session_last_active[session_id] = time.time()
+                payload["tab_id"] = canonical_tab
+                if action == "new_tab":
+                    payload["data"] = f"Created tab {canonical_tab}"
         _trace("cmd.ok", req_id=req_id, action=action, agent_id=agent_id, tab_id=tab_id)
         return web.json_response(payload)
 

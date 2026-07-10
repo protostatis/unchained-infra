@@ -14,6 +14,24 @@ import web
 
 
 class TestHandleCmd(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._saved_session_tabs = dict(web._session_tabs)
+        self._saved_allowed_tabs = {
+            sid: set(tabs) for sid, tabs in web._session_allowed_tabs.items()
+        }
+        self._saved_session_agents = dict(web._session_agent_map)
+        web._session_tabs.clear()
+        web._session_allowed_tabs.clear()
+        web._session_agent_map.clear()
+
+    def tearDown(self):
+        web._session_tabs.clear()
+        web._session_tabs.update(self._saved_session_tabs)
+        web._session_allowed_tabs.clear()
+        web._session_allowed_tabs.update(self._saved_allowed_tabs)
+        web._session_agent_map.clear()
+        web._session_agent_map.update(self._saved_session_agents)
+
     def _request(self, body=None, *, json_exc: Exception | None = None, headers=None):
         req = SimpleNamespace(headers=headers or {})
         if json_exc is not None:
@@ -121,6 +139,196 @@ class TestHandleCmd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(data, {"type": "text", "data": "ok"})
         mock_click.assert_awaited_once_with("claude-abc", "auto", 12, 34, "relay.local", 8765)
+
+    @patch("web._authenticate")
+    async def test_rejects_foreign_chat_session(self, mock_auth):
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        request = self._request({
+            "action": "navigate",
+            "session_id": "s-claude-deadbeef-demo",
+            "url": "https://example.com",
+        })
+
+        response = await web.handle_cmd(request)
+
+        self.assertEqual(response.status, 403)
+        self.assertIn("not owned", json.loads(response.body.decode())["error"])
+
+    @patch("cloud_tools.navigate", new_callable=AsyncMock)
+    @patch("web._parse_relay", return_value=("relay.local", 8765))
+    @patch("web._authenticate")
+    async def test_chat_navigation_uses_active_tab_without_foregrounding(self, mock_auth, _mock_parse, mock_nav):
+        sid = "s-claude-abc12345-demo"
+        tab = "A" * 32
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        mock_nav.return_value = "Navigated"
+        web._session_agent_map[sid] = "claude-abc12345"
+        web._session_tabs[sid] = tab
+        request = self._request({
+            "action": "navigate",
+            "session_id": sid,
+            "tab_id": "auto",
+            "url": "https://example.com",
+        })
+
+        response = await web.handle_cmd(request)
+
+        self.assertEqual(response.status, 200)
+        mock_nav.assert_awaited_once_with(
+            "claude-abc12345",
+            tab,
+            "https://example.com",
+            "relay.local",
+            8765,
+            bring_to_front=False,
+        )
+
+    @patch("cloud_tools.navigate", new_callable=AsyncMock)
+    @patch("cloud_tools.run_cdp_command", new_callable=AsyncMock)
+    @patch("web._parse_relay", return_value=("relay.local", 8765))
+    @patch("web._authenticate")
+    async def test_chat_auto_tab_is_server_pinned_before_navigation(self, mock_auth, _mock_parse, mock_cdp, mock_nav):
+        sid = "s-claude-abc12345-demo"
+        resolved = "C" * 32
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        mock_cdp.return_value = {"targetInfo": {"targetId": resolved}}
+        mock_nav.return_value = "Navigated"
+        web._session_agent_map[sid] = "claude-abc12345"
+        request = self._request({
+            "action": "navigate",
+            "session_id": sid,
+            "tab_id": "auto",
+            "url": "https://example.com",
+        })
+
+        response = await web.handle_cmd(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(web._session_tabs[sid], resolved)
+        self.assertEqual(web._session_allowed_tabs[sid], {resolved})
+        mock_cdp.assert_awaited_once_with(
+            "claude-abc12345",
+            "auto",
+            "Target.getTargetInfo",
+            {},
+            "relay.local",
+            8765,
+            bring_to_front=False,
+        )
+        mock_nav.assert_awaited_once_with(
+            "claude-abc12345",
+            resolved,
+            "https://example.com",
+            "relay.local",
+            8765,
+            bring_to_front=False,
+        )
+
+    @patch("cloud_tools.run_cdp_command", new_callable=AsyncMock)
+    @patch("web._parse_relay", return_value=("relay.local", 8765))
+    @patch("web._authenticate")
+    async def test_new_tab_is_background_created_and_becomes_session_target(self, mock_auth, _mock_parse, mock_cdp):
+        sid = "s-claude-abc12345-demo"
+        original = "A" * 32
+        created = "B" * 32
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        mock_cdp.return_value = {"targetId": created}
+        web._session_agent_map[sid] = "claude-abc12345"
+        web._session_tabs[sid] = original
+        request = self._request({
+            "action": "new_tab",
+            "session_id": sid,
+            "tab_id": "auto",
+            "url": "https://example.com/new",
+        })
+
+        response = await web.handle_cmd(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(data["tab_id"], created)
+        self.assertEqual(web._session_tabs[sid], created)
+        self.assertEqual(web._session_allowed_tabs[sid], {original, created})
+        mock_cdp.assert_awaited_once_with(
+            "claude-abc12345",
+            original,
+            "Target.createTarget",
+            {"url": "https://example.com/new", "background": True},
+            "relay.local",
+            8765,
+            bring_to_front=False,
+        )
+
+    @patch("web._authenticate")
+    async def test_rejects_tab_not_authorized_for_chat_session(self, mock_auth):
+        sid = "s-claude-abc12345-demo"
+        web._session_tabs[sid] = "A" * 32
+        web._session_agent_map[sid] = "claude-abc12345"
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        request = self._request({
+            "action": "click",
+            "session_id": sid,
+            "tab_id": "B" * 12,
+            "x": 1,
+            "y": 2,
+        })
+
+        response = await web.handle_cmd(request)
+
+        self.assertEqual(response.status, 403)
+        self.assertIn("not authorized", json.loads(response.body.decode())["error"])
+
+    @patch("cloud_tools.click", new_callable=AsyncMock)
+    @patch("web._parse_relay", return_value=("relay.local", 8765))
+    @patch("web._authenticate")
+    async def test_explicit_authorized_tab_becomes_agent_view_target(self, mock_auth, _mock_parse, mock_click):
+        sid = "s-claude-abc12345-demo"
+        first = "A" * 32
+        second = "B" * 32
+        web._session_tabs[sid] = first
+        web._session_allowed_tabs[sid] = {first, second}
+        web._session_agent_map[sid] = "claude-abc12345"
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        mock_click.return_value = "clicked"
+        request = self._request({
+            "action": "click",
+            "session_id": sid,
+            "tab_id": second[:12],
+            "x": 3,
+            "y": 4,
+        })
+
+        response = await web.handle_cmd(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(web._session_tabs[sid], second)
+        mock_click.assert_awaited_once_with(
+            "claude-abc12345", second, 3, 4, "relay.local", 8765
+        )
 
 
 if __name__ == "__main__":

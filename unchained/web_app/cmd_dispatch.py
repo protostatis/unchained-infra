@@ -30,8 +30,32 @@ async def _cmd_navigate(body, agent_id, tab_id, relay_host, relay_port, cloud_to
     url = body.get("url")
     if not url:
         raise CmdInputError("url required")
-    result = await cloud_tools.navigate(agent_id, tab_id, url, relay_host, relay_port)
+    result = await cloud_tools.navigate(
+        agent_id,
+        tab_id,
+        url,
+        relay_host,
+        relay_port,
+        bring_to_front=bool(body.get("bring_to_front", True)),
+    )
     return {"type": "text", "data": result}
+
+
+async def _cmd_new_tab(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
+    url = str(body.get("url") or "about:blank").strip()
+    result = await cloud_tools.run_cdp_command(
+        agent_id,
+        tab_id,
+        "Target.createTarget",
+        {"url": url, "background": True},
+        relay_host,
+        relay_port,
+        bring_to_front=False,
+    )
+    target_id = str((result or {}).get("targetId") or "").strip()
+    if not target_id:
+        raise RuntimeError("Chrome did not return a target id")
+    return {"type": "text", "data": f"Created tab {target_id}", "tab_id": target_id}
 
 
 async def _cmd_screenshot(body, agent_id, tab_id, relay_host, relay_port, cloud_tools):
@@ -133,6 +157,7 @@ _CMD_ACTIONS = {
     "ddm": _cmd_ddm,
     "text": _cmd_text,
     "navigate": _cmd_navigate,
+    "new_tab": _cmd_new_tab,
     "screenshot": _cmd_screenshot,
     "js": _cmd_js,
     "click": _cmd_click,

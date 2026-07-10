@@ -210,7 +210,7 @@ def main():
         tab_id = f"prov-{prov_slot}-{tab_id}"
 
     try:
-        # --- Tab management: call Chrome's local HTTP API directly ---
+        # --- Tab management ---
         if command == "tabs":
             tabs = _chrome_tabs()
             print(f"=== Open Tabs ({len(tabs)}) ===")
@@ -223,19 +223,8 @@ def main():
 
         elif command == "new-tab":
             url = args[0] if args else f"{API_URL.rstrip('/')}{DEFAULT_NEW_TAB_PATH}"
-            req = urllib.request.Request(
-                f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/new?{url}", method="PUT")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                tab_info = json.loads(resp.read())
-            new_id_short = tab_info["id"][:12]
-            new_display = _format_tab_id_for_display(tab_info["id"], prov_slot)
-            print(f"Created tab {new_display}")
-            tabs = _chrome_tabs()
-            for t in tabs:
-                tid = _format_tab_id_for_display(t["id"], prov_slot)
-                title = (t.get("title") or "(no title)")[:50]
-                marker = " *" if t["id"].startswith(new_id_short) else ""
-                print(f"  {tid}  {title}{marker}")
+            result = cmd("new_tab", tab_id=tab_id, url=url)
+            print(result.get("data", "Created tab"))
             return
 
         elif command == "close-tab":

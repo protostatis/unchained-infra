@@ -362,6 +362,34 @@ async def _handle_preview_ws(
         if not agent_id:
             return web.Response(status=503, text="browser bridge unavailable")
         tab_id = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+        if tab_id == "auto":
+            import cloud_tools
+
+            relay_host, relay_port = core._parse_relay()
+            try:
+                target_info = await cloud_tools.run_cdp_command(
+                    agent_id,
+                    "auto",
+                    "Target.getTargetInfo",
+                    {},
+                    relay_host,
+                    relay_port,
+                    bring_to_front=False,
+                )
+                tab_id = str(
+                    ((target_info or {}).get("targetInfo") or {}).get("targetId") or ""
+                ).strip()
+            except Exception as exc:
+                print(
+                    f"[preview-fsm] sid={sid_param} target pin failed: {exc!r}",
+                    flush=True,
+                )
+                return web.Response(status=503, text="browser target unavailable")
+            if not tab_id:
+                return web.Response(status=503, text="browser target unavailable")
+            core._session_tabs[sid_param] = tab_id
+            if hasattr(core, "_session_allowed_tabs"):
+                core._session_allowed_tabs.setdefault(sid_param, set()).add(tab_id)
     else:
         guest_auth, guest_id, _ = core._first_look_guest_auth(request)
         try:
@@ -427,6 +455,24 @@ async def _handle_preview_ws(
     if guest_id:
         core._attach_first_look_guest_cookies(ws, request, guest_id)
     await ws.prepare(request)
+    client_closed = asyncio.Event()
+
+    async def watch_client_close() -> None:
+        try:
+            async for _message in ws:
+                pass
+        finally:
+            client_closed.set()
+
+    client_watch_task = asyncio.create_task(watch_client_close())
+
+    async def stop_client_watch() -> None:
+        if not client_watch_task.done():
+            client_watch_task.cancel()
+        try:
+            await client_watch_task
+        except asyncio.CancelledError:
+            pass
     # print() so the line is visible in docker compose logs regardless of
     # the root logger level — the web container runs without a logging
     # handler configured, so log.info goes nowhere.
@@ -458,13 +504,14 @@ async def _handle_preview_ws(
         indicate a real bug that we want visible without crashing the
         request.
         """
-        if ws.closed:
+        if ws.closed or client_closed.is_set():
             return False
         event.setdefault("v", _FIRST_LOOK_PREVIEW_PROTOCOL_VERSION)
         try:
             await ws.send_json(event)
             return True
         except asyncio.CancelledError:
+            await stop_client_watch()
             raise
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             return False
@@ -475,17 +522,108 @@ async def _handle_preview_ws(
             )
             return False
 
+    semantic_requested = (
+        authenticated_chat and request.query.get("transport", "semantic") != "frames"
+    )
     alive = await emit(
         {
             "type": "preview.attached",
             "tab_id": tab_id,
             "width": width,
             "height": height,
+            "mode": "semantic" if semantic_requested else "frames",
         }
     )
 
+    if semantic_requested and alive:
+        # Prefer the semantic observer synchronized from mirror-demo PR #2.
+        # It evaluates only against the already-resolved chat target and has
+        # no action channel. The established screencast below remains a
+        # compatibility fallback when a page disallows semantic capture.
+        from web_app.semantic_mirror import stream_semantic_mirror
+
+        def semantic_target_changed() -> bool:
+            current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+            return client_closed.is_set() or ws.closed or current_tab != tab_id
+
+        semantic_seq = 0
+        try:
+            async for mirror_event in stream_semantic_mirror(
+                agent_id,
+                tab_id,
+                relay_host=relay_host,
+                relay_port=relay_port,
+                stop_requested=semantic_target_changed,
+            ):
+                semantic_seq += 1
+                if mirror_event["type"] == "snapshot":
+                    alive = await emit(
+                        {
+                            "type": "preview.semantic.snapshot",
+                            "snapshot": mirror_event["snapshot"],
+                            "resync": mirror_event["resync"],
+                            "seq": semantic_seq,
+                        }
+                    )
+                else:
+                    alive = await emit(
+                        {
+                            "type": "preview.semantic.patch",
+                            "patch": mirror_event["patch"],
+                            "seq": semantic_seq,
+                        }
+                    )
+                if not alive:
+                    break
+
+            current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+            if alive and current_tab != tab_id:
+                await emit(
+                    {
+                        "type": "preview.ended",
+                        "reason": "tab_changed",
+                        "retriable": True,
+                        "frame_count": semantic_seq,
+                    }
+                )
+            if not ws.closed:
+                await ws.close()
+            await stop_client_watch()
+            print(
+                f"[preview-fsm] sid={sid_param} semantic disconnected events={semantic_seq}",
+                flush=True,
+            )
+            return ws
+        except asyncio.CancelledError:
+            await stop_client_watch()
+            raise
+        except Exception as exc:
+            print(
+                f"[preview-fsm] sid={sid_param} semantic unavailable; "
+                f"falling back to frames: {exc!r}",
+                flush=True,
+            )
+            alive = await emit(
+                {
+                    "type": "preview.semantic_unavailable",
+                    "reason": "capture_failed",
+                }
+            )
+
     try:
         while alive:
+            if authenticated_chat:
+                current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+                if current_tab != tab_id:
+                    await emit(
+                        {
+                            "type": "preview.ended",
+                            "reason": "tab_changed",
+                            "retriable": True,
+                            "frame_count": frame_seq,
+                        }
+                    )
+                    break
             # > MAX (not >=). With MAX=N: we run 1 initial stream + N retry
             # streams = N+1 total stream sessions, and the client sees N
             # "preview.reconnecting" events. The (N+1)th stream session is
@@ -552,6 +690,12 @@ async def _handle_preview_ws(
                     if ws.closed:
                         alive = False
                         break
+                    if authenticated_chat:
+                        current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
+                        if current_tab != tab_id:
+                            terminal_reason = "tab_changed"
+                            retriable_terminal = True
+                            break
 
                     evt_type = event.get("type")
                     if evt_type == "frame":
@@ -682,6 +826,7 @@ async def _handle_preview_ws(
     finally:
         if not ws.closed:
             await ws.close()
+        await stop_client_watch()
         print(
             f"[preview-fsm] sid={sid_param} disconnected frames={frame_seq}",
             flush=True,

@@ -348,6 +348,8 @@ def test_packaged_cdp_tool_defaults_new_tab_to_branded_page():
 
     assert 'DEFAULT_NEW_TAB_PATH = "/tab"' in cdp_tool
     assert 'url = args[0] if args else f"{API_URL.rstrip(\'/\')}{DEFAULT_NEW_TAB_PATH}"' in cdp_tool
+    assert 'cmd("new_tab", tab_id=tab_id, url=url)' in cdp_tool
+    assert "/json/new?" not in cdp_tool
     print("  packaged cdp_tool.py defaults blank new-tab to /tab")
 
 
@@ -1093,7 +1095,12 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert 'id="banner-agent-view"' in CHAT_HTML, "OpenCode Agent View button missing"
     assert 'id="agent-view"' in CHAT_HTML, "integrated browser panel missing"
     assert 'id="agent-view-image"' in CHAT_HTML, "live browser frame missing"
+    assert 'id="agent-view-frame"' in CHAT_HTML, "isolated semantic renderer missing"
     assert "/web/chat/preview/ws" in CHAT_HTML, "Agent View should use the authenticated screencast channel"
+    assert "preview.semantic.snapshot" in CHAT_HTML, "Agent View should render semantic snapshots"
+    assert "preview.semantic.patch" in CHAT_HTML, "Agent View should apply semantic patches"
+    assert "omittedSensitiveFields" in CHAT_HTML, "Agent View should expose mirror fidelity telemetry"
+    assert "new-tab" in CHAT_HTML, "new-tab activity should refresh Agent View"
     assert "Same agent / same Chrome" in CHAT_HTML, "Agent View should explain its source binding"
     assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
     assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"

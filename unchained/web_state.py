@@ -40,6 +40,9 @@ class ChatRuntimeState:
     session_agents: dict[str, str] = field(default_factory=dict)
     agent_req_queues: dict[str, asyncio.Queue] = field(default_factory=dict)
     session_tabs: dict[str, str] = field(default_factory=dict)
+    # Server-authorized targets for each authenticated chat session. The
+    # active target remains in session_tabs for backward compatibility.
+    session_allowed_tabs: dict[str, set[str]] = field(default_factory=dict)
     session_profile_paths: dict[str, str] = field(default_factory=dict)
     session_last_active: dict[str, float] = field(default_factory=dict)
     session_agent_map: dict[str, str] = field(default_factory=dict)
