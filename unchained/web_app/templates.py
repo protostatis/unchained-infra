@@ -19085,7 +19085,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
-    <script>document.write(_scrollDebugOverlay());</script>
+    <div id="scroll-debug-overlay" style="display:none;position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>
   </div>
   <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
 </aside>"""
@@ -19376,6 +19376,7 @@ const AGENT_VIEW_SCROLL_LOCK_MS = 600;
 // --- Scroll debug instrumentation (toggle with ?scroll-debug=1) ---
 const _scrollDebugOn = new URLSearchParams(location.search).has('scroll-debug');
 const _scrollDebugLog = [];
+window.__agentViewScrollDebug = _scrollDebugLog;
 function _scrollDebug(source, targetId, x, y, extra) {
   if (!_scrollDebugOn) return;
   var entry = {t: (performance.now() / 1000).toFixed(3), src: source, tid: String(targetId || '').slice(0, 12), x: Math.round(x || 0), y: Math.round(y || 0), extra: extra || {}};
@@ -19384,16 +19385,13 @@ function _scrollDebug(source, targetId, x, y, extra) {
   console.warn('[scroll-debug]', entry.t + 's', entry.src, entry.tid, 'x=' + entry.x, 'y=' + entry.y, JSON.stringify(entry.extra));
   var el = document.getElementById('scroll-debug-overlay');
   if (el) {
+    el.style.display = 'block';
     var color = entry.src === 'user' ? '#6ee7a1' : entry.src === 'apply' ? '#fbbf24' : entry.src === 'suppress' ? '#f87171' : '#60a5fa';
     var line = '<div style="color:' + color + ';font-size:10px;line-height:1.3">' + entry.t + 's ' + entry.src + ' ' + entry.tid + ' y=' + entry.y + ' ' + JSON.stringify(entry.extra).slice(0, 80) + '</div>';
     el.innerHTML = line + el.innerHTML;
     var lines = el.children;
     while (lines.length > 30) el.removeChild(el.lastChild);
   }
-}
-function _scrollDebugOverlay() {
-  if (!_scrollDebugOn) return '';
-  return '<div id="scroll-debug-overlay" style="position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>';
 }
 
 function agentViewShouldApplySourceScroll(targetId, x, y) {
@@ -19615,6 +19613,14 @@ function scaleAgentViewSemanticFrame() {
 
 function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captureEpoch, documentSeq, resync) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  const visibleFrameBeforeSnapshot = agentViewCurrentFrame();
+  const visibleYBeforeSnapshot = visibleFrameBeforeSnapshot && visibleFrameBeforeSnapshot.contentWindow
+    ? Math.round(visibleFrameBeforeSnapshot.contentWindow.scrollY || 0) : 0;
+  _scrollDebug('snapshot-recv', 'document', Number((snapshot.viewport || {}).scrollX || 0), Number((snapshot.viewport || {}).scrollY || 0), {
+    visibleY: visibleYBeforeSnapshot,
+    resync: !!resync,
+    documentSeq: Number(documentSeq || 0),
+  });
   agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
   agentViewInputTimers.clear();
   agentViewPendingConfirmation = null;
@@ -19680,6 +19686,15 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
       });
     } catch (_err) {}
     const previousFrame = agentViewActiveFrame;
+    const previousY = previousFrame && previousFrame.contentWindow
+      ? Math.round(previousFrame.contentWindow.scrollY || 0) : 0;
+    const nextY = frame.contentWindow ? Math.round(frame.contentWindow.scrollY || 0) : 0;
+    _scrollDebug('frame-swap', 'document', 0, nextY, {
+      previousY: previousY,
+      sourceY: Math.round(Number((snapshot.viewport || {}).scrollY || 0)),
+      lockActive: !!agentViewLocalScrolls.get('document'),
+      resync: !!resync,
+    });
     agentViewActiveFrame = frame;
     frame.classList.add('active');
     frame.setAttribute('aria-hidden', 'false');
@@ -19735,6 +19750,13 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
   const frame = agentViewCurrentFrame();
   const doc = frame && frame.contentDocument;
   if (!doc) { refreshAgentView(); return; }
+  const beforeY = frame.contentWindow ? Math.round(frame.contentWindow.scrollY || 0) : 0;
+  const hasDocumentScroll = patch.operations.some(function(operation) {
+    return operation && operation.op === 'scroll' && operation.targetId === 'document';
+  });
+  const structuralCount = patch.operations.filter(function(operation) {
+    return operation && /^(?:remove|replace|text|attributes)$/.test(operation.op);
+  }).length;
   try {
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
@@ -19775,6 +19797,19 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
     });
     agentViewProtectVisualPlaceholders(frame, doc);
   } catch (_err) { refreshAgentView(); return; }
+  requestAnimationFrame(function() {
+    const current = agentViewCurrentFrame();
+    if (current !== frame || !frame.contentWindow) return;
+    const afterY = Math.round(frame.contentWindow.scrollY || 0);
+    if (afterY !== beforeY) {
+      _scrollDebug(hasDocumentScroll ? 'patch-scroll-result' : 'layout-shift', 'document', 0, afterY, {
+        beforeY: beforeY,
+        deltaY: afterY - beforeY,
+        structuralOps: structuralCount,
+        documentSeq: Number(documentSeq || 0),
+      });
+    }
+  });
   agentViewDocumentSeq = Number(documentSeq == null ? (patch.seq || agentViewDocumentSeq) : documentSeq);
   if (patch.url) {
     const location = document.getElementById('agent-view-location');
