@@ -1118,23 +1118,35 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert "'frame-swap'" in runtime_scripts[0], "Agent View should trace semantic frame swaps"
     assert "'layout-shift'" in runtime_scripts[0], "Agent View should trace non-scroll layout movement"
     assert "function agentViewClassifyScrollAck" in runtime_scripts[0], "Agent View scroll acknowledgments need ordering"
-    assert "actionId !== state.latestSentActionId" in runtime_scripts[0], "stale scroll acknowledgments must be rejected"
+    assert "actionId !== state.inFlightActionId" in runtime_scripts[0], "stale scroll acknowledgments must be rejected"
     assert "'ack-stale'" in runtime_scripts[0], "stale scroll acknowledgments need observability"
     assert "'ack-buffered'" in runtime_scripts[0], "active-gesture acknowledgments must be buffered"
     assert "'snapshot-preserve'" in runtime_scripts[0], "locked snapshot swaps must preserve local scroll"
+    assert "function agentViewNeedsScrollSend" in runtime_scripts[0], "long scrolls need latest-wins flow control"
+    assert "'scroll-coalesce'" in runtime_scripts[0], "coalesced scrolls need observability"
+    assert "reason: 'human-scroll-in-flight'" in runtime_scripts[0], "source patches must wait for the final human scroll request"
     classifier = re.search(
         r"function agentViewClassifyScrollAck\(state, actionId, lockActive\) \{.*?\n\}",
         runtime_scripts[0],
         flags=re.DOTALL,
     )
     assert classifier, "scroll acknowledgment classifier missing"
+    needs_send = re.search(
+        r"function agentViewNeedsScrollSend\(state\) \{.*?\n\}",
+        runtime_scripts[0],
+        flags=re.DOTALL,
+    )
+    assert needs_send, "scroll flow-control predicate missing"
     node = shutil.which("node")
     if node:
-        check = classifier.group(0) + """
-const state = {latestSentActionId: 'latest'};
+        check = classifier.group(0) + "\n" + needs_send.group(0) + """
+const state = {inFlightActionId: 'latest'};
 if (agentViewClassifyScrollAck(state, 'older', true) !== 'stale') throw new Error('older ack was accepted');
 if (agentViewClassifyScrollAck(state, 'latest', true) !== 'buffer') throw new Error('active ack was not buffered');
 if (agentViewClassifyScrollAck(state, 'latest', false) !== 'reconcile') throw new Error('idle latest ack did not reconcile');
+if (agentViewNeedsScrollSend({context:{}, inFlightActionId:'a', desiredY:0, latestSentY:500})) throw new Error('sent a second request while one was in flight');
+if (!agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, latestSentY:500})) throw new Error('did not send trailing final position');
+if (agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, latestSentY:0})) throw new Error('resent already acknowledged position');
 """
         result = subprocess.run([node, "-e", check], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
