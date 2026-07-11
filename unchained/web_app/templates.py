@@ -19806,13 +19806,13 @@ function positionAgentViewMobileChat(renderedHeight) {
   const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
   if (!mobile || !Number.isFinite(renderedHeight) || renderedHeight <= 0) {
     document.body.classList.remove('agent-view-browser-positioned');
-    document.body.style.removeProperty('--agent-view-mobile-chat-top');
+    if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
     return;
   }
   const canvas = document.getElementById('agent-view-canvas');
   if (!canvas) return;
   const top = Math.max(0, Math.round(canvas.getBoundingClientRect().top + renderedHeight + 8));
-  document.body.style.setProperty('--agent-view-mobile-chat-top', top + 'px');
+  if (document.body.style) document.body.style.setProperty('--agent-view-mobile-chat-top', top + 'px');
   document.body.classList.add('agent-view-browser-positioned');
 }
 
@@ -20342,7 +20342,7 @@ function restoreAgentViewChat() {
 function closeAgentView() {
   document.body.classList.remove('agent-view-open');
   document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-browser-positioned');
-  document.body.style.removeProperty('--agent-view-mobile-chat-top');
+  if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
   agentViewChatSizeMode = 'default';
   resetAgentViewSemanticRecovery();
   toggleAgentViewChat(false);
