@@ -18921,14 +18921,20 @@ body::after{
   #login .sub{font-size:14px!important;line-height:1.45!important;max-width:330px!important}
   #login .login-card{padding:18px!important;border-radius:18px!important;width:100%!important}
   #login .login-proof{grid-template-columns:1fr!important}
-  #topbar{position:relative;align-items:flex-start!important;padding-right:92px!important}
-  #topbar .left{width:100%;align-items:flex-start!important;gap:7px!important}
-  #sidebar-toggle{margin-top:1px!important}
-  #topbar .status-stack{width:100%;gap:5px!important}
-  #topbar .status{font-size:9.5px!important;min-height:24px!important}
-  #topbar .nav{position:absolute;right:8px;top:8px;max-width:84px;overflow:visible!important;padding:0!important}
-  #topbar .nav a:not(.topbar-new){display:none!important}
-  .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;height:34px;min-width:76px!important;border-radius:14px!important;padding:0 10px!important}
+  #topbar{position:relative;flex-wrap:wrap!important;align-items:center!important;padding:8px 10px!important;padding-top:max(8px,env(safe-area-inset-top))!important;gap:6px!important}
+  #topbar .left{width:auto!important;flex:1 1 auto!important;min-width:0!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;gap:6px!important}
+  #sidebar-toggle{margin:0!important}
+  #topbar .agent{font-size:10px!important;padding:3px 7px!important;max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #topbar .status-stack{flex-direction:row!important;width:auto!important;gap:4px!important;flex-wrap:nowrap!important}
+  #topbar .status{font-size:9px!important;min-height:20px!important;padding:2px 6px!important}
+  #topbar .client-update-wrap{display:flex!important;align-items:center!important;gap:4px!important}
+  #topbar .client-update{font-size:9px!important;padding:3px 7px!important}
+  #topbar .client-update-note{display:none!important}
+  #topbar .nav{position:static!important;width:auto!important;max-width:none!important;flex:0 0 auto!important;display:flex!important;gap:5px!important;overflow:visible!important;padding:0!important;flex-wrap:nowrap!important;justify-content:flex-end!important}
+  #topbar .nav a{font-size:10px!important;padding:5px 8px!important;white-space:nowrap!important}
+  #topbar .nav a:not(.topbar-new):not(.topbar-agent-view){display:none!important}
+  .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;height:30px!important;min-width:60px!important;border-radius:12px!important;padding:0 8px!important;font-size:10px!important}
+  body.agent-view-open #topbar .nav a:not(.topbar-new){display:none!important}
   #modelrow{display:flex!important;flex-wrap:nowrap!important;gap:6px!important;align-items:center!important;overflow-x:auto}
   #modelrow label{font-size:9px!important;flex:0 0 auto}
   #modelsel,#profilesel{width:auto!important;max-width:none!important;min-width:112px!important;flex:1 1 112px!important}
@@ -19089,13 +19095,17 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
   #agent-view .chat-size-btn{display:inline-flex!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
-  body.agent-view-open #main #topbar,body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
+  body.agent-view-open #main #topbar{display:flex!important;min-height:38px!important;padding:5px 8px!important;align-items:center!important;background:rgba(8,12,17,.88)!important;border-bottom:1px solid rgba(183,205,228,.10)!important}
+  body.agent-view-open #main #topbar .left{display:none!important}
+  body.agent-view-open #main #topbar .nav{margin-left:auto!important;gap:5px!important}
+  body.agent-view-open #main #topbar .nav a:not(.topbar-new):not(.topbar-agent-view){display:none!important}
+  body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
   body.agent-view-open #main #inputbar{display:flex!important;margin:0;padding:8px!important;border:1px solid rgba(183,205,228,.28)!important;border-radius:22px!important;background:rgba(7,10,15,.90)!important;box-shadow:0 18px 54px rgba(0,0,0,.48);backdrop-filter:blur(20px)}
   body.agent-view-open #main #msginput{min-height:46px!important;max-height:92px!important}
   body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px)!important;min-height:320px;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
   body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
-  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:6px;right:6px;width:auto!important;height:min(88dvh,720px)!important}
+  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
