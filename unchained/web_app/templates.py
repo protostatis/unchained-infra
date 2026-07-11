@@ -17913,7 +17913,11 @@ function openPreviewSocket() {
         if (!msg.data) return;
         previewState = 'streaming';
         previewTransportRetries = 0;
-        updatePreview(
+        // Use RAF coalescing — on fast scroll bursts multiple frames can
+        // arrive within a single animation frame.  Painting each one
+        // synchronously causes jitter; schedulePreviewPaint keeps only
+        // the latest frame and paints it once per RAF tick.
+        schedulePreviewPaint(
           msg.data,
           'Shared browser live stream active.',
           'live stream',
@@ -18000,6 +18004,27 @@ function openPreviewSocket() {
 // We revoke the previous blob URL on a small delay so the browser has
 // time to pick up the new src before the old one becomes invalid.
 let previewFrameCount = 0;
+
+// RAF-based frame coalescing buffer.  When frames arrive in a burst (e.g.
+// during a fast scroll where Chrome's compositor pushes several frames in
+// quick succession), we only want to paint the LATEST frame per animation
+// frame (~16 ms).  Without coalescing, every preview.frame event triggers
+// a synchronous img.src change + blob URL create/revoke, causing the
+// browser to decode and paint each intermediate frame — visible as jitter.
+let _pendingFrame = null;
+let _rafScheduled = false;
+function schedulePreviewPaint(imageB64, note, modeLabel, mimeType) {
+  _pendingFrame = {imageB64, note, modeLabel, mimeType};
+  if (_rafScheduled) return;
+  _rafScheduled = true;
+  requestAnimationFrame(function () {
+    _rafScheduled = false;
+    var pf = _pendingFrame;
+    _pendingFrame = null;
+    if (pf) updatePreview(pf.imageB64, pf.note, pf.modeLabel, pf.mimeType);
+  });
+}
+
 function updatePreview(imageB64, note, modeLabel, mimeType) {
   const wrap = document.getElementById('live-canvas-wrap');
   const img = document.getElementById('preview-image');
