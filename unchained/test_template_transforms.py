@@ -102,8 +102,16 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('<button type="button" id="chat-card-exit"', controls)
         self.assertIn('<button type="button" id="chat-card-minimize"', controls)
         self.assertNotIn("<a ", controls)
+        self.assertEqual(controls.count('<svg viewBox="0 0 16 16"'), 3)
+        self.assertIn('title="Expand chat"', controls)
+        self.assertIn('title="Default chat size"', controls)
+        self.assertIn('title="Minimize chat"', controls)
         self.assertIn("body.agent-view-open #agent-view-chat-controls{display:inline-flex}", html)
         self.assertIn("body.agent-view-open.agent-view-chat-expanded #chat-card-exit{display:inline-flex}", html)
+        self.assertIn(
+            "body.agent-view-open #main #chat .bubble{min-width:0;max-width:100%;flex-shrink:0}",
+            html,
+        )
 
     def test_agent_view_mobile_response_reveal_is_once_per_turn(self):
         from web_app import templates
