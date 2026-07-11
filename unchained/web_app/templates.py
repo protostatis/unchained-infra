@@ -11917,6 +11917,7 @@ let installModalReturnFocus = null;""",
       banner.style.display = 'flex';
     }
   }
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
 }""",
         """function localInstallCommandLabel(reconnect) {
   const isWin = typeof _isWindows === 'function' && _isWindows();
@@ -12095,8 +12096,8 @@ function updateAgentStatusUI(data) {
     }
     if (banner) banner.style.display = 'flex';
   }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
   { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
+  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
 }""",
         "Codex guided status and modal helpers",
     ),
