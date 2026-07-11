@@ -19103,7 +19103,7 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
 body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
-  #topbar-chat-size{display:none!important}
+  #topbar-chat-size{display:inline-flex!important}
   #agent-view .chat-size-btn{display:inline-flex!important}
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
