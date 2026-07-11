@@ -19364,17 +19364,25 @@ function agentViewFlushScrolls() {
   });
 }
 
+// Duration of the scroll input lock after each user scroll event.
+// During this window ALL source-driven scroll patches are suppressed,
+// preventing the agent and the user from fighting over scroll position.
+// The window is rolling — each new scroll event resets it — so sustained
+// touch/trackpad scrolling maintains the lock until the user stops.
+const AGENT_VIEW_SCROLL_LOCK_MS = 600;
+
 function agentViewShouldApplySourceScroll(targetId, x, y) {
   const local = agentViewLocalScrolls.get(targetId);
   if (!local) return true;
   if (performance.now() > local.expiresAt) {
+    // Lock expired — user has been idle. Resume applying source scrolls.
     agentViewLocalScrolls.delete(targetId);
     return true;
   }
-  if (Math.abs(local.x - Number(x || 0)) <= 1 && Math.abs(local.y - Number(y || 0)) <= 1) {
-    agentViewLocalScrolls.delete(targetId);
-    return true;
-  }
+  // Lock still active — suppress ALL source scrolls regardless of whether
+  // they match. Previously, a matching scroll (Chrome confirming the user's
+  // position) would release the lock early, which let the very next
+  // agent-driven scroll patch override the user — the "tug of war" bounce.
   return false;
 }
 
@@ -19439,7 +19447,7 @@ function bindAgentViewInteractions(frame) {
       agentViewExpectedScrollMap(doc).delete(targetId);
       if (Math.abs(expected.x - x) <= 1 && Math.abs(expected.y - y) <= 1) return;
     }
-    agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + 1500});
+    agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + AGENT_VIEW_SCROLL_LOCK_MS});
     agentViewPendingScrolls.set(targetId, {context:{element:identified,targetElement:identified,targetId:targetId},x:x,y:y});
     if (!agentViewScrollTimer) agentViewScrollTimer = setTimeout(agentViewFlushScrolls, 80);
   }, true);
@@ -19621,15 +19629,25 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
       agentViewApplyAdoptedStyles(snapshot, frame);
       agentViewProtectVisualPlaceholders(frame, doc);
       bindAgentViewInteractions(frame);
-      agentViewApplyAuthoritativeScroll(
-        frame,
+      // Respect the scroll input lock — if the user is actively scrolling,
+      // don't let a snapshot arrival override their scroll position.
+      if (agentViewShouldApplySourceScroll(
         'document',
         Number((snapshot.viewport || {}).scrollX || 0),
         Number((snapshot.viewport || {}).scrollY || 0)
-      );
+      )) {
+        agentViewApplyAuthoritativeScroll(
+          frame,
+          'document',
+          Number((snapshot.viewport || {}).scrollX || 0),
+          Number((snapshot.viewport || {}).scrollY || 0)
+        );
+      }
       (Array.isArray(snapshot.scrollPositions) ? snapshot.scrollPositions : []).forEach(function(position) {
         if (!position || typeof position.targetId !== 'string') return;
-        agentViewApplyAuthoritativeScroll(frame, position.targetId, position.x, position.y);
+        if (agentViewShouldApplySourceScroll(position.targetId, position.x, position.y)) {
+          agentViewApplyAuthoritativeScroll(frame, position.targetId, position.x, position.y);
+        }
       });
     } catch (_err) {}
     const previousFrame = agentViewActiveFrame;
@@ -19800,7 +19818,12 @@ function startAgentViewSocket() {
     if (event.type === 'preview.action.result') {
       if (event.ok) {
         if (event.action_kind === 'scroll' && event.target_id && Number.isFinite(event.x) && Number.isFinite(event.y)) {
-          agentViewLocalScrolls.delete(event.target_id);
+          // Apply Chrome's confirmed scroll position to keep the mirror in
+          // sync, but do NOT release the local scroll lock. Previously,
+          // the lock was deleted here, which let the next agent-driven
+          // scroll patch override the user immediately — the "tug of war"
+          // bounce. The lock now expires naturally after the user stops
+          // scrolling (AGENT_VIEW_SCROLL_LOCK_MS idle window).
           agentViewApplyAuthoritativeScroll(agentViewCurrentFrame(), event.target_id, event.x, event.y);
         } else {
           agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
