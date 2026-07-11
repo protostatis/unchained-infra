@@ -19168,6 +19168,8 @@ let agentViewToastTimer = null;
 let agentViewScrollTimer = null;
 const agentViewPendingScrolls = new Map();
 const agentViewLocalScrolls = new Map();
+const agentViewScrollActions = new Map();
+const agentViewScrollSettleTimers = new Map();
 const agentViewExpectedScrolls = new WeakMap();
 let agentViewActiveFrame = null;
 let agentViewRenderToken = 0;
@@ -19297,15 +19299,15 @@ function agentViewCheckedValue(element) {
 function agentViewSendAction(context, action) {
   if (agentViewSnapshotLoading) {
     agentViewShowToast('The same browser tab is refreshing.', false);
-    return;
+    return '';
   }
   if (!context || !agentViewMirrorId || !agentViewSocket || agentViewSocket.readyState !== WebSocket.OPEN) {
     agentViewShowToast('The shared browser is still attaching.', true);
-    return;
+    return '';
   }
   if (agentViewSensitiveControl(context.element)) {
     agentViewShowToast('Sensitive fields stay in the source browser and cannot be mirrored.', true);
-    return;
+    return '';
   }
   const actionId = self.crypto && typeof self.crypto.randomUUID === 'function' ? self.crypto.randomUUID() : 'av-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   const payload = Object.assign({
@@ -19321,8 +19323,10 @@ function agentViewSendAction(context, action) {
       document_seq: agentViewDocumentSeq,
       action: payload,
     }));
+    return actionId;
   } catch (_err) {
     agentViewShowToast('Could not send that page action.', true);
+    return '';
   }
 }
 
@@ -19362,7 +19366,17 @@ function agentViewFlushScrolls() {
   const pending = Array.from(agentViewPendingScrolls.values());
   agentViewPendingScrolls.clear();
   pending.forEach(function(item) {
-    agentViewSendAction(item.context, {kind:'scroll',x:item.x,y:item.y});
+    const actionId = agentViewSendAction(item.context, {kind:'scroll',x:item.x,y:item.y});
+    if (!actionId) return;
+    agentViewScrollActions.set(item.context.targetId, {
+      latestSentActionId: actionId,
+      latestSentX: item.x,
+      latestSentY: item.y,
+      latestAckActionId: '',
+      latestAckX: 0,
+      latestAckY: 0,
+    });
+    _scrollDebug('scroll-send', item.context.targetId, item.x, item.y, {actionId: actionId.slice(0, 8)});
   });
 }
 
@@ -19392,6 +19406,68 @@ function _scrollDebug(source, targetId, x, y, extra) {
     var lines = el.children;
     while (lines.length > 30) el.removeChild(el.lastChild);
   }
+}
+
+function agentViewClassifyScrollAck(state, actionId, lockActive) {
+  if (!state || !actionId || actionId !== state.latestSentActionId) return 'stale';
+  return lockActive ? 'buffer' : 'reconcile';
+}
+
+function agentViewScrollLockActive(targetId) {
+  const local = agentViewLocalScrolls.get(targetId);
+  return !!(local && performance.now() <= local.expiresAt);
+}
+
+function agentViewCurrentScrollPosition(targetId) {
+  const frame = agentViewCurrentFrame();
+  const doc = frame && frame.contentDocument;
+  if (!doc) return null;
+  if (targetId === 'document') {
+    return frame.contentWindow ? {
+      x: Math.round(frame.contentWindow.scrollX || 0),
+      y: Math.round(frame.contentWindow.scrollY || 0),
+    } : null;
+  }
+  const target = agentViewFindTarget(doc, targetId);
+  return target ? {x: Math.round(target.scrollLeft || 0), y: Math.round(target.scrollTop || 0)} : null;
+}
+
+function agentViewReconcileLatestScroll(targetId) {
+  const local = agentViewLocalScrolls.get(targetId);
+  if (local && performance.now() <= local.expiresAt) {
+    agentViewScheduleScrollSettle(targetId);
+    return;
+  }
+  if (local) agentViewLocalScrolls.delete(targetId);
+  const state = agentViewScrollActions.get(targetId);
+  if (!state || state.latestAckActionId !== state.latestSentActionId) return;
+  const current = agentViewCurrentScrollPosition(targetId);
+  const dx = current ? Math.abs(current.x - state.latestAckX) : Infinity;
+  const dy = current ? Math.abs(current.y - state.latestAckY) : Infinity;
+  if (dx > 2 || dy > 2) {
+    _scrollDebug('ack-reconcile', targetId, state.latestAckX, state.latestAckY, {
+      currentY: current ? current.y : null,
+      actionId: state.latestAckActionId.slice(0, 8),
+    });
+    agentViewApplyAuthoritativeScroll(agentViewCurrentFrame(), targetId, state.latestAckX, state.latestAckY);
+  } else {
+    _scrollDebug('ack-noop', targetId, state.latestAckX, state.latestAckY, {
+      currentY: current ? current.y : null,
+      actionId: state.latestAckActionId.slice(0, 8),
+    });
+  }
+  agentViewScrollActions.delete(targetId);
+}
+
+function agentViewScheduleScrollSettle(targetId) {
+  const previous = agentViewScrollSettleTimers.get(targetId);
+  if (previous) clearTimeout(previous);
+  const local = agentViewLocalScrolls.get(targetId);
+  const delay = local ? Math.max(20, local.expiresAt - performance.now() + 20) : 20;
+  agentViewScrollSettleTimers.set(targetId, setTimeout(function() {
+    agentViewScrollSettleTimers.delete(targetId);
+    agentViewReconcileLatestScroll(targetId);
+  }, delay));
 }
 
 function agentViewShouldApplySourceScroll(targetId, x, y) {
@@ -19475,6 +19551,7 @@ function bindAgentViewInteractions(frame) {
     }
     agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + AGENT_VIEW_SCROLL_LOCK_MS});
     _scrollDebug('user', targetId, x, y, {lock_ms: AGENT_VIEW_SCROLL_LOCK_MS});
+    agentViewScheduleScrollSettle(targetId);
     agentViewPendingScrolls.set(targetId, {context:{element:identified,targetElement:identified,targetId:targetId},x:x,y:y});
     if (!agentViewScrollTimer) agentViewScrollTimer = setTimeout(agentViewFlushScrolls, 80);
   }, true);
@@ -19664,23 +19741,28 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
       agentViewApplyAdoptedStyles(snapshot, frame);
       agentViewProtectVisualPlaceholders(frame, doc);
       bindAgentViewInteractions(frame);
-      // Respect the scroll input lock — if the user is actively scrolling,
-      // don't let a snapshot arrival override their scroll position.
-      if (agentViewShouldApplySourceScroll(
-        'document',
-        Number((snapshot.viewport || {}).scrollX || 0),
-        Number((snapshot.viewport || {}).scrollY || 0)
-      )) {
-        agentViewApplyAuthoritativeScroll(
-          frame,
-          'document',
-          Number((snapshot.viewport || {}).scrollX || 0),
-          Number((snapshot.viewport || {}).scrollY || 0)
-        );
+      // A hidden snapshot iframe starts at scrollY=0. If human input owns
+      // scrolling, initialize that hidden frame at the LOCAL position before
+      // activation instead of merely suppressing the source position and then
+      // swapping a top-of-page iframe into view.
+      const sourceDocumentX = Number((snapshot.viewport || {}).scrollX || 0);
+      const sourceDocumentY = Number((snapshot.viewport || {}).scrollY || 0);
+      const localDocument = agentViewLocalScrolls.get('document');
+      if (!agentViewShouldApplySourceScroll('document', sourceDocumentX, sourceDocumentY)) {
+        const preserveX = localDocument ? localDocument.x : 0;
+        const preserveY = localDocument ? localDocument.y : visibleYBeforeSnapshot;
+        _scrollDebug('snapshot-preserve', 'document', preserveX, preserveY, {sourceY: sourceDocumentY});
+        agentViewApplyAuthoritativeScroll(frame, 'document', preserveX, preserveY);
+      } else {
+        agentViewApplyAuthoritativeScroll(frame, 'document', sourceDocumentX, sourceDocumentY);
       }
       (Array.isArray(snapshot.scrollPositions) ? snapshot.scrollPositions : []).forEach(function(position) {
         if (!position || typeof position.targetId !== 'string') return;
-        if (agentViewShouldApplySourceScroll(position.targetId, position.x, position.y)) {
+        const localPosition = agentViewLocalScrolls.get(position.targetId);
+        if (!agentViewShouldApplySourceScroll(position.targetId, position.x, position.y) && localPosition) {
+          _scrollDebug('snapshot-preserve', position.targetId, localPosition.x, localPosition.y, {sourceY: position.y});
+          agentViewApplyAuthoritativeScroll(frame, position.targetId, localPosition.x, localPosition.y);
+        } else {
           agentViewApplyAuthoritativeScroll(frame, position.targetId, position.x, position.y);
         }
       });
@@ -19828,6 +19910,9 @@ function stopAgentViewSocket() {
   agentViewQueuedPatches = [];
   agentViewPendingScrolls.clear();
   agentViewLocalScrolls.clear();
+  agentViewScrollActions.clear();
+  agentViewScrollSettleTimers.forEach(function(timer) { clearTimeout(timer); });
+  agentViewScrollSettleTimers.clear();
   if (agentViewScrollTimer) clearTimeout(agentViewScrollTimer);
   agentViewScrollTimer = null;
   agentViewPendingConfirmation = null;
@@ -19882,19 +19967,38 @@ function startAgentViewSocket() {
     if (event.type === 'preview.action.result') {
       if (event.ok) {
         if (event.action_kind === 'scroll' && event.target_id && Number.isFinite(event.x) && Number.isFinite(event.y)) {
-          // Apply Chrome's confirmed scroll position to keep the mirror in
-          // sync, but do NOT release the local scroll lock. Previously,
-          // the lock was deleted here, which let the next agent-driven
-          // scroll patch override the user immediately — the "tug of war"
-          // bounce. The lock now expires naturally after the user stops
-          // scrolling (AGENT_VIEW_SCROLL_LOCK_MS idle window).
-          _scrollDebug('action-ack', event.target_id, event.x, event.y, {});
-          agentViewApplyAuthoritativeScroll(agentViewCurrentFrame(), event.target_id, event.x, event.y);
+          const state = agentViewScrollActions.get(event.target_id);
+          const classification = agentViewClassifyScrollAck(
+            state,
+            String(event.action_id || ''),
+            agentViewScrollLockActive(event.target_id)
+          );
+          if (classification === 'stale') {
+            _scrollDebug('ack-stale', event.target_id, event.x, event.y, {
+              actionId: String(event.action_id || '').slice(0, 8),
+              latestId: state ? state.latestSentActionId.slice(0, 8) : '',
+            });
+          } else {
+            state.latestAckActionId = String(event.action_id || '');
+            state.latestAckX = Math.round(event.x);
+            state.latestAckY = Math.round(event.y);
+            _scrollDebug(classification === 'buffer' ? 'ack-buffered' : 'action-ack', event.target_id, event.x, event.y, {
+              actionId: state.latestAckActionId.slice(0, 8),
+            });
+            if (classification === 'reconcile') agentViewReconcileLatestScroll(event.target_id);
+            else agentViewScheduleScrollSettle(event.target_id);
+          }
         } else {
           agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
         }
       } else {
-        if (event.action_kind === 'scroll' && event.target_id) agentViewLocalScrolls.delete(event.target_id);
+        if (event.action_kind === 'scroll' && event.target_id) {
+          const state = agentViewScrollActions.get(event.target_id);
+          if (state && String(event.action_id || '') === state.latestSentActionId) {
+            agentViewScrollActions.delete(event.target_id);
+            if (!agentViewScrollLockActive(event.target_id)) agentViewLocalScrolls.delete(event.target_id);
+          }
+        }
         const reason = String(event.reason || 'action-failed');
         const messages = {
           'sensitive-target':'Sensitive fields cannot be controlled from the mirror.',
