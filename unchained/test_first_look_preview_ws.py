@@ -644,6 +644,16 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn("agent-view-chat-toggle", html)
         self.assertIn("agent-view-chat-open", html)
         self.assertIn("data-ucm-image-error", html)
+        self.assertIn("function scheduleAgentViewSemanticRecovery", html)
+        self.assertIn("Retrying interactive semantic view", html)
+        self.assertIn("critical styles bounded", html)
+        self.assertIn("agent-view-browser-positioned", html)
+        self.assertIn("--agent-view-mobile-chat-top", html)
+        self.assertIn("function positionAgentViewMobileChat", html)
+        self.assertIn("frame.style.transformOrigin = mobile ? 'top center' : 'center center'", html)
+        self.assertIn("image.addEventListener('load', scaleAgentViewSemanticFrame)", html)
+        self.assertIn("patch-targets-omitted", html)
+        self.assertNotIn("if (!target) throw new Error('semantic target missing')", html)
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):

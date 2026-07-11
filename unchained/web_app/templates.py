@@ -19113,6 +19113,9 @@ body.agent-view-open #main #chat .bubble .text{min-width:0;max-width:100%;overfl
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
+  body.agent-view-open.agent-view-browser-positioned #app-shell #main{top:var(--agent-view-mobile-chat-top);bottom:auto}
+  body.agent-view-open .agent-view-canvas{place-items:start center}
+  body.agent-view-open #agent-view-image{object-position:center top}
   body.agent-view-open #main #topbar{display:flex!important;flex-wrap:nowrap!important;min-height:38px!important;padding:5px 8px!important;align-items:center!important;background:rgba(8,12,17,.88)!important;border-bottom:1px solid rgba(183,205,228,.10)!important}
   body.agent-view-open #main #topbar .left{display:none!important}
   body.agent-view-open #main #topbar .nav{margin-left:auto!important;gap:5px!important;flex-wrap:nowrap!important}
@@ -19120,10 +19123,10 @@ body.agent-view-open #main #chat .bubble .text{min-width:0;max-width:100%;overfl
   body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
   body.agent-view-open #main #inputbar{display:flex!important;margin:0;padding:8px!important;border:1px solid rgba(183,205,228,.28)!important;border-radius:22px!important;background:rgba(7,10,15,.90)!important;box-shadow:0 18px 54px rgba(0,0,0,.48);backdrop-filter:blur(20px)}
   body.agent-view-open #main #msginput{min-height:46px!important;max-height:92px!important}
-  body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px)!important;min-height:320px;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
+  body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important;min-height:min(320px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px));border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
   body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
-  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
+  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;top:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
   body.agent-view-open.agent-view-chat-expanded .agent-view-head{display:none!important}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
@@ -19222,6 +19225,8 @@ document.addEventListener('click', function(e) {
 _AGENT_VIEW_JS = """
 let agentViewSocket = null;
 let agentViewRetryTimer = null;
+let agentViewSemanticRecoveryTimer = null;
+let agentViewSemanticRecoveryAttempts = 0;
 let agentViewGeneration = 0;
 let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
@@ -19796,18 +19801,45 @@ function agentViewApplyAdoptedStyles(snapshot, frame) {
   });
 }
 
+function positionAgentViewMobileChat(renderedHeight) {
+  const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+  if (!mobile || !Number.isFinite(renderedHeight) || renderedHeight <= 0) {
+    document.body.classList.remove('agent-view-browser-positioned');
+    document.body.style.removeProperty('--agent-view-mobile-chat-top');
+    return;
+  }
+  const canvas = document.getElementById('agent-view-canvas');
+  if (!canvas) return;
+  const top = Math.max(0, Math.round(canvas.getBoundingClientRect().top + renderedHeight + 8));
+  document.body.style.setProperty('--agent-view-mobile-chat-top', top + 'px');
+  document.body.classList.add('agent-view-browser-positioned');
+}
+
 function scaleAgentViewSemanticFrame() {
   const canvas = document.getElementById('agent-view-canvas');
-  if (!canvas || !agentViewSnapshot) return;
+  if (!canvas) return;
+  const image = document.getElementById('agent-view-image');
+  if (canvas.classList.contains('has-frame') && image && image.naturalWidth && image.naturalHeight) {
+    const imageScale = Math.min(canvas.clientWidth / image.naturalWidth, canvas.clientHeight / image.naturalHeight);
+    positionAgentViewMobileChat(image.naturalHeight * imageScale);
+    return;
+  }
+  if (!agentViewSnapshot) return;
   const viewport = agentViewSnapshot.viewport || {};
   const width = Math.max(320, Number(viewport.width || 1280));
   const height = Math.max(240, Number(viewport.height || 720));
   const scale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height);
+  const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
   document.querySelectorAll('.agent-view-semantic-frame').forEach(function(frame) {
     frame.style.width = width + 'px';
     frame.style.height = height + 'px';
-    frame.style.transform = 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
+    frame.style.top = mobile ? '0' : '50%';
+    frame.style.transformOrigin = mobile ? 'top center' : 'center center';
+    frame.style.transform = mobile
+      ? 'translate(-50%,0) scale(' + Math.max(.1, scale) + ')'
+      : 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
   });
+  positionAgentViewMobileChat(height * Math.max(.1, scale));
 }
 
 function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captureEpoch, documentSeq, resync) {
@@ -19934,6 +19966,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
   if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
   if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
   if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
+  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
   if (fidelity.truncated) notes.push('capture bounded');
   const fidelityEl = document.getElementById('agent-view-fidelity');
   if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
@@ -19961,6 +19994,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
   const structuralCount = patch.operations.filter(function(operation) {
     return operation && /^(?:remove|replace|text|attributes)$/.test(operation.op);
   }).length;
+  let missingTargets = 0;
   try {
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
@@ -19970,7 +20004,11 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
         return;
       }
       const target = agentViewFindTarget(doc, operation.targetId);
-      if (!target) throw new Error('semantic target missing');
+      // Bounded captures intentionally omit off-viewport/non-priority nodes.
+      // Dynamic sites can still emit mutations for those source nodes (often
+      // during zoom or responsive relayout). Ignore those operations instead
+      // of tearing down an otherwise healthy visible mirror.
+      if (!target) { missingTargets += 1; return; }
       if (operation.op === 'remove') target.remove();
       else if (operation.op === 'text') target.textContent = String(operation.text || '');
       else if (operation.op === 'replace') {
@@ -20001,6 +20039,13 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
     });
     agentViewProtectVisualPlaceholders(frame, doc);
   } catch (_err) { refreshAgentView(); return; }
+  if (missingTargets) {
+    _scrollDebug('patch-targets-omitted', 'document', 0, beforeY, {
+      omitted: missingTargets,
+      operations: patch.operations.length,
+      documentSeq: Number(documentSeq || 0),
+    });
+  }
   requestAnimationFrame(function() {
     const current = agentViewCurrentFrame();
     if (current !== frame || !frame.contentWindow) return;
@@ -20059,9 +20104,29 @@ function scheduleAgentViewRetry(generation) {
   agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
 }
 
+function resetAgentViewSemanticRecovery() {
+  agentViewSemanticRecoveryAttempts = 0;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
+}
+
+function scheduleAgentViewSemanticRecovery() {
+  if (agentViewSemanticRecoveryTimer || agentViewSemanticRecoveryAttempts >= 5) return;
+  const delay = Math.min(30000, 2000 * Math.pow(2, agentViewSemanticRecoveryAttempts));
+  agentViewSemanticRecoveryAttempts += 1;
+  agentViewSemanticRecoveryTimer = setTimeout(function() {
+    agentViewSemanticRecoveryTimer = null;
+    if (!document.body.classList.contains('agent-view-open')) return;
+    setAgentViewState('Retrying interactive semantic view', false);
+    refreshAgentView();
+  }, delay);
+}
+
 function startAgentViewSocket() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   stopAgentViewSocket();
   agentViewBoundSessionId = sessionId;
   agentViewRetryAllowed = true;
@@ -20075,6 +20140,7 @@ function startAgentViewSocket() {
     try { event = JSON.parse(message.data); } catch (_err) { return; }
     if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
+      resetAgentViewSemanticRecovery();
       renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
     }
@@ -20149,6 +20215,7 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.semantic_unavailable') {
       setAgentViewState('Semantic unavailable / live frames', false);
+      scheduleAgentViewSemanticRecovery();
       return;
     }
     if (event.type === 'preview.frame' && event.data) {
@@ -20159,8 +20226,14 @@ function startAgentViewSocket() {
       agentViewLastSeq = seq;
       const image = document.getElementById('agent-view-image');
       const canvas = document.getElementById('agent-view-canvas');
-      if (image) image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
       if (canvas) { canvas.classList.remove('has-semantic'); canvas.classList.add('has-frame'); }
+      if (image) {
+        if (!image.__ucmMobileLayoutBound) {
+          image.__ucmMobileLayoutBound = true;
+          image.addEventListener('load', scaleAgentViewSemanticFrame);
+        }
+        image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
+      }
       const seqEl = document.getElementById('agent-view-seq');
       if (seqEl) seqEl.textContent = 'Fallback frame ' + seq;
       const fidelityEl = document.getElementById('agent-view-fidelity');
@@ -20187,6 +20260,7 @@ function startAgentViewSocket() {
 
 function openAgentView() {
   const alreadyOpen = document.body.classList.contains('agent-view-open');
+  if (!alreadyOpen) resetAgentViewSemanticRecovery();
   document.body.classList.add('agent-view-open');
   if (!alreadyOpen) {
     setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
@@ -20285,12 +20359,14 @@ function maybeRevealAgentResponse() {
 
 function closeAgentView() {
   document.body.classList.remove('agent-view-open');
-  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-chat-open');
+  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-chat-open', 'agent-view-browser-positioned');
+  if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
   agentViewChatMode = 'docked';
   agentViewChatSurface = _agentViewIsMobile() ? 'browser' : 'chat';
   agentViewResponseRevealPending = false;
   agentViewResponseRevealDone = false;
   _syncAgentViewChatControls();
+  resetAgentViewSemanticRecovery();
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
   const button = document.getElementById('topbar-agent-view');
@@ -20302,6 +20378,8 @@ function closeAgentView() {
 
 function refreshAgentView() {
   if (!document.body.classList.contains('agent-view-open')) return;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   agentViewLastSeq = 0;
   agentViewDocumentSeq = 0;
   requestAnimationFrame(startAgentViewSocket);
