@@ -15648,14 +15648,17 @@ function showMain() {
   _rememberLastAppRoute();
   const params = new URLSearchParams(window.location.search);
   const provider = (params.get('provider') || '').trim().toLowerCase();
+  const saved = localStorage.getItem('unchained_model');
   const providerDefault = provider === 'opencode-cli' ? 'opencode-cli:' : '';
-  if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
+  // If there's a saved concrete OpenCode model, restore it immediately
+  // (the option may not exist in static HTML yet, but the .value set sticks
+  // and currentModel() / updateOpenCodeModelOptions both use it).
+  if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
+    document.getElementById('modelsel').value = saved;
+  } else if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
     document.getElementById('modelsel').value = providerDefault;
-  } else {
-    const saved = localStorage.getItem('unchained_model');
-    if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-      document.getElementById('modelsel').value = saved;
-    }
+  } else if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
+    document.getElementById('modelsel').value = saved;
   }
   const slotState = _ensureSlotState();
   activeSlot = slotState.active_slot;
