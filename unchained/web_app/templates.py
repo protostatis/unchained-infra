@@ -15106,7 +15106,10 @@ function updateOpenCodeModelOptions(models) {
   const current = sel.value || '';
   const saved = localStorage.getItem('unchained_model') || '';
   if (!_wantsOpenCodeModelOptions()) return;
-  const target = current.startsWith('opencode-cli:') ? current : (saved.startsWith('opencode-cli:') ? saved : 'opencode-cli:');
+  // Prefer current selection only if it is a concrete model (not just the bare placeholder).
+  // If current is the bare "opencode-cli:" placeholder, fall through to the saved model.
+  const currentIsConcrete = current.startsWith('opencode-cli:') && current.length > 'opencode-cli:'.length;
+  const target = currentIsConcrete ? current : (saved.startsWith('opencode-cli:') ? saved : 'opencode-cli:');
 
   const valid = [];
   const seen = new Set();
