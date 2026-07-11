@@ -80,6 +80,16 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("rememberSetupRoute", templates.SETUP_HTML)
         self.assertIn("unchained_last_route", templates.SETUP_HTML)
 
+    def test_opencode_lane_state_uses_stable_provider_route(self):
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        self.assertIn("function currentLaneModel()", html)
+        self.assertIn("? 'opencode-cli:' : model", html)
+        self.assertEqual(html.count("model: currentLaneModel()"), 4)
+        self.assertIn("const model = currentModel();", html)
+        self.assertIn("model: model,", html)
+
     def test_ux_contract_copy_and_demo_routes(self):
         from web_app import templates
 

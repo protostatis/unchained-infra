@@ -15062,6 +15062,13 @@ function _isOpenCodeRoute() {
   return (params.get('provider') || '').trim().toLowerCase() === 'opencode-cli';
 }
 
+function currentLaneModel() {
+  const model = currentModel();
+  // Lane history belongs to the local OpenCode provider, not to a specific
+  // execution model. Keep state routing stable when the selected model changes.
+  return _isOpenCodeRoute() && model.startsWith('opencode-cli:') ? 'opencode-cli:' : model;
+}
+
 function _opencodeOptionLabel(modelId) {
   const parts = String(modelId || '').split('/');
   if (parts.length < 2) return modelId || 'configured default';
@@ -15696,7 +15703,7 @@ async function checkAgentStatus() {
 async function loadSlots() {
   try {
     const qs = new URLSearchParams({
-      model: currentModel(),
+      model: currentLaneModel(),
       session_id: sessionId,
     });
     const r = await fetch('/web/chat/slots?' + qs.toString());
@@ -15749,7 +15756,7 @@ async function switchSlot(n) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         slot: targetSlot,
-        model: currentModel(),
+        model: currentLaneModel(),
         session_id: previousSessionId,
       }),
     });
@@ -15788,7 +15795,7 @@ async function loadHistory() {
   await loadSlots();
   try {
     const qs = new URLSearchParams({
-      model: currentModel(),
+      model: currentLaneModel(),
       session_id: sessionId,
       slot: activeSlot,
     });
@@ -15846,7 +15853,7 @@ async function doNewChat() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        model: currentModel(),
+        model: currentLaneModel(),
         session_id: sessionId,
         slot: activeSlot,
       }),
