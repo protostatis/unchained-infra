@@ -15054,7 +15054,17 @@ async function backToLogin() {
 }
 
 function currentModel() {
-  return document.getElementById('modelsel').value;
+  const val = document.getElementById('modelsel').value;
+  // On the opencode-cli route, if the selector is still showing the bare
+  // placeholder, transparently return the saved concrete model so the
+  // correct model is used even before the dropdown is clicked.
+  if (val === 'opencode-cli:' && _isOpenCodeRoute()) {
+    const saved = localStorage.getItem('unchained_model');
+    if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
+      return saved;
+    }
+  }
+  return val;
 }
 
 function _isOpenCodeRoute() {
