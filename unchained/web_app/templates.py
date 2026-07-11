@@ -19268,6 +19268,8 @@ syncSidebarInteractivity();
 _AGENT_VIEW_JS = """
 let agentViewSocket = null;
 let agentViewRetryTimer = null;
+let agentViewSemanticRecoveryTimer = null;
+let agentViewSemanticRecoveryAttempts = 0;
 let agentViewGeneration = 0;
 let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
@@ -20007,6 +20009,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
   if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
   if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
   if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
+  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
   if (fidelity.truncated) notes.push('capture bounded');
   const fidelityEl = document.getElementById('agent-view-fidelity');
   if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
@@ -20034,6 +20037,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
   const structuralCount = patch.operations.filter(function(operation) {
     return operation && /^(?:remove|replace|text|attributes)$/.test(operation.op);
   }).length;
+  let missingTargets = 0;
   try {
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
@@ -20043,7 +20047,11 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
         return;
       }
       const target = agentViewFindTarget(doc, operation.targetId);
-      if (!target) throw new Error('semantic target missing');
+      // Bounded captures intentionally omit off-viewport/non-priority nodes.
+      // Dynamic sites can still emit mutations for those source nodes (often
+      // during zoom or responsive relayout). Ignore those operations instead
+      // of tearing down an otherwise healthy visible mirror.
+      if (!target) { missingTargets += 1; return; }
       if (operation.op === 'remove') target.remove();
       else if (operation.op === 'text') target.textContent = String(operation.text || '');
       else if (operation.op === 'replace') {
@@ -20074,6 +20082,13 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
     });
     agentViewProtectVisualPlaceholders(frame, doc);
   } catch (_err) { refreshAgentView(); return; }
+  if (missingTargets) {
+    _scrollDebug('patch-targets-omitted', 'document', 0, beforeY, {
+      omitted: missingTargets,
+      operations: patch.operations.length,
+      documentSeq: Number(documentSeq || 0),
+    });
+  }
   requestAnimationFrame(function() {
     const current = agentViewCurrentFrame();
     if (current !== frame || !frame.contentWindow) return;
@@ -20132,9 +20147,29 @@ function scheduleAgentViewRetry(generation) {
   agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
 }
 
+function resetAgentViewSemanticRecovery() {
+  agentViewSemanticRecoveryAttempts = 0;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
+}
+
+function scheduleAgentViewSemanticRecovery() {
+  if (agentViewSemanticRecoveryTimer || agentViewSemanticRecoveryAttempts >= 5) return;
+  const delay = Math.min(30000, 2000 * Math.pow(2, agentViewSemanticRecoveryAttempts));
+  agentViewSemanticRecoveryAttempts += 1;
+  agentViewSemanticRecoveryTimer = setTimeout(function() {
+    agentViewSemanticRecoveryTimer = null;
+    if (!document.body.classList.contains('agent-view-open')) return;
+    setAgentViewState('Retrying interactive semantic view', false);
+    refreshAgentView();
+  }, delay);
+}
+
 function startAgentViewSocket() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   stopAgentViewSocket();
   agentViewBoundSessionId = sessionId;
   agentViewRetryAllowed = true;
@@ -20148,6 +20183,7 @@ function startAgentViewSocket() {
     try { event = JSON.parse(message.data); } catch (_err) { return; }
     if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
+      resetAgentViewSemanticRecovery();
       renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
     }
@@ -20222,6 +20258,7 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.semantic_unavailable') {
       setAgentViewState('Semantic unavailable / live frames', false);
+      scheduleAgentViewSemanticRecovery();
       return;
     }
     if (event.type === 'preview.frame' && event.data) {
@@ -20266,6 +20303,7 @@ function startAgentViewSocket() {
 
 function openAgentView() {
   const alreadyOpen = document.body.classList.contains('agent-view-open');
+  if (!alreadyOpen) resetAgentViewSemanticRecovery();
   document.body.classList.add('agent-view-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
   if (!alreadyOpen) {
@@ -20373,6 +20411,7 @@ function closeAgentView() {
   agentViewResponseRevealPending = false;
   agentViewResponseRevealDone = false;
   _syncAgentViewChatControls();
+  resetAgentViewSemanticRecovery();
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
   const button = document.getElementById('topbar-agent-view');
@@ -20384,6 +20423,8 @@ function closeAgentView() {
 
 function refreshAgentView() {
   if (!document.body.classList.contains('agent-view-open')) return;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   agentViewLastSeq = 0;
   agentViewDocumentSeq = 0;
   requestAnimationFrame(startAgentViewSocket);
