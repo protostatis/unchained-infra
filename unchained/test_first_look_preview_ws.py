@@ -397,6 +397,7 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
             yield {
                 "type": "snapshot",
                 "snapshot": {
+                    "captureEpoch": "epoch-test-123",
                     "url": "https://example.test",
                     "body": "<main data-ucm-id=\"ucm-1\">Observed</main>",
                     "fidelity": {"truncated": False},
@@ -477,6 +478,7 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
             yield {
                 "type": "snapshot",
                 "snapshot": {
+                    "captureEpoch": "epoch-test-123",
                     "url": "https://example.test",
                     "body": '<button data-ucm-id="ucm-1">Continue</button>',
                     "fidelity": {"truncated": False},
@@ -505,6 +507,7 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
                     "type": "preview.action",
                     "action_id": "action_1234",
                     "mirror_id": snapshot["mirror_id"],
+                    "capture_epoch": snapshot["capture_epoch"],
                     "document_seq": snapshot["document_seq"],
                     "action": {
                         "targetId": "ucm-1",
@@ -548,12 +551,13 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
 
 class TestChatPreviewActionValidation(unittest.TestCase):
     def test_bounds_action_and_drops_client_confirmation_flag(self):
-        action_id, mirror_id, document_seq, action, label = (
+        action_id, mirror_id, capture_epoch, document_seq, action, label = (
             chat_flow._parse_chat_preview_action(
                 {
                     "type": "preview.action",
                     "action_id": "action_5678",
                     "mirror_id": "a" * 32,
+                    "capture_epoch": "epoch-test-123",
                     "document_seq": 4,
                     "action": {
                         "targetId": "ucm-z",
@@ -565,7 +569,10 @@ class TestChatPreviewActionValidation(unittest.TestCase):
                 }
             )
         )
-        self.assertEqual((action_id, mirror_id, document_seq), ("action_5678", "a" * 32, 4))
+        self.assertEqual(
+            (action_id, mirror_id, capture_epoch, document_seq),
+            ("action_5678", "a" * 32, "epoch-test-123", 4),
+        )
         self.assertEqual(action, {"targetId": "ucm-z", "kind": "input", "value": "hello"})
         self.assertEqual(label, "Search")
 
@@ -574,6 +581,7 @@ class TestChatPreviewActionValidation(unittest.TestCase):
             "type": "preview.action",
             "action_id": "action_9012",
             "mirror_id": "b" * 32,
+            "capture_epoch": "epoch-test-123",
             "document_seq": 0,
             "action": {"targetId": "ucm-1", "kind": "scroll", "x": float("inf")},
         }
@@ -582,6 +590,32 @@ class TestChatPreviewActionValidation(unittest.TestCase):
         base["action"]["x"] = 10 ** 10_000
         with self.assertRaisesRegex(ValueError, "coordinate"):
             chat_flow._parse_chat_preview_action(base)
+
+    def test_accepts_document_scroll_and_clamps_target_relative_clicks(self):
+        parsed = chat_flow._parse_chat_preview_action(
+            {
+                "type": "preview.action",
+                "action_id": "action_scroll1",
+                "mirror_id": "c" * 32,
+                "capture_epoch": "epoch-test-123",
+                "document_seq": 9,
+                "action": {"targetId": "document", "kind": "scroll", "x": 12, "y": 34},
+            }
+        )
+        self.assertEqual(parsed[4], {"targetId": "document", "kind": "scroll", "x": 12.0, "y": 34.0})
+
+        click = chat_flow._parse_chat_preview_action(
+            {
+                "type": "preview.action",
+                "action_id": "action_click1",
+                "mirror_id": "d" * 32,
+                "capture_epoch": "epoch-test-123",
+                "document_seq": 9,
+                "action": {"targetId": "ucm-1", "kind": "click", "fx": -2, "fy": 4},
+            }
+        )
+        self.assertEqual(click[4]["fx"], 0.0)
+        self.assertEqual(click[4]["fy"], 1.0)
 
 
 class TestInteractiveAgentViewTemplate(unittest.TestCase):
@@ -601,6 +635,15 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn("Refreshing same browser tab", html)
         self.assertIn("function agentViewProtectVisualPlaceholders", html)
         self.assertIn("sid !== agentViewBoundSessionId", html)
+        self.assertIn("agentViewExpectedScrolls", html)
+        self.assertIn("agentViewLocalScrolls", html)
+        self.assertIn("agentViewShouldApplySourceScroll", html)
+        self.assertIn("snapshot.scrollPositions", html)
+        self.assertIn("capture_epoch: agentViewCaptureEpoch", html)
+        self.assertIn("fx: Math.max(0, Math.min(1, fx))", html)
+        self.assertIn("agent-view-chat-toggle", html)
+        self.assertIn("agent-view-chat-open", html)
+        self.assertIn("data-ucm-image-error", html)
 
 
 class TestFirstLookPreviewClientJsShape(unittest.TestCase):
