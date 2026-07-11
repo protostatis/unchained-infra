@@ -19085,6 +19085,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
+    <script>document.write(_scrollDebugOverlay());</script>
   </div>
   <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
 </aside>"""
@@ -19342,6 +19343,7 @@ function agentViewSetExpectedScroll(doc, targetId, x, y) {
 function agentViewApplyAuthoritativeScroll(frame, targetId, x, y) {
   const doc = frame && frame.contentDocument;
   if (!doc) return;
+  _scrollDebug('apply', targetId, x, y, {});
   const left = Math.round(Number(x || 0));
   const top = Math.round(Number(y || 0));
   agentViewSetExpectedScroll(doc, targetId, left, top);
@@ -19371,18 +19373,43 @@ function agentViewFlushScrolls() {
 // touch/trackpad scrolling maintains the lock until the user stops.
 const AGENT_VIEW_SCROLL_LOCK_MS = 600;
 
+// --- Scroll debug instrumentation (toggle with ?scroll-debug=1) ---
+const _scrollDebugOn = new URLSearchParams(location.search).has('scroll-debug');
+const _scrollDebugLog = [];
+function _scrollDebug(source, targetId, x, y, extra) {
+  if (!_scrollDebugOn) return;
+  var entry = {t: (performance.now() / 1000).toFixed(3), src: source, tid: String(targetId || '').slice(0, 12), x: Math.round(x || 0), y: Math.round(y || 0), extra: extra || {}};
+  _scrollDebugLog.push(entry);
+  if (_scrollDebugLog.length > 80) _scrollDebugLog.shift();
+  console.warn('[scroll-debug]', entry.t + 's', entry.src, entry.tid, 'x=' + entry.x, 'y=' + entry.y, JSON.stringify(entry.extra));
+  var el = document.getElementById('scroll-debug-overlay');
+  if (el) {
+    var color = entry.src === 'user' ? '#6ee7a1' : entry.src === 'apply' ? '#fbbf24' : entry.src === 'suppress' ? '#f87171' : '#60a5fa';
+    var line = '<div style="color:' + color + ';font-size:10px;line-height:1.3">' + entry.t + 's ' + entry.src + ' ' + entry.tid + ' y=' + entry.y + ' ' + JSON.stringify(entry.extra).slice(0, 80) + '</div>';
+    el.innerHTML = line + el.innerHTML;
+    var lines = el.children;
+    while (lines.length > 30) el.removeChild(el.lastChild);
+  }
+}
+function _scrollDebugOverlay() {
+  if (!_scrollDebugOn) return '';
+  return '<div id="scroll-debug-overlay" style="position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>';
+}
+
 function agentViewShouldApplySourceScroll(targetId, x, y) {
   const local = agentViewLocalScrolls.get(targetId);
-  if (!local) return true;
+  if (!local) { _scrollDebug('guard-pass', targetId, x, y, {reason:'no-lock'}); return true; }
   if (performance.now() > local.expiresAt) {
     // Lock expired — user has been idle. Resume applying source scrolls.
     agentViewLocalScrolls.delete(targetId);
+    _scrollDebug('guard-pass', targetId, x, y, {reason:'expired'});
     return true;
   }
   // Lock still active — suppress ALL source scrolls regardless of whether
   // they match. Previously, a matching scroll (Chrome confirming the user's
   // position) would release the lock early, which let the very next
   // agent-driven scroll patch override the user — the "tug of war" bounce.
+  _scrollDebug('suppress', targetId, x, y, {localY: local.y, expires_in_ms: Math.round(local.expiresAt - performance.now())});
   return false;
 }
 
@@ -19445,9 +19472,11 @@ function bindAgentViewInteractions(frame) {
     const expected = agentViewExpectedScrollMap(doc).get(targetId);
     if (expected) {
       agentViewExpectedScrollMap(doc).delete(targetId);
-      if (Math.abs(expected.x - x) <= 1 && Math.abs(expected.y - y) <= 1) return;
+      if (Math.abs(expected.x - x) <= 1 && Math.abs(expected.y - y) <= 1) { _scrollDebug('expected-match', targetId, x, y, {}); return; }
+      _scrollDebug('expected-mismatch', targetId, x, y, {expectedY: expected.y});
     }
     agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + AGENT_VIEW_SCROLL_LOCK_MS});
+    _scrollDebug('user', targetId, x, y, {lock_ms: AGENT_VIEW_SCROLL_LOCK_MS});
     agentViewPendingScrolls.set(targetId, {context:{element:identified,targetElement:identified,targetId:targetId},x:x,y:y});
     if (!agentViewScrollTimer) agentViewScrollTimer = setTimeout(agentViewFlushScrolls, 80);
   }, true);
@@ -19824,6 +19853,7 @@ function startAgentViewSocket() {
           // scroll patch override the user immediately — the "tug of war"
           // bounce. The lock now expires naturally after the user stops
           // scrolling (AGENT_VIEW_SCROLL_LOCK_MS idle window).
+          _scrollDebug('action-ack', event.target_id, event.x, event.y, {});
           agentViewApplyAuthoritativeScroll(agentViewCurrentFrame(), event.target_id, event.x, event.y);
         } else {
           agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
