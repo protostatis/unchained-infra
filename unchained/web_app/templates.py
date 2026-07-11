@@ -19097,6 +19097,10 @@ body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
 body.agent-view-open.chat-minimized .agent-view-chat-restore{display:inline-flex;align-items:center}
 body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;width:min(560px,calc(100% - 36px))}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.av-fullscreen-minimize{display:none;position:fixed;z-index:9999;right:12px;top:max(12px,env(safe-area-inset-top));width:36px;height:36px;border-radius:10px;border:1px solid rgba(183,205,228,.28);background:rgba(7,10,15,.85);color:#b5c0cd;cursor:pointer;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:blur(12px)}
+.av-fullscreen-minimize svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.av-fullscreen-minimize:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.12)}
+body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
   #topbar-chat-size{display:none!important}
@@ -19117,10 +19121,6 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
   body.agent-view-open.agent-view-chat-expanded #main #topbar{display:none!important}
   body.agent-view-open.agent-view-chat-expanded .agent-view-head{display:none!important}
-  .av-fullscreen-minimize{display:none;position:fixed;z-index:9999;right:12px;top:max(12px,env(safe-area-inset-top));width:36px;height:36px;border-radius:10px;border:1px solid rgba(183,205,228,.28);background:rgba(7,10,15,.85);color:#b5c0cd;cursor:pointer;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:blur(12px)}
-  .av-fullscreen-minimize svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-  .av-fullscreen-minimize:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.12)}
-  body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
