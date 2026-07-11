@@ -19068,11 +19068,12 @@ body.agent-view-open #main #chat{padding:14px 12px!important;gap:9px!important}
 body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
-.chat-size-btn{display:none;width:28px;height:28px;padding:0;border:1px solid rgba(183,205,228,.22);border-radius:8px;background:rgba(183,205,228,.06);color:#b5c0cd;font-size:14px;line-height:28px;text-align:center;cursor:pointer;transition:border-color .15s,color .15s,background .15s;flex-shrink:0}
+.chat-size-btn{display:none;min-width:32px;height:32px;padding:0;border:1px solid rgba(183,205,228,.22);border-radius:10px;background:rgba(183,205,228,.06);color:#b5c0cd;cursor:pointer;transition:border-color .15s,color .15s,background .15s;flex-shrink:0;align-items:center;justify-content:center}
 .chat-size-btn:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.08)}
-body.agent-view-open #topbar-chat-size{display:block}
+.chat-size-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+body.agent-view-open #topbar-chat-size{display:inline-flex}
 body.agent-view-open #topbar-agent-view{display:none!important}
-body.agent-view-open #main #topbar .nav a.chat-size-btn{display:block}
+body.agent-view-open #main #topbar .nav a.chat-size-btn{display:inline-flex}
 .agent-view-chat-restore{display:none;position:fixed;z-index:1260;right:22px;bottom:22px;padding:10px 18px;border:1px solid rgba(110,231,161,.38);border-radius:999px;background:rgba(7,10,15,.92);color:#c8f6d7;font:11px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em;cursor:pointer;box-shadow:0 14px 44px rgba(0,0,0,.42);backdrop-filter:blur(18px);transition:border-color .15s,background .15s;animation:agentConfirmIn .18s ease-out both}
 .agent-view-chat-restore:hover{border-color:#6ee7a1;background:rgba(110,231,161,.12)}
 .agent-view-chat-restore::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:50%;background:#6ee7a1;box-shadow:0 0 10px rgba(110,231,161,.55)}
@@ -19084,6 +19085,8 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
+  #topbar-chat-size{display:none!important}
+  #agent-view .chat-size-btn{display:inline-flex!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
   body.agent-view-open #main #topbar,body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
@@ -19092,7 +19095,7 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
   body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px)!important;min-height:320px;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
   body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
-  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:10px;right:10px;width:auto!important}
+  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:6px;right:6px;width:auto!important;height:min(88dvh,720px)!important}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
@@ -19108,6 +19111,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
+    <a href="#" id="av-chat-size" class="chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
@@ -20184,14 +20188,19 @@ function toggleAgentViewChat(forceOpen) {
 
 let agentViewChatSizeMode = 'default';
 const _chatSizeCycle = ['default', 'expanded', 'minimized'];
-const _chatSizeIcons = {default:'\u25FB', expanded:'\u25FC', minimized:'\u25B2'};
+const _chatSizeSvgs = {
+  default: '<svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg>',
+  expanded: '<svg viewBox="0 0 16 16"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg>',
+  minimized: '<svg viewBox="0 0 16 16"><line x1="3" y1="8" x2="13" y2="8"/></svg>'
+};
 
 function _syncChatSizeIcon() {
-  var btn = document.getElementById('topbar-chat-size');
-  if (btn) {
-    btn.textContent = _chatSizeIcons[agentViewChatSizeMode] || _chatSizeIcons['default'];
-    btn.title = 'Chat: ' + agentViewChatSizeMode + ' (click to toggle)';
-  }
+  var svg = _chatSizeSvgs[agentViewChatSizeMode] || _chatSizeSvgs['default'];
+  var title = 'Chat: ' + agentViewChatSizeMode + ' (click to toggle)';
+  var topBtn = document.getElementById('topbar-chat-size');
+  if (topBtn) { topBtn.innerHTML = svg; topBtn.title = title; }
+  var avBtn = document.getElementById('av-chat-size');
+  if (avBtn) { avBtn.innerHTML = svg; avBtn.title = title; }
 }
 
 function toggleChatSize() {
@@ -20470,7 +20479,7 @@ def _inject_sidebar(html: str) -> str:
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
         quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
-        quick_new_nav += '      <a href="#" id="topbar-chat-size" class="topbar-agent-view chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false">&#9645;</a>\n'
+        quick_new_nav += '      <a href="#" id="topbar-chat-size" class="topbar-agent-view chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>\n'
     shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
     runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
 
