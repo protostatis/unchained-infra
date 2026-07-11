@@ -8507,6 +8507,7 @@ body{
       <span class="method-or" aria-hidden="true">or</span>
       <span class="sr-only">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
 
@@ -9189,6 +9190,7 @@ function updateAgentStatusUI(data) {
       banner.style.display = 'flex';
     }
   }
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
   maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasSetupReady);
 }
 
@@ -20627,6 +20629,10 @@ def _inject_sidebar(html: str) -> str:
 
 
 TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML)
+# Trial has no server-backed chat history — remove the sidebar history panel
+# so the UI does not show an empty/non-functional list.
+TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', '')
+
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
