@@ -18990,6 +18990,7 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-state.live{color:#bff3d0}.agent-view-state.live::before{background:#6ee7a1;box-shadow:0 0 14px rgba(110,231,161,.62)}
 .agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:50%;background:rgba(255,255,255,.05);color:#c9d3df;font-size:18px;cursor:pointer}
 .agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
+.agent-view-chat-toggle{display:none;min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(110,231,161,.32);border-radius:999px;background:rgba(110,231,161,.08);color:#c8f6d7;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer}
 .agent-view-browserbar{position:relative;z-index:7;min-height:34px;padding:0 16px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(183,205,228,.13);background:rgba(10,14,20,.92);color:#788697;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:8px;letter-spacing:.08em;text-transform:uppercase}
 .agent-view-location{max-width:min(58vw,820px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#b5c0cd}
 .agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(110,231,161,.52),rgba(74,167,255,.12),transparent)}
@@ -19026,8 +19027,20 @@ body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-@media(max-width:760px){.agent-view-head{min-height:52px;padding:7px 10px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-state{max-width:135px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:54vw}.agent-view-foot{padding:0 10px}.agent-view-fidelity{display:none}body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:10px;width:auto;height:44dvh!important;min-height:300px;border-radius:20px!important}.agent-view-confirm{left:10px;bottom:calc(44dvh + 22px);width:calc(100% - 20px)}}
-@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{max-width:105px}.agent-view-browserbar .policy{display:none}body.agent-view-open #app-shell #main{height:47dvh!important;min-height:290px}.agent-view-confirm{bottom:calc(47dvh + 22px);padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
+@media(max-width:760px){
+  .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
+  body.agent-view-open #agent-view{z-index:1200}
+  body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
+  body.agent-view-open #main #topbar,body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
+  body.agent-view-open #main #inputbar{display:flex!important;margin:0;padding:8px!important;border:1px solid rgba(183,205,228,.28)!important;border-radius:22px!important;background:rgba(7,10,15,.90)!important;box-shadow:0 18px 54px rgba(0,0,0,.48);backdrop-filter:blur(20px)}
+  body.agent-view-open #main #msginput{min-height:46px!important;max-height:92px!important}
+  body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px)!important;min-height:320px;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
+  body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
+  body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
+  .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
+  body.agent-view-chat-open .agent-view-confirm{bottom:calc(min(62dvh,560px) + 22px)}
+}
+@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-browserbar .policy{display:none}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open{animation:none}}
 </style>"""
 
@@ -19036,6 +19049,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <span class="agent-view-mark" aria-hidden="true">UC</span>
     <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
+    <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
@@ -19121,11 +19135,14 @@ let agentViewDocumentSeq = 0;
 let agentViewSnapshot = null;
 let agentViewRetryAllowed = true;
 let agentViewMirrorId = '';
+let agentViewCaptureEpoch = '';
 let agentViewBoundSessionId = '';
 let agentViewPendingConfirmation = null;
 let agentViewToastTimer = null;
-let agentViewSuppressScrollUntil = 0;
-let agentViewScrollFrame = 0;
+let agentViewScrollTimer = null;
+const agentViewPendingScrolls = new Map();
+const agentViewLocalScrolls = new Map();
+const agentViewExpectedScrolls = new WeakMap();
 let agentViewActiveFrame = null;
 let agentViewRenderToken = 0;
 let agentViewSnapshotLoading = false;
@@ -19236,7 +19253,7 @@ function agentViewActionContext(event) {
   const identified = agentViewClosestIdentified(interactive || origin);
   const targetId = agentViewOwnTargetId(identified);
   if (!identified || !targetId) return null;
-  return {element: interactive || identified, targetId: targetId};
+  return {element: interactive || identified, targetElement: identified, targetId: targetId};
 }
 
 function agentViewControlValue(element) {
@@ -19274,12 +19291,66 @@ function agentViewSendAction(context, action) {
       type: 'preview.action',
       action_id: actionId,
       mirror_id: agentViewMirrorId,
+      capture_epoch: agentViewCaptureEpoch,
       document_seq: agentViewDocumentSeq,
       action: payload,
     }));
   } catch (_err) {
     agentViewShowToast('Could not send that page action.', true);
   }
+}
+
+function agentViewExpectedScrollMap(doc) {
+  let values = agentViewExpectedScrolls.get(doc);
+  if (!values) {
+    values = new Map();
+    agentViewExpectedScrolls.set(doc, values);
+  }
+  return values;
+}
+
+function agentViewSetExpectedScroll(doc, targetId, x, y) {
+  if (!doc || !targetId) return;
+  agentViewExpectedScrollMap(doc).set(targetId, {x:Math.round(Number(x || 0)),y:Math.round(Number(y || 0))});
+}
+
+function agentViewApplyAuthoritativeScroll(frame, targetId, x, y) {
+  const doc = frame && frame.contentDocument;
+  if (!doc) return;
+  const left = Math.round(Number(x || 0));
+  const top = Math.round(Number(y || 0));
+  agentViewSetExpectedScroll(doc, targetId, left, top);
+  if (targetId === 'document') {
+    if (frame.contentWindow) frame.contentWindow.scrollTo({left:left,top:top,behavior:'auto'});
+    return;
+  }
+  const target = agentViewFindTarget(doc, targetId);
+  if (!target) return;
+  if (typeof target.scrollTo === 'function') target.scrollTo({left:left,top:top,behavior:'auto'});
+  else { target.scrollLeft = left; target.scrollTop = top; }
+}
+
+function agentViewFlushScrolls() {
+  agentViewScrollTimer = null;
+  const pending = Array.from(agentViewPendingScrolls.values());
+  agentViewPendingScrolls.clear();
+  pending.forEach(function(item) {
+    agentViewSendAction(item.context, {kind:'scroll',x:item.x,y:item.y});
+  });
+}
+
+function agentViewShouldApplySourceScroll(targetId, x, y) {
+  const local = agentViewLocalScrolls.get(targetId);
+  if (!local) return true;
+  if (performance.now() > local.expiresAt) {
+    agentViewLocalScrolls.delete(targetId);
+    return true;
+  }
+  if (Math.abs(local.x - Number(x || 0)) <= 1 && Math.abs(local.y - Number(y || 0)) <= 1) {
+    agentViewLocalScrolls.delete(targetId);
+    return true;
+  }
+  return false;
 }
 
 function agentViewScheduleInput(context, action) {
@@ -19299,14 +19370,15 @@ function bindAgentViewInteractions(frame) {
   doc.addEventListener('click', function(event) {
     const context = agentViewActionContext(event);
     const origin = event.target && event.target.nodeType === 1 ? event.target : null;
-    if (origin && origin.closest && origin.closest('a[href],area[href],button,input[type="submit"],input[type="image"],[role="button"]')) event.preventDefault();
+    if (origin && origin.closest && origin.closest('a[href],area[href],button,input[type="checkbox"],input[type="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="image"],label,summary,[role="button"],[role="checkbox"],[role="radio"],[role="switch"]')) event.preventDefault();
     if (!context) return;
+    const rect = context.targetElement.getBoundingClientRect();
+    const fx = rect.width > 0 ? (Number(event.clientX || 0) - rect.left) / rect.width : 0.5;
+    const fy = rect.height > 0 ? (Number(event.clientY || 0) - rect.top) / rect.height : 0.5;
     agentViewSendAction(context, {
       kind: 'click',
-      value: agentViewControlValue(context.element),
-      checked: agentViewCheckedValue(context.element),
-      x: Math.round(Number(event.clientX || 0)),
-      y: Math.round(Number(event.clientY || 0)),
+      fx: Math.max(0, Math.min(1, fx)),
+      fy: Math.max(0, Math.min(1, fy)),
     });
   }, true);
   doc.addEventListener('auxclick', function(event) { if (event.target && event.target.closest && event.target.closest('a[href],area[href]')) event.preventDefault(); }, true);
@@ -19328,21 +19400,23 @@ function bindAgentViewInteractions(frame) {
     agentViewSendAction(context, {kind:'key',key:'Enter',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
   }, true);
   doc.addEventListener('scroll', function(event) {
-    if (performance.now() < agentViewSuppressScrollUntil) return;
-    if (agentViewScrollFrame) return;
-    agentViewScrollFrame = requestAnimationFrame(function() {
-      agentViewScrollFrame = 0;
-      const target = event.target && event.target.nodeType === 1 ? event.target : (doc.scrollingElement || doc.documentElement || doc.body);
-      const identified = agentViewClosestIdentified(target);
-      const targetId = agentViewOwnTargetId(identified);
-      if (!identified || !targetId) return;
-      const isDocument = target === doc.scrollingElement || target === doc.documentElement || target === doc.body;
-      agentViewSendAction({element:identified,targetId:targetId}, {
-        kind:'scroll',
-        x:Math.round(isDocument ? frame.contentWindow.scrollX : Number(target.scrollLeft || 0)),
-        y:Math.round(isDocument ? frame.contentWindow.scrollY : Number(target.scrollTop || 0)),
-      });
-    });
+    const rawTarget = event.target;
+    const isDocument = rawTarget === doc || rawTarget === doc.scrollingElement || rawTarget === doc.documentElement || rawTarget === doc.body;
+    const target = isDocument ? (doc.scrollingElement || doc.documentElement || doc.body) : (rawTarget && rawTarget.nodeType === 1 ? rawTarget : null);
+    if (!target) return;
+    const identified = isDocument ? target : (agentViewOwnTargetId(target) ? target : agentViewClosestIdentified(target));
+    const targetId = isDocument ? 'document' : agentViewOwnTargetId(identified);
+    if (!identified || !targetId) return;
+    const x = Math.round(isDocument ? frame.contentWindow.scrollX : Number(target.scrollLeft || 0));
+    const y = Math.round(isDocument ? frame.contentWindow.scrollY : Number(target.scrollTop || 0));
+    const expected = agentViewExpectedScrollMap(doc).get(targetId);
+    if (expected) {
+      agentViewExpectedScrollMap(doc).delete(targetId);
+      if (Math.abs(expected.x - x) <= 1 && Math.abs(expected.y - y) <= 1) return;
+    }
+    agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + 1500});
+    agentViewPendingScrolls.set(targetId, {context:{element:identified,targetElement:identified,targetId:targetId},x:x,y:y});
+    if (!agentViewScrollTimer) agentViewScrollTimer = setTimeout(agentViewFlushScrolls, 80);
   }, true);
 }
 
@@ -19431,6 +19505,21 @@ function agentViewProtectVisualPlaceholders(frame, root) {
     element.style.setProperty('font', '12px/1.4 system-ui,sans-serif', 'important');
     element.style.setProperty('text-align', 'center', 'important');
   });
+  const hideBrokenImage = function(image) {
+    if (!image || (!image.hasAttribute('src') && !image.hasAttribute('srcset'))) return;
+    image.setAttribute('data-ucm-image-error', 'true');
+    image.style.setProperty('visibility', 'hidden', 'important');
+  };
+  if (scope.localName === 'img' && scope.complete && Number(scope.naturalWidth || 0) === 0) hideBrokenImage(scope);
+  scope.querySelectorAll('img').forEach(function(image) {
+    if (image.complete && Number(image.naturalWidth || 0) === 0) hideBrokenImage(image);
+  });
+  if (!doc.__ucmImageErrorBound) {
+    doc.__ucmImageErrorBound = true;
+    doc.addEventListener('error', function(event) {
+      if (event.target && event.target.localName === 'img') hideBrokenImage(event.target);
+    }, true);
+  }
 }
 
 function agentViewApplyAdoptedStyles(snapshot, frame) {
@@ -19462,7 +19551,7 @@ function scaleAgentViewSemanticFrame() {
   });
 }
 
-function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, documentSeq, resync) {
+function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captureEpoch, documentSeq, resync) {
   if (!snapshot || typeof snapshot !== 'object') return;
   agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
   agentViewInputTimers.clear();
@@ -19471,6 +19560,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, docum
   if (confirmation) confirmation.classList.remove('open');
   agentViewSnapshot = snapshot;
   agentViewMirrorId = String(mirrorId || '');
+  agentViewCaptureEpoch = String(captureEpoch || snapshot.captureEpoch || '');
   agentViewDocumentSeq = Number(documentSeq || 0);
   agentViewQueuedPatches = [];
   agentViewSnapshotLoading = true;
@@ -19506,8 +19596,16 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, docum
       agentViewApplyAdoptedStyles(snapshot, frame);
       agentViewProtectVisualPlaceholders(frame, doc);
       bindAgentViewInteractions(frame);
-      agentViewSuppressScrollUntil = performance.now() + 180;
-      if (frame.contentWindow) frame.contentWindow.scrollTo(Number((snapshot.viewport || {}).scrollX || 0), Number((snapshot.viewport || {}).scrollY || 0));
+      agentViewApplyAuthoritativeScroll(
+        frame,
+        'document',
+        Number((snapshot.viewport || {}).scrollX || 0),
+        Number((snapshot.viewport || {}).scrollY || 0)
+      );
+      (Array.isArray(snapshot.scrollPositions) ? snapshot.scrollPositions : []).forEach(function(position) {
+        if (!position || typeof position.targetId !== 'string') return;
+        agentViewApplyAuthoritativeScroll(frame, position.targetId, position.x, position.y);
+      });
     } catch (_err) {}
     const previousFrame = agentViewActiveFrame;
     agentViewActiveFrame = frame;
@@ -19552,14 +19650,15 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, docum
   if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
 }
 
-function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq) {
+function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch, documentSeq) {
   if (!patch || !Array.isArray(patch.operations) || !agentViewSnapshot) return;
   if (agentViewSnapshotLoading) {
     if (agentViewQueuedPatches.length >= 32) { refreshAgentView(); return; }
-    agentViewQueuedPatches.push([patch, transportSeq, mirrorId, documentSeq]);
+    agentViewQueuedPatches.push([patch, transportSeq, mirrorId, captureEpoch, documentSeq]);
     return;
   }
   if (String(mirrorId || '') !== agentViewMirrorId) { refreshAgentView(); return; }
+  if (String(captureEpoch || patch.captureEpoch || '') !== agentViewCaptureEpoch) { refreshAgentView(); return; }
   if (Number(patch.previousSeq) !== agentViewDocumentSeq) { refreshAgentView(); return; }
   const frame = agentViewCurrentFrame();
   const doc = frame && frame.contentDocument;
@@ -19568,8 +19667,8 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq)
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
       if (operation.op === 'scroll' && operation.targetId === 'document') {
-        agentViewSuppressScrollUntil = performance.now() + 180;
-        if (frame.contentWindow) frame.contentWindow.scrollTo(Number(operation.x || 0), Number(operation.y || 0));
+        if (!agentViewShouldApplySourceScroll('document', operation.x, operation.y)) return;
+        agentViewApplyAuthoritativeScroll(frame, 'document', operation.x, operation.y);
         return;
       }
       const target = agentViewFindTarget(doc, operation.targetId);
@@ -19598,9 +19697,8 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, documentSeq)
         if (typeof operation.checked === 'boolean') target.checked = operation.checked;
         if (Number.isInteger(operation.selectedIndex)) target.selectedIndex = operation.selectedIndex;
       } else if (operation.op === 'scroll') {
-        agentViewSuppressScrollUntil = performance.now() + 180;
-        target.scrollLeft = Number(operation.x || 0);
-        target.scrollTop = Number(operation.y || 0);
+        if (!agentViewShouldApplySourceScroll(operation.targetId, operation.x, operation.y)) return;
+        agentViewApplyAuthoritativeScroll(frame, operation.targetId, operation.x, operation.y);
       }
     });
     agentViewProtectVisualPlaceholders(frame, doc);
@@ -19618,8 +19716,13 @@ function stopAgentViewSocket() {
   agentViewGeneration++;
   agentViewRenderToken++;
   agentViewMirrorId = '';
+  agentViewCaptureEpoch = '';
   agentViewSnapshotLoading = false;
   agentViewQueuedPatches = [];
+  agentViewPendingScrolls.clear();
+  agentViewLocalScrolls.clear();
+  if (agentViewScrollTimer) clearTimeout(agentViewScrollTimer);
+  agentViewScrollTimer = null;
   agentViewPendingConfirmation = null;
   agentViewInputTimers.forEach(function(timer) { clearTimeout(timer); });
   agentViewInputTimers.clear();
@@ -19658,11 +19761,11 @@ function startAgentViewSocket() {
     try { event = JSON.parse(message.data); } catch (_err) { return; }
     if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
-      renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.document_seq, !!event.resync);
+      renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
     }
     if (event.type === 'preview.semantic.patch' && event.patch) {
-      applyAgentViewSemanticPatch(event.patch, event.seq, event.mirror_id, event.document_seq);
+      applyAgentViewSemanticPatch(event.patch, event.seq, event.mirror_id, event.capture_epoch, event.document_seq);
       return;
     }
     if (event.type === 'preview.action.confirmation_required') {
@@ -19671,8 +19774,14 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.action.result') {
       if (event.ok) {
-        agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
+        if (event.action_kind === 'scroll' && event.target_id && Number.isFinite(event.x) && Number.isFinite(event.y)) {
+          agentViewLocalScrolls.delete(event.target_id);
+          agentViewApplyAuthoritativeScroll(agentViewCurrentFrame(), event.target_id, event.x, event.y);
+        } else {
+          agentViewShowToast(event.navigated ? 'Source page is navigating.' : 'Source page updated.', false);
+        }
       } else {
+        if (event.action_kind === 'scroll' && event.target_id) agentViewLocalScrolls.delete(event.target_id);
         const reason = String(event.reason || 'action-failed');
         const messages = {
           'sensitive-target':'Sensitive fields cannot be controlled from the mirror.',
@@ -19692,6 +19801,7 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.frame' && event.data) {
       agentViewMirrorId = '';
+      agentViewCaptureEpoch = '';
       const seq = Number(event.seq || 0);
       if (seq && seq <= agentViewLastSeq) return;
       agentViewLastSeq = seq;
@@ -19733,8 +19843,25 @@ function openAgentView() {
   if (!alreadyOpen || !agentViewSocket) requestAnimationFrame(startAgentViewSocket);
 }
 
+function toggleAgentViewChat(forceOpen) {
+  const open = typeof forceOpen === 'boolean'
+    ? forceOpen
+    : !document.body.classList.contains('agent-view-chat-open');
+  document.body.classList.toggle('agent-view-chat-open', open);
+  const button = document.getElementById('agent-view-chat-toggle');
+  if (button) {
+    button.setAttribute('aria-expanded', String(open));
+    button.textContent = open ? 'Browser' : 'Chat';
+  }
+  if (open) {
+    const chat = document.getElementById('chat');
+    if (chat) chat.scrollTop = chat.scrollHeight;
+  }
+}
+
 function closeAgentView() {
   document.body.classList.remove('agent-view-open');
+  toggleAgentViewChat(false);
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
   const button = document.getElementById('topbar-agent-view');
@@ -19766,7 +19893,9 @@ _setActiveSlotSession = function(sid) {
 };
 
 document.addEventListener('keydown', function(event) {
-  if (event.key === 'Escape' && document.body.classList.contains('agent-view-open')) closeAgentView();
+  if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
+  if (document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(false);
+  else closeAgentView();
 });
 window.addEventListener('resize', scaleAgentViewSemanticFrame);
 """

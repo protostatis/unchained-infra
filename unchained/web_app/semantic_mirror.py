@@ -1,8 +1,8 @@
 """Semantic browser mirroring for an already-resolved agent tab.
 
-Capture behavior is synchronized from unchained-mirror-demo PR #2, merge
-commit 84351eca7f69f7d5e9b5eb078bfc35c1dd335273. Keep the vendored INSTALL and
-DRAIN expressions aligned with that source when changing capture semantics.
+Capture behavior started from unchained-mirror-demo PR #2, merge commit
+84351eca7f69f7d5e9b5eb078bfc35c1dd335273, and includes production protocol
+hardening for capture epochs, nested scroll state, and safe form fidelity.
 """
 
 from __future__ import annotations
@@ -43,9 +43,11 @@ class SemanticActionInput(TypedDict, total=False):
     key: str
     x: float
     y: float
+    fx: float
+    fy: float
 
 
-# Vendored verbatim from mirrorCapture.ts at the merge commit cited above.
+# Vendored from mirrorCapture.ts at the baseline merge commit cited above.
 INSTALL_MIRROR_EXPRESSION = r"""(() => {
   'use strict';
 
@@ -62,6 +64,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
   const MAX_VALUE_LENGTH = 16384;
   const MAX_RECORDS = 2000;
   const MAX_DIRTY = 750;
+  const MAX_SCROLL_POSITIONS = 500;
   const INLINE_RESULT_CHARS = 192 * 1024;
   const VIEWPORT_BUDGET_RESERVE = 0.4;
   const OMITTED_TAGS = new Set([
@@ -84,6 +87,9 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
 
   const state = {
     url: location.href,
+    captureEpoch: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2),
     seq: 0,
     nextId: 1,
     nodeToId: new WeakMap(),
@@ -192,6 +198,20 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     const compact = descriptor.toLowerCase().replace(/[^a-z0-9]/g, '');
     return SENSITIVE_PATTERN.test(descriptor) ||
       /(?:cardnumber|creditcard|securitycode|onetimecode|verificationcode|passcode|cvc|cvv|csc|otp)/.test(compact);
+  }
+
+  function canExposeValue(element) {
+    if (!element || element.nodeType !== 1 || isSensitive(element)) return false;
+    const tag = element.localName;
+    if (tag !== 'input' && tag !== 'textarea') return false;
+    const type = (element.getAttribute('type') || 'text').toLowerCase();
+    if (/^(?:email|tel|password|file|hidden)$/.test(type)) return false;
+    const autocomplete = (element.getAttribute('autocomplete') || '').toLowerCase();
+    if (autocomplete && /(?:name|email|tel|street|address|postal|country|username|webauthn|password|cc-|one-time-code)/.test(autocomplete)) return false;
+    const descriptor = fieldDescriptor(element).toLowerCase();
+    if (/(?:first|last|full|family|given).?name|e-?mail|phone|mobile|street|address|postal|zip.?code|social.?security|passport|license/.test(descriptor)) return false;
+    const role = (element.getAttribute('role') || '').toLowerCase();
+    return type === 'search' || role === 'searchbox' || role === 'combobox';
   }
 
   function isCrossOriginFrame(element) {
@@ -323,7 +343,13 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
       const type = (source.getAttribute('type') || 'text').toLowerCase();
       if (type === 'checkbox' || type === 'radio') {
         if (source.checked) clone.setAttribute('checked', '');
+      } else if (canExposeValue(source)) {
+        const safeValue = String(source.value || '').slice(0, MAX_VALUE_LENGTH);
+        if (spend(budget, 'value' + safeValue, 6, priority)) clone.setAttribute('value', safeValue);
       }
+    } else if (source.localName === 'textarea' && canExposeValue(source)) {
+      const safeValue = String(source.value || '').slice(0, MAX_VALUE_LENGTH);
+      if (spend(budget, safeValue, 0, priority)) clone.textContent = safeValue;
     } else if (source.localName === 'option' && source.selected) {
       clone.setAttribute('selected', '');
     } else if (source.localName === 'img') {
@@ -334,7 +360,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
   }
 
   function shallowSanitizedClone(source, budget, fidelity, priority = true) {
-    if (/^(?:canvas|video|object|embed)$/.test(source.localName)) {
+    if (/^(?:canvas|video|iframe|frame|object|embed)$/.test(source.localName)) {
       const rect = source.getBoundingClientRect();
       if (rect.width > 1 && rect.height > 1) {
         const style = getComputedStyle(source);
@@ -345,6 +371,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
           placeholder.setAttribute('data-ucm-id', id);
           placeholder.setAttribute('data-ucm-placeholder', source.localName);
           placeholder.setAttribute('aria-label', source.localName + ' region');
+          if (fidelity && (source.localName === 'iframe' || source.localName === 'frame') && isCrossOriginFrame(source)) fidelity.crossOriginFrames += 1;
           const width = Math.round(rect.width);
           const height = Math.round(rect.height);
           placeholder.style.cssText = 'display:grid;place-items:center;box-sizing:border-box;width:' + width + 'px;height:' + height + 'px;max-width:100%;background:#e8e4dc;color:#666;font:12px/1.4 system-ui,sans-serif;border:1px dashed #aaa;min-height:48px;';
@@ -399,6 +426,8 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     const clone = shallowSanitizedClone(source, budget, fidelity, priority);
     if (!clone) return null;
     if (clone.hasAttribute('data-ucm-placeholder')) return clone;
+    // Textarea child text is a form value; only the allowlisted value set above may cross.
+    if (source.localName === 'textarea') return clone;
 
     if (source.localName === 'style') {
       let liveCss = '';
@@ -505,6 +534,20 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     return count;
   }
 
+  function collectScrollPositions() {
+    const positions = [];
+    walkOpenTree(document, (element) => {
+      if (positions.length >= MAX_SCROLL_POSITIONS) return;
+      if (element === document.scrollingElement || element === document.documentElement || element === document.body) return;
+      const x = Math.round(element.scrollLeft || 0);
+      const y = Math.round(element.scrollTop || 0);
+      if (!x && !y) return;
+      const targetId = state.nodeToId.get(element);
+      if (targetId) positions.push({ targetId, x, y });
+    }, MAX_NODES);
+    return positions;
+  }
+
   function serializeAdoptedStyleSheets(priorityNodes) {
     const entries = [];
     const MAX_ADOPTED_BYTES = 256 * 1024;
@@ -586,6 +629,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
   fidelity.omittedAdoptedStyleSheets = adoptedResult.omittedSheets;
 
   const snapshot = {
+    captureEpoch: state.captureEpoch,
     url: location.href.slice(0, MAX_TEXT_LENGTH),
     title: String(document.title || '').slice(0, MAX_TEXT_LENGTH),
     doctype: doctypeString(document.doctype),
@@ -600,6 +644,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
       scrollX: Math.round(window.scrollX || 0),
       scrollY: Math.round(window.scrollY || 0)
     },
+    scrollPositions: collectScrollPositions(),
     fidelity,
     adoptedStyles,
     hash: '',
@@ -609,7 +654,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
   function refreshSnapshotHash() {
     snapshot.hash = hashString(JSON.stringify([
       snapshot.url, snapshot.title, snapshot.doctype, snapshot.head, snapshot.body,
-      snapshot.htmlAttrs, snapshot.bodyAttrs, snapshot.viewport, snapshot.adoptedStyles
+      snapshot.htmlAttrs, snapshot.bodyAttrs, snapshot.viewport, snapshot.scrollPositions, snapshot.adoptedStyles
     ]));
   }
 
@@ -799,12 +844,12 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     if (element.localName === 'input') {
       const type = (element.getAttribute('type') || 'text').toLowerCase();
       if (type === 'checkbox' || type === 'radio') operation.checked = Boolean(element.checked);
-      else if (state.allowedValueIds.has(targetId)) operation.value = String(element.value || '').slice(0, MAX_VALUE_LENGTH);
+      else if (state.allowedValueIds.has(targetId) || canExposeValue(element)) operation.value = String(element.value || '').slice(0, MAX_VALUE_LENGTH);
     } else if (element.localName === 'select') {
       operation.selectedIndex = Number(element.selectedIndex);
     } else if (element.isContentEditable && state.allowedValueIds.has(targetId)) {
       operation.value = String(element.textContent || '').slice(0, MAX_VALUE_LENGTH);
-    } else if (state.allowedValueIds.has(targetId)) {
+    } else if (state.allowedValueIds.has(targetId) || canExposeValue(element)) {
       operation.value = String(element.value || '').slice(0, MAX_VALUE_LENGTH);
     }
     return Object.keys(operation).length > 2 ? operation : null;
@@ -825,6 +870,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     state.overflow = false;
     state.seq = nextSeq;
     return stringifyWithSize({
+      captureEpoch: state.captureEpoch,
       seq: nextSeq,
       previousSeq,
       url: location.href.slice(0, MAX_TEXT_LENGTH),
@@ -888,6 +934,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
     }
 
     const payload = {
+      captureEpoch: state.captureEpoch,
       seq: nextSeq,
       previousSeq,
       url: location.href.slice(0, MAX_TEXT_LENGTH),
@@ -947,6 +994,7 @@ DRAIN_MIRROR_EXPRESSION = r"""(() => {
   }
 
   const payload = {
+    captureEpoch: '',
     seq: 0,
     previousSeq: 0,
     url: location.href.slice(0, 65536),
@@ -982,6 +1030,7 @@ def mirror_action_expression(
     action: SemanticActionInput,
     *,
     expected_seq: int,
+    expected_epoch: str,
     confirmed: bool = False,
 ) -> str:
     """Build a bounded action expression for the currently mirrored document."""
@@ -991,23 +1040,28 @@ def mirror_action_expression(
         separators=(",", ":"),
     ).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     safe_seq = max(0, int(expected_seq))
+    encoded_epoch = json.dumps(str(expected_epoch or "")[:128])
     return f"""(() => {{
   'use strict';
   const action = {encoded_action};
   const expectedSeq = {safe_seq};
+  const expectedEpoch = {encoded_epoch};
   const state = window[Symbol.for('unchained.mirror.capture.v1')];
   const startUrl = location.href;
-  const finish = (ok, reason) => JSON.stringify({{
+  const finish = (ok, reason, extra) => JSON.stringify(Object.assign({{
     ok,
     reason,
     navigated: location.href !== startUrl || Boolean(state && state.url !== location.href),
-    currentSeq: state && Number.isSafeInteger(state.seq) ? state.seq : -1
-  }});
+    currentSeq: state && Number.isSafeInteger(state.seq) ? state.seq : -1,
+    captureEpoch: state && typeof state.captureEpoch === 'string' ? state.captureEpoch : ''
+  }}, extra || {{}}));
 
   if (!state || !(state.idToNode instanceof Map)) return finish(false, 'mirror-not-installed');
-  if (state.seq !== expectedSeq) return finish(false, 'stale-document');
+  if (state.captureEpoch !== expectedEpoch || expectedSeq > state.seq ||
+      (action.kind !== 'scroll' && action.confirmed !== true && expectedSeq !== state.seq)) return finish(false, 'stale-document');
   if (typeof action.targetId !== 'string' || !action.targetId) return finish(false, 'invalid-target');
-  const target = state.idToNode.get(action.targetId);
+  const documentTarget = action.kind === 'scroll' && action.targetId === 'document';
+  const target = documentTarget ? (document.scrollingElement || document.documentElement || document.body) : state.idToNode.get(action.targetId);
   if (!target || target.nodeType !== 1 || !target.isConnected) return finish(false, 'target-not-found');
 
   const descriptor = [
@@ -1055,20 +1109,18 @@ def mirror_action_expression(
   try {{
     if (action.kind === 'click') {{
       if (buttonLike && action.confirmed !== true) return finish(false, 'confirmation-required');
-      if (Number.isFinite(action.x) || Number.isFinite(action.y)) {{
-        dispatch('click', MouseEvent, {{
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clientX: Number.isFinite(action.x) ? action.x : 0,
-          clientY: Number.isFinite(action.y) ? action.y : 0,
-          view: window
-        }});
-      }} else if (typeof target.click === 'function') {{
-        target.click();
-      }} else {{
-        dispatch('click', MouseEvent, {{ bubbles: true, cancelable: true, composed: true, view: window }});
+      let rect = target.getBoundingClientRect();
+      if ((rect.bottom <= 0 || rect.right <= 0 || rect.top >= window.innerHeight || rect.left >= window.innerWidth) &&
+          typeof target.scrollIntoView === 'function') {{
+        target.scrollIntoView({{ block: 'nearest', inline: 'nearest', behavior: 'auto' }});
+        rect = target.getBoundingClientRect();
       }}
+      if (rect.width <= 0 || rect.height <= 0) return finish(false, 'target-not-visible');
+      const fx = Number.isFinite(action.fx) ? Math.max(0, Math.min(1, action.fx)) : 0.5;
+      const fy = Number.isFinite(action.fy) ? Math.max(0, Math.min(1, action.fy)) : 0.5;
+      const clickX = Math.max(0, Math.min(Math.max(0, window.innerWidth - 1), Math.round(rect.left + rect.width * fx)));
+      const clickY = Math.max(0, Math.min(Math.max(0, window.innerHeight - 1), Math.round(rect.top + rect.height * fy)));
+      return finish(false, 'cdp-click-required', {{ targetId: action.targetId, actionKind: 'click', x: clickX, y: clickY }});
     }} else if (action.kind === 'input' || action.kind === 'change') {{
       if (!formField && !target.isContentEditable) return finish(false, 'target-not-editable');
       if (target.localName === 'input' && (type === 'checkbox' || type === 'radio')) {{
@@ -1104,7 +1156,7 @@ def mirror_action_expression(
     }} else if (action.kind === 'scroll') {{
       const x = Number.isFinite(action.x) ? action.x : 0;
       const y = Number.isFinite(action.y) ? action.y : 0;
-      if (target === document.body || target === document.documentElement) {{
+      if (documentTarget || target === document.body || target === document.documentElement) {{
         window.scrollTo({{ left: x, top: y, behavior: 'auto' }});
       }} else if (typeof target.scrollTo === 'function') {{
         target.scrollTo({{ left: x, top: y, behavior: 'auto' }});
@@ -1112,6 +1164,9 @@ def mirror_action_expression(
         target.scrollLeft = x;
         target.scrollTop = y;
       }}
+      const actualX = documentTarget ? Math.round(window.scrollX || 0) : Math.round(target.scrollLeft || 0);
+      const actualY = documentTarget ? Math.round(window.scrollY || 0) : Math.round(target.scrollTop || 0);
+      return finish(true, 'ok', {{ targetId: action.targetId, actionKind: 'scroll', x: actualX, y: actualY }});
     }} else {{
       return finish(false, 'unsupported-action');
     }}
@@ -1243,6 +1298,7 @@ async def execute_semantic_action(
     action: SemanticActionInput,
     *,
     expected_seq: int,
+    expected_epoch: str,
     confirmed: bool = False,
     relay_host: str = "127.0.0.1",
     relay_port: int = 8765,
@@ -1252,6 +1308,7 @@ async def execute_semantic_action(
     expression = mirror_action_expression(
         action,
         expected_seq=expected_seq,
+        expected_epoch=expected_epoch,
         confirmed=confirmed,
     )
 
@@ -1262,6 +1319,20 @@ async def execute_semantic_action(
         result = parse_evaluation(raw)
         if not isinstance(result, dict):
             raise ValueError("semantic action result must be a JSON object")
+        if result.get("reason") == "cdp-click-required":
+            x = result.get("x")
+            y = result.get("y")
+            if isinstance(x, bool) or not isinstance(x, (int, float)) or isinstance(y, bool) or not isinstance(y, (int, float)):
+                raise ValueError("semantic click did not return valid source coordinates")
+            await cloud_tools.click(
+                agent_id,
+                tab_id,
+                int(x),
+                int(y),
+                relay_host,
+                relay_port,
+            )
+            result.update(ok=True, reason="ok", actionKind="click")
         return result
 
     if operation_lock is None:

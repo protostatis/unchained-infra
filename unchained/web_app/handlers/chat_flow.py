@@ -101,6 +101,7 @@ _CHAT_PREVIEW_LABEL_MAX = 240
 _CHAT_PREVIEW_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _CHAT_PREVIEW_MIRROR_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 _CHAT_PREVIEW_TARGET_ID_RE = re.compile(r"^ucm-[a-z0-9]{1,16}$")
+_CHAT_PREVIEW_CAPTURE_EPOCH_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _CHAT_PREVIEW_CONFIRM_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{24,128}$")
 
 
@@ -119,18 +120,21 @@ def _same_origin_preview_request(request: web.Request) -> bool:
     return parsed.scheme.lower() == expected_scheme and parsed.netloc.lower() == expected_host
 
 
-def _parse_chat_preview_action(payload: object) -> tuple[str, str, int, dict, str]:
+def _parse_chat_preview_action(payload: object) -> tuple[str, str, str, int, dict, str]:
     """Validate and bound one interactive semantic action message."""
     if not isinstance(payload, dict) or payload.get("type") != "preview.action":
         raise ValueError("unsupported action message")
     action_id = str(payload.get("action_id", "") or "")
     mirror_id = str(payload.get("mirror_id", "") or "")
+    capture_epoch = str(payload.get("capture_epoch", "") or "")
     document_seq = payload.get("document_seq")
     raw_action = payload.get("action")
     if not _CHAT_PREVIEW_ACTION_ID_RE.fullmatch(action_id):
         raise ValueError("invalid action id")
     if not _CHAT_PREVIEW_MIRROR_ID_RE.fullmatch(mirror_id):
         raise ValueError("invalid mirror id")
+    if not _CHAT_PREVIEW_CAPTURE_EPOCH_RE.fullmatch(capture_epoch):
+        raise ValueError("invalid capture epoch")
     if (
         isinstance(document_seq, bool)
         or not isinstance(document_seq, int)
@@ -143,7 +147,9 @@ def _parse_chat_preview_action(payload: object) -> tuple[str, str, int, dict, st
 
     target_id = str(raw_action.get("targetId", "") or "")
     kind = str(raw_action.get("kind", "") or "")
-    if not _CHAT_PREVIEW_TARGET_ID_RE.fullmatch(target_id):
+    if target_id == "document" and kind != "scroll":
+        raise ValueError("invalid semantic target")
+    if target_id != "document" and not _CHAT_PREVIEW_TARGET_ID_RE.fullmatch(target_id):
         raise ValueError("invalid semantic target")
     if kind not in {"click", "input", "change", "key", "scroll"}:
         raise ValueError("unsupported semantic action")
@@ -163,7 +169,7 @@ def _parse_chat_preview_action(payload: object) -> tuple[str, str, int, dict, st
         if raw_action.get("key") != "Enter":
             raise ValueError("unsupported semantic action key")
         action["key"] = "Enter"
-    for name in ("x", "y"):
+    for name in ("x", "y", "fx", "fy"):
         if name not in raw_action:
             continue
         coordinate = raw_action.get(name)
@@ -175,13 +181,16 @@ def _parse_chat_preview_action(payload: object) -> tuple[str, str, int, dict, st
             raise ValueError("invalid semantic action coordinate") from None
         if not math.isfinite(numeric_coordinate):
             raise ValueError("invalid semantic action coordinate")
-        action[name] = max(-10_000_000, min(10_000_000, numeric_coordinate))
+        if name in {"fx", "fy"}:
+            action[name] = max(0.0, min(1.0, numeric_coordinate))
+        else:
+            action[name] = max(-10_000_000, min(10_000_000, numeric_coordinate))
 
     raw_label = raw_action.get("label", "")
     if raw_label is not None and not isinstance(raw_label, str):
         raise ValueError("invalid semantic action label")
     label = str(raw_label or "")[:_CHAT_PREVIEW_LABEL_MAX]
-    return action_id, mirror_id, document_seq, action, label
+    return action_id, mirror_id, capture_epoch, document_seq, action, label
 
 
 def _research_desk_install_requires_update(caps: dict | None) -> dict:
@@ -712,6 +721,7 @@ async def _handle_preview_ws(
     mirror_state: dict[str, object] = {
         "ready": False,
         "mirror_id": "",
+        "capture_epoch": "",
         "document_seq": 0,
     }
     pending_confirmations: dict[str, dict[str, object]] = {}
@@ -739,7 +749,28 @@ async def _handle_preview_ws(
                 "reason": str(result.get("reason", "action-failed"))[:160],
                 "navigated": bool(result.get("navigated")),
                 "mirror_id": str(mirror_state.get("mirror_id", "")),
+                "capture_epoch": str(
+                    result.get("captureEpoch")
+                    or mirror_state.get("capture_epoch", "")
+                ),
                 "document_seq": int(mirror_state.get("document_seq", 0)),
+                "current_seq": int(
+                    result.get("currentSeq", mirror_state.get("document_seq", 0))
+                ),
+                "action_kind": str(result.get("actionKind", ""))[:32],
+                "target_id": str(result.get("targetId", ""))[:64],
+                **(
+                    {"x": result["x"]}
+                    if isinstance(result.get("x"), (int, float))
+                    and not isinstance(result.get("x"), bool)
+                    else {}
+                ),
+                **(
+                    {"y": result["y"]}
+                    if isinstance(result.get("y"), (int, float))
+                    and not isinstance(result.get("y"), bool)
+                    else {}
+                ),
             }
         )
 
@@ -805,11 +836,19 @@ async def _handle_preview_ws(
                     pending_confirmations.pop(action_id, None)
                     if (
                         pending.get("mirror_id") != mirror_state.get("mirror_id")
-                        or pending.get("document_seq") != mirror_state.get("document_seq")
+                        or pending.get("capture_epoch")
+                        != mirror_state.get("capture_epoch")
+                        or int(pending.get("document_seq", 0))
+                        > int(mirror_state.get("document_seq", 0))
                     ):
                         await emit_action_result(
                             action_id,
-                            {"ok": False, "reason": "stale-document"},
+                            {
+                                "ok": False,
+                                "reason": "stale-document",
+                                "actionKind": pending["action"].get("kind", ""),
+                                "targetId": pending["action"].get("targetId", ""),
+                            },
                         )
                         continue
                     try:
@@ -818,6 +857,7 @@ async def _handle_preview_ws(
                             tab_id,
                             pending["action"],
                             expected_seq=int(pending["document_seq"]),
+                            expected_epoch=str(pending["capture_epoch"]),
                             confirmed=True,
                             relay_host=relay_host,
                             relay_port=relay_port,
@@ -831,11 +871,13 @@ async def _handle_preview_ws(
                             flush=True,
                         )
                         result = {"ok": False, "reason": "action-failed"}
+                    result.setdefault("actionKind", pending["action"].get("kind", ""))
+                    result.setdefault("targetId", pending["action"].get("targetId", ""))
                     await emit_action_result(action_id, result)
                     continue
 
                 try:
-                    action_id, mirror_id, document_seq, action, label = (
+                    action_id, mirror_id, capture_epoch, document_seq, action, label = (
                         _parse_chat_preview_action(payload)
                     )
                 except ValueError as exc:
@@ -854,11 +896,21 @@ async def _handle_preview_ws(
                 if (
                     not mirror_state.get("ready")
                     or mirror_id != mirror_state.get("mirror_id")
-                    or document_seq != mirror_state.get("document_seq")
+                    or capture_epoch != mirror_state.get("capture_epoch")
+                    or document_seq > int(mirror_state.get("document_seq", 0))
+                    or (
+                        action.get("kind") != "scroll"
+                        and document_seq != int(mirror_state.get("document_seq", 0))
+                    )
                 ):
                     await emit_action_result(
                         action_id,
-                        {"ok": False, "reason": "stale-document"},
+                        {
+                            "ok": False,
+                            "reason": "stale-document",
+                            "actionKind": action.get("kind", ""),
+                            "targetId": action.get("targetId", ""),
+                        },
                     )
                     continue
                 try:
@@ -867,6 +919,7 @@ async def _handle_preview_ws(
                         tab_id,
                         action,
                         expected_seq=document_seq,
+                        expected_epoch=capture_epoch,
                         relay_host=relay_host,
                         relay_port=relay_port,
                         operation_lock=source_lock,
@@ -880,12 +933,16 @@ async def _handle_preview_ws(
                     )
                     result = {"ok": False, "reason": "action-failed"}
 
+                result.setdefault("actionKind", action.get("kind", ""))
+                result.setdefault("targetId", action.get("targetId", ""))
+
                 if result.get("reason") == "confirmation-required":
                     token = secrets.token_urlsafe(24)
                     pending_confirmations[action_id] = {
                         "token": token,
                         "action": action,
                         "mirror_id": mirror_id,
+                        "capture_epoch": capture_epoch,
                         "document_seq": document_seq,
                         "expires_at": time.monotonic() + _CHAT_PREVIEW_CONFIRM_TTL_S,
                     }
@@ -927,6 +984,9 @@ async def _handle_preview_ws(
                 if mirror_event["type"] == "snapshot":
                     mirror_state["ready"] = True
                     mirror_state["mirror_id"] = uuid.uuid4().hex
+                    mirror_state["capture_epoch"] = str(
+                        mirror_event["snapshot"].get("captureEpoch", "")
+                    )
                     mirror_state["document_seq"] = 0
                     pending_confirmations.clear()
                     alive = await emit(
@@ -936,13 +996,19 @@ async def _handle_preview_ws(
                             "resync": mirror_event["resync"],
                             "seq": semantic_seq,
                             "mirror_id": mirror_state["mirror_id"],
+                            "capture_epoch": mirror_state["capture_epoch"],
                             "document_seq": 0,
                         }
                     )
                 else:
-                    mirror_state["document_seq"] = int(
+                    next_document_seq = int(
                         mirror_event["patch"].get(
                             "seq", mirror_state.get("document_seq", 0)
+                        )
+                    )
+                    patch_epoch = str(
+                        mirror_event["patch"].get(
+                            "captureEpoch", mirror_state.get("capture_epoch", "")
                         )
                     )
                     alive = await emit(
@@ -951,9 +1017,13 @@ async def _handle_preview_ws(
                             "patch": mirror_event["patch"],
                             "seq": semantic_seq,
                             "mirror_id": mirror_state["mirror_id"],
-                            "document_seq": mirror_state["document_seq"],
+                            "capture_epoch": patch_epoch,
+                            "document_seq": next_document_seq,
                         }
                     )
+                    if alive:
+                        mirror_state["capture_epoch"] = patch_epoch
+                        mirror_state["document_seq"] = next_document_seq
                 if not alive:
                     break
 

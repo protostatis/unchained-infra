@@ -25,20 +25,28 @@ def _encoded(value, *, double=False):
 
 
 class TestSemanticMirrorParsing(unittest.TestCase):
-    def test_capture_expressions_match_mirror_demo_pr_2(self):
+    def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "70dfa9798202667b699e17e759eba99d0488710c9ff97fe80c23ecb9f8147fd4",
+            "73e9a4617ae353aca3ede2434ac8ae81c2e9f789a397279e49a746e25447197c",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "05cee377543661f5a3359c83567b570e60c601b81b96f70b3ae53e361cea2e17",
+            "5ef57181dde9e1f1da31db9221e94c39efdd598c12c6290980f4f1344bb9f480",
         )
 
     def test_direct_and_double_encoded_json(self):
         payload = {"url": "https://example.test", "operations": []}
         self.assertEqual(parse_evaluation(_encoded(payload)), payload)
         self.assertEqual(parse_evaluation(_encoded(payload, double=True)), payload)
+
+    def test_capture_protocol_preserves_nested_scroll_and_safe_search_values(self):
+        self.assertIn("captureEpoch: state.captureEpoch", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("scrollPositions: collectScrollPositions()", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("MAX_SCROLL_POSITIONS = 500", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("role === 'searchbox' || role === 'combobox'", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("email|tel|password|file|hidden", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("canvas|video|iframe|frame|object|embed", INSTALL_MIRROR_EXPRESSION)
 
     def test_action_expression_binds_sequence_and_keeps_server_safety_guards(self):
         expression = mirror_action_expression(
@@ -48,10 +56,12 @@ class TestSemanticMirrorParsing(unittest.TestCase):
                 "value": "line\u2028break",
             },
             expected_seq=7,
+            expected_epoch="epoch-test-123",
         )
 
         self.assertIn("const expectedSeq = 7", expression)
-        self.assertIn("state.seq !== expectedSeq", expression)
+        self.assertIn("state.captureEpoch !== expectedEpoch", expression)
+        self.assertIn("expectedSeq > state.seq", expression)
         self.assertIn("sensitive-target", expression)
         self.assertIn("confirmation-required", expression)
         self.assertIn("target.form || buttonLike", expression)
@@ -115,6 +125,7 @@ class TestSemanticMirrorTransport(unittest.IsolatedAsyncioTestCase):
             "tab",
             {"targetId": "ucm-1", "kind": "click"},
             expected_seq=3,
+            expected_epoch="epoch-test-123",
             relay_host="relay",
             relay_port=9999,
             operation_lock=lock,
@@ -125,7 +136,38 @@ class TestSemanticMirrorTransport(unittest.IsolatedAsyncioTestCase):
         args = run_js.await_args.args
         self.assertEqual(args[:2], ("agent", "tab"))
         self.assertIn("const expectedSeq = 3", args[2])
+        self.assertIn('const expectedEpoch = "epoch-test-123"', args[2])
         self.assertEqual(args[3:], ("relay", 9999))
+
+    @patch("web_app.semantic_mirror.cloud_tools.click", new_callable=AsyncMock)
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_semantic_click_uses_trusted_cdp_coordinates(self, run_js, click):
+        run_js.return_value = _encoded(
+            {
+                "ok": False,
+                "reason": "cdp-click-required",
+                "x": 320,
+                "y": 180,
+                "targetId": "ucm-2",
+                "currentSeq": 5,
+                "captureEpoch": "epoch-test-123",
+            }
+        )
+        click.return_value = "clicked"
+
+        result = await execute_semantic_action(
+            "agent",
+            "tab",
+            {"targetId": "ucm-2", "kind": "click", "fx": 0.25, "fy": 0.75},
+            expected_seq=4,
+            expected_epoch="epoch-test-123",
+            relay_host="relay",
+            relay_port=9999,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["actionKind"], "click")
+        click.assert_awaited_once_with("agent", "tab", 320, 180, "relay", 9999)
 
 
 class TestSemanticMirrorStream(unittest.IsolatedAsyncioTestCase):
