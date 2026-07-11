@@ -19057,7 +19057,7 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 body.agent-view-open{overflow:hidden;background:#05070a!important}
 body.agent-view-open #agent-view{display:flex;position:fixed;z-index:1100;inset:0;min-width:0;flex-direction:column;overflow:hidden;background:#05070a;animation:agentViewIn .24s cubic-bezier(.2,.8,.2,1) both}
 body.agent-view-open #sidebar{display:none!important}
-body.agent-view-open #app-shell #main{position:fixed!important;z-index:1250;right:22px;top:104px;bottom:22px;width:min(440px,calc(100vw - 44px));height:auto!important;min-height:0;flex:none!important;border:1px solid rgba(183,205,228,.26)!important;border-radius:23px!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.88),rgba(7,10,15,.94))!important;box-shadow:0 28px 90px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06)!important;backdrop-filter:blur(22px)}
+body.agent-view-open #app-shell #main{position:fixed!important;z-index:1250;right:22px;top:104px;bottom:22px;width:min(440px,calc(100vw - 44px));height:auto!important;min-height:0;flex:none!important;border:1px solid rgba(183,205,228,.26)!important;border-radius:23px!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.88),rgba(7,10,15,.94))!important;box-shadow:0 28px 90px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06)!important;backdrop-filter:blur(22px);transition:left .22s ease,width .22s ease,right .22s ease}
 body.agent-view-open #main #topbar{min-height:48px;padding:7px 9px!important;background:rgba(8,12,17,.72)!important;border-bottom:1px solid rgba(183,205,228,.14)!important}
 body.agent-view-open #main #topbar .left{display:none!important}
 body.agent-view-open #main #topbar .nav{margin-left:auto;gap:6px;flex-wrap:nowrap}
@@ -19068,6 +19068,16 @@ body.agent-view-open #main #chat{padding:14px 12px!important;gap:9px!important}
 body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
+.chat-size-btn{min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(183,205,228,.22);border-radius:999px;background:rgba(183,205,228,.06);color:#b5c0cd;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+.chat-size-btn:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.08)}
+.agent-view-chat-restore{display:none;position:fixed;z-index:1260;right:22px;bottom:22px;padding:10px 18px;border:1px solid rgba(110,231,161,.38);border-radius:999px;background:rgba(7,10,15,.92);color:#c8f6d7;font:11px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em;cursor:pointer;box-shadow:0 14px 44px rgba(0,0,0,.42);backdrop-filter:blur(18px);transition:border-color .15s,background .15s;animation:agentConfirmIn .18s ease-out both}
+.agent-view-chat-restore:hover{border-color:#6ee7a1;background:rgba(110,231,161,.12)}
+.agent-view-chat-restore::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:50%;background:#6ee7a1;box-shadow:0 0 10px rgba(110,231,161,.55)}
+body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:20px;right:40%;width:auto!important;max-width:none!important}
+body.agent-view-open.agent-view-chat-expanded #main #chat .bubble{max-width:94%}
+body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
+body.agent-view-open.chat-minimized .agent-view-chat-restore{display:inline-flex;align-items:center}
+body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;width:min(560px,calc(100% - 36px))}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
@@ -19079,6 +19089,9 @@ body.agent-view-open #download-banner{display:none!important}
   body.agent-view-open.agent-view-chat-open #app-shell #main{height:min(62dvh,560px)!important;min-height:320px;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
   body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
+  body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:10px;right:10px;width:auto!important}
+  body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
+  body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
   body.agent-view-chat-open .agent-view-confirm{bottom:calc(min(62dvh,560px) + 22px)}
 }
@@ -19092,6 +19105,8 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
+    <button type="button" id="agent-view-minimize" class="chat-size-btn" aria-label="Minimize chat" onclick="minimizeAgentViewChat()">Minimize</button>
+    <button type="button" id="agent-view-expand" class="chat-size-btn" aria-label="Expand chat" onclick="expandAgentViewChat()">Expand</button>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
@@ -19105,6 +19120,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div id="scroll-debug-overlay" style="display:none;position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>
   </div>
   <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
+  <button type="button" id="agent-view-chat-restore" class="agent-view-chat-restore" aria-label="Restore chat panel" onclick="restoreAgentViewChat()">Show chat</button>
 </aside>"""
 
 _SIDEBAR_JS = """
@@ -20138,6 +20154,8 @@ function startAgentViewSocket() {
 function openAgentView() {
   const alreadyOpen = document.body.classList.contains('agent-view-open');
   document.body.classList.add('agent-view-open');
+  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
+  agentViewChatSizeMode = 'default';
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('topbar-agent-view');
@@ -20156,13 +20174,49 @@ function toggleAgentViewChat(forceOpen) {
     button.textContent = open ? 'Browser' : 'Chat';
   }
   if (open) {
+    document.body.classList.remove('chat-minimized');
     const chat = document.getElementById('chat');
     if (chat) chat.scrollTop = chat.scrollHeight;
   }
 }
 
+let agentViewChatSizeMode = 'default';
+
+function minimizeAgentViewChat() {
+  agentViewChatSizeMode = 'minimized';
+  document.body.classList.add('chat-minimized');
+  document.body.classList.remove('agent-view-chat-open');
+}
+
+function expandAgentViewChat() {
+  const isExpanded = document.body.classList.toggle('agent-view-chat-expanded');
+  agentViewChatSizeMode = isExpanded ? 'expanded' : 'default';
+  const expandBtn = document.getElementById('agent-view-expand');
+  if (expandBtn) expandBtn.textContent = isExpanded ? 'Default' : 'Expand';
+  if (isExpanded) {
+    document.body.classList.remove('chat-minimized');
+    if (!document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(true);
+  }
+  const chat = document.getElementById('chat');
+  if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+}
+
+function restoreAgentViewChat() {
+  document.body.classList.remove('chat-minimized');
+  if (agentViewChatSizeMode === 'expanded') {
+    document.body.classList.add('agent-view-chat-expanded');
+    toggleAgentViewChat(true);
+  } else {
+    toggleAgentViewChat(true);
+  }
+  const chat = document.getElementById('chat');
+  if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+}
+
 function closeAgentView() {
   document.body.classList.remove('agent-view-open');
+  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
+  agentViewChatSizeMode = 'default';
   toggleAgentViewChat(false);
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
@@ -20196,6 +20250,8 @@ _setActiveSlotSession = function(sid) {
 
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
+  if (document.body.classList.contains('chat-minimized')) { restoreAgentViewChat(); return; }
+  if (document.body.classList.contains('agent-view-chat-expanded')) { expandAgentViewChat(); return; }
   if (document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(false);
   else closeAgentView();
 });
