@@ -18924,7 +18924,9 @@ body::after{
   #login .login-card{padding:18px!important;border-radius:18px!important;width:100%!important}
   #login .login-proof{grid-template-columns:1fr!important}
   #topbar{display:flex!important;flex-wrap:nowrap!important;align-items:center!important;padding:6px 8px!important;padding-top:max(6px,env(safe-area-inset-top))!important;gap:0!important;overflow:hidden!important}
+  #main #topbar{flex-wrap:nowrap!important}
   #topbar .left{width:auto!important;flex:0 1 auto!important;min-width:0!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;gap:5px!important;overflow:hidden!important}
+  #main #topbar .left{flex-wrap:nowrap!important}
   #sidebar-toggle{display:none!important}
   #topbar .agent{display:none!important}
   #topbar .status-stack{flex-direction:row!important;width:auto!important;gap:3px!important;flex-wrap:nowrap!important}
@@ -19099,11 +19101,12 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
   #topbar-chat-size{display:none!important}
   #agent-view .chat-size-btn{display:inline-flex!important}
+  #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
-  body.agent-view-open #main #topbar{display:flex!important;min-height:38px!important;padding:5px 8px!important;align-items:center!important;background:rgba(8,12,17,.88)!important;border-bottom:1px solid rgba(183,205,228,.10)!important}
+  body.agent-view-open #main #topbar{display:flex!important;flex-wrap:nowrap!important;min-height:38px!important;padding:5px 8px!important;align-items:center!important;background:rgba(8,12,17,.88)!important;border-bottom:1px solid rgba(183,205,228,.10)!important}
   body.agent-view-open #main #topbar .left{display:none!important}
-  body.agent-view-open #main #topbar .nav{margin-left:auto!important;gap:5px!important}
+  body.agent-view-open #main #topbar .nav{margin-left:auto!important;gap:5px!important;flex-wrap:nowrap!important}
   body.agent-view-open #main #topbar .nav a:not(.topbar-new):not(.topbar-agent-view){display:none!important}
   body.agent-view-open #main #modelrow,body.agent-view-open #main #chat{display:none!important}
   body.agent-view-open #main #inputbar{display:flex!important;margin:0;padding:8px!important;border:1px solid rgba(183,205,228,.28)!important;border-radius:22px!important;background:rgba(7,10,15,.90)!important;box-shadow:0 18px 54px rgba(0,0,0,.48);backdrop-filter:blur(20px)}
