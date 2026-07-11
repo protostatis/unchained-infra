@@ -1111,6 +1111,12 @@ def test_chat_html_has_opencode_cockpit_handoff():
     ]
     assert len(runtime_scripts) == 1, "Agent View runtime should remain inside one script element"
     assert "function agentViewFindTarget" in runtime_scripts[0], "Agent View runtime was split by HTML injection"
+    assert 'id="scroll-debug-overlay"' in CHAT_HTML, "Agent View scroll debugger container missing"
+    assert "function _scrollDebug" in runtime_scripts[0], "Agent View scroll debugger runtime missing"
+    assert "document.write(_scrollDebugOverlay())" not in CHAT_HTML, "scroll debugger must not execute before Agent View runtime loads"
+    assert "'snapshot-recv'" in runtime_scripts[0], "Agent View should trace snapshot scroll provenance"
+    assert "'frame-swap'" in runtime_scripts[0], "Agent View should trace semantic frame swaps"
+    assert "'layout-shift'" in runtime_scripts[0], "Agent View should trace non-scroll layout movement"
     assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
