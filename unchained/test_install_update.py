@@ -1117,6 +1117,27 @@ def test_chat_html_has_opencode_cockpit_handoff():
     assert "'snapshot-recv'" in runtime_scripts[0], "Agent View should trace snapshot scroll provenance"
     assert "'frame-swap'" in runtime_scripts[0], "Agent View should trace semantic frame swaps"
     assert "'layout-shift'" in runtime_scripts[0], "Agent View should trace non-scroll layout movement"
+    assert "function agentViewClassifyScrollAck" in runtime_scripts[0], "Agent View scroll acknowledgments need ordering"
+    assert "actionId !== state.latestSentActionId" in runtime_scripts[0], "stale scroll acknowledgments must be rejected"
+    assert "'ack-stale'" in runtime_scripts[0], "stale scroll acknowledgments need observability"
+    assert "'ack-buffered'" in runtime_scripts[0], "active-gesture acknowledgments must be buffered"
+    assert "'snapshot-preserve'" in runtime_scripts[0], "locked snapshot swaps must preserve local scroll"
+    classifier = re.search(
+        r"function agentViewClassifyScrollAck\(state, actionId, lockActive\) \{.*?\n\}",
+        runtime_scripts[0],
+        flags=re.DOTALL,
+    )
+    assert classifier, "scroll acknowledgment classifier missing"
+    node = shutil.which("node")
+    if node:
+        check = classifier.group(0) + """
+const state = {latestSentActionId: 'latest'};
+if (agentViewClassifyScrollAck(state, 'older', true) !== 'stale') throw new Error('older ack was accepted');
+if (agentViewClassifyScrollAck(state, 'latest', true) !== 'buffer') throw new Error('active ack was not buffered');
+if (agentViewClassifyScrollAck(state, 'latest', false) !== 'reconcile') throw new Error('idle latest ack did not reconcile');
+"""
+        result = subprocess.run([node, "-e", check], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
     assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
