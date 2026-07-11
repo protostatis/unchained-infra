@@ -18921,9 +18921,9 @@ body::after{
   #login .sub{font-size:14px!important;line-height:1.45!important;max-width:330px!important}
   #login .login-card{padding:18px!important;border-radius:18px!important;width:100%!important}
   #login .login-proof{grid-template-columns:1fr!important}
-  #topbar{flex-wrap:nowrap!important;align-items:center!important;padding:6px 8px!important;padding-top:max(6px,env(safe-area-inset-top))!important;gap:0!important}
+  #topbar{display:flex!important;flex-wrap:nowrap!important;align-items:center!important;padding:6px 8px!important;padding-top:max(6px,env(safe-area-inset-top))!important;gap:0!important;overflow:hidden!important}
   #topbar .left{width:auto!important;flex:0 1 auto!important;min-width:0!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;gap:5px!important;overflow:hidden!important}
-  #sidebar-toggle{margin:0!important;font-size:16px!important;padding:4px 6px!important}
+  #sidebar-toggle{display:none!important}
   #topbar .agent{display:none!important}
   #topbar .status-stack{flex-direction:row!important;width:auto!important;gap:3px!important;flex-wrap:nowrap!important}
   #topbar .status{font-size:0!important;min-height:0!important;padding:0!important;width:8px;height:8px;border-radius:50%!important;border:none!important;background:#7b8798;box-shadow:0 0 6px rgba(123,135,152,.28)}
@@ -18936,6 +18936,9 @@ body::after{
   #topbar .nav a:not(.topbar-new):not(.topbar-agent-view){display:none!important}
   .topbar-new{height:28px!important;min-width:52px!important;border-radius:10px!important;padding:0 7px!important;font-size:10px!important}
   body.agent-view-open #topbar .nav a:not(.topbar-new){display:none!important}
+  body.agent-view-open #sidebar-toggle{display:none!important}
+  body.agent-view-open #topbar{flex-wrap:nowrap!important}
+  body.agent-view-open #topbar .left{overflow:visible!important}
   #modelrow{display:flex!important;flex-wrap:nowrap!important;gap:6px!important;align-items:center!important;overflow-x:auto}
   #modelrow label{font-size:9px!important;flex:0 0 auto}
   #modelsel,#profilesel{width:auto!important;max-width:none!important;min-width:112px!important;flex:1 1 112px!important}
@@ -19108,7 +19111,11 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
   body.agent-view-open.agent-view-chat-expanded #main #topbar{display:none!important}
-  body.agent-view-open.agent-view-chat-expanded .agent-view-head{position:sticky!important;top:0!important;z-index:10!important}
+  body.agent-view-open.agent-view-chat-expanded .agent-view-head{display:none!important}
+  .av-fullscreen-minimize{display:none;position:fixed;z-index:9999;right:12px;top:max(12px,env(safe-area-inset-top));width:36px;height:36px;border-radius:10px;border:1px solid rgba(183,205,228,.28);background:rgba(7,10,15,.85);color:#b5c0cd;cursor:pointer;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:blur(12px)}
+  .av-fullscreen-minimize svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .av-fullscreen-minimize:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.12)}
+  body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
@@ -19139,6 +19146,7 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
   </div>
   <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
   <button type="button" id="agent-view-chat-restore" class="agent-view-chat-restore" aria-label="Restore chat panel" onclick="restoreAgentViewChat()">Show chat</button>
+  <button type="button" class="av-fullscreen-minimize" aria-label="Exit fullscreen chat" onclick="toggleChatSize()"><svg viewBox="0 0 16 16"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>
 </aside>"""
 
 _SIDEBAR_JS = """
