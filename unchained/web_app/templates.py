@@ -19086,29 +19086,29 @@ body.agent-view-open #main #chat{padding:14px 12px!important;gap:9px!important}
 body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
-.chat-size-btn{display:none;min-width:32px;height:32px;padding:0;border:1px solid rgba(183,205,228,.22);border-radius:10px;background:rgba(183,205,228,.06);color:#b5c0cd;cursor:pointer;transition:border-color .15s,color .15s,background .15s;flex-shrink:0;align-items:center;justify-content:center}
+.agent-view-chat-controls{display:none;align-items:center;gap:6px}
+.chat-size-btn{min-width:32px;height:32px;padding:0 10px;border:1px solid rgba(183,205,228,.22);border-radius:10px;background:rgba(183,205,228,.06);color:#b5c0cd;cursor:pointer;transition:border-color .15s,color .15s,background .15s;flex-shrink:0;align-items:center;justify-content:center;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em}
 .chat-size-btn:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.08)}
 .chat-size-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-body.agent-view-open #topbar-chat-size{display:inline-flex}
 body.agent-view-open #topbar-agent-view{display:none!important}
-body.agent-view-open #chat-card-size{display:inline-flex!important}
-body.agent-view-open #main #topbar .nav a.chat-size-btn{display:inline-flex}
+body.agent-view-open #agent-view-chat-controls{display:inline-flex}
+#chat-card-exit{display:none}
 .agent-view-chat-restore{display:none;position:fixed;z-index:1260;right:22px;bottom:22px;padding:10px 18px;border:1px solid rgba(110,231,161,.38);border-radius:999px;background:rgba(7,10,15,.92);color:#c8f6d7;font:11px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em;cursor:pointer;box-shadow:0 14px 44px rgba(0,0,0,.42);backdrop-filter:blur(18px);transition:border-color .15s,background .15s;animation:agentConfirmIn .18s ease-out both}
 .agent-view-chat-restore:hover{border-color:#6ee7a1;background:rgba(110,231,161,.12)}
 .agent-view-chat-restore::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:50%;background:#6ee7a1;box-shadow:0 0 10px rgba(110,231,161,.55)}
 body.agent-view-open.agent-view-chat-expanded #app-shell #main{right:20px;left:auto;width:min(90vw,calc(100vw - 40px))!important;max-width:none!important}
 body.agent-view-open.agent-view-chat-expanded #main #chat .bubble{max-width:94%}
+body.agent-view-open.agent-view-chat-expanded #chat-card-expand{display:none}
+body.agent-view-open.agent-view-chat-expanded #chat-card-exit{display:inline-flex}
 body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
 body.agent-view-open.chat-minimized .agent-view-chat-restore{display:inline-flex;align-items:center}
 body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;width:min(560px,calc(100% - 36px))}
+body.agent-view-open #main #chat{overflow-x:hidden}
+body.agent-view-open #main #chat .bubble{min-width:0;max-width:100%;overflow-x:auto}
+body.agent-view-open #main #chat .bubble .text{min-width:0;max-width:100%;overflow-x:auto}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.av-fullscreen-minimize{display:none;position:fixed;z-index:9999;right:12px;top:max(12px,env(safe-area-inset-top));width:36px;height:36px;border-radius:10px;border:1px solid rgba(183,205,228,.28);background:rgba(7,10,15,.85);color:#b5c0cd;cursor:pointer;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,.4);backdrop-filter:blur(12px)}
-.av-fullscreen-minimize svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.av-fullscreen-minimize:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.12)}
-body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
-  #agent-view .chat-size-btn{display:inline-flex!important}
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
@@ -19123,10 +19123,10 @@ body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:in
   body.agent-view-open.agent-view-chat-open #main #chat{display:flex!important;min-height:0;padding:12px 10px 8px!important}
   body.agent-view-open.agent-view-chat-open #main #inputbar{margin:0 8px 8px;border-radius:18px!important;box-shadow:none}
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:0;right:0;width:100%!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;border:0!important;bottom:0!important}
-  body.agent-view-open.agent-view-chat-expanded #main #topbar{display:none!important}
   body.agent-view-open.agent-view-chat-expanded .agent-view-head{display:none!important}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
+  .chat-size-btn{min-width:30px;height:30px;padding:0 7px;font-size:8px}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
   body.agent-view-chat-open .agent-view-confirm{bottom:calc(min(62dvh,560px) + 22px)}
 }
@@ -19140,7 +19140,6 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
-    <a href="#" id="av-chat-size" class="chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
@@ -19155,7 +19154,6 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
   </div>
   <footer class="agent-view-foot"><strong>Interactive semantic DOM</strong><span>Actions route through your session-owned agent</span><span class="spacer"></span><span id="agent-view-fidelity" class="agent-view-fidelity">Awaiting semantic state</span><span id="agent-view-seq">No state yet</span></footer>
   <button type="button" id="agent-view-chat-restore" class="agent-view-chat-restore" aria-label="Restore chat panel" onclick="restoreAgentViewChat()">Show chat</button>
-  <button type="button" class="av-fullscreen-minimize" aria-label="Exit fullscreen chat" onclick="toggleChatSize()"><svg viewBox="0 0 16 16"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>
 </aside>"""
 
 _SIDEBAR_JS = """
@@ -20189,9 +20187,11 @@ function startAgentViewSocket() {
 function openAgentView() {
   const alreadyOpen = document.body.classList.contains('agent-view-open');
   document.body.classList.add('agent-view-open');
-  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
-  agentViewChatSizeMode = 'default';
-  _syncChatSizeIcon();
+  if (!alreadyOpen) {
+    setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
+  } else {
+    _syncAgentViewChatControls();
+  }
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('topbar-agent-view');
@@ -20202,74 +20202,94 @@ function openAgentView() {
 function toggleAgentViewChat(forceOpen) {
   const open = typeof forceOpen === 'boolean'
     ? forceOpen
-    : !document.body.classList.contains('agent-view-chat-open');
-  document.body.classList.toggle('agent-view-chat-open', open);
+    : agentViewChatSurface !== 'chat';
+  const mode = agentViewChatMode === 'minimized' ? 'docked' : agentViewChatMode;
+  setAgentViewChatState(mode, open ? 'chat' : 'browser');
+}
+
+let agentViewChatMode = 'docked';
+let agentViewChatSurface = 'chat';
+let agentViewResponseRevealPending = false;
+let agentViewResponseRevealDone = false;
+
+function _agentViewIsMobile() {
+  return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+}
+
+function _syncAgentViewChatControls() {
   const button = document.getElementById('agent-view-chat-toggle');
   if (button) {
-    button.setAttribute('aria-expanded', String(open));
-    button.textContent = open ? 'Browser' : 'Chat';
+    const transcriptOpen = agentViewChatSurface === 'chat' && agentViewChatMode !== 'minimized';
+    button.setAttribute('aria-expanded', String(transcriptOpen));
+    button.textContent = transcriptOpen ? 'Browser' : 'Chat';
   }
-  if (open) {
-    document.body.classList.remove('chat-minimized');
+  const expand = document.getElementById('chat-card-expand');
+  if (expand) expand.setAttribute('aria-hidden', String(agentViewChatMode === 'fullscreen'));
+  const exit = document.getElementById('chat-card-exit');
+  if (exit) exit.setAttribute('aria-hidden', String(agentViewChatMode !== 'fullscreen'));
+  const restore = document.getElementById('agent-view-chat-restore');
+  if (restore) restore.setAttribute('aria-hidden', String(agentViewChatMode !== 'minimized'));
+}
+
+function setAgentViewChatState(mode, surface) {
+  if (mode !== 'docked' && mode !== 'fullscreen' && mode !== 'minimized') mode = 'docked';
+  if (surface !== 'browser' && surface !== 'chat') surface = 'chat';
+  if (mode === 'fullscreen') surface = 'chat';
+  if (mode === 'minimized') surface = 'browser';
+
+  agentViewChatMode = mode;
+  agentViewChatSurface = surface;
+  document.body.classList.toggle('agent-view-chat-expanded', mode === 'fullscreen');
+  document.body.classList.toggle('chat-minimized', mode === 'minimized');
+  document.body.classList.toggle('agent-view-chat-open', surface === 'chat' && mode !== 'minimized');
+  _syncAgentViewChatControls();
+
+  if (surface === 'chat' && mode !== 'minimized') {
     const chat = document.getElementById('chat');
-    if (chat) chat.scrollTop = chat.scrollHeight;
+    if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
   }
 }
 
-let agentViewChatSizeMode = 'default';
-const _chatSizeCycle = ['default', 'expanded', 'minimized'];
-const _chatSizeSvgs = {
-  default: '<svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg>',
-  expanded: '<svg viewBox="0 0 16 16"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg>',
-  minimized: '<svg viewBox="0 0 16 16"><line x1="3" y1="8" x2="13" y2="8"/></svg>'
-};
-
-function _syncChatSizeIcon() {
-  var svg = _chatSizeSvgs[agentViewChatSizeMode] || _chatSizeSvgs['default'];
-  var title = 'Chat: ' + agentViewChatSizeMode + ' (click to toggle)';
-  var topBtn = document.getElementById('topbar-chat-size');
-  if (topBtn) { topBtn.innerHTML = svg; topBtn.title = title; }
-  var avBtn = document.getElementById('av-chat-size');
-  if (avBtn) { avBtn.innerHTML = svg; avBtn.title = title; }
-  var cardBtn = document.getElementById('chat-card-size');
-  if (cardBtn) { cardBtn.innerHTML = svg; cardBtn.title = title; }
+function expandAgentViewChat() {
+  setAgentViewChatState('fullscreen', 'chat');
 }
 
-function toggleChatSize() {
-  var idx = _chatSizeCycle.indexOf(agentViewChatSizeMode);
-  var next = _chatSizeCycle[(idx + 1) % _chatSizeCycle.length];
-  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
-  if (next === 'expanded') {
-    document.body.classList.add('agent-view-chat-expanded');
-    if (!document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(true);
-  } else if (next === 'minimized') {
-    document.body.classList.add('chat-minimized');
-  } else {
-    if (!document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(true);
-  }
-  agentViewChatSizeMode = next;
-  _syncChatSizeIcon();
-  var chat = document.getElementById('chat');
-  if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+function exitAgentViewFullscreen() {
+  setAgentViewChatState('docked', 'chat');
 }
 
-function minimizeAgentViewChat() { toggleChatSize(); }
+function minimizeAgentViewChat() {
+  setAgentViewChatState('minimized', 'browser');
+}
 
 function restoreAgentViewChat() {
-  document.body.classList.remove('chat-minimized');
-  if (agentViewChatSizeMode === 'expanded') {
-    document.body.classList.add('agent-view-chat-expanded');
+  setAgentViewChatState('docked', 'chat');
+}
+
+function beginAgentViewResponseTurn() {
+  agentViewResponseRevealPending = true;
+  agentViewResponseRevealDone = false;
+}
+
+function maybeRevealAgentResponse() {
+  if (!agentViewResponseRevealPending || agentViewResponseRevealDone) return;
+  if (!_agentViewIsMobile() || !document.body.classList.contains('agent-view-open')) return;
+  if (agentViewChatMode === 'minimized') {
+    agentViewResponseRevealDone = true;
+    return;
   }
-  toggleAgentViewChat(true);
-  var chat = document.getElementById('chat');
-  if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+  agentViewResponseRevealDone = true;
+  setAgentViewChatState('docked', 'chat');
 }
 
 function closeAgentView() {
   document.body.classList.remove('agent-view-open');
-  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
-  agentViewChatSizeMode = 'default';
-  toggleAgentViewChat(false);
+  document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-chat-open');
+  agentViewChatMode = 'docked';
+  agentViewChatSurface = _agentViewIsMobile() ? 'browser' : 'chat';
+  agentViewResponseRevealPending = false;
+  agentViewResponseRevealDone = false;
+  _syncAgentViewChatControls();
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
   const button = document.getElementById('topbar-agent-view');
@@ -20290,6 +20310,19 @@ function ensureAgentViewForBrowserActivity() {
   if (!document.body.classList.contains('agent-view-open')) openAgentView();
 }
 
+const _agentViewAddUserBubble = addUserBubble;
+addUserBubble = function() {
+  if (typeof sending !== 'undefined' && sending) beginAgentViewResponseTurn();
+  return _agentViewAddUserBubble.apply(this, arguments);
+};
+
+const _agentViewAppendText = appendText;
+appendText = function() {
+  const result = _agentViewAppendText.apply(this, arguments);
+  maybeRevealAgentResponse();
+  return result;
+};
+
 const _agentViewSetActiveSlotSession = _setActiveSlotSession;
 _setActiveSlotSession = function(sid) {
   const changed = !!sid && !!agentViewBoundSessionId && sid !== agentViewBoundSessionId;
@@ -20302,10 +20335,9 @@ _setActiveSlotSession = function(sid) {
 
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
-  if (document.body.classList.contains('chat-minimized')) { restoreAgentViewChat(); return; }
-  if (document.body.classList.contains('agent-view-chat-expanded')) { toggleChatSize(); return; }
-  if (document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(false);
-  else closeAgentView();
+  if (agentViewChatMode === 'fullscreen') { exitAgentViewFullscreen(); return; }
+  if (_agentViewIsMobile() && agentViewChatSurface === 'chat') { setAgentViewChatState('docked', 'browser'); return; }
+  closeAgentView();
 });
 window.addEventListener('resize', scaleAgentViewSemanticFrame);
 """
@@ -20571,14 +20603,23 @@ def _inject_sidebar(html: str) -> str:
                 "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity();",
                 "agent view auto-open on browser activity",
             ),
+            TemplateReplacement(
+                "          } else if (evt.type === 'done') {\n",
+                "          } else if (evt.type === 'done') {\n            maybeRevealAgentResponse();\n",
+                "agent view tool-only response reveal",
+            ),
         ]
         logout_pattern = '      <a href="#" onclick="doDisconnect();return false">Logout</a>'
         if logout_pattern in html:
             replacements.append(
                 TemplateReplacement(
                     logout_pattern,
-                    '      <a href="#" id="chat-card-size" class="chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>\n' + logout_pattern,
-                    "chat card size toggle injection",
+                    '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" aria-label="Chat panel controls">\n'
+                    '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" onclick="expandAgentViewChat()">Expand</button>\n'
+                    '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Exit fullscreen chat" aria-hidden="true" onclick="exitAgentViewFullscreen()">Default</button>\n'
+                    '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" onclick="minimizeAgentViewChat()">Minimize</button>\n'
+                    '      </span>\n' + logout_pattern,
+                    "chat card controls injection",
                 ),
             )
         html = apply_template_replacements(
@@ -20662,9 +20703,16 @@ TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', ''
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
 # Add Agent View marker to SDK template (simpler banner without banner-actions div)
-CHAT_CLAUDE_SDK_HTML = CHAT_CLAUDE_SDK_HTML.replace(
-    '<a href="/install" id="banner-connect">Download Agent Installer</a>\n  </div>',
-    '<a href="/install" id="banner-connect">Download Agent Installer</a>\n      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>\n  </div>',
+CHAT_CLAUDE_SDK_HTML = apply_template_replacements(
+    CHAT_CLAUDE_SDK_HTML,
+    (
+        TemplateReplacement(
+            '<a href="/install" id="banner-connect">Download Agent Installer</a>\n  </div>',
+            '<a href="/install" id="banner-connect">Download Agent Installer</a>\n      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>\n  </div>',
+            "Claude SDK Agent View marker injection",
+        ),
+    ),
+    template_name="CHAT_CLAUDE_SDK_HTML Agent View marker injection",
 )
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _inject_sidebar(CHAT_CODEX_HTML)

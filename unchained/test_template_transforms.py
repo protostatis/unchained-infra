@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
 
 from web_app.template_transforms import (
@@ -58,6 +60,166 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('id="sidebar"', templates.CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
+
+    def test_agent_view_chat_state_and_response_reveal_across_lanes(self):
+        from web_app import templates
+
+        lane_templates = {
+            "Claude CLI": templates.CLAUDE_CHAT_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+        }
+        for lane, html in lane_templates.items():
+            with self.subTest(lane=lane):
+                self.assertEqual(html.count('id="agent-view"'), 1)
+                self.assertEqual(html.count('id="agent-view-chat-controls"'), 1)
+                self.assertEqual(html.count('id="chat-card-expand"'), 1)
+                self.assertEqual(html.count('id="chat-card-exit"'), 1)
+                self.assertEqual(html.count('id="chat-card-minimize"'), 1)
+                self.assertEqual(html.count('id="agent-view-chat-restore"'), 1)
+                self.assertEqual(html.count('id="msginput"'), 1)
+                self.assertEqual(html.count("appendText(bubble, evt.data)"), 1)
+                self.assertIn("function setAgentViewChatState(mode, surface)", html)
+                self.assertIn("function maybeRevealAgentResponse()", html)
+                self.assertIn("beginAgentViewResponseTurn()", html)
+                self.assertIn(
+                    "if (agentViewChatMode === 'fullscreen') { exitAgentViewFullscreen(); return; }",
+                    html,
+                )
+                self.assertIn("setAgentViewChatState('docked', 'chat');", html)
+                self.assertNotIn('id="topbar-chat-size"', html)
+                self.assertNotIn('id="av-chat-size"', html)
+                self.assertNotIn('id="chat-card-size"', html)
+                self.assertNotIn("_chatSizeCycle", html)
+                self.assertNotIn("av-fullscreen-minimize", html)
+
+    def test_agent_view_controls_are_buttons_not_filtered_nav_links(self):
+        from web_app import templates
+
+        html = templates.CHAT_CLAUDE_SDK_HTML
+        controls = html.split('id="agent-view-chat-controls"', 1)[1].split("</span>", 1)[0]
+        self.assertIn('<button type="button" id="chat-card-expand"', controls)
+        self.assertIn('<button type="button" id="chat-card-exit"', controls)
+        self.assertIn('<button type="button" id="chat-card-minimize"', controls)
+        self.assertNotIn("<a ", controls)
+        self.assertIn("body.agent-view-open #agent-view-chat-controls{display:inline-flex}", html)
+        self.assertIn("body.agent-view-open.agent-view-chat-expanded #chat-card-exit{display:inline-flex}", html)
+
+    def test_agent_view_mobile_response_reveal_is_once_per_turn(self):
+        from web_app import templates
+
+        runtime = templates._AGENT_VIEW_JS
+        self.assertIn("agentViewResponseRevealPending = true", runtime)
+        self.assertIn("agentViewResponseRevealDone = false", runtime)
+        self.assertIn(
+            "if (!agentViewResponseRevealPending || agentViewResponseRevealDone) return;",
+            runtime,
+        )
+        self.assertIn("if (!_agentViewIsMobile()", runtime)
+        self.assertIn("if (agentViewChatMode === 'minimized') {", runtime)
+        self.assertIn("agentViewResponseRevealDone = true;\n    return;", runtime)
+        self.assertIn("setAgentViewChatState('docked', 'chat');", runtime)
+        self.assertIn(
+            "} else if (evt.type === 'done') {\n            maybeRevealAgentResponse();",
+            templates.CHAT_CODEX_HTML,
+        )
+
+    def test_agent_view_state_transitions_execute_consistently(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Agent View runtime checks")
+
+        from web_app import templates
+
+        harness = r"""
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  add(...values) { values.forEach(value => this.values.add(value)); }
+  remove(...values) { values.forEach(value => this.values.delete(value)); }
+  contains(value) { return this.values.has(value); }
+  toggle(value, force) {
+    const enabled = typeof force === 'boolean' ? force : !this.values.has(value);
+    if (enabled) this.values.add(value); else this.values.delete(value);
+    return enabled;
+  }
+}
+const elements = new Map();
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {
+    id,
+    classList: new FakeClassList(),
+    attrs: {},
+    textContent: '',
+    scrollTop: 0,
+    scrollHeight: 100,
+    setAttribute(name, value) { this.attrs[name] = String(value); },
+  });
+  return elements.get(id);
+}
+const body = {classList: new FakeClassList()};
+globalThis.document = {
+  body,
+  getElementById: element,
+  addEventListener() {},
+};
+let mobile = true;
+globalThis.window = {
+  matchMedia() { return {matches: mobile}; },
+  addEventListener() {},
+};
+globalThis.requestAnimationFrame = function() {};
+globalThis.location = {search: '', protocol: 'https:', host: 'example.test'};
+globalThis._setActiveSlotSession = function() {};
+globalThis.addUserBubble = function() {};
+globalThis.appendText = function() {};
+let sending = false;
+"""
+        checks = r"""
+function expect(condition, message) { if (!condition) throw new Error(message); }
+openAgentView();
+expect(body.classList.contains('agent-view-open'), 'Agent View did not open');
+expect(!body.classList.contains('agent-view-chat-open'), 'mobile should open on browser surface');
+
+toggleAgentViewChat(true);
+expect(body.classList.contains('agent-view-chat-open'), 'Chat did not open');
+expandAgentViewChat();
+expect(body.classList.contains('agent-view-chat-expanded'), 'Chat did not expand');
+exitAgentViewFullscreen();
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Fullscreen exit did not dock chat');
+expect(body.classList.contains('agent-view-chat-open'), 'Fullscreen exit hid transcript');
+
+minimizeAgentViewChat();
+expect(body.classList.contains('chat-minimized'), 'Chat did not minimize');
+beginAgentViewResponseTurn();
+maybeRevealAgentResponse();
+expect(body.classList.contains('chat-minimized'), 'Response reveal overrode explicit minimize');
+restoreAgentViewChat();
+expect(!body.classList.contains('chat-minimized'), 'Restore left chat minimized');
+expect(body.classList.contains('agent-view-chat-open'), 'Restore did not open transcript');
+
+setAgentViewChatState('docked', 'browser');
+beginAgentViewResponseTurn();
+maybeRevealAgentResponse();
+expect(body.classList.contains('agent-view-chat-open'), 'First mobile response did not reveal transcript');
+setAgentViewChatState('docked', 'browser');
+maybeRevealAgentResponse();
+expect(!body.classList.contains('agent-view-chat-open'), 'Later response chunk ignored Browser choice');
+
+closeAgentView();
+beginAgentViewResponseTurn();
+maybeRevealAgentResponse();
+expect(!body.classList.contains('agent-view-open'), 'Response opened Agent View before browser activity');
+openAgentView();
+maybeRevealAgentResponse();
+expect(body.classList.contains('agent-view-chat-open'), 'Response pending before browser activity was lost');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + templates._AGENT_VIEW_JS + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_landing_signin_targets_last_provider_route(self):
         from web_app import templates
