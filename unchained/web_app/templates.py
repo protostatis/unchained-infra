@@ -10676,6 +10676,7 @@ function updateAgentStatusUI(data) {
       banner.style.display = 'flex';
     }
   }
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
 }
 
 function _isWindows() { return navigator.userAgent.indexOf('Windows') !== -1; }
@@ -11813,6 +11814,7 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
       <span class="method-or" aria-hidden="true">or</span>
       <span class="sr-only">or use the installer</span>
       <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
 
@@ -12094,6 +12096,7 @@ function updateAgentStatusUI(data) {
     if (banner) banner.style.display = 'flex';
   }
   maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, wasSetupReady);
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
 }""",
         "Codex guided status and modal helpers",
     ),
@@ -19087,6 +19090,7 @@ body.agent-view-open #download-banner{display:none!important}
 .chat-size-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 body.agent-view-open #topbar-chat-size{display:inline-flex}
 body.agent-view-open #topbar-agent-view{display:none!important}
+body.agent-view-open #chat-card-size{display:inline-flex!important}
 body.agent-view-open #main #topbar .nav a.chat-size-btn{display:inline-flex}
 .agent-view-chat-restore{display:none;position:fixed;z-index:1260;right:22px;bottom:22px;padding:10px 18px;border:1px solid rgba(110,231,161,.38);border-radius:999px;background:rgba(7,10,15,.92);color:#c8f6d7;font:11px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em;cursor:pointer;box-shadow:0 14px 44px rgba(0,0,0,.42);backdrop-filter:blur(18px);transition:border-color .15s,background .15s;animation:agentConfirmIn .18s ease-out both}
 .agent-view-chat-restore:hover{border-color:#6ee7a1;background:rgba(110,231,161,.12)}
@@ -19103,7 +19107,6 @@ body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;wi
 body.agent-view-open.agent-view-chat-expanded .av-fullscreen-minimize{display:inline-flex}
 @media(max-width:760px){
   .agent-view-head{min-height:52px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top))}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{padding:0 10px;padding-bottom:env(safe-area-inset-bottom)}.agent-view-foot>span:not(.spacer),.agent-view-fidelity{display:none}
-  #topbar-chat-size{display:inline-flex!important}
   #agent-view .chat-size-btn{display:inline-flex!important}
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
@@ -20227,6 +20230,8 @@ function _syncChatSizeIcon() {
   if (topBtn) { topBtn.innerHTML = svg; topBtn.title = title; }
   var avBtn = document.getElementById('av-chat-size');
   if (avBtn) { avBtn.innerHTML = svg; avBtn.title = title; }
+  var cardBtn = document.getElementById('chat-card-size');
+  if (cardBtn) { cardBtn.innerHTML = svg; cardBtn.title = title; }
 }
 
 function toggleChatSize() {
@@ -20505,7 +20510,6 @@ def _inject_sidebar(html: str) -> str:
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
         quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
-        quick_new_nav += '      <a href="#" id="topbar-chat-size" class="topbar-agent-view chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>\n'
     shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
     runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
 
@@ -20560,15 +20564,25 @@ def _inject_sidebar(html: str) -> str:
     )
 
     if has_agent_view:
+        replacements = [
+            TemplateReplacement(
+                "  if (BROWSER_TOOLS.has(name)) {",
+                "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity();",
+                "agent view auto-open on browser activity",
+            ),
+        ]
+        logout_pattern = '      <a href="#" onclick="doDisconnect();return false">Logout</a>'
+        if logout_pattern in html:
+            replacements.append(
+                TemplateReplacement(
+                    logout_pattern,
+                    '      <a href="#" id="chat-card-size" class="chat-size-btn" title="Toggle chat size" onclick="toggleChatSize();return false"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="9" rx="1.5"/></svg></a>\n' + logout_pattern,
+                    "chat card size toggle injection",
+                ),
+            )
         html = apply_template_replacements(
             html,
-            (
-                TemplateReplacement(
-                    "  if (BROWSER_TOOLS.has(name)) {",
-                    "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity();",
-                    "agent view auto-open on browser activity",
-                ),
-            ),
+            tuple(replacements),
             template_name="agent view activity hook injection",
         )
 
@@ -20646,6 +20660,11 @@ TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', ''
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
+# Add Agent View marker to SDK template (simpler banner without banner-actions div)
+CHAT_CLAUDE_SDK_HTML = CHAT_CLAUDE_SDK_HTML.replace(
+    '<a href="/install" id="banner-connect">Download Agent Installer</a>\n  </div>',
+    '<a href="/install" id="banner-connect">Download Agent Installer</a>\n      <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>\n  </div>',
+)
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _inject_sidebar(CHAT_CODEX_HTML)
 
