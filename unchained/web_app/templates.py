@@ -15054,7 +15054,17 @@ async function backToLogin() {
 }
 
 function currentModel() {
-  return document.getElementById('modelsel').value;
+  const val = document.getElementById('modelsel').value;
+  // On the opencode-cli route, if the selector is still showing the bare
+  // placeholder, transparently return the saved concrete model so the
+  // correct model is used even before the dropdown is clicked.
+  if (val === 'opencode-cli:' && _isOpenCodeRoute()) {
+    const saved = localStorage.getItem('unchained_model');
+    if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
+      return saved;
+    }
+  }
+  return val;
 }
 
 function _isOpenCodeRoute() {
@@ -15648,17 +15658,14 @@ function showMain() {
   _rememberLastAppRoute();
   const params = new URLSearchParams(window.location.search);
   const provider = (params.get('provider') || '').trim().toLowerCase();
-  const saved = localStorage.getItem('unchained_model');
   const providerDefault = provider === 'opencode-cli' ? 'opencode-cli:' : '';
-  // If there's a saved concrete OpenCode model, restore it immediately
-  // (the option may not exist in static HTML yet, but the .value set sticks
-  // and currentModel() / updateOpenCodeModelOptions both use it).
-  if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
-    document.getElementById('modelsel').value = saved;
-  } else if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
+  if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
     document.getElementById('modelsel').value = providerDefault;
-  } else if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
-    document.getElementById('modelsel').value = saved;
+  } else {
+    const saved = localStorage.getItem('unchained_model');
+    if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
+      document.getElementById('modelsel').value = saved;
+    }
   }
   const slotState = _ensureSlotState();
   activeSlot = slotState.active_slot;
