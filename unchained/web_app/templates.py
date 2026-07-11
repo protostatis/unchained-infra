@@ -15054,17 +15054,7 @@ async function backToLogin() {
 }
 
 function currentModel() {
-  const val = document.getElementById('modelsel').value;
-  // On the opencode-cli route, if the selector is still showing the bare
-  // placeholder, transparently return the saved concrete model so the
-  // correct model is used even before the dropdown is clicked.
-  if (val === 'opencode-cli:' && _isOpenCodeRoute()) {
-    const saved = localStorage.getItem('unchained_model');
-    if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
-      return saved;
-    }
-  }
-  return val;
+  return document.getElementById('modelsel').value;
 }
 
 function _isOpenCodeRoute() {
@@ -15660,7 +15650,17 @@ function showMain() {
   const provider = (params.get('provider') || '').trim().toLowerCase();
   const providerDefault = provider === 'opencode-cli' ? 'opencode-cli:' : '';
   if (providerDefault && document.querySelector('#modelsel option[value="' + CSS.escape(providerDefault) + '"]')) {
-    document.getElementById('modelsel').value = providerDefault;
+    // On the opencode-cli route, if there's a saved concrete model,
+    // temporarily add its option to the selector so it displays correctly
+    // (updateOpenCodeModelOptions will rebuild with the full list later).
+    const saved = localStorage.getItem('unchained_model');
+    if (saved && saved.startsWith('opencode-cli:') && saved.length > 'opencode-cli:'.length) {
+      const opt = document.createElement('option');
+      opt.value = saved;
+      opt.textContent = _opencodeOptionLabel(saved.slice('opencode-cli:'.length));
+      document.getElementById('modelsel').appendChild(opt);
+    }
+    document.getElementById('modelsel').value = saved || providerDefault;
   } else {
     const saved = localStorage.getItem('unchained_model');
     if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
