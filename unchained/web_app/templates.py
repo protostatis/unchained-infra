@@ -19068,12 +19068,17 @@ body.agent-view-open #main #chat{padding:14px 12px!important;gap:9px!important}
 body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
-.chat-size-btn{min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(183,205,228,.22);border-radius:999px;background:rgba(183,205,228,.06);color:#b5c0cd;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+.chat-size-btn{min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(183,205,228,.22);border-radius:999px;background:rgba(183,205,228,.06);color:#b5c0cd;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer;transition:border-color .15s,color .15s,background .15s;display:none}
 .chat-size-btn:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.08)}
+body.agent-view-open .chat-size-btn{display:inline-flex;align-items:center;justify-content:center}
+.topbar-chat-size{font-weight:800!important;color:#b5c0cd!important;border-color:rgba(183,205,228,.28)!important;background:rgba(183,205,228,.06)!important}
+.topbar-chat-size:hover{color:#c8f6d7!important;border-color:rgba(110,231,161,.45)!important;background:rgba(110,231,161,.08)!important}
+body.agent-view-open #main #topbar .nav a.chat-size-btn:not(.topbar-new):not(.topbar-agent-view){display:none}
+body.agent-view-open #main #topbar .nav a.chat-size-btn{display:inline-flex}
 .agent-view-chat-restore{display:none;position:fixed;z-index:1260;right:22px;bottom:22px;padding:10px 18px;border:1px solid rgba(110,231,161,.38);border-radius:999px;background:rgba(7,10,15,.92);color:#c8f6d7;font:11px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em;cursor:pointer;box-shadow:0 14px 44px rgba(0,0,0,.42);backdrop-filter:blur(18px);transition:border-color .15s,background .15s;animation:agentConfirmIn .18s ease-out both}
 .agent-view-chat-restore:hover{border-color:#6ee7a1;background:rgba(110,231,161,.12)}
 .agent-view-chat-restore::before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:50%;background:#6ee7a1;box-shadow:0 0 10px rgba(110,231,161,.55)}
-body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:20px;right:40%;width:auto!important;max-width:none!important}
+body.agent-view-open.agent-view-chat-expanded #app-shell #main{left:20px;right:auto;width:min(90vw,calc(100vw - 40px))!important;max-width:none!important}
 body.agent-view-open.agent-view-chat-expanded #main #chat .bubble{max-width:94%}
 body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
 body.agent-view-open.chat-minimized .agent-view-chat-restore{display:inline-flex;align-items:center}
@@ -19105,8 +19110,6 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent brow
     <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
-    <button type="button" id="agent-view-minimize" class="chat-size-btn" aria-label="Minimize chat" onclick="minimizeAgentViewChat()">Minimize</button>
-    <button type="button" id="agent-view-expand" class="chat-size-btn" aria-label="Expand chat" onclick="expandAgentViewChat()">Expand</button>
     <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
   </header>
   <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
@@ -20156,6 +20159,7 @@ function openAgentView() {
   document.body.classList.add('agent-view-open');
   document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded');
   agentViewChatSizeMode = 'default';
+  _updateExpandBtnLabel();
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('topbar-agent-view');
@@ -20188,16 +20192,20 @@ function minimizeAgentViewChat() {
   document.body.classList.remove('agent-view-chat-open');
 }
 
-function expandAgentViewChat() {
-  const isExpanded = document.body.classList.toggle('agent-view-chat-expanded');
+function _updateExpandBtnLabel() {
+  var btn = document.getElementById('topbar-chat-expand');
+  if (btn) btn.textContent = agentViewChatSizeMode === 'expanded' ? 'Default' : 'Expand';
+}
+
+function toggleExpandAgentViewChat() {
+  var isExpanded = document.body.classList.toggle('agent-view-chat-expanded');
   agentViewChatSizeMode = isExpanded ? 'expanded' : 'default';
-  const expandBtn = document.getElementById('agent-view-expand');
-  if (expandBtn) expandBtn.textContent = isExpanded ? 'Default' : 'Expand';
+  _updateExpandBtnLabel();
   if (isExpanded) {
     document.body.classList.remove('chat-minimized');
     if (!document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(true);
   }
-  const chat = document.getElementById('chat');
+  var chat = document.getElementById('chat');
   if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
 }
 
@@ -20209,7 +20217,7 @@ function restoreAgentViewChat() {
   } else {
     toggleAgentViewChat(true);
   }
-  const chat = document.getElementById('chat');
+  var chat = document.getElementById('chat');
   if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
 }
 
@@ -20251,7 +20259,7 @@ _setActiveSlotSession = function(sid) {
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
   if (document.body.classList.contains('chat-minimized')) { restoreAgentViewChat(); return; }
-  if (document.body.classList.contains('agent-view-chat-expanded')) { expandAgentViewChat(); return; }
+  if (document.body.classList.contains('agent-view-chat-expanded')) { toggleExpandAgentViewChat(); return; }
   if (document.body.classList.contains('agent-view-chat-open')) toggleAgentViewChat(false);
   else closeAgentView();
 });
@@ -20459,6 +20467,8 @@ def _inject_sidebar(html: str) -> str:
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
         quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
+        quick_new_nav += '      <a href="#" id="topbar-chat-minimize" class="topbar-agent-view topbar-chat-size chat-size-btn" onclick="minimizeAgentViewChat();return false">Minimize</a>\n'
+        quick_new_nav += '      <a href="#" id="topbar-chat-expand" class="topbar-agent-view topbar-chat-size chat-size-btn" onclick="toggleExpandAgentViewChat();return false">Expand</a>\n'
     shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
     runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
 
