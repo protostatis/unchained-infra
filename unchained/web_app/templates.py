@@ -19366,17 +19366,41 @@ function agentViewFlushScrolls() {
   const pending = Array.from(agentViewPendingScrolls.values());
   agentViewPendingScrolls.clear();
   pending.forEach(function(item) {
-    const actionId = agentViewSendAction(item.context, {kind:'scroll',x:item.x,y:item.y});
-    if (!actionId) return;
-    agentViewScrollActions.set(item.context.targetId, {
-      latestSentActionId: actionId,
-      latestSentX: item.x,
-      latestSentY: item.y,
-      latestAckActionId: '',
-      latestAckX: 0,
-      latestAckY: 0,
+    const state = agentViewScrollActions.get(item.context.targetId) || {};
+    state.context = item.context;
+    state.desiredX = item.x;
+    state.desiredY = item.y;
+    agentViewScrollActions.set(item.context.targetId, state);
+    agentViewPumpScroll(item.context.targetId);
+  });
+}
+
+// Scroll is an absolute position, so intermediate positions are disposable.
+// Keep at most one request in flight per scroller. A long touch/trackpad
+// gesture otherwise fills the server's serialized action queue with stale
+// positions; Chrome then visibly replays those old positions after the user
+// has already reached the final one (especially noticeable on Zillow).
+function agentViewPumpScroll(targetId) {
+  const state = agentViewScrollActions.get(targetId);
+  if (!state || !state.context) return;
+  if (state.inFlightActionId) {
+    _scrollDebug('scroll-coalesce', targetId, state.desiredX, state.desiredY, {
+      inFlight: state.inFlightActionId.slice(0, 8),
     });
-    _scrollDebug('scroll-send', item.context.targetId, item.x, item.y, {actionId: actionId.slice(0, 8)});
+    return;
+  }
+  if (!agentViewNeedsScrollSend(state)) return;
+  const actionId = agentViewSendAction(state.context, {
+    kind: 'scroll', x: state.desiredX, y: state.desiredY,
+  });
+  if (!actionId) return;
+  state.inFlightActionId = actionId;
+  state.latestSentActionId = actionId;
+  state.latestSentX = state.desiredX;
+  state.latestSentY = state.desiredY;
+  state.latestAckActionId = '';
+  _scrollDebug('scroll-send', targetId, state.latestSentX, state.latestSentY, {
+    actionId: actionId.slice(0, 8),
   });
 }
 
@@ -19409,8 +19433,17 @@ function _scrollDebug(source, targetId, x, y, extra) {
 }
 
 function agentViewClassifyScrollAck(state, actionId, lockActive) {
-  if (!state || !actionId || actionId !== state.latestSentActionId) return 'stale';
+  if (!state || !actionId || actionId !== state.inFlightActionId) return 'stale';
   return lockActive ? 'buffer' : 'reconcile';
+}
+
+function agentViewNeedsScrollSend(state) {
+  if (!state || !state.context || state.inFlightActionId) return false;
+  if (!state.latestSentActionId) return true;
+  return (
+    Math.abs(Number(state.latestSentX || 0) - Number(state.desiredX || 0)) > 1 ||
+    Math.abs(Number(state.latestSentY || 0) - Number(state.desiredY || 0)) > 1
+  );
 }
 
 function agentViewScrollLockActive(targetId) {
@@ -19440,7 +19473,15 @@ function agentViewReconcileLatestScroll(targetId) {
   }
   if (local) agentViewLocalScrolls.delete(targetId);
   const state = agentViewScrollActions.get(targetId);
-  if (!state || state.latestAckActionId !== state.latestSentActionId) return;
+  if (!state || state.inFlightActionId) return;
+  if (
+    Math.abs(Number(state.latestSentX || 0) - Number(state.desiredX || 0)) > 1 ||
+    Math.abs(Number(state.latestSentY || 0) - Number(state.desiredY || 0)) > 1
+  ) {
+    agentViewPumpScroll(targetId);
+    return;
+  }
+  if (state.latestAckActionId !== state.latestSentActionId) return;
   const current = agentViewCurrentScrollPosition(targetId);
   const dx = current ? Math.abs(current.x - state.latestAckX) : Infinity;
   const dy = current ? Math.abs(current.y - state.latestAckY) : Infinity;
@@ -19471,6 +19512,15 @@ function agentViewScheduleScrollSettle(targetId) {
 }
 
 function agentViewShouldApplySourceScroll(targetId, x, y) {
+  const flow = agentViewScrollActions.get(targetId);
+  if (flow && flow.inFlightActionId) {
+    _scrollDebug('suppress', targetId, x, y, {
+      reason: 'human-scroll-in-flight',
+      inFlight: flow.inFlightActionId.slice(0, 8),
+      desiredY: flow.desiredY,
+    });
+    return false;
+  }
   const local = agentViewLocalScrolls.get(targetId);
   if (!local) { _scrollDebug('guard-pass', targetId, x, y, {reason:'no-lock'}); return true; }
   if (performance.now() > local.expiresAt) {
@@ -19552,6 +19602,11 @@ function bindAgentViewInteractions(frame) {
     agentViewLocalScrolls.set(targetId, {x:x,y:y,expiresAt:performance.now() + AGENT_VIEW_SCROLL_LOCK_MS});
     _scrollDebug('user', targetId, x, y, {lock_ms: AGENT_VIEW_SCROLL_LOCK_MS});
     agentViewScheduleScrollSettle(targetId);
+    const scrollState = agentViewScrollActions.get(targetId) || {};
+    scrollState.context = {element:identified,targetElement:identified,targetId:targetId};
+    scrollState.desiredX = x;
+    scrollState.desiredY = y;
+    agentViewScrollActions.set(targetId, scrollState);
     agentViewPendingScrolls.set(targetId, {context:{element:identified,targetElement:identified,targetId:targetId},x:x,y:y});
     if (!agentViewScrollTimer) agentViewScrollTimer = setTimeout(agentViewFlushScrolls, 80);
   }, true);
@@ -19979,9 +20034,21 @@ function startAgentViewSocket() {
               latestId: state ? state.latestSentActionId.slice(0, 8) : '',
             });
           } else {
+            state.inFlightActionId = '';
             state.latestAckActionId = String(event.action_id || '');
             state.latestAckX = Math.round(event.x);
             state.latestAckY = Math.round(event.y);
+            const desiredChanged =
+              Math.abs(Number(state.latestSentX || 0) - Number(state.desiredX || 0)) > 1 ||
+              Math.abs(Number(state.latestSentY || 0) - Number(state.desiredY || 0)) > 1;
+            if (desiredChanged) {
+              _scrollDebug('ack-followup', event.target_id, state.desiredX, state.desiredY, {
+                actionId: state.latestAckActionId.slice(0, 8),
+              });
+              agentViewPumpScroll(event.target_id);
+              agentViewScheduleScrollSettle(event.target_id);
+              return;
+            }
             _scrollDebug(classification === 'buffer' ? 'ack-buffered' : 'action-ack', event.target_id, event.x, event.y, {
               actionId: state.latestAckActionId.slice(0, 8),
             });
@@ -19995,7 +20062,8 @@ function startAgentViewSocket() {
         if (event.action_kind === 'scroll' && event.target_id) {
           const state = agentViewScrollActions.get(event.target_id);
           if (state && String(event.action_id || '') === state.latestSentActionId) {
-            agentViewScrollActions.delete(event.target_id);
+            state.inFlightActionId = '';
+            state.latestAckActionId = '';
             if (!agentViewScrollLockActive(event.target_id)) agentViewLocalScrolls.delete(event.target_id);
           }
         }
