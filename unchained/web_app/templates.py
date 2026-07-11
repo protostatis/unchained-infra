@@ -19087,8 +19087,9 @@ body.agent-view-open #main #chat-hints{padding-top:14px!important}
 body.agent-view-open #main #inputbar{margin:0 9px 9px;padding:8px!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:17px!important;background:rgba(6,9,13,.72)!important}
 body.agent-view-open #download-banner{display:none!important}
 .agent-view-chat-controls{display:none;align-items:center;gap:6px}
-.chat-size-btn{min-width:32px;height:32px;padding:0 10px;border:1px solid rgba(183,205,228,.22);border-radius:10px;background:rgba(183,205,228,.06);color:#b5c0cd;cursor:pointer;transition:border-color .15s,color .15s,background .15s;flex-shrink:0;align-items:center;justify-content:center;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.04em}
+.chat-size-btn{width:32px;min-width:32px;height:32px;padding:0;border:1px solid rgba(183,205,228,.22);border-radius:50%;background:rgba(183,205,228,.06);color:#b5c0cd;cursor:pointer;transition:border-color .15s,color .15s,background .15s,transform .15s;flex-shrink:0;align-items:center;justify-content:center}
 .chat-size-btn:hover{border-color:rgba(110,231,161,.45);color:#c8f6d7;background:rgba(110,231,161,.08)}
+.chat-size-btn:active{transform:scale(.94)}
 .chat-size-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 body.agent-view-open #topbar-agent-view{display:none!important}
 body.agent-view-open #agent-view-chat-controls{display:inline-flex}
@@ -19104,7 +19105,7 @@ body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
 body.agent-view-open.chat-minimized .agent-view-chat-restore{display:inline-flex;align-items:center}
 body.agent-view-open.chat-minimized .agent-view-confirm{left:18px;bottom:22px;width:min(560px,calc(100% - 36px))}
 body.agent-view-open #main #chat{overflow-x:hidden}
-body.agent-view-open #main #chat .bubble{min-width:0;max-width:100%;overflow-x:auto}
+body.agent-view-open #main #chat .bubble{min-width:0;max-width:100%;flex-shrink:0}
 body.agent-view-open #main #chat .bubble .text{min-width:0;max-width:100%;overflow-x:auto}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media(max-width:760px){
@@ -19126,7 +19127,7 @@ body.agent-view-open #main #chat .bubble .text{min-width:0;max-width:100%;overfl
   body.agent-view-open.agent-view-chat-expanded .agent-view-head{display:none!important}
   body.agent-view-open.chat-minimized #app-shell #main{display:none!important}
   body.agent-view-open.chat-minimized .agent-view-chat-restore{right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
-  .chat-size-btn{min-width:30px;height:30px;padding:0 7px;font-size:8px}
+  .chat-size-btn{width:30px;min-width:30px;height:30px}
   .agent-view-confirm{left:10px;bottom:82px;width:calc(100% - 20px)}
   body.agent-view-chat-open .agent-view-confirm{bottom:calc(min(62dvh,560px) + 22px)}
 }
@@ -20615,9 +20616,9 @@ def _inject_sidebar(html: str) -> str:
                 TemplateReplacement(
                     logout_pattern,
                     '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" aria-label="Chat panel controls">\n'
-                    '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" onclick="expandAgentViewChat()">Expand</button>\n'
-                    '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Exit fullscreen chat" aria-hidden="true" onclick="exitAgentViewFullscreen()">Default</button>\n'
-                    '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" onclick="minimizeAgentViewChat()">Minimize</button>\n'
+                    '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
+                    '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Return chat to default size" title="Default chat size" aria-hidden="true" onclick="exitAgentViewFullscreen()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3a1 1 0 01-1 1H2M10 2v3a1 1 0 001 1h3M14 10h-3a1 1 0 00-1 1v3M2 10h3a1 1 0 011 1v3"/></svg></button>\n'
+                    '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" title="Minimize chat" onclick="minimizeAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>\n'
                     '      </span>\n' + logout_pattern,
                     "chat card controls injection",
                 ),
