@@ -65,14 +65,29 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("GitHub access token", html)
         self.assertIn("random per-record salt", html)
         self.assertIn("Hosted trial conversations", html)
+        self.assertIn("provider-agent histories default to container-local files", html)
+        self.assertIn("may disappear when the runtime container is recreated", html)
         self.assertIn("Local CLI chat slots and archives are stored on the machine", html)
         self.assertIn("scheduler job prompts", html)
         self.assertIn("run outputs", html)
+        self.assertIn("Optional public results", html)
+        self.assertIn("first prompt, rendered visible conversation/result", html)
+        self.assertIn("account identifier, source session ID", html)
+        self.assertIn("through OpenRouter for PII classification", html)
+        self.assertIn("limited to 8,000 characters of assistant output", html)
+        self.assertIn("stored with <code>pending</code> status", html)
+        self.assertIn("available without authentication", html)
+        self.assertIn("added to the public sitemap", html)
+        self.assertIn("AI systems or training datasets", html)
         self.assertIn("50 most recent records per job", html)
         self.assertIn("90-day cleanup window", html)
         self.assertIn("Revoking a saved provider credential marks it inactive", html)
         self.assertIn("does not by itself delete existing state or run-history files", html)
+        self.assertIn("no guaranteed retention period", html)
+        self.assertIn("Rejecting a pending public result deletes its database row", html)
+        self.assertIn("does not automatically remove a pending or approved result", html)
         self.assertIn("There is no one-click full-account deletion endpoint", html)
+        self.assertIn("pending or approved public-result records", html)
         self.assertIn("A server-side deletion request cannot remove local CLI chats", html)
         self.assertIn('mailto:hello@unchainedsky.com', html)
         self.assertNotIn("@gmail.com", html)
@@ -90,10 +105,14 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hosted conversation files", html)
         self.assertIn("scheduler definitions/state/run history", html)
         self.assertIn("account-linked analytics records", html)
+        self.assertIn("pending or approved public-result records", html)
+        self.assertIn("deleting an account or source conversation does not automatically delete them", html)
         self.assertIn("Requests are handled manually.", html)
         self.assertIn("Revoking a provider credential only marks it inactive", html)
         self.assertIn("Deleting a scheduler job does not remove its prior state or run history", html)
         self.assertIn("Records that must be retained for security or legal reasons", html)
+        self.assertIn("Approved public results have no self-service deletion control", html)
+        self.assertIn("public-result copies already indexed, cached, copied, or redistributed", html)
         self.assertIn("cannot delete local CLI chat slots or archives", html)
         self.assertIn("contact third parties about data they control", html)
         self.assertIn('href="/privacy">/privacy</a>', html)
@@ -112,15 +131,34 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
 
 
 class TestLegalPageDeploymentConfig(unittest.TestCase):
+    @staticmethod
+    def _compose_service(compose: str, name: str, next_name: str) -> str:
+        return compose.split(f"\n  {name}:\n", 1)[1].split(
+            f"\n  {next_name}:\n", 1
+        )[0]
+
     def test_compose_passes_public_contact_email_to_web_service(self):
         compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
         compose = compose_path.read_text(encoding="utf-8")
-        web_service = compose.split("\n  web:\n", 1)[1].split("\n  scheduler:\n", 1)[0]
+        web_service = self._compose_service(compose, "web", "scheduler")
 
         self.assertIn(
             "- CONTACT_EMAIL=${CONTACT_EMAIL:-hello@unchainedsky.com}",
             web_service,
         )
+
+    def test_compose_only_persists_trial_agent_session_directory(self):
+        compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+        compose = compose_path.read_text(encoding="utf-8")
+        web_service = self._compose_service(compose, "web", "scheduler")
+        trial_service = compose.split("\n  trial-agent:\n", 1)[1].split(
+            "\nvolumes:\n", 1
+        )[0]
+
+        self.assertIn("- relay_data:/data", web_service)
+        self.assertNotIn("SESSION_DIR=", web_service)
+        self.assertIn("- relay_data:/data", trial_service)
+        self.assertIn("- SESSION_DIR=/data/sessions", trial_service)
 
 
 if __name__ == "__main__":

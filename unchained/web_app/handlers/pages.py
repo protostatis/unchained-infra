@@ -547,8 +547,9 @@ async def handle_privacy_page(request: web.Request) -> web.Response:
       <li><strong>Account and sign-in data.</strong> When you authorize Google, Facebook, or GitHub sign-in, we receive information such as your email address, name, and profile image. GitHub sign-in requests <code>read:user</code> and <code>user:email</code>. The GitHub access token is used during the sign-in callback to retrieve that profile and email information; it is not written to the Unchained account database.</li>
       <li><strong>Authentication and usage records.</strong> We store Unchained account and API-key records, sign-in times, account status, rate-limit counters, and trial model usage, token, and spend counters.</li>
       <li><strong>Provider API credentials.</strong> If you provision or save a credential for a supported AI provider, we store the credential so the selected provider-backed agent can run. The credential value is encrypted before it is written to the database using a deployment secret and a random per-record salt.</li>
-      <li><strong>Conversations and browser-task context.</strong> Prompts, assistant responses, tool calls and results, and model/session metadata may be persisted for history and continuity. Hosted trial conversations are stored on the service's persistent data volume. Hosted provider-agent sessions are also written to server-side session files. Local CLI chat slots and archives are stored on the machine running your local agent.</li>
+      <li><strong>Conversations and browser-task context.</strong> Prompts, assistant responses, tool calls and results, and model/session metadata may be written to session files for history and continuity. Hosted trial conversations are stored on the service's persistent data volume. Other hosted provider-agent histories default to container-local files and may disappear when the runtime container is recreated unless a feature or deployment explicitly stores them on a persistent volume. Local CLI chat slots and archives are stored on the machine running your local agent.</li>
       <li><strong>Scheduled tasks.</strong> We store scheduler job prompts, timing, selected model/session and profile settings, run state, errors, and run outputs. Scheduler definitions and history are stored on the service's persistent data volume.</li>
+      <li><strong>Optional public results.</strong> If you submit a conversation through the public-result feature, we create a separate persisted record containing the first prompt, rendered visible conversation/result, final result text, message count, creation time, account identifier, source session ID, slug and query hash, approval status, and view count.</li>
       <li><strong>Operational and analytics data.</strong> We record service events, routes, pseudonymous request fingerprints, user/account identifiers where available, errors, and logs used for reliability, abuse prevention, support, and product improvement.</li>
     </ul>
     <h2>How We Use Information</h2>
@@ -560,19 +561,23 @@ async def handle_privacy_page(request: web.Request) -> web.Response:
     </ul>
     <h2>Data Sharing</h2>
     <p>We do not sell personal data. To perform a requested task, Unchained may send the relevant prompt, conversation context, browser-derived page context, and tool results to the AI model provider used for that task. Sign-in information is exchanged with the OAuth provider you choose. Hosting, email-delivery, and other infrastructure providers process data needed to operate those services. Those third parties handle data under their own terms and privacy policies.</p>
+    <p>Before a public-result submission is stored, Unchained sends its first prompt and combined assistant output (limited to 8,000 characters of assistant output) to a configured model through OpenRouter for PII classification. A classification error or missing OpenRouter configuration blocks publication, but automated classification does not guarantee that approved content contains no personal or sensitive information.</p>
+    <h2>Public Results</h2>
+    <p>Public-result publication is optional. A submission that passes quality, blacklist, and PII checks is stored with <code>pending</code> status and is not served on the public result route until approved. Once approved, it is available without authentication at <code>/r/&lt;slug&gt;</code>, includes search and social metadata, and is added to the public sitemap. Search engines, AI systems or training datasets, social-preview networks, and other third parties may index, cache, copy, or redistribute it. Publish only content you intend to make public.</p>
     <h2>Storage and Security</h2>
     <p>Saved provider credential values are encrypted at rest in the application database. That statement applies specifically to provider credentials; conversation and scheduler records are stored as service data files. No storage or transmission method can be guaranteed completely secure.</p>
     <h2>Data Retention</h2>
     <ul>
-      <li>Account, authentication, provider-credential, hosted conversation, and scheduler records do not currently have a general time-based expiration. They remain until removed through a feature-specific action or a verified deletion request, except where retention is required for security or legal reasons.</li>
+      <li>Account, authentication, provider-credential, scheduler, and pending or approved public-result records do not currently have a general time-based expiration. They remain until removed through a feature-specific action or a verified deletion request, except where retention is required for security or legal reasons.</li>
       <li>Revoking a saved provider credential marks it inactive but does not erase its encrypted database record.</li>
-      <li>Hosted conversation histories are size-bounded by the relevant agent. Starting a new hosted trial chat removes that active trial session file, but there is no general age-based cleanup for all hosted conversations.</li>
+      <li>Hosted trial histories are size-bounded and stored on the persistent data volume; starting a new hosted trial chat removes that active trial session file. Other hosted provider-agent histories may be size-bounded but container-local, have no guaranteed retention period, and may disappear on container recreation unless separately persisted.</li>
       <li>Scheduler run history is capped at the 50 most recent records per job. Deleting a scheduler job removes its job definition but does not by itself delete existing state or run-history files.</li>
+      <li>Rejecting a pending public result deletes its database row. Approved public results persist separately from their source account and conversation; deleting the source account or session does not automatically remove a pending or approved result.</li>
       <li>Analytics events and analytics sessions are subject to a 90-day cleanup window. Operational logs are size-rotated separately.</li>
     </ul>
     <h2>Deletion and Your Choices</h2>
-    <p>There is no one-click full-account deletion endpoint. You can submit a verified deletion request via <a href="/data-deletion">/data-deletion</a>. The request can cover your hosted account and authentication records, encrypted provider-credential records (including inactive records), hosted conversation files, scheduler definitions/state/run history, and account-linked analytics records.</p>
-    <p>A server-side deletion request cannot remove local CLI chats or archives on your machine, browser history or downloads in your Chrome profile, or copies already processed by an OAuth, model, or other third-party provider. You must remove local data locally and contact third parties about data they control.</p>
+    <p>There is no one-click full-account deletion endpoint. You can submit a verified deletion request via <a href="/data-deletion">/data-deletion</a>. The request can cover your hosted account and authentication records, encrypted provider-credential records (including inactive records), hosted conversation files that still exist, scheduler definitions/state/run history, account-linked analytics records, and pending or approved public-result records. Include each public-result slug when available.</p>
+    <p>A server-side deletion request cannot remove local CLI chats or archives on your machine, browser history or downloads in your Chrome profile, or copies already processed, indexed, cached, or redistributed by an OAuth, model, search, AI, social-preview, or other third-party provider. You must remove local data locally and contact third parties about data they control.</p>
     <h2>Contact</h2>
     <p class="contact-card">Questions about this policy: <a href="mailto:{safe_contact}">{safe_contact}</a></p>"""
     html = _build_legal_page(
@@ -599,7 +604,8 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
       <li>Your account email address.</li>
       <li>Subject line: <code>Data Deletion Request</code>.</li>
       <li>Whether the request covers the full hosted account or only specific records.</li>
-      <li>For a full hosted-account request, specify account/authentication records, encrypted provider-credential records (including inactive records), hosted conversation files, scheduler definitions/state/run history, and account-linked analytics records.</li>
+      <li>For a full hosted-account request, specify account/authentication records, encrypted provider-credential records (including inactive records), hosted conversation files that still exist, scheduler definitions/state/run history, account-linked analytics records, and pending or approved public-result records.</li>
+      <li>List each public-result slug if available. Public-result rows are stored separately, so deleting an account or source conversation does not automatically delete them.</li>
     </ul>
     <h2>Deletion Coverage</h2>
     <ul>
@@ -607,10 +613,11 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
       <li>Revoking a provider credential only marks it inactive; include provider-credential records in the request if you want the encrypted database record removed.</li>
       <li>Deleting a scheduler job does not remove its prior state or run history; include scheduler state and run history in the request if you want those files removed.</li>
       <li>Starting a new hosted trial chat removes the prior active trial session file, but other hosted conversation files must be included in the request.</li>
+      <li>Rejecting a pending public result deletes its stored row. Approved public results have no self-service deletion control and must be named in a manual deletion request.</li>
       <li>Records that must be retained for security or legal reasons are outside the scope of removal from active service storage.</li>
     </ul>
     <h2>What a Server-Side Request Does Not Delete</h2>
-    <p>A server-side request cannot delete local CLI chat slots or archives stored on your machine, browser history or downloads in your Chrome profile, or data already processed by Google, Facebook, GitHub, an AI model provider, or another third party. Remove local data on the relevant device and contact third parties about data they control.</p>
+    <p>A server-side request cannot delete local CLI chat slots or archives stored on your machine, browser history or downloads in your Chrome profile, or public-result copies already indexed, cached, copied, or redistributed by search engines, AI systems or training datasets, social-preview networks, Google, Facebook, GitHub, an AI model provider, or another third party. Remove local data on the relevant device and contact third parties about data they control.</p>
     <p>For policy details, see <a href="/privacy">/privacy</a>.</p>"""
     html = _build_legal_page(
         title="User Data Deletion",
