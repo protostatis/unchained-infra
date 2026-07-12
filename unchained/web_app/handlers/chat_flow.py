@@ -11,6 +11,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -45,6 +46,13 @@ _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT = 64
 _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT = 4
 _trial_new_chat_requests: dict[tuple[str, str], dict] = {}
 _trial_new_chat_sources: dict[tuple[str, str], dict] = {}
+_trial_new_chat_status_lock = threading.RLock()
+_GUEST_NEW_CHAT_REPLAY_TTL = 15 * 60
+_GUEST_NEW_CHAT_MAX_RECORDS = 1024
+_GUEST_NEW_CHAT_MAX_RECORDS_PER_AGENT = 16
+_guest_new_chat_requests: dict[tuple[str, str], dict] = {}
+_guest_new_chat_sources: dict[tuple[str, str], dict] = {}
+_guest_new_chat_lock = threading.RLock()
 
 
 def _trial_new_chat_session_id(agent_id: str, request_id: str) -> str:
@@ -53,8 +61,24 @@ def _trial_new_chat_session_id(agent_id: str, request_id: str) -> str:
     return f"s-{agent_id}-{digest}"
 
 
+def _guest_new_chat_session_id(
+    agent_id: str, request_id: str, previous_session_id: str
+) -> str:
+    """Derive a replay-stable guest destination without cross-source collisions."""
+    digest = hashlib.sha256(
+        f"guest\0{agent_id}\0{request_id}\0{previous_session_id}".encode()
+    ).hexdigest()[:24]
+    return f"s-{agent_id}-{digest}"
+
+
 def _is_trial_transition_session(agent_id: str, session_id: str) -> bool:
-    return bool(agent_id) and session_id.startswith(f"s-{agent_id}-")
+    prefix = f"s-{agent_id}-"
+    return (
+        bool(agent_id)
+        and session_id.startswith(prefix)
+        and len(session_id) > len(prefix)
+        and re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", session_id) is not None
+    )
 
 
 def _trial_new_chat_commit_token(core, record: dict) -> str:
@@ -91,76 +115,94 @@ def _trial_new_chat_status_path(commit_token: str) -> str:
     return os.path.join(_TRIAL_NEW_CHAT_STATUS_DIR, f"{digest}.json")
 
 
-def _prune_trial_new_chat_statuses(now: float) -> None:
-    try:
-        entries = list(os.scandir(_TRIAL_NEW_CHAT_STATUS_DIR))
-    except FileNotFoundError:
-        return
-    retained = []
-    for entry in entries:
-        if not entry.is_file() or not entry.name.endswith(".json"):
-            continue
+def _prune_trial_new_chat_statuses(now: float) -> tuple[int, dict[str, int]]:
+    """Remove only statuses past recovery retention and report durable usage."""
+    with _trial_new_chat_status_lock:
         try:
-            with open(entry.path) as f:
-                status = json.load(f)
-            retain_until = float(status.get("retain_until", 0))
-            updated_at = float(status.get("updated_at", 0))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            retain_until = 0
-            updated_at = 0
-        if now > retain_until:
-            try:
-                os.remove(entry.path)
-            except FileNotFoundError:
-                pass
-            continue
-        retained.append((updated_at, entry.path))
-    retained.sort()
-    for _, path in retained[:-_TRIAL_NEW_CHAT_STATUS_MAX_RECORDS]:
-        try:
-            os.remove(path)
+            entries = list(os.scandir(_TRIAL_NEW_CHAT_STATUS_DIR))
         except FileNotFoundError:
-            pass
+            return 0, {}
+        retained_count = 0
+        active_by_agent: dict[str, int] = {}
+        for entry in entries:
+            try:
+                if not entry.is_file() or not entry.name.endswith(".json"):
+                    continue
+                with open(entry.path) as f:
+                    status = json.load(f)
+                if not isinstance(status, dict):
+                    raise ValueError("status is not an object")
+                retain_until = float(status["retain_until"])
+                if not math.isfinite(retain_until):
+                    raise ValueError("invalid retain_until")
+            except FileNotFoundError:
+                continue
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                # Unknown evidence is never safe to evict automatically. It also
+                # consumes global capacity until an operator repairs/removes it.
+                retained_count += 1
+                continue
+            if now > retain_until:
+                try:
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    pass
+                continue
+            retained_count += 1
+            if status.get("status") not in {"pending", "committing"}:
+                continue
+            try:
+                expires_at = float(status["expires_at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            agent_id = status.get("agent_id")
+            if isinstance(agent_id, str) and agent_id and now <= expires_at:
+                active_by_agent[agent_id] = active_by_agent.get(agent_id, 0) + 1
+        return retained_count, active_by_agent
 
 
 def _write_trial_new_chat_status(record: dict, status: str, now: float) -> dict:
-    os.makedirs(_TRIAL_NEW_CHAT_STATUS_DIR, exist_ok=True)
-    payload = {
-        "agent_id": record["agent_id"],
-        "commit_request_id": record["commit_request_id"],
-        "previous_session_id": record["previous_session_id"],
-        "session_id": record["session_id"],
-        "slot": record["slot"],
-        "issued_at": record["issued_at"],
-        "expires_at": record["expires_at"],
-        "status": status,
-        "updated_at": now,
-        "retain_until": record["expires_at"] + _TRIAL_NEW_CHAT_STATUS_TTL,
-    }
-    path = _trial_new_chat_status_path(record["commit_token"])
-    temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
-    try:
-        with open(temp_path, "w") as f:
-            json.dump(payload, f, separators=(",", ":"), sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, path)
-    finally:
+    with _trial_new_chat_status_lock:
+        os.makedirs(_TRIAL_NEW_CHAT_STATUS_DIR, exist_ok=True)
+        payload = {
+            "agent_id": record["agent_id"],
+            "commit_request_id": record["commit_request_id"],
+            "previous_session_id": record["previous_session_id"],
+            "session_id": record["session_id"],
+            "slot": record["slot"],
+            "issued_at": record["issued_at"],
+            "expires_at": record["expires_at"],
+            "status": status,
+            "updated_at": now,
+            "retain_until": record["expires_at"] + _TRIAL_NEW_CHAT_STATUS_TTL,
+        }
+        path = _trial_new_chat_status_path(record["commit_token"])
+        temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
         try:
-            os.remove(temp_path)
-        except FileNotFoundError:
-            pass
-    return payload
+            with open(temp_path, "w") as f:
+                json.dump(payload, f, separators=(",", ":"), sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        finally:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+        return payload
 
 
 def _read_trial_new_chat_status(record: dict) -> dict | None:
-    try:
-        with open(_trial_new_chat_status_path(record["commit_token"])) as f:
-            status = json.load(f)
-    except FileNotFoundError:
-        return None
-    except json.JSONDecodeError as exc:
-        raise ValueError("invalid new-chat transition status") from exc
+    with _trial_new_chat_status_lock:
+        try:
+            with open(_trial_new_chat_status_path(record["commit_token"])) as f:
+                status = json.load(f)
+        except FileNotFoundError:
+            return None
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid new-chat transition status") from exc
+    if not isinstance(status, dict):
+        raise ValueError("invalid new-chat transition status")
     for key in (
         "agent_id",
         "commit_request_id",
@@ -253,19 +295,141 @@ def _make_trial_new_chat_capacity(agent_id: str) -> bool:
     agent_records = [record for record in records if record["agent_id"] == agent_id]
     if sum(not record["acknowledged"] for record in agent_records) >= _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT:
         return False
-    while (
-        len(records) >= _TRIAL_NEW_CHAT_MAX_RECORDS
-        or len(agent_records) >= _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT
-    ):
-        candidates = [record for record in agent_records if record["acknowledged"]]
-        if len(records) >= _TRIAL_NEW_CHAT_MAX_RECORDS:
-            candidates = [record for record in records if record["acknowledged"]]
-        if not candidates:
+    return (
+        len(records) < _TRIAL_NEW_CHAT_MAX_RECORDS
+        and len(agent_records) < _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT
+    )
+
+
+def _reserve_trial_new_chat_status(record: dict, now: float) -> bool:
+    """Atomically check durable limits and persist a pending reservation."""
+    with _trial_new_chat_status_lock:
+        retained_count, active_by_agent = _prune_trial_new_chat_statuses(now)
+        if retained_count >= _TRIAL_NEW_CHAT_STATUS_MAX_RECORDS:
             return False
-        _drop_trial_new_chat_commit(min(candidates, key=lambda record: record["created_at"]))
-        records = list(_trial_new_chat_sources.values())
-        agent_records = [record for record in records if record["agent_id"] == agent_id]
-    return True
+        if active_by_agent.get(record["agent_id"], 0) >= _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT:
+            return False
+        if not _make_trial_new_chat_capacity(record["agent_id"]):
+            return False
+        _write_trial_new_chat_status(record, "pending", now)
+        return True
+
+
+def _drop_guest_new_chat_record(record: dict) -> None:
+    for key, candidate in list(_guest_new_chat_requests.items()):
+        if candidate is record:
+            _guest_new_chat_requests.pop(key, None)
+    for key, candidate in list(_guest_new_chat_sources.items()):
+        if candidate is record:
+            _guest_new_chat_sources.pop(key, None)
+
+
+def _prune_guest_new_chat_records(now: float) -> None:
+    for record in list(_guest_new_chat_requests.values()):
+        if now - float(record.get("created_at", 0)) > _GUEST_NEW_CHAT_REPLAY_TTL:
+            _drop_guest_new_chat_record(record)
+
+
+def _make_guest_new_chat_capacity(agent_id: str) -> bool:
+    records = list(_guest_new_chat_requests.values())
+    return (
+        len(records) < _GUEST_NEW_CHAT_MAX_RECORDS
+        and sum(record["agent_id"] == agent_id for record in records)
+        < _GUEST_NEW_CHAT_MAX_RECORDS_PER_AGENT
+    )
+
+
+def _guest_new_chat_response(record: dict, request_id: str, *, replayed: bool) -> dict:
+    return {
+        "ok": True,
+        "active_slot": 1,
+        "trial": True,
+        "guest": True,
+        "request_id": request_id,
+        "previous_session_id": record["previous_session_id"],
+        "session_id": record["session_id"],
+        "replayed": replayed,
+    }
+
+
+def _trial_new_chat_unavailable_response(
+    core,
+    record: dict,
+    *,
+    now: float,
+    recovery_choice: str,
+    known_state: str,
+) -> web.Response:
+    """Keep unknown recovery non-destructive, with an explicit post-expiry escape."""
+    if now <= record["expires_at"]:
+        return web.json_response(
+            {
+                "error": "New-chat transition status unavailable",
+                "recovery_terminal": False,
+                "recovery_decision": "unknown",
+            },
+            status=503,
+            headers={"Retry-After": "5"},
+        )
+    if known_state == "acknowledged":
+        try:
+            _write_trial_new_chat_status(record, "acknowledged", now)
+        except OSError:
+            log.exception("[chat] failed to repair acknowledged new-chat status")
+        return web.json_response(
+            {
+                "error": "New-chat recovery was resolved",
+                "recovery_terminal": True,
+                "recovery_decision": "destination",
+                "recovery_session_id": record["session_id"],
+            },
+            status=409,
+        )
+    recovery_choices = (
+        ["source", "destination"]
+        if known_state == "pending"
+        else ["destination"]
+    )
+    if recovery_choice not in recovery_choices:
+        return web.json_response(
+            {
+                "error": "New-chat recovery needs your choice",
+                "recovery_terminal": False,
+                "recovery_manual": True,
+                "recovery_choices": recovery_choices,
+            },
+            status=409,
+        )
+    try:
+        if recovery_choice == "destination":
+            _commit_trial_new_chat_transition(core, record)
+            _write_trial_new_chat_status(record, "acknowledged", now)
+            recovery_session_id = record["session_id"]
+        else:
+            _write_trial_new_chat_status(record, "rolled_back", now)
+            _drop_trial_new_chat_commit(record)
+            recovery_session_id = record["previous_session_id"]
+    except OSError:
+        log.exception("[chat] failed to repair new-chat transition status")
+        return web.json_response(
+            {
+                "error": "New-chat recovery unavailable",
+                "recovery_terminal": False,
+                "recovery_decision": "unknown",
+            },
+            status=503,
+            headers={"Retry-After": "5"},
+        )
+    return web.json_response(
+        {
+            "error": "New-chat recovery was resolved",
+            "recovery_terminal": True,
+            "recovery_manual_resolved": True,
+            "recovery_decision": recovery_choice,
+            "recovery_session_id": recovery_session_id,
+        },
+        status=409,
+    )
 
 
 def _trial_new_chat_response(record: dict, request_id: str, *, replayed: bool) -> dict:
@@ -2325,26 +2489,94 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
         if guest_mode:
-            limited = _check_first_look_public_rate_limit(
-                request,
-                bucket="new-chat",
-                limit=_FIRST_LOOK_NEW_CHAT_LIMIT,
-            )
-            if limited is not None:
-                core._attach_first_look_guest_cookies(
-                    limited, request, guest_id, quota_count=guest_quota_count
+            request_id = str(body.get("request_id", "") or "").strip()
+            if not _TRIAL_NEW_CHAT_REQUEST_RE.fullmatch(request_id):
+                response = web.json_response(
+                    {"error": "Invalid new-chat request ID"}, status=400
                 )
-                return limited
-            session_id = f"s-{agent_id}-{secrets.token_hex(12)}"
-            response = web.json_response(
-                {
-                    "ok": True,
-                    "active_slot": 1,
-                    "trial": True,
-                    "guest": True,
-                    "session_id": session_id,
+                core._attach_first_look_guest_cookies(response, request, guest_id)
+                return response
+            old_session = str(requested_session_id or "").strip()
+            if not _is_trial_transition_session(agent_id, old_session):
+                response = web.json_response(
+                    {"error": "Source session is not owned by this guest"}, status=403
+                )
+                core._attach_first_look_guest_cookies(response, request, guest_id)
+                return response
+
+            now = core.time.time()
+            request_key = (agent_id, request_id)
+            source_key = (agent_id, old_session)
+            with _guest_new_chat_lock:
+                _prune_guest_new_chat_records(now)
+                record = _guest_new_chat_requests.get(request_key)
+                if record is not None:
+                    if record["previous_session_id"] != old_session:
+                        response = web.json_response(
+                            {"error": "New-chat request ID was already used for another session"},
+                            status=409,
+                        )
+                    elif not record.get("acknowledged"):
+                        response = web.json_response(
+                            {"error": "Guest new-chat recovery is still pending"},
+                            status=503,
+                            headers={"Retry-After": "1"},
+                        )
+                    else:
+                        response = web.json_response(
+                            _guest_new_chat_response(record, request_id, replayed=True)
+                        )
+                    core._attach_first_look_guest_cookies(
+                        response, request, guest_id, quota_count=guest_quota_count
+                    )
+                    return response
+
+                record = _guest_new_chat_sources.get(source_key)
+                if record is not None:
+                    response = web.json_response(
+                        {"error": "Source session already has a guest new-chat transition"},
+                        status=409,
+                    )
+                    core._attach_first_look_guest_cookies(
+                        response, request, guest_id, quota_count=guest_quota_count
+                    )
+                    return response
+
+                limited = _check_first_look_public_rate_limit(
+                    request,
+                    bucket="new-chat",
+                    limit=_FIRST_LOOK_NEW_CHAT_LIMIT,
+                )
+                if limited is not None:
+                    core._attach_first_look_guest_cookies(
+                        limited, request, guest_id, quota_count=guest_quota_count
+                    )
+                    return limited
+                if not _make_guest_new_chat_capacity(agent_id):
+                    response = web.json_response(
+                        {"error": "Too many recent guest new-chat requests"},
+                        status=429,
+                        headers={"Retry-After": "60"},
+                    )
+                    core._attach_first_look_guest_cookies(
+                        response, request, guest_id, quota_count=guest_quota_count
+                    )
+                    return response
+                record = {
+                    "agent_id": agent_id,
+                    "previous_session_id": old_session,
+                    "session_id": _guest_new_chat_session_id(
+                        agent_id, request_id, old_session
+                    ),
+                    "created_at": now,
+                    "acknowledged": False,
                 }
-            )
+                _guest_new_chat_requests[request_key] = record
+                _guest_new_chat_sources[source_key] = record
+                _commit_trial_new_chat_transition(core, record)
+                response = web.json_response(
+                    _guest_new_chat_response(record, request_id, replayed=False)
+                )
             core._attach_first_look_guest_cookies(
                 response, request, guest_id, quota_count=guest_quota_count
             )
@@ -2383,12 +2615,6 @@ async def handle_chat_new(request: web.Request) -> web.Response:
                 _trial_new_chat_response(record, request_id, replayed=True)
             )
 
-        if not _make_trial_new_chat_capacity(agent_id):
-            return web.json_response(
-                {"error": "Too many pending new-chat transitions", "retry_after": 60},
-                status=429,
-                headers={"Retry-After": "60"},
-            )
         record = {
             "agent_id": agent_id,
             "commit_request_id": request_id,
@@ -2402,12 +2628,17 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         }
         record["commit_token"] = _trial_new_chat_commit_token(core, record)
         try:
-            _write_trial_new_chat_status(record, "pending", now)
-            _prune_trial_new_chat_statuses(now)
+            admitted = _reserve_trial_new_chat_status(record, now)
         except OSError:
             log.exception("[chat] failed to persist new-chat transition status")
             return web.json_response(
                 {"error": "Failed to reserve new-chat transition"}, status=500
+            )
+        if not admitted:
+            return web.json_response(
+                {"error": "Too many pending new-chat transitions", "retry_after": 60},
+                status=429,
+                headers={"Retry-After": "60"},
             )
         _trial_new_chat_requests[request_key] = record
         _trial_new_chat_sources[source_key] = record
@@ -2471,7 +2702,6 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     source_key = (agent_id, previous_session_id)
     now = core.time.time()
     issued_at, expires_at = token_times
-    _prune_trial_new_chat_commits(now)
     expected_session_id = _trial_new_chat_session_id(agent_id, request_id)
     if session_id != expected_session_id:
         return web.json_response({"error": "Unknown new-chat transition"}, status=409)
@@ -2490,34 +2720,42 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     if not hmac.compare_digest(commit_token, expected_token):
         return web.json_response({"error": "Unknown new-chat transition"}, status=409)
     canonical_record["commit_token"] = expected_token
+    recovery_choice = str(body.get("recovery_choice", "") or "").strip()
+    recovery_record = _trial_new_chat_requests.get(request_key)
+    if recovery_record is None:
+        recovery_record = _trial_new_chat_sources.get(source_key)
+    if recovery_record is None or not hmac.compare_digest(
+        str(recovery_record.get("commit_token", "")), commit_token
+    ):
+        recovery_record = canonical_record
+        recovery_known_state = "unknown"
+    else:
+        recovery_known_state = (
+            "acknowledged" if recovery_record.get("acknowledged") else "pending"
+        )
 
     try:
         _prune_trial_new_chat_statuses(now)
         durable_status = _read_trial_new_chat_status(canonical_record)
     except (OSError, ValueError):
         log.exception("[chat] failed to read new-chat transition status")
-        return web.json_response({"error": "New-chat recovery unavailable"}, status=503)
+        return _trial_new_chat_unavailable_response(
+            core,
+            recovery_record,
+            now=now,
+            recovery_choice=recovery_choice,
+            known_state=recovery_known_state,
+        )
     if durable_status is None:
-        candidate = _trial_new_chat_requests.get(request_key)
-        if candidate is not None and hmac.compare_digest(
-            str(candidate.get("commit_token", "")), commit_token
-        ):
-            _drop_trial_new_chat_commit(candidate)
-        return web.json_response(
-            {
-                "error": "New-chat transition status unavailable",
-                "recovery_terminal": True,
-                "recovery_decision": "destination",
-                "recovery_session_id": session_id,
-            },
-            status=409,
+        return _trial_new_chat_unavailable_response(
+            core,
+            recovery_record,
+            now=now,
+            recovery_choice=recovery_choice,
+            known_state=recovery_known_state,
         )
 
-    record = _trial_new_chat_requests.get(request_key)
-    if record is None:
-        record = _trial_new_chat_sources.get(source_key)
-    if record is None:
-        record = canonical_record
+    record = recovery_record
     if (
         record["commit_request_id"] != request_id
         or record["previous_session_id"] != previous_session_id

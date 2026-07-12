@@ -254,10 +254,16 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("No matching chats", html)
         self.assertIn("translateY(-8px) scale(.98)", html)
         self.assertIn("body.agent-shell-task.agent-view-open #main #slotbar{display:flex!important;", html)
-        self.assertIn('id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true" tabindex="-1"', html)
+        self.assertIn('id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1"', html)
         self.assertIn("confirmation.classList.contains('open')", runtime)
         self.assertIn("agentViewReturnFocus", runtime)
         self.assertIn("if (agentShellTaskEnabled && mobile)", runtime)
+        self.assertIn("body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}", html)
+        self.assertIn("agent-view-browser-positioned #app-shell #main", html)
+        self.assertIn("completeAgentShellTurn('cancelled');", html)
+        self.assertIn("completeAgentShellTurn('error');", html)
+        self.assertIn("} finally {\n    completeAgentShellTurn('error');", html)
+        self.assertIn("Task ended with an error", runtime)
         self.assertIn("@media(min-width:761px) and (hover:none)", html)
         self.assertIn("transition:none!important", html)
 
@@ -500,6 +506,49 @@ expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not 
         self.assertNotIn("https://api.unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertIn("API key handling", templates.SETUP_HTML)
         self.assertIn("Your Chrome profile stays on your machine", templates.INSTALL_ONBOARD_HTML)
+
+    def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
+        from web_app import templates
+
+        trial = templates.TRIAL_CHAT_HTML
+        self.assertIn("localStorage.getItem(_newChatStateKey())", trial)
+        self.assertIn("localStorage.setItem(_newChatStateKey()", trial)
+        self.assertIn("localStorage.removeItem(_newChatStateKey())", trial)
+        self.assertIn("recoveringSource", trial)
+        self.assertIn("Another tab is finishing New Chat", trial)
+        self.assertIn("localStorage.setItem(_sessionStoreKey(), sid)", trial)
+        self.assertIn("localStorage.setItem(_slotStateKey()", trial)
+
+        guest = templates.FIRST_LOOK_PREVIEW_HTML
+        self.assertIn('id="new-chat-feedback" role="status" aria-live="polite"', guest)
+        self.assertIn("if (sending || guestNewChatPending) return;", guest)
+        self.assertIn("request_id: guestNewChatRequestId()", guest)
+        self.assertIn("localStorage.setItem(key, JSON.stringify(pending))", guest)
+        self.assertIn("function syncGuestSessionFromStorage()", guest)
+        self.assertIn("window.location.reload();", guest)
+        self.assertIn("if (!syncGuestSessionFromStorage()) return;", guest)
+        self.assertIn("data.request_id !== pending.request_id", guest)
+        self.assertIn("data.previous_session_id !== previousSessionId", guest)
+        self.assertIn("data.ok !== true || data.guest !== true", guest)
+        self.assertIn("nextSessionId === previousSessionId", guest)
+        self.assertIn("agentId !== previousAgentId || sessionId !== previousSessionId", guest)
+        self.assertIn("r.status === 429", guest)
+        self.assertIn("Your current chat is unchanged.", guest)
+
+        new_chat = guest[guest.index("async function doNewChat()") : guest.index("function hideHints()")]
+        parsed = new_chat.index("data = await r.json();")
+        validated = new_chat.index("if (!data || data.ok !== true")
+        adopted = new_chat.index("sessionId = nextSessionId;")
+        transcript_reset = new_chat.index("chat.innerHTML =")
+        preview_reset = new_chat.index("resetPreview();")
+        draft_reset = new_chat.index("document.getElementById('msginput').value = '';")
+        cleared = new_chat.rindex("clearGuestNewChatRequest(pending);")
+        self.assertLess(parsed, validated)
+        self.assertLess(validated, adopted)
+        self.assertLess(adopted, transcript_reset)
+        self.assertLess(transcript_reset, preview_reset)
+        self.assertLess(preview_reset, draft_reset)
+        self.assertLess(draft_reset, cleared)
 
     def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
         from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script

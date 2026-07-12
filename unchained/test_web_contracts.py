@@ -193,6 +193,20 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("exhausted retries", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_new_chat_recovery_and_guest_reset_contracts(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn("localStorage.getItem(_newChatStateKey())", trial)
+        self.assertIn("localStorage.setItem(_newChatStateKey()", trial)
+        self.assertIn("Another tab is finishing New Chat", trial)
+        self.assertIn("localStorage.setItem(_sessionStoreKey(), sid)", trial)
+
+        guest = web.FIRST_LOOK_PREVIEW_HTML
+        self.assertIn('id="new-chat-feedback" role="status" aria-live="polite"', guest)
+        self.assertIn("let guestNewChatPending = false;", guest)
+        self.assertIn("request_id: pending.request_id", guest)
+        self.assertIn("clearGuestNewChatRequest(pending);", guest)
+        self.assertIn("Could not start a fresh guest chat.", guest)
+
     def test_trial_upgrade_notice_describes_provider_api_key_setup(self):
         copy = (
             "Access your chosen Claude, Gemini, or Codex provider models using "

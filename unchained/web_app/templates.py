@@ -9227,7 +9227,7 @@ function _syncNewChatRecoveryLock() {
   return blocked;
 }
 
-async function acknowledgeNewChatTransition(pending) {
+async function acknowledgeNewChatTransition(pending, recoveryChoice) {
   try {
     const commitRequestId = pending.commit_request_id || pending.request_id;
     const r = await fetch('/web/chat/new/ack', {
@@ -9240,10 +9240,16 @@ async function acknowledgeNewChatTransition(pending) {
         previous_session_id: pending.previous_session_id,
         session_id: pending.session_id,
         slot: pending.slot,
+        recovery_choice: recoveryChoice || '',
       }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
+      if (r.status === 409 && data.recovery_manual === true &&
+          Array.isArray(data.recovery_choices) &&
+          data.recovery_choices.includes('destination')) {
+        return {status:'manual', choices:data.recovery_choices};
+      }
       if (r.status === 409 && data.recovery_terminal === true) {
         const decision = data.recovery_decision;
         const recoverySessionId = String(data.recovery_session_id || '');
@@ -9251,7 +9257,7 @@ async function acknowledgeNewChatTransition(pending) {
           ? pending.session_id
           : (decision === 'source' ? pending.previous_session_id : '');
         if (expectedSessionId && recoverySessionId === expectedSessionId) {
-          return {status:'expired', decision:decision, session_id:recoverySessionId};
+          return {status:'expired', decision:decision, session_id:recoverySessionId, manual:data.recovery_manual_resolved === true};
         }
       }
       return 'retry';
@@ -9267,6 +9273,51 @@ async function acknowledgeNewChatTransition(pending) {
   }
 }
 
+function offerManualNewChatRecovery(pending, choices) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.className = 'error';
+  const canRestoreSource = Array.isArray(choices) && choices.includes('source');
+  feedback.textContent = canRestoreSource
+    ? 'Recovery records are unavailable. Choose which chat to keep: '
+    : 'Recovery records are unavailable. To avoid restoring deleted context, only the fresh chat can be kept: ';
+  const source = document.createElement('button');
+  source.type = 'button';
+  source.textContent = 'Restore previous chat';
+  const destination = document.createElement('button');
+  destination.type = 'button';
+  destination.textContent = 'Keep fresh chat';
+  const resolve = async function(choice) {
+    source.disabled = true;
+    destination.disabled = true;
+    newChatPending = true;
+    _syncNewChatRecoveryLock();
+    try {
+      const outcome = await acknowledgeNewChatTransition(pending, choice);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
+        return;
+      }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
+        return;
+      }
+      setNewChatFeedback('Recovery could not be resolved. Please try again.', 'error');
+    } finally {
+      newChatPending = false;
+      _syncNewChatRecoveryLock();
+      updateSendAvailability(lastLocalSetupReady);
+    }
+  };
+  source.addEventListener('click', function() { resolve('source'); });
+  destination.addEventListener('click', function() { resolve('destination'); });
+  if (canRestoreSource) {
+    feedback.appendChild(source);
+    feedback.appendChild(document.createTextNode(' '));
+  }
+  feedback.appendChild(destination);
+}
+
 async function recoverExpiredNewChat(pending, recovery) {
   _clearPendingNewChat(pending.request_id);
   activeSlot = pending.slot;
@@ -9277,9 +9328,13 @@ async function recoverExpiredNewChat(pending, recovery) {
   const chat = document.getElementById('chat');
   if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Restoring previous chat...</div>';
   await loadHistory();
-  const message = recovery.decision === 'destination'
-    ? 'The fresh ' + _slotLabel(pending.slot) + ' was confirmed before its response was lost. The fresh chat was restored.'
-    : 'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. Your previous chat was restored; select New Chat to try again.';
+  const message = recovery.manual
+    ? (recovery.decision === 'destination'
+      ? 'You chose to keep the fresh ' + _slotLabel(pending.slot) + '. The fresh chat was restored.'
+      : 'You chose to restore the previous ' + _slotLabel(pending.slot) + '. Select New Chat to try again when ready.')
+    : (recovery.decision === 'destination'
+      ? 'The fresh ' + _slotLabel(pending.slot) + ' was confirmed before its response was lost. The fresh chat was restored.'
+      : 'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. Your previous chat was restored; select New Chat to try again.');
   setNewChatFeedback(message, recovery.decision === 'destination' ? 'success' : 'error');
 }
 
@@ -9297,6 +9352,10 @@ async function recoverPendingNewChat() {
         await recoverExpiredNewChat(pending, outcome);
         return;
       }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
+        return;
+      }
       const acknowledged = outcome === 'acknowledged';
       setNewChatFeedback(
         acknowledged
@@ -9309,6 +9368,13 @@ async function recoverPendingNewChat() {
       _syncNewChatRecoveryLock();
       updateSendAvailability(lastLocalSetupReady);
     }
+    return;
+  }
+  if (pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
+    setNewChatFeedback(
+      'A fresh ' + _slotLabel(pending.slot) + ' is reserved. Select New Chat to restore and confirm it safely.',
+      'error'
+    );
     return;
   }
   if (!pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
@@ -9428,7 +9494,40 @@ function _syncSlotButtons() {
   }
 }
 
+let _crossTabSessionSyncing = false;
+async function syncTrialSessionFromStorage(showFeedback) {
+  if (_crossTabSessionSyncing) return false;
+  const state = _loadSlotState();
+  const storedSlot = state.active_slot;
+  const storedSession = String(state.slots[String(storedSlot)] || _restoreSessionId() || '');
+  if (!storedSession || !storedSession.startsWith('s-' + agentId + '-')) return true;
+  if (storedSlot === activeSlot && storedSession === sessionId) return true;
+  _crossTabSessionSyncing = true;
+  try {
+    activeSlot = storedSlot;
+    sessionId = storedSession;
+    _persistSessionId(sessionId);
+    _syncSlotButtons();
+    const chat = document.getElementById('chat');
+    if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Updating chat from another tab...</div>';
+    await loadHistory();
+    if (showFeedback) {
+      setNewChatFeedback('This chat changed in another tab. The current lane was updated; review it before sending.', 'error');
+    }
+  } finally {
+    _crossTabSessionSyncing = false;
+  }
+  return false;
+}
+
+window.addEventListener('storage', function(event) {
+  if (!event || ![_sessionStoreKey(), _slotStateKey(), _newChatStateKey()].includes(event.key)) return;
+  if (sending || newChatPending) return;
+  syncTrialSessionFromStorage(true).then(function() { recoverPendingNewChat(); });
+});
+
 async function switchSlot(n) {
+  if (!(await syncTrialSessionFromStorage(false))) return;
   if (n === activeSlot) return;
   if (sending || newChatPending || _newChatRecoveryBlocked()) return;
   const state = _loadSlotState();
@@ -9801,10 +9900,31 @@ async function doNewChat() {
   let pending = _loadPendingNewChat();
   try {
     if (pending && pending.session_id) {
+      const recoveringDestination = pending.slot === activeSlot && pending.session_id === sessionId;
+      const recoveringSource = pending.slot === activeSlot && pending.previous_session_id === sessionId;
+      if (!recoveringDestination && !recoveringSource) {
+        setNewChatFeedback(
+          'Another tab is finishing New Chat for ' + _slotLabel(pending.slot) + '. Switch to that lane or retry there.',
+          'error'
+        );
+        return;
+      }
+      if (recoveringSource) {
+        sessionId = pending.session_id;
+        _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
+        if (typeof _setSlotPreview === 'function') _setSlotPreview(pending.slot, '');
+        resetNewChatUi();
+        _syncSlotButtons();
+      }
       setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
       const outcome = await acknowledgeNewChatTransition(pending);
       if (outcome && outcome.status === 'expired') {
         await recoverExpiredNewChat(pending, outcome);
+        return;
+      }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
         return;
       }
       const acknowledged = outcome === 'acknowledged';
@@ -9881,6 +10001,10 @@ async function doNewChat() {
     const outcome = await acknowledgeNewChatTransition(pending);
     if (outcome && outcome.status === 'expired') {
       await recoverExpiredNewChat(pending, outcome);
+      return;
+    }
+    if (outcome && outcome.status === 'manual') {
+      offerManualNewChatRecovery(pending, outcome.choices);
       return;
     }
     const acknowledged = outcome === 'acknowledged';
@@ -10351,7 +10475,9 @@ async function doCancel() {
 }
 
 async function doSend() {
-  if (sending || newChatPending || _newChatRecoveryBlocked()) return;
+  if (sending || newChatPending) return;
+  if (!(await syncTrialSessionFromStorage(true))) return;
+  if (_newChatRecoveryBlocked()) return;
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
@@ -17918,6 +18044,14 @@ body{
   padding:4px 0 0;font-size:11px;color:var(--muted);
 }
 #quota-bar strong{color:var(--text)}
+#new-chat-feedback{
+  display:none;padding:5px 0 0;font-size:12px;line-height:1.4;color:var(--muted);
+}
+#new-chat-feedback.pending,#new-chat-feedback.success,#new-chat-feedback.error{display:block}
+#new-chat-feedback.success{color:#b9f1d8}
+#new-chat-feedback.error{color:#f3aa9f}
+#new-chat-feedback button{margin:6px 4px 0 0;padding:6px 9px;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+#new-chat-feedback button:disabled{cursor:wait;opacity:.55}
 #shared-browser-status{
   padding:0 0 2px;font-size:11px;line-height:1.35;color:var(--muted);
 }
@@ -18103,8 +18237,9 @@ body{
       <div id="inputbar">
         <div id="input-fields">
           <label class="sr-only" for="msginput">Task for the shared browser</label>
-          <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something...">__FIRST_LOOK_TASK_PROMPT_HTML__</textarea>
+          <textarea id="msginput" rows="1" aria-describedby="quota-bar new-chat-feedback" placeholder="Ask the browser to do something...">__FIRST_LOOK_TASK_PROMPT_HTML__</textarea>
           <div id="quota-bar" role="status" aria-live="polite"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <div id="new-chat-feedback" role="status" aria-live="polite"></div>
           <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
         <button id="sendbtn" type="button" aria-label="Run task" aria-disabled="false" title="Run task">&#9654;</button>
@@ -18148,6 +18283,7 @@ let remainingGuestRuns = __FIRST_LOOK_GUEST_REMAINING__;
 let agentId = '';
 let sessionId = '';
 let sending = false;
+let guestNewChatPending = false;
 let cancelCtrl = null;
 let currentToolEl = null;
 let currentAssistantEl = null;
@@ -18196,6 +18332,60 @@ function esc(value) {
 
 function sessionStoreKey() {
   return agentId ? ('unchained_session_' + agentId + '_first_look_preview') : '';
+}
+
+function guestNewChatStateKey() {
+  const key = sessionStoreKey();
+  return key ? (key + '_new_chat_v1') : '';
+}
+
+function guestNewChatRequestId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Secure random IDs are unavailable in this browser.');
+}
+
+function loadGuestNewChatRequest() {
+  const key = guestNewChatStateKey();
+  if (!key) return null;
+  try {
+    const pending = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!pending || !/^[A-Za-z0-9_-]{16,80}$/.test(pending.request_id || '')) return null;
+    if (!String(pending.previous_session_id || '').startsWith('s-' + agentId + '-')) return null;
+    return pending;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function saveGuestNewChatRequest(pending) {
+  const key = guestNewChatStateKey();
+  if (!key) throw new Error('Guest session storage is unavailable.');
+  localStorage.setItem(key, JSON.stringify(pending));
+}
+
+function clearGuestNewChatRequest(pending) {
+  const key = guestNewChatStateKey();
+  if (!key) return;
+  const current = loadGuestNewChatRequest();
+  if (current && current.request_id === pending.request_id &&
+      current.previous_session_id === pending.previous_session_id) {
+    localStorage.removeItem(key);
+  }
+}
+
+function setGuestNewChatFeedback(message, state) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.textContent = message || '';
+  feedback.className = message ? state : '';
+  feedback.setAttribute('role', state === 'error' ? 'alert' : 'status');
 }
 
 function ensureSessionId() {
@@ -18311,6 +18501,8 @@ function updateSendAvailability() {
     send.title = 'Run task';
   }
   input.disabled = remainingGuestRuns <= 0;
+  const newChat = document.getElementById('new-chat-btn');
+  if (newChat) newChat.disabled = sending || guestNewChatPending;
 }
 
 function autoGrow(el) {
@@ -18319,57 +18511,101 @@ function autoGrow(el) {
 }
 
 async function doNewChat() {
-  if (sending) return;
-  const chat = document.getElementById('chat');
-  chat.innerHTML =
-    '<div id="chat-hints">' +
-      '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
-      '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
-      '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
-      '<div class="hint-examples">' +
-        '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
-        '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
-        '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
-      '</div>' +
-      '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
-      '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
-      '<div class="hint-footer">Live browser demo</div>' +
-    '</div>';
-  document.querySelectorAll('.hint-item').forEach(function (item) {
-    item.addEventListener('click', function () {
-      fillExample(item.dataset.prompt || '', item.dataset.url || '');
-    });
-  });
-  resetPreview();
-  resetSteps();
-  document.getElementById('msginput').value = '';
-  signalBuffer = '';
-  assistantText = '';
-  currentAssistantEl = null;
-  currentToolEl = null;
-  historyLoaded = false;
-
+  if (sending || guestNewChatPending) return;
+  guestNewChatPending = true;
+  updateSendAvailability();
+  const previousSessionId = sessionId;
+  const previousAgentId = agentId;
+  let pending = loadGuestNewChatRequest();
   try {
+    if (!pending || pending.previous_session_id !== previousSessionId) {
+      pending = {
+        request_id: guestNewChatRequestId(),
+        previous_session_id: previousSessionId,
+      };
+      saveGuestNewChatRequest(pending);
+    }
+    setGuestNewChatFeedback('Starting a fresh guest chat...', 'pending');
     const r = await fetch('/web/chat/new', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         model: 'google/gemini-3.1-flash-lite',
-        session_id: sessionId,
+        request_id: pending.request_id,
+        session_id: pending.previous_session_id,
         first_look_guest: true,
       }),
     });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.session_id) {
-        sessionId = data.session_id;
-        try { const k = sessionStoreKey(); if (k) localStorage.setItem(k, sessionId); } catch (_e) {}
-      }
+    let data;
+    try {
+      data = await r.json();
+    } catch (_err) {
+      throw new Error('The server returned an unreadable response.');
     }
+    if (!r.ok) {
+      clearGuestNewChatRequest(pending);
+      const retryAfter = r.status === 429 ? ' Please wait and try again.' : '';
+      const serverError = (data && data.error) || 'The server could not start a new chat.';
+      throw new Error(serverError + retryAfter);
+    }
+    const nextSessionId = String(data && data.session_id || '').trim();
+    if (!data || data.ok !== true || data.guest !== true ||
+        data.request_id !== pending.request_id ||
+        data.previous_session_id !== previousSessionId ||
+        !nextSessionId.startsWith('s-' + previousAgentId + '-') ||
+        nextSessionId === previousSessionId) {
+      throw new Error('The server returned a stale or invalid guest session.');
+    }
+    if (agentId !== previousAgentId || sessionId !== previousSessionId) {
+      throw new Error('The active guest session changed while starting a new chat.');
+    }
+
+    sessionId = nextSessionId;
+    try {
+      const key = sessionStoreKey();
+      if (key) localStorage.setItem(key, sessionId);
+    } catch (_err) {}
+    const chat = document.getElementById('chat');
+    chat.innerHTML =
+      '<div id="chat-hints">' +
+        '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
+        '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
+        '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
+        '<div class="hint-examples">' +
+          '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
+          '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
+          '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
+        '</div>' +
+        '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
+        '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
+        '<div class="hint-footer">Live browser demo</div>' +
+      '</div>';
+    document.querySelectorAll('.hint-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        fillExample(item.dataset.prompt || '', item.dataset.url || '');
+      });
+    });
+    resetPreview();
+    resetSteps();
+    document.getElementById('msginput').value = '';
+    signalBuffer = '';
+    assistantText = '';
+    currentAssistantEl = null;
+    currentToolEl = null;
+    historyLoaded = false;
+    clearGuestNewChatRequest(pending);
+    setGuestNewChatFeedback('Fresh guest chat ready.', 'success');
+    refreshSharedBrowserStatus();
   } catch (err) {
-    console.error('Failed to clear context:', err);
+    const detail = err && err.message ? ' ' + err.message : '';
+    setGuestNewChatFeedback(
+      'Could not start a fresh guest chat.' + detail + ' Your current chat is unchanged.',
+      'error'
+    );
+  } finally {
+    guestNewChatPending = false;
+    updateSendAvailability();
   }
-  refreshSharedBrowserStatus();
 }
 
 function hideHints() {
@@ -18943,6 +19179,27 @@ async function loadHistory() {
   } catch (_err) {}
 }
 
+function syncGuestSessionFromStorage() {
+  const pending = loadGuestNewChatRequest();
+  if (pending && pending.previous_session_id === sessionId) {
+    setGuestNewChatFeedback('Another tab is starting a fresh guest chat. Wait for it to finish before running another task.', 'error');
+    return false;
+  }
+  const key = sessionStoreKey();
+  let storedSession = '';
+  try { storedSession = key ? String(localStorage.getItem(key) || '') : ''; } catch (_err) {}
+  if (!storedSession || !storedSession.startsWith('s-' + agentId + '-') || storedSession === sessionId) return true;
+  sessionId = storedSession;
+  setGuestNewChatFeedback('This guest chat changed in another tab. Reloading the current chat...', 'pending');
+  window.location.reload();
+  return false;
+}
+
+window.addEventListener('storage', function(event) {
+  if (!event || ![sessionStoreKey(), guestNewChatStateKey()].includes(event.key)) return;
+  if (!sending && !guestNewChatPending) syncGuestSessionFromStorage();
+});
+
 function fillExample(prompt, url) {
   const input = document.getElementById('msginput');
   selectedExamplePrompt = String(prompt || '').trim();
@@ -18967,6 +19224,7 @@ async function doCancel() {
 
 async function doSend() {
   if (sending) return;
+  if (!syncGuestSessionFromStorage()) return;
   if (remainingGuestRuns <= 0) {
     showQuotaFeedback();
     return;
@@ -19832,10 +20090,18 @@ body.agent-shell-task.agent-view-open #sidebar .sidebar-new{display:none}
 body.agent-shell-task.agent-view-open #main #topbar{position:relative}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{position:relative!important;left:auto!important;top:auto!important;flex:0 0 88px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;position:static!important;height:34px!important;min-width:50px;padding:0 10px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#b9c6d2!important;box-shadow:none!important;font:500 10px var(--mono,'IBM Plex Mono',monospace)!important;transform:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new:hover{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;filter:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{position:static!important;width:34px;min-width:34px;height:34px;border-radius:10px}body.agent-shell-task.agent-view-open #main #topbar .nav{width:auto!important;flex:1 1 auto!important;margin-left:auto!important;padding-left:0!important}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{gap:8px}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{height:44px!important;min-width:52px;padding:0 9px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{width:44px;min-width:44px;height:44px}}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px;transform:translateY(14px) scale(.99);transform-origin:bottom center}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{transform:none}body.agent-shell-task.agent-view-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-shell-task.agent-view-open #sidebar .sidebar-search input{height:44px}.sidebar-close{width:44px;height:44px}.sidebar-new{min-height:44px}}
+/* Preserve the mobile Browser Preview bottom sheet when the task shell is enabled. */
+@media(max-width:760px){
+  body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only) #app-shell #main{left:10px!important;right:10px!important;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto!important;height:auto!important;min-height:0!important;transform:none;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-browser-positioned #app-shell #main{top:var(--agent-view-mobile-chat-top);bottom:auto}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-open #app-shell #main{height:min(62dvh,560px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important;min-height:min(320px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-expanded #app-shell #main{inset:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important}
+}
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
 </style>"""
 
-_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true" tabindex="-1">
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1">
   <header class="agent-view-head">
     <span class="agent-view-mark" aria-hidden="true">UC</span>
     <div class="agent-view-title"><span class="agent-view-kicker">Live browser</span><strong>Browser Preview</strong></div>
@@ -21367,10 +21633,15 @@ function ensureAgentViewForBrowserActivity() {
   if (!document.body.classList.contains('agent-view-open')) openAgentView();
 }
 
-function completeAgentShellTurn() {
+function completeAgentShellTurn(outcome) {
   if (!agentShellTaskEnabled || !agentShellTurnActive) return;
   agentShellTurnActive = false;
-  setAgentShellPhase('complete', agentShellBrowserUsedThisTurn ? 'Browser task complete' : 'Answer ready');
+  const label = outcome === 'cancelled'
+    ? 'Task cancelled'
+    : (outcome === 'error'
+      ? 'Task ended with an error'
+      : (agentShellBrowserUsedThisTurn ? 'Browser task complete' : 'Answer ready'));
+  setAgentShellPhase('complete', label);
 }
 
 const _agentViewAddUserBubble = addUserBubble;
@@ -21721,6 +21992,26 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
                 "          } else if (evt.type === 'done') {\n",
                 "          } else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();\n",
                 "agent view tool-only response reveal",
+            ),
+            TemplateReplacement(
+                "          } else if (evt.type === 'cancelled') {\n",
+                "          } else if (evt.type === 'cancelled') {\n            completeAgentShellTurn('cancelled');\n",
+                "agent task shell cancellation completion",
+            ),
+            TemplateReplacement(
+                "          } else if (evt.type === 'error') {\n",
+                "          } else if (evt.type === 'error') {\n            completeAgentShellTurn('error');\n",
+                "agent task shell error completion",
+            ),
+            TemplateReplacement(
+                "  } catch(e) {\n    const thinking = bubble.querySelector('.thinking');",
+                "  } catch(e) {\n    completeAgentShellTurn(e && e.name === 'AbortError' ? 'cancelled' : 'error');\n    const thinking = bubble.querySelector('.thinking');",
+                "agent task shell network completion",
+            ),
+            TemplateReplacement(
+                "  } finally {\n    _cancelCtrl = null;",
+                "  } finally {\n    completeAgentShellTurn('error');\n    _cancelCtrl = null;",
+                "agent task shell incomplete stream completion",
             ),
         ]
         logout_pattern = '      <a href="#" onclick="doDisconnect();return false">Logout</a>'
