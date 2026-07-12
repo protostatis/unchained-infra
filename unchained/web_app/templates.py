@@ -8177,15 +8177,19 @@ body{
   background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
 }
 #slotbar button{
-  flex:1;height:32px;border:1px solid #444;border-radius:6px;
+  flex:1;height:40px;min-width:0;border:1px solid #444;border-radius:6px;
   background:transparent;color:var(--muted);font-size:12px;
-  font-family:var(--mono);cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--mono);cursor:pointer;display:flex;flex-direction:column;
+  align-items:flex-start;justify-content:center;text-align:left;padding:4px 10px;
   transition:border-color 0.15s,color 0.15s;
 }
+#slotbar .slot-name,#slotbar .slot-preview{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#slotbar .slot-name{font-size:11px;font-weight:700;line-height:1.2}
+#slotbar .slot-preview{font-size:10px;font-weight:400;line-height:1.25;color:var(--muted)}
 #slotbar button:hover{border-color:var(--accent);color:var(--text)}
 #slotbar button:active{transform:scale(0.95)}
 #slotbar button.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+#slotbar button.active .slot-preview{color:inherit}
 #slotbar button.empty{color:#555;font-style:italic}
 #slotbar button.empty.active{color:var(--accent);font-style:normal}
 #slotbar.locked button{pointer-events:none;opacity:0.4}
@@ -8512,10 +8516,10 @@ body{
     <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
   </div>
 
-  <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
+  <div id="slotbar" role="group" aria-label="Chat sessions">
+    <button onclick="switchSlot(1)" id="slot1" aria-pressed="true" aria-label="Chat 1: No task yet. Independent conversation session." title="Chat 1: No task yet. Independent conversation session."><span class="slot-name">Chat 1</span><span class="slot-preview">No task yet</span></button>
+    <button onclick="switchSlot(2)" id="slot2" aria-pressed="false" aria-label="Chat 2: No task yet. Independent conversation session." title="Chat 2: No task yet. Independent conversation session."><span class="slot-name">Chat 2</span><span class="slot-preview">No task yet</span></button>
+    <button onclick="switchSlot(3)" id="slot3" aria-pressed="false" aria-label="Chat 3: No task yet. Independent conversation session." title="Chat 3: No task yet. Independent conversation session."><span class="slot-name">Chat 3</span><span class="slot-preview">No task yet</span></button>
   </div>
 
   <div id="agent-bar">
@@ -9043,7 +9047,18 @@ function _persistSessionId(sid) {
 let activeSlot = 1;
 
 function _slotLabel(n) {
-  return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
+  return 'Chat ' + n;
+}
+
+function _normalizeSlotPreview(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function _firstUserPreview(messages) {
+  for (const msg of (Array.isArray(messages) ? messages : [])) {
+    if (msg && msg.role === 'user') return _normalizeSlotPreview(msg.content);
+  }
+  return '';
 }
 
 function _slotStateKey() {
@@ -9067,14 +9082,17 @@ function _loadSlotState() {
   } catch(e) {}
 
   const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const previews = (state && typeof state.previews === 'object' && state.previews) ? state.previews : {};
   const normalized = {};
+  const normalizedPreviews = {};
   for (let i = 1; i <= 3; i++) {
     const sid = String(slots[String(i)] || '').trim();
     normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+    normalizedPreviews[String(i)] = _normalizeSlotPreview(previews[String(i)]);
   }
   let active = Number(state && state.active_slot);
   if (active !== 1 && active !== 2 && active !== 3) active = 1;
-  return {active_slot: active, slots: normalized};
+  return {active_slot: active, slots: normalized, previews: normalizedPreviews};
 }
 
 function _saveSlotState(state) {
@@ -9103,14 +9121,36 @@ function _setActiveSlotSession(sid) {
   _saveSlotState(state);
 }
 
+function _setSlotPreview(n, preview) {
+  if (n !== 1 && n !== 2 && n !== 3) return;
+  const state = _loadSlotState();
+  state.previews[String(n)] = _normalizeSlotPreview(preview);
+  _saveSlotState(state);
+  _syncSlotButtons();
+  return state.previews[String(n)];
+}
+
+function _setSlotPreviewIfEmpty(n, preview) {
+  const state = _loadSlotState();
+  if (!state.previews[String(n)]) _setSlotPreview(n, preview);
+}
+
 function _syncSlotButtons() {
   const state = _loadSlotState();
   activeSlot = state.active_slot;
   for (let i = 1; i <= 3; i++) {
     const btn = document.getElementById('slot' + i);
     if (!btn) continue;
+    const label = _slotLabel(i);
+    const preview = state.previews[String(i)];
+    const previewLabel = preview || 'No task yet';
     btn.className = '';
-    btn.textContent = _slotLabel(i);
+    btn.classList.toggle('empty', !preview);
+    btn.querySelector('.slot-name').textContent = label;
+    btn.querySelector('.slot-preview').textContent = previewLabel;
+    btn.title = label + ': ' + previewLabel + '. Independent conversation session.';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', i === activeSlot ? 'true' : 'false');
     if (i === activeSlot) btn.classList.add('active');
   }
 }
@@ -9387,6 +9427,7 @@ async function loadHistory() {
       _persistSessionId(sessionId);
       _setActiveSlotSession(sessionId);
     }
+    _setSlotPreview(activeSlot, _firstUserPreview(data.messages));
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
       return;
@@ -9440,6 +9481,7 @@ async function doNewChat() {
         _persistSessionId(sessionId);
         _setActiveSlotSession(sessionId);
       }
+      _setSlotPreview(activeSlot, '');
     }
   } catch(e) {}
   _syncSlotButtons();
@@ -9973,6 +10015,8 @@ async function doSend() {
       if (r.status === 401 || r.status === 403) doDisconnect();
       return;
     }
+
+    _setSlotPreviewIfEmpty(activeSlot, msg);
 
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
@@ -18939,6 +18983,9 @@ body::after{
   box-shadow:0 12px 30px rgba(0,0,0,0.18),0 0 0 1px rgba(255,255,255,0.02) inset;
   transition:transform 0.16s ease,border-color 0.16s ease,background 0.16s ease,box-shadow 0.16s ease!important;
 }
+#slotbar .slot-name{font-size:10px!important;line-height:1.15;letter-spacing:0.08em}
+#slotbar .slot-preview{font-size:10px!important;line-height:1.3;font-weight:500!important;letter-spacing:0;text-transform:none;color:#9daabd}
+#slotbar button.active .slot-preview{color:#fff!important}
 #slotbar button::before{
   content:"";position:absolute;left:13px;top:50%;transform:translateY(-50%);
   width:9px;height:9px;border-radius:50%;
@@ -18957,11 +19004,11 @@ body::after{
   color:#fff!important;
   background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 48%,var(--spectrum-violet))!important;
   box-shadow:0 16px 42px rgba(233,69,96,0.28),0 0 0 1px rgba(255,255,255,0.22) inset;
-  animation:laneGlow 4s ease-in-out infinite;
+  animation:sessionGlow 4s ease-in-out infinite;
 }
 #slotbar button.active::before{background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,0.23),0 0 16px rgba(255,255,255,0.45)}
 #slotbar button.active::after{opacity:1;transform:scaleX(1);background:linear-gradient(90deg,#fff,var(--spectrum-yellow),#fff)}
-@keyframes laneGlow{0%,100%{box-shadow:0 16px 42px rgba(233,69,96,0.24),0 0 0 1px rgba(255,255,255,0.2) inset}50%{box-shadow:0 16px 48px rgba(177,92,255,0.32),0 0 0 1px rgba(255,255,255,0.26) inset}}
+@keyframes sessionGlow{0%,100%{box-shadow:0 16px 42px rgba(233,69,96,0.24),0 0 0 1px rgba(255,255,255,0.2) inset}50%{box-shadow:0 16px 48px rgba(177,92,255,0.32),0 0 0 1px rgba(255,255,255,0.26) inset}}
 #slotbar button.empty{font-style:normal!important;color:#7f8da3!important}
 #slotbar button.empty::before{background:#48556a}
 #slotbar button.empty.active{color:#180f08!important}
