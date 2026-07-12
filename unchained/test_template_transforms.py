@@ -49,7 +49,7 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('id="modern-chat-theme"', templates.CHAT_CODEX_HTML)
         self.assertIn('id="playful-chat-skin"', templates.TRIAL_CHAT_HTML)
         self.assertIn('id="playful-chat-skin"', templates.CLAUDE_CHAT_HTML)
-        self.assertIn("Lane A", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Chat 1", templates.TRIAL_CHAT_HTML)
         self.assertIn("Lane A", templates.CLAUDE_CHAT_HTML)
         self.assertIn('id="dev-login-btn"', templates.TRIAL_CHAT_HTML)
         self.assertIn("maybeShowDevLogin", templates.TRIAL_CHAT_HTML)
