@@ -26,12 +26,17 @@ from web_app.core import get_core as _core
 log = logging.getLogger(__name__)
 
 _TRIAL_NEW_CHAT_REQUEST_RE = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
+_TRIAL_NEW_CHAT_TOKEN_RE = re.compile(r"^[a-f0-9]{64}$")
 _TRIAL_NEW_CHAT_COMMIT_TTL = 24 * 60 * 60
+_TRIAL_NEW_CHAT_MAX_RECORDS = 2048
+_TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT = 64
+_TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT = 4
 _trial_new_chat_requests: dict[tuple[str, str], dict] = {}
 _trial_new_chat_sources: dict[tuple[str, str], dict] = {}
 
 
 def _trial_new_chat_session_id(agent_id: str, request_id: str) -> str:
+    """Derive the replay-stable ID; the signed commit binds it to source and lane."""
     digest = hashlib.sha256(f"{agent_id}\0{request_id}".encode()).hexdigest()[:24]
     return f"s-{agent_id}-{digest}"
 
@@ -40,20 +45,54 @@ def _is_trial_transition_session(agent_id: str, session_id: str) -> bool:
     return bool(agent_id) and session_id.startswith(f"s-{agent_id}-")
 
 
-def _prune_trial_new_chat_commits(now: float) -> None:
-    stale = {
-        id(record)
-        for record in _trial_new_chat_sources.values()
-        if now - float(record.get("created_at", 0)) > _TRIAL_NEW_CHAT_COMMIT_TTL
-    }
-    if not stale:
-        return
-    for key, record in list(_trial_new_chat_sources.items()):
-        if id(record) in stale:
+def _trial_new_chat_commit_token(core, record: dict) -> str:
+    payload = "\0".join(
+        (
+            record["agent_id"],
+            record["commit_request_id"],
+            record["previous_session_id"],
+            record["session_id"],
+            str(record["slot"]),
+        )
+    )
+    return hmac.new(
+        str(core.JWT_SECRET).encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _drop_trial_new_chat_commit(record: dict) -> None:
+    for key, candidate in list(_trial_new_chat_sources.items()):
+        if candidate is record:
             _trial_new_chat_sources.pop(key, None)
-    for key, record in list(_trial_new_chat_requests.items()):
-        if id(record) in stale:
+    for key, candidate in list(_trial_new_chat_requests.items()):
+        if candidate is record:
             _trial_new_chat_requests.pop(key, None)
+
+
+def _prune_trial_new_chat_commits(now: float) -> None:
+    for record in list(_trial_new_chat_sources.values()):
+        if now - float(record.get("created_at", 0)) > _TRIAL_NEW_CHAT_COMMIT_TTL:
+            _drop_trial_new_chat_commit(record)
+
+
+def _make_trial_new_chat_capacity(agent_id: str) -> bool:
+    records = list(_trial_new_chat_sources.values())
+    agent_records = [record for record in records if record["agent_id"] == agent_id]
+    if sum(not record["acknowledged"] for record in agent_records) >= _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT:
+        return False
+    while (
+        len(records) >= _TRIAL_NEW_CHAT_MAX_RECORDS
+        or len(agent_records) >= _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT
+    ):
+        candidates = [record for record in agent_records if record["acknowledged"]]
+        if len(records) >= _TRIAL_NEW_CHAT_MAX_RECORDS:
+            candidates = [record for record in records if record["acknowledged"]]
+        if not candidates:
+            return False
+        _drop_trial_new_chat_commit(min(candidates, key=lambda record: record["created_at"]))
+        records = list(_trial_new_chat_sources.values())
+        agent_records = [record for record in records if record["agent_id"] == agent_id]
+    return True
 
 
 def _trial_new_chat_response(record: dict, request_id: str, *, replayed: bool) -> dict:
@@ -63,6 +102,7 @@ def _trial_new_chat_response(record: dict, request_id: str, *, replayed: bool) -
         "trial": True,
         "request_id": request_id,
         "commit_request_id": record["commit_request_id"],
+        "commit_token": record["commit_token"],
         "previous_session_id": record["previous_session_id"],
         "session_id": record["session_id"],
         "replayed": replayed,
@@ -119,6 +159,7 @@ _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT = 640
 _FIRST_LOOK_PUBLIC_RATE_WINDOW_S = 60.0
 _FIRST_LOOK_PREFLIGHT_LIMIT = 30
 _FIRST_LOOK_SIGNAL_LIMIT = 20
+_FIRST_LOOK_NEW_CHAT_LIMIT = 8
 _PUBLIC_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _FIRST_LOOK_PUBLIC_RATE_LIMITER = SlidingWindowRateLimiter()
 
@@ -2042,8 +2083,11 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         body = {}
-    if bool(body.get("first_look_guest")):
-        auth_info, _, _ = core._first_look_guest_auth(request)
+    guest_mode = bool(body.get("first_look_guest"))
+    guest_id = ""
+    guest_quota_count = 0
+    if guest_mode:
+        auth_info, guest_id, guest_quota_count = core._first_look_guest_auth(request)
     else:
         auth_info = core._authenticate(request)
         if not auth_info:
@@ -2055,10 +2099,38 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
+    if guest_mode and not core._is_openrouter_model(model):
+        return web.json_response({"error": "Guest reset requires the shared demo model"}, status=400)
     requested_session_id = body.get("session_id", "")
     requested_slot = _normalize_chat_slot(body.get("slot"))
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
+        if guest_mode:
+            limited = _check_first_look_public_rate_limit(
+                request,
+                bucket="new-chat",
+                limit=_FIRST_LOOK_NEW_CHAT_LIMIT,
+            )
+            if limited is not None:
+                core._attach_first_look_guest_cookies(
+                    limited, request, guest_id, quota_count=guest_quota_count
+                )
+                return limited
+            session_id = f"s-{agent_id}-{secrets.token_hex(12)}"
+            response = web.json_response(
+                {
+                    "ok": True,
+                    "active_slot": 1,
+                    "trial": True,
+                    "guest": True,
+                    "session_id": session_id,
+                }
+            )
+            core._attach_first_look_guest_cookies(
+                response, request, guest_id, quota_count=guest_quota_count
+            )
+            return response
+
         request_id = str(body.get("request_id", "") or "").strip()
         if not _TRIAL_NEW_CHAT_REQUEST_RE.fullmatch(request_id):
             return web.json_response({"error": "Invalid new-chat request ID"}, status=400)
@@ -2088,12 +2160,18 @@ async def handle_chat_new(request: web.Request) -> web.Response:
                     {"error": "Source session already has a transition for another lane"},
                     status=409,
                 )
-            _trial_new_chat_requests[request_key] = record
             return web.json_response(
                 _trial_new_chat_response(record, request_id, replayed=True)
             )
 
+        if not _make_trial_new_chat_capacity(agent_id):
+            return web.json_response(
+                {"error": "Too many pending new-chat transitions", "retry_after": 60},
+                status=429,
+                headers={"Retry-After": "60"},
+            )
         record = {
+            "agent_id": agent_id,
             "commit_request_id": request_id,
             "previous_session_id": old_session,
             "session_id": _trial_new_chat_session_id(agent_id, request_id),
@@ -2101,6 +2179,7 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             "created_at": now,
             "acknowledged": False,
         }
+        record["commit_token"] = _trial_new_chat_commit_token(core, record)
         _trial_new_chat_requests[request_key] = record
         _trial_new_chat_sources[source_key] = record
         # This phase is intentionally non-destructive. The client must receive
@@ -2144,6 +2223,10 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     request_id = str(body.get("request_id", "") or "").strip()
     if not _TRIAL_NEW_CHAT_REQUEST_RE.fullmatch(request_id):
         return web.json_response({"error": "Invalid new-chat request ID"}, status=400)
+    commit_token = str(body.get("commit_token", "") or "").strip()
+    if not _TRIAL_NEW_CHAT_TOKEN_RE.fullmatch(commit_token):
+        return web.json_response({"error": "Invalid new-chat commit token"}, status=400)
+    slot = _normalize_chat_slot(body.get("slot")) or 1
     previous_session_id = core._resolve_trial_session_id(
         agent_id, str(body.get("previous_session_id", "") or "")
     )
@@ -2156,44 +2239,61 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid new-chat transition"}, status=400)
     request_key = (agent_id, request_id)
     source_key = (agent_id, previous_session_id)
+    _prune_trial_new_chat_commits(core.time.time())
     record = _trial_new_chat_requests.get(request_key)
     if record is None:
         record = _trial_new_chat_sources.get(source_key)
+    store_record = record is not None
     if record is None:
         expected_session_id = _trial_new_chat_session_id(agent_id, request_id)
         if session_id != expected_session_id:
             return web.json_response({"error": "Unknown new-chat transition"}, status=409)
         record = {
+            "agent_id": agent_id,
             "commit_request_id": request_id,
             "previous_session_id": previous_session_id,
             "session_id": session_id,
-            "slot": _normalize_chat_slot(body.get("slot")) or 1,
+            "slot": slot,
             "created_at": core.time.time(),
             "acknowledged": False,
         }
-        _trial_new_chat_sources[source_key] = record
+        expected_token = _trial_new_chat_commit_token(core, record)
+        if not hmac.compare_digest(commit_token, expected_token):
+            return web.json_response({"error": "Unknown new-chat transition"}, status=409)
+        record["commit_token"] = expected_token
+        store_record = _make_trial_new_chat_capacity(agent_id)
+        if store_record:
+            _trial_new_chat_sources[source_key] = record
     if (
         record["previous_session_id"] != previous_session_id
         or record["session_id"] != session_id
+        or record["slot"] != slot
+        or not hmac.compare_digest(record["commit_token"], commit_token)
     ):
         return web.json_response({"error": "New-chat transition does not match"}, status=409)
-    _trial_new_chat_requests[request_key] = record
+    if store_record:
+        _trial_new_chat_requests[request_key] = record
 
     if not record["acknowledged"]:
-        for name in (
-            "_session_tabs",
-            "_session_agent_map",
-            "_session_allowed_tabs",
-            "_session_profile_paths",
-            "_session_last_active",
-            "_chat_preview_generations",
-        ):
-            mapping = getattr(core, name, None)
-            if not isinstance(mapping, dict):
-                continue
-            value = mapping.pop(previous_session_id, None)
-            if value is not None:
-                mapping[session_id] = value
+        session_tabs = getattr(core, "_session_tabs", {})
+        # A late ACK must never replace resources already created for the new
+        # session. Keep the old resource tracked for normal stale cleanup.
+        destination_exists = isinstance(session_tabs, dict) and session_id in session_tabs
+        if not destination_exists:
+            for name in (
+                "_session_tabs",
+                "_session_agent_map",
+                "_session_allowed_tabs",
+                "_session_profile_paths",
+                "_session_last_active",
+                "_chat_preview_generations",
+            ):
+                mapping = getattr(core, name, None)
+                if not isinstance(mapping, dict):
+                    continue
+                value = mapping.pop(previous_session_id, None)
+                if value is not None:
+                    mapping.setdefault(session_id, value)
         core._delete_trial_session(previous_session_id)
         record["acknowledged"] = True
 
