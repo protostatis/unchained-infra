@@ -202,6 +202,26 @@ class TestWebTemplateContracts(unittest.TestCase):
         for href in ("#calculator", "#capability", "#start"):
             self.assertIn(f'href="{href}"', web.LANDING_HTML)
 
+    def test_landing_developer_navigation_exposes_lightweight_routes(self):
+        self.assertIn(
+            'id="landing-developer-toggle" aria-expanded="false" '
+            'aria-controls="landing-developer-links">For developers</button>',
+            web.LANDING_HTML,
+        )
+        self.assertIn(
+            'id="landing-developer-links" role="group" aria-label="Developer resources"',
+            web.LANDING_HTML,
+        )
+        self.assertIn('<a href="/unbrowser">unbrowser</a>', web.LANDING_HTML)
+        self.assertIn('<a href="/chrome-tax">Why lighter?</a>', web.LANDING_HTML)
+
+    def test_landing_developer_navigation_keyboard_contract(self):
+        self.assertIn("function setLandingDeveloperMenuOpen(open,focusFirst)", web.LANDING_HTML)
+        self.assertIn("event.key==='ArrowDown'", web.LANDING_HTML)
+        self.assertIn("developerMenu.querySelector('a').focus()", web.LANDING_HTML)
+        self.assertIn("developerMenuButton.focus()", web.LANDING_HTML)
+        self.assertIn("!developerMenu.contains(event.target)", web.LANDING_HTML)
+
     def test_landing_mobile_navigation_interaction_contract(self):
         self.assertIn("function setLandingMenuOpen(open,focusFirst)", web.LANDING_HTML)
         self.assertIn("landingMenu.querySelector('a').focus()", web.LANDING_HTML)
