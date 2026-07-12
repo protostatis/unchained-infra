@@ -19025,6 +19025,10 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 }
 </style>"""
 
+_FULL_WIDTH_CHAT_STYLE = """<style id="full-width-chat-shell">
+#app-shell #main{width:100%;max-width:none;margin:0}
+</style>"""
+
 _SIDEBAR_BODY = """<div id="app-shell">
 <aside id="sidebar">
   <div class="sidebar-head">
@@ -20466,8 +20470,8 @@ async function deleteArchive(id, el) {
 """
 
 
-def _inject_sidebar(html: str) -> str:
-    """Inject ChatGPT-style left sidebar for chat history."""
+def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
+    """Inject the chat app shell and, when supported, its history sidebar."""
     if 'id="sidebar"' in html:
         return html
 
@@ -20511,56 +20515,72 @@ def _inject_sidebar(html: str) -> str:
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
         quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
-    shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
-    runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
+    shell_body = _SIDEBAR_BODY if include_sidebar else '<div id="app-shell">\n'
+    shell_close = (
+        "</div>\n"
+        + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "")
+        + "</div>\n<script>"
+    )
+    runtime_js = (_SIDEBAR_JS if include_sidebar else "") + (
+        _AGENT_VIEW_JS if has_agent_view else ""
+    )
 
-    html = apply_template_replacements(
-        html,
-        (
-            TemplateReplacement(
-                "</head>",
-                _SIDEBAR_STYLE + (_AGENT_VIEW_STYLE if has_agent_view else "") + "\n</head>",
-                "sidebar style injection",
-            ),
-            TemplateReplacement(
-                "<!-- Main -->\n<div id=\"main\">",
-                _SIDEBAR_BODY + "<!-- Main -->\n<div id=\"main\">",
-                "sidebar shell injection",
-            ),
+    replacements = [
+        TemplateReplacement(
+            "</head>",
+            _SIDEBAR_STYLE
+            + (_FULL_WIDTH_CHAT_STYLE if not include_sidebar else "")
+            + (_AGENT_VIEW_STYLE if has_agent_view else "")
+            + "\n</head>",
+            "sidebar style injection",
+        ),
+        TemplateReplacement(
+            "<!-- Main -->\n<div id=\"main\">",
+            shell_body + "<!-- Main -->\n<div id=\"main\">",
+            "sidebar shell injection",
+        ),
+        TemplateReplacement(
+            '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
+            quick_new_nav,
+            "sidebar nav quick-new replacement",
+        ),
+        TemplateReplacement(
+            "</div>\n<script>",
+            shell_close,
+            "sidebar shell close injection",
+        ),
+        TemplateReplacement(
+            "document.getElementById('main').style.display = 'flex';",
+            "document.getElementById('app-shell').style.display = 'flex';\n"
+            "  document.getElementById('main').style.display = 'flex';",
+            "sidebar shell show hook",
+        ),
+        TemplateReplacement(
+            "document.getElementById('main').style.display = 'none';",
+            "document.getElementById('app-shell').style.display = 'none';\n"
+            "  document.getElementById('main').style.display = 'none';",
+            "sidebar shell hide hook",
+            expected_count=2,
+        ),
+        TemplateReplacement(
+            "\ncheckSession();\n",
+            runtime_js + "\ncheckSession();\n",
+            "sidebar runtime injection",
+        ),
+    ]
+    if include_sidebar:
+        replacements.insert(
+            2,
             TemplateReplacement(
                 '<div class="left">',
                 '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
                 "sidebar toggle injection",
             ),
-                TemplateReplacement(
-                    '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
-                    quick_new_nav,
-                    "sidebar nav quick-new replacement",
-                ),
-            TemplateReplacement(
-                "</div>\n<script>",
-                shell_close,
-                "sidebar shell close injection",
-            ),
-            TemplateReplacement(
-                "document.getElementById('main').style.display = 'flex';",
-                "document.getElementById('app-shell').style.display = 'flex';\n"
-                "  document.getElementById('main').style.display = 'flex';",
-                "sidebar shell show hook",
-            ),
-            TemplateReplacement(
-                "document.getElementById('main').style.display = 'none';",
-                "document.getElementById('app-shell').style.display = 'none';\n"
-                "  document.getElementById('main').style.display = 'none';",
-                "sidebar shell hide hook",
-                expected_count=2,
-            ),
-            TemplateReplacement(
-                "\ncheckSession();\n",
-                runtime_js + "\ncheckSession();\n",
-                "sidebar runtime injection",
-            ),
-        ),
+        )
+
+    html = apply_template_replacements(
+        html,
+        tuple(replacements),
         template_name="sidebar injection",
     )
 
@@ -20600,7 +20620,7 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar archive-nav cleanup",
         )
 
-    if "  loadHistory();\n}" in html:
+    if include_sidebar and "  loadHistory();\n}" in html:
         html = apply_template_replacements(
             html,
             (
@@ -20613,30 +20633,31 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar showMain hook injection",
         )
 
-    # `doNewChat` has two variants depending on whether server-backed slots are present.
-    for old_hook, new_hook, label in [
-        (
-            "  _syncSlotButtons();\n}",
-            "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
-            "sidebar refresh after local slot reset",
-        ),
-        (
-            "  await loadSlots();\n}",
-            "  await loadSlots();\n  loadSidebarHistory();\n}",
-            "sidebar refresh after server slot reset",
-        ),
-    ]:
-        if old_hook in html:
-            html = apply_template_replacements(
-                html,
-                (TemplateReplacement(old_hook, new_hook, label),),
-                template_name="sidebar new-chat hook injection",
+    if include_sidebar:
+        # `doNewChat` has two variants depending on whether server-backed slots are present.
+        for old_hook, new_hook, label in [
+            (
+                "  _syncSlotButtons();\n}",
+                "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
+                "sidebar refresh after local slot reset",
+            ),
+            (
+                "  await loadSlots();\n}",
+                "  await loadSlots();\n  loadSidebarHistory();\n}",
+                "sidebar refresh after server slot reset",
+            ),
+        ]:
+            if old_hook in html:
+                html = apply_template_replacements(
+                    html,
+                    (TemplateReplacement(old_hook, new_hook, label),),
+                    template_name="sidebar new-chat hook injection",
+                )
+                break
+        else:
+            raise TemplateTransformError(
+                "sidebar injection: expected a doNewChat completion hook to refresh sidebar history"
             )
-            break
-    else:
-        raise TemplateTransformError(
-            "sidebar injection: expected a doNewChat completion hook to refresh sidebar history"
-        )
 
     if _OLD_DELETE_ARCHIVE_JS in html:
         html = apply_template_replacements(
@@ -20654,10 +20675,7 @@ def _inject_sidebar(html: str) -> str:
     return html
 
 
-TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML)
-# Trial has no server-backed chat history — remove the sidebar history panel
-# so the UI does not show an empty/non-functional list.
-TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', '')
+TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML, include_sidebar=False)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
