@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import unittest
@@ -421,13 +422,59 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
         self.assertIn(r"%USERPROFILE%\unchained-agent\.env", html)
         self.assertIn('id="load-key-posix"', html)
         self.assertIn('id="load-key-windows"', html)
-        self.assertEqual(html.count("YOUR_UNCHAINED_API_KEY"), 6)
+        self.assertIn("Select-Object -First 1", html)
+        self.assertIn("Claude Desktop JSON does not expand shell variables", html)
+        self.assertIn("If it cannot expand environment variables", html)
+        self.assertIn("YOUR_UNCHAINED_API_KEY", html)
         self.assertNotIn("Sign in to auto-fill your API key", html)
         self.assertNotIn("YOUR_API_KEY", html)
         self.assertNotIn("/auth/me", html)
         self.assertNotIn("me.api_key", html)
         self.assertNotIn("copySnippet", html)
         self.assertNotIn("fillKey", html)
+
+    def test_mcp_shell_copy_text_uses_loaded_environment_variable(self):
+        from web_app import templates
+
+        html = templates.MCP_PAGE_HTML
+
+        def copied_text(snippet_id: str) -> str:
+            match = re.search(
+                rf'<pre class="code-block" id="{snippet_id}">(.*?)</pre>',
+                html,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(match, f"missing copied snippet {snippet_id}")
+            self.assertIn(f"copyCode('{snippet_id}',this)", html)
+            return match.group(1)
+
+        self.assertEqual(
+            copied_text("snippet-claude-code"),
+            """claude mcp add unchainedsky \\
+  https://api.unchainedsky.com/mcp \\
+  -t http \\
+  -H \"Authorization: Bearer $UNCHAINED_API_KEY\"""",
+        )
+        self.assertEqual(
+            copied_text("snippet-claude-code-windows"),
+            """claude mcp add unchainedsky `
+  https://api.unchainedsky.com/mcp `
+  -t http `
+  -H \"Authorization: Bearer $env:UNCHAINED_API_KEY\"""",
+        )
+        self.assertEqual(
+            copied_text("snippet-agent-lookup"),
+            'curl -s -H "Authorization: Bearer $UNCHAINED_API_KEY" '
+            "https://api.unchainedsky.com/api/agents | python3 -m json.tool",
+        )
+        self.assertEqual(
+            copied_text("snippet-agent-lookup-windows"),
+            'Invoke-RestMethod -Headers @{ Authorization = "Bearer '
+            '$env:UNCHAINED_API_KEY" } https://api.unchainedsky.com/api/agents '
+            "| ConvertTo-Json -Depth 5",
+        )
+        self.assertIn("Bearer YOUR_UNCHAINED_API_KEY", copied_text("snippet-claude-desktop"))
+        self.assertIn("Bearer YOUR_UNCHAINED_API_KEY", copied_text("snippet-other"))
 
 
 if __name__ == "__main__":
