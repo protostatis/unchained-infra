@@ -209,12 +209,12 @@ class TestTemplateTransforms(unittest.TestCase):
             templates.CHAT_CODEX_HTML,
         )
 
-    def test_agent_task_shell_is_query_isolated_and_adaptive(self):
+    def test_agent_task_shell_is_default_with_legacy_escape_and_adaptive(self):
         from web_app import templates
 
         html = templates.CLAUDE_CHAT_HTML
         runtime = templates._AGENT_VIEW_JS
-        self.assertIn("const AGENT_SHELL_DEFAULT = 'legacy';", runtime)
+        self.assertIn("const AGENT_SHELL_DEFAULT = 'task';", runtime)
         self.assertIn("value === 'task' || value === 'legacy'", runtime)
         self.assertIn("function setAgentShellConnectionLayout(browserAvailable)", runtime)
         self.assertIn("agent-shell-chat-only", runtime)
@@ -259,15 +259,222 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1"', html)
         self.assertIn("confirmation.classList.contains('open')", runtime)
         self.assertIn("agentViewReturnFocus", runtime)
+        self.assertIn("typeof globalThis._setActiveSlotSession === 'function'", runtime)
         self.assertIn("if (agentShellTaskEnabled && mobile)", runtime)
         self.assertIn("body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}", html)
         self.assertIn("agent-view-browser-positioned #app-shell #main", html)
+        self.assertIn("#main #topbar{z-index:20;overflow:visible!important}", html)
+        self.assertIn("agent-view-chat-expanded #main #modelrow", html)
+        self.assertIn("display:grid!important;grid-template-columns:max-content minmax(0,1fr)!important", html)
+        self.assertIn("const mobileExpanded = open && _agentViewIsMobile()", runtime)
         self.assertIn("completeAgentShellTurn('cancelled');", html)
         self.assertIn("completeAgentShellTurn('error');", html)
         self.assertIn("} finally {\n    completeAgentShellTurn('error');", html)
         self.assertIn("Task ended with an error", runtime)
         self.assertIn("@media(min-width:761px) and (hover:none)", html)
         self.assertIn("transition:none!important", html)
+
+    def test_default_task_shell_arranges_thread_toolbar_and_keeps_legacy_override(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Agent Task Shell runtime checks")
+
+        from web_app import templates
+
+        runtime = templates._AGENT_VIEW_JS
+
+        def function_source(name, next_name):
+            start = runtime.index(f"function {name}(")
+            end = runtime.index(f"\nfunction {next_name}(", start)
+            return runtime[start:end]
+
+        mode_source = function_source("agentShellModeFromLocation", "setAgentShellConnectionLayout")
+        arrange_source = function_source("arrangeAgentChatToolbar", "syncAgentLanePicker")
+        initialize_source = function_source("initializeAgentShellExperiment", "maybeInitializeAgentShell")
+        harness = r"""
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  contains(value) { return this.values.has(value); }
+  toggle(value, force) {
+    const enabled = typeof force === 'boolean' ? force : !this.values.has(value);
+    if (enabled) this.values.add(value); else this.values.delete(value);
+    return enabled;
+  }
+}
+class FakeElement {
+  constructor(id) { this.id = id; this.children = []; this.parentElement = null; this.attrs = {}; }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+  appendChild(child) {
+    if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child);
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  }
+  insertBefore(child, before) {
+    if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(item => item !== child);
+    child.parentElement = this;
+    const index = this.children.indexOf(before);
+    this.children.splice(index < 0 ? this.children.length : index, 0, child);
+    return child;
+  }
+  querySelector(selector) { return selector === '.nav' ? nav : null; }
+}
+const body = {classList: new FakeClassList()};
+const topbar = new FakeElement('topbar');
+const nav = new FakeElement('nav');
+const picker = new FakeElement('slotbar');
+const newChat = new FakeElement('new-chat');
+const history = new FakeElement('chat-card-history');
+topbar.appendChild(nav);
+const elements = new Map([
+  ['slotbar', picker],
+  ['chat-card-history', history],
+]);
+globalThis.document = {
+  body,
+  querySelector(selector) {
+    if (selector === '#main #topbar') return topbar;
+    if (selector === '#main .topbar-new') return newChat;
+    return null;
+  },
+  createElement() { return new FakeElement(''); },
+  getElementById(id) { return elements.get(id) || null; },
+};
+globalThis.location = {search: ''};
+const AGENT_SHELL_DEFAULT = 'task';
+let agentShellTaskEnabled = false;
+function setAgentShellPhase() {}
+"""
+        checks = r"""
+function expect(condition, message) { if (!condition) throw new Error(message); }
+expect(agentShellModeFromLocation() === 'task', 'task shell is not the default');
+location.search = '?provider=opencode-cli&shell=legacy';
+expect(agentShellModeFromLocation() === 'legacy', 'explicit legacy override was ignored');
+initializeAgentShellExperiment();
+expect(!agentShellTaskEnabled, 'legacy override enabled the task shell');
+expect(!body.classList.contains('agent-shell-task'), 'legacy override kept the task shell body class');
+expect(!topbar.children.some(child => child.id === 'agent-chat-primary-tools'), 'legacy override created the task toolbar');
+location.search = '?provider=opencode-cli';
+initializeAgentShellExperiment();
+expect(agentShellTaskEnabled, 'default route did not enable task shell');
+expect(body.classList.contains('agent-shell-task'), 'task shell body class is missing');
+const group = topbar.children.find(child => child.id === 'agent-chat-primary-tools');
+expect(!!group, 'chat navigation toolbar was not created');
+expect(group.children[0] === picker, 'thread picker is not first in the toolbar');
+expect(group.children[1] === newChat, 'New Chat is not second in the toolbar');
+expect(group.children[2] === history, 'History is not third in the toolbar');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + mode_source + arrange_source + initialize_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_agent_view_session_hook_is_optional_for_codex_template(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Agent View runtime checks")
+
+        from web_app import templates
+
+        runtime = templates._AGENT_VIEW_JS
+        start = runtime.index("const _agentViewSetActiveSlotSession")
+        end = runtime.index("\ndocument.addEventListener('click'", start)
+        hook_source = runtime[start:end]
+        harness = r"""
+let agentViewBoundSessionId = '';
+globalThis.document = {body: {classList: {contains() { return false; }}}};
+globalThis.setTimeout = function(callback) { callback(); };
+function syncAgentLanePicker() {}
+function refreshAgentView() {}
+"""
+        checks = r"""
+if (typeof globalThis._setActiveSlotSession !== 'function') {
+  throw new Error('optional session hook was not installed');
+}
+globalThis._setActiveSlotSession('s-codex-test');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + hook_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_trial_thread_picker_preserves_rich_slot_labels(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Thread picker runtime checks")
+
+        from web_app import templates
+
+        runtime = templates._AGENT_VIEW_JS
+        start = runtime.index("function syncAgentLanePicker()")
+        end = runtime.index("\nfunction toggleAgentLanePicker", start)
+        sync_source = runtime[start:end]
+        harness = r"""
+class FakeClassList {
+  constructor(active) { this.active = active; }
+  contains(value) { return value === 'active' && this.active; }
+}
+class FakeChild {
+  constructor(className, text) { this.className = className; this.textContent = text; this.attrs = {}; }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+}
+class FakeButton {
+  constructor(id, active) {
+    this.id = id;
+    this.classList = new FakeClassList(active);
+    this.dataset = {};
+    this.attrs = {};
+    this.children = [new FakeChild('slot-name', 'Chat ' + id.slice(4)), new FakeChild('slot-preview', 'No task yet')];
+  }
+  querySelector(selector) {
+    if (selector === '.slot-name') return this.children.find(child => child.className === 'slot-name') || null;
+    if (selector === '.slot-preview') return this.children.find(child => child.className === 'slot-preview') || null;
+    if (selector === '.lane-option-label') return this.children.find(child => child.className === 'lane-option-label') || null;
+    return null;
+  }
+  appendChild(child) { this.children.push(child); return child; }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+  get textContent() { return this.children.map(child => child.textContent).join(' '); }
+  set textContent(value) { this.children = [new FakeChild('', String(value))]; }
+}
+const buttons = [new FakeButton('slot1', true), new FakeButton('slot2', false), new FakeButton('slot3', false)];
+const picker = {querySelector(selector) { return selector === 'button[id^="slot"].active' ? buttons[0] : null; }};
+const current = {textContent: ''};
+const toggle = {attrs: {}, title: '', setAttribute(name, value) { this.attrs[name] = String(value); }};
+const elements = new Map([['slotbar', picker], ['lane-picker-current', current], ['lane-picker-toggle', toggle]]);
+buttons.forEach(button => elements.set(button.id, button));
+globalThis.document = {
+  getElementById(id) { return elements.get(id) || null; },
+  createElement() { return new FakeChild('', ''); },
+};
+"""
+        checks = r"""
+const nameNode = buttons[0].querySelector('.slot-name');
+const previewNode = buttons[0].querySelector('.slot-preview');
+syncAgentLanePicker();
+if (buttons[0].querySelector('.slot-name') !== nameNode || buttons[0].querySelector('.slot-preview') !== previewNode) {
+  throw new Error('rich trial slot labels were destroyed');
+}
+if (buttons[0].querySelector('.lane-option-label').textContent !== '1') throw new Error('compact label missing');
+previewNode.textContent = 'Latest browser task';
+syncAgentLanePicker();
+if (buttons[0].dataset.laneDetail !== 'Latest browser task') throw new Error('preview detail did not refresh');
+if (!buttons[0].attrs['aria-label'].includes('Latest browser task')) throw new Error('accessible label is stale');
+if (current.textContent !== '1') throw new Error('active Thread number is wrong');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + sync_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_agent_view_state_transitions_execute_consistently(self):
         node = shutil.which("node")
@@ -314,7 +521,7 @@ globalThis.window = {
   addEventListener() {},
 };
 globalThis.requestAnimationFrame = function() {};
-globalThis.location = {search: '', protocol: 'https:', host: 'example.test'};
+globalThis.location = {search: '?shell=legacy', protocol: 'https:', host: 'example.test'};
 const sessionValues = new Map();
 globalThis.sessionStorage = {
   getItem(key) { return sessionValues.get(key) || null; },
@@ -414,6 +621,10 @@ expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not 
         self.assertNotIn("function loadSidebarHistory()", trial)
         self.assertIn('class="topbar-new"', trial)
         self.assertIn('id="full-width-chat-shell"', trial)
+        self.assertIn('<div id="slotbar" role="group" aria-label="Chat sessions">', trial)
+        self.assertEqual(trial.count('id="lane-picker-toggle"'), 1)
+        self.assertIn('id="chat-card-history" class="chat-size-btn" aria-label="Open chat archives"', trial)
+        self.assertIn('onclick="openArchives()"', trial)
 
         for html in (
             templates.CLAUDE_CHAT_HTML,

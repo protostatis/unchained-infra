@@ -97,8 +97,11 @@ The model selected in the local UI chooses the corresponding installed CLI.
 For example, open:
 
 ```text
-http://localhost:8080/local?provider=opencode-cli&shell=task
+http://localhost:8080/local?provider=opencode-cli
 ```
+
+The adaptive Agent Task Shell is the default. Add `&shell=legacy` when a test
+specifically needs the previous chat-first layout.
 
 `chat_agent_cli.py` defaults to the production server when
 `UNCHAINED_SERVER` is omitted. Always set all three localhost routing
