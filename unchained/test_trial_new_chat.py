@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+
+from aiohttp import web as aiohttp_web
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -305,6 +308,7 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         expired_data = json.loads(expired.body.decode())
         self.assertEqual(expired_data["recovery_decision"], "source")
         self.assertEqual(expired_data["recovery_session_id"], old_session)
+        self.assertTrue(expired_data["recovery_terminal"])
         core._delete_trial_session.assert_not_called()
         self.assertEqual(chat_flow._trial_new_chat_requests, {})
         self.assertEqual(chat_flow._trial_new_chat_sources, {})
@@ -402,6 +406,138 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
             {data["session_id"]: {"migrated-tab"}},
         )
         self.assertEqual(deleted, [old_session])
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_ttl_pruned_status_falls_back_to_destination_without_mutation(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        request_id = "request-0000000000000008"
+        old_session = "s-trial-agent-ttl-pruned"
+        core = self._core()
+        core._session_tabs[old_session] = "source-tab"
+        core._session_agent_map[old_session] = "source-agent"
+        mock_core.return_value = core
+        reservation = await handle_chat_new(self._new_request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+
+        recovery_time = (
+            data["commit_expires_at"] + chat_flow._TRIAL_NEW_CHAT_STATUS_TTL + 1
+        )
+        chat_flow._prune_trial_new_chat_statuses(recovery_time)
+        core.time = SimpleNamespace(time=lambda: recovery_time)
+        recovery = await handle_chat_new_ack(
+            self._ack_request(
+                request_id, old_session, data["session_id"], data["commit_token"]
+            )
+        )
+        recovery_data = json.loads(recovery.body.decode())
+
+        self.assertEqual(recovery.status, 409)
+        self.assertTrue(recovery_data["recovery_terminal"])
+        self.assertEqual(recovery_data["recovery_decision"], "destination")
+        self.assertEqual(recovery_data["recovery_session_id"], data["session_id"])
+        self.assertEqual(core._session_tabs, {old_session: "source-tab"})
+        self.assertEqual(core._session_agent_map, {old_session: "source-agent"})
+        core._delete_trial_session.assert_not_called()
+        self.assertNotIn(
+            ("trial-agent", "request-0000000000000008"),
+            chat_flow._trial_new_chat_requests,
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_cap_evicted_status_falls_back_to_destination_without_mutation(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        clock = [1234.5]
+        core = self._core()
+        core.time = SimpleNamespace(time=lambda: clock[0])
+        old_session = "s-trial-agent-cap-evicted"
+        core._session_tabs[old_session] = "source-tab"
+        core._session_agent_map[old_session] = "source-agent"
+        mock_core.return_value = core
+        first = await handle_chat_new(
+            self._new_request("request-0000000000000009", old_session)
+        )
+        first_data = json.loads(first.body.decode())
+
+        clock[0] += 1
+        with patch.object(chat_flow, "_TRIAL_NEW_CHAT_STATUS_MAX_RECORDS", 1):
+            second = await handle_chat_new(
+                self._new_request(
+                    "request-0000000000000030", "s-trial-agent-newer-status"
+                )
+            )
+        self.assertEqual(second.status, 200)
+        self.assertFalse(
+            Path(
+                chat_flow._trial_new_chat_status_path(first_data["commit_token"])
+            ).exists()
+        )
+
+        recovery = await handle_chat_new_ack(
+            self._ack_request(
+                "request-0000000000000009",
+                old_session,
+                first_data["session_id"],
+                first_data["commit_token"],
+            )
+        )
+        recovery_data = json.loads(recovery.body.decode())
+
+        self.assertEqual(recovery.status, 409)
+        self.assertTrue(recovery_data["recovery_terminal"])
+        self.assertEqual(recovery_data["recovery_decision"], "destination")
+        self.assertEqual(
+            recovery_data["recovery_session_id"], first_data["session_id"]
+        )
+        self.assertEqual(core._session_tabs, {old_session: "source-tab"})
+        self.assertEqual(core._session_agent_map, {old_session: "source-agent"})
+        core._delete_trial_session.assert_not_called()
+        self.assertNotIn(
+            ("trial-agent", "request-0000000000000009"),
+            chat_flow._trial_new_chat_requests,
+        )
+
+    async def test_status_cleanup_context_prunes_and_awaits_its_task(self):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new
+
+        core = self._core()
+        with patch("web_app.handlers.chat_flow._core", return_value=core):
+            reservation = await handle_chat_new(
+                self._new_request(
+                    "request-0000000000000031", "s-trial-agent-cleanup"
+                )
+            )
+        self.assertEqual(reservation.status, 200)
+        self.assertTrue(
+            list(Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json"))
+        )
+
+        app = aiohttp_web.Application()
+        app.cleanup_ctx.append(chat_flow.trial_new_chat_status_cleanup_context)
+        runner = aiohttp_web.AppRunner(app)
+        cleanup_task = None
+        try:
+            await runner.setup()
+            cleanup_task = app[chat_flow._TRIAL_NEW_CHAT_STATUS_CLEANUP_TASK_KEY]
+            await asyncio.sleep(0.01)
+            self.assertEqual(
+                list(Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json")),
+                [],
+            )
+            self.assertFalse(cleanup_task.done())
+        finally:
+            await runner.cleanup()
+
+        self.assertIsNotNone(cleanup_task)
+        self.assertTrue(cleanup_task.done())
+        self.assertNotIn(
+            "trial-new-chat-status-cleanup",
+            {task.get_name() for task in asyncio.all_tasks()},
+        )
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_competing_requests_for_same_source_replay_one_transition(self, mock_core):
@@ -566,7 +702,7 @@ class TestTrialNewChatTemplate(unittest.TestCase):
         self.assertIn("data.commit_request_id", html)
         self.assertIn("data.commit_token", html)
         self.assertIn("[0-9]{1,12}\\.[0-9]{1,12}\\.[a-f0-9]{64}", html)
-        self.assertIn("data.error === 'New-chat commit token expired'", html)
+        self.assertIn("data.recovery_terminal === true", html)
         self.assertIn("await recoverExpiredNewChat(pending, outcome);", html)
         self.assertIn("decision === 'destination'", html)
         self.assertIn("Your previous chat was restored; select New Chat to try again.", html)
@@ -692,10 +828,12 @@ function restoreCurrentChat(sid) {{
       ackCalls += 1;
       if (ackMode === 'lost') throw new Error('ack response lost');
       if (ackMode === 'expired-source') return {{ok:false, status:409, json:async () => ({{
-        error:'New-chat commit token expired', recovery_decision:'source', recovery_session_id:body.previous_session_id,
+        error:'New-chat commit token expired', recovery_terminal:true,
+        recovery_decision:'source', recovery_session_id:body.previous_session_id,
       }})}};
       if (ackMode === 'expired-destination') return {{ok:false, status:409, json:async () => ({{
-        error:'New-chat commit token expired', recovery_decision:'destination', recovery_session_id:body.session_id,
+        error:'New-chat transition status unavailable', recovery_terminal:true,
+        recovery_decision:'destination', recovery_session_id:body.session_id,
       }})}};
       return {{ok:true, json:async () => ({{
         ok:true, acknowledged:true, request_id:body.request_id,
