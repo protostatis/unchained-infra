@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "73e9a4617ae353aca3ede2434ac8ae81c2e9f789a397279e49a746e25447197c",
+            "2001c272d2240c94c9053b322f8de4726598d6b979cca98730129927167cb53c",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -52,6 +52,25 @@ class TestSemanticMirrorParsing(unittest.TestCase):
         self.assertIn("role === 'searchbox' || role === 'combobox'", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("email|tel|password|file|hidden", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("canvas|video|iframe|frame|object|embed", INSTALL_MIRROR_EXPRESSION)
+
+    def test_capture_protocol_preserves_bounded_viewport_critical_styles(self):
+        self.assertIn("MAX_CRITICAL_STYLE_BYTES = 384 * 1024", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("function applyCriticalComputedStyle", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("if (!isInViewport(source)) return", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("computed.getPropertyValue(property)", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("criticalStylesTruncated", INSTALL_MIRROR_EXPRESSION)
+        for property_name in (
+            "'display'",
+            "'width'",
+            "'height'",
+            "'flex'",
+            "'grid-template-columns'",
+            "'font-size'",
+            "'fill'",
+            "'stroke'",
+        ):
+            self.assertIn(property_name, INSTALL_MIRROR_EXPRESSION)
 
     def test_action_expression_binds_sequence_and_keeps_server_safety_guards(self):
         expression = mirror_action_expression(
@@ -208,6 +227,41 @@ class TestSemanticMirrorStream(unittest.IsolatedAsyncioTestCase):
         await stream.aclose()
         self.assertEqual(run_js.await_args_list[0].args[2], INSTALL_MIRROR_EXPRESSION)
         self.assertEqual(run_js.await_args_list[1].args[2], DRAIN_MIRROR_EXPRESSION)
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_transient_initial_chunk_error_reinstalls_and_recovers(self, run_js):
+        snapshot = {"url": "https://example.test", "hash": "fnv1a-recovered"}
+        run_js.side_effect = [
+            _encoded({"__unchainedMirrorChunks": 1, "length": 12}),
+            json.dumps("short"),
+            _encoded(snapshot),
+        ]
+        stream = stream_semantic_mirror("agent", "tab")
+
+        self.assertEqual(
+            await anext(stream),
+            {"type": "snapshot", "snapshot": snapshot, "resync": False},
+        )
+        await stream.aclose()
+        self.assertEqual(
+            [call.args[2] for call in run_js.await_args_list],
+            [
+                INSTALL_MIRROR_EXPRESSION,
+                run_js.await_args_list[1].args[2],
+                INSTALL_MIRROR_EXPRESSION,
+            ],
+        )
+        self.assertIn("state.readOutbound(0, 12, true)", run_js.await_args_list[1].args[2])
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_initial_capture_retries_are_bounded(self, run_js):
+        run_js.side_effect = RuntimeError("relay unavailable")
+        stream = stream_semantic_mirror("agent", "tab")
+
+        with self.assertRaisesRegex(RuntimeError, "relay unavailable"):
+            await anext(stream)
+
+        self.assertEqual(run_js.await_count, 3)
 
     @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
     async def test_idle_patch_is_not_yielded(self, run_js):

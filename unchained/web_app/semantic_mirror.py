@@ -20,6 +20,8 @@ MIRROR_CHUNK_CHARS = 128 * 1024
 MAX_MIRROR_PAYLOAD_CHARS = 4 * 1024 * 1024
 DEFAULT_POLL_INTERVAL = 0.5
 MAX_CONSECUTIVE_CAPTURE_ERRORS = 3
+INITIAL_CAPTURE_ATTEMPTS = 3
+INITIAL_CAPTURE_RETRY_DELAY = 0.2
 
 # Each Agent View WebSocket connection gets its own isolated mirror state in the
 # source Chrome tab.  Without per-connection isolation, every new connection
@@ -96,6 +98,23 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const MAX_SCROLL_POSITIONS = 500;
   const INLINE_RESULT_CHARS = 192 * 1024;
   const VIEWPORT_BUDGET_RESERVE = 0.4;
+  const MAX_CRITICAL_STYLE_BYTES = 384 * 1024;
+  const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024;
+  const CRITICAL_STYLE_PROPERTIES = [
+    'display', 'position', 'box-sizing',
+    'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+    'top', 'right', 'bottom', 'left',
+    'margin', 'padding', 'border', 'border-radius',
+    'flex', 'flex-flow', 'align-items', 'align-self', 'justify-content', 'justify-self', 'gap',
+    'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
+    'overflow-x', 'overflow-y', 'object-fit', 'object-position',
+    'transform', 'transform-origin', 'opacity', 'visibility', 'z-index',
+    'fill', 'stroke', 'stroke-width',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+    'letter-spacing', 'white-space', 'text-align',
+    'color', 'background-color', 'background-image', 'background-size', 'background-position',
+    'aspect-ratio'
+  ];
   const OMITTED_TAGS = new Set([
     'script', 'noscript', 'base', 'object', 'embed', 'applet', 'frame',
     'frameset', 'iframe', 'portal'
@@ -388,6 +407,48 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     }
   }
 
+  function applyCriticalComputedStyle(source, clone, budget, priority) {
+    if (!priority || !source || source.nodeType !== Node.ELEMENT_NODE) return;
+    if (!budget || !Number.isFinite(budget.criticalStyleLimit)) return;
+    if (/^(?:html|head|style|link|meta|title|script|noscript)$/.test(source.localName)) return;
+    if (!isInViewport(source)) return;
+
+    let computed;
+    try {
+      computed = getComputedStyle(source);
+    } catch (_error) {
+      return;
+    }
+    if (!computed || computed.display === 'none' || computed.visibility === 'hidden') return;
+
+    const declarations = [];
+    let nodeBytes = 0;
+    for (const property of CRITICAL_STYLE_PROPERTIES) {
+      let value = '';
+      try {
+        value = safeCss(computed.getPropertyValue(property));
+      } catch (_error) {
+        value = '';
+      }
+      if (!value) continue;
+      const declaration = property + ':' + value + '!important;';
+      const cost = byteLength(declaration);
+      if (nodeBytes + cost > MAX_CRITICAL_STYLE_BYTES_PER_NODE) break;
+      if (budget.criticalStyleBytes + cost > budget.criticalStyleLimit ||
+          budget.bytes + cost > budget.limit) {
+        budget.criticalStyleTruncated = true;
+        break;
+      }
+      declarations.push(declaration);
+      nodeBytes += cost;
+      budget.criticalStyleBytes += cost;
+      budget.bytes += cost;
+    }
+    if (!declarations.length) return;
+    const existing = safeCss(clone.getAttribute('style') || '');
+    clone.setAttribute('style', existing + (existing && !existing.trim().endsWith(';') ? ';' : '') + declarations.join(''));
+  }
+
   function shallowSanitizedClone(source, budget, fidelity, priority = true) {
     if (/^(?:canvas|video|iframe|frame|object|embed)$/.test(source.localName)) {
       const rect = source.getBoundingClientRect();
@@ -419,6 +480,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     }
     for (const attribute of Array.from(clone.attributes || [])) clone.removeAttributeNode(attribute);
     populateSafeAttributes(source, clone, budget, priority);
+    applyCriticalComputedStyle(source, clone, budget, priority);
     const id = idFor(source);
     if (!id) return null;
     clone.setAttribute('data-ucm-id', id);
@@ -634,6 +696,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     shadowRoots: 0,
     omittedAdoptedStyleSheets: 0,
     omittedSensitiveFields: 0,
+    criticalStyleBytes: 0,
+    criticalStylesTruncated: false,
     truncated: false
   };
   const priorityNodes = collectViewportPriorityNodes();
@@ -645,6 +709,9 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     nonPriorityLimit: Math.floor(captureLimit * (1 - VIEWPORT_BUDGET_RESERVE)),
     priorityNodes,
     nodes: 0,
+    criticalStyleBytes: 0,
+    criticalStyleLimit: MAX_CRITICAL_STYLE_BYTES,
+    criticalStyleTruncated: false,
     truncated: false
   };
   const htmlClone = document.documentElement ? cloneSanitized(document.documentElement, budget, fidelity) : null;
@@ -652,6 +719,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const bodyClone = htmlClone ? Array.from(htmlClone.children).find((child) => child.localName === 'body') : null;
   state.headId = document.head ? state.nodeToId.get(document.head) || '' : '';
   fidelity.truncated = budget.truncated || state.overflow;
+  fidelity.criticalStyleBytes = budget.criticalStyleBytes;
+  fidelity.criticalStylesTruncated = budget.criticalStyleTruncated;
 
   const adoptedResult = serializeAdoptedStyleSheets(priorityNodes);
   const adoptedStyles = adoptedResult.entries;
@@ -922,7 +991,15 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     for (const element of state.replaceRoots) {
       const targetId = state.nodeToId.get(element);
       if (!targetId || !element.isConnected) continue;
-      const fragmentBudget = { bytes: 0, limit: MAX_FRAGMENT_BYTES, nodes: 0, truncated: false };
+      const fragmentBudget = {
+        bytes: 0,
+        limit: MAX_FRAGMENT_BYTES,
+        nodes: 0,
+        criticalStyleBytes: 0,
+        criticalStyleLimit: Math.min(MAX_CRITICAL_STYLE_BYTES, Math.floor(MAX_FRAGMENT_BYTES * 0.5)),
+        criticalStyleTruncated: false,
+        truncated: false
+      };
       const clone = cloneSanitized(element, fragmentBudget, null);
       if (!clone || fragmentBudget.truncated || state.overflow) return resetPayload(previousSeq, nextSeq);
       const html = clone.outerHTML;
@@ -938,7 +1015,15 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
         operations.push({ op: 'remove', targetId });
         continue;
       }
-      const attributeBudget = { bytes: 0, limit: MAX_FRAGMENT_BYTES, nodes: 0, truncated: false };
+      const attributeBudget = {
+        bytes: 0,
+        limit: MAX_FRAGMENT_BYTES,
+        nodes: 0,
+        criticalStyleBytes: 0,
+        criticalStyleLimit: MAX_CRITICAL_STYLE_BYTES_PER_NODE,
+        criticalStyleTruncated: false,
+        truncated: false
+      };
       const clone = shallowSanitizedClone(element, attributeBudget, null);
       if (!clone || attributeBudget.truncated) return resetPayload(previousSeq, nextSeq);
       operations.push({ op: 'attributes', targetId, attributes: attributesObject(clone) });
@@ -1431,6 +1516,36 @@ async def execute_semantic_action(
         return await run()
 
 
+async def _capture_initial_snapshot(
+    agent_id: str,
+    tab_id: str,
+    *,
+    relay_host: str,
+    relay_port: int,
+    operation_lock: asyncio.Lock | None,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
+) -> dict[str, Any]:
+    """Retry a full mirror install after transient relay or chunk failures."""
+    for attempt in range(1, INITIAL_CAPTURE_ATTEMPTS + 1):
+        try:
+            return await evaluate_mirror_payload(
+                agent_id,
+                tab_id,
+                build_install_mirror_expression(mirror_key),
+                relay_host,
+                relay_port,
+                operation_lock=operation_lock,
+                mirror_key=mirror_key,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if attempt >= INITIAL_CAPTURE_ATTEMPTS:
+                raise
+            await asyncio.sleep(INITIAL_CAPTURE_RETRY_DELAY * attempt)
+    raise RuntimeError("semantic mirror initial capture attempts exhausted")
+
+
 async def stream_semantic_mirror(
     agent_id: str,
     tab_id: str,
@@ -1455,15 +1570,13 @@ async def stream_semantic_mirror(
     if poll_interval <= 0:
         raise ValueError("poll_interval must be greater than zero")
 
-    install_expr = build_install_mirror_expression(mirror_key)
     drain_expr = build_drain_mirror_expression(mirror_key)
 
-    snapshot = await evaluate_mirror_payload(
+    snapshot = await _capture_initial_snapshot(
         agent_id,
         tab_id,
-        install_expr,
-        relay_host,
-        relay_port,
+        relay_host=relay_host,
+        relay_port=relay_port,
         operation_lock=operation_lock,
         mirror_key=mirror_key,
     )
@@ -1498,12 +1611,11 @@ async def stream_semantic_mirror(
                 raise
             continue
         if patch.get("resetRequired"):
-            snapshot = await evaluate_mirror_payload(
+            snapshot = await _capture_initial_snapshot(
                 agent_id,
                 tab_id,
-                install_expr,
-                relay_host,
-                relay_port,
+                relay_host=relay_host,
+                relay_port=relay_port,
                 operation_lock=operation_lock,
                 mirror_key=mirror_key,
             )

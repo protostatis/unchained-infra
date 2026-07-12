@@ -1417,7 +1417,14 @@ async def handle_dev_auth(request: web.Request) -> web.Response:
     token = core.create_session_token(user["user_id"], email)
     agent_id = f"claude-{core._key_hash(user['api_key'])}"
 
-    resp = web.json_response({"ok": True, "agent_id": agent_id, "email": email})
+    resp = web.json_response(
+        {
+            "ok": True,
+            "user_id": user["user_id"],
+            "agent_id": agent_id,
+            "email": email,
+        }
+    )
     core._set_session_cookie(resp, token, request)
     return resp
 
@@ -1691,6 +1698,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "authenticated": True,
+                "user_id": auth_info.get("user_id", ""),
                 "email": email,
                 "agent_id": auth_info.get("agent_id", ""),
                 "user_type": user_type,
@@ -1734,6 +1742,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                 return web.json_response(
                     {
                         "authenticated": True,
+                        "user_id": user.get("user_id", ""),
                         "email": session["email"],
                         "agent_id": agent_id,
                         "user_type": user.get("user_type", "claude"),

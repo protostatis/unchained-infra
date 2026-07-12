@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import unittest
@@ -51,12 +52,13 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('id="modern-chat-theme"', templates.CHAT_CODEX_HTML)
         self.assertIn('id="playful-chat-skin"', templates.TRIAL_CHAT_HTML)
         self.assertIn('id="playful-chat-skin"', templates.CLAUDE_CHAT_HTML)
-        self.assertIn("Lane A", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Chat 1", templates.TRIAL_CHAT_HTML)
         self.assertIn("Lane A", templates.CLAUDE_CHAT_HTML)
         self.assertIn('id="dev-login-btn"', templates.TRIAL_CHAT_HTML)
         self.assertIn("maybeShowDevLogin", templates.TRIAL_CHAT_HTML)
         self.assertIn('class="topbar-new"', templates.TRIAL_CHAT_HTML)
         self.assertIn('class="topbar-new"', templates.CLAUDE_CHAT_HTML)
+        self.assertIn("text-decoration:none!important", templates.TRIAL_CHAT_HTML)
         self.assertIn('id="sidebar"', templates.CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
@@ -97,12 +99,16 @@ class TestTemplateTransforms(unittest.TestCase):
         from web_app import templates
 
         html = templates.CHAT_CLAUDE_SDK_HTML
-        controls = html.split('id="agent-view-chat-controls"', 1)[1].split("</span>", 1)[0]
+        controls = html.split('id="agent-view-chat-controls"', 1)[1].split(
+            '<a href="#" onclick="doDisconnect();return false">', 1
+        )[0]
         self.assertIn('<button type="button" id="chat-card-expand"', controls)
         self.assertIn('<button type="button" id="chat-card-exit"', controls)
         self.assertIn('<button type="button" id="chat-card-minimize"', controls)
         self.assertNotIn("<a ", controls)
-        self.assertEqual(controls.count('<svg viewBox="0 0 16 16"'), 3)
+        self.assertEqual(controls.count('<svg viewBox="0 0 16 16"'), 4)
+        self.assertIn('id="chat-card-history"', controls)
+        self.assertIn('title="Chat history"', controls)
         self.assertIn('title="Expand chat"', controls)
         self.assertIn('title="Default chat size"', controls)
         self.assertIn('title="Minimize chat"', controls)
@@ -119,7 +125,7 @@ class TestTemplateTransforms(unittest.TestCase):
         html = templates.CHAT_CLAUDE_SDK_HTML
         local_html = templates.CLAUDE_CHAT_HTML
         self.assertIn(
-            'role="group" aria-label="Chat panel controls"',
+            'role="group" aria-label="Same conversation controlling browser preview"',
             html,
         )
         self.assertIn(
@@ -127,7 +133,7 @@ class TestTemplateTransforms(unittest.TestCase):
             html,
         )
         self.assertIn(".chat-size-btn{width:44px;min-width:44px;height:44px}", html)
-        self.assertIn(".agent-view-foot{display:none}", html)
+        self.assertIn(".agent-view-foot,.agent-view-chat-context{display:none}", html)
         self.assertIn(
             "body.agent-view-open.chat-minimized .agent-view-chat-restore{display:none!important}",
             html,
@@ -153,6 +159,28 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('placeholder="Ask anything..."', local_html)
         self.assertNotIn('placeholder="Ask the agent anything..."', local_html)
 
+    def test_agent_view_uses_browser_preview_copy_without_exposing_diagnostics(self):
+        from web_app import templates
+
+        lane_templates = {
+            "Claude CLI": templates.CLAUDE_CHAT_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+        }
+        for lane, html in lane_templates.items():
+            with self.subTest(lane=lane):
+                self.assertIn(">Browser Preview</a>", html)
+                self.assertIn("<strong>Browser Preview</strong>", html)
+                self.assertIn("<strong>Same conversation</strong>", html)
+                self.assertIn("Controls this preview", html)
+                self.assertIn("Current page", html)
+                self.assertNotIn("Shared semantic browser", html)
+                self.assertNotIn("semantic://", html)
+                self.assertIn(".agent-view-foot{display:none", html)
+                self.assertIn('id="agent-view-fidelity"', html)
+                self.assertIn("fidelityEl.textContent", html)
+                self.assertIn("setAgentViewState", html)
+
     def test_closed_mobile_sidebar_is_removed_from_focus_order(self):
         from web_app import templates
 
@@ -177,9 +205,67 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("agentViewResponseRevealDone = true;\n    return;", runtime)
         self.assertIn("setAgentViewChatState('docked', 'chat');", runtime)
         self.assertIn(
-            "} else if (evt.type === 'done') {\n            maybeRevealAgentResponse();",
+            "} else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();",
             templates.CHAT_CODEX_HTML,
         )
+
+    def test_agent_task_shell_is_query_isolated_and_adaptive(self):
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        runtime = templates._AGENT_VIEW_JS
+        self.assertIn("const AGENT_SHELL_DEFAULT = 'legacy';", runtime)
+        self.assertIn("value === 'task' || value === 'legacy'", runtime)
+        self.assertIn("function setAgentShellConnectionLayout(browserAvailable)", runtime)
+        self.assertIn("agent-shell-chat-only", runtime)
+        self.assertIn("agentShellBrowserUsedThisTurn", runtime)
+        self.assertIn("agent-shell-text-turn", runtime)
+        self.assertNotIn('id="agent-shell-modes"', html)
+        self.assertNotIn('data-shell-view=', html)
+        self.assertIn('id="chat-card-history"', html)
+        self.assertIn('aria-controls="sidebar"', html)
+        self.assertIn('id="agent-shell-history-scrim"', html)
+        self.assertIn("function toggleAgentShellHistory(forceOpen)", html)
+        self.assertIn('id="lane-picker-toggle"', html)
+        self.assertIn('id="lane-picker-current"', html)
+        self.assertIn('<span class="lane-picker-kicker">Thread</span>', html)
+        self.assertIn("Select chat thread. Current:", runtime)
+        self.assertIn("visible.textContent = threadName", runtime)
+        self.assertIn("function toggleAgentLanePicker(forceOpen)", runtime)
+        self.assertIn("function arrangeAgentChatToolbar()", runtime)
+        self.assertIn("group.setAttribute('aria-label', 'Chat navigation')", runtime)
+        self.assertIn("group.appendChild(picker);", runtime)
+        self.assertIn("group.appendChild(newChat);", runtime)
+        self.assertIn("group.appendChild(history);", runtime)
+        self.assertIn("#agent-chat-primary-tools{gap:8px}", html)
+        self.assertIn("#slotbar:hover>button:not(#lane-picker-toggle)", html)
+        self.assertIn("width:36px!important", html)
+        self.assertIn("#slot2{left:40px!important}", html)
+        self.assertIn('class="agent-shell-trace"', html)
+        self.assertIn("body.agent-shell-task.agent-view-open #agent-view", html)
+        self.assertIn("body.agent-shell-task.agent-view-open.chat-minimized #agent-view{right:0}", html)
+        self.assertIn("translateX(28px) scale(.965)", html)
+        self.assertIn("transition:right 240ms", html)
+        self.assertIn("width:calc(100vw - 24px)!important", html)
+        self.assertIn("function positionAgentShellHistory()", html)
+        self.assertIn('id="sidebar-history-search" type="search"', html)
+        self.assertIn('aria-label="Search chat history"', html)
+        self.assertIn("Loading chats...", html)
+        self.assertIn("No matching chats", html)
+        self.assertIn("translateY(-8px) scale(.98)", html)
+        self.assertIn("body.agent-shell-task.agent-view-open #main #slotbar{display:flex!important;", html)
+        self.assertIn('id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1"', html)
+        self.assertIn("confirmation.classList.contains('open')", runtime)
+        self.assertIn("agentViewReturnFocus", runtime)
+        self.assertIn("if (agentShellTaskEnabled && mobile)", runtime)
+        self.assertIn("body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}", html)
+        self.assertIn("agent-view-browser-positioned #app-shell #main", html)
+        self.assertIn("completeAgentShellTurn('cancelled');", html)
+        self.assertIn("completeAgentShellTurn('error');", html)
+        self.assertIn("} finally {\n    completeAgentShellTurn('error');", html)
+        self.assertIn("Task ended with an error", runtime)
+        self.assertIn("@media(min-width:761px) and (hover:none)", html)
+        self.assertIn("transition:none!important", html)
 
     def test_agent_view_state_transitions_execute_consistently(self):
         node = shutil.which("node")
@@ -213,10 +299,11 @@ function element(id) {
   });
   return elements.get(id);
 }
-const body = {classList: new FakeClassList()};
+const body = {classList: new FakeClassList(), dataset: {}, style: {removeProperty() {}}};
 globalThis.document = {
   body,
   getElementById: element,
+  querySelectorAll() { return []; },
   addEventListener() {},
 };
 let mobile = true;
@@ -226,6 +313,12 @@ globalThis.window = {
 };
 globalThis.requestAnimationFrame = function() {};
 globalThis.location = {search: '', protocol: 'https:', host: 'example.test'};
+const sessionValues = new Map();
+globalThis.sessionStorage = {
+  getItem(key) { return sessionValues.get(key) || null; },
+  setItem(key, value) { sessionValues.set(key, String(value)); },
+  removeItem(key) { sessionValues.delete(key); },
+};
 globalThis._setActiveSlotSession = function() {};
 globalThis.addUserBubble = function() {};
 globalThis.appendText = function() {};
@@ -269,6 +362,37 @@ expect(!body.classList.contains('agent-view-open'), 'Response opened Agent View 
 openAgentView();
 maybeRevealAgentResponse();
 expect(body.classList.contains('agent-view-chat-open'), 'Response pending before browser activity was lost');
+
+closeAgentView();
+location.search = '?shell=task';
+sessionId = 's-test-task';
+initializeAgentShellExperiment();
+expect(body.classList.contains('agent-shell-task'), 'Task shell flag did not activate');
+expect(!body.classList.contains('agent-view-open'), 'Task shell opened before readiness');
+maybeInitializeAgentShell({chat_connected:true, bridge_connected:true});
+expect(body.classList.contains('agent-view-open'), 'Ready task shell did not default to Agent View');
+expect(!body.classList.contains('agent-shell-chat-only'), 'Connected shell incorrectly used chat-only layout');
+
+beginAgentViewResponseTurn();
+appendText({}, 'text-only answer');
+expect(body.classList.contains('agent-view-chat-expanded'), 'Text-only Auto turn did not expand chat');
+ensureAgentViewForBrowserActivity();
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Browser work did not restore split task shell');
+
+minimizeAgentViewChat();
+expect(body.classList.contains('chat-minimized'), 'Minimizing chat did not release the browser stage');
+restoreAgentViewChat();
+expect(!body.classList.contains('chat-minimized'), 'Restoring chat kept the browser stage expanded');
+
+closeAgentView();
+maybeInitializeAgentShell({chat_connected:true, bridge_connected:true});
+expect(body.classList.contains('agent-view-open'), 'Adaptive task shell did not recover after a status refresh');
+
+location.search = '?shell=task';
+initializeAgentShellExperiment();
+maybeInitializeAgentShell({chat_connected:false, bridge_connected:false});
+expect(body.classList.contains('agent-view-open'), 'Offline state left the adaptive shell');
+expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not morph into chat workspace');
 """
         result = subprocess.run(
             [node],
@@ -277,6 +401,30 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+    def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
+        from web_app import templates
+
+        trial = templates.TRIAL_CHAT_HTML
+        self.assertIn('id="app-shell"', trial)
+        self.assertNotIn('<aside id="sidebar">', trial)
+        self.assertNotIn('id="sidebar-history"', trial)
+        self.assertNotIn('id="sidebar-toggle"', trial)
+        self.assertNotIn("function loadSidebarHistory()", trial)
+        self.assertIn('class="topbar-new"', trial)
+        self.assertIn('id="full-width-chat-shell"', trial)
+
+        for html in (
+            templates.CLAUDE_CHAT_HTML,
+            templates.CHAT_GEMINI_HTML,
+            templates.CHAT_CLAUDE_SDK_HTML,
+            templates.CHAT_CODEX_HTML,
+        ):
+            with self.subTest(title=html[html.index("<title>"):html.index("</title>")]):
+                self.assertIn('<aside id="sidebar">', html)
+                self.assertIn('id="sidebar-history"', html)
+                self.assertIn('id="sidebar-toggle"', html)
+                self.assertIn("function loadSidebarHistory()", html)
+                self.assertNotIn('id="full-width-chat-shell"', html)
 
     def test_landing_signin_targets_last_provider_route(self):
         from web_app import templates
@@ -335,7 +483,8 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
         self.assertIn("Guided bridge install", templates.LANDING_HTML)
         self.assertIn("Work from a selected Chrome profile", templates.LANDING_HTML)
         self.assertIn("rec-cta", templates.LANDING_HTML)
-        self.assertNotIn('href="/chrome-tax"', templates.LANDING_HTML)
+        self.assertIn('href="/unbrowser"', templates.LANDING_HTML)
+        self.assertIn('href="/chrome-tax"', templates.LANDING_HTML)
         self.assertNotIn("Drive my browser", templates.LANDING_HTML)
         self.assertNotIn("narrative rhythm", templates.LANDING_HTML)
         self.assertNotIn("Sign in / Sign up", templates.LANDING_HTML)
@@ -357,6 +506,117 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
         self.assertNotIn("https://api.unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertIn("API key handling", templates.SETUP_HTML)
         self.assertIn("Your Chrome profile stays on your machine", templates.INSTALL_ONBOARD_HTML)
+
+    def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
+        from web_app import templates
+
+        trial = templates.TRIAL_CHAT_HTML
+        self.assertIn("localStorage.getItem(_newChatStateKey())", trial)
+        self.assertIn("localStorage.setItem(_newChatStateKey()", trial)
+        self.assertIn("localStorage.removeItem(_newChatStateKey())", trial)
+        self.assertIn("recoveringSource", trial)
+        self.assertIn("Another tab is finishing New Chat", trial)
+        self.assertIn("localStorage.setItem(_sessionStoreKey(), sid)", trial)
+        self.assertIn("localStorage.setItem(_slotStateKey()", trial)
+
+        guest = templates.FIRST_LOOK_PREVIEW_HTML
+        self.assertIn('id="new-chat-feedback" role="status" aria-live="polite"', guest)
+        self.assertIn("if (sending || guestNewChatPending) return;", guest)
+        self.assertIn("request_id: guestNewChatRequestId()", guest)
+        self.assertIn("localStorage.setItem(key, JSON.stringify(pending))", guest)
+        self.assertIn("function syncGuestSessionFromStorage()", guest)
+        self.assertIn("window.location.reload();", guest)
+        self.assertIn("if (!syncGuestSessionFromStorage()) return;", guest)
+        self.assertIn("data.request_id !== pending.request_id", guest)
+        self.assertIn("data.previous_session_id !== previousSessionId", guest)
+        self.assertIn("data.ok !== true || data.guest !== true", guest)
+        self.assertIn("nextSessionId === previousSessionId", guest)
+        self.assertIn("agentId !== previousAgentId || sessionId !== previousSessionId", guest)
+        self.assertIn("r.status === 429", guest)
+        self.assertIn("Your current chat is unchanged.", guest)
+
+        new_chat = guest[guest.index("async function doNewChat()") : guest.index("function hideHints()")]
+        parsed = new_chat.index("data = await r.json();")
+        validated = new_chat.index("if (!data || data.ok !== true")
+        adopted = new_chat.index("sessionId = nextSessionId;")
+        transcript_reset = new_chat.index("chat.innerHTML =")
+        preview_reset = new_chat.index("resetPreview();")
+        draft_reset = new_chat.index("document.getElementById('msginput').value = '';")
+        cleared = new_chat.rindex("clearGuestNewChatRequest(pending);")
+        self.assertLess(parsed, validated)
+        self.assertLess(validated, adopted)
+        self.assertLess(adopted, transcript_reset)
+        self.assertLess(transcript_reset, preview_reset)
+        self.assertLess(preview_reset, draft_reset)
+        self.assertLess(draft_reset, cleared)
+
+    def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
+        from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script
+        from web_app import templates
+
+        html = templates.MCP_PAGE_HTML
+        self.assertIn(
+            'INSTALL_DIR="$HOME/unchained-agent"',
+            _generate_public_install_script("https://unchainedsky.com"),
+        )
+        self.assertIn('$installDir = Join-Path $HOME "unchained-agent"', _WINDOWS_INSTALLER_TEMPLATE)
+        self.assertIn("~/unchained-agent/.env", html)
+        self.assertIn(r"%USERPROFILE%\unchained-agent\.env", html)
+        self.assertIn('id="load-key-posix"', html)
+        self.assertIn('id="load-key-windows"', html)
+        self.assertIn("Select-Object -First 1", html)
+        self.assertIn("Claude Desktop JSON does not expand shell variables", html)
+        self.assertIn("If it cannot expand environment variables", html)
+        self.assertIn("YOUR_UNCHAINED_API_KEY", html)
+        self.assertNotIn("Sign in to auto-fill your API key", html)
+        self.assertNotIn("YOUR_API_KEY", html)
+        self.assertNotIn("/auth/me", html)
+        self.assertNotIn("me.api_key", html)
+        self.assertNotIn("copySnippet", html)
+        self.assertNotIn("fillKey", html)
+
+    def test_mcp_shell_copy_text_uses_loaded_environment_variable(self):
+        from web_app import templates
+
+        html = templates.MCP_PAGE_HTML
+
+        def copied_text(snippet_id: str) -> str:
+            match = re.search(
+                rf'<pre class="code-block" id="{snippet_id}">(.*?)</pre>',
+                html,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(match, f"missing copied snippet {snippet_id}")
+            self.assertIn(f"copyCode('{snippet_id}',this)", html)
+            return match.group(1)
+
+        self.assertEqual(
+            copied_text("snippet-claude-code"),
+            """claude mcp add unchainedsky \\
+  https://api.unchainedsky.com/mcp \\
+  -t http \\
+  -H \"Authorization: Bearer $UNCHAINED_API_KEY\"""",
+        )
+        self.assertEqual(
+            copied_text("snippet-claude-code-windows"),
+            """claude mcp add unchainedsky `
+  https://api.unchainedsky.com/mcp `
+  -t http `
+  -H \"Authorization: Bearer $env:UNCHAINED_API_KEY\"""",
+        )
+        self.assertEqual(
+            copied_text("snippet-agent-lookup"),
+            'curl -s -H "Authorization: Bearer $UNCHAINED_API_KEY" '
+            "https://api.unchainedsky.com/api/agents | python3 -m json.tool",
+        )
+        self.assertEqual(
+            copied_text("snippet-agent-lookup-windows"),
+            'Invoke-RestMethod -Headers @{ Authorization = "Bearer '
+            '$env:UNCHAINED_API_KEY" } https://api.unchainedsky.com/api/agents '
+            "| ConvertTo-Json -Depth 5",
+        )
+        self.assertIn("Bearer YOUR_UNCHAINED_API_KEY", copied_text("snippet-claude-desktop"))
+        self.assertIn("Bearer YOUR_UNCHAINED_API_KEY", copied_text("snippet-other"))
 
 
 if __name__ == "__main__":

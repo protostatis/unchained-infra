@@ -7,6 +7,10 @@ These tests protect public routes and exported template contracts while
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -102,6 +106,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/chat/install-research-desk"),
             ("GET", "/web/chat/history"),
             ("POST", "/web/chat/new"),
+            ("POST", "/web/chat/new/ack"),
             ("GET", "/web/chat/slots"),
             ("POST", "/web/chat/switch"),
             ("GET", "/web/download-agent"),
@@ -188,11 +193,98 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("exhausted retries", web.SCHEDULER_HTML)
         self.assertIn("openHistoryModal", web.SCHEDULER_HTML)
 
+    def test_new_chat_recovery_and_guest_reset_contracts(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn("localStorage.getItem(_newChatStateKey())", trial)
+        self.assertIn("localStorage.setItem(_newChatStateKey()", trial)
+        self.assertIn("Another tab is finishing New Chat", trial)
+        self.assertIn("localStorage.setItem(_sessionStoreKey(), sid)", trial)
+
+        guest = web.FIRST_LOOK_PREVIEW_HTML
+        self.assertIn('id="new-chat-feedback" role="status" aria-live="polite"', guest)
+        self.assertIn("let guestNewChatPending = false;", guest)
+        self.assertIn("request_id: pending.request_id", guest)
+        self.assertIn("clearGuestNewChatRequest(pending);", guest)
+        self.assertIn("Could not start a fresh guest chat.", guest)
+
+    def test_trial_upgrade_notice_describes_provider_api_key_setup(self):
+        copy = (
+            "Access your chosen Claude, Gemini, or Codex provider models using "
+            "your own API key. <a href=\"/setup\">Configure provider / API key "
+            "&rarr;</a>"
+        )
+
+        self.assertEqual(web.TRIAL_CHAT_HTML.count(copy), 2)
+        self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
+        self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
+
+    def test_scheduler_cards_only_render_privacy_safe_previews(self):
+        html = web.SCHEDULER_HTML
+        self.assertIn("truncateSchedulerPreview(j.prompt||'',80)", html)
+        self.assertIn("p.last_output_preview||''", html)
+        self.assertNotIn("esc(p.last_output)", html)
+        self.assertIn("View run history", html)
+        self.assertIn("aria-label=\"'+esc(viewHistoryLabel)+'\"", html)
+        self.assertNotIn("View full run", html)
+        self.assertNotIn("p.email", html)
+        self.assertNotIn("Unavailable profile ('+path+')", html)
+        self.assertIn("return 'Profile: Selected browser'", html)
+        self.assertIn("const detailHtml=detail ? esc(detail)", html)
+
+    def test_scheduler_jobs_response_uses_one_line_output_preview(self):
+        full_output = "Private first paragraph.\n\n" + ("full detail " * 30)
+        with patch("scheduled_tasks.load_state", return_value={}):
+            with patch("scheduled_tasks.preview_jobs", return_value=[{"id": "daily"}]):
+                with patch("scheduled_tasks.latest_success_output", return_value=full_output):
+                    rows = web._scheduler_preview_rows("u-1", [])
+
+        preview = rows[0]["last_output_preview"]
+        self.assertNotIn("\n", preview)
+        self.assertLessEqual(len(preview), 120)
+        self.assertNotEqual(preview, full_output)
+        self.assertNotIn("last_output", rows[0])
+
     def test_landing_auth_cta_points_to_auth_entry(self):
         self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', web.LANDING_HTML)
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
         self.assertIn("Open trial", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
+
+    def test_landing_mobile_navigation_has_accessible_disclosure(self):
+        self.assertIn('<nav class="topnav" aria-label="Primary">', web.LANDING_HTML)
+        self.assertIn('id="landing-menu-toggle" aria-expanded="false"', web.LANDING_HTML)
+        self.assertIn('aria-controls="landing-nav-links"', web.LANDING_HTML)
+        self.assertIn('id="landing-nav-links"', web.LANDING_HTML)
+        for href in ("#calculator", "#capability", "#start"):
+            self.assertIn(f'href="{href}"', web.LANDING_HTML)
+
+    def test_landing_developer_navigation_exposes_lightweight_routes(self):
+        self.assertIn(
+            'id="landing-developer-toggle" aria-expanded="false" '
+            'aria-controls="landing-developer-links">For developers</button>',
+            web.LANDING_HTML,
+        )
+        self.assertIn(
+            'id="landing-developer-links" role="group" aria-label="Developer resources"',
+            web.LANDING_HTML,
+        )
+        self.assertIn('<a href="/unbrowser">unbrowser</a>', web.LANDING_HTML)
+        self.assertIn('<a href="/chrome-tax">Why lighter?</a>', web.LANDING_HTML)
+
+    def test_landing_developer_navigation_keyboard_contract(self):
+        self.assertIn("function setLandingDeveloperMenuOpen(open,focusFirst)", web.LANDING_HTML)
+        self.assertIn("event.key==='ArrowDown'", web.LANDING_HTML)
+        self.assertIn("developerMenu.querySelector('a').focus()", web.LANDING_HTML)
+        self.assertIn("developerMenuButton.focus()", web.LANDING_HTML)
+        self.assertIn("!developerMenu.contains(event.target)", web.LANDING_HTML)
+
+    def test_landing_mobile_navigation_interaction_contract(self):
+        self.assertIn("function setLandingMenuOpen(open,focusFirst)", web.LANDING_HTML)
+        self.assertIn("landingMenu.querySelector('a').focus()", web.LANDING_HTML)
+        self.assertIn("event.key==='Escape'", web.LANDING_HTML)
+        self.assertIn("landingMenuButton.focus()", web.LANDING_HTML)
+        self.assertIn("!landingMenu.contains(event.target)", web.LANDING_HTML)
+        self.assertIn("landingMenu.querySelectorAll('a')", web.LANDING_HTML)
 
     def test_landing_v4_default_route_clears_preview_cookie(self):
         async def _render(query: dict[str, str], cookies: dict[str, str]):
@@ -494,6 +586,51 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
 
+    def test_use_case_templates_link_to_allowlisted_first_look_tasks(self):
+        self.assertIn('href="/first-look?task=apartment"', web.USE_CASE_APARTMENT_HTML)
+        self.assertIn("Try a Live Apartment Task", web.USE_CASE_APARTMENT_HTML)
+        self.assertIn("examples, not live listings", web.USE_CASE_APARTMENT_HTML)
+        self.assertIn('href="/first-look?task=flight"', web.USE_CASE_FLIGHTS_HTML)
+        self.assertIn("Try a Live Flight Task", web.USE_CASE_FLIGHTS_HTML)
+        self.assertIn("examples, not live fares", web.USE_CASE_FLIGHTS_HTML)
+
+    def test_first_look_task_template_prefills_allowlisted_tasks_and_ignores_unknown_values(self):
+        from web_app.handlers.pages import _build_first_look_preview_html
+
+        apartment_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="apartment",
+        )
+        self.assertIn('data-task="apartment"', apartment_html)
+        self.assertIn("Apartment search task", apartment_html)
+        self.assertIn("current 2-bedroom apartment listings", apartment_html)
+        self.assertIn("Prefilled, not run.", apartment_html)
+
+        flight_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="flight",
+        )
+        self.assertIn('data-task="flight"', flight_html)
+        self.assertIn("Flight comparison task", flight_html)
+        self.assertIn("current round-trip flight options", flight_html)
+        self.assertIn("Prefilled, not run.", flight_html)
+
+        untrusted_task = 'apartment"><script>alert(1)</script>'
+        fallback_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task=untrusted_task,
+        )
+        self.assertNotIn('id="task-handoff"', fallback_html)
+        self.assertNotIn(untrusted_task, fallback_html)
+        self.assertIn("Compare computing pioneers on Wikipedia", fallback_html)
+        self.assertIn(
+            'placeholder="Ask the browser to do something..."></textarea>',
+            fallback_html,
+        )
+
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
             "CLIENT_UPDATE_TIMEOUT_MS = 90000",
@@ -617,6 +754,150 @@ class TestWebTemplateContracts(unittest.TestCase):
             1,
             "TRIAL_CHAT_HTML should not duplicate slot runtime declarations",
         )
+
+    def test_trial_full_width_and_agent_view_layout_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn('#app-shell #main{height:auto;flex:1;min-height:0;min-width:0}', trial)
+        self.assertIn('#app-shell #main{width:100%;max-width:none;margin:0}', trial)
+        self.assertIn('<a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>', trial)
+        self.assertIn('id="agent-view"', trial)
+        self.assertIn(
+            "body.agent-view-open #app-shell #main{position:fixed!important;z-index:1250;right:22px;top:104px;",
+            trial,
+        )
+        self.assertIn(
+            "body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;",
+            trial,
+        )
+        self.assertNotIn('<aside id="sidebar">', trial)
+        self.assertNotIn('id="sidebar-toggle"', trial)
+
+
+class TestTrialModelStorageIsolation(unittest.TestCase):
+    def _run_storage_runtime(self, assertions: str) -> None:
+        match = re.search(
+            r"const _TRIAL_MODEL_STORAGE_PREFIX = .*?(?=\nfunction _nextAfterLogin\()",
+            web.TRIAL_CHAT_HTML,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "trial model storage runtime missing")
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for trial storage runtime tests")
+        runtime = r"""
+class MemoryStorage {
+  constructor() { this.values = new Map(); }
+  getItem(key) { return this.values.has(key) ? this.values.get(key) : null; }
+  setItem(key, value) { this.values.set(String(key), String(value)); }
+  removeItem(key) { this.values.delete(String(key)); }
+}
+const localStorage = new MemoryStorage();
+const elements = {
+  modelsel: {value: 'google/gemini-3.1-flash-lite'},
+  'model-custom-input': {value: ''},
+  'control-link': {style: {display: 'none'}},
+};
+const document = {getElementById: id => elements[id] || null};
+let _userId = '';
+let _isAdmin = false;
+function _defaultTrialModel() { return 'google/gemini-3.1-flash-lite'; }
+function _syncCustomModelUi() {}
+""" + match.group(0) + assertions
+        result = subprocess.run(
+            [node, "-e", runtime],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_two_accounts_do_not_share_or_retain_model_state(self):
+        self._run_storage_runtime(r"""
+localStorage.setItem('unrelated', 'keep-me');
+_setTrialIdentity('opaque-user-a');
+_persistTrialModel('vendor/private-admin-model');
+if (_readTrialModelPreference() !== 'vendor/private-admin-model') throw new Error('account A did not restore its model');
+_setTrialIdentity('opaque-user-b');
+if (_readTrialModelPreference() !== '') throw new Error('account B inherited account A model');
+if (localStorage.getItem(_trialModelKey('opaque-user-a')) !== null) throw new Error('account A state survived identity change');
+_persistTrialModel('google/gemini-3.1-flash-lite');
+if (_readTrialModelPreference() !== 'google/gemini-3.1-flash-lite') throw new Error('account B preference was not scoped');
+if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('unrelated storage was cleared');
+""")
+
+    def test_unowned_legacy_model_does_not_cross_accounts_or_logout(self):
+        self._run_storage_runtime(r"""
+localStorage.setItem('unrelated', 'keep-me');
+localStorage.setItem(_TRIAL_ACTIVE_IDENTITY_KEY, 'opaque-user-a');
+localStorage.setItem(_LEGACY_MODEL_KEY, 'vendor/account-a-model');
+localStorage.setItem(_LEGACY_MODEL_OWNER_KEY, 'opaque-user-a');
+_setTrialIdentity('opaque-user-b');
+if (_readTrialModelPreference() !== '') throw new Error('account B migrated account A legacy model');
+if (localStorage.getItem(_LEGACY_MODEL_KEY) !== null) throw new Error('legacy model was not discarded');
+localStorage.setItem(_LEGACY_MODEL_KEY, 'vendor/account-b-model');
+localStorage.setItem(_LEGACY_MODEL_OWNER_KEY, 'opaque-user-b');
+if (_readTrialModelPreference() !== 'vendor/account-b-model') throw new Error('owned legacy model was not migrated');
+_setTrialIdentity('');
+if (localStorage.getItem(_trialModelKey('opaque-user-b')) !== null) throw new Error('logout retained account B model');
+if (localStorage.getItem(_TRIAL_ACTIVE_IDENTITY_KEY) !== null) throw new Error('logout retained active identity');
+if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('logout cleared unrelated storage');
+""")
+
+    def test_admin_control_is_hidden_for_second_non_admin_account(self):
+        self._run_storage_runtime(r"""
+_applyTrialIdentity({user_id: 'opaque-admin-a', is_admin: true});
+if (elements['control-link'].style.display !== '') throw new Error('admin account did not see control link');
+_setTrialIdentity('');
+if (elements['control-link'].style.display !== 'none') throw new Error('logout retained admin control link');
+_applyTrialIdentity({user_id: 'opaque-user-b', is_admin: false});
+if (elements['control-link'].style.display !== 'none') throw new Error('non-admin account inherited admin control link');
+_syncTrialAdminUi();
+if (elements['control-link'].style.display !== 'none') throw new Error('non-admin render revealed admin control link');
+""")
+
+    def test_trial_template_has_no_unscoped_model_writes(self):
+        self.assertNotIn("localStorage.setItem('unchained_model'", web.TRIAL_CHAT_HTML)
+        self.assertIn("_persistTrialModel(evt.model)", web.TRIAL_CHAT_HTML)
+        self.assertIn("controlLink.style.display = _isAdmin ? '' : 'none'", web.TRIAL_CHAT_HTML)
+        self.assertIn("function showMain()", web.TRIAL_CHAT_HTML)
+        self.assertIn("  _syncTrialAdminUi();", web.TRIAL_CHAT_HTML)
+        storage_runtime = web.TRIAL_CHAT_HTML[
+            web.TRIAL_CHAT_HTML.index("const _TRIAL_MODEL_STORAGE_PREFIX"):
+            web.TRIAL_CHAT_HTML.index("function _nextAfterLogin")
+        ]
+        self.assertNotIn("email", storage_runtime.lower())
+
+
+class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_me_returns_stable_opaque_user_id(self):
+        from web_app.handlers import auth_admin
+
+        user = {
+            "user_id": "opaque-user-a",
+            "status": "approved",
+            "user_type": "claude",
+            "name": "User A",
+            "picture": "",
+        }
+        auth_store = SimpleNamespace(
+            find_user_by_email=lambda _email: user,
+            get_demo_count=lambda _email: 0,
+        )
+        core = SimpleNamespace(
+            _authenticate=lambda _request: {
+                "user_id": user["user_id"],
+                "email": "user-a@example.test",
+                "agent_id": "claude-test",
+            },
+            _auth=auth_store,
+            _is_demo_unlimited=lambda _user: False,
+            ADMIN_EMAILS=set(),
+        )
+        with patch.object(auth_admin, "_core", return_value=core):
+            response = await auth_admin.handle_auth_me(SimpleNamespace())
+
+        payload = json.loads(response.body.decode())
+        self.assertTrue(payload["authenticated"])
+        self.assertEqual(payload["user_id"], "opaque-user-a")
 
 
 class TestWebCoreResolverContracts(unittest.TestCase):

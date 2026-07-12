@@ -66,6 +66,7 @@ from web_app.templates import (
     LANDING_V3_HTML,
     LANDING_V4_HTML,
     MCP_PAGE_HTML,
+    PUBLIC_404_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
     TRIAL_CHAT_HTML,
@@ -139,10 +140,14 @@ ADMIN_EMAILS = [
     for e in os.environ.get("ADMIN_EMAILS", "").split(",")
     if e.strip()
 ]
-CONTACT_EMAIL = (
-    os.environ.get("CONTACT_EMAIL", "").strip()
-    or (ADMIN_EMAILS[0] if ADMIN_EMAILS else "hello@unchainedsky.com")
-)
+
+
+def _resolve_contact_email() -> str:
+    """Return the public project contact without exposing an admin account."""
+    return os.environ.get("CONTACT_EMAIL", "").strip() or "hello@unchainedsky.com"
+
+
+CONTACT_EMAIL = _resolve_contact_email()
 if not TRIAL_AGENT_KEY:
     log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
 if not TRIAL_AGENT_ID:
@@ -1068,7 +1073,10 @@ def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
     for row in preview:
         last_output = st.latest_success_output(state_path, row["id"], limit=20)
         if last_output:
-            row["last_output"] = last_output[:500]
+            one_line = " ".join(last_output.split())
+            if len(one_line) > 120:
+                one_line = one_line[:117].rstrip() + "..."
+            row["last_output_preview"] = one_line
     return preview
 
 
@@ -1667,6 +1675,7 @@ from web_app.handlers.chat_flow import (
     list_relay_agents_for_auth as _list_relay_agents_for_auth,
     resolve_bridge_agent as _resolve_bridge_agent,
     resolve_chat_agent_id as _resolve_chat_agent_id,
+    trial_new_chat_status_cleanup_context,
 )
 from web_app.handlers.chat_stream import handle_chat_cancel, handle_chat_msg, handle_chat_ws
 from web_app.handlers.install_flow import (
@@ -2103,6 +2112,64 @@ def _build_mcp_guide_html() -> str:
 # Server
 # ---------------------------------------------------------------------------
 
+_NON_PAGE_404_PREFIXES = (
+    "/api",
+    "/auth",
+    "/cdp",
+    "/core",
+    "/health",
+    "/mcp",
+    "/tunnel",
+    "/unbrowser-mcp",
+    "/web",
+)
+
+
+def _accepts_html(request: web.Request) -> bool:
+    for item in request.headers.get("Accept", "").lower().split(","):
+        media_type, *parameters = (part.strip() for part in item.split(";"))
+        if media_type != "text/html":
+            continue
+        quality = 1.0
+        for parameter in parameters:
+            if parameter.startswith("q="):
+                try:
+                    quality = float(parameter[2:])
+                except ValueError:
+                    quality = 0.0
+        if quality > 0:
+            return True
+    return False
+
+
+def _is_browser_page_request(request: web.Request) -> bool:
+    if request.method not in {"GET", "HEAD"} or not _accepts_html(request):
+        return False
+    path = request.path
+    return not any(
+        path == prefix or path.startswith(f"{prefix}/")
+        for prefix in _NON_PAGE_404_PREFIXES
+    )
+
+
+@web.middleware
+async def branded_not_found_middleware(request: web.Request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPNotFound:
+        if not _is_browser_page_request(request):
+            raise
+        return web.Response(
+            status=404,
+            text=PUBLIC_404_HTML,
+            content_type="text/html",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+
 def _register_routes(app: web.Application):
     register_route_specs(
         app,
@@ -2185,8 +2252,9 @@ async def _on_cleanup(app_: web.Application):
 
 
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[branded_not_found_middleware])
     _register_routes(app)
+    app.cleanup_ctx.append(trial_new_chat_status_cleanup_context)
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     return app

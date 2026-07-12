@@ -46,6 +46,113 @@ function renderSafeMarkdown(raw) {
 }"""
 
 
+PUBLIC_404_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Page not found | Unchained</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0a10;--surface:#16131f;--border:#302b3f;
+  --text:#f1ede2;--muted:#ada799;--accent:#ff6a3d;--trial-hover:#ff815e;--signal:#b6f25c;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{
+  margin:0;color:var(--text);background:var(--bg);
+  font-family:"Familjen Grotesk",system-ui,sans-serif;
+  background-image:
+    radial-gradient(circle at 18% 18%,rgba(182,242,92,.08),transparent 34%),
+    radial-gradient(circle at 82% 78%,rgba(255,106,61,.08),transparent 38%);
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:linear-gradient(to bottom,black,transparent 88%);
+}
+a{color:inherit}
+.nav{
+  position:relative;z-index:1;min-height:64px;padding:0 24px;
+  display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.07);
+  background:rgba(11,10,16,.78);backdrop-filter:blur(14px);
+}
+.nav-inner{width:min(1120px,100%);margin:auto;display:flex;align-items:center;gap:28px}
+.brand{font-weight:700;letter-spacing:.18em;text-decoration:none;font-size:.8rem}
+.brand span{color:var(--accent)}
+.nav-links{margin-left:auto;display:flex;align-items:center;gap:22px}
+.nav-links a{color:var(--muted);font-size:.88rem;font-weight:600;text-decoration:none}
+.nav-links a:hover,.nav-links a:focus-visible{color:var(--text)}
+.nav-links .trial{padding:8px 13px;border-radius:7px;background:var(--accent);color:var(--bg)}
+.nav-links .trial:hover,.nav-links .trial:focus-visible{background:var(--trial-hover);color:var(--bg)}
+.shell{
+  position:relative;z-index:1;width:min(1120px,calc(100% - 40px));min-height:calc(100vh - 64px);
+  margin:auto;display:grid;grid-template-columns:minmax(220px,.72fr) minmax(320px,1fr);
+  align-items:center;gap:clamp(42px,8vw,120px);padding:72px 0;
+}
+.code{
+  font-family:"JetBrains Mono",monospace;font-size:clamp(7rem,22vw,15rem);font-weight:700;
+  line-height:.78;letter-spacing:-.1em;color:transparent;-webkit-text-stroke:1px var(--border);
+  text-shadow:12px 12px 0 rgba(182,242,92,.05);user-select:none;
+}
+.eyebrow{font:700 .7rem/1.4 "JetBrains Mono",monospace;letter-spacing:.2em;text-transform:uppercase;color:var(--signal)}
+h1{max-width:680px;margin:18px 0 16px;font-size:clamp(2.6rem,6vw,5.4rem);font-weight:600;line-height:.96;letter-spacing:-.035em}
+.copy{max-width:530px;margin:0;color:var(--muted);font-size:1.08rem;line-height:1.65}
+.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.button{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 18px;border:1px solid var(--border);border-radius:8px;text-decoration:none;font-weight:700;transition:transform .18s,border-color .18s,background .18s}
+.button.primary{border-color:var(--signal);background:var(--signal);color:#10150b}
+.button:hover{transform:translateY(-2px);border-color:var(--accent)}
+.button.primary:hover{border-color:var(--signal);box-shadow:0 10px 30px rgba(182,242,92,.15)}
+.route-list{display:flex;flex-wrap:wrap;gap:18px;margin-top:28px;color:var(--muted);font:500 .78rem/1.4 "JetBrains Mono",monospace}
+.route-list a{text-underline-offset:4px;text-decoration-color:var(--border)}
+.route-list a:hover,.route-list a:focus-visible{color:var(--text);text-decoration-color:var(--accent)}
+a:focus-visible{outline:2px solid var(--signal);outline-offset:4px}
+@media(max-width:720px){
+  .nav{padding:0 18px}.nav-links{gap:14px}.nav-links a:not(.trial){display:none}
+  .shell{width:min(100% - 36px,560px);grid-template-columns:1fr;align-content:center;gap:36px;padding:48px 0 64px}
+  .code{font-size:clamp(6.5rem,38vw,10rem)}h1{font-size:clamp(2.5rem,13vw,4.25rem)}
+}
+@media(prefers-reduced-motion:reduce){.button{transition:none}.button:hover{transform:none}}
+</style>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary navigation">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Unchained home">UN<span>CHAIN</span>ED</a>
+      <div class="nav-links">
+        <a href="/demo">Demo</a>
+        <a href="/mcp">MCP</a>
+        <a class="trial" href="/trial">Start free trial</a>
+      </div>
+    </div>
+  </nav>
+  <main class="shell">
+    <div class="code" aria-hidden="true">404</div>
+    <section>
+      <div class="eyebrow">Route not found</div>
+      <h1>This tab took a wrong turn.</h1>
+      <p class="copy">The page may have moved, or the address may be incomplete. Head home or choose a working route below.</p>
+      <div class="actions">
+        <a class="button primary" href="/">Back to home</a>
+        <a class="button" href="/demo">Try the live demo</a>
+      </div>
+      <div class="route-list" aria-label="Helpful links">
+        <a href="/trial">Free trial</a>
+        <a href="/mcp">MCP setup</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
 def _inject_safe_markdown_renderer(html: str, *, template_name: str) -> str:
     return apply_template_replacements(
         html,
@@ -6403,7 +6510,7 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 <style>
 :root{--bg:#0b0a10;--bg-elev:#131119;--surface:#16131f;--surface-hover:#1d1928;--border:#272335;--border-light:#34304a;--text:#f1ede2;--text-sec:#ada799;--muted:#6b6657;--dim:#3a3650;--accent:#ff6a3d;--accent-dim:rgba(255,106,61,.13);--chrome:#7c83f5;--chrome-dim:rgba(124,131,245,.13);--agent:#b6f25c;--agent-dim:rgba(182,242,92,.13);--warning:#f5b942;--warning-dim:rgba(245,185,66,.13)}
 *{margin:0;padding:0;box-sizing:border-box}html{scroll-behavior:smooth}body{font-family:'Familjen Grotesk',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden;background-image:radial-gradient(circle at 18% 12%,rgba(182,242,92,.05) 0%,transparent 42%),radial-gradient(circle at 82% 88%,rgba(255,106,61,.04) 0%,transparent 44%)}
-.mono{font-family:'JetBrains Mono',monospace}.topnav{position:fixed;top:0;left:0;right:0;z-index:20;background:rgba(8,9,13,.72);backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid rgba(255,255,255,.06)}.topnav-inner{max-width:1180px;margin:0 auto;padding:.75rem 1.25rem;display:flex;align-items:center;gap:1rem}.brand{font-weight:800;letter-spacing:.18em;text-transform:uppercase;font-size:.82rem;text-decoration:none;color:var(--text)}.brand span{color:var(--accent)}.links{margin-left:auto;display:flex;align-items:center;gap:1.1rem}.links a{color:var(--text-sec);text-decoration:none;font-size:.88rem;font-weight:600}.links a:hover{color:var(--text)}.signin{background:var(--accent);color:#fff!important;padding:.55rem .95rem;border-radius:999px;box-shadow:0 0 30px rgba(233,69,96,.18)}@media(max-width:760px){.links a:not(.signin){display:none}.topnav-inner{padding:.65rem 1rem}}
+.mono{font-family:'JetBrains Mono',monospace}.topnav{position:fixed;top:0;left:0;right:0;z-index:20;background:rgba(8,9,13,.72);backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid rgba(255,255,255,.06)}.topnav-inner{max-width:1180px;margin:0 auto;padding:.75rem 1.25rem;display:flex;align-items:center;gap:1rem}.brand{font-weight:800;letter-spacing:.18em;text-transform:uppercase;font-size:.82rem;text-decoration:none;color:var(--text)}.brand span{color:var(--accent)}.links{margin-left:auto;display:flex;align-items:center;gap:1.1rem}.links a{color:var(--text-sec);text-decoration:none;font-size:.88rem;font-weight:600}.links a:hover{color:var(--text)}.signin{background:var(--accent);color:#fff!important;padding:.55rem .95rem;border-radius:999px;box-shadow:0 0 30px rgba(233,69,96,.18)}.menu-toggle{display:none;background:transparent;border:1px solid var(--border-light);border-radius:8px;color:var(--text);font:inherit;font-size:.8rem;font-weight:700;letter-spacing:.04em;padding:.48rem .65rem;cursor:pointer;align-items:center;gap:.5rem}.menu-toggle:focus-visible{outline:2px solid var(--agent);outline-offset:3px}.menu-icon{display:flex;flex-direction:column;gap:3px;width:14px}.menu-icon span{display:block;height:1px;width:100%;background:currentColor;transition:transform .18s,opacity .18s}.menu-toggle[aria-expanded="true"] .menu-icon span:first-child{transform:translateY(2px) rotate(45deg)}.menu-toggle[aria-expanded="true"] .menu-icon span:last-child{transform:translateY(-2px) rotate(-45deg)}@media(max-width:760px){.topnav-inner{padding:.65rem 1rem;position:relative}.menu-toggle{display:inline-flex;margin-left:auto}.links{display:none;position:absolute;top:calc(100% + .5rem);right:1rem;width:min(240px,calc(100vw - 2rem));margin:0;padding:.6rem;flex-direction:column;align-items:stretch;gap:.2rem;background:rgba(19,17,25,.98);border:1px solid var(--border-light);border-radius:12px;box-shadow:0 18px 48px rgba(0,0,0,.45)}.links.open{display:flex}.links a{width:100%;padding:.7rem .75rem;border-radius:7px}.links a:hover,.links a:focus-visible{background:var(--surface-hover);color:var(--text);outline:none}.links .signin{text-align:center;margin-top:.25rem}}
 .hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:6rem 1.5rem 4rem;position:relative}.hero::before{content:'';position:absolute;inset:0;background-image:radial-gradient(rgba(182,242,92,.10) 1px,transparent 1.6px);background-size:22px 22px;mask-image:radial-gradient(ellipse at center,black 18%,transparent 76%);-webkit-mask-image:radial-gradient(ellipse at center,black 18%,transparent 76%);pointer-events:none}.hero>*{position:relative}.hero-tag{font-size:.75rem;letter-spacing:.28em;text-transform:uppercase;color:var(--accent);margin-bottom:1.8rem}.hero h1{font-family:'Familjen Grotesk',system-ui,sans-serif;font-size:clamp(2.55rem,7vw,5.65rem);font-weight:600;line-height:1.04;letter-spacing:-.025em;max-width:980px;margin-bottom:1.3rem}.hero h1 em{font-style:normal;font-weight:400;color:var(--accent)}.hero-sub{font-size:1.1rem;color:var(--text-sec);max-width:650px;margin-bottom:2.3rem}.hero-stat{margin:0 0 2rem}.hero-stat-value{font-family:'JetBrains Mono',monospace;font-size:clamp(3rem,9vw,6rem);font-weight:700;line-height:1;color:var(--agent);letter-spacing:-.055em;text-shadow:0 0 60px rgba(16,185,129,.24)}.hero-stat-label{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.18em;margin-top:.55rem}.hero-stat-detail{font-size:.92rem;color:var(--text-sec);max-width:460px;margin:.55rem auto 0}.hero-actions{display:flex;flex-wrap:wrap;gap:.85rem;justify-content:center}.cta-btn,.ghost-btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border-radius:8px;font-weight:700;transition:transform .18s,box-shadow .18s,border-color .18s,background .18s}.cta-btn{background:var(--agent);color:#07110d;padding:1rem 1.5rem}.cta-btn:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(16,185,129,.28)}.ghost-btn{border:1px solid var(--border-light);color:var(--text);padding:.95rem 1.4rem}.ghost-btn:hover{border-color:var(--accent);background:var(--accent-dim)}.scroll-hint{position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);color:var(--muted);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;text-decoration:none;animation:bounce 2s infinite}@keyframes bounce{0%,100%{transform:translateX(-50%) translateY(0);opacity:.55}50%{transform:translateX(-50%) translateY(8px);opacity:1}}
 .section{max-width:1200px;margin:0 auto;padding:5rem 1.5rem}.section-label{font-size:.7rem;letter-spacing:.26em;text-transform:uppercase;color:var(--accent);margin-bottom:.7rem}.section-title{font-family:'Familjen Grotesk',system-ui,sans-serif;font-size:clamp(1.85rem,4vw,2.85rem);font-weight:600;line-height:1.15;letter-spacing:-.01em;margin-bottom:1rem}.section-title em{font-style:normal;color:var(--agent)}.section-desc{color:var(--text-sec);font-size:1.04rem;max-width:650px;margin-bottom:3rem}.presets{display:flex;flex-wrap:wrap;gap:.75rem;margin-bottom:2.2rem}.preset-btn{background:var(--surface);border:1px solid var(--border);color:var(--text-sec);padding:.62rem 1.15rem;border-radius:999px;font:inherit;font-size:.86rem;cursor:pointer;transition:all .18s}.preset-btn:hover{border-color:var(--accent);color:var(--text);background:var(--surface-hover)}.preset-btn.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
 .calc-grid{display:grid;grid-template-columns:380px 1fr;gap:2rem;align-items:start}@media(max-width:930px){.calc-grid{grid-template-columns:1fr}}.inputs-panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:2rem;position:sticky;top:5rem}@media(max-width:930px){.inputs-panel{position:static}}.inputs-panel h3,.chart-card h3{font-size:.75rem;text-transform:uppercase;letter-spacing:.15em;color:var(--muted);margin-bottom:1.4rem}.input-group{margin-bottom:1.55rem}.input-group label{display:flex;justify-content:space-between;align-items:baseline;color:var(--text-sec);font-size:.88rem;margin-bottom:.55rem}.input-value{font-family:'JetBrains Mono',monospace;font-size:1.2rem;color:var(--accent);font-weight:700}.slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;background:var(--border);border-radius:3px;outline:none;cursor:pointer}.slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--accent);border:3px solid var(--bg);box-shadow:0 0 0 1px var(--accent)}.slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--accent);border:3px solid var(--bg);box-shadow:0 0 0 1px var(--accent)}.slider-ticks{display:flex;justify-content:space-between;margin-top:.4rem;font-size:.7rem;color:var(--dim);font-family:'JetBrains Mono',monospace}.select-group{width:100%;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;color:var(--text);font:inherit;font-size:.9rem}.results-dashboard{display:flex;flex-direction:column;gap:1.5rem}.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}@media(max-width:650px){.metric-grid{grid-template-columns:1fr}}.metric-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.45rem;position:relative;overflow:hidden}.metric-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent)}.metric-card.agent::before{background:var(--agent)}.metric-card.chrome::before{background:var(--chrome)}.metric-label{font-size:.68rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:.72rem}.metric-value{font-family:'JetBrains Mono',monospace;font-size:1.9rem;font-weight:700;line-height:1;color:var(--accent);margin-bottom:.45rem}.metric-card.agent .metric-value{color:var(--agent)}.metric-card.chrome .metric-value{color:var(--chrome)}.metric-detail{font-size:.82rem;color:var(--text-sec);line-height:1.4}.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem}.bar-chart{display:flex;flex-direction:column;gap:1rem}.bar-row{display:grid;grid-template-columns:145px 1fr 86px;gap:1rem;align-items:center}.bar-label{font-size:.85rem;text-align:right;color:var(--text-sec)}.bar-track{height:28px;background:var(--bg-elev);border-radius:6px;overflow:hidden}.bar-fill{height:100%;border-radius:6px;transition:width .45s cubic-bezier(.4,0,.2,1);display:flex;align-items:center;padding-left:.72rem;font-family:'JetBrains Mono',monospace;font-size:.73rem;font-weight:700;color:#07110d}.bar-fill.agent{background:linear-gradient(90deg,var(--agent),#059669)}.bar-fill.chrome{background:linear-gradient(90deg,var(--chrome),#4f46e5);color:#fff}.bar-fill.accent{background:linear-gradient(90deg,var(--accent),#be123c);color:#fff}.bar-value{font-family:'JetBrains Mono',monospace;font-size:.85rem;font-weight:700}
@@ -6468,12 +6575,13 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 .brand{transition:letter-spacing .3s}
 .brand:hover{letter-spacing:.22em}
 .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.developer-menu{position:relative}.developer-toggle{display:inline-flex;align-items:center;gap:.35rem;background:transparent;border:0;color:var(--text-sec);font:inherit;font-size:.88rem;font-weight:600;cursor:pointer}.developer-toggle:hover{color:var(--text)}.developer-toggle::after{content:'+';color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:.78rem;transition:transform .18s}.developer-toggle[aria-expanded="true"]::after{transform:rotate(45deg)}.developer-toggle:focus-visible,.developer-links a:focus-visible{outline:2px solid var(--agent);outline-offset:3px}.developer-links{display:none;position:absolute;top:calc(100% + .75rem);right:0;min-width:190px;padding:.45rem;background:rgba(19,17,25,.98);border:1px solid var(--border-light);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,.45)}.developer-menu.open .developer-links{display:grid}.developer-links a{padding:.55rem .65rem;border-radius:6px;white-space:nowrap}.developer-links a:hover{background:var(--surface-hover)}.developer-links a::after{display:none}@media(max-width:760px){.developer-menu{width:100%}.developer-toggle{width:100%;justify-content:space-between;padding:.7rem .75rem}.developer-links{position:static;min-width:0;margin:.1rem .45rem .35rem;padding:.25rem;background:rgba(255,255,255,.025);box-shadow:none}.developer-links a{padding:.6rem .7rem}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.scan{display:none}.caret{opacity:0!important}.console-step,.timeline-step{opacity:1!important;transform:none!important}.scenario-card:hover,.flow-card:hover,.path-card:hover,.cta-btn:hover{transform:none!important}}
 </style>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div><div class="scan" aria-hidden="true"></div>
-<nav class="topnav"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><div class="links"><a href="#calculator">Preview</a><a href="#capability">Capability</a><a href="#start">Start</a><a href="/trial" class="signin" id="landing-auth-link">Start free trial</a></div></div></nav>
+<nav class="topnav" aria-label="Primary"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><button type="button" class="menu-toggle" id="landing-menu-toggle" aria-expanded="false" aria-controls="landing-nav-links" aria-label="Open navigation menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"><span></span><span></span></span></button><div class="links" id="landing-nav-links"><a href="#calculator">Preview</a><a href="#capability">Capability</a><a href="#start">Start</a><div class="developer-menu" id="landing-developer-menu"><button type="button" class="developer-toggle" id="landing-developer-toggle" aria-expanded="false" aria-controls="landing-developer-links">For developers</button><div class="developer-links" id="landing-developer-links" role="group" aria-label="Developer resources"><a href="/unbrowser">unbrowser</a><a href="/chrome-tax">Why lighter?</a></div></div><a href="/trial" class="signin" id="landing-auth-link">Start free trial</a></div></div></nav>
 <section class="hero">
   <div class="hero-tag">You navigate. The agent drives.</div>
   <h1>You call the shots. <em>Unchained runs the steps.</em></h1>
@@ -6523,6 +6631,10 @@ const scenarioList=$('scenario-list');SCENARIOS.forEach(s=>{const b=document.cre
 const CONSOLE_TASKS=[{p:'Shortlist 2BR Brooklyn apartments under $4,000',k:['open rentals','apply filters','cross-check','shortlist']},{p:'Compare flight + hotel options for a 3-day trip',k:['search','compare','capture','pause']},{p:'Prep the weekly vendor-portal status summary',k:['open portals','collect status','flag','draft']},{p:'Compare products across sites, recommend one',k:['search','extract specs','compare','summarize']}];
 (function(){const typeEl=$('console-type'),stepsEl=$('console-steps'),status=$('console-status'),caret=$('console-caret'),live=$('console-live');if(!typeEl)return;const reduced=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;function renderSteps(t){stepsEl.innerHTML=t.k.map(k=>'<div class="console-step show"><span class="k">'+esc(k)+'</span></div>').join('')}function announce(t,state){if(live)live.textContent='Example task: '+t.p+'. Status: '+state+'. Steps: '+t.k.join(', ')+'.'}if(reduced){const t=CONSOLE_TASKS[0];typeEl.textContent=t.p;renderSteps(t);status.textContent='review';caret.classList.add('idle');announce(t,'review');return}let ti=0,ci=0,phase='type',st=null;function clr(){if(st){clearTimeout(st);st=null}}function reset(){clr();ti++;ci=0;phase='type';typeEl.textContent='';stepsEl.innerHTML='';status.textContent='ready';caret.classList.remove('idle');announce(CONSOLE_TASKS[ti%CONSOLE_TASKS.length],'ready');st=setTimeout(tick,340)}function tick(){const t=CONSOLE_TASKS[ti%CONSOLE_TASKS.length];if(phase==='type'){ci++;typeEl.textContent=t.p.slice(0,ci);if(ci>=t.p.length){status.textContent='working';announce(t,'working');phase='steps';let si=0;const go=()=>{if(si<t.k.length){const d=document.createElement('div');d.className='console-step';d.innerHTML='<span class="k">'+esc(t.k[si])+'</span>';stepsEl.appendChild(d);requestAnimationFrame(()=>d.classList.add('show'));si++;st=setTimeout(go,310);}else{status.textContent='review';announce(t,'review');caret.classList.add('idle');st=setTimeout(reset,1700);}};go();return;}st=setTimeout(tick,26);}}announce(CONSOLE_TASKS[0],'ready');tick();})();
 const io=new IntersectionObserver(entries=>entries.forEach(e=>{if(e.isIntersecting)e.target.classList.add('visible')}),{threshold:.12});document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+const landingMenuButton=$('landing-menu-toggle'),landingMenu=$('landing-nav-links'),developerMenuButton=$('landing-developer-toggle'),developerMenu=$('landing-developer-menu');
+function setLandingMenuOpen(open,focusFirst){if(!landingMenuButton||!landingMenu)return;landingMenuButton.setAttribute('aria-expanded',String(open));landingMenuButton.setAttribute('aria-label',(open?'Close':'Open')+' navigation menu');landingMenu.classList.toggle('open',open);if(open&&focusFirst)requestAnimationFrame(()=>landingMenu.querySelector('a').focus())}
+function setLandingDeveloperMenuOpen(open,focusFirst){if(!developerMenuButton||!developerMenu)return;developerMenuButton.setAttribute('aria-expanded',String(open));developerMenu.classList.toggle('open',open);if(open&&focusFirst)requestAnimationFrame(()=>developerMenu.querySelector('a').focus())}
+if(landingMenuButton&&landingMenu&&developerMenuButton&&developerMenu){landingMenuButton.addEventListener('click',()=>setLandingMenuOpen(landingMenuButton.getAttribute('aria-expanded')!=='true',true));developerMenuButton.addEventListener('click',()=>setLandingDeveloperMenuOpen(developerMenuButton.getAttribute('aria-expanded')!=='true',false));developerMenuButton.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();setLandingDeveloperMenuOpen(true,true)}});landingMenu.querySelectorAll('a').forEach(link=>link.addEventListener('click',()=>{setLandingDeveloperMenuOpen(false,false);setLandingMenuOpen(false,false)}));document.addEventListener('keydown',event=>{if(event.key==='Escape'){if(developerMenuButton.getAttribute('aria-expanded')==='true'){setLandingDeveloperMenuOpen(false,false);developerMenuButton.focus();return}if(landingMenuButton.getAttribute('aria-expanded')==='true'){setLandingMenuOpen(false,false);landingMenuButton.focus()}}});document.addEventListener('click',event=>{if(developerMenuButton.getAttribute('aria-expanded')==='true'&&!developerMenu.contains(event.target))setLandingDeveloperMenuOpen(false,false);if(landingMenuButton.getAttribute('aria-expanded')==='true'&&!landingMenu.contains(event.target)&&!landingMenuButton.contains(event.target))setLandingMenuOpen(false,false)});window.addEventListener('resize',()=>{if(window.innerWidth>760){setLandingDeveloperMenuOpen(false,false);setLandingMenuOpen(false,false)}})}
 function normalizeLandingRoute(value){const fallback='/trial';if(!value)return fallback;let url;try{url=new URL(value,window.location.origin)}catch(e){return fallback}if(url.origin!==window.location.origin)return fallback;const path=url.pathname;const provider=(url.searchParams.get('provider')||'').trim().toLowerCase();if(path==='/trial'||path==='/demo')return path;if(path==='/local'){if(provider==='codex-cli'||provider==='codex-sdk'||provider==='opencode-cli')return '/local?provider='+provider;return '/trial'}if(path==='/chat-claude'||path==='/chat-gemini')return path;if(path==='/setup'){if(provider==='gemini'||provider==='claude-sdk'||provider==='codex-sdk')return '/setup?provider='+provider;return '/setup'}return fallback}function landingRouteLabel(route,authenticated){if(route.indexOf('/local')===0)return authenticated?'Open CLI lane':'Set up MCP / CLI';return authenticated?'Open trial':'Start free trial'}(function(){const btn=document.getElementById('landing-auth-link');if(!btn)return;let storedRoute='';try{storedRoute=localStorage.getItem('unchained_last_route')||''}catch(e){}const route=normalizeLandingRoute(storedRoute);btn.href=route;btn.title='Continue to '+route;fetch('/auth/me',{cache:'no-store'}).then(r=>r.json()).then(data=>{btn.textContent=landingRouteLabel(route,!!data.authenticated)}).catch(()=>{btn.textContent=landingRouteLabel(route,false)})})();
 </script>
 </body>
@@ -7111,6 +7223,12 @@ a:hover{text-decoration:underline}
   font-size:clamp(16px,2.5vw,20px);
   color:var(--muted);line-height:1.6;max-width:560px;margin:0 auto;
 }
+.sample-disclosure{
+  display:inline-flex;align-items:center;gap:8px;margin-top:20px;padding:8px 12px;
+  border:1px solid #333;border-radius:999px;background:rgba(255,255,255,0.025);
+  color:#9aa0ae;font-size:12px;line-height:1.4;
+}
+.sample-disclosure strong{color:var(--text);font-weight:600}
 .segment{
   position:relative;z-index:1;
   max-width:720px;margin:0 auto;padding:0 24px 64px;
@@ -7204,7 +7322,7 @@ _USE_CASE_FOOTER = r"""
   <h2>Your browser agent, ready when you are</h2>
   <p>Works with your real browser, your real logins, and your real data. No screenshots, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="__USE_CASE_DEMO_HREF__" class="cta-btn primary">__USE_CASE_DEMO_LABEL__ &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -7224,6 +7342,16 @@ _USE_CASE_FOOTER = r"""
 
 </body>
 </html>"""
+
+
+def _use_case_footer(
+    demo_href: str = "/first-look",
+    demo_label: str = "Try the Demo",
+) -> str:
+    return (
+        _USE_CASE_FOOTER.replace("__USE_CASE_DEMO_HREF__", demo_href)
+        .replace("__USE_CASE_DEMO_LABEL__", demo_label)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -7259,6 +7387,7 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
   <a href="/" class="hero-back">&larr; Unchained</a>
   <h1>AI <span>Apartment Search</span> Assistant</h1>
   <p class="subtitle">Describe what you want. The agent searches Zillow, Apartments.com, and Craigslist&mdash;and delivers a ranked shortlist in seconds.</p>
+  <div class="sample-disclosure" role="note"><strong>Illustrative sample</strong><span>The prompts and results below are examples, not live listings.</span></div>
 </div>
 
 <div class="segment">
@@ -7320,7 +7449,10 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer(
+    "/first-look?task=apartment",
+    "Try a Live Apartment Task",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -7356,6 +7488,7 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
   <a href="/" class="hero-back">&larr; Unchained</a>
   <h1>AI <span>Flight Price</span> Comparison</h1>
   <p class="subtitle">Tell it where you&rsquo;re going. The agent searches Google Flights, Kayak, and airline sites&mdash;and ranks the best options with tradeoffs.</p>
+  <div class="sample-disclosure" role="note"><strong>Illustrative sample</strong><span>The prompts and results below are examples, not live fares.</span></div>
 </div>
 
 <div class="segment">
@@ -7418,7 +7551,10 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer(
+    "/first-look?task=flight",
+    "Try a Live Flight Task",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -7519,7 +7655,7 @@ USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer()
 
 
 # ---------------------------------------------------------------------------
@@ -7611,7 +7747,7 @@ USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer()
 
 
 # ---------------------------------------------------------------------------
@@ -8132,6 +8268,14 @@ body{
 #nav-trail span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px}
 #nav-trail span+span::before{content:' › ';opacity:0.6}
 #turn-ctr{flex-shrink:0;opacity:0.4;font-size:10px}
+#new-chat-feedback{
+  display:none;margin:8px 16px 0;padding:9px 12px;border:1px solid #3f4b68;
+  border-radius:8px;background:#151b29;color:#cbd5e1;font-size:12px;line-height:1.4;
+  flex-shrink:0;
+}
+#new-chat-feedback.pending{display:block}
+#new-chat-feedback.success{display:block;border-color:#285b46;background:#10271e;color:#9ee6c2}
+#new-chat-feedback.error{display:block;border-color:#713b45;background:#2b171c;color:#f3b7c1}
 .bubble.asst{position:relative}
 .bubble.asst .copy-btn{
   position:absolute;top:6px;right:6px;
@@ -8148,15 +8292,19 @@ body{
   background:var(--surface);border-bottom:1px solid #333;flex-shrink:0;
 }
 #slotbar button{
-  flex:1;height:32px;border:1px solid #444;border-radius:6px;
+  flex:1;height:40px;min-width:0;border:1px solid #444;border-radius:6px;
   background:transparent;color:var(--muted);font-size:12px;
-  font-family:var(--mono);cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--mono);cursor:pointer;display:flex;flex-direction:column;
+  align-items:flex-start;justify-content:center;text-align:left;padding:4px 10px;
   transition:border-color 0.15s,color 0.15s;
 }
+#slotbar .slot-name,#slotbar .slot-preview{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#slotbar .slot-name{font-size:11px;font-weight:700;line-height:1.2}
+#slotbar .slot-preview{font-size:10px;font-weight:400;line-height:1.25;color:var(--muted)}
 #slotbar button:hover{border-color:var(--accent);color:var(--text)}
 #slotbar button:active{transform:scale(0.95)}
 #slotbar button.active{border-color:var(--accent);color:var(--accent);font-weight:600}
+#slotbar button.active .slot-preview{color:inherit}
 #slotbar button.empty{color:#555;font-style:italic}
 #slotbar button.empty.active{color:var(--accent);font-style:normal}
 #slotbar.locked button{pointer-events:none;opacity:0.4}
@@ -8462,7 +8610,6 @@ body{
       <a href="/demo">Demo</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="#" onclick="openArchives();return false">Archives</a>
-      <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
@@ -8478,16 +8625,16 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.</div>
+  <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. Access your chosen Claude, Gemini, or Codex provider models using your own API key. <a href="/setup">Configure provider / API key &rarr;</a></div>
   <div id="claude-request-banner">
     <span id="claude-request-text"></span>
     <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
   </div>
 
-  <div id="slotbar">
-    <button onclick="switchSlot(1)" id="slot1" title="Independent conversation session">Lane A</button>
-    <button onclick="switchSlot(2)" id="slot2" title="Independent conversation session">Lane B</button>
-    <button onclick="switchSlot(3)" id="slot3" title="Independent conversation session">Lane C</button>
+  <div id="slotbar" role="group" aria-label="Chat sessions">
+    <button onclick="switchSlot(1)" id="slot1" aria-pressed="true" aria-label="Chat 1: No task yet. Independent conversation session." title="Chat 1: No task yet. Independent conversation session."><span class="slot-name">Chat 1</span><span class="slot-preview">No task yet</span></button>
+    <button onclick="switchSlot(2)" id="slot2" aria-pressed="false" aria-label="Chat 2: No task yet. Independent conversation session." title="Chat 2: No task yet. Independent conversation session."><span class="slot-name">Chat 2</span><span class="slot-preview">No task yet</span></button>
+    <button onclick="switchSlot(3)" id="slot3" aria-pressed="false" aria-label="Chat 3: No task yet. Independent conversation session." title="Chat 3: No task yet. Independent conversation session."><span class="slot-name">Chat 3</span><span class="slot-preview">No task yet</span></button>
   </div>
 
   <div id="agent-bar">
@@ -8495,6 +8642,7 @@ body{
     <span id="nav-trail"></span>
     <span id="turn-ctr"></span>
   </div>
+  <div id="new-chat-feedback" role="status" aria-live="polite"></div>
 
   <div id="download-banner" class="guided" style="display:none">
     <div class="copy">
@@ -8597,6 +8745,7 @@ let sessionId = '';
 let sending = false;
 let _cancelCtrl = null;
 let _isAdmin = false;
+let _userId = '';
 let _userName = '';
 let _userPicture = '';
 let _openrouterUsage = null;
@@ -8605,6 +8754,93 @@ let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const _TRIAL_MODEL_STORAGE_PREFIX = 'unchained_trial_model:';
+const _TRIAL_ACTIVE_IDENTITY_KEY = 'unchained_trial_identity';
+const _LEGACY_MODEL_KEY = 'unchained_model';
+const _LEGACY_MODEL_OWNER_KEY = 'unchained_model_owner';
+
+function _trialModelKey(userId) {
+  return userId ? _TRIAL_MODEL_STORAGE_PREFIX + encodeURIComponent(userId) : '';
+}
+
+function _clearTrialAccountUi(userId) {
+  const key = _trialModelKey(userId);
+  try {
+    if (key) localStorage.removeItem(key);
+    if ((localStorage.getItem(_LEGACY_MODEL_OWNER_KEY) || '').trim() === userId) {
+      localStorage.removeItem(_LEGACY_MODEL_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    }
+  } catch(e) {}
+}
+
+function _resetTrialModelUi() {
+  const sel = document.getElementById('modelsel');
+  const customInput = document.getElementById('model-custom-input');
+  if (sel) sel.value = _defaultTrialModel();
+  if (customInput) customInput.value = '';
+  _syncCustomModelUi();
+}
+
+function _syncTrialAdminUi() {
+  const controlLink = document.getElementById('control-link');
+  if (controlLink) controlLink.style.display = _isAdmin ? '' : 'none';
+}
+
+function _setTrialIdentity(userId) {
+  const next = (userId || '').trim();
+  let previous = _userId;
+  try { previous = previous || localStorage.getItem(_TRIAL_ACTIVE_IDENTITY_KEY) || ''; } catch(e) {}
+  const changed = previous !== next || _userId !== next;
+  if (previous && previous !== next) _clearTrialAccountUi(previous);
+  _userId = next;
+  try {
+    if (next) localStorage.setItem(_TRIAL_ACTIVE_IDENTITY_KEY, next);
+    else {
+      localStorage.removeItem(_TRIAL_ACTIVE_IDENTITY_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    }
+  } catch(e) {}
+  if (changed) {
+    _isAdmin = false;
+    _syncTrialAdminUi();
+    _resetTrialModelUi();
+  }
+}
+
+function _persistTrialModel(model) {
+  const key = _trialModelKey(_userId);
+  const value = (model || '').trim();
+  if (!key || !value) return;
+  try { localStorage.setItem(key, value); } catch(e) {}
+}
+
+function _readTrialModelPreference() {
+  const key = _trialModelKey(_userId);
+  if (!key) return '';
+  try {
+    let saved = (localStorage.getItem(key) || '').trim();
+    const legacy = (localStorage.getItem(_LEGACY_MODEL_KEY) || '').trim();
+    const legacyOwner = (localStorage.getItem(_LEGACY_MODEL_OWNER_KEY) || '').trim();
+    if (!saved && legacy && legacyOwner === _userId) {
+      saved = legacy;
+      localStorage.setItem(key, saved);
+    }
+    localStorage.removeItem(_LEGACY_MODEL_KEY);
+    localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    return saved;
+  } catch(e) {
+    return '';
+  }
+}
+
+function _applyTrialIdentity(data) {
+  const userId = (data.user_id || '').trim();
+  _setTrialIdentity(userId);
+  _isAdmin = !!(userId && data.is_admin);
+  _syncTrialAdminUi();
+}
 
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
@@ -8630,7 +8866,7 @@ function maybeShowDevLogin() {
 }
 
 function _applyAuthState(data) {
-  _isAdmin = !!data.is_admin;
+  _applyTrialIdentity(data);
   _userName = data.name || '';
   _userPicture = data.picture || '';
   _openrouterUsage = data.openrouter_usage || null;
@@ -8741,8 +8977,14 @@ async function checkApproval() {
 
 async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
+  _setTrialIdentity('');
   agentId = '';
   sessionId = '';
+  _isAdmin = false;
+  _syncTrialAdminUi();
+  _userName = '';
+  _userPicture = '';
+  _openrouterUsage = null;
   _accountStatus = 'approved';
   _claudeAccessRequested = false;
   document.getElementById('login').style.display = 'flex';
@@ -8805,6 +9047,12 @@ function showPending() {
 
 async function backToLogin() {
   await fetch('/auth/logout', {method: 'POST'});
+  _setTrialIdentity('');
+  _isAdmin = false;
+  _syncTrialAdminUi();
+  _userName = '';
+  _userPicture = '';
+  _openrouterUsage = null;
   _accountStatus = 'approved';
   _claudeAccessRequested = false;
   document.getElementById('pending').style.display = 'none';
@@ -8870,14 +9118,14 @@ function _applyOpenRouterCapUi() {
       const forced = _defaultTrialModel();
       if (_modelOptionExists(forced)) {
         sel.value = forced;
-        localStorage.setItem('unchained_model', forced);
+        _persistTrialModel(forced);
       }
     }
     if (notice) {
       notice.innerHTML = '<strong>Trial budget reached</strong> &mdash; available models are Trinity and StepFun.';
     }
   } else if (notice) {
-    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.';
+    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. Access your chosen Claude, Gemini, or Codex provider models using your own API key. <a href="/setup">Configure provider / API key &rarr;</a>';
   }
 }
 
@@ -8908,14 +9156,248 @@ function _restoreSessionId() {
 
 function _persistSessionId(sid) {
   if (sid && sid.startsWith('s-' + agentId)) {
-    localStorage.setItem(_sessionStoreKey(), sid);
+    try { localStorage.setItem(_sessionStoreKey(), sid); } catch(e) {}
   }
 }
 
 let activeSlot = 1;
+let newChatPending = false;
+
+function _newChatStateKey() {
+  return _sessionStoreKey() + '_new_chat_v1';
+}
+
+function _newChatRequestId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Secure random IDs are unavailable in this browser.');
+}
+
+function _loadPendingNewChat() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(_newChatStateKey()) || 'null');
+    if (!parsed || !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.request_id || '')) return null;
+    if (!String(parsed.previous_session_id || '').startsWith('s-' + agentId + '-')) return null;
+    if (parsed.slot !== 1 && parsed.slot !== 2 && parsed.slot !== 3) return null;
+    const next = String(parsed.session_id || '');
+    if (next && !next.startsWith('s-' + agentId + '-')) return null;
+    if (parsed.commit_request_id &&
+        !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.commit_request_id)) return null;
+    if (parsed.commit_token && !/^[0-9]{1,12}\.[0-9]{1,12}\.[a-f0-9]{64}$/.test(parsed.commit_token)) return null;
+    if (next && (!parsed.commit_request_id || !parsed.commit_token)) return null;
+    return parsed;
+  } catch(e) {
+    return null;
+  }
+}
+
+function _savePendingNewChat(state) {
+  try { localStorage.setItem(_newChatStateKey(), JSON.stringify(state)); } catch(e) {}
+}
+
+function _clearPendingNewChat(requestId) {
+  const pending = _loadPendingNewChat();
+  if (!pending || pending.request_id !== requestId) return;
+  try { localStorage.removeItem(_newChatStateKey()); } catch(e) {}
+}
+
+function _newChatRecoveryBlocked() {
+  const pending = _loadPendingNewChat();
+  return !!(pending && pending.session_id);
+}
+
+function _syncNewChatRecoveryLock() {
+  const blocked = _newChatRecoveryBlocked();
+  const slotbar = document.getElementById('slotbar');
+  if (slotbar) slotbar.classList.toggle('locked', blocked || newChatPending || sending);
+  const input = document.getElementById('msginput');
+  if (input) input.disabled = blocked;
+  const sendbtn = document.getElementById('sendbtn');
+  if (sendbtn && blocked) {
+    sendbtn.disabled = true;
+    sendbtn.setAttribute('aria-disabled', 'true');
+    sendbtn.title = 'Finish recovering the new chat first';
+  }
+  return blocked;
+}
+
+async function acknowledgeNewChatTransition(pending, recoveryChoice) {
+  try {
+    const commitRequestId = pending.commit_request_id || pending.request_id;
+    const r = await fetch('/web/chat/new/ack', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: pending.model || currentModel(),
+        request_id: commitRequestId,
+        commit_token: pending.commit_token,
+        previous_session_id: pending.previous_session_id,
+        session_id: pending.session_id,
+        slot: pending.slot,
+        recovery_choice: recoveryChoice || '',
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (r.status === 409 && data.recovery_manual === true &&
+          Array.isArray(data.recovery_choices) &&
+          data.recovery_choices.includes('destination')) {
+        return {status:'manual', choices:data.recovery_choices};
+      }
+      if (r.status === 409 && data.recovery_terminal === true) {
+        const decision = data.recovery_decision;
+        const recoverySessionId = String(data.recovery_session_id || '');
+        const expectedSessionId = decision === 'destination'
+          ? pending.session_id
+          : (decision === 'source' ? pending.previous_session_id : '');
+        if (expectedSessionId && recoverySessionId === expectedSessionId) {
+          return {status:'expired', decision:decision, session_id:recoverySessionId, manual:data.recovery_manual_resolved === true};
+        }
+      }
+      return 'retry';
+    }
+    if (!data.ok || !data.acknowledged) return 'retry';
+    if (data.request_id !== commitRequestId ||
+        data.previous_session_id !== pending.previous_session_id ||
+        data.session_id !== pending.session_id) return 'retry';
+    _clearPendingNewChat(pending.request_id);
+    return 'acknowledged';
+  } catch(e) {
+    return 'retry';
+  }
+}
+
+function offerManualNewChatRecovery(pending, choices) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.className = 'error';
+  const canRestoreSource = Array.isArray(choices) && choices.includes('source');
+  feedback.textContent = canRestoreSource
+    ? 'Recovery records are unavailable. Choose which chat to keep: '
+    : 'Recovery records are unavailable. To avoid restoring deleted context, only the fresh chat can be kept: ';
+  const source = document.createElement('button');
+  source.type = 'button';
+  source.textContent = 'Restore previous chat';
+  const destination = document.createElement('button');
+  destination.type = 'button';
+  destination.textContent = 'Keep fresh chat';
+  const resolve = async function(choice) {
+    source.disabled = true;
+    destination.disabled = true;
+    newChatPending = true;
+    _syncNewChatRecoveryLock();
+    try {
+      const outcome = await acknowledgeNewChatTransition(pending, choice);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
+        return;
+      }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
+        return;
+      }
+      setNewChatFeedback('Recovery could not be resolved. Please try again.', 'error');
+    } finally {
+      newChatPending = false;
+      _syncNewChatRecoveryLock();
+      updateSendAvailability(lastLocalSetupReady);
+    }
+  };
+  source.addEventListener('click', function() { resolve('source'); });
+  destination.addEventListener('click', function() { resolve('destination'); });
+  if (canRestoreSource) {
+    feedback.appendChild(source);
+    feedback.appendChild(document.createTextNode(' '));
+  }
+  feedback.appendChild(destination);
+}
+
+async function recoverExpiredNewChat(pending, recovery) {
+  _clearPendingNewChat(pending.request_id);
+  activeSlot = pending.slot;
+  sessionId = recovery.session_id;
+  _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();
+  const chat = document.getElementById('chat');
+  if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Restoring previous chat...</div>';
+  await loadHistory();
+  const message = recovery.manual
+    ? (recovery.decision === 'destination'
+      ? 'You chose to keep the fresh ' + _slotLabel(pending.slot) + '. The fresh chat was restored.'
+      : 'You chose to restore the previous ' + _slotLabel(pending.slot) + '. Select New Chat to try again when ready.')
+    : (recovery.decision === 'destination'
+      ? 'The fresh ' + _slotLabel(pending.slot) + ' was confirmed before its response was lost. The fresh chat was restored.'
+      : 'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. Your previous chat was restored; select New Chat to try again.');
+  setNewChatFeedback(message, recovery.decision === 'destination' ? 'success' : 'error');
+}
+
+async function recoverPendingNewChat() {
+  const pending = _loadPendingNewChat();
+  if (!pending) return;
+  if (pending.session_id && pending.session_id === sessionId) {
+    if (newChatPending) return;
+    newChatPending = true;
+    _syncNewChatRecoveryLock();
+    setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
+    try {
+      const outcome = await acknowledgeNewChatTransition(pending);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
+        return;
+      }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
+        return;
+      }
+      const acknowledged = outcome === 'acknowledged';
+      setNewChatFeedback(
+        acknowledged
+          ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
+          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+        acknowledged ? 'success' : 'error'
+      );
+    } finally {
+      newChatPending = false;
+      _syncNewChatRecoveryLock();
+      updateSendAvailability(lastLocalSetupReady);
+    }
+    return;
+  }
+  if (pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
+    setNewChatFeedback(
+      'A fresh ' + _slotLabel(pending.slot) + ' is reserved. Select New Chat to restore and confirm it safely.',
+      'error'
+    );
+    return;
+  }
+  if (!pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
+    setNewChatFeedback(
+      'A previous New Chat request may have completed. Select New Chat again to recover it safely.',
+      'error'
+    );
+  }
+}
 
 function _slotLabel(n) {
-  return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
+  return 'Chat ' + n;
+}
+
+function _normalizeSlotPreview(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function _firstUserPreview(messages) {
+  for (const msg of (Array.isArray(messages) ? messages : [])) {
+    if (msg && msg.role === 'user') return _normalizeSlotPreview(msg.content);
+  }
+  return '';
 }
 
 function _slotStateKey() {
@@ -8939,14 +9421,17 @@ function _loadSlotState() {
   } catch(e) {}
 
   const slots = (state && typeof state.slots === 'object' && state.slots) ? state.slots : {};
+  const previews = (state && typeof state.previews === 'object' && state.previews) ? state.previews : {};
   const normalized = {};
+  const normalizedPreviews = {};
   for (let i = 1; i <= 3; i++) {
     const sid = String(slots[String(i)] || '').trim();
     normalized[String(i)] = (sid.startsWith('s-' + agentId + '-') ? sid : '');
+    normalizedPreviews[String(i)] = _normalizeSlotPreview(previews[String(i)]);
   }
   let active = Number(state && state.active_slot);
   if (active !== 1 && active !== 2 && active !== 3) active = 1;
-  return {active_slot: active, slots: normalized};
+  return {active_slot: active, slots: normalized, previews: normalizedPreviews};
 }
 
 function _saveSlotState(state) {
@@ -8975,21 +9460,76 @@ function _setActiveSlotSession(sid) {
   _saveSlotState(state);
 }
 
+function _setSlotPreview(n, preview) {
+  if (n !== 1 && n !== 2 && n !== 3) return;
+  const state = _loadSlotState();
+  state.previews[String(n)] = _normalizeSlotPreview(preview);
+  _saveSlotState(state);
+  _syncSlotButtons();
+  return state.previews[String(n)];
+}
+
+function _setSlotPreviewIfEmpty(n, preview) {
+  const state = _loadSlotState();
+  if (!state.previews[String(n)]) _setSlotPreview(n, preview);
+}
+
 function _syncSlotButtons() {
   const state = _loadSlotState();
   activeSlot = state.active_slot;
   for (let i = 1; i <= 3; i++) {
     const btn = document.getElementById('slot' + i);
     if (!btn) continue;
+    const label = _slotLabel(i);
+    const preview = state.previews[String(i)];
+    const previewLabel = preview || 'No task yet';
     btn.className = '';
-    btn.textContent = _slotLabel(i);
+    btn.classList.toggle('empty', !preview);
+    btn.querySelector('.slot-name').textContent = label;
+    btn.querySelector('.slot-preview').textContent = previewLabel;
+    btn.title = label + ': ' + previewLabel + '. Independent conversation session.';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', i === activeSlot ? 'true' : 'false');
     if (i === activeSlot) btn.classList.add('active');
   }
 }
 
+let _crossTabSessionSyncing = false;
+async function syncTrialSessionFromStorage(showFeedback) {
+  if (_crossTabSessionSyncing) return false;
+  const state = _loadSlotState();
+  const storedSlot = state.active_slot;
+  const storedSession = String(state.slots[String(storedSlot)] || _restoreSessionId() || '');
+  if (!storedSession || !storedSession.startsWith('s-' + agentId + '-')) return true;
+  if (storedSlot === activeSlot && storedSession === sessionId) return true;
+  _crossTabSessionSyncing = true;
+  try {
+    activeSlot = storedSlot;
+    sessionId = storedSession;
+    _persistSessionId(sessionId);
+    _syncSlotButtons();
+    const chat = document.getElementById('chat');
+    if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Updating chat from another tab...</div>';
+    await loadHistory();
+    if (showFeedback) {
+      setNewChatFeedback('This chat changed in another tab. The current lane was updated; review it before sending.', 'error');
+    }
+  } finally {
+    _crossTabSessionSyncing = false;
+  }
+  return false;
+}
+
+window.addEventListener('storage', function(event) {
+  if (!event || ![_sessionStoreKey(), _slotStateKey(), _newChatStateKey()].includes(event.key)) return;
+  if (sending || newChatPending) return;
+  syncTrialSessionFromStorage(true).then(function() { recoverPendingNewChat(); });
+});
+
 async function switchSlot(n) {
+  if (!(await syncTrialSessionFromStorage(false))) return;
   if (n === activeSlot) return;
-  if (sending) return;
+  if (sending || newChatPending || _newChatRecoveryBlocked()) return;
   const state = _loadSlotState();
   state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
   if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
@@ -9007,7 +9547,7 @@ function onModelChange(model) {
     const forced = _defaultTrialModel();
     if (_modelOptionExists(forced)) {
       document.getElementById('modelsel').value = forced;
-      localStorage.setItem('unchained_model', forced);
+      _persistTrialModel(forced);
     }
     _syncCustomModelUi();
     checkAgentStatus();
@@ -9016,9 +9556,9 @@ function onModelChange(model) {
   _syncCustomModelUi();
   if (model === '__custom_openrouter__') {
     const custom = (document.getElementById('model-custom-input')?.value || '').trim();
-    if (custom) localStorage.setItem('unchained_model', custom);
+    if (custom) _persistTrialModel(custom);
   } else {
-    localStorage.setItem('unchained_model', model);
+    _persistTrialModel(model);
   }
   updateTrialInstallGuidance();
   updateSendAvailability(false);
@@ -9028,7 +9568,7 @@ function onModelChange(model) {
 
 function onCustomModelInput(value) {
   const model = (value || '').trim();
-  if (model) localStorage.setItem('unchained_model', model);
+  if (model) _persistTrialModel(model);
 }
 
 let lastAgentConnected = false;
@@ -9058,15 +9598,24 @@ function updateTrialInstallGuidance() {
 function updateSendAvailability(ready) {
   const input = document.getElementById('msginput');
   const btn = document.getElementById('sendbtn');
+  const recoveryBlocked = _newChatRecoveryBlocked();
   if (input) {
-    input.placeholder = ready ? 'Ask anything...' : 'Connect agent to send...';
+    input.disabled = recoveryBlocked;
+    input.placeholder = recoveryBlocked
+      ? 'Finish recovering the new chat before sending...'
+      : (ready ? 'Ask anything...' : 'Connect agent to send...');
   }
   if (btn) {
     btn.disabled = !ready;
-    btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
-    btn.classList.toggle('setup-blocked', !ready);
-    btn.title = ready ? 'Send prompt' : 'Connect this computer first';
+    if (recoveryBlocked) btn.disabled = true;
+    const enabled = !btn.disabled;
+    btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    btn.classList.toggle('setup-blocked', !enabled);
+    btn.title = recoveryBlocked
+      ? 'Finish recovering the new chat first'
+      : (ready ? 'Send prompt' : 'Connect this computer first');
   }
+  _syncNewChatRecoveryLock();
 }
 
 function _installModalFocusable() {
@@ -9200,12 +9749,12 @@ function showMain() {
   document.getElementById('main').style.display = 'flex';
   renderClaudeRequestBanner();
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
+  _syncTrialAdminUi();
   try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
   _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
-  const saved = (localStorage.getItem('unchained_model') || '').trim();
+  const saved = _readTrialModelPreference();
   const requestedModel = fromQuery || saved;
   if (_isAdmin && requestedModel && _isOpenRouterModelId(requestedModel) && !_modelOptionExists(requestedModel)) {
     document.getElementById('modelsel').value = '__custom_openrouter__';
@@ -9227,6 +9776,7 @@ function showMain() {
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
+  recoverPendingNewChat();
 
 }
 
@@ -9241,17 +9791,32 @@ async function checkAgentStatus() {
   } catch(e) {}
 }
 
+let _historyLoadSequence = 0;
+
+function _historyLoadIsCurrent(sequence, requestedSlot, requestedSessionId) {
+  const state = _loadSlotState();
+  return sequence === _historyLoadSequence &&
+    activeSlot === requestedSlot &&
+    sessionId === requestedSessionId &&
+    state.active_slot === requestedSlot &&
+    state.slots[String(requestedSlot)] === requestedSessionId;
+}
+
 async function loadHistory() {
   _syncSlotButtons();
+  const requestedSlot = activeSlot;
+  const requestedSessionId = sessionId;
+  const loadSequence = ++_historyLoadSequence;
   try {
     const qs = new URLSearchParams({
       model: currentModel(),
-      session_id: sessionId,
-      slot: activeSlot,
+      session_id: requestedSessionId,
+      slot: requestedSlot,
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
     const data = await r.json();
+    if (!_historyLoadIsCurrent(loadSequence, requestedSlot, requestedSessionId)) return;
     const chatEl = document.getElementById('chat');
     if (chatEl) chatEl.innerHTML = '';
     if (data.session_id) {
@@ -9259,6 +9824,7 @@ async function loadHistory() {
       _persistSessionId(sessionId);
       _setActiveSlotSession(sessionId);
     }
+    _setSlotPreview(requestedSlot, _firstUserPreview(data.messages));
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
       return;
@@ -9291,30 +9857,168 @@ function showHintsIfEmpty() {
     '</div></div>';
 }
 
-async function doNewChat() {
-  if (sending) return;
+function setNewChatFeedback(message, state) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.textContent = message || '';
+  feedback.className = message ? state : '';
+  feedback.setAttribute('role', state === 'error' ? 'alert' : 'status');
+}
+
+function resetNewChatUi() {
   document.getElementById('chat').innerHTML = '';
   showHintsIfEmpty();
+  const input = document.getElementById('msginput');
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+  _cancelCtrl = null;
+  _finalizeGroup();
+  _turnCount = 0;
+  _navTrail = [];
+  renderNavTrail();
+  const actionEl = document.getElementById('agent-action');
+  if (actionEl) actionEl.textContent = '';
+  const turnEl = document.getElementById('turn-ctr');
+  if (turnEl) turnEl.textContent = '';
+  document.getElementById('agent-bar').classList.remove('active');
+  document.getElementById('sendbtn').style.display = 'block';
+  document.getElementById('cancelbtn').style.display = 'none';
+}
+
+async function doNewChat() {
+  if (sending || newChatPending) return;
+  newChatPending = true;
+  const slotbar = document.getElementById('slotbar');
+  const sendbtn = document.getElementById('sendbtn');
+  if (slotbar) slotbar.classList.add('locked');
+  if (sendbtn) {
+    sendbtn.disabled = true;
+    sendbtn.setAttribute('aria-disabled', 'true');
+  }
+  let pending = _loadPendingNewChat();
   try {
-    const r = await fetch('/web/chat/new', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        model: currentModel(),
-        session_id: sessionId,
-        slot: activeSlot,
-      }),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.session_id) {
-        sessionId = data.session_id;
+    if (pending && pending.session_id) {
+      const recoveringDestination = pending.slot === activeSlot && pending.session_id === sessionId;
+      const recoveringSource = pending.slot === activeSlot && pending.previous_session_id === sessionId;
+      if (!recoveringDestination && !recoveringSource) {
+        setNewChatFeedback(
+          'Another tab is finishing New Chat for ' + _slotLabel(pending.slot) + '. Switch to that lane or retry there.',
+          'error'
+        );
+        return;
+      }
+      if (recoveringSource) {
+        sessionId = pending.session_id;
         _persistSessionId(sessionId);
         _setActiveSlotSession(sessionId);
+        if (typeof _setSlotPreview === 'function') _setSlotPreview(pending.slot, '');
+        resetNewChatUi();
+        _syncSlotButtons();
       }
+      setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
+      const outcome = await acknowledgeNewChatTransition(pending);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
+        return;
+      }
+      if (outcome && outcome.status === 'manual') {
+        offerManualNewChatRecovery(pending, outcome.choices);
+        return;
+      }
+      const acknowledged = outcome === 'acknowledged';
+      setNewChatFeedback(
+        acknowledged
+          ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
+          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+        acknowledged ? 'success' : 'error'
+      );
+      return;
     }
-  } catch(e) {}
-  _syncSlotButtons();
+
+    const requestedSlot = activeSlot;
+    const previousSessionId = sessionId;
+    if (!pending || pending.previous_session_id !== previousSessionId ||
+        pending.slot !== requestedSlot) {
+      pending = {
+        request_id: _newChatRequestId(),
+        commit_request_id: '',
+        commit_token: '',
+        previous_session_id: previousSessionId,
+        session_id: '',
+        slot: requestedSlot,
+        model: currentModel(),
+      };
+      _savePendingNewChat(pending);
+    }
+    setNewChatFeedback('Starting a fresh ' + _slotLabel(requestedSlot) + '...', 'pending');
+    let nextSessionId = '';
+    try {
+      const r = await fetch('/web/chat/new', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          model: pending.model,
+          request_id: pending.request_id,
+          session_id: pending.previous_session_id,
+          slot: requestedSlot,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'The server could not start a new chat.');
+      nextSessionId = String(data.session_id || '').trim();
+      if (!data.ok || data.request_id !== pending.request_id ||
+          !/^[A-Za-z0-9_-]{16,80}$/.test(data.commit_request_id || '') ||
+          !/^[0-9]{1,12}\.[0-9]{1,12}\.[a-f0-9]{64}$/.test(data.commit_token || '') ||
+          data.previous_session_id !== previousSessionId || data.active_slot !== requestedSlot ||
+          !nextSessionId || nextSessionId === previousSessionId ||
+          !nextSessionId.startsWith('s-' + agentId + '-')) {
+        throw new Error('The server returned a stale or invalid new-chat transition.');
+      }
+      if (activeSlot !== requestedSlot || sessionId !== previousSessionId) {
+        throw new Error('The active lane or session changed while starting a new chat.');
+      }
+      pending.commit_request_id = data.commit_request_id;
+      pending.commit_token = data.commit_token;
+    } catch(e) {
+      const reason = e && e.message ? ' ' + e.message : '';
+      setNewChatFeedback(
+        'Could not start a fresh ' + _slotLabel(requestedSlot) + '.' + reason +
+        ' Your current chat is unchanged. Select New Chat again to retry safely.',
+        'error'
+      );
+      return;
+    }
+    sessionId = nextSessionId;
+    _persistSessionId(sessionId);
+    _setActiveSlotSession(sessionId);
+    pending.session_id = sessionId;
+    _savePendingNewChat(pending);
+    if (typeof _setSlotPreview === 'function') _setSlotPreview(requestedSlot, '');
+    resetNewChatUi();
+    _syncSlotButtons();
+    const outcome = await acknowledgeNewChatTransition(pending);
+    if (outcome && outcome.status === 'expired') {
+      await recoverExpiredNewChat(pending, outcome);
+      return;
+    }
+    if (outcome && outcome.status === 'manual') {
+      offerManualNewChatRecovery(pending, outcome.choices);
+      return;
+    }
+    const acknowledged = outcome === 'acknowledged';
+    setNewChatFeedback(
+      acknowledged
+        ? 'Fresh ' + _slotLabel(requestedSlot) + ' ready.'
+        : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+      acknowledged ? 'success' : 'error'
+    );
+  } finally {
+    newChatPending = false;
+    _syncNewChatRecoveryLock();
+    updateSendAvailability(lastLocalSetupReady);
+  }
 }
 
 async function openArchives() {
@@ -9771,7 +10475,9 @@ async function doCancel() {
 }
 
 async function doSend() {
-  if (sending) return;
+  if (sending || newChatPending) return;
+  if (!(await syncTrialSessionFromStorage(true))) return;
+  if (_newChatRecoveryBlocked()) return;
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
@@ -9846,6 +10552,8 @@ async function doSend() {
       return;
     }
 
+    _setSlotPreviewIfEmpty(activeSlot, msg);
+
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -9890,7 +10598,7 @@ async function doSend() {
             }
             if (evt.model && _modelOptionExists(evt.model)) {
               document.getElementById('modelsel').value = evt.model;
-              localStorage.setItem('unchained_model', evt.model);
+              _persistTrialModel(evt.model);
             }
             _applyOpenRouterCapUi();
             _syncCustomModelUi();
@@ -15610,9 +16318,9 @@ function updateAgentStatusUI(data) {
     if (bridgeConnected) {
       if (isOpenCodeCli) {
         if (banner) banner.style.display = 'none';
-        if (bannerKicker) bannerKicker.textContent = 'Agent view';
+        if (bannerKicker) bannerKicker.textContent = 'Browser preview';
         if (bannerMsg) bannerMsg.textContent = 'Chat and browser are ready together.';
-        if (bannerDetail) bannerDetail.textContent = 'Prompt here or use Agent View; both operate the same CDP Chrome controlled by your agent.';
+        if (bannerDetail) bannerDetail.textContent = 'Prompt here or use Browser Preview; both control the browser for this conversation.';
         if (bannerCurl) bannerCurl.style.display = 'none';
         if (bannerConnect) bannerConnect.style.display = 'none';
         if (bannerMethodOr) bannerMethodOr.style.display = 'none';
@@ -17324,7 +18032,7 @@ body{
   display:flex;align-items:center;justify-content:center;
 }
 #sendbtn:active{opacity:0.8}
-#sendbtn:disabled{opacity:0.4;cursor:default}
+#sendbtn:disabled,#sendbtn[aria-disabled="true"]{opacity:0.4;cursor:not-allowed}
 #cancelbtn{
   width:44px;height:44px;border:none;border-radius:12px;
   background:#ff4444;color:#fff;font-size:18px;
@@ -17336,6 +18044,14 @@ body{
   padding:4px 0 0;font-size:11px;color:var(--muted);
 }
 #quota-bar strong{color:var(--text)}
+#new-chat-feedback{
+  display:none;padding:5px 0 0;font-size:12px;line-height:1.4;color:var(--muted);
+}
+#new-chat-feedback.pending,#new-chat-feedback.success,#new-chat-feedback.error{display:block}
+#new-chat-feedback.success{color:#b9f1d8}
+#new-chat-feedback.error{color:#f3aa9f}
+#new-chat-feedback button{margin:6px 4px 0 0;padding:6px 9px;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+#new-chat-feedback button:disabled{cursor:wait;opacity:.55}
 #shared-browser-status{
   padding:0 0 2px;font-size:11px;line-height:1.35;color:var(--muted);
 }
@@ -17441,6 +18157,18 @@ body{
 }
 .quota-dismiss:hover{color:var(--text)}
 @media(max-width:640px){.quota-grid{grid-template-columns:1fr}}
+.task-handoff{
+  display:flex;align-items:center;gap:10px;padding:9px 16px;
+  border-bottom:1px solid #24443c;background:#122b27;color:#c8ded8;
+  font-size:12px;line-height:1.45;flex-shrink:0;
+}
+.task-handoff-label{
+  flex-shrink:0;padding:3px 7px;border:1px solid #3d675d;border-radius:999px;
+  color:#b9f1d8;font-family:var(--mono);font-size:10px;letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.task-handoff strong{color:#fff}
+@media(max-width:640px){.task-handoff{align-items:flex-start;flex-direction:column;gap:5px}}
 </style>
 </head>
 <body class="first-look-canvas">
@@ -17482,6 +18210,7 @@ body{
   </div>
 
   <div id="model-notice" style="display:block"><strong>Live shared browser</strong> — run a demo on selected public sites. <a href="/trial">Unlock the full browser</a> for any site.</div>
+  __FIRST_LOOK_TASK_HANDOFF_HTML__
 
   <div id="workspace">
     <div id="chat-pane">
@@ -17508,11 +18237,12 @@ body{
       <div id="inputbar">
         <div id="input-fields">
           <label class="sr-only" for="msginput">Task for the shared browser</label>
-          <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something..."></textarea>
-          <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <textarea id="msginput" rows="1" aria-describedby="quota-bar new-chat-feedback" placeholder="Ask the browser to do something...">__FIRST_LOOK_TASK_PROMPT_HTML__</textarea>
+          <div id="quota-bar" role="status" aria-live="polite"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <div id="new-chat-feedback" role="status" aria-live="polite"></div>
           <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
-        <button id="sendbtn" aria-label="Run task">&#9654;</button>
+        <button id="sendbtn" type="button" aria-label="Run task" aria-disabled="false" title="Run task">&#9654;</button>
         <button id="cancelbtn" aria-label="Cancel run">&#9632;</button>
       </div>
     </div>
@@ -17553,6 +18283,7 @@ let remainingGuestRuns = __FIRST_LOOK_GUEST_REMAINING__;
 let agentId = '';
 let sessionId = '';
 let sending = false;
+let guestNewChatPending = false;
 let cancelCtrl = null;
 let currentToolEl = null;
 let currentAssistantEl = null;
@@ -17575,7 +18306,7 @@ let previewState = 'idle'; // 'idle'|'connecting'|'streaming'|'reconnecting'|'en
 let previewHasFrame = false;
 let previewTransportRetries = 0;
 const PREVIEW_MAX_TRANSPORT_RETRIES = 2;
-let selectedExamplePrompt = '';
+let selectedExamplePrompt = __FIRST_LOOK_TASK_PROMPT_JSON__;
 let selectedExampleUrl = '';
 let sharedBrowserReady = false;
 let sharedBrowserConfigured = false;
@@ -17601,6 +18332,60 @@ function esc(value) {
 
 function sessionStoreKey() {
   return agentId ? ('unchained_session_' + agentId + '_first_look_preview') : '';
+}
+
+function guestNewChatStateKey() {
+  const key = sessionStoreKey();
+  return key ? (key + '_new_chat_v1') : '';
+}
+
+function guestNewChatRequestId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Secure random IDs are unavailable in this browser.');
+}
+
+function loadGuestNewChatRequest() {
+  const key = guestNewChatStateKey();
+  if (!key) return null;
+  try {
+    const pending = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!pending || !/^[A-Za-z0-9_-]{16,80}$/.test(pending.request_id || '')) return null;
+    if (!String(pending.previous_session_id || '').startsWith('s-' + agentId + '-')) return null;
+    return pending;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function saveGuestNewChatRequest(pending) {
+  const key = guestNewChatStateKey();
+  if (!key) throw new Error('Guest session storage is unavailable.');
+  localStorage.setItem(key, JSON.stringify(pending));
+}
+
+function clearGuestNewChatRequest(pending) {
+  const key = guestNewChatStateKey();
+  if (!key) return;
+  const current = loadGuestNewChatRequest();
+  if (current && current.request_id === pending.request_id &&
+      current.previous_session_id === pending.previous_session_id) {
+    localStorage.removeItem(key);
+  }
+}
+
+function setGuestNewChatFeedback(message, state) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.textContent = message || '';
+  feedback.className = message ? state : '';
+  feedback.setAttribute('role', state === 'error' ? 'alert' : 'status');
 }
 
 function ensureSessionId() {
@@ -17689,17 +18474,35 @@ function updateQuotaCopy() {
       bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
     } else {
       bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/trial" style="color:var(--accent)">Start a free trial</a> to browse any site with the full agent.';
-      showQuotaModal();
     }
   }
+}
+
+function showQuotaFeedback() {
+  updateQuotaCopy();
+  const trialLink = document.querySelector('#quota-bar a[href="/trial"]');
+  if (trialLink) trialLink.focus();
 }
 
 function updateSendAvailability() {
   const send = document.getElementById('sendbtn');
   const input = document.getElementById('msginput');
-  const unavailable = sending || remainingGuestRuns <= 0 || !agentId || !sharedBrowserReady;
-  send.disabled = unavailable;
+  const quotaExhausted = remainingGuestRuns <= 0;
+  const hardUnavailable = sending || !agentId || !sharedBrowserReady;
+  send.disabled = hardUnavailable;
+  send.setAttribute('aria-disabled', (hardUnavailable || quotaExhausted) ? 'true' : 'false');
+  if (quotaExhausted) {
+    send.title = 'Guest runs used up. Start a free trial.';
+  } else if (sending) {
+    send.title = 'Run in progress';
+  } else if (!agentId || !sharedBrowserReady) {
+    send.title = 'Shared browser is not ready';
+  } else {
+    send.title = 'Run task';
+  }
   input.disabled = remainingGuestRuns <= 0;
+  const newChat = document.getElementById('new-chat-btn');
+  if (newChat) newChat.disabled = sending || guestNewChatPending;
 }
 
 function autoGrow(el) {
@@ -17708,57 +18511,101 @@ function autoGrow(el) {
 }
 
 async function doNewChat() {
-  if (sending) return;
-  const chat = document.getElementById('chat');
-  chat.innerHTML =
-    '<div id="chat-hints">' +
-      '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
-      '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
-      '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
-      '<div class="hint-examples">' +
-        '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
-        '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
-        '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
-      '</div>' +
-      '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
-      '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
-      '<div class="hint-footer">Live browser demo</div>' +
-    '</div>';
-  document.querySelectorAll('.hint-item').forEach(function (item) {
-    item.addEventListener('click', function () {
-      fillExample(item.dataset.prompt || '', item.dataset.url || '');
-    });
-  });
-  resetPreview();
-  resetSteps();
-  document.getElementById('msginput').value = '';
-  signalBuffer = '';
-  assistantText = '';
-  currentAssistantEl = null;
-  currentToolEl = null;
-  historyLoaded = false;
-
+  if (sending || guestNewChatPending) return;
+  guestNewChatPending = true;
+  updateSendAvailability();
+  const previousSessionId = sessionId;
+  const previousAgentId = agentId;
+  let pending = loadGuestNewChatRequest();
   try {
+    if (!pending || pending.previous_session_id !== previousSessionId) {
+      pending = {
+        request_id: guestNewChatRequestId(),
+        previous_session_id: previousSessionId,
+      };
+      saveGuestNewChatRequest(pending);
+    }
+    setGuestNewChatFeedback('Starting a fresh guest chat...', 'pending');
     const r = await fetch('/web/chat/new', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         model: 'google/gemini-3.1-flash-lite',
-        session_id: sessionId,
+        request_id: pending.request_id,
+        session_id: pending.previous_session_id,
         first_look_guest: true,
       }),
     });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.session_id) {
-        sessionId = data.session_id;
-        try { const k = sessionStoreKey(); if (k) localStorage.setItem(k, sessionId); } catch (_e) {}
-      }
+    let data;
+    try {
+      data = await r.json();
+    } catch (_err) {
+      throw new Error('The server returned an unreadable response.');
     }
+    if (!r.ok) {
+      clearGuestNewChatRequest(pending);
+      const retryAfter = r.status === 429 ? ' Please wait and try again.' : '';
+      const serverError = (data && data.error) || 'The server could not start a new chat.';
+      throw new Error(serverError + retryAfter);
+    }
+    const nextSessionId = String(data && data.session_id || '').trim();
+    if (!data || data.ok !== true || data.guest !== true ||
+        data.request_id !== pending.request_id ||
+        data.previous_session_id !== previousSessionId ||
+        !nextSessionId.startsWith('s-' + previousAgentId + '-') ||
+        nextSessionId === previousSessionId) {
+      throw new Error('The server returned a stale or invalid guest session.');
+    }
+    if (agentId !== previousAgentId || sessionId !== previousSessionId) {
+      throw new Error('The active guest session changed while starting a new chat.');
+    }
+
+    sessionId = nextSessionId;
+    try {
+      const key = sessionStoreKey();
+      if (key) localStorage.setItem(key, sessionId);
+    } catch (_err) {}
+    const chat = document.getElementById('chat');
+    chat.innerHTML =
+      '<div id="chat-hints">' +
+        '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
+        '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
+        '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
+        '<div class="hint-examples">' +
+          '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
+          '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
+          '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
+        '</div>' +
+        '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
+        '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
+        '<div class="hint-footer">Live browser demo</div>' +
+      '</div>';
+    document.querySelectorAll('.hint-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        fillExample(item.dataset.prompt || '', item.dataset.url || '');
+      });
+    });
+    resetPreview();
+    resetSteps();
+    document.getElementById('msginput').value = '';
+    signalBuffer = '';
+    assistantText = '';
+    currentAssistantEl = null;
+    currentToolEl = null;
+    historyLoaded = false;
+    clearGuestNewChatRequest(pending);
+    setGuestNewChatFeedback('Fresh guest chat ready.', 'success');
+    refreshSharedBrowserStatus();
   } catch (err) {
-    console.error('Failed to clear context:', err);
+    const detail = err && err.message ? ' ' + err.message : '';
+    setGuestNewChatFeedback(
+      'Could not start a fresh guest chat.' + detail + ' Your current chat is unchanged.',
+      'error'
+    );
+  } finally {
+    guestNewChatPending = false;
+    updateSendAvailability();
   }
-  refreshSharedBrowserStatus();
 }
 
 function hideHints() {
@@ -18332,6 +19179,27 @@ async function loadHistory() {
   } catch (_err) {}
 }
 
+function syncGuestSessionFromStorage() {
+  const pending = loadGuestNewChatRequest();
+  if (pending && pending.previous_session_id === sessionId) {
+    setGuestNewChatFeedback('Another tab is starting a fresh guest chat. Wait for it to finish before running another task.', 'error');
+    return false;
+  }
+  const key = sessionStoreKey();
+  let storedSession = '';
+  try { storedSession = key ? String(localStorage.getItem(key) || '') : ''; } catch (_err) {}
+  if (!storedSession || !storedSession.startsWith('s-' + agentId + '-') || storedSession === sessionId) return true;
+  sessionId = storedSession;
+  setGuestNewChatFeedback('This guest chat changed in another tab. Reloading the current chat...', 'pending');
+  window.location.reload();
+  return false;
+}
+
+window.addEventListener('storage', function(event) {
+  if (!event || ![sessionStoreKey(), guestNewChatStateKey()].includes(event.key)) return;
+  if (!sending && !guestNewChatPending) syncGuestSessionFromStorage();
+});
+
 function fillExample(prompt, url) {
   const input = document.getElementById('msginput');
   selectedExamplePrompt = String(prompt || '').trim();
@@ -18356,8 +19224,13 @@ async function doCancel() {
 
 async function doSend() {
   if (sending) return;
+  if (!syncGuestSessionFromStorage()) return;
+  if (remainingGuestRuns <= 0) {
+    showQuotaFeedback();
+    return;
+  }
   const message = String(document.getElementById('msginput').value || '').trim();
-  if (!message || remainingGuestRuns <= 0) return;
+  if (!message) return;
   if (!sharedBrowserReady) {
     if (!sharedBrowserConfigured) {
       setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
@@ -18754,6 +19627,7 @@ body::after{
   background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 55%,var(--spectrum-violet))!important;
   border:0!important;
   color:#fff!important;
+  text-decoration:none!important;
   box-shadow:0 12px 28px rgba(233,69,96,0.26)!important;
 }
 .topbar-new:hover{filter:brightness(1.06);background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong),var(--spectrum-blue))!important}
@@ -18778,6 +19652,9 @@ body::after{
   box-shadow:0 12px 30px rgba(0,0,0,0.18),0 0 0 1px rgba(255,255,255,0.02) inset;
   transition:transform 0.16s ease,border-color 0.16s ease,background 0.16s ease,box-shadow 0.16s ease!important;
 }
+#slotbar .slot-name{font-size:10px!important;line-height:1.15;letter-spacing:0.08em}
+#slotbar .slot-preview{font-size:10px!important;line-height:1.3;font-weight:500!important;letter-spacing:0;text-transform:none;color:#9daabd}
+#slotbar button.active .slot-preview{color:#fff!important}
 #slotbar button::before{
   content:"";position:absolute;left:13px;top:50%;transform:translateY(-50%);
   width:9px;height:9px;border-radius:50%;
@@ -18796,11 +19673,11 @@ body::after{
   color:#fff!important;
   background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 48%,var(--spectrum-violet))!important;
   box-shadow:0 16px 42px rgba(233,69,96,0.28),0 0 0 1px rgba(255,255,255,0.22) inset;
-  animation:laneGlow 4s ease-in-out infinite;
+  animation:sessionGlow 4s ease-in-out infinite;
 }
 #slotbar button.active::before{background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,0.23),0 0 16px rgba(255,255,255,0.45)}
 #slotbar button.active::after{opacity:1;transform:scaleX(1);background:linear-gradient(90deg,#fff,var(--spectrum-yellow),#fff)}
-@keyframes laneGlow{0%,100%{box-shadow:0 16px 42px rgba(233,69,96,0.24),0 0 0 1px rgba(255,255,255,0.2) inset}50%{box-shadow:0 16px 48px rgba(177,92,255,0.32),0 0 0 1px rgba(255,255,255,0.26) inset}}
+@keyframes sessionGlow{0%,100%{box-shadow:0 16px 42px rgba(233,69,96,0.24),0 0 0 1px rgba(255,255,255,0.2) inset}50%{box-shadow:0 16px 48px rgba(177,92,255,0.32),0 0 0 1px rgba(255,255,255,0.26) inset}}
 #slotbar button.empty{font-style:normal!important;color:#7f8da3!important}
 #slotbar button.empty::before{background:#48556a}
 #slotbar button.empty.active{color:#180f08!important}
@@ -18877,6 +19754,8 @@ body::after{
 #sendbtn{background:linear-gradient(135deg,#ffcf6e,#ff7a59 58%,#ff5e9f)!important;color:#180f08!important;font-weight:900!important}
 #sendbtn:hover{filter:none!important;transform:translateY(-2px) rotate(-2deg)}
 #sendbtn:disabled{opacity:0.48!important;box-shadow:none!important;transform:none!important}
+body.first-look-canvas #sendbtn:disabled,body.first-look-canvas #sendbtn[aria-disabled="true"]{opacity:0.48!important;cursor:not-allowed!important;box-shadow:none!important;transform:none!important}
+body.first-look-canvas #sendbtn[aria-disabled="true"]:hover{filter:none!important;transform:none!important}
 #cancelbtn{background:linear-gradient(135deg,#ef5c5c,#fb7185)!important}
 #download-banner{
   background:linear-gradient(90deg,rgba(255,207,110,0.13),rgba(255,107,74,0.10),rgba(93,155,255,0.10))!important;
@@ -19005,15 +19884,17 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 .sidebar-title{font-size:15px;font-weight:600;color:var(--text,#edf2f7);letter-spacing:0.5px}
 .sidebar-new{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
 .sidebar-new:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+.sidebar-search{display:block;padding:10px 10px 2px}.sidebar-search input{width:100%;height:36px;padding:0 11px;border:1px solid var(--line,#2a3341);border-radius:9px;background:rgba(255,255,255,.035);color:var(--text,#edf2f7);font:12px var(--sans);outline:none}.sidebar-search input::placeholder{color:var(--muted,#9da7b7)}.sidebar-search input:focus-visible{border-color:#6ee7a1;box-shadow:0 0 0 3px rgba(110,231,161,.12)}
 .topbar-new{font-weight:800!important;color:var(--text,#edf2f7)!important;border-color:var(--accent,#ff6b4a)!important;background:rgba(255,107,74,0.14)!important}
 .topbar-new:hover{background:rgba(255,107,74,0.24)!important}
 #sidebar-history{overflow-y:auto;flex:1;padding:8px}
-.sidebar-item{display:flex;flex-direction:column;padding:10px 12px;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px}
+.sidebar-group-label{padding:10px 10px 5px;color:var(--muted,#9da7b7);font:500 9px var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase}.sidebar-item{display:flex;width:100%;flex-direction:column;padding:10px 12px;border:0;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px;background:transparent;text-align:left}
 .sidebar-item:hover{background:var(--surface-elev,#171d26)}
 .sidebar-item.active{border-left-color:var(--accent,#ff6b4a);background:var(--surface-elev,#171d26)}
 .sidebar-item .sb-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-item .sb-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:3px;display:flex;gap:8px}
 .sidebar-empty{text-align:center;color:var(--muted,#9da7b7);padding:32px 16px;font-size:13px}
+.sidebar-empty button{margin-top:10px;padding:6px 10px;border:1px solid var(--line,#2a3341);border-radius:8px;background:transparent;color:var(--text,#edf2f7);cursor:pointer}.sidebar-filter-empty{display:none;text-align:center;color:var(--muted,#9da7b7);padding:22px 12px;font-size:12px}.sidebar-filter-empty.visible{display:block}
 .sidebar-viewall{display:block;text-align:center;padding:10px 12px;font-size:12px;color:var(--muted,#9da7b7);cursor:pointer;border-top:1px solid var(--line,#2a3341);text-decoration:none}
 .sidebar-viewall:hover{color:var(--accent,#ff6b4a)}
 #sidebar-toggle{display:none;background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px;margin-right:4px;line-height:1}
@@ -19033,12 +19914,17 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 }
 </style>"""
 
+_FULL_WIDTH_CHAT_STYLE = """<style id="full-width-chat-shell">
+#app-shell #main{width:100%;max-width:none;margin:0}
+</style>"""
+
 _SIDEBAR_BODY = """<div id="app-shell">
 <aside id="sidebar">
   <div class="sidebar-head">
     <span class="sidebar-title">Unchained</span>
-    <button class="sidebar-new" onclick="doNewChat()">+ New</button>
+    <span class="sidebar-head-actions"><button class="sidebar-new" onclick="doNewChat();if(typeof toggleAgentShellHistory==='function')toggleAgentShellHistory(false)">+ New</button><button type="button" class="sidebar-close" aria-label="Close history" onclick="toggleAgentShellHistory(false)">&times;</button></span>
   </div>
+  <label class="sidebar-search"><input id="sidebar-history-search" type="search" placeholder="Search chats" aria-label="Search chat history" autocomplete="off" oninput="filterSidebarHistory(this.value)"></label>
   <div id="sidebar-history"></div>
 </aside>
 """
@@ -19059,10 +19945,10 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:50%;background:rgba(255,255,255,.05);color:#c9d3df;font-size:18px;cursor:pointer}
 .agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
 .agent-view-chat-toggle{display:none;min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(110,231,161,.32);border-radius:999px;background:rgba(110,231,161,.08);color:#c8f6d7;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer}
+.agent-view-chat-context{display:grid;gap:1px;margin-right:4px;text-align:right;white-space:nowrap}.agent-view-chat-context strong{color:#dce7da;font-size:10px}.agent-view-chat-context span{color:#7f8c9d;font-size:8px}
 .agent-view-browserbar{position:relative;z-index:7;min-height:34px;padding:0 16px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(183,205,228,.13);background:rgba(10,14,20,.92);color:#788697;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:8px;letter-spacing:.08em;text-transform:uppercase}
 .agent-view-location{max-width:min(58vw,820px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#b5c0cd}
 .agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(110,231,161,.52),rgba(74,167,255,.12),transparent)}
-.agent-view-browserbar .policy{color:#baf1cc;border:1px solid rgba(110,231,161,.25);padding:3px 7px;border-radius:999px;background:rgba(110,231,161,.06)}
 .agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 42% 34%,rgba(74,167,255,.08),transparent 38%),linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#05070a;background-size:auto,48px 48px,48px 48px,auto}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
 .agent-view-semantic-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
@@ -19071,7 +19957,7 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(110,231,161,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
 .agent-view-empty strong{color:#dce7da;font-size:15px}.agent-view-empty span{font-size:11px;line-height:1.6}
-.agent-view-foot{position:relative;z-index:7;min-height:31px;padding:0 16px;display:flex;align-items:center;gap:12px;border-top:1px solid rgba(183,205,228,.13);background:rgba(8,11,16,.94);color:#778494;font:8px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
+.agent-view-foot{display:none;position:relative;z-index:7;min-height:31px;padding:0 16px;align-items:center;gap:12px;border-top:1px solid rgba(183,205,228,.13);background:rgba(8,11,16,.94);color:#778494;font:8px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
 .agent-view-foot strong{color:#bfe8ca;font-weight:500}.agent-view-foot .spacer{flex:1}
 .agent-view-fidelity{min-width:0;max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
 .agent-view-confirm{display:none;position:absolute;z-index:20;left:18px;bottom:22px;width:min(560px,calc(100% - 500px));padding:14px 15px;border:1px solid rgba(255,184,107,.38);border-radius:18px;background:rgba(20,16,12,.94);box-shadow:0 24px 72px rgba(0,0,0,.46);backdrop-filter:blur(18px);color:#f3e5d4}
@@ -19121,7 +20007,7 @@ body.agent-view-open #main .bubble.asst .copy-btn{pointer-events:none}
 body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #main .bubble.asst .copy-btn:focus-visible,body.agent-view-open #main .bubble.asst .copy-btn.copied{pointer-events:auto}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media(max-width:760px){
-  .agent-view-head{min-height:60px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top));gap:8px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 14px}.agent-view-close{width:44px;height:44px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{display:none}
+  .agent-view-head{min-height:60px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top));gap:8px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 14px}.agent-view-close{width:44px;height:44px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot,.agent-view-chat-context{display:none}
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
@@ -19165,23 +20051,77 @@ body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #ma
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0;width:100%!important;max-width:none!important;border:0!important;border-radius:0!important}
 }
 @media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-browserbar .policy{display:none}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
-@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open{animation:none}}
+/* Agent Task Shell experiment. Isolated behind ?shell=task. */
+:root{--task-space-1:4px;--task-space-2:8px;--task-space-3:12px;--task-space-4:16px;--task-space-6:24px;--task-space-8:32px;--task-radius-sm:8px;--task-radius-md:14px;--task-radius-lg:22px;--task-radius-full:999px;--task-shadow-sm:0 8px 24px rgba(0,0,0,.24);--task-shadow-lg:0 28px 90px rgba(0,0,0,.48);--task-fast:150ms;--task-normal:220ms;--task-panel-width:clamp(380px,34vw,520px)}
+#lane-picker-toggle{display:none}
+.agent-view-close:focus-visible,.agent-view-chat-toggle:focus-visible,.chat-size-btn:focus-visible,.agent-view-chat-restore:focus-visible,.topbar-agent-view:focus-visible,.sidebar-close:focus-visible,#lane-picker-toggle:focus-visible{outline:2px solid #9af1b9;outline-offset:2px}
+.agent-shell-trace{display:none;position:relative;z-index:7;min-height:38px;padding:0 16px;align-items:center;gap:7px;border-bottom:1px solid rgba(183,205,228,.11);background:rgba(7,11,16,.94);color:#657181;font:500 10px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.09em;text-transform:uppercase}
+.agent-shell-trace::before{content:"Task";margin-right:6px;color:#9aa8b8}.agent-shell-trace-step{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:color var(--task-normal) ease}.agent-shell-trace-step::before{content:"";width:6px;height:6px;border-radius:50%;border:1px solid #4b5868;background:#111820;transition:background var(--task-normal) ease,border-color var(--task-normal) ease,box-shadow var(--task-normal) ease}.agent-shell-trace-rail{width:26px;height:1px;background:#293340}.agent-shell-phase-label{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9aa8b8;letter-spacing:0;text-transform:none}
+body[data-agent-shell-phase="planning"] .agent-shell-trace-step[data-step="plan"],body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="browse"],body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="answer"],body[data-agent-shell-phase="complete"] .agent-shell-trace-step[data-step="answer"]{color:#d8ffe5}
+body[data-agent-shell-phase="planning"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="browse"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="answer"]::before{border-color:#6ee7a1;background:#6ee7a1;box-shadow:0 0 12px rgba(110,231,161,.6)}
+body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="browse"]::before,body[data-agent-shell-phase="complete"] .agent-shell-trace-step::before{border-color:#5f9c75;background:#326047}
+.agent-view-empty-task{display:none;place-items:center;gap:9px}.agent-view-empty-task .eyebrow{color:#78a58a;font:500 10px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.17em;text-transform:uppercase}.agent-view-empty-task strong{font-size:clamp(18px,2.1vw,28px);line-height:1.12;letter-spacing:-.035em;max-width:360px}.agent-view-empty-task span{max-width:350px}
+body.agent-shell-task .agent-shell-trace{display:flex;align-items:center;justify-content:center}body.agent-shell-task .agent-view-empty-legacy{display:none}body.agent-shell-task .agent-view-empty-task{display:grid}body.agent-shell-task .agent-view-chat-toggle,body.agent-shell-task .agent-view-close{display:none!important}body.agent-shell-task .topbar-agent-view::after{content:" shell";opacity:.58;font-weight:500}
+body.agent-shell-task.agent-view-open #agent-view{right:calc(var(--task-panel-width) + 12px);background:#05070a;transition:right 240ms cubic-bezier(.2,.8,.2,1),opacity 240ms ease,filter 240ms ease}body.agent-shell-task.agent-view-open #app-shell #main{right:12px;top:12px;bottom:12px;width:var(--task-panel-width);visibility:visible;opacity:1;transform:translateX(0) scale(1);transform-origin:right center;border-radius:var(--task-radius-lg)!important;box-shadow:var(--task-shadow-lg)!important;transition:left 240ms cubic-bezier(.2,.8,.2,1),right 240ms cubic-bezier(.2,.8,.2,1),top 240ms cubic-bezier(.2,.8,.2,1),bottom 240ms cubic-bezier(.2,.8,.2,1),width 240ms cubic-bezier(.2,.8,.2,1),opacity 180ms ease,transform 240ms cubic-bezier(.2,.8,.2,1),border-radius 240ms ease,visibility 0s linear 0s}body.agent-shell-task.agent-view-open #main #topbar{min-height:54px}body.agent-shell-task.agent-view-open #main #chat{padding:18px 16px!important}body.agent-shell-task.agent-view-open #main #inputbar{margin:0 11px 11px;border-color:rgba(110,231,161,.18)!important;box-shadow:var(--task-shadow-sm)}body.agent-shell-task.agent-view-open #main #msginput:focus{border-color:#6ee7a1!important;box-shadow:0 0 0 3px rgba(110,231,161,.12)!important}
+body.agent-shell-task.agent-view-open #main{overflow:visible}body.agent-shell-task.agent-view-open #main #topbar{overflow:visible}body.agent-shell-task.agent-view-open #main #topbar .nav{padding-left:98px}body.agent-shell-task.agent-view-open #main #slotbar{display:flex!important;position:absolute;z-index:14;left:10px;top:8px;width:auto;height:38px;padding:0;gap:0;overflow:visible;border:0;background:transparent}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{display:inline-flex;align-items:center;gap:7px;width:auto;min-width:84px;height:38px;padding:0 11px;border:1px solid rgba(183,205,228,.2);border-radius:12px;background:rgba(9,13,18,.94);color:#b8c5d2;box-shadow:0 8px 22px rgba(0,0,0,.24);font:500 10px var(--mono,'IBM Plex Mono',monospace);cursor:pointer}#lane-picker-toggle .lane-picker-kicker{color:#718092;text-transform:uppercase;letter-spacing:.08em}#lane-picker-toggle strong{color:#d8ffe5;font-size:11px}#lane-picker-toggle svg{width:12px;height:12px;margin-left:auto;fill:none;stroke:currentColor;stroke-width:1.7;transition:transform var(--task-fast) ease}body.agent-shell-task.agent-view-open #main #slotbar.agent-lane-picker-open #lane-picker-toggle svg{transform:rotate(180deg)}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){display:none;position:absolute;left:0;width:210px;height:36px;padding:0 12px;border:1px solid rgba(183,205,228,.18);border-radius:10px;background:rgba(9,13,18,.98);color:#9eabb9;text-align:left;font:500 10px var(--mono,'IBM Plex Mono',monospace);box-shadow:0 12px 34px rgba(0,0,0,.38)}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):hover,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):focus-visible{border-color:rgba(110,231,161,.42);color:#effff4;background:#111b18}body.agent-shell-task.agent-view-open #main #slotbar>button.active:not(#lane-picker-toggle){color:#d8ffe5;border-color:rgba(110,231,161,.34);box-shadow:inset 3px 0 0 #6ee7a1,0 12px 34px rgba(0,0,0,.38)}body.agent-shell-task.agent-view-open #main #slotbar:hover>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar:focus-within>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar.agent-lane-picker-open>button:not(#lane-picker-toggle){display:block}body.agent-shell-task.agent-view-open #main #slot1{top:42px}body.agent-shell-task.agent-view-open #main #slot2{top:80px}body.agent-shell-task.agent-view-open #main #slot3{top:118px}
+body.agent-shell-task.agent-view-open.agent-view-chat-expanded #app-shell #main{left:auto!important;right:12px!important;top:12px!important;bottom:12px!important;width:calc(100vw - 24px)!important;border-radius:var(--task-radius-lg)!important}body.agent-shell-task.agent-view-open.agent-view-chat-expanded #agent-view{opacity:.26;filter:saturate(.7);pointer-events:none}body.agent-shell-task.agent-view-open.agent-shell-text-turn #main #topbar{background:rgba(8,12,17,.94)!important}
+body.agent-shell-task.agent-view-open.chat-minimized #agent-view{right:0}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:flex!important;visibility:hidden;opacity:0;transform:translateX(28px) scale(.965);pointer-events:none;transition-delay:0s,0s,0s,0s,0s,0s,0s,0s,240ms}body.agent-shell-task.agent-view-open.chat-minimized .agent-view-location{max-width:min(72vw,1120px)}
+body.agent-shell-task.agent-view-open.agent-shell-chat-only #agent-view{right:0;background:radial-gradient(circle at 50% 18%,rgba(110,231,161,.055),transparent 34%),#05070a}body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-browserbar,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-shell-trace,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-canvas,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-foot,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-chat-restore{display:none!important}
+body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{left:50%;right:auto;top:72px;bottom:12px;width:min(1040px,calc(100vw - 24px));transform:translateX(-50%);border-radius:var(--task-radius-lg)!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #agent-bar.active{display:flex!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #chat .bubble{max-width:min(88%,860px)}body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-expand,body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-exit,body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-minimize{display:none!important}
+body.agent-shell-task #agent-shell-history-scrim{display:block;position:fixed;z-index:1320;inset:0;border:0;background:rgba(2,5,8,.24);opacity:0;visibility:hidden;pointer-events:none;cursor:pointer;backdrop-filter:blur(0);transition:opacity 180ms ease,visibility 0s linear 220ms,backdrop-filter 220ms cubic-bezier(.2,.8,.2,1)}body.agent-shell-task.agent-shell-history-open #agent-shell-history-scrim{opacity:1;visibility:visible;pointer-events:auto;backdrop-filter:blur(3px);transition-delay:0s}body.agent-shell-task.agent-view-open #sidebar{display:flex!important;position:fixed;z-index:1330;left:var(--agent-history-left,12px);top:var(--agent-history-top,64px);bottom:auto;width:min(360px,calc(100vw - 24px));max-height:var(--agent-history-max-height,520px);border:1px solid rgba(183,205,228,.22);border-radius:16px;background:linear-gradient(180deg,rgba(17,22,29,.99),rgba(8,11,16,.99));box-shadow:0 26px 72px rgba(0,0,0,.56),inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-8px) scale(.98);transform-origin:top left;transition:opacity 180ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition-delay:0s}body.agent-shell-task.agent-view-open #sidebar .sidebar-head{padding:12px 12px 10px;border-color:rgba(183,205,228,.13)}body.agent-shell-task.agent-view-open #sidebar .sidebar-title{font-size:0}body.agent-shell-task.agent-view-open #sidebar .sidebar-title::after{content:"Chat history";font-size:14px;letter-spacing:.01em}body.agent-shell-task.agent-view-open #sidebar-history{min-height:110px;max-height:390px;padding:6px 8px 10px}body.agent-shell-task.agent-view-open #sidebar .sidebar-item{border-left:0;margin-bottom:3px;padding:10px;border:1px solid transparent}body.agent-shell-task.agent-view-open #sidebar .sidebar-item:hover,body.agent-shell-task.agent-view-open #sidebar .sidebar-item:focus-visible{border-color:rgba(110,231,161,.2);background:rgba(110,231,161,.065);outline:none}body.agent-shell-task.agent-view-open #sidebar .sidebar-search{padding:9px 10px 3px}.sidebar-head-actions{display:flex;align-items:center;gap:6px}.sidebar-close{display:none;width:34px;height:34px;border:1px solid rgba(183,205,228,.18);border-radius:10px;background:rgba(255,255,255,.04);color:#cbd5df;font-size:18px;cursor:pointer}body.agent-shell-history-open .sidebar-close{display:grid;place-items:center}body.agent-shell-task.agent-view-open #agent-chat-primary-tools #chat-card-history{transition:border-color 150ms ease,background 150ms ease,color 150ms ease,transform 150ms ease}body.agent-shell-task.agent-view-open #agent-chat-primary-tools #chat-card-history[aria-expanded="true"]{border-color:rgba(110,231,161,.48);background:#13221b;color:#d8ffe5;transform:scale(.96)}
+@media(min-width:761px) and (max-width:1100px){body.agent-shell-task{--task-panel-width:min(420px,42vw)}body.agent-shell-task .agent-view-kicker{display:none}body.agent-shell-task .agent-view-head{gap:9px}}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #agent-view{right:0!important}body.agent-shell-task .agent-view-head{min-height:58px}body.agent-shell-task .agent-view-state{display:none}body.agent-shell-task .agent-shell-trace{min-height:34px;padding:0 10px;gap:5px}body.agent-shell-task .agent-shell-trace::before,body.agent-shell-task .agent-shell-trace-rail,body.agent-shell-task .agent-shell-phase-label{display:none}body.agent-shell-task.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0!important;border-radius:0!important}body.agent-shell-task #chat-card-minimize{display:none!important}body.agent-shell-task.agent-view-open #main #topbar .nav{padding-left:104px}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{height:44px}body.agent-shell-task.agent-view-open #main #slotbar{top:5px;height:44px}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){height:44px;font-size:11px}body.agent-shell-task.agent-view-open #main #slot1{top:48px}body.agent-shell-task.agent-view-open #main #slot2{top:94px}body.agent-shell-task.agent-view-open #main #slot3{top:140px}body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{inset:58px 0 0!important;width:100%!important;height:auto!important;transform:none;border:0!important;border-radius:0!important;background:linear-gradient(180deg,rgba(13,18,25,.98),rgba(7,10,15,1))!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #modelrow,body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #chat{display:flex!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #inputbar{margin:0 8px max(8px,env(safe-area-inset-bottom))!important;border-radius:18px!important}}
+@media(min-width:761px) and (hover:none){.chat-size-btn{width:44px;min-width:44px;height:44px}.agent-view-chat-controls{gap:8px}}
+/* Compact lane picker overrides the decorative full-width lane cards. */
+body.agent-shell-task.agent-view-open #main #slotbar{width:88px!important;height:34px!important;padding:0!important;gap:0!important;top:10px!important;left:10px!important;background:transparent!important;border:0!important;overflow:visible!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle{display:inline-flex!important;position:relative!important;min-width:88px!important;width:88px!important;height:34px!important;flex:0 0 88px!important;padding:0 9px!important;gap:6px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#9caaba!important;box-shadow:none!important;font-size:9px!important;font-weight:500!important;letter-spacing:.02em!important;text-transform:none!important;transform:none!important;animation:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle:hover,body.agent-shell-task.agent-view-open #main #lane-picker-toggle:focus-visible{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#d8ffe5!important;transform:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle::before,body.agent-shell-task.agent-view-open #main #lane-picker-toggle::after{display:none!important;content:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:8px;color:#748291;letter-spacing:.08em}body.agent-shell-task.agent-view-open #main #lane-picker-toggle strong{font-size:10px;color:#d8ffe5}body.agent-shell-task.agent-view-open #main #lane-picker-toggle svg{width:10px;height:10px}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){display:none;position:absolute!important;top:38px!important;width:36px!important;min-width:36px!important;height:34px!important;flex:0 0 36px!important;padding:0!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:9px!important;background:#0c1117!important;color:#91a0af!important;box-shadow:0 10px 24px rgba(0,0,0,.32)!important;font-size:11px!important;font-weight:600!important;letter-spacing:0!important;text-align:center!important;text-transform:none!important;transform:none!important;animation:none!important}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::before,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::after{display:none!important;content:none!important}.lane-option-label{display:grid;width:100%;height:100%;place-items:center;color:inherit;font:600 11px var(--mono,'IBM Plex Mono',monospace)}
+body.agent-shell-task.agent-view-open #main #slotbar>button.active:not(#lane-picker-toggle){border-color:rgba(110,231,161,.45)!important;background:#13221b!important;color:#d8ffe5!important;box-shadow:inset 0 0 0 1px rgba(110,231,161,.08),0 10px 24px rgba(0,0,0,.32)!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):hover,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):focus-visible{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;transform:none!important}
+body.agent-shell-task.agent-view-open #main #slot1{left:0!important}body.agent-shell-task.agent-view-open #main #slot2{left:40px!important}body.agent-shell-task.agent-view-open #main #slot3{left:80px!important}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #main #slotbar{top:10px!important;width:94px!important;height:44px!important}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{width:94px!important;min-width:94px!important;height:44px!important;flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){top:48px!important;width:40px!important;min-width:40px!important;height:44px!important;flex-basis:40px!important}body.agent-shell-task.agent-view-open #main #slot2{left:44px!important}body.agent-shell-task.agent-view-open #main #slot3{left:88px!important}}
+/* Primary chat navigation: context, creation, recovery. */
+#agent-chat-primary-tools{display:none}
+body.agent-shell-task.agent-view-open #sidebar .sidebar-new{display:none}
+body.agent-shell-task.agent-view-open #main #topbar{position:relative}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{position:relative!important;left:auto!important;top:auto!important;flex:0 0 88px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;position:static!important;height:34px!important;min-width:50px;padding:0 10px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#b9c6d2!important;box-shadow:none!important;font:500 10px var(--mono,'IBM Plex Mono',monospace)!important;transform:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new:hover{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;filter:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{position:static!important;width:34px;min-width:34px;height:34px;border-radius:10px}body.agent-shell-task.agent-view-open #main #topbar .nav{width:auto!important;flex:1 1 auto!important;margin-left:auto!important;padding-left:0!important}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{gap:8px}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{height:44px!important;min-width:52px;padding:0 9px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{width:44px;min-width:44px;height:44px}}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px;transform:translateY(14px) scale(.99);transform-origin:bottom center}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{transform:none}body.agent-shell-task.agent-view-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-shell-task.agent-view-open #sidebar .sidebar-search input{height:44px}.sidebar-close{width:44px;height:44px}.sidebar-new{min-height:44px}}
+/* Preserve the mobile Browser Preview bottom sheet when the task shell is enabled. */
+@media(max-width:760px){
+  body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only) #app-shell #main{left:10px!important;right:10px!important;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto!important;height:auto!important;min-height:0!important;transform:none;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-browser-positioned #app-shell #main{top:var(--agent-view-mobile-chat-top);bottom:auto}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-open #app-shell #main{height:min(62dvh,560px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important;min-height:min(320px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important;border:1px solid rgba(183,205,228,.28)!important;overflow:hidden;background:linear-gradient(180deg,rgba(13,18,25,.96),rgba(7,10,15,.98))!important;box-shadow:0 24px 80px rgba(0,0,0,.56)!important;backdrop-filter:blur(22px)}
+  body.agent-shell-task.agent-view-open:not(.agent-shell-chat-only).agent-view-chat-expanded #app-shell #main{inset:0!important;width:100%!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important}
+}
+@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
 </style>"""
 
-_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true">
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser Preview" aria-hidden="true" tabindex="-1">
   <header class="agent-view-head">
     <span class="agent-view-mark" aria-hidden="true">UC</span>
-    <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
+    <div class="agent-view-title"><span class="agent-view-kicker">Live browser</span><strong>Browser Preview</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
-    <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
+    <button type="button" class="agent-view-close" aria-label="Close browser preview" onclick="closeAgentView()">&times;</button>
   </header>
-  <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
+  <button type="button" id="agent-shell-history-scrim" aria-label="Close history" onclick="toggleAgentShellHistory(false)"></button>
+  <div class="agent-view-browserbar"><span>Current page</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">You + agent</span></div>
+  <div class="agent-shell-trace" aria-label="Task progress">
+    <span class="agent-shell-trace-step" data-step="plan">Plan</span><span class="agent-shell-trace-rail" aria-hidden="true"></span>
+    <span class="agent-shell-trace-step" data-step="browse">Browse</span><span class="agent-shell-trace-rail" aria-hidden="true"></span>
+    <span class="agent-shell-trace-step" data-step="answer">Answer</span>
+    <span id="agent-shell-phase-label" class="agent-shell-phase-label" aria-live="polite">Ready for a task</span>
+  </div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
-    <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
-    <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Semantic mirror refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
-    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
+    <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive preview of the browser controlled by this conversation" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Browser preview refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
+    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">WEB</div><strong class="agent-view-empty-legacy">The browser will appear here.</strong><span class="agent-view-empty-legacy">Send a message or use the page directly. Both control the browser for this conversation.</span><div class="agent-view-empty-task"><span class="eyebrow">Browser ready</span><strong>Give the agent a task, then work alongside it.</strong><span>The live page appears here when browsing starts. Text-only questions expand into a focused chat automatically.</span></div></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
     <div id="scroll-debug-overlay" style="display:none;position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>
@@ -19204,28 +20144,44 @@ function _relativeDate(ts) {
 async function loadSidebarHistory() {
   var list = document.getElementById('sidebar-history');
   if (!list) return;
+  list.innerHTML = '<div class="sidebar-empty">Loading chats...</div>';
   try {
     var r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
-    if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load history</div>'; return; }
+    if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load chats.<br><button type="button" onclick="loadSidebarHistory()">Try again</button></div>'; return; }
     var data = await r.json();
     var allArchives = data.archives || [];
-    var archives = allArchives.slice(0, 6);
+    var archives = allArchives.slice(0, 8);
     if (archives.length === 0) {
-      list.innerHTML = '<div class="sidebar-empty">No chat history yet</div>';
+      list.innerHTML = '<div class="sidebar-empty">No saved chats yet.<br>Start a new chat to archive this one.</div>';
       return;
     }
     list.innerHTML = '';
+    var lastGroup = '';
     for (var i = 0; i < archives.length; i++) {
       var arc = archives[i];
-      var div = document.createElement('div');
+      var group = _relativeDate(arc.archived_at);
+      if (group !== lastGroup) {
+        var heading = document.createElement('div');
+        heading.className = 'sidebar-group-label';
+        heading.textContent = group;
+        list.appendChild(heading);
+        lastGroup = group;
+      }
+      var div = document.createElement('button');
+      div.type = 'button';
       div.className = 'sidebar-item';
       div.setAttribute('data-id', arc.id);
+      div.setAttribute('data-search', String(arc.preview || '').toLowerCase());
       div.innerHTML =
         '<div class="sb-preview">' + esc(arc.preview || '(empty)') + '</div>' +
-        '<div class="sb-meta"><span>' + _relativeDate(arc.archived_at) + '</span><span>' + arc.message_count + ' msgs</span></div>';
-      div.onclick = (function(id) { return function() { restoreArchive(id); }; })(arc.id);
+        '<div class="sb-meta"><span>' + arc.message_count + ' messages</span></div>';
+      div.onclick = (function(id) { return function() { toggleAgentShellHistory(false); restoreArchive(id); }; })(arc.id);
       list.appendChild(div);
     }
+    var filterEmpty = document.createElement('div');
+    filterEmpty.className = 'sidebar-filter-empty';
+    filterEmpty.textContent = 'No matching chats';
+    list.appendChild(filterEmpty);
     var link = document.createElement('a');
     link.className = 'sidebar-viewall';
     link.href = '#';
@@ -19233,8 +20189,32 @@ async function loadSidebarHistory() {
     link.onclick = function(e) { e.preventDefault(); openArchives(); };
     list.appendChild(link);
   } catch(e) {
-    list.innerHTML = '<div class="sidebar-empty">Could not load history</div>';
+    list.innerHTML = '<div class="sidebar-empty">Could not load chats.<br><button type="button" onclick="loadSidebarHistory()">Try again</button></div>';
   }
+}
+
+function filterSidebarHistory(value) {
+  var list = document.getElementById('sidebar-history');
+  if (!list) return;
+  var query = String(value || '').trim().toLowerCase();
+  var visible = 0;
+  var items = list.querySelectorAll('.sidebar-item');
+  items.forEach(function(item) {
+    var show = !query || String(item.getAttribute('data-search') || '').indexOf(query) !== -1;
+    item.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  list.querySelectorAll('.sidebar-group-label').forEach(function(label) {
+    var next = label.nextElementSibling;
+    var hasVisible = false;
+    while (next && !next.classList.contains('sidebar-group-label')) {
+      if (next.classList.contains('sidebar-item') && next.style.display !== 'none') { hasVisible = true; break; }
+      next = next.nextElementSibling;
+    }
+    label.style.display = hasVisible ? '' : 'none';
+  });
+  var empty = list.querySelector('.sidebar-filter-empty');
+  if (empty) empty.classList.toggle('visible', !!query && visible === 0);
 }
 
 function toggleSidebar() {
@@ -19242,16 +20222,65 @@ function toggleSidebar() {
   syncSidebarInteractivity();
 }
 
+function positionAgentShellHistory() {
+  if (!document.body.classList.contains('agent-shell-task') || window.innerWidth <= 760) return;
+  const button = document.getElementById('chat-card-history');
+  if (!button) return;
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(360, Math.max(280, window.innerWidth - 24));
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  const top = Math.min(rect.bottom + 8, window.innerHeight - 220);
+  document.body.style.setProperty('--agent-history-left', Math.round(left) + 'px');
+  document.body.style.setProperty('--agent-history-top', Math.round(top) + 'px');
+  document.body.style.setProperty('--agent-history-max-height', Math.max(200, Math.round(window.innerHeight - top - 12)) + 'px');
+}
+
+function toggleAgentShellHistory(forceOpen) {
+  const open = typeof forceOpen === 'boolean'
+    ? forceOpen
+    : !document.body.classList.contains('agent-shell-history-open');
+  document.body.classList.toggle('agent-shell-history-open', open);
+  const button = document.getElementById('chat-card-history');
+  if (button) button.setAttribute('aria-expanded', String(open));
+  syncSidebarInteractivity();
+  if (open) {
+    positionAgentShellHistory();
+    loadSidebarHistory();
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+      sidebar.setAttribute('tabindex', '-1');
+      sidebar.setAttribute('role', 'dialog');
+      sidebar.setAttribute('aria-label', 'Chat history');
+      requestAnimationFrame(function() {
+        const search = document.getElementById('sidebar-history-search');
+        if (search && typeof search.focus === 'function') search.focus({preventScroll:true});
+        else if (typeof sidebar.focus === 'function') sidebar.focus({preventScroll:true});
+      });
+    }
+  } else if (button && typeof button.focus === 'function') {
+    requestAnimationFrame(function() { button.focus({preventScroll:true}); });
+  }
+}
+
 function syncSidebarInteractivity() {
   var sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
-  var hidden = document.body.classList.contains('agent-view-open') ||
-    (window.innerWidth <= 1024 && !document.body.classList.contains('sidebar-open'));
+  var historyOpen = document.body.classList.contains('agent-shell-history-open');
+  var hidden = (document.body.classList.contains('agent-view-open') && !historyOpen) ||
+    (window.innerWidth <= 1024 && !document.body.classList.contains('sidebar-open') && !historyOpen);
   sidebar.toggleAttribute('inert', hidden);
   sidebar.setAttribute('aria-hidden', String(hidden));
 }
 
 document.addEventListener('click', function(e) {
+  if (document.body.classList.contains('agent-shell-history-open')) {
+    var historySidebar = document.getElementById('sidebar');
+    var historyButton = document.getElementById('chat-card-history');
+    if (historySidebar && !historySidebar.contains(e.target) && historyButton && !historyButton.contains(e.target)) {
+      toggleAgentShellHistory(false);
+      return;
+    }
+  }
   if (document.body.classList.contains('sidebar-open') && window.innerWidth <= 1024) {
     var sidebar = document.getElementById('sidebar');
     var toggle = document.getElementById('sidebar-toggle');
@@ -19262,12 +20291,15 @@ document.addEventListener('click', function(e) {
   }
 });
 window.addEventListener('resize', syncSidebarInteractivity);
+window.addEventListener('resize', positionAgentShellHistory);
 syncSidebarInteractivity();
 """
 
 _AGENT_VIEW_JS = """
 let agentViewSocket = null;
 let agentViewRetryTimer = null;
+let agentViewSemanticRecoveryTimer = null;
+let agentViewSemanticRecoveryAttempts = 0;
 let agentViewGeneration = 0;
 let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
@@ -19291,6 +20323,125 @@ let agentViewQueuedPatches = [];
 let agentViewActivationTimer = null;
 const agentViewInputTimers = new Map();
 const agentViewBoundDocuments = new WeakSet();
+const AGENT_SHELL_DEFAULT = 'legacy';
+let agentShellTaskEnabled = false;
+let agentShellBrowserReady = false;
+let agentShellChatReady = false;
+let agentShellTurnActive = false;
+let agentShellBrowserUsedThisTurn = false;
+let agentViewReturnFocus = null;
+
+function agentShellModeFromLocation() {
+  const value = new URLSearchParams(location.search || '').get('shell');
+  return value === 'task' || value === 'legacy' ? value : AGENT_SHELL_DEFAULT;
+}
+
+function setAgentShellConnectionLayout(browserAvailable) {
+  if (!agentShellTaskEnabled) return;
+  document.body.classList.toggle('agent-shell-chat-only', !browserAvailable);
+  if (!browserAvailable) {
+    setAgentViewChatState('docked', 'chat');
+    stopAgentViewSocket();
+  }
+  requestAnimationFrame(function() {
+    scaleAgentViewSemanticFrame();
+  });
+}
+
+function arrangeAgentChatToolbar() {
+  if (!agentShellTaskEnabled || !document.querySelector || !document.createElement) return;
+  if (document.getElementById('agent-chat-primary-tools')) return;
+  const topbar = document.querySelector('#main #topbar');
+  const nav = topbar && topbar.querySelector ? topbar.querySelector('.nav') : null;
+  const picker = document.getElementById('slotbar');
+  const newChat = document.querySelector('#main .topbar-new');
+  const history = document.getElementById('chat-card-history');
+  if (!topbar || !nav || !picker || !newChat || !history) return;
+  const group = document.createElement('div');
+  group.id = 'agent-chat-primary-tools';
+  group.setAttribute('role', 'toolbar');
+  group.setAttribute('aria-label', 'Chat navigation');
+  topbar.insertBefore(group, nav);
+  group.appendChild(picker);
+  group.appendChild(newChat);
+  group.appendChild(history);
+}
+
+function syncAgentLanePicker() {
+  const picker = document.getElementById('slotbar');
+  const current = document.getElementById('lane-picker-current');
+  const toggle = document.getElementById('lane-picker-toggle');
+  if (!picker || !current || !toggle) return;
+  for (let lane = 1; lane <= 3; lane++) {
+    const button = document.getElementById('slot' + lane);
+    if (!button) continue;
+    if (!button.dataset) button.dataset = {};
+    const threadName = String(lane);
+    const existingLabel = button.querySelector ? button.querySelector('.lane-option-label') : null;
+    if (!existingLabel) {
+      const rawDetail = String(button.textContent || ('Thread ' + threadName)).replace(/\\s+/g, ' ').trim();
+      button.dataset.laneDetail = /^(?:Lane [ABC]|Thread [123])$/.test(rawDetail) ? ('Thread ' + threadName) : (rawDetail || ('Thread ' + threadName));
+      button.textContent = '';
+      const visible = document.createElement ? document.createElement('span') : null;
+      if (visible) {
+        visible.className = 'lane-option-label';
+        visible.setAttribute('aria-hidden', 'true');
+        visible.textContent = threadName;
+        button.appendChild(visible);
+      }
+    }
+    const detail = button.dataset.laneDetail || ('Thread ' + threadName);
+    button.setAttribute('aria-label', detail === 'Thread ' + threadName ? detail : 'Thread ' + threadName + ': ' + detail);
+    button.title = detail;
+  }
+  const active = (picker.querySelector ? picker.querySelector('button[id^="slot"].active') : null) || document.getElementById('slot1');
+  const laneNumber = active && /^slot([123])$/.test(active.id) ? Number(active.id.slice(4)) : 1;
+  const threadName = String(laneNumber);
+  const detail = active ? (active.dataset.laneDetail || ('Thread ' + threadName)) : 'Thread ' + threadName;
+  current.textContent = threadName;
+  toggle.setAttribute('aria-label', 'Select chat thread. Current: ' + detail);
+  toggle.title = detail;
+}
+
+function toggleAgentLanePicker(forceOpen) {
+  const picker = document.getElementById('slotbar');
+  const toggle = document.getElementById('lane-picker-toggle');
+  if (!picker || !toggle) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : !picker.classList.contains('agent-lane-picker-open');
+  picker.classList.toggle('agent-lane-picker-open', open);
+  toggle.setAttribute('aria-expanded', String(open));
+  if (open) syncAgentLanePicker();
+}
+
+function setAgentShellPhase(phase, label) {
+  if (!agentShellTaskEnabled) return;
+  if (document.body && document.body.dataset) document.body.dataset.agentShellPhase = phase || 'ready';
+  const phaseLabel = document.getElementById('agent-shell-phase-label');
+  if (phaseLabel) phaseLabel.textContent = label || 'Ready for a task';
+}
+
+function initializeAgentShellExperiment() {
+  agentShellTaskEnabled = agentShellModeFromLocation() === 'task';
+  document.body.classList.toggle('agent-shell-task', agentShellTaskEnabled);
+  if (agentShellTaskEnabled) {
+    arrangeAgentChatToolbar();
+    setAgentShellPhase('ready', 'Ready for a task');
+  }
+}
+
+function maybeInitializeAgentShell(data) {
+  if (!agentShellTaskEnabled || !data || typeof data !== 'object') return;
+  agentShellBrowserReady = !!data.bridge_connected;
+  agentShellChatReady = !!data.chat_connected;
+  const browserAvailable = agentShellBrowserReady && agentShellChatReady;
+  setAgentShellConnectionLayout(browserAvailable);
+  openAgentView({system:true});
+  if (browserAvailable) {
+    setAgentShellPhase('ready', 'Browser and agent ready');
+  } else {
+    setAgentShellPhase('ready', agentShellChatReady ? 'Chat ready / browser offline' : 'Waiting for local agent');
+  }
+}
 
 function setAgentViewState(text, live) {
   const el = document.getElementById('agent-view-state');
@@ -19844,6 +20995,11 @@ function agentViewApplyAdoptedStyles(snapshot, frame) {
 
 function positionAgentViewMobileChat(renderedHeight) {
   const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+  if (agentShellTaskEnabled && mobile) {
+    document.body.classList.remove('agent-view-browser-positioned');
+    if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
+    return;
+  }
   if (!mobile || !Number.isFinite(renderedHeight) || renderedHeight <= 0) {
     document.body.classList.remove('agent-view-browser-positioned');
     if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
@@ -20007,6 +21163,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
   if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
   if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
   if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
+  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
   if (fidelity.truncated) notes.push('capture bounded');
   const fidelityEl = document.getElementById('agent-view-fidelity');
   if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
@@ -20034,6 +21191,7 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
   const structuralCount = patch.operations.filter(function(operation) {
     return operation && /^(?:remove|replace|text|attributes)$/.test(operation.op);
   }).length;
+  let missingTargets = 0;
   try {
     patch.operations.forEach(function(operation) {
       if (!operation || typeof operation !== 'object') return;
@@ -20043,7 +21201,11 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
         return;
       }
       const target = agentViewFindTarget(doc, operation.targetId);
-      if (!target) throw new Error('semantic target missing');
+      // Bounded captures intentionally omit off-viewport/non-priority nodes.
+      // Dynamic sites can still emit mutations for those source nodes (often
+      // during zoom or responsive relayout). Ignore those operations instead
+      // of tearing down an otherwise healthy visible mirror.
+      if (!target) { missingTargets += 1; return; }
       if (operation.op === 'remove') target.remove();
       else if (operation.op === 'text') target.textContent = String(operation.text || '');
       else if (operation.op === 'replace') {
@@ -20074,6 +21236,13 @@ function applyAgentViewSemanticPatch(patch, transportSeq, mirrorId, captureEpoch
     });
     agentViewProtectVisualPlaceholders(frame, doc);
   } catch (_err) { refreshAgentView(); return; }
+  if (missingTargets) {
+    _scrollDebug('patch-targets-omitted', 'document', 0, beforeY, {
+      omitted: missingTargets,
+      operations: patch.operations.length,
+      documentSeq: Number(documentSeq || 0),
+    });
+  }
   requestAnimationFrame(function() {
     const current = agentViewCurrentFrame();
     if (current !== frame || !frame.contentWindow) return;
@@ -20132,9 +21301,29 @@ function scheduleAgentViewRetry(generation) {
   agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
 }
 
+function resetAgentViewSemanticRecovery() {
+  agentViewSemanticRecoveryAttempts = 0;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
+}
+
+function scheduleAgentViewSemanticRecovery() {
+  if (agentViewSemanticRecoveryTimer || agentViewSemanticRecoveryAttempts >= 5) return;
+  const delay = Math.min(30000, 2000 * Math.pow(2, agentViewSemanticRecoveryAttempts));
+  agentViewSemanticRecoveryAttempts += 1;
+  agentViewSemanticRecoveryTimer = setTimeout(function() {
+    agentViewSemanticRecoveryTimer = null;
+    if (!document.body.classList.contains('agent-view-open')) return;
+    setAgentViewState('Retrying interactive semantic view', false);
+    refreshAgentView();
+  }, delay);
+}
+
 function startAgentViewSocket() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (!sessionId) { setAgentViewState('Waiting for chat session', false); return; }
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   stopAgentViewSocket();
   agentViewBoundSessionId = sessionId;
   agentViewRetryAllowed = true;
@@ -20146,8 +21335,9 @@ function startAgentViewSocket() {
     if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
     let event;
     try { event = JSON.parse(message.data); } catch (_err) { return; }
-    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
+    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Preparing interactive preview' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
+      resetAgentViewSemanticRecovery();
       renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
     }
@@ -20212,7 +21402,7 @@ function startAgentViewSocket() {
           'sensitive-target':'Sensitive fields cannot be controlled from the mirror.',
           'stale-document':'The page changed before that action could run.',
           'target-not-found':'That control changed. Refreshing the semantic view.',
-          'preview-superseded':'A newer Agent View owns this chat session.',
+          'preview-superseded':'A newer Browser Preview owns this chat session.',
           'action-queue-full':'The page is busy. Try again in a moment.',
         };
         agentViewShowToast(messages[reason] || 'Page action was not applied: ' + reason, true);
@@ -20222,6 +21412,7 @@ function startAgentViewSocket() {
     }
     if (event.type === 'preview.semantic_unavailable') {
       setAgentViewState('Semantic unavailable / live frames', false);
+      scheduleAgentViewSemanticRecovery();
       return;
     }
     if (event.type === 'preview.frame' && event.data) {
@@ -20264,8 +21455,12 @@ function startAgentViewSocket() {
   };
 }
 
-function openAgentView() {
+function openAgentView(options) {
+  options = options || {};
   const alreadyOpen = document.body.classList.contains('agent-view-open');
+  if (!alreadyOpen) resetAgentViewSemanticRecovery();
+  arrangeAgentChatToolbar();
+  if (!alreadyOpen && !options.system) agentViewReturnFocus = document.activeElement || null;
   document.body.classList.add('agent-view-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
   if (!alreadyOpen) {
@@ -20277,7 +21472,11 @@ function openAgentView() {
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('topbar-agent-view');
   if (button) button.setAttribute('aria-expanded', 'true');
-  if (!alreadyOpen || !agentViewSocket) requestAnimationFrame(startAgentViewSocket);
+  syncAgentLanePicker();
+  if (!alreadyOpen && !options.system && panel && typeof panel.focus === 'function') {
+    requestAnimationFrame(function() { panel.focus({preventScroll:true}); });
+  }
+  if ((!agentShellTaskEnabled || !document.body.classList.contains('agent-shell-chat-only')) && (!alreadyOpen || !agentViewSocket)) requestAnimationFrame(startAgentViewSocket);
 }
 
 function toggleAgentViewChat(forceOpen) {
@@ -20329,6 +21528,10 @@ function setAgentViewChatState(mode, surface) {
     const chat = document.getElementById('chat');
     if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
   }
+  if (agentShellTaskEnabled) {
+    requestAnimationFrame(scaleAgentViewSemanticFrame);
+    setTimeout(scaleAgentViewSemanticFrame, 240);
+  }
 }
 
 function expandAgentViewChat() {
@@ -20350,6 +21553,15 @@ function restoreAgentViewChat() {
 function beginAgentViewResponseTurn() {
   agentViewResponseRevealPending = true;
   agentViewResponseRevealDone = false;
+  agentShellTurnActive = true;
+  agentShellBrowserUsedThisTurn = false;
+  document.body.classList.remove('agent-shell-text-turn');
+  if (agentShellTaskEnabled) {
+    if (document.body.classList.contains('agent-view-open')) {
+      setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
+    }
+    setAgentShellPhase('planning', 'Understanding your task');
+  }
 }
 
 function maybeRevealAgentResponse() {
@@ -20360,11 +21572,18 @@ function maybeRevealAgentResponse() {
     return;
   }
   agentViewResponseRevealDone = true;
+  if (agentShellTaskEnabled && !agentShellBrowserUsedThisTurn) {
+    document.body.classList.add('agent-shell-text-turn');
+    setAgentViewChatState('fullscreen', 'chat');
+    return;
+  }
   setAgentViewChatState('docked', 'chat');
 }
 
-function closeAgentView() {
+function closeAgentView(options) {
+  options = options || {};
   document.body.classList.remove('agent-view-open');
+  document.body.classList.remove('agent-shell-history-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
   document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-chat-open', 'agent-view-browser-positioned');
   if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
@@ -20373,6 +21592,7 @@ function closeAgentView() {
   agentViewResponseRevealPending = false;
   agentViewResponseRevealDone = false;
   _syncAgentViewChatControls();
+  resetAgentViewSemanticRecovery();
   const panel = document.getElementById('agent-view');
   if (panel) panel.setAttribute('aria-hidden', 'true');
   const button = document.getElementById('topbar-agent-view');
@@ -20380,17 +21600,48 @@ function closeAgentView() {
   stopAgentViewSocket();
   agentViewBoundSessionId = '';
   agentViewRetryAllowed = false;
+  if ((!options.system || options.restoreFocus) && document.body.classList.contains('agent-shell-task')) {
+    const fallback = document.getElementById('topbar-agent-view');
+    const target = agentViewReturnFocus && typeof agentViewReturnFocus.focus === 'function' ? agentViewReturnFocus : fallback;
+    if (target && typeof target.focus === 'function') requestAnimationFrame(function() { target.focus({preventScroll:true}); });
+  }
+  agentViewReturnFocus = null;
 }
 
 function refreshAgentView() {
   if (!document.body.classList.contains('agent-view-open')) return;
+  if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
+  agentViewSemanticRecoveryTimer = null;
   agentViewLastSeq = 0;
   agentViewDocumentSeq = 0;
   requestAnimationFrame(startAgentViewSocket);
 }
 
 function ensureAgentViewForBrowserActivity() {
+  agentShellBrowserUsedThisTurn = true;
+  document.body.classList.remove('agent-shell-text-turn');
+  if (agentShellTaskEnabled) {
+    setAgentShellPhase('browsing', 'Working in your browser');
+    agentShellBrowserReady = true;
+    document.body.classList.remove('agent-shell-chat-only');
+    if (!document.body.classList.contains('agent-view-open')) openAgentView({system:true});
+    if (agentViewChatMode === 'fullscreen') {
+      setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
+    }
+    return;
+  }
   if (!document.body.classList.contains('agent-view-open')) openAgentView();
+}
+
+function completeAgentShellTurn(outcome) {
+  if (!agentShellTaskEnabled || !agentShellTurnActive) return;
+  agentShellTurnActive = false;
+  const label = outcome === 'cancelled'
+    ? 'Task cancelled'
+    : (outcome === 'error'
+      ? 'Task ended with an error'
+      : (agentShellBrowserUsedThisTurn ? 'Browser task complete' : 'Answer ready'));
+  setAgentShellPhase('complete', label);
 }
 
 const _agentViewAddUserBubble = addUserBubble;
@@ -20402,6 +21653,13 @@ addUserBubble = function() {
 const _agentViewAppendText = appendText;
 appendText = function() {
   const result = _agentViewAppendText.apply(this, arguments);
+  if (agentShellTaskEnabled && agentShellTurnActive) {
+    setAgentShellPhase('writing', agentShellBrowserUsedThisTurn ? 'Preparing the result' : 'Writing an answer');
+    if (!agentShellBrowserUsedThisTurn && document.body.classList.contains('agent-view-open')) {
+      document.body.classList.add('agent-shell-text-turn');
+      setAgentViewChatState('fullscreen', 'chat');
+    }
+  }
   maybeRevealAgentResponse();
   return result;
 };
@@ -20414,15 +21672,43 @@ _setActiveSlotSession = function(sid) {
     agentViewBoundSessionId = sid;
     setTimeout(refreshAgentView, 0);
   }
+  setTimeout(syncAgentLanePicker, 0);
 };
+
+document.addEventListener('click', function(event) {
+  const picker = document.getElementById('slotbar');
+  if (!picker || !document.body.classList.contains('agent-shell-task')) return;
+  const slotButton = event.target && event.target.closest ? event.target.closest('#slot1,#slot2,#slot3') : null;
+  if (slotButton) {
+    setTimeout(syncAgentLanePicker, 120);
+    toggleAgentLanePicker(false);
+    return;
+  }
+  if (!picker.contains(event.target)) toggleAgentLanePicker(false);
+});
 
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
+  if (document.body.classList.contains('agent-shell-history-open')) { toggleAgentShellHistory(false); return; }
+  const lanePicker = document.getElementById('slotbar');
+  if (lanePicker && lanePicker.classList.contains('agent-lane-picker-open')) { toggleAgentLanePicker(false); return; }
+  const confirmation = document.getElementById('agent-view-confirm');
+  if (confirmation && confirmation.classList.contains('open')) { cancelAgentViewConfirmation(); return; }
   if (agentViewChatMode === 'fullscreen') { exitAgentViewFullscreen(); return; }
   if (_agentViewIsMobile() && agentViewChatSurface === 'chat') { setAgentViewChatState('docked', 'browser'); return; }
+  if (agentShellTaskEnabled) return;
   closeAgentView();
 });
 window.addEventListener('resize', scaleAgentViewSemanticFrame);
+initializeAgentShellExperiment();
+if (typeof updateAgentStatusUI === 'function') {
+  const _agentShellUpdateAgentStatusUI = updateAgentStatusUI;
+  updateAgentStatusUI = function(data) {
+    const result = _agentShellUpdateAgentStatusUI.apply(this, arguments);
+    maybeInitializeAgentShell(data);
+    return result;
+  };
+}
 """
 
 _OLD_DELETE_ARCHIVE_JS = """async function deleteArchive(id, el) {
@@ -20581,8 +21867,8 @@ async function deleteArchive(id, el) {
 """
 
 
-def _inject_sidebar(html: str) -> str:
-    """Inject ChatGPT-style left sidebar for chat history."""
+def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
+    """Inject the chat app shell and, when supported, its history sidebar."""
     if 'id="sidebar"' in html:
         return html
 
@@ -20625,57 +21911,73 @@ def _inject_sidebar(html: str) -> str:
         )
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
-        quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
-    shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
-    runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
+        quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Browser Preview</a>\n'
+    shell_body = _SIDEBAR_BODY if include_sidebar else '<div id="app-shell">\n'
+    shell_close = (
+        "</div>\n"
+        + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "")
+        + "</div>\n<script>"
+    )
+    runtime_js = (_SIDEBAR_JS if include_sidebar else "") + (
+        _AGENT_VIEW_JS if has_agent_view else ""
+    )
 
-    html = apply_template_replacements(
-        html,
-        (
-            TemplateReplacement(
-                "</head>",
-                _SIDEBAR_STYLE + (_AGENT_VIEW_STYLE if has_agent_view else "") + "\n</head>",
-                "sidebar style injection",
-            ),
-            TemplateReplacement(
-                "<!-- Main -->\n<div id=\"main\">",
-                _SIDEBAR_BODY + "<!-- Main -->\n<div id=\"main\">",
-                "sidebar shell injection",
-            ),
+    replacements = [
+        TemplateReplacement(
+            "</head>",
+            _SIDEBAR_STYLE
+            + (_FULL_WIDTH_CHAT_STYLE if not include_sidebar else "")
+            + (_AGENT_VIEW_STYLE if has_agent_view else "")
+            + "\n</head>",
+            "sidebar style injection",
+        ),
+        TemplateReplacement(
+            "<!-- Main -->\n<div id=\"main\">",
+            shell_body + "<!-- Main -->\n<div id=\"main\">",
+            "sidebar shell injection",
+        ),
+        TemplateReplacement(
+            '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
+            quick_new_nav,
+            "sidebar nav quick-new replacement",
+        ),
+        TemplateReplacement(
+            "</div>\n<script>",
+            shell_close,
+            "sidebar shell close injection",
+        ),
+        TemplateReplacement(
+            "document.getElementById('main').style.display = 'flex';",
+            "document.getElementById('app-shell').style.display = 'flex';\n"
+            "  document.getElementById('main').style.display = 'flex';",
+            "sidebar shell show hook",
+        ),
+        TemplateReplacement(
+            "document.getElementById('main').style.display = 'none';",
+            "document.getElementById('app-shell').style.display = 'none';\n"
+            "  document.getElementById('main').style.display = 'none';",
+            "sidebar shell hide hook",
+            expected_count=2,
+        ),
+        TemplateReplacement(
+            "\ncheckSession();\n",
+            runtime_js + "\ncheckSession();\n",
+            "sidebar runtime injection",
+        ),
+    ]
+    if include_sidebar:
+        replacements.insert(
+            2,
             TemplateReplacement(
                 '<div class="left">',
                 '<div class="left">\n      <button id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>',
                 "sidebar toggle injection",
             ),
-                TemplateReplacement(
-                    '      <a href="#" onclick="doNewChat();return false">New Chat</a>\n',
-                    quick_new_nav,
-                    "sidebar nav quick-new replacement",
-                ),
-            TemplateReplacement(
-                "</div>\n<script>",
-                shell_close,
-                "sidebar shell close injection",
-            ),
-            TemplateReplacement(
-                "document.getElementById('main').style.display = 'flex';",
-                "document.getElementById('app-shell').style.display = 'flex';\n"
-                "  document.getElementById('main').style.display = 'flex';",
-                "sidebar shell show hook",
-            ),
-            TemplateReplacement(
-                "document.getElementById('main').style.display = 'none';",
-                "document.getElementById('app-shell').style.display = 'none';\n"
-                "  document.getElementById('main').style.display = 'none';",
-                "sidebar shell hide hook",
-                expected_count=2,
-            ),
-            TemplateReplacement(
-                "\ncheckSession();\n",
-                runtime_js + "\ncheckSession();\n",
-                "sidebar runtime injection",
-            ),
-        ),
+        )
+
+    html = apply_template_replacements(
+        html,
+        tuple(replacements),
         template_name="sidebar injection",
     )
 
@@ -20688,8 +21990,28 @@ def _inject_sidebar(html: str) -> str:
             ),
             TemplateReplacement(
                 "          } else if (evt.type === 'done') {\n",
-                "          } else if (evt.type === 'done') {\n            maybeRevealAgentResponse();\n",
+                "          } else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();\n",
                 "agent view tool-only response reveal",
+            ),
+            TemplateReplacement(
+                "          } else if (evt.type === 'cancelled') {\n",
+                "          } else if (evt.type === 'cancelled') {\n            completeAgentShellTurn('cancelled');\n",
+                "agent task shell cancellation completion",
+            ),
+            TemplateReplacement(
+                "          } else if (evt.type === 'error') {\n",
+                "          } else if (evt.type === 'error') {\n            completeAgentShellTurn('error');\n",
+                "agent task shell error completion",
+            ),
+            TemplateReplacement(
+                "  } catch(e) {\n    const thinking = bubble.querySelector('.thinking');",
+                "  } catch(e) {\n    completeAgentShellTurn(e && e.name === 'AbortError' ? 'cancelled' : 'error');\n    const thinking = bubble.querySelector('.thinking');",
+                "agent task shell network completion",
+            ),
+            TemplateReplacement(
+                "  } finally {\n    _cancelCtrl = null;",
+                "  } finally {\n    completeAgentShellTurn('error');\n    _cancelCtrl = null;",
+                "agent task shell incomplete stream completion",
             ),
         ]
         logout_pattern = '      <a href="#" onclick="doDisconnect();return false">Logout</a>'
@@ -20697,12 +22019,22 @@ def _inject_sidebar(html: str) -> str:
             replacements.append(
                 TemplateReplacement(
                     logout_pattern,
-                    '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Chat panel controls">\n'
+                    '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Same conversation controlling browser preview">\n'
+                    '        <span class="agent-view-chat-context"><strong>Same conversation</strong><span>Controls this preview</span></span>\n'
+                    '        <button type="button" id="chat-card-history" class="chat-size-btn" aria-label="Open chat history" title="Chat history" aria-expanded="false" aria-controls="sidebar" onclick="toggleAgentShellHistory()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h7"/></svg></button>\n'
                     '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Return chat to default size" title="Default chat size" aria-hidden="true" onclick="exitAgentViewFullscreen()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3a1 1 0 01-1 1H2M10 2v3a1 1 0 001 1h3M14 10h-3a1 1 0 00-1 1v3M2 10h3a1 1 0 011 1v3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" title="Minimize chat" onclick="minimizeAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>\n'
                     '      </span>\n' + logout_pattern,
                     "chat card controls injection",
+                ),
+            )
+        if '<div id="slotbar">' in html:
+            replacements.append(
+                TemplateReplacement(
+                    '<div id="slotbar">',
+                    '<div id="slotbar">\n    <button type="button" id="lane-picker-toggle" aria-expanded="false" aria-controls="slot1 slot2 slot3" onclick="toggleAgentLanePicker()"><span class="lane-picker-kicker">Thread</span><strong id="lane-picker-current">1</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>',
+                    "compact Agent View lane picker injection",
                 ),
             )
         html = apply_template_replacements(
@@ -20724,7 +22056,7 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar archive-nav cleanup",
         )
 
-    if "  loadHistory();\n}" in html:
+    if include_sidebar and "  loadHistory();\n}" in html:
         html = apply_template_replacements(
             html,
             (
@@ -20737,30 +22069,36 @@ def _inject_sidebar(html: str) -> str:
             template_name="sidebar showMain hook injection",
         )
 
-    # `doNewChat` has two variants depending on whether server-backed slots are present.
-    for old_hook, new_hook, label in [
-        (
-            "  _syncSlotButtons();\n}",
-            "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
-            "sidebar refresh after local slot reset",
-        ),
-        (
-            "  await loadSlots();\n}",
-            "  await loadSlots();\n  loadSidebarHistory();\n}",
-            "sidebar refresh after server slot reset",
-        ),
-    ]:
-        if old_hook in html:
-            html = apply_template_replacements(
-                html,
-                (TemplateReplacement(old_hook, new_hook, label),),
-                template_name="sidebar new-chat hook injection",
+    if include_sidebar:
+        # `doNewChat` has two variants depending on whether server-backed slots are present.
+        for old_hook, new_hook, label in [
+            (
+                "    _syncSlotButtons();\n    const acknowledged = await acknowledgeNewChatTransition(pending);",
+                "    _syncSlotButtons();\n    loadSidebarHistory();\n    const acknowledged = await acknowledgeNewChatTransition(pending);",
+                "sidebar refresh after transactional slot reset",
+            ),
+            (
+                "  _syncSlotButtons();\n}",
+                "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
+                "sidebar refresh after local slot reset",
+            ),
+            (
+                "  await loadSlots();\n}",
+                "  await loadSlots();\n  loadSidebarHistory();\n}",
+                "sidebar refresh after server slot reset",
+            ),
+        ]:
+            if old_hook in html:
+                html = apply_template_replacements(
+                    html,
+                    (TemplateReplacement(old_hook, new_hook, label),),
+                    template_name="sidebar new-chat hook injection",
+                )
+                break
+        else:
+            raise TemplateTransformError(
+                "sidebar injection: expected a doNewChat completion hook to refresh sidebar history"
             )
-            break
-    else:
-        raise TemplateTransformError(
-            "sidebar injection: expected a doNewChat completion hook to refresh sidebar history"
-        )
 
     if _OLD_DELETE_ARCHIVE_JS in html:
         html = apply_template_replacements(
@@ -20778,10 +22116,7 @@ def _inject_sidebar(html: str) -> str:
     return html
 
 
-TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML)
-# Trial has no server-backed chat history — remove the sidebar history panel
-# so the UI does not show an empty/non-functional list.
-TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', '')
+TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML, include_sidebar=False)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
@@ -22873,8 +24208,12 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 .card-meta{display:flex;gap:12px;font-size:11px;color:var(--muted);flex-wrap:wrap}
 .card-meta .status-ok{color:var(--green)}
 .card-meta .status-fail{color:var(--red)}
-.card-output{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:#cfd5e6;line-height:1.5;white-space:pre-wrap}
+.card-output{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:#cfd5e6;line-height:1.5;min-width:0}
 .card-output .label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em}
+.card-output-row{display:flex;align-items:center;gap:10px;min-width:0}
+.card-output-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.card-output-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-weight:600;padding:2px 0;white-space:nowrap}
+.card-output-link:hover,.card-output-link:focus-visible{color:var(--text);text-decoration:underline;text-underline-offset:3px}
 .card.disabled{opacity:0.5}
 
 /* Toggle switch */
@@ -23114,7 +24453,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 </div>
 
 <!-- History Modal -->
-<div class="modal-overlay" id="history-modal">
+<div class="modal-overlay" id="history-modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
   <div class="modal">
     <h2 id="history-title">Run History</h2>
     <div id="history-list" class="history-list">
@@ -23140,6 +24479,18 @@ let schedulerOpenCodeModelsPromise = null;
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function truncateSchedulerPreview(value,maxLength){
+  const clean=String(value||'').replace(/\s+/g,' ').trim();
+  if(clean.length<=maxLength) return clean;
+  return clean.substring(0,maxLength-3).trimEnd()+'...';
+}
+
+function safeSchedulerProfileLabel(value,fallback){
+  const clean=String(value||'').trim();
+  if(!clean||clean.indexOf('@')!==-1||/[\\/]/.test(clean)) return fallback;
+  return truncateSchedulerPreview(clean,32);
+}
 
 function toast(msg, kind='ok'){
   const el=document.getElementById('toast');
@@ -23341,8 +24692,7 @@ function formatSchedulerProfile(value){
   const path=String(value||'').trim();
   if(!path) return '';
   if(schedulerProfileLabels[path]) return 'Profile: '+schedulerProfileLabels[path];
-  const fallback=path.split('/').filter(Boolean).pop()||path;
-  return 'Profile: '+fallback;
+  return 'Profile: Selected browser';
 }
 
 function setSchedulerProfileValue(value){
@@ -23352,7 +24702,7 @@ function setSchedulerProfileValue(value){
   if(path && ![...select.options].some(opt=>opt.value===path)){
     const opt=document.createElement('option');
     opt.value=path;
-    opt.textContent='Unavailable profile ('+path+')';
+    opt.textContent='Unavailable browser profile';
     select.appendChild(opt);
   }
   select.value=path;
@@ -23384,13 +24734,12 @@ async function loadSchedulerProfiles(){
       for(const p of (data.profiles||[])){
         const path=String(p.profile_path||p.path||'').trim();
         if(!path||schedulerProfileLabels[path]) continue;
-        const label=String(p.name||p.dir_name||'Profile').trim()||'Profile';
-        const email=String(p.email||'').trim();
-        const text=email?(label+' ('+email+')'):label;
-        schedulerProfileLabels[path]=text;
+        const fallback='Browser profile '+select.options.length;
+        const label=safeSchedulerProfileLabel(p.dir_name||p.name,fallback);
+        schedulerProfileLabels[path]=label;
         const opt=document.createElement('option');
         opt.value=path;
-        opt.textContent=text;
+        opt.textContent=label;
         select.appendChild(opt);
       }
     }
@@ -23416,7 +24765,10 @@ function render(){
     const lastAgo=timeAgo(p.last_run_at);
     const nextAgo=p.next_run_at?new Date(p.next_run_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'—';
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
-    const lastOutput=p.last_output?'<div class="card-output"><span class="label">Last output</span>'+esc(p.last_output)+'</div>':'';
+    const promptPreview=truncateSchedulerPreview(j.prompt||'',80);
+    const outputPreview=truncateSchedulerPreview(p.last_output_preview||'',120);
+    const viewHistoryLabel='View run history for '+String(j.id||'this task');
+    const lastOutput=outputPreview?'<div class="card-output"><span class="label">Last output</span><div class="card-output-row"><span class="card-output-preview">'+esc(outputPreview)+'</span><button type="button" class="card-output-link" aria-label="'+esc(viewHistoryLabel)+'" onclick="openHistoryModal('+i+')">View run history</button></div></div>':'';
     const modelMeta='<span>'+esc(formatSchedulerModel(j.model||''))+'</span>';
     const profileMeta=j.profile_path?'<span>'+esc(formatSchedulerProfile(j.profile_path))+'</span>':'';
     return '<div class="card'+(en?'':' disabled')+'">' +
@@ -23429,7 +24781,7 @@ function render(){
           '<button class="del-btn" title="Delete" onclick="deleteJob('+i+')">&#10005;</button>' +
         '</span>' +
       '</div>' +
-      '<div class="card-prompt">'+esc((j.prompt||'').substring(0,120))+'</div>' +
+      '<div class="card-prompt">'+esc(promptPreview)+'</div>' +
       '<div class="card-schedule">'+esc(scheduleToText(j.schedule))+'</div>' +
       '<div class="card-meta">' +
         modelMeta +
@@ -24299,7 +25651,6 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MCP Setup | Unchained</title>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -24369,17 +25720,17 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
     }
     .copy-btn:hover{border-color:#e94560;color:#fff}
     .copy-btn.copied{background:#23141a;color:#e94560;border-color:#e94560}
-    .signin-prompt{
-      display:flex;align-items:center;gap:10px;padding:12px 16px;
-      border-radius:10px;background:rgba(233,69,96,0.08);
-      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:12px;
+    .key-help{
+      padding:14px 16px;border-radius:10px;background:rgba(233,69,96,0.08);
+      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:14px;
     }
-    .signin-btn{
-      padding:7px 16px;border-radius:8px;background:#e94560;
-      color:#fff;font-size:13px;font-weight:600;cursor:pointer;
-      border:none;text-decoration:none;
+    .key-help strong{display:block;color:#f3f3f6;margin-bottom:4px}
+    .key-help p{color:#b5b5c2;margin-top:5px}
+    .key-help code{
+      background:#171722;border:1px solid #2f2f3c;border-radius:4px;
+      padding:1px 5px;font-size:12px;
     }
-    .signin-btn:hover{background:#d63b55;text-decoration:none}
+    .key-command-label{color:#a6a6b5;font-size:12px;margin:10px 0 5px}
     .trust-panel{
       display:grid;gap:8px;margin:12px 0 14px;padding:12px 14px;
       border:1px solid rgba(255,255,255,0.1);border-radius:12px;
@@ -24453,9 +25804,9 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
         <span class="step-num">1</span>
         <h2>Connect Your Browser</h2>
         <div class="step-body">
-          <div class="agent-status" id="agent-status">
-            <div class="dot yellow" id="agent-dot"></div>
-            <span id="agent-status-text">Checking agent status...</span>
+          <div class="agent-status">
+            <div class="dot yellow"></div>
+            <span>Start the installed agent before continuing.</span>
           </div>
           <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
             Install the Unchained agent on your Mac to bridge your local Chrome:
@@ -24476,50 +25827,78 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
         <span class="step-num">2</span>
         <h2>Add MCP Server</h2>
         <div class="step-body">
-          <div id="signin-section" class="signin-prompt" style="display:none">
-            <span>Sign in to auto-fill your API key</span>
-            <div id="mcp-gsi-btn"></div>
+          <div class="key-help">
+            <strong>Use the key stored by your installed agent</strong>
+            <p>This page never loads or displays your key. The agent stores it locally at <code>~/unchained-agent/.env</code> on macOS/Linux or <code>%USERPROFILE%\unchained-agent\.env</code> on Windows.</p>
+            <p>Start the agent once to complete browser authorization if <code>UNCHAINED_API_KEY</code> is empty. Shell commands below use the variable loaded into your current session. Configuration files that cannot expand shell variables require explicit local substitution.</p>
           </div>
+          <p class="key-command-label">macOS/Linux: load the key into your current shell without printing it</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="load-key-posix">export UNCHAINED_API_KEY="$(sed -n 's/^UNCHAINED_API_KEY=//p' "$HOME/unchained-agent/.env")"</pre>
+            <button class="copy-btn" onclick="copyCode('load-key-posix',this)">Copy</button>
+          </div>
+          <p class="key-command-label">Windows PowerShell: load the key into your current session without printing it</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="load-key-windows">$env:UNCHAINED_API_KEY = (Get-Content "$HOME\unchained-agent\.env" | Where-Object { $_ -like 'UNCHAINED_API_KEY=*' } | Select-Object -First 1) -replace '^UNCHAINED_API_KEY=', ''</pre>
+            <button class="copy-btn" onclick="copyCode('load-key-windows',this)">Copy</button>
+          </div>
+          <p style="color:#a6a6b5;font-size:12px;margin:10px 0 12px">
+            Shell command copy buttons reference the environment variable above. Configuration copy buttons preserve <code>YOUR_UNCHAINED_API_KEY</code> exactly; they never copy a hidden account secret.
+          </p>
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
             <button class="tab-btn" onclick="switchTab('claude-desktop',this)">Claude Desktop</button>
             <button class="tab-btn" onclick="switchTab('other',this)">Other</button>
           </div>
           <div id="tab-claude-code">
+            <p class="key-command-label">macOS/Linux shell</p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
   https://api.unchainedsky.com/mcp \
   -t http \
-  -H "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+  -H "Authorization: Bearer $UNCHAINED_API_KEY"</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-code',this)">Copy</button>
+            </div>
+            <p class="key-command-label">Windows PowerShell</p>
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-code-windows">claude mcp add unchainedsky `
+  https://api.unchainedsky.com/mcp `
+  -t http `
+  -H "Authorization: Bearer $env:UNCHAINED_API_KEY"</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-code-windows',this)">Copy</button>
+            </div>
+            <div>
               <p style="color:#a6a6b5;font-size:12px;margin-top:8px">
                 Restart Claude Code after adding (<code>/mcp</code> to verify tools are loaded).
               </p>
-              <button class="copy-btn" onclick="copySnippet('claude-code',this)">Copy</button>
             </div>
           </div>
           <div id="tab-claude-desktop" style="display:none">
+            <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+              Claude Desktop JSON does not expand shell variables. Replace <code>YOUR_UNCHAINED_API_KEY</code> with the value from your local agent <code>.env</code> file before saving this configuration.
+            </p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-claude-desktop">{
   "mcpServers": {
     "unchainedsky": {
       "url": "https://api.unchainedsky.com/mcp",
       "headers": {
-        "Authorization": "Bearer <span id="key-cd">YOUR_API_KEY</span>"
+        "Authorization": "Bearer YOUR_UNCHAINED_API_KEY"
       }
     }
   }
 }</pre>
-              <button class="copy-btn" onclick="copySnippet('claude-desktop',this)">Copy</button>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-desktop',this)">Copy</button>
             </div>
           </div>
           <div id="tab-other" style="display:none">
             <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
-              Use any MCP client that supports HTTP transport. Set the endpoint and Authorization header:
+              Use any MCP client that supports HTTP transport. If it cannot expand environment variables, replace <code>YOUR_UNCHAINED_API_KEY</code> with the value from your local agent <code>.env</code> file before saving its configuration:
             </p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-other">Endpoint: https://api.unchainedsky.com/mcp
-Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
-              <button class="copy-btn" onclick="copySnippet('other',this)">Copy</button>
+Header:   Authorization: Bearer YOUR_UNCHAINED_API_KEY</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-other',this)">Copy</button>
             </div>
           </div>
         </div>
@@ -24534,14 +25913,20 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
           </p>
           <div class="code-wrap">
             <pre class="code-block" id="snippet-verify">ddm url=https://example.com</pre>
-            <button class="copy-btn" onclick="copySnippet('verify',this)">Copy</button>
+            <button class="copy-btn" onclick="copyCode('snippet-verify',this)">Copy</button>
           </div>
           <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
             To check your agent connection status:
           </p>
+          <p class="key-command-label">macOS/Linux shell</p>
           <div class="code-wrap">
-            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
+            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer $UNCHAINED_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
             <button class="copy-btn" onclick="copyCode('snippet-agent-lookup',this)">Copy</button>
+          </div>
+          <p class="key-command-label">Windows PowerShell</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-agent-lookup-windows">Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:UNCHAINED_API_KEY" } https://api.unchainedsky.com/api/agents | ConvertTo-Json -Depth 5</pre>
+            <button class="copy-btn" onclick="copyCode('snippet-agent-lookup-windows',this)">Copy</button>
           </div>
         </div>
       </div>
@@ -24594,38 +25979,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
   </div>
 
   <script>
-    let apiKey = '';
-    let agentId = '';
-
-    async function handleMcpGoogleCredential(response) {
-      try {
-        var res = await fetch('/auth/google', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({credential: response.credential}),
-          credentials: 'include'
-        });
-        if (res.ok) { location.reload(); }
-      } catch(e) {}
-    }
-
-    window.addEventListener('load', function() {
-      var gcid = '__GOOGLE_CLIENT_ID__';
-      if (gcid && gcid !== '__GOOGLE_' + 'CLIENT_ID__' && window.google && google.accounts) {
-        google.accounts.id.initialize({
-          client_id: gcid,
-          callback: handleMcpGoogleCredential,
-          auto_prompt: false
-        });
-        var el = document.getElementById('mcp-gsi-btn');
-        if (el) {
-          google.accounts.id.renderButton(el, {
-            theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'rectangular', width: 260
-          });
-        }
-      }
-    });
-
     function switchTab(tab, btn) {
       document.querySelectorAll('[id^="tab-"]').forEach(function(el) {
         if (el.id.startsWith('tab-claude') || el.id === 'tab-other') {
@@ -24647,19 +26000,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
       });
     }
 
-    function copySnippet(tab, btn) {
-      var el = document.getElementById('snippet-' + tab);
-      if (!el) return;
-      var text = el.textContent;
-      if (apiKey) text = text.replace(/YOUR_API_KEY/g, apiKey);
-      if (agentId) text = text.replace(/YOUR_AGENT_ID/g, agentId);
-      navigator.clipboard.writeText(text).then(function() {
-        btn.textContent = 'Copied!';
-        btn.classList.add('copied');
-        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-      });
-    }
-
     function toggleTools() {
       var table = document.getElementById('tools-table');
       var pipeline = document.getElementById('tools-pipeline');
@@ -24669,65 +26009,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
       arrow.classList.toggle('open');
     }
 
-    function fillKey(key) {
-      apiKey = key;
-      ['key-cc','key-cd','key-ot'].forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) { el.textContent = key; el.style.color = '#34d399'; }
-      });
-    }
-
-    function fillAgentId(aid) {
-      agentId = aid;
-    }
-
-    (async function init() {
-      try {
-        var meResp = await fetch('/auth/me', { credentials: 'include' });
-        if (meResp.ok) {
-          var me = await meResp.json();
-          if (me.authenticated && me.api_key) {
-            fillKey(me.api_key);
-            document.getElementById('signin-section').style.display = 'none';
-            try {
-              var agentsResp = await fetch('/api/agents', {
-                headers: { 'Authorization': 'Bearer ' + me.api_key }
-              });
-              if (agentsResp.ok) {
-                var agents = await agentsResp.json();
-                var list = agents.agents || [];
-                if (list.length > 0) {
-                  var aid = list[0].agent_id || list[0].id || '';
-                  if (aid) fillAgentId(aid);
-                  document.getElementById('agent-dot').className = 'dot green';
-                  document.getElementById('agent-status-text').textContent =
-                    'Agent connected' + (aid ? ' (' + aid + ')' : '') + ' \u2014 skip to step 2';
-                  document.getElementById('installer-wrap').style.display = 'none';
-                } else {
-                  document.getElementById('agent-dot').className = 'dot red';
-                  document.getElementById('agent-status-text').textContent =
-                    'No agent connected \u2014 install below';
-                }
-              }
-            } catch(e) {}
-          } else {
-            document.getElementById('signin-section').style.display = '';
-            document.getElementById('agent-dot').className = 'dot yellow';
-            document.getElementById('agent-status-text').textContent =
-              'Sign in to check agent status';
-          }
-        } else {
-          document.getElementById('signin-section').style.display = '';
-          document.getElementById('agent-dot').className = 'dot yellow';
-          document.getElementById('agent-status-text').textContent =
-            'Sign in to check agent status';
-        }
-      } catch(e) {
-        document.getElementById('agent-dot').className = 'dot yellow';
-        document.getElementById('agent-status-text').textContent =
-          'Could not check status';
-      }
-    })();
   </script>
 </body>
 </html>"""
