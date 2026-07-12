@@ -190,12 +190,14 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_trial_upgrade_notice_describes_provider_api_key_setup(self):
         copy = (
-            "Use your own Claude, Gemini, or Codex API key for stronger model "
-            "reasoning. <a href=\"/setup\">Configure provider / API key &rarr;</a>"
+            "Access your chosen Claude, Gemini, or Codex provider models using "
+            "your own API key. <a href=\"/setup\">Configure provider / API key "
+            "&rarr;</a>"
         )
 
         self.assertEqual(web.TRIAL_CHAT_HTML.count(copy), 2)
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
+        self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
 
     def test_landing_auth_cta_points_to_auth_entry(self):
         self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', web.LANDING_HTML)
