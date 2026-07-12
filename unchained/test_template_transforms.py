@@ -267,6 +267,7 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("agent-view-chat-expanded #main #modelrow", html)
         self.assertIn("display:grid!important;grid-template-columns:max-content minmax(0,1fr)!important", html)
         self.assertIn("const mobileExpanded = open && _agentViewIsMobile()", runtime)
+        self.assertIn("body.agent-shell-task.agent-view-open #chat-card-minimize{display:inline-flex!important}", html)
         self.assertIn("completeAgentShellTurn('cancelled');", html)
         self.assertIn("completeAgentShellTurn('error');", html)
         self.assertIn("} finally {\n    completeAgentShellTurn('error');", html)
