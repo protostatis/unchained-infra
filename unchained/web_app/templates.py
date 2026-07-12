@@ -23301,8 +23301,8 @@ function render(){
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
     const promptPreview=truncateSchedulerPreview(j.prompt||'',80);
     const outputPreview=truncateSchedulerPreview(p.last_output_preview||'',120);
-    const viewRunLabel='View full run for '+String(j.id||'this task');
-    const lastOutput=outputPreview?'<div class="card-output"><span class="label">Last output</span><div class="card-output-row"><span class="card-output-preview">'+esc(outputPreview)+'</span><button type="button" class="card-output-link" aria-label="'+esc(viewRunLabel)+'" onclick="openHistoryModal('+i+')">View full run</button></div></div>':'';
+    const viewHistoryLabel='View run history for '+String(j.id||'this task');
+    const lastOutput=outputPreview?'<div class="card-output"><span class="label">Last output</span><div class="card-output-row"><span class="card-output-preview">'+esc(outputPreview)+'</span><button type="button" class="card-output-link" aria-label="'+esc(viewHistoryLabel)+'" onclick="openHistoryModal('+i+')">View run history</button></div></div>':'';
     const modelMeta='<span>'+esc(formatSchedulerModel(j.model||''))+'</span>';
     const profileMeta=j.profile_path?'<span>'+esc(formatSchedulerProfile(j.profile_path))+'</span>':'';
     return '<div class="card'+(en?'':' disabled')+'">' +
