@@ -1374,6 +1374,7 @@ def test_trial_chat_has_guided_install_ux():
     assert "--setup-accent" in TRIAL_CHAT_HTML, "trial setup color variables missing"
     assert "to reconnect this browser" in TRIAL_CHAT_HTML, "trial reconnect modal copy missing"
     assert "btn.disabled = !ready" in TRIAL_CHAT_HTML, "trial send button should be disabled semantically when setup is blocked"
+    assert 'href="/test"' not in TRIAL_CHAT_HTML, "trial navigation should not expose the Control sandbox"
     print("  TRIAL_CHAT_HTML has chat+bridge status pills + guided install UX")
 
 
