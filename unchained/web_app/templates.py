@@ -21538,6 +21538,26 @@ function _syncAgentViewChatControls() {
   if (restore) restore.setAttribute('aria-hidden', String(agentViewChatMode !== 'minimized'));
 }
 
+function _agentViewRecalcMobileChatPosition() {
+  const canvas = document.getElementById('agent-view-canvas');
+  if (!canvas) { positionAgentViewMobileChat(0); return; }
+  const image = document.getElementById('agent-view-image');
+  if (canvas.classList.contains('has-frame') && image && image.naturalWidth && image.naturalHeight) {
+    const imageScale = Math.min(canvas.clientWidth / image.naturalWidth, canvas.clientHeight / image.naturalHeight);
+    positionAgentViewMobileChat(image.naturalHeight * imageScale);
+    return;
+  }
+  if (agentViewSnapshot) {
+    const viewport = agentViewSnapshot.viewport || {};
+    const width = Math.max(320, Number(viewport.width || 1280));
+    const height = Math.max(240, Number(viewport.height || 720));
+    const scale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height);
+    positionAgentViewMobileChat(height * Math.max(.1, scale));
+    return;
+  }
+  positionAgentViewMobileChat(0);
+}
+
 function setAgentViewChatState(mode, surface) {
   if (mode !== 'docked' && mode !== 'fullscreen' && mode !== 'minimized') mode = 'docked';
   if (surface !== 'browser' && surface !== 'chat') surface = 'chat';
@@ -21554,6 +21574,12 @@ function setAgentViewChatState(mode, surface) {
   if (surface === 'chat' && mode !== 'minimized') {
     const chat = document.getElementById('chat');
     if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
+    if (_agentViewIsMobile() && mode !== 'fullscreen') requestAnimationFrame(function() {
+      if (!document.body.classList.contains('agent-view-open') ||
+          !document.body.classList.contains('agent-view-chat-open') ||
+          document.body.classList.contains('agent-view-chat-expanded')) return;
+      _agentViewRecalcMobileChatPosition();
+    });
   }
   if (agentShellTaskEnabled) {
     requestAnimationFrame(scaleAgentViewSemanticFrame);
