@@ -7,13 +7,18 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from web_app.semantic_mirror import (
+    DEFAULT_MIRROR_KEY,
     DRAIN_MIRROR_EXPRESSION,
     INSTALL_MIRROR_EXPRESSION,
     MAX_MIRROR_PAYLOAD_CHARS,
     MIRROR_CHUNK_CHARS,
+    build_dispose_mirror_expression,
+    build_drain_mirror_expression,
+    build_install_mirror_expression,
     evaluate_mirror_payload,
     execute_semantic_action,
     mirror_action_expression,
+    mirror_payload_chunk_expression,
     parse_evaluation,
     stream_semantic_mirror,
 )
@@ -289,6 +294,121 @@ class TestSemanticMirrorStream(unittest.IsolatedAsyncioTestCase):
             {"type": "snapshot", "snapshot": resync, "resync": True},
         )
         await stream.aclose()
+
+
+class TestPerConnectionMirrorKey(unittest.TestCase):
+    """Regression guard for the scroll-reset-to-top bug caused by multiple
+    Agent View clients sharing a single global mirror symbol.
+
+    Each WS connection must get its own Symbol.for key so that INSTALL by one
+    client does not dispose another client's mirror (which invalidates the
+    captureEpoch and causes scroll actions to fail with stale-document).
+    """
+
+    def test_build_install_replaces_symbol_key(self):
+        default_expr = build_install_mirror_expression()
+        custom_expr = build_install_mirror_expression(
+            "unchained.mirror.capture.v1.abc123def456"
+        )
+        self.assertEqual(default_expr, INSTALL_MIRROR_EXPRESSION)
+        self.assertNotEqual(custom_expr, INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("unchained.mirror.capture.v1.abc123def456", custom_expr)
+        self.assertNotIn(
+            "Symbol.for('unchained.mirror.capture.v1')",
+            custom_expr,
+        )
+
+    def test_build_drain_replaces_symbol_key(self):
+        default_expr = build_drain_mirror_expression()
+        custom_expr = build_drain_mirror_expression("unchained.mirror.capture.v1.keyB")
+        self.assertEqual(default_expr, DRAIN_MIRROR_EXPRESSION)
+        self.assertIn("unchained.mirror.capture.v1.keyB", custom_expr)
+        self.assertNotIn(
+            "Symbol.for('unchained.mirror.capture.v1')",
+            custom_expr,
+        )
+
+    def test_two_different_keys_produce_different_expressions(self):
+        key_a = "unchained.mirror.capture.v1.connA"
+        key_b = "unchained.mirror.capture.v1.connB"
+        self.assertNotEqual(
+            build_install_mirror_expression(key_a),
+            build_install_mirror_expression(key_b),
+        )
+        self.assertNotEqual(
+            build_drain_mirror_expression(key_a),
+            build_drain_mirror_expression(key_b),
+        )
+
+    def test_action_expression_uses_custom_mirror_key(self):
+        expr = mirror_action_expression(
+            {"targetId": "ucm-1", "kind": "scroll", "x": 0, "y": 500},
+            expected_seq=3,
+            expected_epoch="epoch-test",
+            mirror_key="unchained.mirror.capture.v1.connA",
+        )
+        self.assertIn("unchained.mirror.capture.v1.connA", expr)
+        self.assertNotIn(
+            "Symbol.for('unchained.mirror.capture.v1')",
+            expr,
+        )
+
+    def test_chunk_expression_uses_custom_mirror_key(self):
+        expr = mirror_payload_chunk_expression(
+            0, 1024, True, mirror_key="unchained.mirror.capture.v1.connA"
+        )
+        self.assertIn("unchained.mirror.capture.v1.connA", expr)
+
+    def test_dispose_expression_targets_correct_key(self):
+        expr = build_dispose_mirror_expression("unchained.mirror.capture.v1.connA")
+        self.assertIn("unchained.mirror.capture.v1.connA", expr)
+        self.assertIn(".dispose()", expr)
+
+    def test_invalid_mirror_key_is_rejected(self):
+        with self.assertRaises(ValueError):
+            build_install_mirror_expression("unchained.mirror.capture.v1'; alert(1); '")
+        with self.assertRaises(ValueError):
+            build_drain_mirror_expression("bad key with spaces")
+
+    def test_default_key_constant_matches_backward_compat(self):
+        self.assertEqual(DEFAULT_MIRROR_KEY, "unchained.mirror.capture.v1")
+
+
+class TestPerConnectionMirrorKeyStream(unittest.IsolatedAsyncioTestCase):
+    """Verify that stream_semantic_mirror and execute_semantic_action pass the
+    per-connection mirror_key through to the underlying CDP evaluations."""
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_stream_passes_custom_key_to_install_and_drain(self, run_js):
+        snapshot = {"url": "https://example.test"}
+        run_js.return_value = _encoded(snapshot)
+        custom_key = "unchained.mirror.capture.v1.test123"
+        stream = stream_semantic_mirror("agent", "tab", mirror_key=custom_key)
+
+        await anext(stream)
+        await stream.aclose()
+
+        install_expr = run_js.await_args_list[0].args[2]
+        self.assertIn(custom_key, install_expr)
+        self.assertNotIn(f"Symbol.for('{DEFAULT_MIRROR_KEY}')", install_expr)
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_action_passes_custom_key(self, run_js):
+        run_js.return_value = _encoded(
+            {"ok": True, "reason": "ok", "navigated": False, "currentSeq": 3}
+        )
+        custom_key = "unchained.mirror.capture.v1.act456"
+        await execute_semantic_action(
+            "agent",
+            "tab",
+            {"targetId": "ucm-1", "kind": "scroll", "x": 0, "y": 500},
+            expected_seq=3,
+            expected_epoch="epoch-test",
+            mirror_key=custom_key,
+        )
+        action_expr = run_js.await_args.args[2]
+        self.assertIn(custom_key, action_expr)
+        self.assertNotIn(f"Symbol.for('{DEFAULT_MIRROR_KEY}')", action_expr)
 
 
 if __name__ == "__main__":

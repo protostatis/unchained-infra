@@ -423,6 +423,30 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
 #   elsewhere are unaffected.
 
 
+async def _dispose_source_mirror(
+    agent_id: str,
+    tab_id: str,
+    mirror_key: str,
+    relay_host: str,
+    relay_port: int,
+    source_lock: asyncio.Lock,
+) -> None:
+    """Tear down the per-connection mirror state in the source Chrome tab.
+
+    Each Agent View WS connection installs an isolated mirror under a unique
+    Symbol.for key.  When the WS closes we dispose that mirror so the source
+    tab doesn't accumulate stale MutationObservers from disconnected clients.
+    """
+    from web_app.semantic_mirror import build_dispose_mirror_expression
+
+    try:
+        expr = build_dispose_mirror_expression(mirror_key)
+        async with source_lock:
+            await cloud_tools.run_js(agent_id, tab_id, expr, relay_host, relay_port)
+    except Exception as exc:
+        log.debug("mirror dispose failed for %s: %r", mirror_key, exc)
+
+
 async def _handle_preview_ws(
     request: web.Request,
     *,
@@ -582,14 +606,24 @@ async def _handle_preview_ws(
         setattr(core, "_source_operation_locks", source_locks)
     source_lock = source_locks.setdefault((agent_id, tab_id), asyncio.Lock())
 
-    preview_generation = 0
-    if authenticated_chat:
-        preview_generations = getattr(core, "_chat_preview_generations", None)
-        if preview_generations is None:
-            preview_generations = {}
-            setattr(core, "_chat_preview_generations", preview_generations)
-        preview_generation = int(preview_generations.get(sid_param, 0)) + 1
-        preview_generations[sid_param] = preview_generation
+    # Each authenticated Agent View connection gets its own isolated mirror
+    # state in the source Chrome tab.  Without per-connection isolation, every
+    # new WebSocket runs INSTALL_MIRROR_EXPRESSION which *disposes* the previous
+    # mirror and installs a fresh one with a new captureEpoch.  When two clients
+    # (phone + desktop) are open on the same chat session, each keeps disposing
+    # the other's mirror; scroll actions fail with stale-document (epoch
+    # mismatch), the source never scrolls, and the next snapshot shows
+    # scrollY=0 — the "page resets to top after a second" bug.
+    #
+    # The per-connection key gives each stream its own Symbol.for(...) slot so
+    # mirrors coexist without interference.  The previous _chat_preview_generations
+    # mechanism (which killed the older connection when a new one arrived) is
+    # no longer needed and has been removed: concurrent clients now coexist.
+    mirror_key = (
+        f"unchained.mirror.capture.v1.{uuid.uuid4().hex[:12]}"
+        if authenticated_chat
+        else "unchained.mirror.capture.v1"
+    )
 
     ws = web.WebSocketResponse(heartbeat=30)
     if guest_id:
@@ -731,11 +765,9 @@ async def _handle_preview_ws(
     def preview_is_current() -> bool:
         if not authenticated_chat:
             return False
-        generations = getattr(core, "_chat_preview_generations", {})
         current_tab = str(core._session_tabs.get(sid_param, "") or "auto").strip()
         return (
-            generations.get(sid_param) == preview_generation
-            and current_tab == tab_id
+            current_tab == tab_id
             and not client_closed.is_set()
             and not ws.closed
         )
@@ -862,6 +894,7 @@ async def _handle_preview_ws(
                             relay_host=relay_host,
                             relay_port=relay_port,
                             operation_lock=source_lock,
+                            mirror_key=mirror_key,
                         )
                     except asyncio.CancelledError:
                         raise
@@ -923,6 +956,7 @@ async def _handle_preview_ws(
                         relay_host=relay_host,
                         relay_port=relay_port,
                         operation_lock=source_lock,
+                        mirror_key=mirror_key,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -979,6 +1013,7 @@ async def _handle_preview_ws(
                 relay_port=relay_port,
                 stop_requested=semantic_target_changed,
                 operation_lock=source_lock,
+                mirror_key=mirror_key,
             ):
                 semantic_seq += 1
                 if mirror_event["type"] == "snapshot":
@@ -1048,6 +1083,9 @@ async def _handle_preview_ws(
                 await ws.close()
             await stop_action_worker()
             await stop_client_watch()
+            await _dispose_source_mirror(
+                agent_id, tab_id, mirror_key, relay_host, relay_port, source_lock
+            )
             print(
                 f"[preview-fsm] sid={sid_param} semantic disconnected events={semantic_seq}",
                 flush=True,
@@ -1056,10 +1094,16 @@ async def _handle_preview_ws(
         except asyncio.CancelledError:
             await stop_action_worker()
             await stop_client_watch()
+            await _dispose_source_mirror(
+                agent_id, tab_id, mirror_key, relay_host, relay_port, source_lock
+            )
             raise
         except Exception as exc:
             mirror_state["ready"] = False
             pending_confirmations.clear()
+            await _dispose_source_mirror(
+                agent_id, tab_id, mirror_key, relay_host, relay_port, source_lock
+            )
             print(
                 f"[preview-fsm] sid={sid_param} semantic unavailable; "
                 f"falling back to frames: {exc!r}",
