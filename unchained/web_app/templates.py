@@ -8132,6 +8132,14 @@ body{
 #nav-trail span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px}
 #nav-trail span+span::before{content:' › ';opacity:0.6}
 #turn-ctr{flex-shrink:0;opacity:0.4;font-size:10px}
+#new-chat-feedback{
+  display:none;margin:8px 16px 0;padding:9px 12px;border:1px solid #3f4b68;
+  border-radius:8px;background:#151b29;color:#cbd5e1;font-size:12px;line-height:1.4;
+  flex-shrink:0;
+}
+#new-chat-feedback.pending{display:block}
+#new-chat-feedback.success{display:block;border-color:#285b46;background:#10271e;color:#9ee6c2}
+#new-chat-feedback.error{display:block;border-color:#713b45;background:#2b171c;color:#f3b7c1}
 .bubble.asst{position:relative}
 .bubble.asst .copy-btn{
   position:absolute;top:6px;right:6px;
@@ -8495,6 +8503,7 @@ body{
     <span id="nav-trail"></span>
     <span id="turn-ctr"></span>
   </div>
+  <div id="new-chat-feedback" role="status" aria-live="polite"></div>
 
   <div id="download-banner" class="guided" style="display:none">
     <div class="copy">
@@ -8908,11 +8917,12 @@ function _restoreSessionId() {
 
 function _persistSessionId(sid) {
   if (sid && sid.startsWith('s-' + agentId)) {
-    localStorage.setItem(_sessionStoreKey(), sid);
+    try { localStorage.setItem(_sessionStoreKey(), sid); } catch(e) {}
   }
 }
 
 let activeSlot = 1;
+let newChatPending = false;
 
 function _slotLabel(n) {
   return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
@@ -8989,7 +8999,7 @@ function _syncSlotButtons() {
 
 async function switchSlot(n) {
   if (n === activeSlot) return;
-  if (sending) return;
+  if (sending || newChatPending) return;
   const state = _loadSlotState();
   state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
   if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
@@ -9291,10 +9301,51 @@ function showHintsIfEmpty() {
     '</div></div>';
 }
 
-async function doNewChat() {
-  if (sending) return;
+function setNewChatFeedback(message, state) {
+  const feedback = document.getElementById('new-chat-feedback');
+  if (!feedback) return;
+  feedback.textContent = message || '';
+  feedback.className = message ? state : '';
+  feedback.setAttribute('role', state === 'error' ? 'alert' : 'status');
+}
+
+function resetNewChatUi() {
   document.getElementById('chat').innerHTML = '';
   showHintsIfEmpty();
+  const input = document.getElementById('msginput');
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+  _cancelCtrl = null;
+  _finalizeGroup();
+  _turnCount = 0;
+  _navTrail = [];
+  renderNavTrail();
+  const actionEl = document.getElementById('agent-action');
+  if (actionEl) actionEl.textContent = '';
+  const turnEl = document.getElementById('turn-ctr');
+  if (turnEl) turnEl.textContent = '';
+  document.getElementById('agent-bar').classList.remove('active');
+  document.getElementById('sendbtn').style.display = 'block';
+  document.getElementById('cancelbtn').style.display = 'none';
+}
+
+async function doNewChat() {
+  if (sending || newChatPending) return;
+  const requestedSlot = activeSlot;
+  const previousSessionId = sessionId;
+  newChatPending = true;
+  const slotbar = document.getElementById('slotbar');
+  const sendbtn = document.getElementById('sendbtn');
+  const sendWasDisabled = sendbtn ? sendbtn.disabled : true;
+  if (slotbar) slotbar.classList.add('locked');
+  if (sendbtn) {
+    sendbtn.disabled = true;
+    sendbtn.setAttribute('aria-disabled', 'true');
+  }
+  setNewChatFeedback('Starting a fresh ' + _slotLabel(requestedSlot) + '...', 'pending');
+  let nextSessionId = '';
   try {
     const r = await fetch('/web/chat/new', {
       method: 'POST',
@@ -9302,19 +9353,41 @@ async function doNewChat() {
       body: JSON.stringify({
         model: currentModel(),
         session_id: sessionId,
-        slot: activeSlot,
+        slot: requestedSlot,
       }),
     });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.session_id) {
-        sessionId = data.session_id;
-        _persistSessionId(sessionId);
-        _setActiveSlotSession(sessionId);
-      }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'The server could not start a new chat.');
+    nextSessionId = String(data.session_id || '').trim();
+    if (!data.ok || !nextSessionId || nextSessionId === previousSessionId ||
+        !nextSessionId.startsWith('s-' + agentId + '-')) {
+      throw new Error('The server did not return a fresh session.');
     }
-  } catch(e) {}
+    if (activeSlot !== requestedSlot || sessionId !== previousSessionId) {
+      throw new Error('The active lane changed before the new chat was ready.');
+    }
+  } catch(e) {
+    const reason = e && e.message ? ' ' + e.message : '';
+    setNewChatFeedback(
+      'Could not start a fresh ' + _slotLabel(requestedSlot) + '.' + reason +
+      ' Your current chat is unchanged.',
+      'error'
+    );
+    return;
+  } finally {
+    newChatPending = false;
+    if (slotbar) slotbar.classList.remove('locked');
+    if (sendbtn) {
+      sendbtn.disabled = sendWasDisabled;
+      sendbtn.setAttribute('aria-disabled', sendWasDisabled ? 'true' : 'false');
+    }
+  }
+  sessionId = nextSessionId;
+  _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  resetNewChatUi();
   _syncSlotButtons();
+  setNewChatFeedback('Fresh ' + _slotLabel(requestedSlot) + ' ready.', 'success');
 }
 
 async function openArchives() {
@@ -9771,7 +9844,7 @@ async function doCancel() {
 }
 
 async function doSend() {
-  if (sending) return;
+  if (sending || newChatPending) return;
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
@@ -20615,6 +20688,11 @@ def _inject_sidebar(html: str) -> str:
 
     # `doNewChat` has two variants depending on whether server-backed slots are present.
     for old_hook, new_hook, label in [
+        (
+            "  _syncSlotButtons();\n  setNewChatFeedback('Fresh '",
+            "  _syncSlotButtons();\n  loadSidebarHistory();\n  setNewChatFeedback('Fresh '",
+            "sidebar refresh after transactional slot reset",
+        ),
         (
             "  _syncSlotButtons();\n}",
             "  _syncSlotButtons();\n  loadSidebarHistory();\n}",
