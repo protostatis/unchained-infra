@@ -66,6 +66,8 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
             _delete_trial_session=Mock(),
             time=SimpleNamespace(time=lambda: 1234.5),
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            JWT_SECRET="test-jwt-secret",
+            _attach_first_look_guest_cookies=Mock(),
         )
 
     def _new_request(self, request_id: str, session_id: str = "s-trial-agent-current"):
@@ -80,12 +82,15 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def _ack_request(self, request_id: str, old_session: str, new_session: str):
+    def _ack_request(
+        self, request_id: str, old_session: str, new_session: str, commit_token: str
+    ):
         return SimpleNamespace(
             json=AsyncMock(
                 return_value={
                     "model": "google/gemini-3.1-flash-lite",
                     "request_id": request_id,
+                    "commit_token": commit_token,
                     "previous_session_id": old_session,
                     "session_id": new_session,
                     "slot": 2,
@@ -150,8 +155,24 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         chat_flow._trial_new_chat_requests.clear()
         chat_flow._trial_new_chat_sources.clear()
 
+        forged = await handle_chat_new_ack(
+            self._ack_request(
+                request_id,
+                old_session,
+                retry_data["session_id"],
+                "0" * 64,
+            )
+        )
+        self.assertEqual(forged.status, 409)
+        core._delete_trial_session.assert_not_called()
+
         ack = await handle_chat_new_ack(
-            self._ack_request(request_id, old_session, retry_data["session_id"])
+            self._ack_request(
+                request_id,
+                old_session,
+                retry_data["session_id"],
+                retry_data["commit_token"],
+            )
         )
         ack_data = json.loads(ack.body.decode())
 
@@ -165,13 +186,19 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         core._delete_trial_session.assert_called_once_with(old_session)
 
         repeated_ack = await handle_chat_new_ack(
-            self._ack_request(request_id, old_session, retry_data["session_id"])
+            self._ack_request(
+                request_id,
+                old_session,
+                retry_data["session_id"],
+                retry_data["commit_token"],
+            )
         )
         self.assertEqual(repeated_ack.status, 200)
         core._delete_trial_session.assert_called_once_with(old_session)
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_competing_requests_for_same_source_replay_one_transition(self, mock_core):
+        from web_app.handlers import chat_flow
         from web_app.handlers.chat_flow import handle_chat_new
 
         old_session = "s-trial-agent-current"
@@ -191,6 +218,8 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(later_data["commit_request_id"], "request-0000000000000003")
         self.assertTrue(later_data["replayed"])
         self.assertEqual(later_data["session_id"], first_data["session_id"])
+        self.assertEqual(len(chat_flow._trial_new_chat_requests), 1)
+        self.assertEqual(len(chat_flow._trial_new_chat_sources), 1)
         core._delete_trial_session.assert_not_called()
 
         reused = await handle_chat_new(
@@ -199,6 +228,106 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(reused.status, 409)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_guest_reset_needs_no_request_id_and_is_rate_limited(self, mock_core):
+        from rate_limit import SlidingWindowRateLimiter
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new
+
+        core = self._core()
+        guest_auth = {"agent_id": "guest-abcd1234"}
+        core._first_look_guest_auth = lambda request: (guest_auth, "guest-id", 0)
+        core._session_tabs["s-guest-abcd1234-current"] = "guest-tab"
+        mock_core.return_value = core
+        chat_flow._FIRST_LOOK_PUBLIC_RATE_LIMITER = SlidingWindowRateLimiter()
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "session_id": "s-guest-abcd1234-current",
+                    "first_look_guest": True,
+                }
+            ),
+            headers={"X-Forwarded-For": "203.0.113.44"},
+            remote="203.0.113.44",
+        )
+
+        with patch.object(chat_flow, "_FIRST_LOOK_NEW_CHAT_LIMIT", 1):
+            response = await handle_chat_new(request)
+            limited = await handle_chat_new(request)
+
+        data = json.loads(response.body.decode())
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["guest"])
+        self.assertTrue(data["session_id"].startswith("s-guest-abcd1234-"))
+        self.assertEqual(limited.status, 429)
+        self.assertEqual(
+            core._session_tabs, {"s-guest-abcd1234-current": "guest-tab"}
+        )
+        core._delete_trial_session.assert_not_called()
+        self.assertEqual(chat_flow._trial_new_chat_sources, {})
+        self.assertEqual(chat_flow._trial_new_chat_requests, {})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_pending_reservations_are_bounded_and_expired_records_prune(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new
+
+        core = self._core()
+        mock_core.return_value = core
+        with patch.object(chat_flow, "_TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT", 2):
+            first = await handle_chat_new(
+                self._new_request("request-0000000000000010", "s-trial-agent-one")
+            )
+            second = await handle_chat_new(
+                self._new_request("request-0000000000000011", "s-trial-agent-two")
+            )
+            limited = await handle_chat_new(
+                self._new_request("request-0000000000000012", "s-trial-agent-three")
+            )
+
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        self.assertEqual(limited.status, 429)
+        self.assertLessEqual(len(chat_flow._trial_new_chat_sources), 2)
+        self.assertLessEqual(len(chat_flow._trial_new_chat_requests), 2)
+
+        chat_flow._prune_trial_new_chat_commits(
+            1234.5 + chat_flow._TRIAL_NEW_CHAT_COMMIT_TTL + 1
+        )
+        self.assertEqual(chat_flow._trial_new_chat_sources, {})
+        self.assertEqual(chat_flow._trial_new_chat_requests, {})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_late_ack_does_not_overwrite_new_session_resources(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        request_id = "request-0000000000000020"
+        old_session = "s-trial-agent-current"
+        core = self._core()
+        core._session_tabs[old_session] = "old-tab"
+        core._session_agent_map[old_session] = "old-agent"
+        mock_core.return_value = core
+        reservation = await handle_chat_new(self._new_request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        core._session_tabs[data["session_id"]] = "new-tab"
+        core._session_agent_map[data["session_id"]] = "new-agent"
+
+        ack = await handle_chat_new_ack(
+            self._ack_request(
+                request_id,
+                old_session,
+                data["session_id"],
+                data["commit_token"],
+            )
+        )
+
+        self.assertEqual(ack.status, 200)
+        self.assertEqual(core._session_tabs[data["session_id"]], "new-tab")
+        self.assertEqual(core._session_agent_map[data["session_id"]], "new-agent")
+        self.assertEqual(core._session_tabs[old_session], "old-tab")
+        self.assertEqual(core._session_agent_map[old_session], "old-agent")
 
 
 class TestTrialNewChatTemplate(unittest.TestCase):
@@ -214,6 +343,9 @@ class TestTrialNewChatTemplate(unittest.TestCase):
         self.assertIn("/web/chat/new/ack", html)
         self.assertIn("data.request_id !== pending.request_id", html)
         self.assertIn("data.commit_request_id", html)
+        self.assertIn("data.commit_token", html)
+        self.assertIn("_newChatRecoveryBlocked()", html)
+        self.assertIn("Finish recovering the new chat", html)
         self.assertIn("recoverPendingNewChat();", html)
         self.assertIn("resetNewChatUi();", html)
         self.assertIn("Your current chat is unchanged.", html)
@@ -226,6 +358,8 @@ class TestTrialNewChatRuntime(unittest.TestCase):
             self.skipTest("Node.js is required for the browser-runtime harness")
 
         html = templates.TRIAL_CHAT_HTML
+        # These extracted functions intentionally run together as one contract;
+        # update this list when the inline New Chat runtime gains a dependency.
         runtime = "\n".join(
             [
                 _js_function(html, "_newChatStateKey"),
@@ -233,18 +367,27 @@ class TestTrialNewChatRuntime(unittest.TestCase):
                 _js_function(html, "_loadPendingNewChat"),
                 _js_function(html, "_savePendingNewChat"),
                 _js_function(html, "_clearPendingNewChat"),
+                _js_function(html, "_newChatRecoveryBlocked"),
+                _js_function(html, "_syncNewChatRecoveryLock"),
                 _js_function(html, "acknowledgeNewChatTransition", async_function=True),
                 _js_function(html, "recoverPendingNewChat", async_function=True),
+                _js_function(html, "updateSendAvailability"),
                 _js_function(html, "setNewChatFeedback"),
                 _js_function(html, "resetNewChatUi"),
                 _js_function(html, "doNewChat", async_function=True),
+                _js_function(html, "doSend", async_function=True),
             ]
         )
         harness = f"""
 const assert = require('assert');
 function classList() {{
   const values = new Set();
-  return {{add: v => values.add(v), remove: v => values.delete(v), contains: v => values.has(v)}};
+  return {{
+    add: v => values.add(v),
+    remove: v => values.delete(v),
+    contains: v => values.has(v),
+    toggle: (v, force) => force === undefined ? (values.has(v) ? values.delete(v) : values.add(v)) : (force ? values.add(v) : values.delete(v)),
+  }};
 }}
 const storage = new Map();
 global.localStorage = {{
@@ -260,11 +403,11 @@ Object.defineProperty(globalThis, 'crypto', {{
 const elements = {{
   'new-chat-feedback': {{textContent:'', className:'', attrs:{{}}, setAttribute(k,v){{this.attrs[k]=v;}}}},
   chat: {{innerHTML:'existing history'}},
-  msginput: {{value:'draft prompt', style:{{height:'88px'}}}},
+  msginput: {{value:'draft prompt', style:{{height:'88px'}}, disabled:false, placeholder:''}},
   'agent-action': {{textContent:'Browsing'}},
   'turn-ctr': {{textContent:'t4'}},
   'agent-bar': {{classList:classList()}},
-  sendbtn: {{style:{{display:'none'}}, disabled:false, attrs:{{}}, setAttribute(k,v){{this.attrs[k]=v;}}}},
+  sendbtn: {{style:{{display:'none'}}, disabled:false, title:'', classList:classList(), attrs:{{}}, setAttribute(k,v){{this.attrs[k]=v;}}}},
   cancelbtn: {{style:{{display:'block'}}}},
   slotbar: {{classList:classList()}},
 }};
@@ -275,6 +418,7 @@ let sessionId = 's-trial-agent-old';
 let activeSlot = 2;
 let sending = false;
 let newChatPending = false;
+let lastLocalSetupReady = true;
 let _cancelCtrl = {{stale:true}};
 let _turnCount = 4;
 let _navTrail = ['example.com'];
@@ -282,6 +426,7 @@ let persisted = '';
 let activePersisted = '';
 let hintsShown = 0;
 let syncCount = 0;
+let sendAttemptAdvanced = 0;
 function currentModel() {{ return 'google/gemini-3.1-flash-lite'; }}
 function _sessionStoreKey() {{ return 'unchained_session_trial-agent_openrouter'; }}
 function _slotLabel(slot) {{ return ['Lane A','Lane B','Lane C'][slot - 1]; }}
@@ -292,6 +437,7 @@ function loadSidebarHistory() {{}}
 function showHintsIfEmpty() {{ hintsShown += 1; elements.chat.innerHTML = 'fresh hints'; }}
 function _finalizeGroup() {{}}
 function renderNavTrail() {{}}
+function _incTrialMsgCount() {{ sendAttemptAdvanced += 1; }}
 {runtime}
 
 function restoreCurrentChat(sid) {{
@@ -310,9 +456,11 @@ function restoreCurrentChat(sid) {{
   let ackMode = 'success';
   let reservedSession = '';
   const reserveRequestIds = [];
+  let ackCalls = 0;
   global.fetch = async (url, options) => {{
     const body = JSON.parse(options.body);
     if (url === '/web/chat/new/ack') {{
+      ackCalls += 1;
       if (ackMode === 'lost') throw new Error('ack response lost');
       return {{ok:true, json:async () => ({{
         ok:true, acknowledged:true, request_id:body.request_id,
@@ -330,6 +478,7 @@ function restoreCurrentChat(sid) {{
     const responseRequestId = mode === 'stale' ? 'request-stale-00000000000' : body.request_id;
     return {{ok:true, json:async () => ({{
       ok:true, request_id:responseRequestId, commit_request_id:body.request_id,
+      commit_token:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       previous_session_id:body.session_id,
       session_id:reservedSession, active_slot:body.slot, replayed:mode === 'replay',
     }})}};
@@ -378,10 +527,29 @@ function restoreCurrentChat(sid) {{
   const unacked = _loadPendingNewChat();
   assert.strictEqual(sessionId, reservedSession);
   assert.strictEqual(unacked.session_id, reservedSession);
-  assert.strictEqual(elements['new-chat-feedback'].className, 'success');
+  assert.strictEqual(elements['new-chat-feedback'].className, 'error');
+  assert.strictEqual(elements.sendbtn.disabled, true);
+  assert.strictEqual(elements.msginput.disabled, true);
+  assert.strictEqual(elements.slotbar.classList.contains('locked'), true);
+
+  elements.msginput.value = 'must not send';
+  await doSend();
+  assert.strictEqual(sendAttemptAdvanced, 0, 'send advanced while ACK recovery was pending');
+
+  const reservationsBeforeRetry = reserveRequestIds.length;
+  const ackCallsBeforeRetry = ackCalls;
+  await doNewChat();
+  assert.strictEqual(reserveRequestIds.length, reservationsBeforeRetry, 'second New Chat created another reservation');
+  assert.strictEqual(ackCalls, ackCallsBeforeRetry + 1, 'second New Chat did not retry ACK');
+  assert.strictEqual(_loadPendingNewChat().request_id, unacked.request_id);
+  assert.strictEqual(elements.sendbtn.disabled, true);
+
   ackMode = 'success';
   await recoverPendingNewChat();
   assert.strictEqual(_loadPendingNewChat(), null, 'reload recovery retries lost ack');
+  assert.strictEqual(elements.sendbtn.disabled, false);
+  assert.strictEqual(elements.msginput.disabled, false);
+  assert.strictEqual(elements.slotbar.classList.contains('locked'), false);
 
   // A stale response from an older request cannot replace the active session.
   storage.clear();

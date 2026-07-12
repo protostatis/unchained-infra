@@ -9064,8 +9064,12 @@ function _newChatRequestId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
   }
-  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) +
-    Math.random().toString(36).slice(2);
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Secure random IDs are unavailable in this browser.');
 }
 
 function _loadPendingNewChat() {
@@ -9078,6 +9082,8 @@ function _loadPendingNewChat() {
     if (next && !next.startsWith('s-' + agentId + '-')) return null;
     if (parsed.commit_request_id &&
         !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.commit_request_id)) return null;
+    if (parsed.commit_token && !/^[a-f0-9]{64}$/.test(parsed.commit_token)) return null;
+    if (next && (!parsed.commit_request_id || !parsed.commit_token)) return null;
     return parsed;
   } catch(e) {
     return null;
@@ -9094,6 +9100,26 @@ function _clearPendingNewChat(requestId) {
   try { localStorage.removeItem(_newChatStateKey()); } catch(e) {}
 }
 
+function _newChatRecoveryBlocked() {
+  const pending = _loadPendingNewChat();
+  return !!(pending && pending.session_id);
+}
+
+function _syncNewChatRecoveryLock() {
+  const blocked = _newChatRecoveryBlocked();
+  const slotbar = document.getElementById('slotbar');
+  if (slotbar) slotbar.classList.toggle('locked', blocked || newChatPending || sending);
+  const input = document.getElementById('msginput');
+  if (input) input.disabled = blocked;
+  const sendbtn = document.getElementById('sendbtn');
+  if (sendbtn && blocked) {
+    sendbtn.disabled = true;
+    sendbtn.setAttribute('aria-disabled', 'true');
+    sendbtn.title = 'Finish recovering the new chat first';
+  }
+  return blocked;
+}
+
 async function acknowledgeNewChatTransition(pending) {
   try {
     const commitRequestId = pending.commit_request_id || pending.request_id;
@@ -9103,6 +9129,7 @@ async function acknowledgeNewChatTransition(pending) {
       body: JSON.stringify({
         model: pending.model || currentModel(),
         request_id: commitRequestId,
+        commit_token: pending.commit_token,
         previous_session_id: pending.previous_session_id,
         session_id: pending.session_id,
         slot: pending.slot,
@@ -9124,7 +9151,23 @@ async function recoverPendingNewChat() {
   const pending = _loadPendingNewChat();
   if (!pending) return;
   if (pending.session_id && pending.session_id === sessionId) {
-    await acknowledgeNewChatTransition(pending);
+    if (newChatPending) return;
+    newChatPending = true;
+    _syncNewChatRecoveryLock();
+    setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
+    try {
+      const acknowledged = await acknowledgeNewChatTransition(pending);
+      setNewChatFeedback(
+        acknowledged
+          ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
+          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+        acknowledged ? 'success' : 'error'
+      );
+    } finally {
+      newChatPending = false;
+      _syncNewChatRecoveryLock();
+      updateSendAvailability(lastLocalSetupReady);
+    }
     return;
   }
   if (!pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
@@ -9246,7 +9289,7 @@ function _syncSlotButtons() {
 
 async function switchSlot(n) {
   if (n === activeSlot) return;
-  if (sending || newChatPending) return;
+  if (sending || newChatPending || _newChatRecoveryBlocked()) return;
   const state = _loadSlotState();
   state.active_slot = (n === 1 || n === 2 || n === 3) ? n : 1;
   if (!state.slots[String(state.active_slot)]) state.slots[String(state.active_slot)] = _newSessionId();
@@ -9315,15 +9358,24 @@ function updateTrialInstallGuidance() {
 function updateSendAvailability(ready) {
   const input = document.getElementById('msginput');
   const btn = document.getElementById('sendbtn');
+  const recoveryBlocked = _newChatRecoveryBlocked();
   if (input) {
-    input.placeholder = ready ? 'Ask anything...' : 'Connect agent to send...';
+    input.disabled = recoveryBlocked;
+    input.placeholder = recoveryBlocked
+      ? 'Finish recovering the new chat before sending...'
+      : (ready ? 'Ask anything...' : 'Connect agent to send...');
   }
   if (btn) {
     btn.disabled = !ready;
-    btn.setAttribute('aria-disabled', ready ? 'false' : 'true');
-    btn.classList.toggle('setup-blocked', !ready);
-    btn.title = ready ? 'Send prompt' : 'Connect this computer first';
+    if (recoveryBlocked) btn.disabled = true;
+    const enabled = !btn.disabled;
+    btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    btn.classList.toggle('setup-blocked', !enabled);
+    btn.title = recoveryBlocked
+      ? 'Finish recovering the new chat first'
+      : (ready ? 'Send prompt' : 'Connect this computer first');
   }
+  _syncNewChatRecoveryLock();
 }
 
 function _installModalFocusable() {
@@ -9598,37 +9650,44 @@ function resetNewChatUi() {
 async function doNewChat() {
   if (sending || newChatPending) return;
   newChatPending = true;
-  const requestedSlot = activeSlot;
-  const previousSessionId = sessionId;
-  const requestedModel = currentModel();
-  let pending = _loadPendingNewChat();
-  if (pending && pending.session_id === previousSessionId) {
-    await acknowledgeNewChatTransition(pending);
-    pending = null;
-  }
-  if (!pending || pending.previous_session_id !== previousSessionId ||
-      pending.slot !== requestedSlot || pending.session_id) {
-    pending = {
-      request_id: _newChatRequestId(),
-      commit_request_id: '',
-      previous_session_id: previousSessionId,
-      session_id: '',
-      slot: requestedSlot,
-      model: requestedModel,
-    };
-    _savePendingNewChat(pending);
-  }
   const slotbar = document.getElementById('slotbar');
   const sendbtn = document.getElementById('sendbtn');
-  const sendWasDisabled = sendbtn ? sendbtn.disabled : true;
   if (slotbar) slotbar.classList.add('locked');
   if (sendbtn) {
     sendbtn.disabled = true;
     sendbtn.setAttribute('aria-disabled', 'true');
   }
-  setNewChatFeedback('Starting a fresh ' + _slotLabel(requestedSlot) + '...', 'pending');
-  let nextSessionId = '';
+  let pending = _loadPendingNewChat();
   try {
+    if (pending && pending.session_id) {
+      setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
+      const acknowledged = await acknowledgeNewChatTransition(pending);
+      setNewChatFeedback(
+        acknowledged
+          ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
+          : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+        acknowledged ? 'success' : 'error'
+      );
+      return;
+    }
+
+    const requestedSlot = activeSlot;
+    const previousSessionId = sessionId;
+    if (!pending || pending.previous_session_id !== previousSessionId ||
+        pending.slot !== requestedSlot) {
+      pending = {
+        request_id: _newChatRequestId(),
+        commit_request_id: '',
+        commit_token: '',
+        previous_session_id: previousSessionId,
+        session_id: '',
+        slot: requestedSlot,
+        model: currentModel(),
+      };
+      _savePendingNewChat(pending);
+    }
+    setNewChatFeedback('Starting a fresh ' + _slotLabel(requestedSlot) + '...', 'pending');
+    let nextSessionId = '';
     try {
       const r = await fetch('/web/chat/new', {
         method: 'POST',
@@ -9645,15 +9704,17 @@ async function doNewChat() {
       nextSessionId = String(data.session_id || '').trim();
       if (!data.ok || data.request_id !== pending.request_id ||
           !/^[A-Za-z0-9_-]{16,80}$/.test(data.commit_request_id || '') ||
+          !/^[a-f0-9]{64}$/.test(data.commit_token || '') ||
           data.previous_session_id !== previousSessionId || data.active_slot !== requestedSlot ||
           !nextSessionId || nextSessionId === previousSessionId ||
           !nextSessionId.startsWith('s-' + agentId + '-')) {
         throw new Error('The server returned a stale or invalid new-chat transition.');
       }
       if (activeSlot !== requestedSlot || sessionId !== previousSessionId) {
-        throw new Error('The active lane changed before the new chat was ready.');
+        throw new Error('The active lane or session changed while starting a new chat.');
       }
       pending.commit_request_id = data.commit_request_id;
+      pending.commit_token = data.commit_token;
     } catch(e) {
       const reason = e && e.message ? ' ' + e.message : '';
       setNewChatFeedback(
@@ -9671,15 +9732,17 @@ async function doNewChat() {
     _setSlotPreview(requestedSlot, '');
     resetNewChatUi();
     _syncSlotButtons();
-    setNewChatFeedback('Fresh ' + _slotLabel(requestedSlot) + ' ready.', 'success');
-    await acknowledgeNewChatTransition(pending);
+    const acknowledged = await acknowledgeNewChatTransition(pending);
+    setNewChatFeedback(
+      acknowledged
+        ? 'Fresh ' + _slotLabel(requestedSlot) + ' ready.'
+        : 'The fresh lane is reserved, but recovery is not finished. Select New Chat to retry.',
+      acknowledged ? 'success' : 'error'
+    );
   } finally {
     newChatPending = false;
-    if (slotbar) slotbar.classList.remove('locked');
-    if (sendbtn) {
-      sendbtn.disabled = sendWasDisabled;
-      sendbtn.setAttribute('aria-disabled', sendWasDisabled ? 'true' : 'false');
-    }
+    _syncNewChatRecoveryLock();
+    updateSendAvailability(lastLocalSetupReady);
   }
 }
 
@@ -10137,7 +10200,7 @@ async function doCancel() {
 }
 
 async function doSend() {
-  if (sending || newChatPending) return;
+  if (sending || newChatPending || _newChatRecoveryBlocked()) return;
   const input = document.getElementById('msginput');
   const msg = input.value.trim();
   if (!msg) return;
@@ -21188,8 +21251,8 @@ def _inject_sidebar(html: str) -> str:
     # `doNewChat` has two variants depending on whether server-backed slots are present.
     for old_hook, new_hook, label in [
         (
-            "    _syncSlotButtons();\n    setNewChatFeedback('Fresh '",
-            "    _syncSlotButtons();\n    loadSidebarHistory();\n    setNewChatFeedback('Fresh '",
+            "    _syncSlotButtons();\n    const acknowledged = await acknowledgeNewChatTransition(pending);",
+            "    _syncSlotButtons();\n    loadSidebarHistory();\n    const acknowledged = await acknowledgeNewChatTransition(pending);",
             "sidebar refresh after transactional slot reset",
         ),
         (
