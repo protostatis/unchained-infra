@@ -9492,6 +9492,7 @@ function _syncSlotButtons() {
     btn.setAttribute('aria-pressed', i === activeSlot ? 'true' : 'false');
     if (i === activeSlot) btn.classList.add('active');
   }
+  if (typeof syncAgentLanePicker === 'function') syncAgentLanePicker();
 }
 
 let _crossTabSessionSyncing = false;
@@ -20106,7 +20107,7 @@ body.agent-shell-task.agent-view-open #main #lane-picker-toggle:hover,body.agent
 body.agent-shell-task.agent-view-open #main #lane-picker-toggle::before,body.agent-shell-task.agent-view-open #main #lane-picker-toggle::after{display:none!important;content:none!important}
 body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:8px;color:#748291;letter-spacing:.08em}body.agent-shell-task.agent-view-open #main #lane-picker-toggle strong{font-size:10px;color:#d8ffe5}body.agent-shell-task.agent-view-open #main #lane-picker-toggle svg{width:10px;height:10px}
 body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){display:none;position:absolute!important;top:38px!important;width:36px!important;min-width:36px!important;height:34px!important;flex:0 0 36px!important;padding:0!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:9px!important;background:#0c1117!important;color:#91a0af!important;box-shadow:0 10px 24px rgba(0,0,0,.32)!important;font-size:11px!important;font-weight:600!important;letter-spacing:0!important;text-align:center!important;text-transform:none!important;transform:none!important;animation:none!important}
-body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::before,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::after{display:none!important;content:none!important}.lane-option-label{display:grid;width:100%;height:100%;place-items:center;color:inherit;font:600 11px var(--mono,'IBM Plex Mono',monospace)}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::before,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::after{display:none!important;content:none!important}.lane-option-label{display:none;width:100%;height:100%;place-items:center;color:inherit;font:600 11px var(--mono,'IBM Plex Mono',monospace)}
 body.agent-shell-task.agent-view-open #main #slotbar>button.active:not(#lane-picker-toggle){border-color:rgba(110,231,161,.45)!important;background:#13221b!important;color:#d8ffe5!important;box-shadow:inset 0 0 0 1px rgba(110,231,161,.08),0 10px 24px rgba(0,0,0,.32)!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):hover,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):focus-visible{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;transform:none!important}
 body.agent-shell-task.agent-view-open #main #slot1{left:0!important}body.agent-shell-task.agent-view-open #main #slot2{left:40px!important}body.agent-shell-task.agent-view-open #main #slot3{left:80px!important}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #main #slotbar{top:10px!important;width:94px!important;height:44px!important}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{width:94px!important;min-width:94px!important;height:44px!important;flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){top:48px!important;width:40px!important;min-width:40px!important;height:44px!important;flex-basis:40px!important}body.agent-shell-task.agent-view-open #main #slot2{left:44px!important}body.agent-shell-task.agent-view-open #main #slot3{left:88px!important}}
@@ -20115,6 +20116,10 @@ body.agent-shell-task.agent-view-open #main #slot1{left:0!important}body.agent-s
 body.agent-shell-task.agent-view-open #sidebar .sidebar-new{display:none}
 body.agent-shell-task.agent-view-open #main #topbar{position:relative}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{position:relative!important;left:auto!important;top:auto!important;flex:0 0 88px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;position:static!important;height:34px!important;min-width:50px;padding:0 10px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#b9c6d2!important;box-shadow:none!important;font:500 10px var(--mono,'IBM Plex Mono',monospace)!important;transform:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new:hover{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;filter:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{position:static!important;width:34px;min-width:34px;height:34px;border-radius:10px}body.agent-shell-task.agent-view-open #main #topbar .nav{width:auto!important;flex:1 1 auto!important;margin-left:auto!important;padding-left:0!important}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{gap:8px}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{height:44px!important;min-width:52px;padding:0 9px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{width:44px;min-width:44px;height:44px}}
+body.agent-shell-task.agent-view-open #main #topbar{z-index:20;overflow:visible!important}
+body.agent-shell-task.agent-view-open #main #slotbar .lane-option-label{display:grid}
+body.agent-shell-task.agent-view-open #main #slotbar .slot-name,body.agent-shell-task.agent-view-open #main #slotbar .slot-preview{display:none!important}
+@media(max-width:760px){body.agent-shell-task.agent-view-open.agent-view-chat-expanded #main #modelrow{display:flex!important}body.agent-shell-task.agent-view-open:not(.agent-view-chat-expanded):not(.agent-shell-chat-only) #main #modelrow{display:none!important}}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px;transform:translateY(14px) scale(.99);transform-origin:bottom center}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{transform:none}body.agent-shell-task.agent-view-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-shell-task.agent-view-open #sidebar .sidebar-search input{height:44px}.sidebar-close{width:44px;height:44px}.sidebar-new{min-height:44px}}
 /* Chat history is available in both legacy Browser Preview and task-shell modes. */
 body.agent-view-open.agent-shell-history-open #agent-shell-history-scrim{display:block;position:fixed;z-index:1320;inset:0;border:0;background:rgba(2,5,8,.24);opacity:1;visibility:visible;pointer-events:auto;cursor:pointer;backdrop-filter:blur(3px)}
@@ -20408,11 +20413,19 @@ function syncAgentLanePicker() {
     if (!button) continue;
     if (!button.dataset) button.dataset = {};
     const threadName = String(lane);
+    const richPreview = button.querySelector ? button.querySelector('.slot-preview') : null;
+    const hasRichLabel = !!richPreview;
     const existingLabel = button.querySelector ? button.querySelector('.lane-option-label') : null;
+    if (hasRichLabel || !existingLabel) {
+      const rawDetail = String(
+        hasRichLabel ? richPreview.textContent : (button.textContent || ('Thread ' + threadName))
+      ).replace(/\\s+/g, ' ').trim();
+      button.dataset.laneDetail = /^(?:Lane [ABC]|Thread [123]|No task yet)$/.test(rawDetail)
+        ? ('Thread ' + threadName)
+        : (rawDetail || ('Thread ' + threadName));
+    }
     if (!existingLabel) {
-      const rawDetail = String(button.textContent || ('Thread ' + threadName)).replace(/\\s+/g, ' ').trim();
-      button.dataset.laneDetail = /^(?:Lane [ABC]|Thread [123])$/.test(rawDetail) ? ('Thread ' + threadName) : (rawDetail || ('Thread ' + threadName));
-      button.textContent = '';
+      if (!hasRichLabel) button.textContent = '';
       const visible = document.createElement ? document.createElement('span') : null;
       if (visible) {
         visible.className = 'lane-option-label';
@@ -21514,7 +21527,8 @@ function toggleAgentViewChat(forceOpen) {
   const open = typeof forceOpen === 'boolean'
     ? forceOpen
     : agentViewChatSurface !== 'chat';
-  const mode = agentViewChatMode === 'minimized' ? 'docked' : agentViewChatMode;
+  const mobileExpanded = open && _agentViewIsMobile() && !document.body.classList.contains('agent-shell-chat-only');
+  const mode = mobileExpanded ? 'fullscreen' : (agentViewChatMode === 'minimized' ? 'docked' : agentViewChatMode);
   setAgentViewChatState(mode, open ? 'chat' : 'browser');
 }
 
@@ -22041,6 +22055,20 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
     )
 
     if has_agent_view:
+        if include_sidebar:
+            history_button = (
+                '        <button type="button" id="chat-card-history" class="chat-size-btn" '
+                'aria-label="Open chat history" title="Chat history" aria-expanded="false" '
+                'aria-controls="sidebar" onclick="toggleAgentShellHistory()"><svg viewBox="0 0 16 16" '
+                'aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h7"/></svg></button>\n'
+            )
+        else:
+            history_button = (
+                '        <button type="button" id="chat-card-history" class="chat-size-btn" '
+                'aria-label="Open chat archives" title="Chat archives" onclick="openArchives()">'
+                '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h7"/>'
+                '</svg></button>\n'
+            )
         replacements = [
             TemplateReplacement(
                 "  if (BROWSER_TOOLS.has(name)) {",
@@ -22080,19 +22108,30 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
                     logout_pattern,
                     '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Same conversation controlling browser preview">\n'
                     '        <span class="agent-view-chat-context"><strong>Same conversation</strong><span>Controls this preview</span></span>\n'
-                    '        <button type="button" id="chat-card-history" class="chat-size-btn" aria-label="Open chat history" title="Chat history" aria-expanded="false" aria-controls="sidebar" onclick="toggleAgentShellHistory()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h7"/></svg></button>\n'
-                    '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
+                    + history_button
+                    + '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Return chat to default size" title="Default chat size" aria-hidden="true" onclick="exitAgentViewFullscreen()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3a1 1 0 01-1 1H2M10 2v3a1 1 0 001 1h3M14 10h-3a1 1 0 00-1 1v3M2 10h3a1 1 0 011 1v3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" title="Minimize chat" onclick="minimizeAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>\n'
                     '      </span>\n' + logout_pattern,
                     "chat card controls injection",
                 ),
             )
-        if '<div id="slotbar">' in html:
+        slotbar_open = next(
+            (
+                marker
+                for marker in (
+                    '<div id="slotbar">',
+                    '<div id="slotbar" role="group" aria-label="Chat sessions">',
+                )
+                if marker in html
+            ),
+            None,
+        )
+        if slotbar_open:
             replacements.append(
                 TemplateReplacement(
-                    '<div id="slotbar">',
-                    '<div id="slotbar">\n    <button type="button" id="lane-picker-toggle" aria-expanded="false" aria-controls="slot1 slot2 slot3" onclick="toggleAgentLanePicker()"><span class="lane-picker-kicker">Thread</span><strong id="lane-picker-current">1</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>',
+                    slotbar_open,
+                    slotbar_open + '\n    <button type="button" id="lane-picker-toggle" aria-expanded="false" aria-controls="slot1 slot2 slot3" onclick="toggleAgentLanePicker()"><span class="lane-picker-kicker">Thread</span><strong id="lane-picker-current">1</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>',
                     "compact Agent View lane picker injection",
                 ),
             )

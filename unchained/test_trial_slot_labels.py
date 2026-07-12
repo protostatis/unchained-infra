@@ -26,7 +26,7 @@ class TestTrialSlotLabels(unittest.TestCase):
         start = html.index("function _sessionStoreKey()")
         end = html.index("function onModelChange(model)", start)
         slot_runtime = html[start:end]
-        script = slot_runtime + r"""
+        script = "globalThis.window = {addEventListener() {}};\n" + slot_runtime + r"""
 class ClassList {
   constructor() { this.values = new Set(); }
   add(value) { this.values.add(value); }
@@ -61,12 +61,14 @@ globalThis.localStorage = {
 agentId = 'test-agent';
 sessionId = '';
 sending = false;
-globalThis.loadHistory = async function() {
+loadHistory = async function() {
   _setSlotPreview(activeSlot, activeSlot === 2 ? 'Compare accessible hotels' : '');
 };
 function check(condition, message) { if (!condition) throw new Error(message); }
 
-_ensureSlotState();
+const initialState = _ensureSlotState();
+sessionId = initialState.slots['1'];
+_persistSessionId(sessionId);
 _syncSlotButtons();
 check(buttons.slot1.children['.slot-name'].textContent === 'Chat 1', 'initial chat name');
 check(buttons.slot1.children['.slot-preview'].textContent === 'No task yet', 'initial empty label');
@@ -113,7 +115,7 @@ check(buttons.slot1.attrs['aria-label'].includes('Research flights to Tokyo'), '
         start = html.index("function _sessionStoreKey()")
         end = html.index("function showHintsIfEmpty()", start)
         runtime = html[start:end]
-        script = runtime + r"""
+        script = "globalThis.window = {addEventListener() {}};\n" + runtime + r"""
 class ClassList {
   constructor() { this.values = new Set(); }
   add(value) { this.values.add(value); }
