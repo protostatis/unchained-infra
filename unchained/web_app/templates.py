@@ -12336,6 +12336,7 @@ async function loadSlots() {
         btn.textContent = s.preview || (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       }
     }
+    if (typeof syncAgentLanePicker === 'function') syncAgentLanePicker();
   } catch(e) {}
 }
 
@@ -13051,6 +13052,7 @@ function _syncSlotButtons() {
     btn.textContent = _slotLabel(i);
     if (i === activeSlot) btn.classList.add('active');
   }
+  if (typeof syncAgentLanePicker === 'function') syncAgentLanePicker();
 }
 
 async function switchSlot(n) {
@@ -15974,6 +15976,7 @@ function _syncSlotButtons() {
     btn.textContent = _slotLabel(i);
     if (i === activeSlot) btn.classList.add('active');
   }
+  if (typeof syncAgentLanePicker === 'function') syncAgentLanePicker();
 }
 
 function _highlightSlotButtons(slot) {
@@ -16455,6 +16458,7 @@ async function loadSlots() {
         btn.textContent = s.preview || (['Lane A', 'Lane B', 'Lane C'][s.slot - 1] || ('Lane ' + s.slot));
       }
     }
+    if (typeof syncAgentLanePicker === 'function') syncAgentLanePicker();
   } catch(e) {}
 }
 
@@ -20073,7 +20077,7 @@ body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #ma
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0;width:100%!important;max-width:none!important;border:0!important;border-radius:0!important}
 }
 @media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-browserbar .policy{display:none}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
-/* Agent Task Shell experiment. Isolated behind ?shell=task. */
+/* Agent Task Shell. Default experience; ?shell=legacy remains the rollback path. */
 :root{--task-space-1:4px;--task-space-2:8px;--task-space-3:12px;--task-space-4:16px;--task-space-6:24px;--task-space-8:32px;--task-radius-sm:8px;--task-radius-md:14px;--task-radius-lg:22px;--task-radius-full:999px;--task-shadow-sm:0 8px 24px rgba(0,0,0,.24);--task-shadow-lg:0 28px 90px rgba(0,0,0,.48);--task-fast:150ms;--task-normal:220ms;--task-panel-width:clamp(380px,34vw,520px)}
 #lane-picker-toggle{display:none}
 .agent-view-close:focus-visible,.agent-view-chat-toggle:focus-visible,.chat-size-btn:focus-visible,.agent-view-chat-restore:focus-visible,.topbar-agent-view:focus-visible,.sidebar-close:focus-visible,#lane-picker-toggle:focus-visible{outline:2px solid #9af1b9;outline-offset:2px}
@@ -20350,7 +20354,7 @@ let agentViewQueuedPatches = [];
 let agentViewActivationTimer = null;
 const agentViewInputTimers = new Map();
 const agentViewBoundDocuments = new WeakSet();
-const AGENT_SHELL_DEFAULT = 'legacy';
+const AGENT_SHELL_DEFAULT = 'task';
 let agentShellTaskEnabled = false;
 let agentShellBrowserReady = false;
 let agentShellChatReady = false;
@@ -21717,8 +21721,10 @@ appendText = function() {
   return result;
 };
 
-const _agentViewSetActiveSlotSession = _setActiveSlotSession;
-_setActiveSlotSession = function(sid) {
+const _agentViewSetActiveSlotSession = typeof globalThis._setActiveSlotSession === 'function'
+  ? globalThis._setActiveSlotSession
+  : function() {};
+globalThis._setActiveSlotSession = function(sid) {
   const changed = !!sid && !!agentViewBoundSessionId && sid !== agentViewBoundSessionId;
   _agentViewSetActiveSlotSession(sid);
   if (changed && document.body.classList.contains('agent-view-open')) {
