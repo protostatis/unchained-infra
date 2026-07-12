@@ -204,6 +204,31 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
         self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
 
+    def test_scheduler_cards_only_render_privacy_safe_previews(self):
+        html = web.SCHEDULER_HTML
+        self.assertIn("truncateSchedulerPreview(j.prompt||'',80)", html)
+        self.assertIn("p.last_output_preview||''", html)
+        self.assertNotIn("esc(p.last_output)", html)
+        self.assertIn("View full run", html)
+        self.assertIn("aria-label=\"'+esc(viewRunLabel)+'\"", html)
+        self.assertNotIn("p.email", html)
+        self.assertNotIn("Unavailable profile ('+path+')", html)
+        self.assertIn("return 'Profile: Selected browser'", html)
+        self.assertIn("const detailHtml=detail ? esc(detail)", html)
+
+    def test_scheduler_jobs_response_uses_one_line_output_preview(self):
+        full_output = "Private first paragraph.\n\n" + ("full detail " * 30)
+        with patch("scheduled_tasks.load_state", return_value={}):
+            with patch("scheduled_tasks.preview_jobs", return_value=[{"id": "daily"}]):
+                with patch("scheduled_tasks.latest_success_output", return_value=full_output):
+                    rows = web._scheduler_preview_rows("u-1", [])
+
+        preview = rows[0]["last_output_preview"]
+        self.assertNotIn("\n", preview)
+        self.assertLessEqual(len(preview), 120)
+        self.assertNotEqual(preview, full_output)
+        self.assertNotIn("last_output", rows[0])
+
     def test_landing_auth_cta_points_to_auth_entry(self):
         self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', web.LANDING_HTML)
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
