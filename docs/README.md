@@ -11,6 +11,8 @@ live at the repo root.
   path for browser actions across `web`, `relay`, `private_core_client`, and the
   private core
 - [debugging-map.md](./debugging-map.md): trace events and fast triage checklist
+- [local-agent-testing.md](./local-agent-testing.md): isolated local web, chat
+  client, relay, and controlled Chrome setup
 - [open-core-split-plan.md](./open-core-split-plan.md): public/private boundary and
   repository split rationale
 - [split-repo-setup.md](./split-repo-setup.md): CI, secrets, and private-core overlay
