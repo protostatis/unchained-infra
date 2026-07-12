@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 
 from aiohttp import web
 
@@ -10,6 +11,26 @@ from aiohttp import web
 from web_app.core import get_core as _core
 from web_app.research_desk_page import build_research_desk_html as _build_research_desk_html
 from web_app.templates import CHROME_TAX_HTML, FIRST_LOOK_PREVIEW_HTML, UNBROWSER_PAGE_HTML
+
+
+_FIRST_LOOK_TASK_HANDOFFS = {
+    "apartment": {
+        "label": "Apartment search task",
+        "prompt": (
+            "Find up to five current 2-bedroom apartment listings in Chicago under "
+            "$2,000 per month. Compare rent, neighborhood, laundry, pet policy, and "
+            "source link. Do not contact anyone."
+        ),
+    },
+    "flight": {
+        "label": "Flight comparison task",
+        "prompt": (
+            "Compare current round-trip flight options from Chicago to Tokyo for a "
+            "one-week trip next month. Show price, total duration, stops, dates, and "
+            "source link. Do not book anything."
+        ),
+    },
+}
 
 
 async def handle_install_page(request: web.Request) -> web.Response:
@@ -68,10 +89,28 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
-def _build_first_look_preview_html(*, prompt_limit: int, remaining: int) -> str:
+def _build_first_look_preview_html(*, prompt_limit: int, remaining: int, task: str = "") -> str:
+    task_key = task if task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    handoff = _FIRST_LOOK_TASK_HANDOFFS.get(task_key)
+    prompt = handoff["prompt"] if handoff else ""
+    handoff_html = ""
+    if handoff:
+        handoff_html = (
+            f'<div id="task-handoff" class="task-handoff" data-task="{escape(task_key)}" role="note">'
+            f'<span class="task-handoff-label">{escape(handoff["label"])}</span>'
+            '<span><strong>Prefilled, not run.</strong> Review or edit the example below, '
+            'then press Run to start a live shared-browser run.</span></div>'
+        )
+
     html = FIRST_LOOK_PREVIEW_HTML
     html = html.replace("__FIRST_LOOK_GUEST_LIMIT__", str(max(1, int(prompt_limit))))
     html = html.replace("__FIRST_LOOK_GUEST_REMAINING__", str(max(0, int(remaining))))
+    html = html.replace("__FIRST_LOOK_TASK_HANDOFF_HTML__", handoff_html)
+    html = html.replace("__FIRST_LOOK_TASK_PROMPT_HTML__", escape(prompt))
+    html = html.replace(
+        "__FIRST_LOOK_TASK_PROMPT_JSON__",
+        json.dumps(prompt).replace("<", r"\u003c"),
+    )
     return html
 
 
@@ -402,11 +441,19 @@ async def handle_first_look_page(request: web.Request) -> web.Response:
     """Serve the first-look page (now uses the preview template)."""
     core = _core()
     ref = request.query.get('ref', '')[:64]
-    core._track_page_view(request, meta={'ref': ref} if ref else None)
+    requested_task = request.query.get("task", "")
+    task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    meta = {}
+    if ref:
+        meta["ref"] = ref
+    if task:
+        meta["task"] = task
+    core._track_page_view(request, meta=meta or None)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
     html = _build_first_look_preview_html(
         prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
         remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+        task=task,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
@@ -417,14 +464,19 @@ async def handle_first_look_preview_page(request: web.Request) -> web.Response:
     """Serve the guest-safe preview route for first-look review."""
     core = _core()
     ref = request.query.get("ref", "")[:64]
+    requested_task = request.query.get("task", "")
+    task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
     meta = {"route": "first-look-preview"}
     if ref:
         meta["ref"] = ref
+    if task:
+        meta["task"] = task
     core._track_page_view(request, meta=meta)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
     html = _build_first_look_preview_html(
         prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
         remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+        task=task,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)

@@ -113,6 +113,45 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bridge_configured", data)
         self.assertIn("bridge_connected", data)
 
+    async def test_use_case_routes_handoff_matching_first_look_tasks(self):
+        cases = (
+            (
+                "/use/apartment-hunting",
+                "/first-look?task=apartment",
+                "Apartment search task",
+                "current 2-bedroom apartment listings",
+            ),
+            (
+                "/use/flight-comparison",
+                "/first-look?task=flight",
+                "Flight comparison task",
+                "current round-trip flight options",
+            ),
+        )
+        for use_case_path, handoff_path, label, prompt_fragment in cases:
+            with self.subTest(use_case_path=use_case_path):
+                use_case = await self._client.get(use_case_path)
+                self.assertEqual(use_case.status_code, 200)
+                self.assertIn(f'href="{handoff_path}"', use_case.text)
+                self.assertIn("Illustrative sample", use_case.text)
+
+                first_look = await self._client.get(handoff_path)
+                self.assertEqual(first_look.status_code, 200)
+                self.assertIn(label, first_look.text)
+                self.assertIn(prompt_fragment, first_look.text)
+                self.assertIn("Prefilled, not run.", first_look.text)
+
+        untrusted_task = 'apartment"><script>alert(1)</script>'
+        fallback = await self._client.get("/first-look", params={"task": untrusted_task})
+        self.assertEqual(fallback.status_code, 200)
+        self.assertNotIn('id="task-handoff"', fallback.text)
+        self.assertNotIn(untrusted_task, fallback.text)
+        self.assertIn("Compare computing pioneers on Wikipedia", fallback.text)
+        self.assertIn(
+            'placeholder="Ask the browser to do something..."></textarea>',
+            fallback.text,
+        )
+
     async def test_auth_and_local_pages_render_expected_dev_markers(self):
         response = await self._client.post("/web/install-token")
         self.assertEqual(response.status_code, 401)
