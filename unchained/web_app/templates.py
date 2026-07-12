@@ -8634,6 +8634,11 @@ function _resetTrialModelUi() {
   _syncCustomModelUi();
 }
 
+function _syncTrialAdminUi() {
+  const controlLink = document.getElementById('control-link');
+  if (controlLink) controlLink.style.display = _isAdmin ? '' : 'none';
+}
+
 function _setTrialIdentity(userId) {
   const next = (userId || '').trim();
   let previous = _userId;
@@ -8649,7 +8654,11 @@ function _setTrialIdentity(userId) {
       localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
     }
   } catch(e) {}
-  if (changed) _resetTrialModelUi();
+  if (changed) {
+    _isAdmin = false;
+    _syncTrialAdminUi();
+    _resetTrialModelUi();
+  }
 }
 
 function _persistTrialModel(model) {
@@ -8678,6 +8687,13 @@ function _readTrialModelPreference() {
   }
 }
 
+function _applyTrialIdentity(data) {
+  const userId = (data.user_id || '').trim();
+  _setTrialIdentity(userId);
+  _isAdmin = !!(userId && data.is_admin);
+  _syncTrialAdminUi();
+}
+
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
   if (!raw) return '';
@@ -8702,9 +8718,7 @@ function maybeShowDevLogin() {
 }
 
 function _applyAuthState(data) {
-  if (data.user_id) _setTrialIdentity(data.user_id);
-  else if (data.authenticated === false) _setTrialIdentity('');
-  _isAdmin = !!data.is_admin;
+  _applyTrialIdentity(data);
   _userName = data.name || '';
   _userPicture = data.picture || '';
   _openrouterUsage = data.openrouter_usage || null;
@@ -8819,6 +8833,7 @@ async function doDisconnect() {
   agentId = '';
   sessionId = '';
   _isAdmin = false;
+  _syncTrialAdminUi();
   _userName = '';
   _userPicture = '';
   _openrouterUsage = null;
@@ -8886,6 +8901,7 @@ async function backToLogin() {
   await fetch('/auth/logout', {method: 'POST'});
   _setTrialIdentity('');
   _isAdmin = false;
+  _syncTrialAdminUi();
   _userName = '';
   _userPicture = '';
   _openrouterUsage = null;
@@ -9284,7 +9300,7 @@ function showMain() {
   document.getElementById('main').style.display = 'flex';
   renderClaudeRequestBanner();
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
-  if (_isAdmin) { const cl = document.getElementById('control-link'); if (cl) cl.style.display = ''; }
+  _syncTrialAdminUi();
   try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
   _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);

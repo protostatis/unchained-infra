@@ -644,9 +644,11 @@ const localStorage = new MemoryStorage();
 const elements = {
   modelsel: {value: 'google/gemini-3.1-flash-lite'},
   'model-custom-input': {value: ''},
+  'control-link': {style: {display: 'none'}},
 };
 const document = {getElementById: id => elements[id] || null};
 let _userId = '';
+let _isAdmin = false;
 function _defaultTrialModel() { return 'google/gemini-3.1-flash-lite'; }
 function _syncCustomModelUi() {}
 """ + match.group(0) + assertions
@@ -690,9 +692,24 @@ if (localStorage.getItem(_TRIAL_ACTIVE_IDENTITY_KEY) !== null) throw new Error('
 if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('logout cleared unrelated storage');
 """)
 
+    def test_admin_control_is_hidden_for_second_non_admin_account(self):
+        self._run_storage_runtime(r"""
+_applyTrialIdentity({user_id: 'opaque-admin-a', is_admin: true});
+if (elements['control-link'].style.display !== '') throw new Error('admin account did not see control link');
+_setTrialIdentity('');
+if (elements['control-link'].style.display !== 'none') throw new Error('logout retained admin control link');
+_applyTrialIdentity({user_id: 'opaque-user-b', is_admin: false});
+if (elements['control-link'].style.display !== 'none') throw new Error('non-admin account inherited admin control link');
+_syncTrialAdminUi();
+if (elements['control-link'].style.display !== 'none') throw new Error('non-admin render revealed admin control link');
+""")
+
     def test_trial_template_has_no_unscoped_model_writes(self):
         self.assertNotIn("localStorage.setItem('unchained_model'", web.TRIAL_CHAT_HTML)
         self.assertIn("_persistTrialModel(evt.model)", web.TRIAL_CHAT_HTML)
+        self.assertIn("controlLink.style.display = _isAdmin ? '' : 'none'", web.TRIAL_CHAT_HTML)
+        self.assertIn("function showMain()", web.TRIAL_CHAT_HTML)
+        self.assertIn("  _syncTrialAdminUi();", web.TRIAL_CHAT_HTML)
         storage_runtime = web.TRIAL_CHAT_HTML[
             web.TRIAL_CHAT_HTML.index("const _TRIAL_MODEL_STORAGE_PREFIX"):
             web.TRIAL_CHAT_HTML.index("function _nextAfterLogin")
