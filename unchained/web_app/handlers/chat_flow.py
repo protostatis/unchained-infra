@@ -2287,7 +2287,6 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     record = _trial_new_chat_requests.get(request_key)
     if record is None:
         record = _trial_new_chat_sources.get(source_key)
-    store_record = record is not None
     if record is None:
         expected_session_id = _trial_new_chat_session_id(agent_id, request_id)
         if session_id != expected_session_id:
@@ -2305,18 +2304,16 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         if not hmac.compare_digest(commit_token, expected_token):
             return web.json_response({"error": "Unknown new-chat transition"}, status=409)
         record["commit_token"] = expected_token
-        store_record = _make_trial_new_chat_capacity(agent_id)
-        if store_record:
+        if _make_trial_new_chat_capacity(agent_id):
             _trial_new_chat_sources[source_key] = record
     if (
-        record["previous_session_id"] != previous_session_id
+        record["commit_request_id"] != request_id
+        or record["previous_session_id"] != previous_session_id
         or record["session_id"] != session_id
         or record["slot"] != slot
         or not hmac.compare_digest(record["commit_token"], commit_token)
     ):
         return web.json_response({"error": "New-chat transition does not match"}, status=409)
-    if store_record:
-        _trial_new_chat_requests[request_key] = record
 
     if not record["acknowledged"]:
         session_tabs = getattr(core, "_session_tabs", {})

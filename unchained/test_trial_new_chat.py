@@ -196,6 +196,21 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repeated_ack.status, 200)
         core._delete_trial_session.assert_called_once_with(old_session)
 
+        request_count = len(chat_flow._trial_new_chat_requests)
+        source_count = len(chat_flow._trial_new_chat_sources)
+        alias_ack = await handle_chat_new_ack(
+            self._ack_request(
+                "request-0000000000000099",
+                old_session,
+                retry_data["session_id"],
+                retry_data["commit_token"],
+            )
+        )
+        self.assertEqual(alias_ack.status, 409)
+        self.assertEqual(len(chat_flow._trial_new_chat_requests), request_count)
+        self.assertEqual(len(chat_flow._trial_new_chat_sources), source_count)
+        core._delete_trial_session.assert_called_once_with(old_session)
+
     @patch("web_app.handlers.chat_flow._core")
     async def test_competing_requests_for_same_source_replay_one_transition(self, mock_core):
         from web_app.handlers import chat_flow
