@@ -46,6 +46,112 @@ function renderSafeMarkdown(raw) {
 }"""
 
 
+PUBLIC_404_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Page not found | Unchained</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0a10;--surface:#16131f;--border:#302b3f;
+  --text:#f1ede2;--muted:#ada799;--accent:#ff6a3d;--signal:#b6f25c;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{
+  margin:0;color:var(--text);background:var(--bg);
+  font-family:"Familjen Grotesk",system-ui,sans-serif;
+  background-image:
+    radial-gradient(circle at 18% 18%,rgba(182,242,92,.08),transparent 34%),
+    radial-gradient(circle at 82% 78%,rgba(255,106,61,.08),transparent 38%);
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:linear-gradient(to bottom,black,transparent 88%);
+}
+a{color:inherit}
+.nav{
+  position:relative;z-index:1;min-height:64px;padding:0 24px;
+  display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.07);
+  background:rgba(11,10,16,.78);backdrop-filter:blur(14px);
+}
+.nav-inner{width:min(1120px,100%);margin:auto;display:flex;align-items:center;gap:28px}
+.brand{font-weight:700;letter-spacing:.18em;text-decoration:none;font-size:.8rem}
+.brand span{color:var(--accent)}
+.nav-links{margin-left:auto;display:flex;align-items:center;gap:22px}
+.nav-links a{color:var(--muted);font-size:.88rem;font-weight:600;text-decoration:none}
+.nav-links a:hover,.nav-links a:focus-visible{color:var(--text)}
+.trial{padding:8px 13px;border-radius:7px;background:var(--accent);color:#fff!important}
+.shell{
+  position:relative;z-index:1;width:min(1120px,calc(100% - 40px));min-height:calc(100vh - 64px);
+  margin:auto;display:grid;grid-template-columns:minmax(220px,.72fr) minmax(320px,1fr);
+  align-items:center;gap:clamp(42px,8vw,120px);padding:72px 0;
+}
+.code{
+  font-family:"JetBrains Mono",monospace;font-size:clamp(7rem,22vw,15rem);font-weight:700;
+  line-height:.78;letter-spacing:-.1em;color:transparent;-webkit-text-stroke:1px var(--border);
+  text-shadow:12px 12px 0 rgba(182,242,92,.05);user-select:none;
+}
+.eyebrow{font:700 .7rem/1.4 "JetBrains Mono",monospace;letter-spacing:.2em;text-transform:uppercase;color:var(--signal)}
+h1{max-width:680px;margin:18px 0 16px;font-size:clamp(2.6rem,6vw,5.4rem);font-weight:600;line-height:.96;letter-spacing:-.035em}
+.copy{max-width:530px;margin:0;color:var(--muted);font-size:1.08rem;line-height:1.65}
+.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.button{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 18px;border:1px solid var(--border);border-radius:8px;text-decoration:none;font-weight:700;transition:transform .18s,border-color .18s,background .18s}
+.button.primary{border-color:var(--signal);background:var(--signal);color:#10150b}
+.button:hover{transform:translateY(-2px);border-color:var(--accent)}
+.button.primary:hover{border-color:var(--signal);box-shadow:0 10px 30px rgba(182,242,92,.15)}
+.route-list{display:flex;flex-wrap:wrap;gap:18px;margin-top:28px;color:var(--muted);font:500 .78rem/1.4 "JetBrains Mono",monospace}
+.route-list a{text-underline-offset:4px;text-decoration-color:var(--border)}
+.route-list a:hover,.route-list a:focus-visible{color:var(--text);text-decoration-color:var(--accent)}
+a:focus-visible{outline:2px solid var(--signal);outline-offset:4px}
+@media(max-width:720px){
+  .nav{padding:0 18px}.nav-links{gap:14px}.nav-links a:not(.trial){display:none}
+  .shell{width:min(100% - 36px,560px);grid-template-columns:1fr;align-content:center;gap:36px;padding:48px 0 64px}
+  .code{font-size:clamp(6.5rem,38vw,10rem)}h1{font-size:clamp(2.5rem,13vw,4.25rem)}
+}
+@media(prefers-reduced-motion:reduce){.button{transition:none}.button:hover{transform:none}}
+</style>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary navigation">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Unchained home">UN<span>CHAIN</span>ED</a>
+      <div class="nav-links">
+        <a href="/demo">Demo</a>
+        <a href="/mcp">MCP</a>
+        <a class="trial" href="/trial">Start free trial</a>
+      </div>
+    </div>
+  </nav>
+  <main class="shell">
+    <div class="code" aria-hidden="true">404</div>
+    <section>
+      <div class="eyebrow">Route not found</div>
+      <h1>This tab took a wrong turn.</h1>
+      <p class="copy">The page may have moved, or the address may be incomplete. Head home or choose a working route below.</p>
+      <div class="actions">
+        <a class="button primary" href="/">Back to home</a>
+        <a class="button" href="/demo">Try the live demo</a>
+      </div>
+      <div class="route-list" aria-label="Helpful links">
+        <a href="/trial">Free trial</a>
+        <a href="/mcp">MCP setup</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
 def _inject_safe_markdown_renderer(html: str, *, template_name: str) -> str:
     return apply_template_replacements(
         html,
