@@ -181,6 +181,49 @@ class TestSchedulerAgentAccess(unittest.IsolatedAsyncioTestCase):
             {"error": "scheduler JSON endpoints require a browser session or an active /schedule turn"},
         )
 
+    async def test_scheduler_history_returns_full_detail_for_owned_job(self):
+        full_detail = "First paragraph.\n\nPrivate full run detail remains available."
+        state_path = Path("/tmp/scheduler-u-1.state.json")
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-1"},
+            _is_pending_user=lambda _auth: False,
+            _scheduler_read_jobs_payload=lambda user_id: {
+                "jobs": [{"id": "daily", "prompt": "Run it", "schedule": {"daily_at": "09:00"}}]
+                if user_id == "u-1" else []
+            },
+            _scheduler_state_path=lambda _user_id: state_path,
+        )
+        request = SimpleNamespace(headers={}, query={"job_id": "daily", "limit": "20"})
+
+        with patch("web_app.handlers.auth_admin._core", return_value=core):
+            with patch(
+                "scheduled_tasks.load_run_history",
+                return_value=[{"ts": "2026-07-12T10:00:00Z", "ok": True, "detail": full_detail}],
+            ) as load_history:
+                response = await auth_admin.handle_scheduler_history(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.body.decode())["records"][0]["detail"], full_detail)
+        load_history.assert_called_once_with(state_path, "daily", limit=20)
+
+    async def test_scheduler_history_rejects_job_outside_account_scope(self):
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-1"},
+            _is_pending_user=lambda _auth: False,
+            _scheduler_read_jobs_payload=lambda _user_id: {
+                "jobs": [{"id": "owned", "prompt": "Run it", "schedule": {"daily_at": "09:00"}}]
+            },
+        )
+        request = SimpleNamespace(headers={}, query={"job_id": "someone-elses-job"})
+
+        with patch("web_app.handlers.auth_admin._core", return_value=core):
+            with patch("scheduled_tasks.load_run_history") as load_history:
+                response = await auth_admin.handle_scheduler_history(request)
+
+        self.assertEqual(response.status, 404)
+        self.assertEqual(json.loads(response.body.decode()), {"error": "job not found"})
+        load_history.assert_not_called()
+
     async def test_agent_upsert_requires_valid_turn_grant(self):
         core = SimpleNamespace(
             _authenticate=lambda _req: {"user_id": "u-1"},
