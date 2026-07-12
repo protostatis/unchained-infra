@@ -8462,7 +8462,6 @@ body{
       <a href="/demo">Demo</a>
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="#" onclick="openArchives();return false">Archives</a>
-      <a href="/test" id="control-link" style="display:none">Control</a>
       <a href="/scheduler">Scheduler</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
