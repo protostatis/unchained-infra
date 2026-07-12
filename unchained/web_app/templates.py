@@ -15610,9 +15610,9 @@ function updateAgentStatusUI(data) {
     if (bridgeConnected) {
       if (isOpenCodeCli) {
         if (banner) banner.style.display = 'none';
-        if (bannerKicker) bannerKicker.textContent = 'Agent view';
+        if (bannerKicker) bannerKicker.textContent = 'Browser preview';
         if (bannerMsg) bannerMsg.textContent = 'Chat and browser are ready together.';
-        if (bannerDetail) bannerDetail.textContent = 'Prompt here or use Agent View; both operate the same CDP Chrome controlled by your agent.';
+        if (bannerDetail) bannerDetail.textContent = 'Prompt here or use Browser Preview; both control the browser for this conversation.';
         if (bannerCurl) bannerCurl.style.display = 'none';
         if (bannerConnect) bannerConnect.style.display = 'none';
         if (bannerMethodOr) bannerMethodOr.style.display = 'none';
@@ -19059,10 +19059,10 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);border-radius:50%;background:rgba(255,255,255,.05);color:#c9d3df;font-size:18px;cursor:pointer}
 .agent-view-close:hover{border-color:#ff8a72;color:#fff;background:rgba(255,107,74,.12)}
 .agent-view-chat-toggle{display:none;min-width:44px;height:34px;padding:0 12px;border:1px solid rgba(110,231,161,.32);border-radius:999px;background:rgba(110,231,161,.08);color:#c8f6d7;font:9px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.07em;cursor:pointer}
+.agent-view-chat-context{display:grid;gap:1px;margin-right:4px;text-align:right;white-space:nowrap}.agent-view-chat-context strong{color:#dce7da;font-size:10px}.agent-view-chat-context span{color:#7f8c9d;font-size:8px}
 .agent-view-browserbar{position:relative;z-index:7;min-height:34px;padding:0 16px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(183,205,228,.13);background:rgba(10,14,20,.92);color:#788697;font-family:var(--mono,'IBM Plex Mono',monospace);font-size:8px;letter-spacing:.08em;text-transform:uppercase}
 .agent-view-location{max-width:min(58vw,820px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;color:#b5c0cd}
 .agent-view-browserbar .rail{height:1px;flex:1;background:linear-gradient(90deg,rgba(110,231,161,.52),rgba(74,167,255,.12),transparent)}
-.agent-view-browserbar .policy{color:#baf1cc;border:1px solid rgba(110,231,161,.25);padding:3px 7px;border-radius:999px;background:rgba(110,231,161,.06)}
 .agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 42% 34%,rgba(74,167,255,.08),transparent 38%),linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#05070a;background-size:auto,48px 48px,48px 48px,auto}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
 .agent-view-semantic-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
@@ -19071,7 +19071,7 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(110,231,161,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
 .agent-view-empty strong{color:#dce7da;font-size:15px}.agent-view-empty span{font-size:11px;line-height:1.6}
-.agent-view-foot{position:relative;z-index:7;min-height:31px;padding:0 16px;display:flex;align-items:center;gap:12px;border-top:1px solid rgba(183,205,228,.13);background:rgba(8,11,16,.94);color:#778494;font:8px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
+.agent-view-foot{display:none;position:relative;z-index:7;min-height:31px;padding:0 16px;align-items:center;gap:12px;border-top:1px solid rgba(183,205,228,.13);background:rgba(8,11,16,.94);color:#778494;font:8px var(--mono,'IBM Plex Mono',monospace);text-transform:uppercase;letter-spacing:.08em}
 .agent-view-foot strong{color:#bfe8ca;font-weight:500}.agent-view-foot .spacer{flex:1}
 .agent-view-fidelity{min-width:0;max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
 .agent-view-confirm{display:none;position:absolute;z-index:20;left:18px;bottom:22px;width:min(560px,calc(100% - 500px));padding:14px 15px;border:1px solid rgba(255,184,107,.38);border-radius:18px;background:rgba(20,16,12,.94);box-shadow:0 24px 72px rgba(0,0,0,.46);backdrop-filter:blur(18px);color:#f3e5d4}
@@ -19121,7 +19121,7 @@ body.agent-view-open #main .bubble.asst .copy-btn{pointer-events:none}
 body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #main .bubble.asst .copy-btn:focus-visible,body.agent-view-open #main .bubble.asst .copy-btn.copied{pointer-events:auto}
 @keyframes agentViewIn{from{opacity:0;transform:scale(1.008)}to{opacity:1;transform:none}}@keyframes agentOrbit{to{transform:rotate(360deg)}}@keyframes agentConfirmIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media(max-width:760px){
-  .agent-view-head{min-height:60px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top));gap:8px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 14px}.agent-view-close{width:44px;height:44px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot{display:none}
+  .agent-view-head{min-height:60px;padding:7px 10px;padding-top:max(7px,env(safe-area-inset-top));gap:8px}.agent-view-kicker,.agent-view-mark{display:none}.agent-view-title{display:none}.agent-view-state{margin-left:0;max-width:none;flex:1}.agent-view-chat-toggle{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 14px}.agent-view-close{width:44px;height:44px}.agent-view-browserbar{padding:0 10px}.agent-view-browserbar .rail{display:none}.agent-view-location{max-width:62vw}.agent-view-foot,.agent-view-chat-context{display:none}
   #sidebar-toggle{display:none!important}
   body.agent-view-open #agent-view{z-index:1200}
   body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;bottom:max(10px,env(safe-area-inset-bottom));width:auto;height:auto!important;min-height:0;border:0!important;border-radius:22px!important;overflow:visible;background:transparent!important;box-shadow:none!important;backdrop-filter:none}
@@ -19164,24 +19164,24 @@ body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #ma
   body.agent-view-open #agent-view-chat-controls .chat-size-btn{width:44px;min-width:44px;height:44px}
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0;width:100%!important;max-width:none!important;border:0!important;border-radius:0!important}
 }
-@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-browserbar .policy{display:none}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
+@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
 @media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open{animation:none}}
 </style>"""
 
-_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true">
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser preview" aria-hidden="true">
   <header class="agent-view-head">
     <span class="agent-view-mark" aria-hidden="true">UC</span>
-    <div class="agent-view-title"><span class="agent-view-kicker">Shared semantic browser</span><strong>Agent View</strong></div>
+    <div class="agent-view-title"><span class="agent-view-kicker">Live browser</span><strong>Browser Preview</strong></div>
     <span id="agent-view-state" class="agent-view-state" aria-live="polite">Waiting to attach</span>
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
-    <button type="button" class="agent-view-close" aria-label="Close Agent View" onclick="closeAgentView()">&times;</button>
+    <button type="button" class="agent-view-close" aria-label="Close browser preview" onclick="closeAgentView()">&times;</button>
   </header>
-  <div class="agent-view-browserbar"><span>semantic://</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">human + agent</span></div>
+  <div class="agent-view-browserbar"><span>Current page</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span></div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
-    <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive semantic mirror of the browser controlled by the agent" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
-    <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Semantic mirror refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
-    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">DOM</div><strong>The shared browser will appear here.</strong><span>Send a prompt or use the page directly. Both routes operate the exact Chrome target selected for this conversation.</span></div>
+    <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive preview of the browser controlled by this conversation" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+    <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Browser preview refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
+    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">WEB</div><strong>The browser will appear here.</strong><span>Send a message or use the page directly. Both control the browser for this conversation.</span></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
     <div id="scroll-debug-overlay" style="display:none;position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>
@@ -20146,7 +20146,7 @@ function startAgentViewSocket() {
     if (agentViewSocket !== socket || generation !== agentViewGeneration) return;
     let event;
     try { event = JSON.parse(message.data); } catch (_err) { return; }
-    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Building interactive semantic view' : 'Attached in observer mode', false); return; }
+    if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Preparing interactive preview' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
       renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
@@ -20212,7 +20212,7 @@ function startAgentViewSocket() {
           'sensitive-target':'Sensitive fields cannot be controlled from the mirror.',
           'stale-document':'The page changed before that action could run.',
           'target-not-found':'That control changed. Refreshing the semantic view.',
-          'preview-superseded':'A newer Agent View owns this chat session.',
+          'preview-superseded':'A newer Browser Preview owns this chat session.',
           'action-queue-full':'The page is busy. Try again in a moment.',
         };
         agentViewShowToast(messages[reason] || 'Page action was not applied: ' + reason, true);
@@ -20625,7 +20625,7 @@ def _inject_sidebar(html: str) -> str:
         )
     quick_new_nav = '      <a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>\n'
     if has_agent_view:
-        quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Agent View</a>\n'
+        quick_new_nav += '      <a href="#" id="topbar-agent-view" class="topbar-agent-view" aria-expanded="false" onclick="openAgentView();return false">Browser Preview</a>\n'
     shell_close = "</div>\n" + (_AGENT_VIEW_PANEL + "\n" if has_agent_view else "") + "</div>\n<script>"
     runtime_js = _SIDEBAR_JS + (_AGENT_VIEW_JS if has_agent_view else "")
 
@@ -20697,7 +20697,8 @@ def _inject_sidebar(html: str) -> str:
             replacements.append(
                 TemplateReplacement(
                     logout_pattern,
-                    '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Chat panel controls">\n'
+                    '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Same conversation controlling browser preview">\n'
+                    '        <span class="agent-view-chat-context"><strong>Same conversation</strong><span>Controls this preview</span></span>\n'
                     '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Return chat to default size" title="Default chat size" aria-hidden="true" onclick="exitAgentViewFullscreen()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3a1 1 0 01-1 1H2M10 2v3a1 1 0 001 1h3M14 10h-3a1 1 0 00-1 1v3M2 10h3a1 1 0 011 1v3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" title="Minimize chat" onclick="minimizeAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>\n'
