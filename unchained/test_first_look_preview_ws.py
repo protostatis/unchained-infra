@@ -425,11 +425,68 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.assertTrue(ended["retriable"])
         self.assertEqual(ended["from_tab_id"], "TAB" * 10 + "AA")
         self.assertEqual(ended["to_tab_id"], "NEW" * 10 + "BB")
-        self.assertEqual(
-            self.fake_core._chat_preview_generations["s-claude-abc12345-demo"],
-            1,
-            "preview generations must remain monotonic across reconnects",
-        )
+
+    async def test_concurrent_connections_coexist_without_generation_war(self):
+        """Two Agent View clients on the same session must coexist.
+
+        Previously, _chat_preview_generations killed the older connection when
+        a new one arrived, creating a 1.6-second reconnection war that caused
+        scroll actions to be rejected (preview-superseded) and the page to
+        reset to top. Each connection now gets its own mirror_key so mirrors
+        coexist without interference.
+        """
+        from web_app import semantic_mirror
+
+        original_stream = semantic_mirror.stream_semantic_mirror
+        release = asyncio.Event()
+        seen_keys = []
+
+        async def fake_semantic_stream(agent_id, tab_id, **kwargs):
+            seen_keys.append(kwargs.get("mirror_key", ""))
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "captureEpoch": "epoch-test",
+                    "url": "https://example.test",
+                    "body": "<main data-ucm-id=\"ucm-1\">Hi</main>",
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+            await release.wait()
+
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        try:
+            ws1 = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo")
+            attached1 = await ws1.receive_json()
+            snapshot1 = await ws1.receive_json()
+
+            ws2 = await self.client.ws_connect("/ws?session_id=s-claude-abc12345-demo")
+            attached2 = await ws2.receive_json()
+            snapshot2 = await ws2.receive_json()
+
+            # Both connections should be alive — the second must NOT kill the first.
+            self.assertFalse(ws1.closed, "first connection was killed by the second")
+            self.assertFalse(ws2.closed, "second connection did not survive")
+
+            # Both received snapshots.
+            self.assertEqual(snapshot1["type"], "preview.semantic.snapshot")
+            self.assertEqual(snapshot2["type"], "preview.semantic.snapshot")
+
+            # Each connection got its own mirror key.
+            self.assertEqual(len(seen_keys), 2)
+            self.assertNotEqual(seen_keys[0], seen_keys[1])
+            self.assertTrue(
+                all(k.startswith("unchained.mirror.capture.v1.") for k in seen_keys),
+                f"mirror keys should be per-connection: {seen_keys}",
+            )
+
+            release.set()
+            await ws1.close()
+            await ws2.close()
+        finally:
+            release.set()
+            semantic_mirror.stream_semantic_mirror = original_stream
 
     async def test_stale_default_tab_is_replaced_by_server_resolved_auto_target(self):
         stale = self.fake_core._session_tabs["s-claude-abc12345-demo"]

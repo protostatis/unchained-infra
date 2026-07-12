@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal, TypedDict
 
@@ -19,6 +20,29 @@ MIRROR_CHUNK_CHARS = 128 * 1024
 MAX_MIRROR_PAYLOAD_CHARS = 4 * 1024 * 1024
 DEFAULT_POLL_INTERVAL = 0.5
 MAX_CONSECUTIVE_CAPTURE_ERRORS = 3
+
+# Each Agent View WebSocket connection gets its own isolated mirror state in the
+# source Chrome tab.  Without per-connection isolation, every new connection
+# runs INSTALL_MIRROR_EXPRESSION which *disposes* the previous mirror and
+# installs a fresh one with a new captureEpoch.  When two clients (phone +
+# desktop) are open on the same chat session, this creates an install war:
+# each client keeps disposing the other's mirror, scroll actions fail with
+# stale-document (epoch mismatch), the source never scrolls, and the next
+# snapshot shows scrollY=0 — the "page resets to top after a second" bug.
+#
+# Per-connection isolation is achieved by giving each stream a unique mirror
+# key (Symbol.for key).  The default key preserves backward compatibility for
+# any caller that does not opt in.
+DEFAULT_MIRROR_KEY = "unchained.mirror.capture.v1"
+_MIRROR_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_mirror_key(key: str) -> str:
+    """Validate a mirror symbol key to prevent JS injection in CDP expressions."""
+    key = str(key or DEFAULT_MIRROR_KEY)
+    if not _MIRROR_KEY_RE.fullmatch(key):
+        raise ValueError("invalid mirror key")
+    return key
 
 
 class SemanticMirrorSnapshotEvent(TypedDict):
@@ -48,7 +72,12 @@ class SemanticActionInput(TypedDict, total=False):
 
 
 # Vendored from mirrorCapture.ts at the baseline merge commit cited above.
-INSTALL_MIRROR_EXPRESSION = r"""(() => {
+#
+# The templates below hardcode DEFAULT_MIRROR_KEY as the Symbol.for argument.
+# build_install_mirror_expression() / build_drain_mirror_expression() swap in a
+# per-connection key so that concurrent Agent View clients each get an isolated
+# mirror state without disposing each other.
+_INSTALL_MIRROR_TEMPLATE = r"""(() => {
   'use strict';
 
   const STATE_KEY = Symbol.for('unchained.mirror.capture.v1');
@@ -985,7 +1014,7 @@ INSTALL_MIRROR_EXPRESSION = r"""(() => {
 })()"""
 
 
-DRAIN_MIRROR_EXPRESSION = r"""(() => {
+_DRAIN_MIRROR_TEMPLATE = r"""(() => {
   'use strict';
   const state = window[Symbol.for('unchained.mirror.capture.v1')];
   if (state && typeof state.drain === 'function') {
@@ -1013,14 +1042,66 @@ DRAIN_MIRROR_EXPRESSION = r"""(() => {
 })()"""
 
 
-def mirror_payload_chunk_expression(offset: int, length: int, release: bool) -> str:
+# ---- Per-connection mirror key builders ---------------------------------------
+#
+# Each Agent View WS connection receives its own mirror key so that concurrent
+# clients (phone + desktop) each get an isolated mirror state in the source tab.
+# The key is injected into the JS expressions by string-replacing the default
+# key, which appears exactly once in each template.
+
+def _with_mirror_key(template: str, mirror_key: str) -> str:
+    key = _validate_mirror_key(mirror_key)
+    if key == DEFAULT_MIRROR_KEY:
+        return template
+    return template.replace(f"'{DEFAULT_MIRROR_KEY}'", f"'{key}'")
+
+
+def build_install_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
+    """Return the mirror installation JS for a specific connection's symbol key."""
+    return _with_mirror_key(_INSTALL_MIRROR_TEMPLATE, mirror_key)
+
+
+def build_drain_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
+    """Return the mirror drain JS for a specific connection's symbol key."""
+    return _with_mirror_key(_DRAIN_MIRROR_TEMPLATE, mirror_key)
+
+
+def build_dispose_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
+    """Return a JS expression that disposes the mirror for the given key.
+
+    Called when a WS connection closes so the source tab doesn't accumulate
+    stale mirrors with live MutationObservers from disconnected clients.
+    """
+    key = _validate_mirror_key(mirror_key)
+    return (
+        "(() => { 'use strict';"
+        f" const s = window[Symbol.for('{key}')];"
+        " if (s && typeof s.dispose === 'function') s.dispose();"
+        f" window[Symbol.for('{key}')] = null;"
+        " })()"
+    )
+
+
+# Backward-compatible aliases (default key).
+INSTALL_MIRROR_EXPRESSION = _INSTALL_MIRROR_TEMPLATE
+DRAIN_MIRROR_EXPRESSION = _DRAIN_MIRROR_TEMPLATE
+
+
+def mirror_payload_chunk_expression(
+    offset: int,
+    length: int,
+    release: bool,
+    *,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
+) -> str:
     """Build the PR #2 outbound-buffer read expression."""
     safe_offset = max(0, int(offset))
     safe_length = max(1, int(length))
     release_js = "true" if release else "false"
+    key = _validate_mirror_key(mirror_key)
     return f"""(() => {{
   'use strict';
-  const state = window[Symbol.for('unchained.mirror.capture.v1')];
+  const state = window[Symbol.for('{key}')];
   if (!state || typeof state.readOutbound !== 'function') return '';
   return state.readOutbound({safe_offset}, {safe_length}, {release_js});
 }})()"""
@@ -1032,6 +1113,7 @@ def mirror_action_expression(
     expected_seq: int,
     expected_epoch: str,
     confirmed: bool = False,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
 ) -> str:
     """Build a bounded action expression for the currently mirrored document."""
     encoded_action = json.dumps(
@@ -1041,12 +1123,13 @@ def mirror_action_expression(
     ).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     safe_seq = max(0, int(expected_seq))
     encoded_epoch = json.dumps(str(expected_epoch or "")[:128])
+    key = _validate_mirror_key(mirror_key)
     return f"""(() => {{
   'use strict';
   const action = {encoded_action};
   const expectedSeq = {safe_seq};
   const expectedEpoch = {encoded_epoch};
-  const state = window[Symbol.for('unchained.mirror.capture.v1')];
+  const state = window[Symbol.for('{key}')];
   const startUrl = location.href;
   const finish = (ok, reason, extra) => JSON.stringify(Object.assign({{
     ok,
@@ -1237,6 +1320,8 @@ async def _evaluate_mirror_payload_unlocked(
     expression: str,
     relay_host: str = "127.0.0.1",
     relay_port: int = 8765,
+    *,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
 ) -> dict[str, Any]:
     """Evaluate one capture expression, reconstructing a bounded chunked result."""
     raw = await cloud_tools.run_js(agent_id, tab_id, expression, relay_host, relay_port)
@@ -1254,7 +1339,7 @@ async def _evaluate_mirror_payload_unlocked(
         raw_chunk = await cloud_tools.run_js(
             agent_id,
             tab_id,
-            mirror_payload_chunk_expression(offset, length, release),
+            mirror_payload_chunk_expression(offset, length, release, mirror_key=mirror_key),
             relay_host,
             relay_port,
         )
@@ -1280,15 +1365,18 @@ async def evaluate_mirror_payload(
     relay_port: int = 8765,
     *,
     operation_lock: asyncio.Lock | None = None,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
 ) -> dict[str, Any]:
     """Evaluate one capture expression under the optional per-source lock."""
     if operation_lock is None:
         return await _evaluate_mirror_payload_unlocked(
-            agent_id, tab_id, expression, relay_host, relay_port
+            agent_id, tab_id, expression, relay_host, relay_port,
+            mirror_key=mirror_key,
         )
     async with operation_lock:
         return await _evaluate_mirror_payload_unlocked(
-            agent_id, tab_id, expression, relay_host, relay_port
+            agent_id, tab_id, expression, relay_host, relay_port,
+            mirror_key=mirror_key,
         )
 
 
@@ -1303,6 +1391,7 @@ async def execute_semantic_action(
     relay_host: str = "127.0.0.1",
     relay_port: int = 8765,
     operation_lock: asyncio.Lock | None = None,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
 ) -> dict[str, Any]:
     """Execute one server-authorized semantic action on the mirrored source."""
     expression = mirror_action_expression(
@@ -1310,6 +1399,7 @@ async def execute_semantic_action(
         expected_seq=expected_seq,
         expected_epoch=expected_epoch,
         confirmed=confirmed,
+        mirror_key=mirror_key,
     )
 
     async def run() -> dict[str, Any]:
@@ -1350,23 +1440,32 @@ async def stream_semantic_mirror(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     stop_requested: Callable[[], bool] | None = None,
     operation_lock: asyncio.Lock | None = None,
+    mirror_key: str = DEFAULT_MIRROR_KEY,
 ) -> AsyncIterator[SemanticMirrorEvent]:
     """Yield an initial snapshot and non-empty patches from an attached tab.
 
     The caller owns this async iterator's lifetime. Cancelling or closing it
     stops polling; this module never launches, navigates, or otherwise controls
     Chrome.
+
+    ``mirror_key`` isolates this stream's capture state from other concurrent
+    streams on the same tab (e.g. phone + desktop Agent View). Each key maps to
+    a distinct ``Symbol.for(...)`` in the source Chrome tab.
     """
     if poll_interval <= 0:
         raise ValueError("poll_interval must be greater than zero")
 
+    install_expr = build_install_mirror_expression(mirror_key)
+    drain_expr = build_drain_mirror_expression(mirror_key)
+
     snapshot = await evaluate_mirror_payload(
         agent_id,
         tab_id,
-        INSTALL_MIRROR_EXPRESSION,
+        install_expr,
         relay_host,
         relay_port,
         operation_lock=operation_lock,
+        mirror_key=mirror_key,
     )
     yield {"type": "snapshot", "snapshot": snapshot, "resync": False}
 
@@ -1383,10 +1482,11 @@ async def stream_semantic_mirror(
             patch = await evaluate_mirror_payload(
                 agent_id,
                 tab_id,
-                DRAIN_MIRROR_EXPRESSION,
+                drain_expr,
                 relay_host,
                 relay_port,
                 operation_lock=operation_lock,
+                mirror_key=mirror_key,
             )
             capture_errors = 0
         except asyncio.CancelledError:
@@ -1401,10 +1501,11 @@ async def stream_semantic_mirror(
             snapshot = await evaluate_mirror_payload(
                 agent_id,
                 tab_id,
-                INSTALL_MIRROR_EXPRESSION,
+                install_expr,
                 relay_host,
                 relay_port,
                 operation_lock=operation_lock,
+                mirror_key=mirror_key,
             )
             empty_polls = 0
             yield {"type": "snapshot", "snapshot": snapshot, "resync": True}
