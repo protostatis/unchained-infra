@@ -85,6 +85,12 @@ curl -X POST http://localhost:8080/auth/dev \
   -d '{"email":"dev@localhost"}'
 ```
 
+`dev.sh` starts only the local web server and relay. To connect a local chat
+client and controlled Chrome without sending test traffic to production, follow
+[docs/local-agent-testing.md](./docs/local-agent-testing.md). The browser
+session, chat client, and Chrome bridge must use the same locally stored API
+key.
+
 ### Production deploy
 
 ```bash
@@ -133,6 +139,8 @@ unchained-infra/
 - [docs/cloud-tools-execution-map.md](./docs/cloud-tools-execution-map.md): where
   browser actions execute across the public/private boundary
 - [docs/debugging-map.md](./docs/debugging-map.md): trace events and incident triage
+- [docs/local-agent-testing.md](./docs/local-agent-testing.md): run the web UI,
+  chat client, relay, and controlled Chrome entirely on one development machine
 - [docs/mcp-local-browser-guide.md](./docs/mcp-local-browser-guide.md): run
   production MCP against your local Chrome bridge
 - [docs/mcp-frontend-route-plan.md](./docs/mcp-frontend-route-plan.md): plan for
