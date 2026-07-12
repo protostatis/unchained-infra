@@ -9281,17 +9281,32 @@ async function checkAgentStatus() {
   } catch(e) {}
 }
 
+let _historyLoadSequence = 0;
+
+function _historyLoadIsCurrent(sequence, requestedSlot, requestedSessionId) {
+  const state = _loadSlotState();
+  return sequence === _historyLoadSequence &&
+    activeSlot === requestedSlot &&
+    sessionId === requestedSessionId &&
+    state.active_slot === requestedSlot &&
+    state.slots[String(requestedSlot)] === requestedSessionId;
+}
+
 async function loadHistory() {
   _syncSlotButtons();
+  const requestedSlot = activeSlot;
+  const requestedSessionId = sessionId;
+  const loadSequence = ++_historyLoadSequence;
   try {
     const qs = new URLSearchParams({
       model: currentModel(),
-      session_id: sessionId,
-      slot: activeSlot,
+      session_id: requestedSessionId,
+      slot: requestedSlot,
     });
     const r = await fetch('/web/chat/history?' + qs.toString());
     if (!r.ok) return;
     const data = await r.json();
+    if (!_historyLoadIsCurrent(loadSequence, requestedSlot, requestedSessionId)) return;
     const chatEl = document.getElementById('chat');
     if (chatEl) chatEl.innerHTML = '';
     if (data.session_id) {
@@ -9299,7 +9314,7 @@ async function loadHistory() {
       _persistSessionId(sessionId);
       _setActiveSlotSession(sessionId);
     }
-    _setSlotPreview(activeSlot, _firstUserPreview(data.messages));
+    _setSlotPreview(requestedSlot, _firstUserPreview(data.messages));
     if (!data.messages || data.messages.length === 0) {
       showHintsIfEmpty();
       return;
