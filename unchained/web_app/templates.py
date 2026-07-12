@@ -24833,7 +24833,6 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MCP Setup | Unchained</title>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -24903,17 +24902,17 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
     }
     .copy-btn:hover{border-color:#e94560;color:#fff}
     .copy-btn.copied{background:#23141a;color:#e94560;border-color:#e94560}
-    .signin-prompt{
-      display:flex;align-items:center;gap:10px;padding:12px 16px;
-      border-radius:10px;background:rgba(233,69,96,0.08);
-      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:12px;
+    .key-help{
+      padding:14px 16px;border-radius:10px;background:rgba(233,69,96,0.08);
+      border:1px solid rgba(233,69,96,0.25);font-size:13px;margin-bottom:14px;
     }
-    .signin-btn{
-      padding:7px 16px;border-radius:8px;background:#e94560;
-      color:#fff;font-size:13px;font-weight:600;cursor:pointer;
-      border:none;text-decoration:none;
+    .key-help strong{display:block;color:#f3f3f6;margin-bottom:4px}
+    .key-help p{color:#b5b5c2;margin-top:5px}
+    .key-help code{
+      background:#171722;border:1px solid #2f2f3c;border-radius:4px;
+      padding:1px 5px;font-size:12px;
     }
-    .signin-btn:hover{background:#d63b55;text-decoration:none}
+    .key-command-label{color:#a6a6b5;font-size:12px;margin:10px 0 5px}
     .trust-panel{
       display:grid;gap:8px;margin:12px 0 14px;padding:12px 14px;
       border:1px solid rgba(255,255,255,0.1);border-radius:12px;
@@ -24987,9 +24986,9 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
         <span class="step-num">1</span>
         <h2>Connect Your Browser</h2>
         <div class="step-body">
-          <div class="agent-status" id="agent-status">
-            <div class="dot yellow" id="agent-dot"></div>
-            <span id="agent-status-text">Checking agent status...</span>
+          <div class="agent-status">
+            <div class="dot yellow"></div>
+            <span>Start the installed agent before continuing.</span>
           </div>
           <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
             Install the Unchained agent on your Mac to bridge your local Chrome:
@@ -25010,10 +25009,24 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
         <span class="step-num">2</span>
         <h2>Add MCP Server</h2>
         <div class="step-body">
-          <div id="signin-section" class="signin-prompt" style="display:none">
-            <span>Sign in to auto-fill your API key</span>
-            <div id="mcp-gsi-btn"></div>
+          <div class="key-help">
+            <strong>Use the key stored by your installed agent</strong>
+            <p>This page never loads or displays your key. The agent stores it locally at <code>~/unchained-agent/.env</code> on macOS/Linux or <code>%USERPROFILE%\unchained-agent\.env</code> on Windows.</p>
+            <p>Start the agent once to complete browser authorization if <code>UNCHAINED_API_KEY</code> is empty. For clients that do not expand environment variables, open that local file and replace <code>YOUR_UNCHAINED_API_KEY</code> in the copied snippet on your machine.</p>
           </div>
+          <p class="key-command-label">macOS/Linux: load the key into your current shell without printing it</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="load-key-posix">export UNCHAINED_API_KEY="$(sed -n 's/^UNCHAINED_API_KEY=//p' "$HOME/unchained-agent/.env")"</pre>
+            <button class="copy-btn" onclick="copyCode('load-key-posix',this)">Copy</button>
+          </div>
+          <p class="key-command-label">Windows PowerShell: load the key into your current session without printing it</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="load-key-windows">$env:UNCHAINED_API_KEY = (Get-Content "$HOME\unchained-agent\.env" | Where-Object { $_ -like 'UNCHAINED_API_KEY=*' }) -replace '^UNCHAINED_API_KEY=', ''</pre>
+            <button class="copy-btn" onclick="copyCode('load-key-windows',this)">Copy</button>
+          </div>
+          <p style="color:#a6a6b5;font-size:12px;margin:10px 0 12px">
+            Snippet copy buttons preserve <code>YOUR_UNCHAINED_API_KEY</code> exactly; they never copy a hidden account secret.
+          </p>
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
             <button class="tab-btn" onclick="switchTab('claude-desktop',this)">Claude Desktop</button>
@@ -25024,11 +25037,11 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
               <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
   https://api.unchainedsky.com/mcp \
   -t http \
-  -H "Authorization: Bearer <span id="key-cc">YOUR_API_KEY</span>"</pre>
+  -H "Authorization: Bearer YOUR_UNCHAINED_API_KEY"</pre>
               <p style="color:#a6a6b5;font-size:12px;margin-top:8px">
                 Restart Claude Code after adding (<code>/mcp</code> to verify tools are loaded).
               </p>
-              <button class="copy-btn" onclick="copySnippet('claude-code',this)">Copy</button>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-code',this)">Copy</button>
             </div>
           </div>
           <div id="tab-claude-desktop" style="display:none">
@@ -25038,12 +25051,12 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
     "unchainedsky": {
       "url": "https://api.unchainedsky.com/mcp",
       "headers": {
-        "Authorization": "Bearer <span id="key-cd">YOUR_API_KEY</span>"
+        "Authorization": "Bearer YOUR_UNCHAINED_API_KEY"
       }
     }
   }
 }</pre>
-              <button class="copy-btn" onclick="copySnippet('claude-desktop',this)">Copy</button>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-desktop',this)">Copy</button>
             </div>
           </div>
           <div id="tab-other" style="display:none">
@@ -25052,8 +25065,8 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
             </p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-other">Endpoint: https://api.unchainedsky.com/mcp
-Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
-              <button class="copy-btn" onclick="copySnippet('other',this)">Copy</button>
+Header:   Authorization: Bearer YOUR_UNCHAINED_API_KEY</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-other',this)">Copy</button>
             </div>
           </div>
         </div>
@@ -25068,13 +25081,13 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
           </p>
           <div class="code-wrap">
             <pre class="code-block" id="snippet-verify">ddm url=https://example.com</pre>
-            <button class="copy-btn" onclick="copySnippet('verify',this)">Copy</button>
+            <button class="copy-btn" onclick="copyCode('snippet-verify',this)">Copy</button>
           </div>
           <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
             To check your agent connection status:
           </p>
           <div class="code-wrap">
-            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
+            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_UNCHAINED_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
             <button class="copy-btn" onclick="copyCode('snippet-agent-lookup',this)">Copy</button>
           </div>
         </div>
@@ -25128,38 +25141,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
   </div>
 
   <script>
-    let apiKey = '';
-    let agentId = '';
-
-    async function handleMcpGoogleCredential(response) {
-      try {
-        var res = await fetch('/auth/google', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({credential: response.credential}),
-          credentials: 'include'
-        });
-        if (res.ok) { location.reload(); }
-      } catch(e) {}
-    }
-
-    window.addEventListener('load', function() {
-      var gcid = '__GOOGLE_CLIENT_ID__';
-      if (gcid && gcid !== '__GOOGLE_' + 'CLIENT_ID__' && window.google && google.accounts) {
-        google.accounts.id.initialize({
-          client_id: gcid,
-          callback: handleMcpGoogleCredential,
-          auto_prompt: false
-        });
-        var el = document.getElementById('mcp-gsi-btn');
-        if (el) {
-          google.accounts.id.renderButton(el, {
-            theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'rectangular', width: 260
-          });
-        }
-      }
-    });
-
     function switchTab(tab, btn) {
       document.querySelectorAll('[id^="tab-"]').forEach(function(el) {
         if (el.id.startsWith('tab-claude') || el.id === 'tab-other') {
@@ -25181,19 +25162,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
       });
     }
 
-    function copySnippet(tab, btn) {
-      var el = document.getElementById('snippet-' + tab);
-      if (!el) return;
-      var text = el.textContent;
-      if (apiKey) text = text.replace(/YOUR_API_KEY/g, apiKey);
-      if (agentId) text = text.replace(/YOUR_AGENT_ID/g, agentId);
-      navigator.clipboard.writeText(text).then(function() {
-        btn.textContent = 'Copied!';
-        btn.classList.add('copied');
-        setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-      });
-    }
-
     function toggleTools() {
       var table = document.getElementById('tools-table');
       var pipeline = document.getElementById('tools-pipeline');
@@ -25203,65 +25171,6 @@ Header:   Authorization: Bearer <span id="key-ot">YOUR_API_KEY</span></pre>
       arrow.classList.toggle('open');
     }
 
-    function fillKey(key) {
-      apiKey = key;
-      ['key-cc','key-cd','key-ot'].forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) { el.textContent = key; el.style.color = '#34d399'; }
-      });
-    }
-
-    function fillAgentId(aid) {
-      agentId = aid;
-    }
-
-    (async function init() {
-      try {
-        var meResp = await fetch('/auth/me', { credentials: 'include' });
-        if (meResp.ok) {
-          var me = await meResp.json();
-          if (me.authenticated && me.api_key) {
-            fillKey(me.api_key);
-            document.getElementById('signin-section').style.display = 'none';
-            try {
-              var agentsResp = await fetch('/api/agents', {
-                headers: { 'Authorization': 'Bearer ' + me.api_key }
-              });
-              if (agentsResp.ok) {
-                var agents = await agentsResp.json();
-                var list = agents.agents || [];
-                if (list.length > 0) {
-                  var aid = list[0].agent_id || list[0].id || '';
-                  if (aid) fillAgentId(aid);
-                  document.getElementById('agent-dot').className = 'dot green';
-                  document.getElementById('agent-status-text').textContent =
-                    'Agent connected' + (aid ? ' (' + aid + ')' : '') + ' \u2014 skip to step 2';
-                  document.getElementById('installer-wrap').style.display = 'none';
-                } else {
-                  document.getElementById('agent-dot').className = 'dot red';
-                  document.getElementById('agent-status-text').textContent =
-                    'No agent connected \u2014 install below';
-                }
-              }
-            } catch(e) {}
-          } else {
-            document.getElementById('signin-section').style.display = '';
-            document.getElementById('agent-dot').className = 'dot yellow';
-            document.getElementById('agent-status-text').textContent =
-              'Sign in to check agent status';
-          }
-        } else {
-          document.getElementById('signin-section').style.display = '';
-          document.getElementById('agent-dot').className = 'dot yellow';
-          document.getElementById('agent-status-text').textContent =
-            'Sign in to check agent status';
-        }
-      } catch(e) {
-        document.getElementById('agent-dot').className = 'dot yellow';
-        document.getElementById('agent-status-text').textContent =
-          'Could not check status';
-      }
-    })();
   </script>
 </body>
 </html>"""

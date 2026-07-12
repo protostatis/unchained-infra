@@ -407,6 +407,28 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
         self.assertIn("API key handling", templates.SETUP_HTML)
         self.assertIn("Your Chrome profile stays on your machine", templates.INSTALL_ONBOARD_HTML)
 
+    def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
+        from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script
+        from web_app import templates
+
+        html = templates.MCP_PAGE_HTML
+        self.assertIn(
+            'INSTALL_DIR="$HOME/unchained-agent"',
+            _generate_public_install_script("https://unchainedsky.com"),
+        )
+        self.assertIn('$installDir = Join-Path $HOME "unchained-agent"', _WINDOWS_INSTALLER_TEMPLATE)
+        self.assertIn("~/unchained-agent/.env", html)
+        self.assertIn(r"%USERPROFILE%\unchained-agent\.env", html)
+        self.assertIn('id="load-key-posix"', html)
+        self.assertIn('id="load-key-windows"', html)
+        self.assertEqual(html.count("YOUR_UNCHAINED_API_KEY"), 6)
+        self.assertNotIn("Sign in to auto-fill your API key", html)
+        self.assertNotIn("YOUR_API_KEY", html)
+        self.assertNotIn("/auth/me", html)
+        self.assertNotIn("me.api_key", html)
+        self.assertNotIn("copySnippet", html)
+        self.assertNotIn("fillKey", html)
+
 
 if __name__ == "__main__":
     unittest.main()
