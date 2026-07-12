@@ -33,8 +33,12 @@ _TRIAL_NEW_CHAT_TOKEN_RE = re.compile(
 _TRIAL_NEW_CHAT_COMMIT_TTL = 24 * 60 * 60
 _TRIAL_NEW_CHAT_STATUS_TTL = _TRIAL_NEW_CHAT_COMMIT_TTL
 _TRIAL_NEW_CHAT_STATUS_MAX_RECORDS = 4096
+_TRIAL_NEW_CHAT_STATUS_CLEANUP_INTERVAL = 15 * 60
 _TRIAL_NEW_CHAT_STATUS_DIR = os.environ.get(
     "UNCHAINED_NEW_CHAT_STATUS_DIR", "/data/sessions/new-chat-transitions"
+)
+_TRIAL_NEW_CHAT_STATUS_CLEANUP_TASK_KEY = web.AppKey(
+    "trial_new_chat_status_cleanup_task", asyncio.Task
 )
 _TRIAL_NEW_CHAT_MAX_RECORDS = 2048
 _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT = 64
@@ -153,8 +157,10 @@ def _read_trial_new_chat_status(record: dict) -> dict | None:
     try:
         with open(_trial_new_chat_status_path(record["commit_token"])) as f:
             status = json.load(f)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return None
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid new-chat transition status") from exc
     for key in (
         "agent_id",
         "commit_request_id",
@@ -165,15 +171,40 @@ def _read_trial_new_chat_status(record: dict) -> dict | None:
         "expires_at",
     ):
         if status.get(key) != record[key]:
-            return None
+            raise ValueError("new-chat transition status does not match token")
     if status.get("status") not in {
         "pending",
         "committing",
         "acknowledged",
         "rolled_back",
     }:
-        return None
+        raise ValueError("invalid new-chat transition state")
     return status
+
+
+async def trial_new_chat_status_cleanup_loop() -> None:
+    while True:
+        try:
+            _prune_trial_new_chat_statuses(time.time())
+        except Exception:
+            log.exception("[chat] failed to prune new-chat transition statuses")
+        await asyncio.sleep(_TRIAL_NEW_CHAT_STATUS_CLEANUP_INTERVAL)
+
+
+async def trial_new_chat_status_cleanup_context(app: web.Application):
+    task = asyncio.create_task(
+        trial_new_chat_status_cleanup_loop(),
+        name="trial-new-chat-status-cleanup",
+    )
+    app[_TRIAL_NEW_CHAT_STATUS_CLEANUP_TASK_KEY] = task
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def _commit_trial_new_chat_transition(core, record: dict) -> None:
@@ -2463,11 +2494,24 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     try:
         _prune_trial_new_chat_statuses(now)
         durable_status = _read_trial_new_chat_status(canonical_record)
-    except OSError:
+    except (OSError, ValueError):
         log.exception("[chat] failed to read new-chat transition status")
         return web.json_response({"error": "New-chat recovery unavailable"}, status=503)
     if durable_status is None:
-        return web.json_response({"error": "Unknown new-chat transition"}, status=409)
+        candidate = _trial_new_chat_requests.get(request_key)
+        if candidate is not None and hmac.compare_digest(
+            str(candidate.get("commit_token", "")), commit_token
+        ):
+            _drop_trial_new_chat_commit(candidate)
+        return web.json_response(
+            {
+                "error": "New-chat transition status unavailable",
+                "recovery_terminal": True,
+                "recovery_decision": "destination",
+                "recovery_session_id": session_id,
+            },
+            status=409,
+        )
 
     record = _trial_new_chat_requests.get(request_key)
     if record is None:
@@ -2503,6 +2547,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "error": "New-chat commit token expired",
+                "recovery_terminal": True,
                 "recovery_decision": recovery_decision,
                 "recovery_session_id": recovery_session_id,
             },

@@ -9244,7 +9244,7 @@ async function acknowledgeNewChatTransition(pending) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      if (r.status === 409 && data.error === 'New-chat commit token expired') {
+      if (r.status === 409 && data.recovery_terminal === true) {
         const decision = data.recovery_decision;
         const recoverySessionId = String(data.recovery_session_id || '');
         const expectedSessionId = decision === 'destination'

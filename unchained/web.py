@@ -1675,6 +1675,7 @@ from web_app.handlers.chat_flow import (
     list_relay_agents_for_auth as _list_relay_agents_for_auth,
     resolve_bridge_agent as _resolve_bridge_agent,
     resolve_chat_agent_id as _resolve_chat_agent_id,
+    trial_new_chat_status_cleanup_context,
 )
 from web_app.handlers.chat_stream import handle_chat_cancel, handle_chat_msg, handle_chat_ws
 from web_app.handlers.install_flow import (
@@ -2253,6 +2254,7 @@ async def _on_cleanup(app_: web.Application):
 def create_app() -> web.Application:
     app = web.Application(middlewares=[branded_not_found_middleware])
     _register_routes(app)
+    app.cleanup_ctx.append(trial_new_chat_status_cleanup_context)
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     return app
