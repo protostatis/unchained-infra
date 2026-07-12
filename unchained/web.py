@@ -139,10 +139,14 @@ ADMIN_EMAILS = [
     for e in os.environ.get("ADMIN_EMAILS", "").split(",")
     if e.strip()
 ]
-CONTACT_EMAIL = (
-    os.environ.get("CONTACT_EMAIL", "").strip()
-    or (ADMIN_EMAILS[0] if ADMIN_EMAILS else "hello@unchainedsky.com")
-)
+
+
+def _resolve_contact_email() -> str:
+    """Return the public project contact without exposing an admin account."""
+    return os.environ.get("CONTACT_EMAIL", "").strip() or "hello@unchainedsky.com"
+
+
+CONTACT_EMAIL = _resolve_contact_email()
 if not TRIAL_AGENT_KEY:
     log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
 if not TRIAL_AGENT_ID:
