@@ -715,6 +715,23 @@ class TestWebTemplateContracts(unittest.TestCase):
             "TRIAL_CHAT_HTML should not duplicate slot runtime declarations",
         )
 
+    def test_trial_full_width_and_agent_view_layout_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn('#app-shell #main{height:auto;flex:1;min-height:0;min-width:0}', trial)
+        self.assertIn('#app-shell #main{width:100%;max-width:none;margin:0}', trial)
+        self.assertIn('<a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>', trial)
+        self.assertIn('id="agent-view"', trial)
+        self.assertIn(
+            "body.agent-view-open #app-shell #main{position:fixed!important;z-index:1250;right:22px;top:104px;",
+            trial,
+        )
+        self.assertIn(
+            "body.agent-view-open #app-shell #main{left:10px;right:10px;top:auto;",
+            trial,
+        )
+        self.assertNotIn('<aside id="sidebar">', trial)
+        self.assertNotIn('id="sidebar-toggle"', trial)
+
 
 class TestTrialModelStorageIsolation(unittest.TestCase):
     def _run_storage_runtime(self, assertions: str) -> None:

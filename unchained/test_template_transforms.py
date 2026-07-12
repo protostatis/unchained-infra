@@ -301,6 +301,30 @@ expect(body.classList.contains('agent-view-chat-open'), 'Response pending before
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+    def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
+        from web_app import templates
+
+        trial = templates.TRIAL_CHAT_HTML
+        self.assertIn('id="app-shell"', trial)
+        self.assertNotIn('<aside id="sidebar">', trial)
+        self.assertNotIn('id="sidebar-history"', trial)
+        self.assertNotIn('id="sidebar-toggle"', trial)
+        self.assertNotIn("function loadSidebarHistory()", trial)
+        self.assertIn('class="topbar-new"', trial)
+        self.assertIn('id="full-width-chat-shell"', trial)
+
+        for html in (
+            templates.CLAUDE_CHAT_HTML,
+            templates.CHAT_GEMINI_HTML,
+            templates.CHAT_CLAUDE_SDK_HTML,
+            templates.CHAT_CODEX_HTML,
+        ):
+            with self.subTest(title=html[html.index("<title>"):html.index("</title>")]):
+                self.assertIn('<aside id="sidebar">', html)
+                self.assertIn('id="sidebar-history"', html)
+                self.assertIn('id="sidebar-toggle"', html)
+                self.assertIn("function loadSidebarHistory()", html)
+                self.assertNotIn('id="full-width-chat-shell"', html)
 
     def test_landing_signin_targets_last_provider_route(self):
         from web_app import templates
