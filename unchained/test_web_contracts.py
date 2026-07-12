@@ -7,6 +7,10 @@ These tests protect public routes and exported template contracts while
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -617,6 +621,116 @@ class TestWebTemplateContracts(unittest.TestCase):
             1,
             "TRIAL_CHAT_HTML should not duplicate slot runtime declarations",
         )
+
+
+class TestTrialModelStorageIsolation(unittest.TestCase):
+    def _run_storage_runtime(self, assertions: str) -> None:
+        match = re.search(
+            r"const _TRIAL_MODEL_STORAGE_PREFIX = .*?(?=\nfunction _nextAfterLogin\()",
+            web.TRIAL_CHAT_HTML,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "trial model storage runtime missing")
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for trial storage runtime tests")
+        runtime = r"""
+class MemoryStorage {
+  constructor() { this.values = new Map(); }
+  getItem(key) { return this.values.has(key) ? this.values.get(key) : null; }
+  setItem(key, value) { this.values.set(String(key), String(value)); }
+  removeItem(key) { this.values.delete(String(key)); }
+}
+const localStorage = new MemoryStorage();
+const elements = {
+  modelsel: {value: 'google/gemini-3.1-flash-lite'},
+  'model-custom-input': {value: ''},
+};
+const document = {getElementById: id => elements[id] || null};
+let _userId = '';
+function _defaultTrialModel() { return 'google/gemini-3.1-flash-lite'; }
+function _syncCustomModelUi() {}
+""" + match.group(0) + assertions
+        result = subprocess.run(
+            [node, "-e", runtime],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_two_accounts_do_not_share_or_retain_model_state(self):
+        self._run_storage_runtime(r"""
+localStorage.setItem('unrelated', 'keep-me');
+_setTrialIdentity('opaque-user-a');
+_persistTrialModel('vendor/private-admin-model');
+if (_readTrialModelPreference() !== 'vendor/private-admin-model') throw new Error('account A did not restore its model');
+_setTrialIdentity('opaque-user-b');
+if (_readTrialModelPreference() !== '') throw new Error('account B inherited account A model');
+if (localStorage.getItem(_trialModelKey('opaque-user-a')) !== null) throw new Error('account A state survived identity change');
+_persistTrialModel('google/gemini-3.1-flash-lite');
+if (_readTrialModelPreference() !== 'google/gemini-3.1-flash-lite') throw new Error('account B preference was not scoped');
+if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('unrelated storage was cleared');
+""")
+
+    def test_unowned_legacy_model_does_not_cross_accounts_or_logout(self):
+        self._run_storage_runtime(r"""
+localStorage.setItem('unrelated', 'keep-me');
+localStorage.setItem(_TRIAL_ACTIVE_IDENTITY_KEY, 'opaque-user-a');
+localStorage.setItem(_LEGACY_MODEL_KEY, 'vendor/account-a-model');
+localStorage.setItem(_LEGACY_MODEL_OWNER_KEY, 'opaque-user-a');
+_setTrialIdentity('opaque-user-b');
+if (_readTrialModelPreference() !== '') throw new Error('account B migrated account A legacy model');
+if (localStorage.getItem(_LEGACY_MODEL_KEY) !== null) throw new Error('legacy model was not discarded');
+localStorage.setItem(_LEGACY_MODEL_KEY, 'vendor/account-b-model');
+localStorage.setItem(_LEGACY_MODEL_OWNER_KEY, 'opaque-user-b');
+if (_readTrialModelPreference() !== 'vendor/account-b-model') throw new Error('owned legacy model was not migrated');
+_setTrialIdentity('');
+if (localStorage.getItem(_trialModelKey('opaque-user-b')) !== null) throw new Error('logout retained account B model');
+if (localStorage.getItem(_TRIAL_ACTIVE_IDENTITY_KEY) !== null) throw new Error('logout retained active identity');
+if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('logout cleared unrelated storage');
+""")
+
+    def test_trial_template_has_no_unscoped_model_writes(self):
+        self.assertNotIn("localStorage.setItem('unchained_model'", web.TRIAL_CHAT_HTML)
+        self.assertIn("_persistTrialModel(evt.model)", web.TRIAL_CHAT_HTML)
+        storage_runtime = web.TRIAL_CHAT_HTML[
+            web.TRIAL_CHAT_HTML.index("const _TRIAL_MODEL_STORAGE_PREFIX"):
+            web.TRIAL_CHAT_HTML.index("function _nextAfterLogin")
+        ]
+        self.assertNotIn("email", storage_runtime.lower())
+
+
+class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_me_returns_stable_opaque_user_id(self):
+        from web_app.handlers import auth_admin
+
+        user = {
+            "user_id": "opaque-user-a",
+            "status": "approved",
+            "user_type": "claude",
+            "name": "User A",
+            "picture": "",
+        }
+        auth_store = SimpleNamespace(
+            find_user_by_email=lambda _email: user,
+            get_demo_count=lambda _email: 0,
+        )
+        core = SimpleNamespace(
+            _authenticate=lambda _request: {
+                "user_id": user["user_id"],
+                "email": "user-a@example.test",
+                "agent_id": "claude-test",
+            },
+            _auth=auth_store,
+            _is_demo_unlimited=lambda _user: False,
+            ADMIN_EMAILS=set(),
+        )
+        with patch.object(auth_admin, "_core", return_value=core):
+            response = await auth_admin.handle_auth_me(SimpleNamespace())
+
+        payload = json.loads(response.body.decode())
+        self.assertTrue(payload["authenticated"])
+        self.assertEqual(payload["user_id"], "opaque-user-a")
 
 
 class TestWebCoreResolverContracts(unittest.TestCase):

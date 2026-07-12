@@ -8597,6 +8597,7 @@ let sessionId = '';
 let sending = false;
 let _cancelCtrl = null;
 let _isAdmin = false;
+let _userId = '';
 let _userName = '';
 let _userPicture = '';
 let _openrouterUsage = null;
@@ -8605,6 +8606,77 @@ let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const _TRIAL_MODEL_STORAGE_PREFIX = 'unchained_trial_model:';
+const _TRIAL_ACTIVE_IDENTITY_KEY = 'unchained_trial_identity';
+const _LEGACY_MODEL_KEY = 'unchained_model';
+const _LEGACY_MODEL_OWNER_KEY = 'unchained_model_owner';
+
+function _trialModelKey(userId) {
+  return userId ? _TRIAL_MODEL_STORAGE_PREFIX + encodeURIComponent(userId) : '';
+}
+
+function _clearTrialAccountUi(userId) {
+  const key = _trialModelKey(userId);
+  try {
+    if (key) localStorage.removeItem(key);
+    if ((localStorage.getItem(_LEGACY_MODEL_OWNER_KEY) || '').trim() === userId) {
+      localStorage.removeItem(_LEGACY_MODEL_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    }
+  } catch(e) {}
+}
+
+function _resetTrialModelUi() {
+  const sel = document.getElementById('modelsel');
+  const customInput = document.getElementById('model-custom-input');
+  if (sel) sel.value = _defaultTrialModel();
+  if (customInput) customInput.value = '';
+  _syncCustomModelUi();
+}
+
+function _setTrialIdentity(userId) {
+  const next = (userId || '').trim();
+  let previous = _userId;
+  try { previous = previous || localStorage.getItem(_TRIAL_ACTIVE_IDENTITY_KEY) || ''; } catch(e) {}
+  const changed = previous !== next || _userId !== next;
+  if (previous && previous !== next) _clearTrialAccountUi(previous);
+  _userId = next;
+  try {
+    if (next) localStorage.setItem(_TRIAL_ACTIVE_IDENTITY_KEY, next);
+    else {
+      localStorage.removeItem(_TRIAL_ACTIVE_IDENTITY_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_KEY);
+      localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    }
+  } catch(e) {}
+  if (changed) _resetTrialModelUi();
+}
+
+function _persistTrialModel(model) {
+  const key = _trialModelKey(_userId);
+  const value = (model || '').trim();
+  if (!key || !value) return;
+  try { localStorage.setItem(key, value); } catch(e) {}
+}
+
+function _readTrialModelPreference() {
+  const key = _trialModelKey(_userId);
+  if (!key) return '';
+  try {
+    let saved = (localStorage.getItem(key) || '').trim();
+    const legacy = (localStorage.getItem(_LEGACY_MODEL_KEY) || '').trim();
+    const legacyOwner = (localStorage.getItem(_LEGACY_MODEL_OWNER_KEY) || '').trim();
+    if (!saved && legacy && legacyOwner === _userId) {
+      saved = legacy;
+      localStorage.setItem(key, saved);
+    }
+    localStorage.removeItem(_LEGACY_MODEL_KEY);
+    localStorage.removeItem(_LEGACY_MODEL_OWNER_KEY);
+    return saved;
+  } catch(e) {
+    return '';
+  }
+}
 
 function _nextAfterLogin() {
   const raw = (new URLSearchParams(window.location.search).get('next') || '').trim();
@@ -8630,6 +8702,8 @@ function maybeShowDevLogin() {
 }
 
 function _applyAuthState(data) {
+  if (data.user_id) _setTrialIdentity(data.user_id);
+  else if (data.authenticated === false) _setTrialIdentity('');
   _isAdmin = !!data.is_admin;
   _userName = data.name || '';
   _userPicture = data.picture || '';
@@ -8741,8 +8815,13 @@ async function checkApproval() {
 
 async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
+  _setTrialIdentity('');
   agentId = '';
   sessionId = '';
+  _isAdmin = false;
+  _userName = '';
+  _userPicture = '';
+  _openrouterUsage = null;
   _accountStatus = 'approved';
   _claudeAccessRequested = false;
   document.getElementById('login').style.display = 'flex';
@@ -8805,6 +8884,11 @@ function showPending() {
 
 async function backToLogin() {
   await fetch('/auth/logout', {method: 'POST'});
+  _setTrialIdentity('');
+  _isAdmin = false;
+  _userName = '';
+  _userPicture = '';
+  _openrouterUsage = null;
   _accountStatus = 'approved';
   _claudeAccessRequested = false;
   document.getElementById('pending').style.display = 'none';
@@ -8870,7 +8954,7 @@ function _applyOpenRouterCapUi() {
       const forced = _defaultTrialModel();
       if (_modelOptionExists(forced)) {
         sel.value = forced;
-        localStorage.setItem('unchained_model', forced);
+        _persistTrialModel(forced);
       }
     }
     if (notice) {
@@ -9007,7 +9091,7 @@ function onModelChange(model) {
     const forced = _defaultTrialModel();
     if (_modelOptionExists(forced)) {
       document.getElementById('modelsel').value = forced;
-      localStorage.setItem('unchained_model', forced);
+      _persistTrialModel(forced);
     }
     _syncCustomModelUi();
     checkAgentStatus();
@@ -9016,9 +9100,9 @@ function onModelChange(model) {
   _syncCustomModelUi();
   if (model === '__custom_openrouter__') {
     const custom = (document.getElementById('model-custom-input')?.value || '').trim();
-    if (custom) localStorage.setItem('unchained_model', custom);
+    if (custom) _persistTrialModel(custom);
   } else {
-    localStorage.setItem('unchained_model', model);
+    _persistTrialModel(model);
   }
   updateTrialInstallGuidance();
   updateSendAvailability(false);
@@ -9028,7 +9112,7 @@ function onModelChange(model) {
 
 function onCustomModelInput(value) {
   const model = (value || '').trim();
-  if (model) localStorage.setItem('unchained_model', model);
+  if (model) _persistTrialModel(model);
 }
 
 let lastAgentConnected = false;
@@ -9205,7 +9289,7 @@ function showMain() {
   _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
-  const saved = (localStorage.getItem('unchained_model') || '').trim();
+  const saved = _readTrialModelPreference();
   const requestedModel = fromQuery || saved;
   if (_isAdmin && requestedModel && _isOpenRouterModelId(requestedModel) && !_modelOptionExists(requestedModel)) {
     document.getElementById('modelsel').value = '__custom_openrouter__';
@@ -9890,7 +9974,7 @@ async function doSend() {
             }
             if (evt.model && _modelOptionExists(evt.model)) {
               document.getElementById('modelsel').value = evt.model;
-              localStorage.setItem('unchained_model', evt.model);
+              _persistTrialModel(evt.model);
             }
             _applyOpenRouterCapUi();
             _syncCustomModelUi();
