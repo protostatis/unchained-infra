@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 
 from aiohttp import web as aiohttp_web
@@ -11,6 +12,24 @@ from aiohttp.test_utils import TestClient, TestServer
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import web
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(color: str) -> float:
+        channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    lighter, darker = sorted(
+        (luminance(foreground), luminance(background)),
+        reverse=True,
+    )
+    return (lighter + 0.05) / (darker + 0.05)
 
 
 class TestBrandedPublic404(unittest.IsolatedAsyncioTestCase):
@@ -48,6 +67,32 @@ class TestBrandedPublic404(unittest.IsolatedAsyncioTestCase):
         self.assertIn('href="/demo"', body)
         self.assertIn('href="/trial"', body)
         self.assertIn('href="/mcp"', body)
+
+    async def test_trial_cta_meets_aa_contrast_in_all_states(self):
+        response = await self.client.get(
+            "/missing-page",
+            headers={"Accept": "text/html"},
+        )
+        body = await response.text()
+        colors = dict(re.findall(r"--([\w-]+):(#[0-9a-fA-F]{6})", body))
+
+        self.assertIn(
+            ".nav-links .trial{padding:8px 13px;border-radius:7px;"
+            "background:var(--accent);color:var(--bg)}",
+            body,
+        )
+        self.assertIn(
+            ".nav-links .trial:hover,.nav-links .trial:focus-visible"
+            "{background:var(--trial-hover);color:var(--bg)}",
+            body,
+        )
+        self.assertNotIn("color:#fff!important", body)
+        for state_background in ("accent", "trial-hover"):
+            with self.subTest(state=state_background):
+                self.assertGreaterEqual(
+                    _contrast_ratio(colors["bg"], colors[state_background]),
+                    4.5,
+                )
 
     async def test_non_page_requests_keep_aiohttp_plain_404(self):
         requests = (
