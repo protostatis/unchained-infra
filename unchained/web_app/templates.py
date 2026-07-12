@@ -8478,7 +8478,7 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.</div>
+  <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. Use your own Claude, Gemini, or Codex API key for stronger model reasoning. <a href="/setup">Configure provider / API key &rarr;</a></div>
   <div id="claude-request-banner">
     <span id="claude-request-text"></span>
     <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
@@ -8877,7 +8877,7 @@ function _applyOpenRouterCapUi() {
       notice.innerHTML = '<strong>Trial budget reached</strong> &mdash; available models are Trinity and StepFun.';
     }
   } else if (notice) {
-    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. <a href="/setup">Upgrade to Claude, Gemini, or Codex</a> for 10x better results.';
+    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. Use your own Claude, Gemini, or Codex API key for stronger model reasoning. <a href="/setup">Configure provider / API key &rarr;</a>';
   }
 }
 
