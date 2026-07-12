@@ -24347,7 +24347,7 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
           <div class="key-help">
             <strong>Use the key stored by your installed agent</strong>
             <p>This page never loads or displays your key. The agent stores it locally at <code>~/unchained-agent/.env</code> on macOS/Linux or <code>%USERPROFILE%\unchained-agent\.env</code> on Windows.</p>
-            <p>Start the agent once to complete browser authorization if <code>UNCHAINED_API_KEY</code> is empty. For clients that do not expand environment variables, open that local file and replace <code>YOUR_UNCHAINED_API_KEY</code> in the copied snippet on your machine.</p>
+            <p>Start the agent once to complete browser authorization if <code>UNCHAINED_API_KEY</code> is empty. Shell commands below use the variable loaded into your current session. Configuration files that cannot expand shell variables require explicit local substitution.</p>
           </div>
           <p class="key-command-label">macOS/Linux: load the key into your current shell without printing it</p>
           <div class="code-wrap">
@@ -24356,11 +24356,11 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
           </div>
           <p class="key-command-label">Windows PowerShell: load the key into your current session without printing it</p>
           <div class="code-wrap">
-            <pre class="code-block" id="load-key-windows">$env:UNCHAINED_API_KEY = (Get-Content "$HOME\unchained-agent\.env" | Where-Object { $_ -like 'UNCHAINED_API_KEY=*' }) -replace '^UNCHAINED_API_KEY=', ''</pre>
+            <pre class="code-block" id="load-key-windows">$env:UNCHAINED_API_KEY = (Get-Content "$HOME\unchained-agent\.env" | Where-Object { $_ -like 'UNCHAINED_API_KEY=*' } | Select-Object -First 1) -replace '^UNCHAINED_API_KEY=', ''</pre>
             <button class="copy-btn" onclick="copyCode('load-key-windows',this)">Copy</button>
           </div>
           <p style="color:#a6a6b5;font-size:12px;margin:10px 0 12px">
-            Snippet copy buttons preserve <code>YOUR_UNCHAINED_API_KEY</code> exactly; they never copy a hidden account secret.
+            Shell command copy buttons reference the environment variable above. Configuration copy buttons preserve <code>YOUR_UNCHAINED_API_KEY</code> exactly; they never copy a hidden account secret.
           </p>
           <div class="tab-bar">
             <button class="tab-btn active" onclick="switchTab('claude-code',this)">Claude Code</button>
@@ -24368,18 +24368,32 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
             <button class="tab-btn" onclick="switchTab('other',this)">Other</button>
           </div>
           <div id="tab-claude-code">
+            <p class="key-command-label">macOS/Linux shell</p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-claude-code">claude mcp add unchainedsky \
   https://api.unchainedsky.com/mcp \
   -t http \
-  -H "Authorization: Bearer YOUR_UNCHAINED_API_KEY"</pre>
+  -H "Authorization: Bearer $UNCHAINED_API_KEY"</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-code',this)">Copy</button>
+            </div>
+            <p class="key-command-label">Windows PowerShell</p>
+            <div class="code-wrap">
+              <pre class="code-block" id="snippet-claude-code-windows">claude mcp add unchainedsky `
+  https://api.unchainedsky.com/mcp `
+  -t http `
+  -H "Authorization: Bearer $env:UNCHAINED_API_KEY"</pre>
+              <button class="copy-btn" onclick="copyCode('snippet-claude-code-windows',this)">Copy</button>
+            </div>
+            <div>
               <p style="color:#a6a6b5;font-size:12px;margin-top:8px">
                 Restart Claude Code after adding (<code>/mcp</code> to verify tools are loaded).
               </p>
-              <button class="copy-btn" onclick="copyCode('snippet-claude-code',this)">Copy</button>
             </div>
           </div>
           <div id="tab-claude-desktop" style="display:none">
+            <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
+              Claude Desktop JSON does not expand shell variables. Replace <code>YOUR_UNCHAINED_API_KEY</code> with the value from your local agent <code>.env</code> file before saving this configuration.
+            </p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-claude-desktop">{
   "mcpServers": {
@@ -24396,7 +24410,7 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
           </div>
           <div id="tab-other" style="display:none">
             <p style="color:#a6a6b5;font-size:13px;margin-bottom:10px">
-              Use any MCP client that supports HTTP transport. Set the endpoint and Authorization header:
+              Use any MCP client that supports HTTP transport. If it cannot expand environment variables, replace <code>YOUR_UNCHAINED_API_KEY</code> with the value from your local agent <code>.env</code> file before saving its configuration:
             </p>
             <div class="code-wrap">
               <pre class="code-block" id="snippet-other">Endpoint: https://api.unchainedsky.com/mcp
@@ -24421,9 +24435,15 @@ Header:   Authorization: Bearer YOUR_UNCHAINED_API_KEY</pre>
           <p style="color:#a6a6b5;font-size:13px;margin-top:10px">
             To check your agent connection status:
           </p>
+          <p class="key-command-label">macOS/Linux shell</p>
           <div class="code-wrap">
-            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer YOUR_UNCHAINED_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
+            <pre class="code-block" id="snippet-agent-lookup">curl -s -H "Authorization: Bearer $UNCHAINED_API_KEY" https://api.unchainedsky.com/api/agents | python3 -m json.tool</pre>
             <button class="copy-btn" onclick="copyCode('snippet-agent-lookup',this)">Copy</button>
+          </div>
+          <p class="key-command-label">Windows PowerShell</p>
+          <div class="code-wrap">
+            <pre class="code-block" id="snippet-agent-lookup-windows">Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:UNCHAINED_API_KEY" } https://api.unchainedsky.com/api/agents | ConvertTo-Json -Depth 5</pre>
+            <button class="copy-btn" onclick="copyCode('snippet-agent-lookup-windows',this)">Copy</button>
           </div>
         </div>
       </div>
