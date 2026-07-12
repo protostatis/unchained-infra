@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import time
@@ -30,6 +31,11 @@ _TRIAL_NEW_CHAT_TOKEN_RE = re.compile(
     r"^(?P<issued_at>[0-9]{1,12})\.(?P<expires_at>[0-9]{1,12})\.(?P<signature>[a-f0-9]{64})$"
 )
 _TRIAL_NEW_CHAT_COMMIT_TTL = 24 * 60 * 60
+_TRIAL_NEW_CHAT_STATUS_TTL = _TRIAL_NEW_CHAT_COMMIT_TTL
+_TRIAL_NEW_CHAT_STATUS_MAX_RECORDS = 4096
+_TRIAL_NEW_CHAT_STATUS_DIR = os.environ.get(
+    "UNCHAINED_NEW_CHAT_STATUS_DIR", "/data/sessions/new-chat-transitions"
+)
 _TRIAL_NEW_CHAT_MAX_RECORDS = 2048
 _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT = 64
 _TRIAL_NEW_CHAT_MAX_PENDING_PER_AGENT = 4
@@ -74,6 +80,126 @@ def _trial_new_chat_token_times(commit_token: str) -> tuple[int, int] | None:
     if expires_at != issued_at + _TRIAL_NEW_CHAT_COMMIT_TTL:
         return None
     return issued_at, expires_at
+
+
+def _trial_new_chat_status_path(commit_token: str) -> str:
+    digest = hashlib.sha256(commit_token.encode()).hexdigest()
+    return os.path.join(_TRIAL_NEW_CHAT_STATUS_DIR, f"{digest}.json")
+
+
+def _prune_trial_new_chat_statuses(now: float) -> None:
+    try:
+        entries = list(os.scandir(_TRIAL_NEW_CHAT_STATUS_DIR))
+    except FileNotFoundError:
+        return
+    retained = []
+    for entry in entries:
+        if not entry.is_file() or not entry.name.endswith(".json"):
+            continue
+        try:
+            with open(entry.path) as f:
+                status = json.load(f)
+            retain_until = float(status.get("retain_until", 0))
+            updated_at = float(status.get("updated_at", 0))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            retain_until = 0
+            updated_at = 0
+        if now > retain_until:
+            try:
+                os.remove(entry.path)
+            except FileNotFoundError:
+                pass
+            continue
+        retained.append((updated_at, entry.path))
+    retained.sort()
+    for _, path in retained[:-_TRIAL_NEW_CHAT_STATUS_MAX_RECORDS]:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def _write_trial_new_chat_status(record: dict, status: str, now: float) -> dict:
+    os.makedirs(_TRIAL_NEW_CHAT_STATUS_DIR, exist_ok=True)
+    payload = {
+        "agent_id": record["agent_id"],
+        "commit_request_id": record["commit_request_id"],
+        "previous_session_id": record["previous_session_id"],
+        "session_id": record["session_id"],
+        "slot": record["slot"],
+        "issued_at": record["issued_at"],
+        "expires_at": record["expires_at"],
+        "status": status,
+        "updated_at": now,
+        "retain_until": record["expires_at"] + _TRIAL_NEW_CHAT_STATUS_TTL,
+    }
+    path = _trial_new_chat_status_path(record["commit_token"])
+    temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(temp_path, "w") as f:
+            json.dump(payload, f, separators=(",", ":"), sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
+    return payload
+
+
+def _read_trial_new_chat_status(record: dict) -> dict | None:
+    try:
+        with open(_trial_new_chat_status_path(record["commit_token"])) as f:
+            status = json.load(f)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    for key in (
+        "agent_id",
+        "commit_request_id",
+        "previous_session_id",
+        "session_id",
+        "slot",
+        "issued_at",
+        "expires_at",
+    ):
+        if status.get(key) != record[key]:
+            return None
+    if status.get("status") not in {
+        "pending",
+        "committing",
+        "acknowledged",
+        "rolled_back",
+    }:
+        return None
+    return status
+
+
+def _commit_trial_new_chat_transition(core, record: dict) -> None:
+    previous_session_id = record["previous_session_id"]
+    session_id = record["session_id"]
+    session_tabs = getattr(core, "_session_tabs", {})
+    # A late ACK must never replace resources already created for the new
+    # session. Keep the old resource tracked for normal stale cleanup.
+    destination_exists = isinstance(session_tabs, dict) and session_id in session_tabs
+    if not destination_exists:
+        for name in (
+            "_session_tabs",
+            "_session_agent_map",
+            "_session_allowed_tabs",
+            "_session_profile_paths",
+            "_session_last_active",
+            "_chat_preview_generations",
+        ):
+            mapping = getattr(core, name, None)
+            if not isinstance(mapping, dict):
+                continue
+            value = mapping.pop(previous_session_id, None)
+            if value is not None:
+                mapping.setdefault(session_id, value)
+    core._delete_trial_session(previous_session_id)
+    record["acknowledged"] = True
 
 
 def _drop_trial_new_chat_commit(record: dict) -> None:
@@ -2244,6 +2370,14 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             "acknowledged": False,
         }
         record["commit_token"] = _trial_new_chat_commit_token(core, record)
+        try:
+            _write_trial_new_chat_status(record, "pending", now)
+            _prune_trial_new_chat_statuses(now)
+        except OSError:
+            log.exception("[chat] failed to persist new-chat transition status")
+            return web.json_response(
+                {"error": "Failed to reserve new-chat transition"}, status=500
+            )
         _trial_new_chat_requests[request_key] = record
         _trial_new_chat_sources[source_key] = record
         # This phase is intentionally non-destructive. The client must receive
@@ -2307,32 +2441,39 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     now = core.time.time()
     issued_at, expires_at = token_times
     _prune_trial_new_chat_commits(now)
-    if now > expires_at:
-        return web.json_response({"error": "New-chat commit token expired"}, status=409)
+    expected_session_id = _trial_new_chat_session_id(agent_id, request_id)
+    if session_id != expected_session_id:
+        return web.json_response({"error": "Unknown new-chat transition"}, status=409)
+    canonical_record = {
+        "agent_id": agent_id,
+        "commit_request_id": request_id,
+        "previous_session_id": previous_session_id,
+        "session_id": session_id,
+        "slot": slot,
+        "created_at": issued_at,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "acknowledged": False,
+    }
+    expected_token = _trial_new_chat_commit_token(core, canonical_record)
+    if not hmac.compare_digest(commit_token, expected_token):
+        return web.json_response({"error": "Unknown new-chat transition"}, status=409)
+    canonical_record["commit_token"] = expected_token
+
+    try:
+        _prune_trial_new_chat_statuses(now)
+        durable_status = _read_trial_new_chat_status(canonical_record)
+    except OSError:
+        log.exception("[chat] failed to read new-chat transition status")
+        return web.json_response({"error": "New-chat recovery unavailable"}, status=503)
+    if durable_status is None:
+        return web.json_response({"error": "Unknown new-chat transition"}, status=409)
+
     record = _trial_new_chat_requests.get(request_key)
     if record is None:
         record = _trial_new_chat_sources.get(source_key)
     if record is None:
-        expected_session_id = _trial_new_chat_session_id(agent_id, request_id)
-        if session_id != expected_session_id:
-            return web.json_response({"error": "Unknown new-chat transition"}, status=409)
-        record = {
-            "agent_id": agent_id,
-            "commit_request_id": request_id,
-            "previous_session_id": previous_session_id,
-            "session_id": session_id,
-            "slot": slot,
-            "created_at": issued_at,
-            "issued_at": issued_at,
-            "expires_at": expires_at,
-            "acknowledged": False,
-        }
-        expected_token = _trial_new_chat_commit_token(core, record)
-        if not hmac.compare_digest(commit_token, expected_token):
-            return web.json_response({"error": "Unknown new-chat transition"}, status=409)
-        record["commit_token"] = expected_token
-        if _make_trial_new_chat_capacity(agent_id):
-            _trial_new_chat_sources[source_key] = record
+        record = canonical_record
     if (
         record["commit_request_id"] != request_id
         or record["previous_session_id"] != previous_session_id
@@ -2344,27 +2485,40 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     ):
         return web.json_response({"error": "New-chat transition does not match"}, status=409)
 
-    if not record["acknowledged"]:
-        session_tabs = getattr(core, "_session_tabs", {})
-        # A late ACK must never replace resources already created for the new
-        # session. Keep the old resource tracked for normal stale cleanup.
-        destination_exists = isinstance(session_tabs, dict) and session_id in session_tabs
-        if not destination_exists:
-            for name in (
-                "_session_tabs",
-                "_session_agent_map",
-                "_session_allowed_tabs",
-                "_session_profile_paths",
-                "_session_last_active",
-                "_chat_preview_generations",
-            ):
-                mapping = getattr(core, name, None)
-                if not isinstance(mapping, dict):
-                    continue
-                value = mapping.pop(previous_session_id, None)
-                if value is not None:
-                    mapping.setdefault(session_id, value)
-        core._delete_trial_session(previous_session_id)
+    status = durable_status["status"]
+    if now > expires_at:
+        if status == "pending":
+            durable_status = _write_trial_new_chat_status(record, "rolled_back", now)
+            status = durable_status["status"]
+        elif status == "committing":
+            _commit_trial_new_chat_transition(core, record)
+            durable_status = _write_trial_new_chat_status(record, "acknowledged", now)
+            status = durable_status["status"]
+        recovery_decision = (
+            "destination" if status == "acknowledged" else "source"
+        )
+        recovery_session_id = (
+            session_id if recovery_decision == "destination" else previous_session_id
+        )
+        return web.json_response(
+            {
+                "error": "New-chat commit token expired",
+                "recovery_decision": recovery_decision,
+                "recovery_session_id": recovery_session_id,
+            },
+            status=409,
+        )
+
+    if record is canonical_record and _make_trial_new_chat_capacity(agent_id):
+        _trial_new_chat_sources[source_key] = record
+    if status == "rolled_back":
+        return web.json_response({"error": "New-chat transition was rolled back"}, status=409)
+    if status != "acknowledged":
+        if status == "pending":
+            _write_trial_new_chat_status(record, "committing", now)
+        _commit_trial_new_chat_transition(core, record)
+        _write_trial_new_chat_status(record, "acknowledged", now)
+    else:
         record["acknowledged"] = True
 
     return web.json_response(
