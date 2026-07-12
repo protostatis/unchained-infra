@@ -8924,6 +8924,85 @@ function _persistSessionId(sid) {
 let activeSlot = 1;
 let newChatPending = false;
 
+function _newChatStateKey() {
+  return _sessionStoreKey() + '_new_chat_v1';
+}
+
+function _newChatRequestId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) +
+    Math.random().toString(36).slice(2);
+}
+
+function _loadPendingNewChat() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(_newChatStateKey()) || 'null');
+    if (!parsed || !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.request_id || '')) return null;
+    if (!String(parsed.previous_session_id || '').startsWith('s-' + agentId + '-')) return null;
+    if (parsed.slot !== 1 && parsed.slot !== 2 && parsed.slot !== 3) return null;
+    const next = String(parsed.session_id || '');
+    if (next && !next.startsWith('s-' + agentId + '-')) return null;
+    if (parsed.commit_request_id &&
+        !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.commit_request_id)) return null;
+    return parsed;
+  } catch(e) {
+    return null;
+  }
+}
+
+function _savePendingNewChat(state) {
+  try { localStorage.setItem(_newChatStateKey(), JSON.stringify(state)); } catch(e) {}
+}
+
+function _clearPendingNewChat(requestId) {
+  const pending = _loadPendingNewChat();
+  if (!pending || pending.request_id !== requestId) return;
+  try { localStorage.removeItem(_newChatStateKey()); } catch(e) {}
+}
+
+async function acknowledgeNewChatTransition(pending) {
+  try {
+    const commitRequestId = pending.commit_request_id || pending.request_id;
+    const r = await fetch('/web/chat/new/ack', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: pending.model || currentModel(),
+        request_id: commitRequestId,
+        previous_session_id: pending.previous_session_id,
+        session_id: pending.session_id,
+        slot: pending.slot,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok || !data.acknowledged) return false;
+    if (data.request_id !== commitRequestId ||
+        data.previous_session_id !== pending.previous_session_id ||
+        data.session_id !== pending.session_id) return false;
+    _clearPendingNewChat(pending.request_id);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+async function recoverPendingNewChat() {
+  const pending = _loadPendingNewChat();
+  if (!pending) return;
+  if (pending.session_id && pending.session_id === sessionId) {
+    await acknowledgeNewChatTransition(pending);
+    return;
+  }
+  if (!pending.session_id && pending.previous_session_id === sessionId && pending.slot === activeSlot) {
+    setNewChatFeedback(
+      'A previous New Chat request may have completed. Select New Chat again to recover it safely.',
+      'error'
+    );
+  }
+}
+
 function _slotLabel(n) {
   return (['Lane A', 'Lane B', 'Lane C'][n - 1] || ('Lane ' + n));
 }
@@ -9237,6 +9316,7 @@ function showMain() {
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
+  recoverPendingNewChat();
 
 }
 
@@ -9333,9 +9413,27 @@ function resetNewChatUi() {
 
 async function doNewChat() {
   if (sending || newChatPending) return;
+  newChatPending = true;
   const requestedSlot = activeSlot;
   const previousSessionId = sessionId;
-  newChatPending = true;
+  const requestedModel = currentModel();
+  let pending = _loadPendingNewChat();
+  if (pending && pending.session_id === previousSessionId) {
+    await acknowledgeNewChatTransition(pending);
+    pending = null;
+  }
+  if (!pending || pending.previous_session_id !== previousSessionId ||
+      pending.slot !== requestedSlot || pending.session_id) {
+    pending = {
+      request_id: _newChatRequestId(),
+      commit_request_id: '',
+      previous_session_id: previousSessionId,
+      session_id: '',
+      slot: requestedSlot,
+      model: requestedModel,
+    };
+    _savePendingNewChat(pending);
+  }
   const slotbar = document.getElementById('slotbar');
   const sendbtn = document.getElementById('sendbtn');
   const sendWasDisabled = sendbtn ? sendbtn.disabled : true;
@@ -9347,33 +9445,49 @@ async function doNewChat() {
   setNewChatFeedback('Starting a fresh ' + _slotLabel(requestedSlot) + '...', 'pending');
   let nextSessionId = '';
   try {
-    const r = await fetch('/web/chat/new', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        model: currentModel(),
-        session_id: sessionId,
-        slot: requestedSlot,
-      }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || 'The server could not start a new chat.');
-    nextSessionId = String(data.session_id || '').trim();
-    if (!data.ok || !nextSessionId || nextSessionId === previousSessionId ||
-        !nextSessionId.startsWith('s-' + agentId + '-')) {
-      throw new Error('The server did not return a fresh session.');
+    try {
+      const r = await fetch('/web/chat/new', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          model: pending.model,
+          request_id: pending.request_id,
+          session_id: pending.previous_session_id,
+          slot: requestedSlot,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'The server could not start a new chat.');
+      nextSessionId = String(data.session_id || '').trim();
+      if (!data.ok || data.request_id !== pending.request_id ||
+          !/^[A-Za-z0-9_-]{16,80}$/.test(data.commit_request_id || '') ||
+          data.previous_session_id !== previousSessionId || data.active_slot !== requestedSlot ||
+          !nextSessionId || nextSessionId === previousSessionId ||
+          !nextSessionId.startsWith('s-' + agentId + '-')) {
+        throw new Error('The server returned a stale or invalid new-chat transition.');
+      }
+      if (activeSlot !== requestedSlot || sessionId !== previousSessionId) {
+        throw new Error('The active lane changed before the new chat was ready.');
+      }
+      pending.commit_request_id = data.commit_request_id;
+    } catch(e) {
+      const reason = e && e.message ? ' ' + e.message : '';
+      setNewChatFeedback(
+        'Could not start a fresh ' + _slotLabel(requestedSlot) + '.' + reason +
+        ' Your current chat is unchanged. Select New Chat again to retry safely.',
+        'error'
+      );
+      return;
     }
-    if (activeSlot !== requestedSlot || sessionId !== previousSessionId) {
-      throw new Error('The active lane changed before the new chat was ready.');
-    }
-  } catch(e) {
-    const reason = e && e.message ? ' ' + e.message : '';
-    setNewChatFeedback(
-      'Could not start a fresh ' + _slotLabel(requestedSlot) + '.' + reason +
-      ' Your current chat is unchanged.',
-      'error'
-    );
-    return;
+    sessionId = nextSessionId;
+    _persistSessionId(sessionId);
+    _setActiveSlotSession(sessionId);
+    pending.session_id = sessionId;
+    _savePendingNewChat(pending);
+    resetNewChatUi();
+    _syncSlotButtons();
+    setNewChatFeedback('Fresh ' + _slotLabel(requestedSlot) + ' ready.', 'success');
+    await acknowledgeNewChatTransition(pending);
   } finally {
     newChatPending = false;
     if (slotbar) slotbar.classList.remove('locked');
@@ -9382,12 +9496,6 @@ async function doNewChat() {
       sendbtn.setAttribute('aria-disabled', sendWasDisabled ? 'true' : 'false');
     }
   }
-  sessionId = nextSessionId;
-  _persistSessionId(sessionId);
-  _setActiveSlotSession(sessionId);
-  resetNewChatUi();
-  _syncSlotButtons();
-  setNewChatFeedback('Fresh ' + _slotLabel(requestedSlot) + ' ready.', 'success');
 }
 
 async function openArchives() {
@@ -20689,8 +20797,8 @@ def _inject_sidebar(html: str) -> str:
     # `doNewChat` has two variants depending on whether server-backed slots are present.
     for old_hook, new_hook, label in [
         (
-            "  _syncSlotButtons();\n  setNewChatFeedback('Fresh '",
-            "  _syncSlotButtons();\n  loadSidebarHistory();\n  setNewChatFeedback('Fresh '",
+            "    _syncSlotButtons();\n    setNewChatFeedback('Fresh '",
+            "    _syncSlotButtons();\n    loadSidebarHistory();\n    setNewChatFeedback('Fresh '",
             "sidebar refresh after transactional slot reset",
         ),
         (

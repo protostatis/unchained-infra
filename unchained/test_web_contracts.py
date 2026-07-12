@@ -102,6 +102,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("POST", "/web/chat/install-research-desk"),
             ("GET", "/web/chat/history"),
             ("POST", "/web/chat/new"),
+            ("POST", "/web/chat/new/ack"),
             ("GET", "/web/chat/slots"),
             ("POST", "/web/chat/switch"),
             ("GET", "/web/download-agent"),
