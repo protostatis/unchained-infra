@@ -234,6 +234,17 @@ class TestScheduledTasks(unittest.TestCase):
             self.assertEqual([row["detail"] for row in rows], ["fourth", "third", "second"])
             self.assertEqual(latest_success_output(state_path, "job-a"), "fourth")
 
+    def test_latest_success_preview_can_precede_newer_failure_in_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "sched.state.json"
+            append_run_record(state_path, "job-a", True, "successful preview", _utc(2026, 2, 25, 12, 0, 0))
+            append_run_record(state_path, "job-a", False, "newer failure", _utc(2026, 2, 25, 12, 1, 0))
+
+            rows = load_run_history(state_path, "job-a", limit=20)
+            self.assertEqual(rows[0]["detail"], "newer failure")
+            self.assertFalse(rows[0]["ok"])
+            self.assertEqual(latest_success_output(state_path, "job-a"), "successful preview")
+
     def test_run_due_jobs_multi_once_uses_per_user_api_key(self):
         with tempfile.TemporaryDirectory() as td:
             jobs_dir = Path(td) / "scheduler_jobs"
