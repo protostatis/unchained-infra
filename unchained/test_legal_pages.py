@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -60,7 +61,19 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Last updated: <time datetime=\"2026-07-12\">July 12, 2026</time>", html)
         self.assertNotIn("March 6, 2026", html)
         self.assertIn("We do not sell personal data.", html)
-        self.assertIn("We retain account and operational data for as long as needed", html)
+        self.assertIn("Google, Facebook, or GitHub sign-in", html)
+        self.assertIn("GitHub access token", html)
+        self.assertIn("random per-record salt", html)
+        self.assertIn("Hosted trial conversations", html)
+        self.assertIn("Local CLI chat slots and archives are stored on the machine", html)
+        self.assertIn("scheduler job prompts", html)
+        self.assertIn("run outputs", html)
+        self.assertIn("50 most recent records per job", html)
+        self.assertIn("90-day cleanup window", html)
+        self.assertIn("Revoking a saved provider credential marks it inactive", html)
+        self.assertIn("does not by itself delete existing state or run-history files", html)
+        self.assertIn("There is no one-click full-account deletion endpoint", html)
+        self.assertIn("A server-side deletion request cannot remove local CLI chats", html)
         self.assertIn('mailto:hello@unchainedsky.com', html)
         self.assertNotIn("@gmail.com", html)
 
@@ -73,8 +86,16 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
         self.assertIn('aria-current="page">Data deletion</a>', html)
         self.assertIn("send a request from your account email", html)
         self.assertIn("Subject line: <code>Data Deletion Request</code>.", html)
-        self.assertIn("We verify account ownership.", html)
-        self.assertIn("We delete or anonymize eligible personal data from active systems.", html)
+        self.assertIn("encrypted provider-credential records (including inactive records)", html)
+        self.assertIn("hosted conversation files", html)
+        self.assertIn("scheduler definitions/state/run history", html)
+        self.assertIn("account-linked analytics records", html)
+        self.assertIn("Requests are handled manually.", html)
+        self.assertIn("Revoking a provider credential only marks it inactive", html)
+        self.assertIn("Deleting a scheduler job does not remove its prior state or run history", html)
+        self.assertIn("Records that must be retained for security or legal reasons", html)
+        self.assertIn("cannot delete local CLI chat slots or archives", html)
+        self.assertIn("contact third parties about data they control", html)
         self.assertIn('href="/privacy">/privacy</a>', html)
         self.assertIn('mailto:hello@unchainedsky.com', html)
 
@@ -88,6 +109,18 @@ class TestLegalPageContent(unittest.IsolatedAsyncioTestCase):
     def test_public_contact_honors_explicit_configuration(self):
         with patch.dict(os.environ, {"CONTACT_EMAIL": "support@example.test"}):
             self.assertEqual(web._resolve_contact_email(), "support@example.test")
+
+
+class TestLegalPageDeploymentConfig(unittest.TestCase):
+    def test_compose_passes_public_contact_email_to_web_service(self):
+        compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
+        compose = compose_path.read_text(encoding="utf-8")
+        web_service = compose.split("\n  web:\n", 1)[1].split("\n  scheduler:\n", 1)[0]
+
+        self.assertIn(
+            "- CONTACT_EMAIL=${CONTACT_EMAIL:-hello@unchainedsky.com}",
+            web_service,
+        )
 
 
 if __name__ == "__main__":
