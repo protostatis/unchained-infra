@@ -59,6 +59,22 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
 
+    def test_trial_has_only_topnav_new_action(self):
+        from web_app import templates
+
+        sidebar_new = '<button class="sidebar-new" onclick="doNewChat()">+ New</button>'
+        topbar_new = '<a href="#" class="topbar-new" onclick="doNewChat();return false">+ New</a>'
+
+        self.assertNotIn(sidebar_new, templates.TRIAL_CHAT_HTML)
+        self.assertEqual(templates.TRIAL_CHAT_HTML.count(topbar_new), 1)
+        for html in (
+            templates.CLAUDE_CHAT_HTML,
+            templates.CHAT_GEMINI_HTML,
+            templates.CHAT_CLAUDE_SDK_HTML,
+            templates.CHAT_CODEX_HTML,
+        ):
+            self.assertEqual(html.count(sidebar_new), 1)
+
     def test_landing_signin_targets_last_provider_route(self):
         from web_app import templates
 

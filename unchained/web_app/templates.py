@@ -20655,9 +20655,24 @@ def _inject_sidebar(html: str) -> str:
 
 
 TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML)
-# Trial has no server-backed chat history — remove the sidebar history panel
-# so the UI does not show an empty/non-functional list.
-TRIAL_CHAT_HTML = TRIAL_CHAT_HTML.replace('<div id="sidebar-history"></div>', '')
+# Trial has no server-backed chat history, so keep its New action in the topnav
+# and remove the empty sidebar controls.
+TRIAL_CHAT_HTML = apply_template_replacements(
+    TRIAL_CHAT_HTML,
+    (
+        TemplateReplacement(
+            '    <button class="sidebar-new" onclick="doNewChat()">+ New</button>\n',
+            "",
+            "trial sidebar new-chat removal",
+        ),
+        TemplateReplacement(
+            '  <div id="sidebar-history"></div>',
+            "",
+            "trial sidebar history removal",
+        ),
+    ),
+    template_name="trial sidebar cleanup",
+)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
 CHAT_GEMINI_HTML = _inject_sidebar(CHAT_GEMINI_HTML)
