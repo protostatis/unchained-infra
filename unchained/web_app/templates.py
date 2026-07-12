@@ -60,7 +60,7 @@ PUBLIC_404_HTML = r"""<!DOCTYPE html>
 <style>
 :root{
   --bg:#0b0a10;--surface:#16131f;--border:#302b3f;
-  --text:#f1ede2;--muted:#ada799;--accent:#ff6a3d;--signal:#b6f25c;
+  --text:#f1ede2;--muted:#ada799;--accent:#ff6a3d;--trial-hover:#ff815e;--signal:#b6f25c;
 }
 *{box-sizing:border-box}
 html,body{min-height:100%}
@@ -89,7 +89,8 @@ a{color:inherit}
 .nav-links{margin-left:auto;display:flex;align-items:center;gap:22px}
 .nav-links a{color:var(--muted);font-size:.88rem;font-weight:600;text-decoration:none}
 .nav-links a:hover,.nav-links a:focus-visible{color:var(--text)}
-.trial{padding:8px 13px;border-radius:7px;background:var(--accent);color:#fff!important}
+.nav-links .trial{padding:8px 13px;border-radius:7px;background:var(--accent);color:var(--bg)}
+.nav-links .trial:hover,.nav-links .trial:focus-visible{background:var(--trial-hover);color:var(--bg)}
 .shell{
   position:relative;z-index:1;width:min(1120px,calc(100% - 40px));min-height:calc(100vh - 64px);
   margin:auto;display:grid;grid-template-columns:minmax(220px,.72fr) minmax(320px,1fr);
