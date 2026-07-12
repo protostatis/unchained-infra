@@ -66,6 +66,7 @@ from web_app.templates import (
     LANDING_V3_HTML,
     LANDING_V4_HTML,
     MCP_PAGE_HTML,
+    PUBLIC_404_HTML,
     SCHEDULER_HTML,
     SETUP_HTML,
     TRIAL_CHAT_HTML,
@@ -2103,6 +2104,64 @@ def _build_mcp_guide_html() -> str:
 # Server
 # ---------------------------------------------------------------------------
 
+_NON_PAGE_404_PREFIXES = (
+    "/api",
+    "/auth",
+    "/cdp",
+    "/core",
+    "/health",
+    "/mcp",
+    "/tunnel",
+    "/unbrowser-mcp",
+    "/web",
+)
+
+
+def _accepts_html(request: web.Request) -> bool:
+    for item in request.headers.get("Accept", "").lower().split(","):
+        media_type, *parameters = (part.strip() for part in item.split(";"))
+        if media_type != "text/html":
+            continue
+        quality = 1.0
+        for parameter in parameters:
+            if parameter.startswith("q="):
+                try:
+                    quality = float(parameter[2:])
+                except ValueError:
+                    quality = 0.0
+        if quality > 0:
+            return True
+    return False
+
+
+def _is_browser_page_request(request: web.Request) -> bool:
+    if request.method not in {"GET", "HEAD"} or not _accepts_html(request):
+        return False
+    path = request.path
+    return not any(
+        path == prefix or path.startswith(f"{prefix}/")
+        for prefix in _NON_PAGE_404_PREFIXES
+    )
+
+
+@web.middleware
+async def branded_not_found_middleware(request: web.Request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPNotFound:
+        if not _is_browser_page_request(request):
+            raise
+        return web.Response(
+            status=404,
+            text=PUBLIC_404_HTML,
+            content_type="text/html",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+
 def _register_routes(app: web.Application):
     register_route_specs(
         app,
@@ -2185,7 +2244,7 @@ async def _on_cleanup(app_: web.Application):
 
 
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[branded_not_found_middleware])
     _register_routes(app)
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
