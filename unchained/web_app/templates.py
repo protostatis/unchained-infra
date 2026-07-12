@@ -9243,15 +9243,36 @@ async function acknowledgeNewChatTransition(pending) {
       }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok || !data.acknowledged) return false;
+    if (!r.ok) {
+      if (r.status === 409 && data.error === 'New-chat commit token expired') return 'expired';
+      return 'retry';
+    }
+    if (!data.ok || !data.acknowledged) return 'retry';
     if (data.request_id !== commitRequestId ||
         data.previous_session_id !== pending.previous_session_id ||
-        data.session_id !== pending.session_id) return false;
+        data.session_id !== pending.session_id) return 'retry';
     _clearPendingNewChat(pending.request_id);
-    return true;
+    return 'acknowledged';
   } catch(e) {
-    return false;
+    return 'retry';
   }
+}
+
+async function recoverExpiredNewChat(pending) {
+  _clearPendingNewChat(pending.request_id);
+  activeSlot = pending.slot;
+  sessionId = pending.previous_session_id;
+  _persistSessionId(sessionId);
+  _setActiveSlotSession(sessionId);
+  _syncSlotButtons();
+  const chat = document.getElementById('chat');
+  if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Restoring previous chat...</div>';
+  await loadHistory();
+  setNewChatFeedback(
+    'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. ' +
+    'Your previous chat was restored; select New Chat to try again.',
+    'error'
+  );
 }
 
 async function recoverPendingNewChat() {
@@ -9263,7 +9284,12 @@ async function recoverPendingNewChat() {
     _syncNewChatRecoveryLock();
     setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
     try {
-      const acknowledged = await acknowledgeNewChatTransition(pending);
+      const outcome = await acknowledgeNewChatTransition(pending);
+      if (outcome === 'expired') {
+        await recoverExpiredNewChat(pending);
+        return;
+      }
+      const acknowledged = outcome === 'acknowledged';
       setNewChatFeedback(
         acknowledged
           ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
@@ -9768,7 +9794,12 @@ async function doNewChat() {
   try {
     if (pending && pending.session_id) {
       setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
-      const acknowledged = await acknowledgeNewChatTransition(pending);
+      const outcome = await acknowledgeNewChatTransition(pending);
+      if (outcome === 'expired') {
+        await recoverExpiredNewChat(pending);
+        return;
+      }
+      const acknowledged = outcome === 'acknowledged';
       setNewChatFeedback(
         acknowledged
           ? 'Fresh ' + _slotLabel(pending.slot) + ' ready.'
@@ -9839,7 +9870,12 @@ async function doNewChat() {
     if (typeof _setSlotPreview === 'function') _setSlotPreview(requestedSlot, '');
     resetNewChatUi();
     _syncSlotButtons();
-    const acknowledged = await acknowledgeNewChatTransition(pending);
+    const outcome = await acknowledgeNewChatTransition(pending);
+    if (outcome === 'expired') {
+      await recoverExpiredNewChat(pending);
+      return;
+    }
+    const acknowledged = outcome === 'acknowledged';
     setNewChatFeedback(
       acknowledged
         ? 'Fresh ' + _slotLabel(requestedSlot) + ' ready.'
