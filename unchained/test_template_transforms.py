@@ -97,7 +97,9 @@ class TestTemplateTransforms(unittest.TestCase):
         from web_app import templates
 
         html = templates.CHAT_CLAUDE_SDK_HTML
-        controls = html.split('id="agent-view-chat-controls"', 1)[1].split("</span>", 1)[0]
+        controls = html.split('id="agent-view-chat-controls"', 1)[1].split(
+            '<a href="#" onclick="doDisconnect();return false">', 1
+        )[0]
         self.assertIn('<button type="button" id="chat-card-expand"', controls)
         self.assertIn('<button type="button" id="chat-card-exit"', controls)
         self.assertIn('<button type="button" id="chat-card-minimize"', controls)
@@ -119,7 +121,7 @@ class TestTemplateTransforms(unittest.TestCase):
         html = templates.CHAT_CLAUDE_SDK_HTML
         local_html = templates.CLAUDE_CHAT_HTML
         self.assertIn(
-            'role="group" aria-label="Chat panel controls"',
+            'role="group" aria-label="Same conversation controlling browser preview"',
             html,
         )
         self.assertIn(
@@ -127,7 +129,7 @@ class TestTemplateTransforms(unittest.TestCase):
             html,
         )
         self.assertIn(".chat-size-btn{width:44px;min-width:44px;height:44px}", html)
-        self.assertIn(".agent-view-foot{display:none}", html)
+        self.assertIn(".agent-view-foot,.agent-view-chat-context{display:none}", html)
         self.assertIn(
             "body.agent-view-open.chat-minimized .agent-view-chat-restore{display:none!important}",
             html,
@@ -152,6 +154,28 @@ class TestTemplateTransforms(unittest.TestCase):
         )
         self.assertIn('placeholder="Ask anything..."', local_html)
         self.assertNotIn('placeholder="Ask the agent anything..."', local_html)
+
+    def test_agent_view_uses_browser_preview_copy_without_exposing_diagnostics(self):
+        from web_app import templates
+
+        lane_templates = {
+            "Claude CLI": templates.CLAUDE_CHAT_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+        }
+        for lane, html in lane_templates.items():
+            with self.subTest(lane=lane):
+                self.assertIn(">Browser Preview</a>", html)
+                self.assertIn("<strong>Browser Preview</strong>", html)
+                self.assertIn("<strong>Same conversation</strong>", html)
+                self.assertIn("Controls this preview", html)
+                self.assertIn("Current page", html)
+                self.assertNotIn("Shared semantic browser", html)
+                self.assertNotIn("semantic://", html)
+                self.assertIn(".agent-view-foot{display:none", html)
+                self.assertIn('id="agent-view-fidelity"', html)
+                self.assertIn("fidelityEl.textContent", html)
+                self.assertIn("setAgentViewState", html)
 
     def test_closed_mobile_sidebar_is_removed_from_focus_order(self):
         from web_app import templates
