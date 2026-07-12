@@ -207,6 +207,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("clearGuestNewChatRequest(pending);", guest)
         self.assertIn("Could not start a fresh guest chat.", guest)
 
+        chat_stream_source = (
+            Path(__file__).with_name("web_app") / "handlers" / "chat_stream.py"
+        ).read_text()
+        self.assertIn('"new_chat_error",', chat_stream_source)
+
     def test_trial_upgrade_notice_describes_provider_api_key_setup(self):
         copy = (
             "Access your chosen Claude, Gemini, or Codex provider models using "

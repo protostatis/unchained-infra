@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.util
 import json
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import web
 
 
-class TestChatAgentCliArchives(unittest.TestCase):
+class TestChatAgentCliArchives(unittest.IsolatedAsyncioTestCase):
     def _load_module(self):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
@@ -162,6 +163,78 @@ class TestChatAgentCliArchives(unittest.TestCase):
         self.assertEqual(mod._load_chat(1)["messages"][0]["content"], "active slot")
         self.assertEqual(mod._load_chat(2)["messages"][0]["content"], "restored into two")
 
+    async def test_new_chat_cancellation_stops_task_and_process_before_cleanup(self):
+        mod = self._load_module()
+        sid = "s-agent-active"
+
+        async def running_turn():
+            await asyncio.Event().wait()
+
+        class FakeProcess:
+            pid = 4242
+            returncode = None
+
+            async def wait(self):
+                return self.returncode
+
+        task = asyncio.create_task(running_turn())
+        await asyncio.sleep(0)
+        proc = FakeProcess()
+        mod.active_tasks[sid] = task
+        mod.active_procs[sid] = proc
+
+        def kill_process(target):
+            target.returncode = -9
+
+        with patch.object(mod, "_kill_process", side_effect=kill_process) as kill:
+            stopped = await mod._cancel_active_session_work(sid, timeout=0.2)
+
+        self.assertTrue(stopped)
+        self.assertTrue(task.cancelled())
+        kill.assert_called_once_with(proc)
+        self.assertNotIn(sid, mod.active_tasks)
+        self.assertNotIn(sid, mod.active_procs)
+
+    async def test_old_task_callback_cannot_remove_newer_turn_state(self):
+        mod = self._load_module()
+        sid = "s-agent-race"
+        old_task = asyncio.create_task(asyncio.sleep(0))
+        new_task = asyncio.create_task(asyncio.sleep(0))
+        new_proc = object()
+        mod.active_tasks[sid] = new_task
+        mod.active_procs[sid] = new_proc
+
+        mod._finish_active_task(sid, old_task)
+
+        self.assertIs(mod.active_tasks[sid], new_task)
+        self.assertIs(mod.active_procs[sid], new_proc)
+        await old_task
+        await new_task
+
+    async def test_new_chat_cancellation_timeout_keeps_active_state(self):
+        mod = self._load_module()
+        sid = "s-agent-stuck"
+        release = asyncio.Event()
+
+        async def stubborn_turn():
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        task = asyncio.create_task(stubborn_turn())
+        await asyncio.sleep(0)
+        mod.active_tasks[sid] = task
+
+        stopped = await mod._cancel_active_session_work(sid, timeout=0.01)
+
+        self.assertFalse(stopped)
+        self.assertIs(mod.active_tasks[sid], task)
+        release.set()
+        await asyncio.wait_for(task, timeout=0.2)
+        mod.active_tasks.clear()
+
 
 class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
     def _core_stub(self):
@@ -223,7 +296,36 @@ class TestChatArchiveHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(data["active_slot"], 3)
-        core._agent_request.assert_awaited_once_with("claude-abc12345", {"type": "new_chat", "slot": 3})
+        core._agent_request.assert_awaited_once_with(
+            "claude-abc12345",
+            {"type": "new_chat", "session_id": "s-agent-current", "slot": 3},
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_chat_new_does_not_acknowledge_agent_cancellation_failure(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_new
+
+        core = self._core_stub()
+        core._agent_request.return_value = {
+            "ok": False,
+            "error": "Could not stop the active task; chat was not cleared",
+        }
+        mock_core.return_value = core
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "claude-sonnet-4-6",
+                    "session_id": "s-agent-current",
+                    "slot": "3",
+                }
+            )
+        )
+
+        response = await handle_chat_new(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 503)
+        self.assertIn("not cleared", data["error"])
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_chat_history_omits_invalid_slot(self, mock_core):

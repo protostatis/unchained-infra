@@ -1459,6 +1459,50 @@ def _kill_process(proc):
             return
 
 
+def _finish_active_task(sid: str, task: asyncio.Task) -> None:
+    """Remove task state only when it still belongs to this exact turn."""
+    if active_tasks.get(sid) is not task:
+        return
+    active_tasks.pop(sid, None)
+    active_procs.pop(sid, None)
+    log.info("[%s] Done", sid)
+
+
+async def _cancel_active_session_work(sid: str, timeout: float = 3.0) -> bool:
+    """Stop and await the active turn before destructive session changes."""
+    task = active_tasks.get(sid)
+    proc = active_procs.get(sid)
+
+    if proc is not None and proc.returncode is None:
+        log.info("[%s] Stopping process %s before new chat", sid, proc.pid)
+        _kill_process(proc)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            log.error("[%s] Timed out waiting for active task cancellation", sid)
+            return False
+        except Exception:
+            # The turn failed while being stopped; it is nevertheless finished.
+            log.exception("[%s] Active task failed during new-chat cancellation", sid)
+
+    if proc is not None and proc.returncode is None:
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            log.error("[%s] Timed out waiting for process %s to exit", sid, proc.pid)
+            return False
+
+    if task is not None and active_tasks.get(sid) is task:
+        active_tasks.pop(sid, None)
+    if proc is not None and active_procs.get(sid) is proc:
+        active_procs.pop(sid, None)
+    return True
+
+
 def check_chrome_bridge(cdp_agent_id: str = "") -> bool:
     """Test that chrome_bridge.py is connected to the relay."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -3123,11 +3167,7 @@ async def main():
                     )
                     active_tasks[sid] = task
                     task.add_done_callback(
-                        lambda t, s=sid: (
-                            active_tasks.pop(s, None),
-                            active_procs.pop(s, None),
-                            log.info("[%s] Done", s),
-                        )
+                        lambda t, s=sid: _finish_active_task(s, t)
                     )
                 elif msg.get("type") == "cancel":
                     sid = msg.get("session_id", "")
@@ -3155,6 +3195,23 @@ async def main():
                     await ws.send(json.dumps(payload))
                 elif msg.get("type") == "new_chat":
                     req_id = msg.get("req_id", "")
+                    sid = str(msg.get("session_id") or "").strip()
+                    if not sid:
+                        await ws.send(json.dumps({
+                            "type": "new_chat_error",
+                            "req_id": req_id,
+                            "ok": False,
+                            "error": "Missing session_id; active work was not cleared",
+                        }))
+                        continue
+                    if not await _cancel_active_session_work(sid):
+                        await ws.send(json.dumps({
+                            "type": "new_chat_error",
+                            "req_id": req_id,
+                            "ok": False,
+                            "error": "Could not stop the active task; chat was not cleared",
+                        }))
+                        continue
                     current = _sync_active_slot(_normalize_slot(msg.get("slot")), "new_chat")
                     _clear_slot(current)
                     claude_sessions.clear()
@@ -3165,6 +3222,7 @@ async def main():
                     await ws.send(json.dumps({
                         "type": "new_chat_ok",
                         "req_id": req_id,
+                        "ok": True,
                         "active_slot": current,
                     }))
                 elif msg.get("type") == "switch_slot":
