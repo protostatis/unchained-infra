@@ -33,6 +33,181 @@ _FIRST_LOOK_TASK_HANDOFFS = {
 }
 
 
+_LEGAL_LAST_UPDATED = "July 12, 2026"
+
+
+def _build_legal_page(
+    *,
+    title: str,
+    description: str,
+    canonical_path: str,
+    current_path: str,
+    content: str,
+    contact_email: str,
+) -> str:
+    """Wrap legal copy in the shared, dependency-free public site shell."""
+    safe_contact = escape(contact_email, quote=True)
+    nav_links = []
+    for href, label in (
+        ("/", "Home"),
+        ("/demo", "Demo"),
+        ("/privacy", "Privacy"),
+        ("/data-deletion", "Data deletion"),
+    ):
+        current = ' aria-current="page"' if href == current_path else ""
+        nav_links.append(f'<li><a href="{href}"{current}>{label}</a></li>')
+    nav = "".join(nav_links)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{escape(description, quote=True)}">
+  <meta name="theme-color" content="#0b0a10">
+  <link rel="canonical" href="https://unchainedsky.com{canonical_path}">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>{escape(title)} | Unchained</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #0b0a10;
+      --surface: #15121d;
+      --line: #2c2738;
+      --text: #f1ede2;
+      --muted: #aaa397;
+      --accent: #ff6a3d;
+      --signal: #b6f25c;
+    }}
+    * {{ box-sizing: border-box; }}
+    html {{ scroll-behavior: smooth; }}
+    body {{
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(182, 242, 92, .07), transparent 30rem),
+        radial-gradient(circle at 88% 12%, rgba(255, 106, 61, .07), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+      line-height: 1.7;
+    }}
+    body::before {{
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, .025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, .025) 1px, transparent 1px);
+      background-size: 48px 48px;
+      content: "";
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }}
+    a {{ color: var(--signal); text-underline-offset: .2em; }}
+    a:hover {{ color: #d5ff97; }}
+    a:focus-visible {{ outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 2px; }}
+    .skip-link {{
+      position: fixed;
+      top: .75rem;
+      left: .75rem;
+      z-index: 10;
+      padding: .65rem .9rem;
+      background: var(--text);
+      color: var(--bg);
+      font-weight: 700;
+      transform: translateY(-150%);
+    }}
+    .skip-link:focus {{ transform: none; }}
+    .site-header {{ border-bottom: 1px solid rgba(255, 255, 255, .08); }}
+    .header-inner, .footer-inner {{
+      width: min(70rem, calc(100% - 2.5rem));
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }}
+    .header-inner {{ min-height: 4.5rem; }}
+    .brand {{
+      display: inline-flex;
+      align-items: center;
+      gap: .65rem;
+      color: var(--text);
+      font-size: .82rem;
+      font-weight: 800;
+      letter-spacing: .18em;
+      text-decoration: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .brand img {{ width: 1.7rem; height: 1.7rem; }}
+    .brand span {{ color: var(--accent); }}
+    nav ul {{ display: flex; align-items: center; gap: 1.25rem; margin: 0; padding: 0; list-style: none; }}
+    nav a {{ color: var(--muted); font-size: .87rem; font-weight: 600; text-decoration: none; }}
+    nav a:hover, nav a[aria-current="page"] {{ color: var(--text); }}
+    nav a[aria-current="page"] {{ text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; }}
+    .legal-main {{ width: min(70rem, calc(100% - 2.5rem)); margin: 0 auto; padding: clamp(3.5rem, 8vw, 7rem) 0; }}
+    .legal-document {{ max-width: 46rem; }}
+    .eyebrow {{
+      margin: 0 0 1rem;
+      color: var(--accent);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }}
+    h1, h2 {{ font-family: Georgia, "Times New Roman", serif; font-weight: 400; }}
+    h1 {{ margin: 0; font-size: clamp(2.8rem, 8vw, 5.4rem); letter-spacing: -.045em; line-height: .98; }}
+    .updated {{ margin: 1.25rem 0 3.25rem; color: var(--muted); font-size: .9rem; }}
+    .legal-copy {{ padding-top: 2rem; border-top: 1px solid var(--line); font-size: clamp(1rem, 2vw, 1.08rem); }}
+    .legal-copy h2 {{ margin: 2.5rem 0 .65rem; font-size: clamp(1.45rem, 4vw, 1.85rem); line-height: 1.25; }}
+    .legal-copy p {{ margin: 0 0 1rem; }}
+    .legal-copy ul {{ margin: .5rem 0 1.2rem; padding-left: 1.35rem; }}
+    .legal-copy li {{ margin: .4rem 0; padding-left: .25rem; }}
+    code {{ padding: .15rem .35rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }}
+    .contact-card {{ margin-top: 1rem; padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-left: 3px solid var(--signal); background: var(--surface); }}
+    .site-footer {{ padding: 2rem 0 2.5rem; border-top: 1px solid rgba(255, 255, 255, .08); color: var(--muted); }}
+    .footer-inner {{ align-items: flex-start; }}
+    .footer-note {{ margin: 0; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }}
+    .footer-contact {{ font-size: .85rem; }}
+    @media (max-width: 680px) {{
+      .header-inner {{ align-items: flex-start; flex-direction: column; gap: .65rem; padding: 1rem 0; }}
+      nav {{ width: 100%; overflow-x: auto; padding-bottom: .2rem; }}
+      nav ul {{ width: max-content; gap: 1.1rem; }}
+      nav a {{ display: inline-block; min-height: 2.25rem; padding: .35rem 0; }}
+      .legal-main {{ padding: 3.5rem 0 4.5rem; }}
+      .updated {{ margin-bottom: 2.5rem; }}
+      .footer-inner {{ flex-direction: column; gap: .75rem; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{ html {{ scroll-behavior: auto; }} }}
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="Unchained home"><img src="/favicon.svg" alt="" width="27" height="27">UN<span>CHAIN</span>ED</a>
+      <nav aria-label="Primary navigation"><ul>{nav}</ul></nav>
+    </div>
+  </header>
+  <main class="legal-main" id="main-content">
+    <article class="legal-document" aria-labelledby="page-title">
+      <p class="eyebrow">Policy &amp; trust</p>
+      <h1 id="page-title">{escape(title)}</h1>
+      <p class="updated">Last updated: <time datetime="2026-07-12">{_LEGAL_LAST_UPDATED}</time></p>
+      <div class="legal-copy">{content}</div>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p class="footer-note">Unchained &mdash; browser work from a profile you control</p>
+      <a class="footer-contact" href="mailto:{safe_contact}">Contact {safe_contact}</a>
+    </div>
+  </footer>
+</body>
+</html>"""
+
+
 async def handle_install_page(request: web.Request) -> web.Response:
     """Serve the one-click installer onboarding page."""
     core = _core()
@@ -364,17 +539,8 @@ async def handle_privacy_page(request: web.Request) -> web.Response:
     """Serve public privacy policy page (required for OAuth provider submissions)."""
     core = _core()
     core._track_page_view(request)
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Privacy Policy | Unchained</title>
-</head>
-<body style="margin:0;padding:32px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e6ecff;line-height:1.6">
-  <main style="max-width:880px;margin:0 auto">
-    <h1 style="margin:0 0 6px;font-size:32px">Privacy Policy</h1>
-    <p style="margin:0 0 20px;color:#a8b3cf">Last updated: March 6, 2026</p>
+    safe_contact = escape(core.CONTACT_EMAIL, quote=True)
+    content = f"""
     <p>Unchained provides browser automation and chat tooling. This policy describes how we collect, use, and protect information when you use our services.</p>
     <h2>Information We Collect</h2>
     <ul>
@@ -393,12 +559,17 @@ async def handle_privacy_page(request: web.Request) -> web.Response:
     <h2>Data Retention</h2>
     <p>We retain account and operational data for as long as needed to provide the service, meet legal requirements, resolve disputes, and enforce agreements.</p>
     <h2>Your Rights</h2>
-    <p>You can request account/data deletion via <a href="/data-deletion" style="color:#7dd3fc">/data-deletion</a>.</p>
+    <p>You can request account/data deletion via <a href="/data-deletion">/data-deletion</a>.</p>
     <h2>Contact</h2>
-    <p>Questions about this policy: <a href="mailto:{core.CONTACT_EMAIL}" style="color:#7dd3fc">{core.CONTACT_EMAIL}</a></p>
-  </main>
-</body>
-</html>"""
+    <p class="contact-card">Questions about this policy: <a href="mailto:{safe_contact}">{safe_contact}</a></p>"""
+    html = _build_legal_page(
+        title="Privacy Policy",
+        description="How Unchained collects, uses, and protects information.",
+        canonical_path="/privacy",
+        current_path="/privacy",
+        content=content,
+        contact_email=core.CONTACT_EMAIL,
+    )
     return web.Response(text=html, content_type="text/html")
 
 
@@ -406,19 +577,10 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
     """Serve public user-data deletion instructions page for OAuth compliance."""
     core = _core()
     core._track_page_view(request)
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>User Data Deletion | Unchained</title>
-</head>
-<body style="margin:0;padding:32px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e6ecff;line-height:1.6">
-  <main style="max-width:880px;margin:0 auto">
-    <h1 style="margin:0 0 6px;font-size:32px">User Data Deletion</h1>
-    <p style="margin:0 0 20px;color:#a8b3cf">Last updated: March 6, 2026</p>
+    safe_contact = escape(core.CONTACT_EMAIL, quote=True)
+    content = f"""
     <p>If you want your Unchained account and related personal data deleted, send a request from your account email to:</p>
-    <p><a href="mailto:{core.CONTACT_EMAIL}" style="color:#7dd3fc">{core.CONTACT_EMAIL}</a></p>
+    <p class="contact-card"><a href="mailto:{safe_contact}">{safe_contact}</a></p>
     <h2>What to Include</h2>
     <ul>
       <li>Your account email address.</li>
@@ -430,10 +592,15 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
       <li>We delete or anonymize eligible personal data from active systems.</li>
       <li>We may retain limited records where required for legal/security obligations.</li>
     </ul>
-    <p>For policy details, see <a href="/privacy" style="color:#7dd3fc">/privacy</a>.</p>
-  </main>
-</body>
-</html>"""
+    <p>For policy details, see <a href="/privacy">/privacy</a>.</p>"""
+    html = _build_legal_page(
+        title="User Data Deletion",
+        description="How to request deletion of your Unchained account and related personal data.",
+        canonical_path="/data-deletion",
+        current_path="/data-deletion",
+        content=content,
+        contact_email=core.CONTACT_EMAIL,
+    )
     return web.Response(text=html, content_type="text/html")
 
 
