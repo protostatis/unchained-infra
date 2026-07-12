@@ -2649,11 +2649,18 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         )
 
     new_chat_msg = {"type": "new_chat"}
+    if requested_session_id:
+        new_chat_msg["session_id"] = requested_session_id
     if requested_slot is not None:
         new_chat_msg["slot"] = requested_slot
     resp = await core._agent_request(chat_agent_id, new_chat_msg)
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
+    if resp.get("ok") is False or resp.get("error"):
+        return web.json_response(
+            {"error": resp.get("error") or "Could not safely start a new chat"},
+            status=503,
+        )
     result = {"ok": True, "active_slot": resp.get("active_slot", 1)}
     if resp.get("session_id"):
         result["session_id"] = resp["session_id"]

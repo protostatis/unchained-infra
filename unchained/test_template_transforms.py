@@ -248,6 +248,8 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("transition:right 240ms", html)
         self.assertIn("width:calc(100vw - 24px)!important", html)
         self.assertIn("function positionAgentShellHistory()", html)
+        self.assertIn("body.agent-view-open.agent-shell-history-open #sidebar", html)
+        self.assertIn("!document.body.classList.contains('agent-view-open')", html)
         self.assertIn('id="sidebar-history-search" type="search"', html)
         self.assertIn('aria-label="Search chat history"', html)
         self.assertIn("Loading chats...", html)
@@ -456,6 +458,69 @@ expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not 
         self.assertEqual(html.count("model: currentLaneModel()"), 4)
         self.assertIn("const model = currentModel();", html)
         self.assertIn("model: model,", html)
+
+    def test_opencode_model_refresh_preserves_concrete_selection(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for OpenCode model runtime checks")
+
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        start = html.index("function updateOpenCodeModelOptions(models)")
+        end = html.index("\n\nlet activeSlot", start)
+        function_source = html[start:end]
+        harness = r"""
+const select = {
+  value: 'opencode-cli:openai/gpt-5.3-codex-spark',
+  options: [],
+  appendChild(option) { this.options.push(option); },
+  set innerHTML(value) { this.options = []; this.value = ''; },
+};
+globalThis.document = {
+  getElementById(id) { return id === 'modelsel' ? select : null; },
+  createElement() { return {value: '', textContent: ''}; },
+};
+globalThis.localStorage = {
+  getItem() { return 'opencode-cli:openai/gpt-5.3-codex-spark'; },
+};
+function _wantsOpenCodeModelOptions() { return true; }
+function _opencodeOptionLabel(modelId) { return modelId; }
+let _openCodeModelOptionsSignature = '';
+"""
+        checks = r"""
+updateOpenCodeModelOptions(['anthropic/claude-sonnet-4-6']);
+if (select.value !== 'opencode-cli:openai/gpt-5.3-codex-spark') {
+  throw new Error('concrete model selection was replaced: ' + select.value);
+}
+if (!select.options.some(option => option.value === select.value)) {
+  throw new Error('preserved concrete model was not added as an option');
+}
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + function_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_local_new_chat_waits_for_authoritative_agent_ack(self):
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        start = html.index("async function doNewChat()")
+        end = html.index("\nasync function openArchives()", start)
+        new_chat = html[start:end]
+
+        self.assertIn("if (localNewChatPending) return;", new_chat)
+        self.assertNotIn("if (sending) return;", new_chat)
+        acknowledged = new_chat.index("data.ok !== true")
+        stream_abort = new_chat.index("if (_cancelCtrl) _cancelCtrl.abort();")
+        transcript_reset = new_chat.index("document.getElementById('chat').innerHTML = '';")
+        self.assertLess(acknowledged, transcript_reset)
+        self.assertLess(stream_abort, transcript_reset)
+        self.assertIn("Could not safely start a new chat.", new_chat)
 
     def test_ux_contract_copy_and_demo_routes(self):
         from web_app import templates

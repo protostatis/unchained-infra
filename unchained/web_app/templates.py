@@ -15841,6 +15841,12 @@ function updateOpenCodeModelOptions(models) {
     valid.push(modelId);
     if (valid.length >= 500) break;
   }
+  const targetModelId = target.startsWith('opencode-cli:')
+    ? target.slice('opencode-cli:'.length)
+    : '';
+  if (targetModelId && targetModelId.indexOf('/') !== -1 && !/\s/.test(targetModelId) && !seen.has(targetModelId)) {
+    valid.unshift(targetModelId);
+  }
   if (!valid.length) return;
   const signature = valid.join('\n');
   if (signature === _openCodeModelOptionsSignature && Array.from(sel.options).some(opt => opt.value === target)) {
@@ -15868,6 +15874,7 @@ function updateOpenCodeModelOptions(models) {
 }
 
 let activeSlot = 1;
+let localNewChatPending = false;
 
 function _sessionStoreKey() {
   return 'unchained_session_' + agentId + '_claude';
@@ -16558,10 +16565,8 @@ function removeClaudeUpgradeCard() {
 function showClaudeUpgradeCard() {}
 
 async function doNewChat() {
-  if (sending) return;
-  removeClaudeUpgradeCard();
-  document.getElementById('chat').innerHTML = '';
-  showHintsIfEmpty();
+  if (localNewChatPending) return;
+  localNewChatPending = true;
   try {
     const r = await fetch('/web/chat/new', {
       method: 'POST',
@@ -16572,16 +16577,33 @@ async function doNewChat() {
         slot: activeSlot,
       }),
     });
-    if (r.ok) {
-      const data = await r.json();
-      if (data.session_id) {
-        sessionId = data.session_id;
-        _persistSessionId(sessionId);
-        _setActiveSlotSession(sessionId);
-      }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data || data.ok !== true) {
+      throw new Error(data.error || 'Could not safely start a new chat.');
     }
-  } catch(e) {}
-  await loadSlots();
+    if (data.session_id) {
+      sessionId = data.session_id;
+      _persistSessionId(sessionId);
+      _setActiveSlotSession(sessionId);
+    }
+    if (_cancelCtrl) _cancelCtrl.abort();
+    _cancelCtrl = null;
+    sending = false;
+    document.getElementById('sendbtn').style.display = 'block';
+    document.getElementById('cancelbtn').style.display = 'none';
+    const slotbar = document.getElementById('slotbar');
+    if (slotbar) slotbar.classList.remove('locked');
+    document.getElementById('agent-bar').classList.remove('active');
+    removeClaudeUpgradeCard();
+    document.getElementById('chat').innerHTML = '';
+    showHintsIfEmpty();
+    await loadSlots();
+  } catch(e) {
+    const bubble = addAsstBubble();
+    bubble.textContent = e && e.message ? e.message : 'Could not safely start a new chat.';
+  } finally {
+    localNewChatPending = false;
+  }
 }
 
 async function openArchives() {
@@ -20090,6 +20112,11 @@ body.agent-shell-task.agent-view-open #sidebar .sidebar-new{display:none}
 body.agent-shell-task.agent-view-open #main #topbar{position:relative}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{position:relative!important;left:auto!important;top:auto!important;flex:0 0 88px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;position:static!important;height:34px!important;min-width:50px;padding:0 10px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#b9c6d2!important;box-shadow:none!important;font:500 10px var(--mono,'IBM Plex Mono',monospace)!important;transform:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new:hover{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;filter:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{position:static!important;width:34px;min-width:34px;height:34px;border-radius:10px}body.agent-shell-task.agent-view-open #main #topbar .nav{width:auto!important;flex:1 1 auto!important;margin-left:auto!important;padding-left:0!important}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{gap:8px}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{height:44px!important;min-width:52px;padding:0 9px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{width:44px;min-width:44px;height:44px}}
 @media(max-width:760px){body.agent-shell-task.agent-view-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px;transform:translateY(14px) scale(.99);transform-origin:bottom center}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{transform:none}body.agent-shell-task.agent-view-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-shell-task.agent-view-open #sidebar .sidebar-search input{height:44px}.sidebar-close{width:44px;height:44px}.sidebar-new{min-height:44px}}
+/* Chat history is available in both legacy Browser Preview and task-shell modes. */
+body.agent-view-open.agent-shell-history-open #agent-shell-history-scrim{display:block;position:fixed;z-index:1320;inset:0;border:0;background:rgba(2,5,8,.24);opacity:1;visibility:visible;pointer-events:auto;cursor:pointer;backdrop-filter:blur(3px)}
+body.agent-view-open.agent-shell-history-open #sidebar{display:flex!important;position:fixed;z-index:1330;left:var(--agent-history-left,12px);top:var(--agent-history-top,64px);bottom:auto;width:min(360px,calc(100vw - 24px));max-height:var(--agent-history-max-height,520px);border:1px solid rgba(183,205,228,.22);border-radius:16px;background:linear-gradient(180deg,rgba(17,22,29,.99),rgba(8,11,16,.99));box-shadow:0 26px 72px rgba(0,0,0,.56),inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden;opacity:1;visibility:visible;pointer-events:auto;transform:none}
+body.agent-view-open.agent-shell-history-open #sidebar .sidebar-new{display:none}
+@media(max-width:760px){body.agent-view-open.agent-shell-history-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px}body.agent-view-open.agent-shell-history-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-view-open.agent-shell-history-open #sidebar .sidebar-search input{height:44px}}
 /* Preserve the mobile Browser Preview bottom sheet when the task shell is enabled. */
 @media(max-width:760px){
   body.agent-shell-task .agent-view-chat-toggle{display:inline-flex!important}
@@ -20223,7 +20250,7 @@ function toggleSidebar() {
 }
 
 function positionAgentShellHistory() {
-  if (!document.body.classList.contains('agent-shell-task') || window.innerWidth <= 760) return;
+  if (!document.body.classList.contains('agent-view-open') || window.innerWidth <= 760) return;
   const button = document.getElementById('chat-card-history');
   if (!button) return;
   const rect = button.getBoundingClientRect();
@@ -22086,6 +22113,11 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
                 "  await loadSlots();\n}",
                 "  await loadSlots();\n  loadSidebarHistory();\n}",
                 "sidebar refresh after server slot reset",
+            ),
+            (
+                "    await loadSlots();\n  } catch(e) {",
+                "    await loadSlots();\n    loadSidebarHistory();\n  } catch(e) {",
+                "sidebar refresh after acknowledged local slot reset",
             ),
         ]:
             if old_hook in html:

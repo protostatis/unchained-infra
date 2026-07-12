@@ -335,6 +335,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                 if req_id and msg_type in (
                     "history_response",
                     "new_chat_ok",
+                    "new_chat_error",
                     "switch_slot_ok",
                     "slots_response",
                     "update_client_ok",
