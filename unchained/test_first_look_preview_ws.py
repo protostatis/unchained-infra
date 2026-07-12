@@ -743,6 +743,39 @@ class TestFirstLookPreviewClientJsShape(unittest.TestCase):
         self.assertIn('aria-live="polite"', html)
         self.assertIn("setStatusCopy('shared-browser-status'", html)
 
+    def test_exhausted_run_control_stays_focusable_with_disabled_semantics(self):
+        html = self._preview_html()
+        self.assertIn(
+            '<button id="sendbtn" type="button" aria-label="Run task" aria-disabled="false" title="Run task">',
+            html,
+        )
+        availability = html.split("function updateSendAvailability() {", 1)[1].split(
+            "function autoGrow", 1
+        )[0]
+        self.assertIn("const hardUnavailable = sending || !agentId || !sharedBrowserReady;", availability)
+        self.assertIn("send.disabled = hardUnavailable;", availability)
+        self.assertIn("hardUnavailable || quotaExhausted", availability)
+        self.assertIn("send.title = 'Guest runs used up. Start a free trial.';", availability)
+        self.assertIn(
+            '#sendbtn:disabled,#sendbtn[aria-disabled="true"]{opacity:0.4;cursor:not-allowed}',
+            html,
+        )
+
+    def test_exhausted_run_surfaces_inline_trial_cta_without_modal(self):
+        html = self._preview_html()
+        quota_copy = html.split("function updateQuotaCopy() {", 1)[1].split(
+            "function showQuotaFeedback", 1
+        )[0]
+        self.assertIn('href="/trial"', quota_copy)
+        self.assertNotIn("showQuotaModal()", quota_copy)
+        self.assertIn('id="quota-bar" role="status" aria-live="polite"', html)
+        self.assertIn("const trialLink = document.querySelector('#quota-bar a[href=\"/trial\"]');", html)
+        send_guard = html.split("async function doSend() {", 1)[1].split(
+            "const message =", 1
+        )[0]
+        self.assertIn("if (remainingGuestRuns <= 0)", send_guard)
+        self.assertIn("showQuotaFeedback();", send_guard)
+
     def test_connected_status_clears_idle_preview_fallback(self):
         """Ready status should clear stale warming/unavailable preview copy.
 

@@ -17324,7 +17324,7 @@ body{
   display:flex;align-items:center;justify-content:center;
 }
 #sendbtn:active{opacity:0.8}
-#sendbtn:disabled{opacity:0.4;cursor:default}
+#sendbtn:disabled,#sendbtn[aria-disabled="true"]{opacity:0.4;cursor:not-allowed}
 #cancelbtn{
   width:44px;height:44px;border:none;border-radius:12px;
   background:#ff4444;color:#fff;font-size:18px;
@@ -17509,10 +17509,10 @@ body{
         <div id="input-fields">
           <label class="sr-only" for="msginput">Task for the shared browser</label>
           <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something..."></textarea>
-          <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
+          <div id="quota-bar" role="status" aria-live="polite"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
           <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
-        <button id="sendbtn" aria-label="Run task">&#9654;</button>
+        <button id="sendbtn" type="button" aria-label="Run task" aria-disabled="false" title="Run task">&#9654;</button>
         <button id="cancelbtn" aria-label="Cancel run">&#9632;</button>
       </div>
     </div>
@@ -17689,16 +17689,32 @@ function updateQuotaCopy() {
       bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
     } else {
       bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/trial" style="color:var(--accent)">Start a free trial</a> to browse any site with the full agent.';
-      showQuotaModal();
     }
   }
+}
+
+function showQuotaFeedback() {
+  updateQuotaCopy();
+  const trialLink = document.querySelector('#quota-bar a[href="/trial"]');
+  if (trialLink) trialLink.focus();
 }
 
 function updateSendAvailability() {
   const send = document.getElementById('sendbtn');
   const input = document.getElementById('msginput');
-  const unavailable = sending || remainingGuestRuns <= 0 || !agentId || !sharedBrowserReady;
-  send.disabled = unavailable;
+  const quotaExhausted = remainingGuestRuns <= 0;
+  const hardUnavailable = sending || !agentId || !sharedBrowserReady;
+  send.disabled = hardUnavailable;
+  send.setAttribute('aria-disabled', (hardUnavailable || quotaExhausted) ? 'true' : 'false');
+  if (quotaExhausted) {
+    send.title = 'Guest runs used up. Start a free trial.';
+  } else if (sending) {
+    send.title = 'Run in progress';
+  } else if (!agentId || !sharedBrowserReady) {
+    send.title = 'Shared browser is not ready';
+  } else {
+    send.title = 'Run task';
+  }
   input.disabled = remainingGuestRuns <= 0;
 }
 
@@ -18356,8 +18372,12 @@ async function doCancel() {
 
 async function doSend() {
   if (sending) return;
+  if (remainingGuestRuns <= 0) {
+    showQuotaFeedback();
+    return;
+  }
   const message = String(document.getElementById('msginput').value || '').trim();
-  if (!message || remainingGuestRuns <= 0) return;
+  if (!message) return;
   if (!sharedBrowserReady) {
     if (!sharedBrowserConfigured) {
       setStatusCopy('shared-browser-status', 'Local shared browser is not configured. Review the UI here; runs need HEADLESS_AGENT_ID and a connected headless bridge.', 'danger');
@@ -18877,6 +18897,8 @@ body::after{
 #sendbtn{background:linear-gradient(135deg,#ffcf6e,#ff7a59 58%,#ff5e9f)!important;color:#180f08!important;font-weight:900!important}
 #sendbtn:hover{filter:none!important;transform:translateY(-2px) rotate(-2deg)}
 #sendbtn:disabled{opacity:0.48!important;box-shadow:none!important;transform:none!important}
+body.first-look-canvas #sendbtn:disabled,body.first-look-canvas #sendbtn[aria-disabled="true"]{opacity:0.48!important;cursor:not-allowed!important;box-shadow:none!important;transform:none!important}
+body.first-look-canvas #sendbtn[aria-disabled="true"]:hover{filter:none!important;transform:none!important}
 #cancelbtn{background:linear-gradient(135deg,#ef5c5c,#fb7185)!important}
 #download-banner{
   background:linear-gradient(90deg,rgba(255,207,110,0.13),rgba(255,107,74,0.10),rgba(93,155,255,0.10))!important;
