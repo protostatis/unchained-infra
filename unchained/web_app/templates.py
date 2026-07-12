@@ -9244,7 +9244,16 @@ async function acknowledgeNewChatTransition(pending) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      if (r.status === 409 && data.error === 'New-chat commit token expired') return 'expired';
+      if (r.status === 409 && data.error === 'New-chat commit token expired') {
+        const decision = data.recovery_decision;
+        const recoverySessionId = String(data.recovery_session_id || '');
+        const expectedSessionId = decision === 'destination'
+          ? pending.session_id
+          : (decision === 'source' ? pending.previous_session_id : '');
+        if (expectedSessionId && recoverySessionId === expectedSessionId) {
+          return {status:'expired', decision:decision, session_id:recoverySessionId};
+        }
+      }
       return 'retry';
     }
     if (!data.ok || !data.acknowledged) return 'retry';
@@ -9258,21 +9267,20 @@ async function acknowledgeNewChatTransition(pending) {
   }
 }
 
-async function recoverExpiredNewChat(pending) {
+async function recoverExpiredNewChat(pending, recovery) {
   _clearPendingNewChat(pending.request_id);
   activeSlot = pending.slot;
-  sessionId = pending.previous_session_id;
+  sessionId = recovery.session_id;
   _persistSessionId(sessionId);
   _setActiveSlotSession(sessionId);
   _syncSlotButtons();
   const chat = document.getElementById('chat');
   if (chat) chat.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Restoring previous chat...</div>';
   await loadHistory();
-  setNewChatFeedback(
-    'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. ' +
-    'Your previous chat was restored; select New Chat to try again.',
-    'error'
-  );
+  const message = recovery.decision === 'destination'
+    ? 'The fresh ' + _slotLabel(pending.slot) + ' was confirmed before its response was lost. The fresh chat was restored.'
+    : 'The fresh ' + _slotLabel(pending.slot) + ' reservation expired before confirmation. Your previous chat was restored; select New Chat to try again.';
+  setNewChatFeedback(message, recovery.decision === 'destination' ? 'success' : 'error');
 }
 
 async function recoverPendingNewChat() {
@@ -9285,8 +9293,8 @@ async function recoverPendingNewChat() {
     setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
     try {
       const outcome = await acknowledgeNewChatTransition(pending);
-      if (outcome === 'expired') {
-        await recoverExpiredNewChat(pending);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
         return;
       }
       const acknowledged = outcome === 'acknowledged';
@@ -9795,8 +9803,8 @@ async function doNewChat() {
     if (pending && pending.session_id) {
       setNewChatFeedback('Finishing recovery for ' + _slotLabel(pending.slot) + '...', 'pending');
       const outcome = await acknowledgeNewChatTransition(pending);
-      if (outcome === 'expired') {
-        await recoverExpiredNewChat(pending);
+      if (outcome && outcome.status === 'expired') {
+        await recoverExpiredNewChat(pending, outcome);
         return;
       }
       const acknowledged = outcome === 'acknowledged';
@@ -9871,8 +9879,8 @@ async function doNewChat() {
     resetNewChatUi();
     _syncSlotButtons();
     const outcome = await acknowledgeNewChatTransition(pending);
-    if (outcome === 'expired') {
-      await recoverExpiredNewChat(pending);
+    if (outcome && outcome.status === 'expired') {
+      await recoverExpiredNewChat(pending, outcome);
       return;
     }
     const acknowledged = outcome === 'acknowledged';

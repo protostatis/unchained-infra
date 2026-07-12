@@ -6,7 +6,9 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -49,6 +51,19 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
 
         chat_flow._trial_new_chat_requests.clear()
         chat_flow._trial_new_chat_sources.clear()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_status_dir = chat_flow._TRIAL_NEW_CHAT_STATUS_DIR
+        chat_flow._TRIAL_NEW_CHAT_STATUS_DIR = os.path.join(
+            self.temp_dir.name, "transition-status"
+        )
+        self.session_dir = Path(self.temp_dir.name) / "sessions"
+        self.session_dir.mkdir()
+
+    def tearDown(self):
+        from web_app.handlers import chat_flow
+
+        chat_flow._TRIAL_NEW_CHAT_STATUS_DIR = self.original_status_dir
+        self.temp_dir.cleanup()
 
     def _core(self):
         return SimpleNamespace(
@@ -97,6 +112,32 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
+
+    def _core_with_persisted_history(self):
+        core = self._core()
+        deleted = []
+
+        def session_path(session_id: str) -> str:
+            return str(self.session_dir / f"{session_id}.json")
+
+        def delete_session(session_id: str) -> None:
+            deleted.append(session_id)
+            try:
+                os.remove(session_path(session_id))
+            except FileNotFoundError:
+                pass
+
+        core._trial_session_path = session_path
+        core._delete_trial_session = delete_session
+        return core, deleted
+
+    def _write_history(self, core, session_id: str, marker: str) -> Path:
+        path = Path(core._trial_session_path(session_id))
+        path.write_text(
+            json.dumps({"messages": [{"role": "user", "content": marker}]}),
+            encoding="utf-8",
+        )
+        return path
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_trial_reservation_preserves_old_session_until_ack(self, mock_core):
@@ -261,9 +302,106 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
             json.loads(expired.body.decode())["error"],
             "New-chat commit token expired",
         )
+        expired_data = json.loads(expired.body.decode())
+        self.assertEqual(expired_data["recovery_decision"], "source")
+        self.assertEqual(expired_data["recovery_session_id"], old_session)
         core._delete_trial_session.assert_not_called()
         self.assertEqual(chat_flow._trial_new_chat_requests, {})
         self.assertEqual(chat_flow._trial_new_chat_sources, {})
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_expired_uncommitted_transition_authoritatively_keeps_source(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        request_id = "request-0000000000000006"
+        old_session = "s-trial-agent-uncommitted"
+        core, deleted = self._core_with_persisted_history()
+        old_history = self._write_history(core, old_session, "source history")
+        core._session_tabs[old_session] = "source-tab"
+        core._session_agent_map[old_session] = "source-agent"
+        core._session_allowed_tabs[old_session] = {"source-tab"}
+        mock_core.return_value = core
+
+        reservation = await handle_chat_new(self._new_request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        chat_flow._trial_new_chat_requests.clear()
+        chat_flow._trial_new_chat_sources.clear()
+        core.time = SimpleNamespace(time=lambda: data["commit_expires_at"] + 1)
+
+        recovery = await handle_chat_new_ack(
+            self._ack_request(
+                request_id, old_session, data["session_id"], data["commit_token"]
+            )
+        )
+        recovery_data = json.loads(recovery.body.decode())
+
+        self.assertEqual(recovery.status, 409)
+        self.assertEqual(recovery_data["recovery_decision"], "source")
+        self.assertEqual(recovery_data["recovery_session_id"], old_session)
+        self.assertEqual(
+            json.loads(old_history.read_text(encoding="utf-8"))["messages"][0]["content"],
+            "source history",
+        )
+        self.assertEqual(core._session_tabs, {old_session: "source-tab"})
+        self.assertEqual(core._session_agent_map, {old_session: "source-agent"})
+        self.assertEqual(core._session_allowed_tabs, {old_session: {"source-tab"}})
+        self.assertEqual(deleted, [])
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_expired_committed_transition_authoritatively_keeps_destination(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        request_id = "request-0000000000000007"
+        old_session = "s-trial-agent-committed"
+        core, deleted = self._core_with_persisted_history()
+        old_history = self._write_history(core, old_session, "history to archive")
+        core._session_tabs[old_session] = "migrated-tab"
+        core._session_agent_map[old_session] = "migrated-agent"
+        core._session_allowed_tabs[old_session] = {"migrated-tab"}
+        mock_core.return_value = core
+
+        reservation = await handle_chat_new(self._new_request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        # The ACK commits, but its successful response is lost to the browser.
+        committed = await handle_chat_new_ack(
+            self._ack_request(
+                request_id, old_session, data["session_id"], data["commit_token"]
+            )
+        )
+        self.assertEqual(committed.status, 200)
+        self.assertFalse(old_history.exists())
+        destination_history = self._write_history(
+            core, data["session_id"], "fresh destination history"
+        )
+        self.assertEqual(deleted, [old_session])
+
+        chat_flow._trial_new_chat_requests.clear()
+        chat_flow._trial_new_chat_sources.clear()
+        core.time = SimpleNamespace(time=lambda: data["commit_expires_at"] + 1)
+        recovery = await handle_chat_new_ack(
+            self._ack_request(
+                request_id, old_session, data["session_id"], data["commit_token"]
+            )
+        )
+        recovery_data = json.loads(recovery.body.decode())
+
+        self.assertEqual(recovery.status, 409)
+        self.assertEqual(recovery_data["recovery_decision"], "destination")
+        self.assertEqual(recovery_data["recovery_session_id"], data["session_id"])
+        self.assertFalse(old_history.exists())
+        self.assertEqual(
+            json.loads(destination_history.read_text(encoding="utf-8"))["messages"][0]["content"],
+            "fresh destination history",
+        )
+        self.assertEqual(core._session_tabs, {data["session_id"]: "migrated-tab"})
+        self.assertEqual(core._session_agent_map, {data["session_id"]: "migrated-agent"})
+        self.assertEqual(
+            core._session_allowed_tabs,
+            {data["session_id"]: {"migrated-tab"}},
+        )
+        self.assertEqual(deleted, [old_session])
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_competing_requests_for_same_source_replay_one_transition(self, mock_core):
@@ -367,6 +505,20 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(chat_flow._trial_new_chat_sources, {})
         self.assertEqual(chat_flow._trial_new_chat_requests, {})
+        self.assertEqual(
+            len(list(Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json"))),
+            2,
+        )
+        chat_flow._prune_trial_new_chat_statuses(
+            1234.5
+            + chat_flow._TRIAL_NEW_CHAT_COMMIT_TTL
+            + chat_flow._TRIAL_NEW_CHAT_STATUS_TTL
+            + 1
+        )
+        self.assertEqual(
+            list(Path(chat_flow._TRIAL_NEW_CHAT_STATUS_DIR).glob("*.json")),
+            [],
+        )
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_late_ack_does_not_overwrite_new_session_resources(self, mock_core):
@@ -415,7 +567,8 @@ class TestTrialNewChatTemplate(unittest.TestCase):
         self.assertIn("data.commit_token", html)
         self.assertIn("[0-9]{1,12}\\.[0-9]{1,12}\\.[a-f0-9]{64}", html)
         self.assertIn("data.error === 'New-chat commit token expired'", html)
-        self.assertIn("await recoverExpiredNewChat(pending);", html)
+        self.assertIn("await recoverExpiredNewChat(pending, outcome);", html)
+        self.assertIn("decision === 'destination'", html)
         self.assertIn("Your previous chat was restored; select New Chat to try again.", html)
         self.assertIn("_newChatRecoveryBlocked()", html)
         self.assertIn("Finish recovering the new chat", html)
@@ -538,7 +691,12 @@ function restoreCurrentChat(sid) {{
     if (url === '/web/chat/new/ack') {{
       ackCalls += 1;
       if (ackMode === 'lost') throw new Error('ack response lost');
-      if (ackMode === 'expired') return {{ok:false, status:409, json:async () => ({{error:'New-chat commit token expired'}})}};
+      if (ackMode === 'expired-source') return {{ok:false, status:409, json:async () => ({{
+        error:'New-chat commit token expired', recovery_decision:'source', recovery_session_id:body.previous_session_id,
+      }})}};
+      if (ackMode === 'expired-destination') return {{ok:false, status:409, json:async () => ({{
+        error:'New-chat commit token expired', recovery_decision:'destination', recovery_session_id:body.session_id,
+      }})}};
       return {{ok:true, json:async () => ({{
         ok:true, acknowledged:true, request_id:body.request_id,
         previous_session_id:body.previous_session_id, session_id:body.session_id,
@@ -641,7 +799,7 @@ function restoreCurrentChat(sid) {{
   assert.strictEqual(elements.sendbtn.disabled, true);
   assert.strictEqual(elements.msginput.disabled, true);
 
-  ackMode = 'expired';
+  ackMode = 'expired-source';
   const ackCallsBeforeExpiry = ackCalls;
   const historyLoadsBeforeExpiry = historyLoads;
   await recoverPendingNewChat();
@@ -658,6 +816,33 @@ function restoreCurrentChat(sid) {{
   assert.match(elements['new-chat-feedback'].textContent, /expired before confirmation.*previous chat was restored.*try again/i);
   await recoverPendingNewChat();
   assert.strictEqual(ackCalls, ackCallsBeforeExpiry + 1, 'expired ACK was retried after terminal recovery');
+
+  // If the server confirms that the ACK committed before its response was
+  // lost, terminal recovery must retain the destination and its resources.
+  storage.clear();
+  reservedSession = '';
+  mode = 'normal';
+  ackMode = 'lost';
+  restoreCurrentChat('s-trial-agent-committed-source');
+  await doNewChat();
+  const committedPending = _loadPendingNewChat();
+  const committedDestination = committedPending.session_id;
+  ackMode = 'expired-destination';
+  const ackCallsBeforeCommittedRecovery = ackCalls;
+  await recoverPendingNewChat();
+  assert.strictEqual(ackCalls, ackCallsBeforeCommittedRecovery + 1);
+  assert.strictEqual(_loadPendingNewChat(), null);
+  assert.strictEqual(sessionId, committedDestination);
+  assert.strictEqual(persisted, committedDestination);
+  assert.strictEqual(activePersisted, committedDestination);
+  assert.strictEqual(elements.chat.innerHTML, 'restored history for ' + committedDestination);
+  assert.strictEqual(elements.sendbtn.disabled, false);
+  assert.strictEqual(elements.msginput.disabled, false);
+  assert.strictEqual(elements.slotbar.classList.contains('locked'), false);
+  assert.strictEqual(elements['new-chat-feedback'].className, 'success');
+  assert.match(elements['new-chat-feedback'].textContent, /confirmed before its response was lost.*fresh chat was restored/i);
+  await recoverPendingNewChat();
+  assert.strictEqual(ackCalls, ackCallsBeforeCommittedRecovery + 1, 'committed expired ACK was retried');
 
   // A stale response from an older request cannot replace the active session.
   storage.clear();
