@@ -113,6 +113,55 @@ class TestTemplateTransforms(unittest.TestCase):
             html,
         )
 
+    def test_mobile_chat_controls_are_right_aligned_and_responsive(self):
+        from web_app import templates
+
+        html = templates.CHAT_CLAUDE_SDK_HTML
+        local_html = templates.CLAUDE_CHAT_HTML
+        self.assertIn(
+            'role="group" aria-label="Chat panel controls"',
+            html,
+        )
+        self.assertIn(
+            "body.agent-view-open #main #topbar .nav{margin-left:auto!important;width:100%!important;max-width:none!important;gap:6px!important;flex-wrap:nowrap!important;justify-content:flex-end!important;overflow:visible!important}",
+            html,
+        )
+        self.assertIn(".chat-size-btn{width:44px;min-width:44px;height:44px}", html)
+        self.assertIn(".agent-view-foot{display:none}", html)
+        self.assertIn(
+            "body.agent-view-open.chat-minimized .agent-view-chat-restore{display:none!important}",
+            html,
+        )
+        self.assertIn(
+            "body.agent-view-open.agent-view-chat-expanded #main #inputbar{margin-bottom:max(8px,env(safe-area-inset-bottom))!important}",
+            html,
+        )
+        self.assertIn(
+            "height:min(62dvh,560px,calc(100dvh - var(--agent-view-mobile-chat-top,0px) - 10px))!important",
+            html,
+        )
+        self.assertIn("function positionAgentViewMobileChat(renderedHeight)", html)
+        self.assertIn("agent-view-browser-positioned", html)
+        self.assertIn(
+            "@media(min-width:761px) and (max-width:900px) and (max-height:500px)",
+            html,
+        )
+        self.assertIn(
+            "grid-template-columns:max-content minmax(0,1fr)!important",
+            local_html,
+        )
+        self.assertIn('placeholder="Ask anything..."', local_html)
+        self.assertNotIn('placeholder="Ask the agent anything..."', local_html)
+
+    def test_closed_mobile_sidebar_is_removed_from_focus_order(self):
+        from web_app import templates
+
+        runtime = templates._SIDEBAR_JS
+        self.assertIn("function syncSidebarInteractivity()", runtime)
+        self.assertIn("sidebar.toggleAttribute('inert', hidden);", runtime)
+        self.assertIn("sidebar.setAttribute('aria-hidden', String(hidden));", runtime)
+        self.assertIn("window.addEventListener('resize', syncSidebarInteractivity);", runtime)
+
     def test_agent_view_mobile_response_reveal_is_once_per_turn(self):
         from web_app import templates
 
