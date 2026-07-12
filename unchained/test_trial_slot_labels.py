@@ -105,7 +105,7 @@ check(buttons.slot1.attrs['aria-label'].includes('Research flights to Tokyo'), '
         html = templates.TRIAL_CHAT_HTML
         self.assertIn("_setSlotPreview(requestedSlot, _firstUserPreview(data.messages));", html)
         self.assertIn("_setSlotPreviewIfEmpty(activeSlot, msg);", html)
-        self.assertIn("_setSlotPreview(activeSlot, '');", html)
+        self.assertIn("_setSlotPreview(requestedSlot, '');", html)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for the JavaScript race check")
     def test_out_of_order_history_response_cannot_replace_active_chat(self):

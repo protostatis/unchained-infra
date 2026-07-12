@@ -9836,7 +9836,7 @@ async function doNewChat() {
     _setActiveSlotSession(sessionId);
     pending.session_id = sessionId;
     _savePendingNewChat(pending);
-    _setSlotPreview(requestedSlot, '');
+    if (typeof _setSlotPreview === 'function') _setSlotPreview(requestedSlot, '');
     resetNewChatUi();
     _syncSlotButtons();
     const acknowledged = await acknowledgeNewChatTransition(pending);
