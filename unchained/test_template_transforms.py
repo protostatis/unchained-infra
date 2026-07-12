@@ -106,7 +106,9 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn('<button type="button" id="chat-card-exit"', controls)
         self.assertIn('<button type="button" id="chat-card-minimize"', controls)
         self.assertNotIn("<a ", controls)
-        self.assertEqual(controls.count('<svg viewBox="0 0 16 16"'), 3)
+        self.assertEqual(controls.count('<svg viewBox="0 0 16 16"'), 4)
+        self.assertIn('id="chat-card-history"', controls)
+        self.assertIn('title="Chat history"', controls)
         self.assertIn('title="Expand chat"', controls)
         self.assertIn('title="Default chat size"', controls)
         self.assertIn('title="Minimize chat"', controls)
@@ -203,9 +205,61 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("agentViewResponseRevealDone = true;\n    return;", runtime)
         self.assertIn("setAgentViewChatState('docked', 'chat');", runtime)
         self.assertIn(
-            "} else if (evt.type === 'done') {\n            maybeRevealAgentResponse();",
+            "} else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();",
             templates.CHAT_CODEX_HTML,
         )
+
+    def test_agent_task_shell_is_query_isolated_and_adaptive(self):
+        from web_app import templates
+
+        html = templates.CLAUDE_CHAT_HTML
+        runtime = templates._AGENT_VIEW_JS
+        self.assertIn("const AGENT_SHELL_DEFAULT = 'legacy';", runtime)
+        self.assertIn("value === 'task' || value === 'legacy'", runtime)
+        self.assertIn("function setAgentShellConnectionLayout(browserAvailable)", runtime)
+        self.assertIn("agent-shell-chat-only", runtime)
+        self.assertIn("agentShellBrowserUsedThisTurn", runtime)
+        self.assertIn("agent-shell-text-turn", runtime)
+        self.assertNotIn('id="agent-shell-modes"', html)
+        self.assertNotIn('data-shell-view=', html)
+        self.assertIn('id="chat-card-history"', html)
+        self.assertIn('aria-controls="sidebar"', html)
+        self.assertIn('id="agent-shell-history-scrim"', html)
+        self.assertIn("function toggleAgentShellHistory(forceOpen)", html)
+        self.assertIn('id="lane-picker-toggle"', html)
+        self.assertIn('id="lane-picker-current"', html)
+        self.assertIn('<span class="lane-picker-kicker">Thread</span>', html)
+        self.assertIn("Select chat thread. Current:", runtime)
+        self.assertIn("visible.textContent = threadName", runtime)
+        self.assertIn("function toggleAgentLanePicker(forceOpen)", runtime)
+        self.assertIn("function arrangeAgentChatToolbar()", runtime)
+        self.assertIn("group.setAttribute('aria-label', 'Chat navigation')", runtime)
+        self.assertIn("group.appendChild(picker);", runtime)
+        self.assertIn("group.appendChild(newChat);", runtime)
+        self.assertIn("group.appendChild(history);", runtime)
+        self.assertIn("#agent-chat-primary-tools{gap:8px}", html)
+        self.assertIn("#slotbar:hover>button:not(#lane-picker-toggle)", html)
+        self.assertIn("width:36px!important", html)
+        self.assertIn("#slot2{left:40px!important}", html)
+        self.assertIn('class="agent-shell-trace"', html)
+        self.assertIn("body.agent-shell-task.agent-view-open #agent-view", html)
+        self.assertIn("body.agent-shell-task.agent-view-open.chat-minimized #agent-view{right:0}", html)
+        self.assertIn("translateX(28px) scale(.965)", html)
+        self.assertIn("transition:right 240ms", html)
+        self.assertIn("width:calc(100vw - 24px)!important", html)
+        self.assertIn("function positionAgentShellHistory()", html)
+        self.assertIn('id="sidebar-history-search" type="search"', html)
+        self.assertIn('aria-label="Search chat history"', html)
+        self.assertIn("Loading chats...", html)
+        self.assertIn("No matching chats", html)
+        self.assertIn("translateY(-8px) scale(.98)", html)
+        self.assertIn("body.agent-shell-task.agent-view-open #main #slotbar{display:flex!important;", html)
+        self.assertIn('id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true" tabindex="-1"', html)
+        self.assertIn("confirmation.classList.contains('open')", runtime)
+        self.assertIn("agentViewReturnFocus", runtime)
+        self.assertIn("if (agentShellTaskEnabled && mobile)", runtime)
+        self.assertIn("@media(min-width:761px) and (hover:none)", html)
+        self.assertIn("transition:none!important", html)
 
     def test_agent_view_state_transitions_execute_consistently(self):
         node = shutil.which("node")
@@ -239,10 +293,11 @@ function element(id) {
   });
   return elements.get(id);
 }
-const body = {classList: new FakeClassList()};
+const body = {classList: new FakeClassList(), dataset: {}, style: {removeProperty() {}}};
 globalThis.document = {
   body,
   getElementById: element,
+  querySelectorAll() { return []; },
   addEventListener() {},
 };
 let mobile = true;
@@ -252,6 +307,12 @@ globalThis.window = {
 };
 globalThis.requestAnimationFrame = function() {};
 globalThis.location = {search: '', protocol: 'https:', host: 'example.test'};
+const sessionValues = new Map();
+globalThis.sessionStorage = {
+  getItem(key) { return sessionValues.get(key) || null; },
+  setItem(key, value) { sessionValues.set(key, String(value)); },
+  removeItem(key) { sessionValues.delete(key); },
+};
 globalThis._setActiveSlotSession = function() {};
 globalThis.addUserBubble = function() {};
 globalThis.appendText = function() {};
@@ -295,6 +356,37 @@ expect(!body.classList.contains('agent-view-open'), 'Response opened Agent View 
 openAgentView();
 maybeRevealAgentResponse();
 expect(body.classList.contains('agent-view-chat-open'), 'Response pending before browser activity was lost');
+
+closeAgentView();
+location.search = '?shell=task';
+sessionId = 's-test-task';
+initializeAgentShellExperiment();
+expect(body.classList.contains('agent-shell-task'), 'Task shell flag did not activate');
+expect(!body.classList.contains('agent-view-open'), 'Task shell opened before readiness');
+maybeInitializeAgentShell({chat_connected:true, bridge_connected:true});
+expect(body.classList.contains('agent-view-open'), 'Ready task shell did not default to Agent View');
+expect(!body.classList.contains('agent-shell-chat-only'), 'Connected shell incorrectly used chat-only layout');
+
+beginAgentViewResponseTurn();
+appendText({}, 'text-only answer');
+expect(body.classList.contains('agent-view-chat-expanded'), 'Text-only Auto turn did not expand chat');
+ensureAgentViewForBrowserActivity();
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Browser work did not restore split task shell');
+
+minimizeAgentViewChat();
+expect(body.classList.contains('chat-minimized'), 'Minimizing chat did not release the browser stage');
+restoreAgentViewChat();
+expect(!body.classList.contains('chat-minimized'), 'Restoring chat kept the browser stage expanded');
+
+closeAgentView();
+maybeInitializeAgentShell({chat_connected:true, bridge_connected:true});
+expect(body.classList.contains('agent-view-open'), 'Adaptive task shell did not recover after a status refresh');
+
+location.search = '?shell=task';
+initializeAgentShellExperiment();
+maybeInitializeAgentShell({chat_connected:false, bridge_connected:false});
+expect(body.classList.contains('agent-view-open'), 'Offline state left the adaptive shell');
+expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not morph into chat workspace');
 """
         result = subprocess.run(
             [node],

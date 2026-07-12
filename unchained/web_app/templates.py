@@ -19626,15 +19626,17 @@ _SIDEBAR_STYLE = """<style id="sidebar-panel">
 .sidebar-title{font-size:15px;font-weight:600;color:var(--text,#edf2f7);letter-spacing:0.5px}
 .sidebar-new{background:none;border:1px solid var(--line,#2a3341);color:var(--muted,#9da7b7);border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
 .sidebar-new:hover{border-color:var(--accent,#ff6b4a);color:var(--accent,#ff6b4a)}
+.sidebar-search{display:block;padding:10px 10px 2px}.sidebar-search input{width:100%;height:36px;padding:0 11px;border:1px solid var(--line,#2a3341);border-radius:9px;background:rgba(255,255,255,.035);color:var(--text,#edf2f7);font:12px var(--sans);outline:none}.sidebar-search input::placeholder{color:var(--muted,#9da7b7)}.sidebar-search input:focus-visible{border-color:#6ee7a1;box-shadow:0 0 0 3px rgba(110,231,161,.12)}
 .topbar-new{font-weight:800!important;color:var(--text,#edf2f7)!important;border-color:var(--accent,#ff6b4a)!important;background:rgba(255,107,74,0.14)!important}
 .topbar-new:hover{background:rgba(255,107,74,0.24)!important}
 #sidebar-history{overflow-y:auto;flex:1;padding:8px}
-.sidebar-item{display:flex;flex-direction:column;padding:10px 12px;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px}
+.sidebar-group-label{padding:10px 10px 5px;color:var(--muted,#9da7b7);font:500 9px var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase}.sidebar-item{display:flex;width:100%;flex-direction:column;padding:10px 12px;border:0;border-radius:8px;cursor:pointer;border-left:3px solid transparent;margin-bottom:2px;background:transparent;text-align:left}
 .sidebar-item:hover{background:var(--surface-elev,#171d26)}
 .sidebar-item.active{border-left-color:var(--accent,#ff6b4a);background:var(--surface-elev,#171d26)}
 .sidebar-item .sb-preview{font-size:13px;color:var(--text,#edf2f7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-item .sb-meta{font-size:11px;color:var(--muted,#9da7b7);margin-top:3px;display:flex;gap:8px}
 .sidebar-empty{text-align:center;color:var(--muted,#9da7b7);padding:32px 16px;font-size:13px}
+.sidebar-empty button{margin-top:10px;padding:6px 10px;border:1px solid var(--line,#2a3341);border-radius:8px;background:transparent;color:var(--text,#edf2f7);cursor:pointer}.sidebar-filter-empty{display:none;text-align:center;color:var(--muted,#9da7b7);padding:22px 12px;font-size:12px}.sidebar-filter-empty.visible{display:block}
 .sidebar-viewall{display:block;text-align:center;padding:10px 12px;font-size:12px;color:var(--muted,#9da7b7);cursor:pointer;border-top:1px solid var(--line,#2a3341);text-decoration:none}
 .sidebar-viewall:hover{color:var(--accent,#ff6b4a)}
 #sidebar-toggle{display:none;background:none;border:none;color:var(--muted,#9da7b7);font-size:20px;cursor:pointer;padding:4px 8px;margin-right:4px;line-height:1}
@@ -19662,8 +19664,9 @@ _SIDEBAR_BODY = """<div id="app-shell">
 <aside id="sidebar">
   <div class="sidebar-head">
     <span class="sidebar-title">Unchained</span>
-    <button class="sidebar-new" onclick="doNewChat()">+ New</button>
+    <span class="sidebar-head-actions"><button class="sidebar-new" onclick="doNewChat();if(typeof toggleAgentShellHistory==='function')toggleAgentShellHistory(false)">+ New</button><button type="button" class="sidebar-close" aria-label="Close history" onclick="toggleAgentShellHistory(false)">&times;</button></span>
   </div>
+  <label class="sidebar-search"><input id="sidebar-history-search" type="search" placeholder="Search chats" aria-label="Search chat history" autocomplete="off" oninput="filterSidebarHistory(this.value)"></label>
   <div id="sidebar-history"></div>
 </aside>
 """
@@ -19789,11 +19792,50 @@ body.agent-view-open #main .bubble.asst:hover .copy-btn,body.agent-view-open #ma
   body.agent-view-open #agent-view-chat-controls .chat-size-btn{width:44px;min-width:44px;height:44px}
   body.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0;width:100%!important;max-width:none!important;border:0!important;border-radius:0!important}
 }
-@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
-@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open{animation:none}}
+@media(max-width:440px){.agent-view-title strong{font-size:12px}.agent-view-state{font-size:8px}.agent-view-browserbar .policy{display:none}.agent-view-confirm{padding:11px;gap:8px}.agent-view-confirm-copy span{max-width:150px}}
+/* Agent Task Shell experiment. Isolated behind ?shell=task. */
+:root{--task-space-1:4px;--task-space-2:8px;--task-space-3:12px;--task-space-4:16px;--task-space-6:24px;--task-space-8:32px;--task-radius-sm:8px;--task-radius-md:14px;--task-radius-lg:22px;--task-radius-full:999px;--task-shadow-sm:0 8px 24px rgba(0,0,0,.24);--task-shadow-lg:0 28px 90px rgba(0,0,0,.48);--task-fast:150ms;--task-normal:220ms;--task-panel-width:clamp(380px,34vw,520px)}
+#lane-picker-toggle{display:none}
+.agent-view-close:focus-visible,.agent-view-chat-toggle:focus-visible,.chat-size-btn:focus-visible,.agent-view-chat-restore:focus-visible,.topbar-agent-view:focus-visible,.sidebar-close:focus-visible,#lane-picker-toggle:focus-visible{outline:2px solid #9af1b9;outline-offset:2px}
+.agent-shell-trace{display:none;position:relative;z-index:7;min-height:38px;padding:0 16px;align-items:center;gap:7px;border-bottom:1px solid rgba(183,205,228,.11);background:rgba(7,11,16,.94);color:#657181;font:500 10px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.09em;text-transform:uppercase}
+.agent-shell-trace::before{content:"Task";margin-right:6px;color:#9aa8b8}.agent-shell-trace-step{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:color var(--task-normal) ease}.agent-shell-trace-step::before{content:"";width:6px;height:6px;border-radius:50%;border:1px solid #4b5868;background:#111820;transition:background var(--task-normal) ease,border-color var(--task-normal) ease,box-shadow var(--task-normal) ease}.agent-shell-trace-rail{width:26px;height:1px;background:#293340}.agent-shell-phase-label{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9aa8b8;letter-spacing:0;text-transform:none}
+body[data-agent-shell-phase="planning"] .agent-shell-trace-step[data-step="plan"],body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="browse"],body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="answer"],body[data-agent-shell-phase="complete"] .agent-shell-trace-step[data-step="answer"]{color:#d8ffe5}
+body[data-agent-shell-phase="planning"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="browse"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="answer"]::before{border-color:#6ee7a1;background:#6ee7a1;box-shadow:0 0 12px rgba(110,231,161,.6)}
+body[data-agent-shell-phase="browsing"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="plan"]::before,body[data-agent-shell-phase="writing"] .agent-shell-trace-step[data-step="browse"]::before,body[data-agent-shell-phase="complete"] .agent-shell-trace-step::before{border-color:#5f9c75;background:#326047}
+.agent-view-empty-task{display:none;place-items:center;gap:9px}.agent-view-empty-task .eyebrow{color:#78a58a;font:500 10px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.17em;text-transform:uppercase}.agent-view-empty-task strong{font-size:clamp(18px,2.1vw,28px);line-height:1.12;letter-spacing:-.035em;max-width:360px}.agent-view-empty-task span{max-width:350px}
+body.agent-shell-task .agent-shell-trace{display:flex;align-items:center;justify-content:center}body.agent-shell-task .agent-view-empty-legacy{display:none}body.agent-shell-task .agent-view-empty-task{display:grid}body.agent-shell-task .agent-view-chat-toggle,body.agent-shell-task .agent-view-close{display:none!important}body.agent-shell-task .topbar-agent-view::after{content:" shell";opacity:.58;font-weight:500}
+body.agent-shell-task.agent-view-open #agent-view{right:calc(var(--task-panel-width) + 12px);background:#05070a;transition:right 240ms cubic-bezier(.2,.8,.2,1),opacity 240ms ease,filter 240ms ease}body.agent-shell-task.agent-view-open #app-shell #main{right:12px;top:12px;bottom:12px;width:var(--task-panel-width);visibility:visible;opacity:1;transform:translateX(0) scale(1);transform-origin:right center;border-radius:var(--task-radius-lg)!important;box-shadow:var(--task-shadow-lg)!important;transition:left 240ms cubic-bezier(.2,.8,.2,1),right 240ms cubic-bezier(.2,.8,.2,1),top 240ms cubic-bezier(.2,.8,.2,1),bottom 240ms cubic-bezier(.2,.8,.2,1),width 240ms cubic-bezier(.2,.8,.2,1),opacity 180ms ease,transform 240ms cubic-bezier(.2,.8,.2,1),border-radius 240ms ease,visibility 0s linear 0s}body.agent-shell-task.agent-view-open #main #topbar{min-height:54px}body.agent-shell-task.agent-view-open #main #chat{padding:18px 16px!important}body.agent-shell-task.agent-view-open #main #inputbar{margin:0 11px 11px;border-color:rgba(110,231,161,.18)!important;box-shadow:var(--task-shadow-sm)}body.agent-shell-task.agent-view-open #main #msginput:focus{border-color:#6ee7a1!important;box-shadow:0 0 0 3px rgba(110,231,161,.12)!important}
+body.agent-shell-task.agent-view-open #main{overflow:visible}body.agent-shell-task.agent-view-open #main #topbar{overflow:visible}body.agent-shell-task.agent-view-open #main #topbar .nav{padding-left:98px}body.agent-shell-task.agent-view-open #main #slotbar{display:flex!important;position:absolute;z-index:14;left:10px;top:8px;width:auto;height:38px;padding:0;gap:0;overflow:visible;border:0;background:transparent}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{display:inline-flex;align-items:center;gap:7px;width:auto;min-width:84px;height:38px;padding:0 11px;border:1px solid rgba(183,205,228,.2);border-radius:12px;background:rgba(9,13,18,.94);color:#b8c5d2;box-shadow:0 8px 22px rgba(0,0,0,.24);font:500 10px var(--mono,'IBM Plex Mono',monospace);cursor:pointer}#lane-picker-toggle .lane-picker-kicker{color:#718092;text-transform:uppercase;letter-spacing:.08em}#lane-picker-toggle strong{color:#d8ffe5;font-size:11px}#lane-picker-toggle svg{width:12px;height:12px;margin-left:auto;fill:none;stroke:currentColor;stroke-width:1.7;transition:transform var(--task-fast) ease}body.agent-shell-task.agent-view-open #main #slotbar.agent-lane-picker-open #lane-picker-toggle svg{transform:rotate(180deg)}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){display:none;position:absolute;left:0;width:210px;height:36px;padding:0 12px;border:1px solid rgba(183,205,228,.18);border-radius:10px;background:rgba(9,13,18,.98);color:#9eabb9;text-align:left;font:500 10px var(--mono,'IBM Plex Mono',monospace);box-shadow:0 12px 34px rgba(0,0,0,.38)}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):hover,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):focus-visible{border-color:rgba(110,231,161,.42);color:#effff4;background:#111b18}body.agent-shell-task.agent-view-open #main #slotbar>button.active:not(#lane-picker-toggle){color:#d8ffe5;border-color:rgba(110,231,161,.34);box-shadow:inset 3px 0 0 #6ee7a1,0 12px 34px rgba(0,0,0,.38)}body.agent-shell-task.agent-view-open #main #slotbar:hover>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar:focus-within>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar.agent-lane-picker-open>button:not(#lane-picker-toggle){display:block}body.agent-shell-task.agent-view-open #main #slot1{top:42px}body.agent-shell-task.agent-view-open #main #slot2{top:80px}body.agent-shell-task.agent-view-open #main #slot3{top:118px}
+body.agent-shell-task.agent-view-open.agent-view-chat-expanded #app-shell #main{left:auto!important;right:12px!important;top:12px!important;bottom:12px!important;width:calc(100vw - 24px)!important;border-radius:var(--task-radius-lg)!important}body.agent-shell-task.agent-view-open.agent-view-chat-expanded #agent-view{opacity:.26;filter:saturate(.7);pointer-events:none}body.agent-shell-task.agent-view-open.agent-shell-text-turn #main #topbar{background:rgba(8,12,17,.94)!important}
+body.agent-shell-task.agent-view-open.chat-minimized #agent-view{right:0}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:flex!important;visibility:hidden;opacity:0;transform:translateX(28px) scale(.965);pointer-events:none;transition-delay:0s,0s,0s,0s,0s,0s,0s,0s,240ms}body.agent-shell-task.agent-view-open.chat-minimized .agent-view-location{max-width:min(72vw,1120px)}
+body.agent-shell-task.agent-view-open.agent-shell-chat-only #agent-view{right:0;background:radial-gradient(circle at 50% 18%,rgba(110,231,161,.055),transparent 34%),#05070a}body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-browserbar,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-shell-trace,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-canvas,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-foot,body.agent-shell-task.agent-view-open.agent-shell-chat-only .agent-view-chat-restore{display:none!important}
+body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{left:50%;right:auto;top:72px;bottom:12px;width:min(1040px,calc(100vw - 24px));transform:translateX(-50%);border-radius:var(--task-radius-lg)!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #agent-bar.active{display:flex!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #chat .bubble{max-width:min(88%,860px)}body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-expand,body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-exit,body.agent-shell-task.agent-view-open.agent-shell-chat-only #chat-card-minimize{display:none!important}
+body.agent-shell-task #agent-shell-history-scrim{display:block;position:fixed;z-index:1320;inset:0;border:0;background:rgba(2,5,8,.24);opacity:0;visibility:hidden;pointer-events:none;cursor:pointer;backdrop-filter:blur(0);transition:opacity 180ms ease,visibility 0s linear 220ms,backdrop-filter 220ms cubic-bezier(.2,.8,.2,1)}body.agent-shell-task.agent-shell-history-open #agent-shell-history-scrim{opacity:1;visibility:visible;pointer-events:auto;backdrop-filter:blur(3px);transition-delay:0s}body.agent-shell-task.agent-view-open #sidebar{display:flex!important;position:fixed;z-index:1330;left:var(--agent-history-left,12px);top:var(--agent-history-top,64px);bottom:auto;width:min(360px,calc(100vw - 24px));max-height:var(--agent-history-max-height,520px);border:1px solid rgba(183,205,228,.22);border-radius:16px;background:linear-gradient(180deg,rgba(17,22,29,.99),rgba(8,11,16,.99));box-shadow:0 26px 72px rgba(0,0,0,.56),inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-8px) scale(.98);transform-origin:top left;transition:opacity 180ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{opacity:1;visibility:visible;pointer-events:auto;transform:none;transition-delay:0s}body.agent-shell-task.agent-view-open #sidebar .sidebar-head{padding:12px 12px 10px;border-color:rgba(183,205,228,.13)}body.agent-shell-task.agent-view-open #sidebar .sidebar-title{font-size:0}body.agent-shell-task.agent-view-open #sidebar .sidebar-title::after{content:"Chat history";font-size:14px;letter-spacing:.01em}body.agent-shell-task.agent-view-open #sidebar-history{min-height:110px;max-height:390px;padding:6px 8px 10px}body.agent-shell-task.agent-view-open #sidebar .sidebar-item{border-left:0;margin-bottom:3px;padding:10px;border:1px solid transparent}body.agent-shell-task.agent-view-open #sidebar .sidebar-item:hover,body.agent-shell-task.agent-view-open #sidebar .sidebar-item:focus-visible{border-color:rgba(110,231,161,.2);background:rgba(110,231,161,.065);outline:none}body.agent-shell-task.agent-view-open #sidebar .sidebar-search{padding:9px 10px 3px}.sidebar-head-actions{display:flex;align-items:center;gap:6px}.sidebar-close{display:none;width:34px;height:34px;border:1px solid rgba(183,205,228,.18);border-radius:10px;background:rgba(255,255,255,.04);color:#cbd5df;font-size:18px;cursor:pointer}body.agent-shell-history-open .sidebar-close{display:grid;place-items:center}body.agent-shell-task.agent-view-open #agent-chat-primary-tools #chat-card-history{transition:border-color 150ms ease,background 150ms ease,color 150ms ease,transform 150ms ease}body.agent-shell-task.agent-view-open #agent-chat-primary-tools #chat-card-history[aria-expanded="true"]{border-color:rgba(110,231,161,.48);background:#13221b;color:#d8ffe5;transform:scale(.96)}
+@media(min-width:761px) and (max-width:1100px){body.agent-shell-task{--task-panel-width:min(420px,42vw)}body.agent-shell-task .agent-view-kicker{display:none}body.agent-shell-task .agent-view-head{gap:9px}}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #agent-view{right:0!important}body.agent-shell-task .agent-view-head{min-height:58px}body.agent-shell-task .agent-view-state{display:none}body.agent-shell-task .agent-shell-trace{min-height:34px;padding:0 10px;gap:5px}body.agent-shell-task .agent-shell-trace::before,body.agent-shell-task .agent-shell-trace-rail,body.agent-shell-task .agent-shell-phase-label{display:none}body.agent-shell-task.agent-view-open.agent-view-chat-expanded #app-shell #main{inset:0!important;border-radius:0!important}body.agent-shell-task #chat-card-minimize{display:none!important}body.agent-shell-task.agent-view-open #main #topbar .nav{padding-left:104px}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{height:44px}body.agent-shell-task.agent-view-open #main #slotbar{top:5px;height:44px}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){height:44px;font-size:11px}body.agent-shell-task.agent-view-open #main #slot1{top:48px}body.agent-shell-task.agent-view-open #main #slot2{top:94px}body.agent-shell-task.agent-view-open #main #slot3{top:140px}body.agent-shell-task.agent-view-open.agent-shell-chat-only #app-shell #main{inset:58px 0 0!important;width:100%!important;height:auto!important;transform:none;border:0!important;border-radius:0!important;background:linear-gradient(180deg,rgba(13,18,25,.98),rgba(7,10,15,1))!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #modelrow,body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #chat{display:flex!important}body.agent-shell-task.agent-view-open.agent-shell-chat-only #main #inputbar{margin:0 8px max(8px,env(safe-area-inset-bottom))!important;border-radius:18px!important}}
+@media(min-width:761px) and (hover:none){.chat-size-btn{width:44px;min-width:44px;height:44px}.agent-view-chat-controls{gap:8px}}
+/* Compact lane picker overrides the decorative full-width lane cards. */
+body.agent-shell-task.agent-view-open #main #slotbar{width:88px!important;height:34px!important;padding:0!important;gap:0!important;top:10px!important;left:10px!important;background:transparent!important;border:0!important;overflow:visible!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle{display:inline-flex!important;position:relative!important;min-width:88px!important;width:88px!important;height:34px!important;flex:0 0 88px!important;padding:0 9px!important;gap:6px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#9caaba!important;box-shadow:none!important;font-size:9px!important;font-weight:500!important;letter-spacing:.02em!important;text-transform:none!important;transform:none!important;animation:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle:hover,body.agent-shell-task.agent-view-open #main #lane-picker-toggle:focus-visible{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#d8ffe5!important;transform:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle::before,body.agent-shell-task.agent-view-open #main #lane-picker-toggle::after{display:none!important;content:none!important}
+body.agent-shell-task.agent-view-open #main #lane-picker-toggle .lane-picker-kicker{font-size:8px;color:#748291;letter-spacing:.08em}body.agent-shell-task.agent-view-open #main #lane-picker-toggle strong{font-size:10px;color:#d8ffe5}body.agent-shell-task.agent-view-open #main #lane-picker-toggle svg{width:10px;height:10px}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){display:none;position:absolute!important;top:38px!important;width:36px!important;min-width:36px!important;height:34px!important;flex:0 0 36px!important;padding:0!important;border:1px solid rgba(183,205,228,.16)!important;border-radius:9px!important;background:#0c1117!important;color:#91a0af!important;box-shadow:0 10px 24px rgba(0,0,0,.32)!important;font-size:11px!important;font-weight:600!important;letter-spacing:0!important;text-align:center!important;text-transform:none!important;transform:none!important;animation:none!important}
+body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::before,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle)::after{display:none!important;content:none!important}.lane-option-label{display:grid;width:100%;height:100%;place-items:center;color:inherit;font:600 11px var(--mono,'IBM Plex Mono',monospace)}
+body.agent-shell-task.agent-view-open #main #slotbar>button.active:not(#lane-picker-toggle){border-color:rgba(110,231,161,.45)!important;background:#13221b!important;color:#d8ffe5!important;box-shadow:inset 0 0 0 1px rgba(110,231,161,.08),0 10px 24px rgba(0,0,0,.32)!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):hover,body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle):focus-visible{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;transform:none!important}
+body.agent-shell-task.agent-view-open #main #slot1{left:0!important}body.agent-shell-task.agent-view-open #main #slot2{left:40px!important}body.agent-shell-task.agent-view-open #main #slot3{left:80px!important}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #main #slotbar{top:10px!important;width:94px!important;height:44px!important}body.agent-shell-task.agent-view-open #main #lane-picker-toggle{width:94px!important;min-width:94px!important;height:44px!important;flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #slotbar>button:not(#lane-picker-toggle){top:48px!important;width:40px!important;min-width:40px!important;height:44px!important;flex-basis:40px!important}body.agent-shell-task.agent-view-open #main #slot2{left:44px!important}body.agent-shell-task.agent-view-open #main #slot3{left:88px!important}}
+/* Primary chat navigation: context, creation, recovery. */
+#agent-chat-primary-tools{display:none}
+body.agent-shell-task.agent-view-open #sidebar .sidebar-new{display:none}
+body.agent-shell-task.agent-view-open #main #topbar{position:relative}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{position:relative!important;left:auto!important;top:auto!important;flex:0 0 88px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{display:inline-flex!important;align-items:center;justify-content:center;position:static!important;height:34px!important;min-width:50px;padding:0 10px!important;border:1px solid rgba(183,205,228,.18)!important;border-radius:10px!important;background:#0c1117!important;color:#b9c6d2!important;box-shadow:none!important;font:500 10px var(--mono,'IBM Plex Mono',monospace)!important;transform:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new:hover{border-color:rgba(110,231,161,.42)!important;background:#101a17!important;color:#effff4!important;filter:none!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{position:static!important;width:34px;min-width:34px;height:34px;border-radius:10px}body.agent-shell-task.agent-view-open #main #topbar .nav{width:auto!important;flex:1 1 auto!important;margin-left:auto!important;padding-left:0!important}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools{gap:8px}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #slotbar{flex-basis:94px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools .topbar-new{height:44px!important;min-width:52px;padding:0 9px!important}body.agent-shell-task.agent-view-open #main #agent-chat-primary-tools #chat-card-history{width:44px;min-width:44px;height:44px}}
+@media(max-width:760px){body.agent-shell-task.agent-view-open #sidebar{left:10px!important;right:10px!important;top:auto!important;bottom:max(10px,env(safe-area-inset-bottom))!important;width:auto!important;max-height:min(66dvh,560px)!important;border-radius:18px;transform:translateY(14px) scale(.99);transform-origin:bottom center}body.agent-shell-task.agent-view-open.agent-shell-history-open #sidebar{transform:none}body.agent-shell-task.agent-view-open #sidebar-history{max-height:min(48dvh,390px)}body.agent-shell-task.agent-view-open #sidebar .sidebar-search input{height:44px}.sidebar-close{width:44px;height:44px}.sidebar-new{min-height:44px}}
+@media(prefers-reduced-motion:reduce){body.agent-view-open #agent-view,.agent-view-orbit::after,.agent-view-confirm.open,.agent-view-chat-restore{animation:none!important}#sidebar,body.agent-view-open #app-shell #main,.agent-view-toast,.chat-size-btn,.agent-shell-trace-step,.agent-shell-trace-step::before,#lane-picker-toggle svg{transition:none!important}body.agent-shell-task.agent-view-open.chat-minimized #app-shell #main{display:none!important}}
 </style>"""
 
-_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser preview" aria-hidden="true">
+_AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Interactive agent browser view" aria-hidden="true" tabindex="-1">
   <header class="agent-view-head">
     <span class="agent-view-mark" aria-hidden="true">UC</span>
     <div class="agent-view-title"><span class="agent-view-kicker">Live browser</span><strong>Browser Preview</strong></div>
@@ -19801,12 +19843,19 @@ _AGENT_VIEW_PANEL = """<aside id="agent-view" aria-label="Browser preview" aria-
     <button type="button" id="agent-view-chat-toggle" class="agent-view-chat-toggle" aria-expanded="false" onclick="toggleAgentViewChat()">Chat</button>
     <button type="button" class="agent-view-close" aria-label="Close browser preview" onclick="closeAgentView()">&times;</button>
   </header>
-  <div class="agent-view-browserbar"><span>Current page</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span></div>
+  <button type="button" id="agent-shell-history-scrim" aria-label="Close history" onclick="toggleAgentShellHistory(false)"></button>
+  <div class="agent-view-browserbar"><span>Current page</span><span id="agent-view-location" class="agent-view-location">awaiting target</span><span class="rail"></span><span class="policy">You + agent</span></div>
+  <div class="agent-shell-trace" aria-label="Task progress">
+    <span class="agent-shell-trace-step" data-step="plan">Plan</span><span class="agent-shell-trace-rail" aria-hidden="true"></span>
+    <span class="agent-shell-trace-step" data-step="browse">Browse</span><span class="agent-shell-trace-rail" aria-hidden="true"></span>
+    <span class="agent-shell-trace-step" data-step="answer">Answer</span>
+    <span id="agent-shell-phase-label" class="agent-shell-phase-label" aria-live="polite">Ready for a task</span>
+  </div>
   <div id="agent-view-canvas" class="agent-view-canvas">
     <img id="agent-view-image" alt="Live view of the browser controlled by the agent">
     <iframe id="agent-view-frame" class="agent-view-semantic-frame" title="Interactive preview of the browser controlled by this conversation" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
     <iframe id="agent-view-frame-next" class="agent-view-semantic-frame" title="Browser preview refresh buffer" sandbox="allow-same-origin" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
-    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">WEB</div><strong>The browser will appear here.</strong><span>Send a message or use the page directly. Both control the browser for this conversation.</span></div>
+    <div class="agent-view-empty"><div class="agent-view-orbit" aria-hidden="true">WEB</div><strong class="agent-view-empty-legacy">The browser will appear here.</strong><span class="agent-view-empty-legacy">Send a message or use the page directly. Both control the browser for this conversation.</span><div class="agent-view-empty-task"><span class="eyebrow">Browser ready</span><strong>Give the agent a task, then work alongside it.</strong><span>The live page appears here when browsing starts. Text-only questions expand into a focused chat automatically.</span></div></div>
     <div id="agent-view-confirm" class="agent-view-confirm" role="dialog" aria-live="assertive"><div class="agent-view-confirm-copy"><b>Confirm this page action</b><span id="agent-view-confirm-label">Activate this control?</span></div><button type="button" onclick="cancelAgentViewConfirmation()">Cancel</button><button type="button" class="approve" onclick="confirmAgentViewAction()">Continue</button></div>
     <div id="agent-view-toast" class="agent-view-toast" role="status" aria-live="polite"></div>
     <div id="scroll-debug-overlay" style="display:none;position:fixed;left:8px;bottom:8px;z-index:9999;width:360px;max-height:300px;overflow-y:auto;background:rgba(0,0,0,0.88);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px;font-family:monospace;pointer-events:auto"></div>
@@ -19829,28 +19878,44 @@ function _relativeDate(ts) {
 async function loadSidebarHistory() {
   var list = document.getElementById('sidebar-history');
   if (!list) return;
+  list.innerHTML = '<div class="sidebar-empty">Loading chats...</div>';
   try {
     var r = await fetch('/web/chat/archives?model=' + encodeURIComponent(currentModel()));
-    if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load history</div>'; return; }
+    if (!r.ok) { list.innerHTML = '<div class="sidebar-empty">Could not load chats.<br><button type="button" onclick="loadSidebarHistory()">Try again</button></div>'; return; }
     var data = await r.json();
     var allArchives = data.archives || [];
-    var archives = allArchives.slice(0, 6);
+    var archives = allArchives.slice(0, 8);
     if (archives.length === 0) {
-      list.innerHTML = '<div class="sidebar-empty">No chat history yet</div>';
+      list.innerHTML = '<div class="sidebar-empty">No saved chats yet.<br>Start a new chat to archive this one.</div>';
       return;
     }
     list.innerHTML = '';
+    var lastGroup = '';
     for (var i = 0; i < archives.length; i++) {
       var arc = archives[i];
-      var div = document.createElement('div');
+      var group = _relativeDate(arc.archived_at);
+      if (group !== lastGroup) {
+        var heading = document.createElement('div');
+        heading.className = 'sidebar-group-label';
+        heading.textContent = group;
+        list.appendChild(heading);
+        lastGroup = group;
+      }
+      var div = document.createElement('button');
+      div.type = 'button';
       div.className = 'sidebar-item';
       div.setAttribute('data-id', arc.id);
+      div.setAttribute('data-search', String(arc.preview || '').toLowerCase());
       div.innerHTML =
         '<div class="sb-preview">' + esc(arc.preview || '(empty)') + '</div>' +
-        '<div class="sb-meta"><span>' + _relativeDate(arc.archived_at) + '</span><span>' + arc.message_count + ' msgs</span></div>';
-      div.onclick = (function(id) { return function() { restoreArchive(id); }; })(arc.id);
+        '<div class="sb-meta"><span>' + arc.message_count + ' messages</span></div>';
+      div.onclick = (function(id) { return function() { toggleAgentShellHistory(false); restoreArchive(id); }; })(arc.id);
       list.appendChild(div);
     }
+    var filterEmpty = document.createElement('div');
+    filterEmpty.className = 'sidebar-filter-empty';
+    filterEmpty.textContent = 'No matching chats';
+    list.appendChild(filterEmpty);
     var link = document.createElement('a');
     link.className = 'sidebar-viewall';
     link.href = '#';
@@ -19858,8 +19923,32 @@ async function loadSidebarHistory() {
     link.onclick = function(e) { e.preventDefault(); openArchives(); };
     list.appendChild(link);
   } catch(e) {
-    list.innerHTML = '<div class="sidebar-empty">Could not load history</div>';
+    list.innerHTML = '<div class="sidebar-empty">Could not load chats.<br><button type="button" onclick="loadSidebarHistory()">Try again</button></div>';
   }
+}
+
+function filterSidebarHistory(value) {
+  var list = document.getElementById('sidebar-history');
+  if (!list) return;
+  var query = String(value || '').trim().toLowerCase();
+  var visible = 0;
+  var items = list.querySelectorAll('.sidebar-item');
+  items.forEach(function(item) {
+    var show = !query || String(item.getAttribute('data-search') || '').indexOf(query) !== -1;
+    item.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  list.querySelectorAll('.sidebar-group-label').forEach(function(label) {
+    var next = label.nextElementSibling;
+    var hasVisible = false;
+    while (next && !next.classList.contains('sidebar-group-label')) {
+      if (next.classList.contains('sidebar-item') && next.style.display !== 'none') { hasVisible = true; break; }
+      next = next.nextElementSibling;
+    }
+    label.style.display = hasVisible ? '' : 'none';
+  });
+  var empty = list.querySelector('.sidebar-filter-empty');
+  if (empty) empty.classList.toggle('visible', !!query && visible === 0);
 }
 
 function toggleSidebar() {
@@ -19867,16 +19956,65 @@ function toggleSidebar() {
   syncSidebarInteractivity();
 }
 
+function positionAgentShellHistory() {
+  if (!document.body.classList.contains('agent-shell-task') || window.innerWidth <= 760) return;
+  const button = document.getElementById('chat-card-history');
+  if (!button) return;
+  const rect = button.getBoundingClientRect();
+  const width = Math.min(360, Math.max(280, window.innerWidth - 24));
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  const top = Math.min(rect.bottom + 8, window.innerHeight - 220);
+  document.body.style.setProperty('--agent-history-left', Math.round(left) + 'px');
+  document.body.style.setProperty('--agent-history-top', Math.round(top) + 'px');
+  document.body.style.setProperty('--agent-history-max-height', Math.max(200, Math.round(window.innerHeight - top - 12)) + 'px');
+}
+
+function toggleAgentShellHistory(forceOpen) {
+  const open = typeof forceOpen === 'boolean'
+    ? forceOpen
+    : !document.body.classList.contains('agent-shell-history-open');
+  document.body.classList.toggle('agent-shell-history-open', open);
+  const button = document.getElementById('chat-card-history');
+  if (button) button.setAttribute('aria-expanded', String(open));
+  syncSidebarInteractivity();
+  if (open) {
+    positionAgentShellHistory();
+    loadSidebarHistory();
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+      sidebar.setAttribute('tabindex', '-1');
+      sidebar.setAttribute('role', 'dialog');
+      sidebar.setAttribute('aria-label', 'Chat history');
+      requestAnimationFrame(function() {
+        const search = document.getElementById('sidebar-history-search');
+        if (search && typeof search.focus === 'function') search.focus({preventScroll:true});
+        else if (typeof sidebar.focus === 'function') sidebar.focus({preventScroll:true});
+      });
+    }
+  } else if (button && typeof button.focus === 'function') {
+    requestAnimationFrame(function() { button.focus({preventScroll:true}); });
+  }
+}
+
 function syncSidebarInteractivity() {
   var sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
-  var hidden = document.body.classList.contains('agent-view-open') ||
-    (window.innerWidth <= 1024 && !document.body.classList.contains('sidebar-open'));
+  var historyOpen = document.body.classList.contains('agent-shell-history-open');
+  var hidden = (document.body.classList.contains('agent-view-open') && !historyOpen) ||
+    (window.innerWidth <= 1024 && !document.body.classList.contains('sidebar-open') && !historyOpen);
   sidebar.toggleAttribute('inert', hidden);
   sidebar.setAttribute('aria-hidden', String(hidden));
 }
 
 document.addEventListener('click', function(e) {
+  if (document.body.classList.contains('agent-shell-history-open')) {
+    var historySidebar = document.getElementById('sidebar');
+    var historyButton = document.getElementById('chat-card-history');
+    if (historySidebar && !historySidebar.contains(e.target) && historyButton && !historyButton.contains(e.target)) {
+      toggleAgentShellHistory(false);
+      return;
+    }
+  }
   if (document.body.classList.contains('sidebar-open') && window.innerWidth <= 1024) {
     var sidebar = document.getElementById('sidebar');
     var toggle = document.getElementById('sidebar-toggle');
@@ -19887,6 +20025,7 @@ document.addEventListener('click', function(e) {
   }
 });
 window.addEventListener('resize', syncSidebarInteractivity);
+window.addEventListener('resize', positionAgentShellHistory);
 syncSidebarInteractivity();
 """
 
@@ -19918,6 +20057,125 @@ let agentViewQueuedPatches = [];
 let agentViewActivationTimer = null;
 const agentViewInputTimers = new Map();
 const agentViewBoundDocuments = new WeakSet();
+const AGENT_SHELL_DEFAULT = 'legacy';
+let agentShellTaskEnabled = false;
+let agentShellBrowserReady = false;
+let agentShellChatReady = false;
+let agentShellTurnActive = false;
+let agentShellBrowserUsedThisTurn = false;
+let agentViewReturnFocus = null;
+
+function agentShellModeFromLocation() {
+  const value = new URLSearchParams(location.search || '').get('shell');
+  return value === 'task' || value === 'legacy' ? value : AGENT_SHELL_DEFAULT;
+}
+
+function setAgentShellConnectionLayout(browserAvailable) {
+  if (!agentShellTaskEnabled) return;
+  document.body.classList.toggle('agent-shell-chat-only', !browserAvailable);
+  if (!browserAvailable) {
+    setAgentViewChatState('docked', 'chat');
+    stopAgentViewSocket();
+  }
+  requestAnimationFrame(function() {
+    scaleAgentViewSemanticFrame();
+  });
+}
+
+function arrangeAgentChatToolbar() {
+  if (!agentShellTaskEnabled || !document.querySelector || !document.createElement) return;
+  if (document.getElementById('agent-chat-primary-tools')) return;
+  const topbar = document.querySelector('#main #topbar');
+  const nav = topbar && topbar.querySelector ? topbar.querySelector('.nav') : null;
+  const picker = document.getElementById('slotbar');
+  const newChat = document.querySelector('#main .topbar-new');
+  const history = document.getElementById('chat-card-history');
+  if (!topbar || !nav || !picker || !newChat || !history) return;
+  const group = document.createElement('div');
+  group.id = 'agent-chat-primary-tools';
+  group.setAttribute('role', 'toolbar');
+  group.setAttribute('aria-label', 'Chat navigation');
+  topbar.insertBefore(group, nav);
+  group.appendChild(picker);
+  group.appendChild(newChat);
+  group.appendChild(history);
+}
+
+function syncAgentLanePicker() {
+  const picker = document.getElementById('slotbar');
+  const current = document.getElementById('lane-picker-current');
+  const toggle = document.getElementById('lane-picker-toggle');
+  if (!picker || !current || !toggle) return;
+  for (let lane = 1; lane <= 3; lane++) {
+    const button = document.getElementById('slot' + lane);
+    if (!button) continue;
+    if (!button.dataset) button.dataset = {};
+    const threadName = String(lane);
+    const existingLabel = button.querySelector ? button.querySelector('.lane-option-label') : null;
+    if (!existingLabel) {
+      const rawDetail = String(button.textContent || ('Thread ' + threadName)).replace(/\\s+/g, ' ').trim();
+      button.dataset.laneDetail = /^(?:Lane [ABC]|Thread [123])$/.test(rawDetail) ? ('Thread ' + threadName) : (rawDetail || ('Thread ' + threadName));
+      button.textContent = '';
+      const visible = document.createElement ? document.createElement('span') : null;
+      if (visible) {
+        visible.className = 'lane-option-label';
+        visible.setAttribute('aria-hidden', 'true');
+        visible.textContent = threadName;
+        button.appendChild(visible);
+      }
+    }
+    const detail = button.dataset.laneDetail || ('Thread ' + threadName);
+    button.setAttribute('aria-label', detail === 'Thread ' + threadName ? detail : 'Thread ' + threadName + ': ' + detail);
+    button.title = detail;
+  }
+  const active = (picker.querySelector ? picker.querySelector('button[id^="slot"].active') : null) || document.getElementById('slot1');
+  const laneNumber = active && /^slot([123])$/.test(active.id) ? Number(active.id.slice(4)) : 1;
+  const threadName = String(laneNumber);
+  const detail = active ? (active.dataset.laneDetail || ('Thread ' + threadName)) : 'Thread ' + threadName;
+  current.textContent = threadName;
+  toggle.setAttribute('aria-label', 'Select chat thread. Current: ' + detail);
+  toggle.title = detail;
+}
+
+function toggleAgentLanePicker(forceOpen) {
+  const picker = document.getElementById('slotbar');
+  const toggle = document.getElementById('lane-picker-toggle');
+  if (!picker || !toggle) return;
+  const open = typeof forceOpen === 'boolean' ? forceOpen : !picker.classList.contains('agent-lane-picker-open');
+  picker.classList.toggle('agent-lane-picker-open', open);
+  toggle.setAttribute('aria-expanded', String(open));
+  if (open) syncAgentLanePicker();
+}
+
+function setAgentShellPhase(phase, label) {
+  if (!agentShellTaskEnabled) return;
+  if (document.body && document.body.dataset) document.body.dataset.agentShellPhase = phase || 'ready';
+  const phaseLabel = document.getElementById('agent-shell-phase-label');
+  if (phaseLabel) phaseLabel.textContent = label || 'Ready for a task';
+}
+
+function initializeAgentShellExperiment() {
+  agentShellTaskEnabled = agentShellModeFromLocation() === 'task';
+  document.body.classList.toggle('agent-shell-task', agentShellTaskEnabled);
+  if (agentShellTaskEnabled) {
+    arrangeAgentChatToolbar();
+    setAgentShellPhase('ready', 'Ready for a task');
+  }
+}
+
+function maybeInitializeAgentShell(data) {
+  if (!agentShellTaskEnabled || !data || typeof data !== 'object') return;
+  agentShellBrowserReady = !!data.bridge_connected;
+  agentShellChatReady = !!data.chat_connected;
+  const browserAvailable = agentShellBrowserReady && agentShellChatReady;
+  setAgentShellConnectionLayout(browserAvailable);
+  openAgentView({system:true});
+  if (browserAvailable) {
+    setAgentShellPhase('ready', 'Browser and agent ready');
+  } else {
+    setAgentShellPhase('ready', agentShellChatReady ? 'Chat ready / browser offline' : 'Waiting for local agent');
+  }
+}
 
 function setAgentViewState(text, live) {
   const el = document.getElementById('agent-view-state');
@@ -20471,6 +20729,11 @@ function agentViewApplyAdoptedStyles(snapshot, frame) {
 
 function positionAgentViewMobileChat(renderedHeight) {
   const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+  if (agentShellTaskEnabled && mobile) {
+    document.body.classList.remove('agent-view-browser-positioned');
+    if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
+    return;
+  }
   if (!mobile || !Number.isFinite(renderedHeight) || renderedHeight <= 0) {
     document.body.classList.remove('agent-view-browser-positioned');
     if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
@@ -20926,9 +21189,12 @@ function startAgentViewSocket() {
   };
 }
 
-function openAgentView() {
+function openAgentView(options) {
+  options = options || {};
   const alreadyOpen = document.body.classList.contains('agent-view-open');
   if (!alreadyOpen) resetAgentViewSemanticRecovery();
+  arrangeAgentChatToolbar();
+  if (!alreadyOpen && !options.system) agentViewReturnFocus = document.activeElement || null;
   document.body.classList.add('agent-view-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
   if (!alreadyOpen) {
@@ -20940,7 +21206,11 @@ function openAgentView() {
   if (panel) panel.setAttribute('aria-hidden', 'false');
   const button = document.getElementById('topbar-agent-view');
   if (button) button.setAttribute('aria-expanded', 'true');
-  if (!alreadyOpen || !agentViewSocket) requestAnimationFrame(startAgentViewSocket);
+  syncAgentLanePicker();
+  if (!alreadyOpen && !options.system && panel && typeof panel.focus === 'function') {
+    requestAnimationFrame(function() { panel.focus({preventScroll:true}); });
+  }
+  if ((!agentShellTaskEnabled || !document.body.classList.contains('agent-shell-chat-only')) && (!alreadyOpen || !agentViewSocket)) requestAnimationFrame(startAgentViewSocket);
 }
 
 function toggleAgentViewChat(forceOpen) {
@@ -20992,6 +21262,10 @@ function setAgentViewChatState(mode, surface) {
     const chat = document.getElementById('chat');
     if (chat) requestAnimationFrame(function() { chat.scrollTop = chat.scrollHeight; });
   }
+  if (agentShellTaskEnabled) {
+    requestAnimationFrame(scaleAgentViewSemanticFrame);
+    setTimeout(scaleAgentViewSemanticFrame, 240);
+  }
 }
 
 function expandAgentViewChat() {
@@ -21013,6 +21287,15 @@ function restoreAgentViewChat() {
 function beginAgentViewResponseTurn() {
   agentViewResponseRevealPending = true;
   agentViewResponseRevealDone = false;
+  agentShellTurnActive = true;
+  agentShellBrowserUsedThisTurn = false;
+  document.body.classList.remove('agent-shell-text-turn');
+  if (agentShellTaskEnabled) {
+    if (document.body.classList.contains('agent-view-open')) {
+      setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
+    }
+    setAgentShellPhase('planning', 'Understanding your task');
+  }
 }
 
 function maybeRevealAgentResponse() {
@@ -21023,11 +21306,18 @@ function maybeRevealAgentResponse() {
     return;
   }
   agentViewResponseRevealDone = true;
+  if (agentShellTaskEnabled && !agentShellBrowserUsedThisTurn) {
+    document.body.classList.add('agent-shell-text-turn');
+    setAgentViewChatState('fullscreen', 'chat');
+    return;
+  }
   setAgentViewChatState('docked', 'chat');
 }
 
-function closeAgentView() {
+function closeAgentView(options) {
+  options = options || {};
   document.body.classList.remove('agent-view-open');
+  document.body.classList.remove('agent-shell-history-open');
   if (typeof syncSidebarInteractivity === 'function') syncSidebarInteractivity();
   document.body.classList.remove('chat-minimized', 'agent-view-chat-expanded', 'agent-view-chat-open', 'agent-view-browser-positioned');
   if (document.body.style) document.body.style.removeProperty('--agent-view-mobile-chat-top');
@@ -21044,6 +21334,12 @@ function closeAgentView() {
   stopAgentViewSocket();
   agentViewBoundSessionId = '';
   agentViewRetryAllowed = false;
+  if ((!options.system || options.restoreFocus) && document.body.classList.contains('agent-shell-task')) {
+    const fallback = document.getElementById('topbar-agent-view');
+    const target = agentViewReturnFocus && typeof agentViewReturnFocus.focus === 'function' ? agentViewReturnFocus : fallback;
+    if (target && typeof target.focus === 'function') requestAnimationFrame(function() { target.focus({preventScroll:true}); });
+  }
+  agentViewReturnFocus = null;
 }
 
 function refreshAgentView() {
@@ -21056,7 +21352,25 @@ function refreshAgentView() {
 }
 
 function ensureAgentViewForBrowserActivity() {
+  agentShellBrowserUsedThisTurn = true;
+  document.body.classList.remove('agent-shell-text-turn');
+  if (agentShellTaskEnabled) {
+    setAgentShellPhase('browsing', 'Working in your browser');
+    agentShellBrowserReady = true;
+    document.body.classList.remove('agent-shell-chat-only');
+    if (!document.body.classList.contains('agent-view-open')) openAgentView({system:true});
+    if (agentViewChatMode === 'fullscreen') {
+      setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
+    }
+    return;
+  }
   if (!document.body.classList.contains('agent-view-open')) openAgentView();
+}
+
+function completeAgentShellTurn() {
+  if (!agentShellTaskEnabled || !agentShellTurnActive) return;
+  agentShellTurnActive = false;
+  setAgentShellPhase('complete', agentShellBrowserUsedThisTurn ? 'Browser task complete' : 'Answer ready');
 }
 
 const _agentViewAddUserBubble = addUserBubble;
@@ -21068,6 +21382,13 @@ addUserBubble = function() {
 const _agentViewAppendText = appendText;
 appendText = function() {
   const result = _agentViewAppendText.apply(this, arguments);
+  if (agentShellTaskEnabled && agentShellTurnActive) {
+    setAgentShellPhase('writing', agentShellBrowserUsedThisTurn ? 'Preparing the result' : 'Writing an answer');
+    if (!agentShellBrowserUsedThisTurn && document.body.classList.contains('agent-view-open')) {
+      document.body.classList.add('agent-shell-text-turn');
+      setAgentViewChatState('fullscreen', 'chat');
+    }
+  }
   maybeRevealAgentResponse();
   return result;
 };
@@ -21080,15 +21401,43 @@ _setActiveSlotSession = function(sid) {
     agentViewBoundSessionId = sid;
     setTimeout(refreshAgentView, 0);
   }
+  setTimeout(syncAgentLanePicker, 0);
 };
+
+document.addEventListener('click', function(event) {
+  const picker = document.getElementById('slotbar');
+  if (!picker || !document.body.classList.contains('agent-shell-task')) return;
+  const slotButton = event.target && event.target.closest ? event.target.closest('#slot1,#slot2,#slot3') : null;
+  if (slotButton) {
+    setTimeout(syncAgentLanePicker, 120);
+    toggleAgentLanePicker(false);
+    return;
+  }
+  if (!picker.contains(event.target)) toggleAgentLanePicker(false);
+});
 
 document.addEventListener('keydown', function(event) {
   if (event.key !== 'Escape' || !document.body.classList.contains('agent-view-open')) return;
+  if (document.body.classList.contains('agent-shell-history-open')) { toggleAgentShellHistory(false); return; }
+  const lanePicker = document.getElementById('slotbar');
+  if (lanePicker && lanePicker.classList.contains('agent-lane-picker-open')) { toggleAgentLanePicker(false); return; }
+  const confirmation = document.getElementById('agent-view-confirm');
+  if (confirmation && confirmation.classList.contains('open')) { cancelAgentViewConfirmation(); return; }
   if (agentViewChatMode === 'fullscreen') { exitAgentViewFullscreen(); return; }
   if (_agentViewIsMobile() && agentViewChatSurface === 'chat') { setAgentViewChatState('docked', 'browser'); return; }
+  if (agentShellTaskEnabled) return;
   closeAgentView();
 });
 window.addEventListener('resize', scaleAgentViewSemanticFrame);
+initializeAgentShellExperiment();
+if (typeof updateAgentStatusUI === 'function') {
+  const _agentShellUpdateAgentStatusUI = updateAgentStatusUI;
+  updateAgentStatusUI = function(data) {
+    const result = _agentShellUpdateAgentStatusUI.apply(this, arguments);
+    maybeInitializeAgentShell(data);
+    return result;
+  };
+}
 """
 
 _OLD_DELETE_ARCHIVE_JS = """async function deleteArchive(id, el) {
@@ -21370,7 +21719,7 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
             ),
             TemplateReplacement(
                 "          } else if (evt.type === 'done') {\n",
-                "          } else if (evt.type === 'done') {\n            maybeRevealAgentResponse();\n",
+                "          } else if (evt.type === 'done') {\n            completeAgentShellTurn();\n            maybeRevealAgentResponse();\n",
                 "agent view tool-only response reveal",
             ),
         ]
@@ -21381,11 +21730,20 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
                     logout_pattern,
                     '      <span id="agent-view-chat-controls" class="agent-view-chat-controls" role="group" aria-label="Same conversation controlling browser preview">\n'
                     '        <span class="agent-view-chat-context"><strong>Same conversation</strong><span>Controls this preview</span></span>\n'
+                    '        <button type="button" id="chat-card-history" class="chat-size-btn" aria-label="Open chat history" title="Chat history" aria-expanded="false" aria-controls="sidebar" onclick="toggleAgentShellHistory()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10M3 8h10M3 12.5h7"/></svg></button>\n'
                     '        <button type="button" id="chat-card-expand" class="chat-size-btn" aria-label="Expand chat" title="Expand chat" onclick="expandAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V3a1 1 0 011-1h3M10 2h3a1 1 0 011 1v3M14 10v3a1 1 0 01-1 1h-3M6 14H3a1 1 0 01-1-1v-3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-exit" class="chat-size-btn" aria-label="Return chat to default size" title="Default chat size" aria-hidden="true" onclick="exitAgentViewFullscreen()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2v3a1 1 0 01-1 1H2M10 2v3a1 1 0 001 1h3M14 10h-3a1 1 0 00-1 1v3M2 10h3a1 1 0 011 1v3"/></svg></button>\n'
                     '        <button type="button" id="chat-card-minimize" class="chat-size-btn" aria-label="Minimize chat" title="Minimize chat" onclick="minimizeAgentViewChat()"><svg viewBox="0 0 16 16" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/></svg></button>\n'
                     '      </span>\n' + logout_pattern,
                     "chat card controls injection",
+                ),
+            )
+        if '<div id="slotbar">' in html:
+            replacements.append(
+                TemplateReplacement(
+                    '<div id="slotbar">',
+                    '<div id="slotbar">\n    <button type="button" id="lane-picker-toggle" aria-expanded="false" aria-controls="slot1 slot2 slot3" onclick="toggleAgentLanePicker()"><span class="lane-picker-kicker">Thread</span><strong id="lane-picker-current">1</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>',
+                    "compact Agent View lane picker injection",
                 ),
             )
         html = apply_template_replacements(
