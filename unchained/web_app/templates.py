@@ -7111,6 +7111,12 @@ a:hover{text-decoration:underline}
   font-size:clamp(16px,2.5vw,20px);
   color:var(--muted);line-height:1.6;max-width:560px;margin:0 auto;
 }
+.sample-disclosure{
+  display:inline-flex;align-items:center;gap:8px;margin-top:20px;padding:8px 12px;
+  border:1px solid #333;border-radius:999px;background:rgba(255,255,255,0.025);
+  color:#9aa0ae;font-size:12px;line-height:1.4;
+}
+.sample-disclosure strong{color:var(--text);font-weight:600}
 .segment{
   position:relative;z-index:1;
   max-width:720px;margin:0 auto;padding:0 24px 64px;
@@ -7204,7 +7210,7 @@ _USE_CASE_FOOTER = r"""
   <h2>Your browser agent, ready when you are</h2>
   <p>Works with your real browser, your real logins, and your real data. No screenshots, no copy-paste&mdash;just tell it what to do.</p>
   <div class="cta-buttons">
-    <a href="/first-look" class="cta-btn primary">Try the Demo &rarr;</a>
+    <a href="__USE_CASE_DEMO_HREF__" class="cta-btn primary">__USE_CASE_DEMO_LABEL__ &rarr;</a>
     <a href="/trial" class="cta-btn secondary">Connect Your Browser &rarr;</a>
   </div>
 </div>
@@ -7224,6 +7230,16 @@ _USE_CASE_FOOTER = r"""
 
 </body>
 </html>"""
+
+
+def _use_case_footer(
+    demo_href: str = "/first-look",
+    demo_label: str = "Try the Demo",
+) -> str:
+    return (
+        _USE_CASE_FOOTER.replace("__USE_CASE_DEMO_HREF__", demo_href)
+        .replace("__USE_CASE_DEMO_LABEL__", demo_label)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -7259,6 +7275,7 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
   <a href="/" class="hero-back">&larr; Unchained</a>
   <h1>AI <span>Apartment Search</span> Assistant</h1>
   <p class="subtitle">Describe what you want. The agent searches Zillow, Apartments.com, and Craigslist&mdash;and delivers a ranked shortlist in seconds.</p>
+  <div class="sample-disclosure" role="note"><strong>Illustrative sample</strong><span>The prompts and results below are examples, not live listings.</span></div>
 </div>
 
 <div class="segment">
@@ -7320,7 +7337,10 @@ USE_CASE_APARTMENT_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer(
+    "/first-look?task=apartment",
+    "Try a Live Apartment Task",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -7356,6 +7376,7 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
   <a href="/" class="hero-back">&larr; Unchained</a>
   <h1>AI <span>Flight Price</span> Comparison</h1>
   <p class="subtitle">Tell it where you&rsquo;re going. The agent searches Google Flights, Kayak, and airline sites&mdash;and ranks the best options with tradeoffs.</p>
+  <div class="sample-disclosure" role="note"><strong>Illustrative sample</strong><span>The prompts and results below are examples, not live fares.</span></div>
 </div>
 
 <div class="segment">
@@ -7418,7 +7439,10 @@ USE_CASE_FLIGHTS_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer(
+    "/first-look?task=flight",
+    "Try a Live Flight Task",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -7519,7 +7543,7 @@ USE_CASE_COMPETITOR_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer()
 
 
 # ---------------------------------------------------------------------------
@@ -7611,7 +7635,7 @@ USE_CASE_PRICE_TRACKING_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-""" + _USE_CASE_FOOTER
+""" + _use_case_footer()
 
 
 # ---------------------------------------------------------------------------
@@ -17441,6 +17465,18 @@ body{
 }
 .quota-dismiss:hover{color:var(--text)}
 @media(max-width:640px){.quota-grid{grid-template-columns:1fr}}
+.task-handoff{
+  display:flex;align-items:center;gap:10px;padding:9px 16px;
+  border-bottom:1px solid #24443c;background:#122b27;color:#c8ded8;
+  font-size:12px;line-height:1.45;flex-shrink:0;
+}
+.task-handoff-label{
+  flex-shrink:0;padding:3px 7px;border:1px solid #3d675d;border-radius:999px;
+  color:#b9f1d8;font-family:var(--mono);font-size:10px;letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.task-handoff strong{color:#fff}
+@media(max-width:640px){.task-handoff{align-items:flex-start;flex-direction:column;gap:5px}}
 </style>
 </head>
 <body class="first-look-canvas">
@@ -17482,6 +17518,7 @@ body{
   </div>
 
   <div id="model-notice" style="display:block"><strong>Live shared browser</strong> — run a demo on selected public sites. <a href="/trial">Unlock the full browser</a> for any site.</div>
+  __FIRST_LOOK_TASK_HANDOFF_HTML__
 
   <div id="workspace">
     <div id="chat-pane">
@@ -17508,7 +17545,7 @@ body{
       <div id="inputbar">
         <div id="input-fields">
           <label class="sr-only" for="msginput">Task for the shared browser</label>
-          <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something..."></textarea>
+          <textarea id="msginput" rows="1" aria-describedby="quota-bar" placeholder="Ask the browser to do something...">__FIRST_LOOK_TASK_PROMPT_HTML__</textarea>
           <div id="quota-bar"><strong>__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs left.</strong> The shared preview works best on selected public sites.</div>
           <div id="shared-browser-status" class="subtle" aria-live="polite">Checking shared browser status...</div>
         </div>
@@ -17575,7 +17612,7 @@ let previewState = 'idle'; // 'idle'|'connecting'|'streaming'|'reconnecting'|'en
 let previewHasFrame = false;
 let previewTransportRetries = 0;
 const PREVIEW_MAX_TRANSPORT_RETRIES = 2;
-let selectedExamplePrompt = '';
+let selectedExamplePrompt = __FIRST_LOOK_TASK_PROMPT_JSON__;
 let selectedExampleUrl = '';
 let sharedBrowserReady = false;
 let sharedBrowserConfigured = false;

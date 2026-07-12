@@ -494,6 +494,51 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
 
+    def test_use_case_templates_link_to_allowlisted_first_look_tasks(self):
+        self.assertIn('href="/first-look?task=apartment"', web.USE_CASE_APARTMENT_HTML)
+        self.assertIn("Try a Live Apartment Task", web.USE_CASE_APARTMENT_HTML)
+        self.assertIn("examples, not live listings", web.USE_CASE_APARTMENT_HTML)
+        self.assertIn('href="/first-look?task=flight"', web.USE_CASE_FLIGHTS_HTML)
+        self.assertIn("Try a Live Flight Task", web.USE_CASE_FLIGHTS_HTML)
+        self.assertIn("examples, not live fares", web.USE_CASE_FLIGHTS_HTML)
+
+    def test_first_look_task_template_prefills_allowlisted_tasks_and_ignores_unknown_values(self):
+        from web_app.handlers.pages import _build_first_look_preview_html
+
+        apartment_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="apartment",
+        )
+        self.assertIn('data-task="apartment"', apartment_html)
+        self.assertIn("Apartment search task", apartment_html)
+        self.assertIn("current 2-bedroom apartment listings", apartment_html)
+        self.assertIn("Prefilled, not run.", apartment_html)
+
+        flight_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="flight",
+        )
+        self.assertIn('data-task="flight"', flight_html)
+        self.assertIn("Flight comparison task", flight_html)
+        self.assertIn("current round-trip flight options", flight_html)
+        self.assertIn("Prefilled, not run.", flight_html)
+
+        untrusted_task = 'apartment"><script>alert(1)</script>'
+        fallback_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task=untrusted_task,
+        )
+        self.assertNotIn('id="task-handoff"', fallback_html)
+        self.assertNotIn(untrusted_task, fallback_html)
+        self.assertIn("Compare computing pioneers on Wikipedia", fallback_html)
+        self.assertIn(
+            'placeholder="Ask the browser to do something..."></textarea>',
+            fallback_html,
+        )
+
     def test_client_update_buttons_disable_when_current_and_clear_after_fast_reconnect(self):
         self.assertIn(
             "CLIENT_UPDATE_TIMEOUT_MS = 90000",
