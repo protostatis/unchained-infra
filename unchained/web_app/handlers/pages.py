@@ -461,8 +461,12 @@ async def handle_publish_result(request: web.Request) -> web.Response:
     # Validate session_id format to prevent path traversal
     if not _re.fullmatch(r"[a-zA-Z0-9_.-]{8,80}", session_id):
         return web.json_response({"error": "Invalid session_id"}, status=400)
+    agent_id = str(auth_info.get("agent_id", "") or "")
+    scoped_session_id = core._resolve_trial_session_id(agent_id, session_id)
+    if not agent_id or scoped_session_id != session_id:
+        return web.json_response({"error": "Session not found"}, status=404)
     # Load session data
-    session_path = core._trial_session_path(session_id)
+    session_path = core._trial_session_path(scoped_session_id)
     try:
         with open(session_path) as f:
             session_data = json.load(f)
@@ -488,10 +492,9 @@ async def handle_publish_result(request: web.Request) -> web.Response:
 async def handle_pending_results(request: web.Request) -> web.Response:
     """GET /web/publish/pending — list results awaiting approval."""
     from published_results import list_pending
-    core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Authentication required"}, status=401)
+    from web_app.handlers.auth_admin import is_admin
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
     results = list_pending(limit=100)
     return web.json_response({"pending": results})
 
@@ -499,10 +502,9 @@ async def handle_pending_results(request: web.Request) -> web.Response:
 async def handle_approve_result(request: web.Request) -> web.Response:
     """POST /web/publish/approve — approve one or more pending results."""
     from published_results import approve_result, bulk_approve
-    core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Authentication required"}, status=401)
+    from web_app.handlers.auth_admin import is_admin
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
     body = await request.json()
     slugs = body.get("slugs", [])
     slug = body.get("slug", "")
@@ -518,10 +520,9 @@ async def handle_approve_result(request: web.Request) -> web.Response:
 async def handle_reject_result(request: web.Request) -> web.Response:
     """POST /web/publish/reject — reject one or more pending results."""
     from published_results import reject_result, bulk_reject
-    core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Authentication required"}, status=401)
+    from web_app.handlers.auth_admin import is_admin
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
     body = await request.json()
     reason = body.get("reason", "")
     slugs = body.get("slugs", [])

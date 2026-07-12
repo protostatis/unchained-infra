@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from aiohttp.test_utils import TestClient, TestServer
+
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import published_results
@@ -116,6 +118,84 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
         self.assertIn("Classify this publication prompt", classifier_input)
         self.assertIn("x" * 8000, classifier_input)
         self.assertNotIn("x" * 8001, classifier_input)
+
+
+class TestPublishedResultRouteAuthorization(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        app = web.create_app()
+        app.on_startup.clear()
+        app.on_cleanup.clear()
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_moderation_routes_hide_results_from_anonymous_and_non_admin_users(self):
+        routes = (
+            ("GET", "/web/publish/pending", None),
+            ("POST", "/web/publish/approve", {"slug": "private-pending-result"}),
+            ("POST", "/web/publish/reject", {"slug": "private-pending-result"}),
+        )
+        auth_cases = (None, {"email": "member@example.test", "agent_id": "claude-member"})
+        guarded = (
+            patch.object(published_results, "list_pending", side_effect=AssertionError("listed")),
+            patch.object(published_results, "approve_result", side_effect=AssertionError("approved")),
+            patch.object(published_results, "bulk_approve", side_effect=AssertionError("approved")),
+            patch.object(published_results, "reject_result", side_effect=AssertionError("rejected")),
+            patch.object(published_results, "bulk_reject", side_effect=AssertionError("rejected")),
+        )
+        with guarded[0], guarded[1], guarded[2], guarded[3], guarded[4]:
+            for auth_info in auth_cases:
+                for method, path, body in routes:
+                    with self.subTest(authenticated=bool(auth_info), path=path):
+                        with patch.object(web, "_authenticate", return_value=auth_info), patch.object(
+                            web, "ADMIN_EMAILS", {"admin@example.test"}
+                        ):
+                            response = await self.client.request(method, path, json=body)
+                        self.assertEqual(response.status, 403)
+                        self.assertEqual(
+                            await response.json(), {"error": "Admin access required"}
+                        )
+
+    async def test_server_verified_admin_can_list_approve_and_reject(self):
+        auth_info = {"email": "admin@example.test", "agent_id": "claude-admin"}
+        pending = [{"slug": "pending-result", "result_text": "review content"}]
+        with patch.object(web, "_authenticate", return_value=auth_info), patch.object(
+            web, "ADMIN_EMAILS", {"admin@example.test"}
+        ), patch.object(published_results, "list_pending", return_value=pending), patch.object(
+            published_results, "approve_result", return_value=True
+        ), patch.object(published_results, "reject_result", return_value=True):
+            listed = await self.client.get("/web/publish/pending")
+            approved = await self.client.post(
+                "/web/publish/approve", json={"slug": "pending-result"}
+            )
+            rejected = await self.client.post(
+                "/web/publish/reject", json={"slug": "pending-result"}
+            )
+
+        self.assertEqual(listed.status, 200)
+        self.assertEqual((await listed.json())["pending"], pending)
+        self.assertEqual(await approved.json(), {"approved": True, "slug": "pending-result"})
+        self.assertEqual(await rejected.json(), {"rejected": True, "slug": "pending-result"})
+
+    async def test_publish_rejects_a_session_scoped_to_another_agent(self):
+        auth_info = {
+            "email": "owner@example.test",
+            "agent_id": "claude-owner",
+            "key_hash": "owner",
+        }
+        with patch.object(web, "_authenticate", return_value=auth_info), patch.object(
+            web, "_trial_session_path", side_effect=AssertionError("foreign session opened")
+        ) as session_path:
+            response = await self.client.post(
+                "/web/publish-result",
+                json={"session_id": "s-claude-other-private-session"},
+            )
+
+        self.assertEqual(response.status, 404)
+        self.assertEqual(await response.json(), {"error": "Session not found"})
+        session_path.assert_not_called()
 
 
 if __name__ == "__main__":

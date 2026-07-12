@@ -26,7 +26,9 @@ from web_app.core import get_core as _core
 log = logging.getLogger(__name__)
 
 _TRIAL_NEW_CHAT_REQUEST_RE = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
-_TRIAL_NEW_CHAT_TOKEN_RE = re.compile(r"^[a-f0-9]{64}$")
+_TRIAL_NEW_CHAT_TOKEN_RE = re.compile(
+    r"^(?P<issued_at>[0-9]{1,12})\.(?P<expires_at>[0-9]{1,12})\.(?P<signature>[a-f0-9]{64})$"
+)
 _TRIAL_NEW_CHAT_COMMIT_TTL = 24 * 60 * 60
 _TRIAL_NEW_CHAT_MAX_RECORDS = 2048
 _TRIAL_NEW_CHAT_MAX_RECORDS_PER_AGENT = 64
@@ -53,11 +55,25 @@ def _trial_new_chat_commit_token(core, record: dict) -> str:
             record["previous_session_id"],
             record["session_id"],
             str(record["slot"]),
+            str(record["issued_at"]),
+            str(record["expires_at"]),
         )
     )
-    return hmac.new(
+    signature = hmac.new(
         str(core.JWT_SECRET).encode(), payload.encode(), hashlib.sha256
     ).hexdigest()
+    return f'{record["issued_at"]}.{record["expires_at"]}.{signature}'
+
+
+def _trial_new_chat_token_times(commit_token: str) -> tuple[int, int] | None:
+    match = _TRIAL_NEW_CHAT_TOKEN_RE.fullmatch(commit_token)
+    if not match:
+        return None
+    issued_at = int(match.group("issued_at"))
+    expires_at = int(match.group("expires_at"))
+    if expires_at != issued_at + _TRIAL_NEW_CHAT_COMMIT_TTL:
+        return None
+    return issued_at, expires_at
 
 
 def _drop_trial_new_chat_commit(record: dict) -> None:
@@ -103,6 +119,8 @@ def _trial_new_chat_response(record: dict, request_id: str, *, replayed: bool) -
         "request_id": request_id,
         "commit_request_id": record["commit_request_id"],
         "commit_token": record["commit_token"],
+        "commit_issued_at": record["issued_at"],
+        "commit_expires_at": record["expires_at"],
         "previous_session_id": record["previous_session_id"],
         "session_id": record["session_id"],
         "replayed": replayed,
@@ -2177,6 +2195,8 @@ async def handle_chat_new(request: web.Request) -> web.Response:
             "session_id": _trial_new_chat_session_id(agent_id, request_id),
             "slot": slot,
             "created_at": now,
+            "issued_at": int(now),
+            "expires_at": int(now) + _TRIAL_NEW_CHAT_COMMIT_TTL,
             "acknowledged": False,
         }
         record["commit_token"] = _trial_new_chat_commit_token(core, record)
@@ -2224,7 +2244,8 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     if not _TRIAL_NEW_CHAT_REQUEST_RE.fullmatch(request_id):
         return web.json_response({"error": "Invalid new-chat request ID"}, status=400)
     commit_token = str(body.get("commit_token", "") or "").strip()
-    if not _TRIAL_NEW_CHAT_TOKEN_RE.fullmatch(commit_token):
+    token_times = _trial_new_chat_token_times(commit_token)
+    if token_times is None:
         return web.json_response({"error": "Invalid new-chat commit token"}, status=400)
     slot = _normalize_chat_slot(body.get("slot")) or 1
     previous_session_id = core._resolve_trial_session_id(
@@ -2239,7 +2260,11 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid new-chat transition"}, status=400)
     request_key = (agent_id, request_id)
     source_key = (agent_id, previous_session_id)
-    _prune_trial_new_chat_commits(core.time.time())
+    now = core.time.time()
+    issued_at, expires_at = token_times
+    _prune_trial_new_chat_commits(now)
+    if now > expires_at:
+        return web.json_response({"error": "New-chat commit token expired"}, status=409)
     record = _trial_new_chat_requests.get(request_key)
     if record is None:
         record = _trial_new_chat_sources.get(source_key)
@@ -2253,7 +2278,9 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
             "previous_session_id": previous_session_id,
             "session_id": session_id,
             "slot": slot,
-            "created_at": core.time.time(),
+            "created_at": issued_at,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
             "acknowledged": False,
         }
         expected_token = _trial_new_chat_commit_token(core, record)
@@ -2267,6 +2294,8 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         or record["previous_session_id"] != previous_session_id
         or record["session_id"] != session_id
         or record["slot"] != slot
+        or record["issued_at"] != issued_at
+        or record["expires_at"] != expires_at
         or not hmac.compare_digest(record["commit_token"], commit_token)
     ):
         return web.json_response({"error": "New-chat transition does not match"}, status=409)
