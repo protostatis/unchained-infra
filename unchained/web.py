@@ -1069,7 +1069,10 @@ def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
     for row in preview:
         last_output = st.latest_success_output(state_path, row["id"], limit=20)
         if last_output:
-            row["last_output"] = last_output[:500]
+            one_line = " ".join(last_output.split())
+            if len(one_line) > 120:
+                one_line = one_line[:117].rstrip() + "..."
+            row["last_output_preview"] = one_line
     return preview
 
 

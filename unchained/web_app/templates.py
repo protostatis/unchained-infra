@@ -23514,8 +23514,12 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 .card-meta{display:flex;gap:12px;font-size:11px;color:var(--muted);flex-wrap:wrap}
 .card-meta .status-ok{color:var(--green)}
 .card-meta .status-fail{color:var(--red)}
-.card-output{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:#cfd5e6;line-height:1.5;white-space:pre-wrap}
+.card-output{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:#cfd5e6;line-height:1.5;min-width:0}
 .card-output .label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em}
+.card-output-row{display:flex;align-items:center;gap:10px;min-width:0}
+.card-output-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.card-output-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-weight:600;padding:2px 0;white-space:nowrap}
+.card-output-link:hover,.card-output-link:focus-visible{color:var(--text);text-decoration:underline;text-underline-offset:3px}
 .card.disabled{opacity:0.5}
 
 /* Toggle switch */
@@ -23755,7 +23759,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
 </div>
 
 <!-- History Modal -->
-<div class="modal-overlay" id="history-modal">
+<div class="modal-overlay" id="history-modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
   <div class="modal">
     <h2 id="history-title">Run History</h2>
     <div id="history-list" class="history-list">
@@ -23781,6 +23785,18 @@ let schedulerOpenCodeModelsPromise = null;
 
 // ── Helpers ──
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function truncateSchedulerPreview(value,maxLength){
+  const clean=String(value||'').replace(/\s+/g,' ').trim();
+  if(clean.length<=maxLength) return clean;
+  return clean.substring(0,maxLength-3).trimEnd()+'...';
+}
+
+function safeSchedulerProfileLabel(value,fallback){
+  const clean=String(value||'').trim();
+  if(!clean||clean.indexOf('@')!==-1||/[\\/]/.test(clean)) return fallback;
+  return truncateSchedulerPreview(clean,32);
+}
 
 function toast(msg, kind='ok'){
   const el=document.getElementById('toast');
@@ -23982,8 +23998,7 @@ function formatSchedulerProfile(value){
   const path=String(value||'').trim();
   if(!path) return '';
   if(schedulerProfileLabels[path]) return 'Profile: '+schedulerProfileLabels[path];
-  const fallback=path.split('/').filter(Boolean).pop()||path;
-  return 'Profile: '+fallback;
+  return 'Profile: Selected browser';
 }
 
 function setSchedulerProfileValue(value){
@@ -23993,7 +24008,7 @@ function setSchedulerProfileValue(value){
   if(path && ![...select.options].some(opt=>opt.value===path)){
     const opt=document.createElement('option');
     opt.value=path;
-    opt.textContent='Unavailable profile ('+path+')';
+    opt.textContent='Unavailable browser profile';
     select.appendChild(opt);
   }
   select.value=path;
@@ -24025,13 +24040,12 @@ async function loadSchedulerProfiles(){
       for(const p of (data.profiles||[])){
         const path=String(p.profile_path||p.path||'').trim();
         if(!path||schedulerProfileLabels[path]) continue;
-        const label=String(p.name||p.dir_name||'Profile').trim()||'Profile';
-        const email=String(p.email||'').trim();
-        const text=email?(label+' ('+email+')'):label;
-        schedulerProfileLabels[path]=text;
+        const fallback='Browser profile '+select.options.length;
+        const label=safeSchedulerProfileLabel(p.dir_name||p.name,fallback);
+        schedulerProfileLabels[path]=label;
         const opt=document.createElement('option');
         opt.value=path;
-        opt.textContent=text;
+        opt.textContent=label;
         select.appendChild(opt);
       }
     }
@@ -24057,7 +24071,10 @@ function render(){
     const lastAgo=timeAgo(p.last_run_at);
     const nextAgo=p.next_run_at?new Date(p.next_run_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'—';
     const statusCls=p.last_status==='success'?'status-ok':p.last_status==='error'?'status-fail':'';
-    const lastOutput=p.last_output?'<div class="card-output"><span class="label">Last output</span>'+esc(p.last_output)+'</div>':'';
+    const promptPreview=truncateSchedulerPreview(j.prompt||'',80);
+    const outputPreview=truncateSchedulerPreview(p.last_output_preview||'',120);
+    const viewRunLabel='View full run for '+String(j.id||'this task');
+    const lastOutput=outputPreview?'<div class="card-output"><span class="label">Last output</span><div class="card-output-row"><span class="card-output-preview">'+esc(outputPreview)+'</span><button type="button" class="card-output-link" aria-label="'+esc(viewRunLabel)+'" onclick="openHistoryModal('+i+')">View full run</button></div></div>':'';
     const modelMeta='<span>'+esc(formatSchedulerModel(j.model||''))+'</span>';
     const profileMeta=j.profile_path?'<span>'+esc(formatSchedulerProfile(j.profile_path))+'</span>':'';
     return '<div class="card'+(en?'':' disabled')+'">' +
@@ -24070,7 +24087,7 @@ function render(){
           '<button class="del-btn" title="Delete" onclick="deleteJob('+i+')">&#10005;</button>' +
         '</span>' +
       '</div>' +
-      '<div class="card-prompt">'+esc((j.prompt||'').substring(0,120))+'</div>' +
+      '<div class="card-prompt">'+esc(promptPreview)+'</div>' +
       '<div class="card-schedule">'+esc(scheduleToText(j.schedule))+'</div>' +
       '<div class="card-meta">' +
         modelMeta +
