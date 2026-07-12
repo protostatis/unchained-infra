@@ -414,6 +414,9 @@ class TestTrialNewChatTemplate(unittest.TestCase):
         self.assertIn("data.commit_request_id", html)
         self.assertIn("data.commit_token", html)
         self.assertIn("[0-9]{1,12}\\.[0-9]{1,12}\\.[a-f0-9]{64}", html)
+        self.assertIn("data.error === 'New-chat commit token expired'", html)
+        self.assertIn("await recoverExpiredNewChat(pending);", html)
+        self.assertIn("Your previous chat was restored; select New Chat to try again.", html)
         self.assertIn("_newChatRecoveryBlocked()", html)
         self.assertIn("Finish recovering the new chat", html)
         self.assertIn("recoverPendingNewChat();", html)
@@ -440,6 +443,7 @@ class TestTrialNewChatRuntime(unittest.TestCase):
                 _js_function(html, "_newChatRecoveryBlocked"),
                 _js_function(html, "_syncNewChatRecoveryLock"),
                 _js_function(html, "acknowledgeNewChatTransition", async_function=True),
+                _js_function(html, "recoverExpiredNewChat", async_function=True),
                 _js_function(html, "recoverPendingNewChat", async_function=True),
                 _js_function(html, "updateSendAvailability"),
                 _js_function(html, "setNewChatFeedback"),
@@ -497,6 +501,7 @@ let activePersisted = '';
 let hintsShown = 0;
 let syncCount = 0;
 let sendAttemptAdvanced = 0;
+let historyLoads = 0;
 function currentModel() {{ return 'google/gemini-3.1-flash-lite'; }}
 function _sessionStoreKey() {{ return 'unchained_session_trial-agent_openrouter'; }}
 function _slotLabel(slot) {{ return ['Lane A','Lane B','Lane C'][slot - 1]; }}
@@ -504,6 +509,7 @@ function _persistSessionId(value) {{ persisted = value; }}
 function _setActiveSlotSession(value) {{ activePersisted = value; }}
 function _syncSlotButtons() {{ syncCount += 1; }}
 function loadSidebarHistory() {{}}
+async function loadHistory() {{ historyLoads += 1; elements.chat.innerHTML = 'restored history for ' + sessionId; }}
 function showHintsIfEmpty() {{ hintsShown += 1; elements.chat.innerHTML = 'fresh hints'; }}
 function _finalizeGroup() {{}}
 function renderNavTrail() {{}}
@@ -532,6 +538,7 @@ function restoreCurrentChat(sid) {{
     if (url === '/web/chat/new/ack') {{
       ackCalls += 1;
       if (ackMode === 'lost') throw new Error('ack response lost');
+      if (ackMode === 'expired') return {{ok:false, status:409, json:async () => ({{error:'New-chat commit token expired'}})}};
       return {{ok:true, json:async () => ({{
         ok:true, acknowledged:true, request_id:body.request_id,
         previous_session_id:body.previous_session_id, session_id:body.session_id,
@@ -621,10 +628,42 @@ function restoreCurrentChat(sid) {{
   assert.strictEqual(elements.msginput.disabled, false);
   assert.strictEqual(elements.slotbar.classList.contains('locked'), false);
 
+  // If an ACK was lost and the signed reservation expires before recovery,
+  // rollback is terminal: restore the prior session and never retry that ACK.
+  storage.clear();
+  reservedSession = '';
+  mode = 'normal';
+  ackMode = 'lost';
+  restoreCurrentChat('s-trial-agent-expiring');
+  await doNewChat();
+  const expiring = _loadPendingNewChat();
+  assert.strictEqual(sessionId, expiring.session_id);
+  assert.strictEqual(elements.sendbtn.disabled, true);
+  assert.strictEqual(elements.msginput.disabled, true);
+
+  ackMode = 'expired';
+  const ackCallsBeforeExpiry = ackCalls;
+  const historyLoadsBeforeExpiry = historyLoads;
+  await recoverPendingNewChat();
+  assert.strictEqual(ackCalls, ackCallsBeforeExpiry + 1);
+  assert.strictEqual(_loadPendingNewChat(), null, 'expired recovery state was retained');
+  assert.strictEqual(sessionId, expiring.previous_session_id);
+  assert.strictEqual(persisted, expiring.previous_session_id);
+  assert.strictEqual(activePersisted, expiring.previous_session_id);
+  assert.strictEqual(historyLoads, historyLoadsBeforeExpiry + 1);
+  assert.strictEqual(elements.chat.innerHTML, 'restored history for ' + expiring.previous_session_id);
+  assert.strictEqual(elements.sendbtn.disabled, false);
+  assert.strictEqual(elements.msginput.disabled, false);
+  assert.strictEqual(elements.slotbar.classList.contains('locked'), false);
+  assert.match(elements['new-chat-feedback'].textContent, /expired before confirmation.*previous chat was restored.*try again/i);
+  await recoverPendingNewChat();
+  assert.strictEqual(ackCalls, ackCallsBeforeExpiry + 1, 'expired ACK was retried after terminal recovery');
+
   // A stale response from an older request cannot replace the active session.
   storage.clear();
   reservedSession = '';
   mode = 'stale';
+  ackMode = 'success';
   restoreCurrentChat('s-trial-agent-third');
   await doNewChat();
   const stalePending = _loadPendingNewChat();
