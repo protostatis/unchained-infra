@@ -117,6 +117,9 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(data["replayed"])
         self.assertEqual(data["request_id"], "request-0000000000000001")
         self.assertEqual(data["commit_request_id"], data["request_id"])
+        self.assertEqual(data["commit_issued_at"], 1234)
+        self.assertEqual(data["commit_expires_at"], 1234 + 24 * 60 * 60)
+        self.assertRegex(data["commit_token"], r"^1234\.87634\.[a-f0-9]{64}$")
         self.assertEqual(data["previous_session_id"], old_session)
         self.assertEqual(data["active_slot"], 2)
         self.assertNotEqual(data["session_id"], old_session)
@@ -160,7 +163,8 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
                 request_id,
                 old_session,
                 retry_data["session_id"],
-                "0" * 64,
+                retry_data["commit_token"][:-1]
+                + ("0" if retry_data["commit_token"][-1] != "0" else "1"),
             )
         )
         self.assertEqual(forged.status, 409)
@@ -210,6 +214,56 @@ class TestTrialNewChatBackend(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(chat_flow._trial_new_chat_requests), request_count)
         self.assertEqual(len(chat_flow._trial_new_chat_sources), source_count)
         core._delete_trial_session.assert_called_once_with(old_session)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_pruned_commit_token_cannot_be_acknowledged_after_expiry(self, mock_core):
+        from web_app.handlers import chat_flow
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        request_id = "request-0000000000000005"
+        old_session = "s-trial-agent-current"
+        core = self._core()
+        mock_core.return_value = core
+        reservation = await handle_chat_new(self._new_request(request_id, old_session))
+        data = json.loads(reservation.body.decode())
+        chat_flow._trial_new_chat_requests.clear()
+        chat_flow._trial_new_chat_sources.clear()
+
+        issued_at, expires_at, signature = data["commit_token"].split(".")
+        tampered_token = (
+            f"{int(issued_at) + 1}.{int(expires_at) + 1}.{signature}"
+        )
+        tampered = await handle_chat_new_ack(
+            self._ack_request(
+                request_id,
+                old_session,
+                data["session_id"],
+                tampered_token,
+            )
+        )
+        self.assertEqual(tampered.status, 409)
+
+        core.time = SimpleNamespace(
+            time=lambda: data["commit_expires_at"] + 1
+        )
+
+        expired = await handle_chat_new_ack(
+            self._ack_request(
+                request_id,
+                old_session,
+                data["session_id"],
+                data["commit_token"],
+            )
+        )
+
+        self.assertEqual(expired.status, 409)
+        self.assertEqual(
+            json.loads(expired.body.decode())["error"],
+            "New-chat commit token expired",
+        )
+        core._delete_trial_session.assert_not_called()
+        self.assertEqual(chat_flow._trial_new_chat_requests, {})
+        self.assertEqual(chat_flow._trial_new_chat_sources, {})
 
     @patch("web_app.handlers.chat_flow._core")
     async def test_competing_requests_for_same_source_replay_one_transition(self, mock_core):
@@ -359,6 +413,7 @@ class TestTrialNewChatTemplate(unittest.TestCase):
         self.assertIn("data.request_id !== pending.request_id", html)
         self.assertIn("data.commit_request_id", html)
         self.assertIn("data.commit_token", html)
+        self.assertIn("[0-9]{1,12}\\.[0-9]{1,12}\\.[a-f0-9]{64}", html)
         self.assertIn("_newChatRecoveryBlocked()", html)
         self.assertIn("Finish recovering the new chat", html)
         self.assertIn("recoverPendingNewChat();", html)
@@ -493,7 +548,7 @@ function restoreCurrentChat(sid) {{
     const responseRequestId = mode === 'stale' ? 'request-stale-00000000000' : body.request_id;
     return {{ok:true, json:async () => ({{
       ok:true, request_id:responseRequestId, commit_request_id:body.request_id,
-      commit_token:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      commit_token:'1234.87634.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       previous_session_id:body.session_id,
       session_id:reservedSession, active_slot:body.slot, replayed:mode === 'replay',
     }})}};

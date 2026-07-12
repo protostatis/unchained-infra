@@ -9189,7 +9189,7 @@ function _loadPendingNewChat() {
     if (next && !next.startsWith('s-' + agentId + '-')) return null;
     if (parsed.commit_request_id &&
         !/^[A-Za-z0-9_-]{16,80}$/.test(parsed.commit_request_id)) return null;
-    if (parsed.commit_token && !/^[a-f0-9]{64}$/.test(parsed.commit_token)) return null;
+    if (parsed.commit_token && !/^[0-9]{1,12}\.[0-9]{1,12}\.[a-f0-9]{64}$/.test(parsed.commit_token)) return null;
     if (next && (!parsed.commit_request_id || !parsed.commit_token)) return null;
     return parsed;
   } catch(e) {
@@ -9811,7 +9811,7 @@ async function doNewChat() {
       nextSessionId = String(data.session_id || '').trim();
       if (!data.ok || data.request_id !== pending.request_id ||
           !/^[A-Za-z0-9_-]{16,80}$/.test(data.commit_request_id || '') ||
-          !/^[a-f0-9]{64}$/.test(data.commit_token || '') ||
+          !/^[0-9]{1,12}\.[0-9]{1,12}\.[a-f0-9]{64}$/.test(data.commit_token || '') ||
           data.previous_session_id !== previousSessionId || data.active_slot !== requestedSlot ||
           !nextSessionId || nextSessionId === previousSessionId ||
           !nextSessionId.startsWith('s-' + agentId + '-')) {
