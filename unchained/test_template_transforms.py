@@ -58,6 +58,7 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("maybeShowDevLogin", templates.TRIAL_CHAT_HTML)
         self.assertIn('class="topbar-new"', templates.TRIAL_CHAT_HTML)
         self.assertIn('class="topbar-new"', templates.CLAUDE_CHAT_HTML)
+        self.assertIn("text-decoration:none!important", templates.TRIAL_CHAT_HTML)
         self.assertIn('id="sidebar"', templates.CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)

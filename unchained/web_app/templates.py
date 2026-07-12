@@ -19369,6 +19369,7 @@ body::after{
   background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong) 55%,var(--spectrum-violet))!important;
   border:0!important;
   color:#fff!important;
+  text-decoration:none!important;
   box-shadow:0 12px 28px rgba(233,69,96,0.26)!important;
 }
 .topbar-new:hover{filter:brightness(1.06);background:linear-gradient(135deg,var(--spectrum-red),var(--accent-strong),var(--spectrum-blue))!important}
