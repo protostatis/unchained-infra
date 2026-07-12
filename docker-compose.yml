@@ -186,6 +186,7 @@ services:
       - SMTP_PASS=${SMTP_PASS}
       - FROM_EMAIL=${FROM_EMAIL:-noreply@unchainedsky.com}
       - ADMIN_EMAILS=${ADMIN_EMAILS}
+      - CONTACT_EMAIL=${CONTACT_EMAIL:-hello@unchainedsky.com}
       - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
       - TRIAL_AGENT_ID=${TRIAL_AGENT_ID:-}
       - HEADLESS_API_KEY=${HEADLESS_API_KEY:-}
