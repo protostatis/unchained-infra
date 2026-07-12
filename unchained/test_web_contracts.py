@@ -194,6 +194,22 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Open trial", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
 
+    def test_landing_mobile_navigation_has_accessible_disclosure(self):
+        self.assertIn('<nav class="topnav" aria-label="Primary">', web.LANDING_HTML)
+        self.assertIn('id="landing-menu-toggle" aria-expanded="false"', web.LANDING_HTML)
+        self.assertIn('aria-controls="landing-nav-links"', web.LANDING_HTML)
+        self.assertIn('id="landing-nav-links"', web.LANDING_HTML)
+        for href in ("#calculator", "#capability", "#start"):
+            self.assertIn(f'href="{href}"', web.LANDING_HTML)
+
+    def test_landing_mobile_navigation_interaction_contract(self):
+        self.assertIn("function setLandingMenuOpen(open,focusFirst)", web.LANDING_HTML)
+        self.assertIn("landingMenu.querySelector('a').focus()", web.LANDING_HTML)
+        self.assertIn("event.key==='Escape'", web.LANDING_HTML)
+        self.assertIn("landingMenuButton.focus()", web.LANDING_HTML)
+        self.assertIn("!landingMenu.contains(event.target)", web.LANDING_HTML)
+        self.assertIn("landingMenu.querySelectorAll('a')", web.LANDING_HTML)
+
     def test_landing_v4_default_route_clears_preview_cookie(self):
         async def _render(query: dict[str, str], cookies: dict[str, str]):
             return await web.handle_index(SimpleNamespace(query=query, cookies=cookies))
