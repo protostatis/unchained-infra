@@ -2060,7 +2060,9 @@ async def handle_chat_new(request: web.Request) -> web.Response:
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
         old_session = core._resolve_trial_session_id(agent_id, requested_session_id)
-        new_session = f"s-{agent_id}-{int(core.time.time() * 1000):x}"
+        new_session = (
+            f"s-{agent_id}-{int(core.time.time() * 1000):x}-{secrets.token_hex(4)}"
+        )
         # Migrate the Chrome tab to the new session so the screencast
         # can persist, but always create a fresh session_id so the
         # agent starts with a clean conversation history.
@@ -2072,7 +2074,7 @@ async def handle_chat_new(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "ok": True,
-                "active_slot": 1,
+                "active_slot": requested_slot or 1,
                 "trial": True,
                 "session_id": new_session,
             }
