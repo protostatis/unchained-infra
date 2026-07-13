@@ -146,7 +146,7 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertEqual(inspect.getsource(chat_agent_openrouter).count("await self.ws.send(json.dumps("), 1)
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
-        self.assertEqual(agent_package.VERSION, "0.3.111")
+        self.assertEqual(agent_package.VERSION, "0.3.112")
         self.assertEqual(
             agent_package._PACKAGE_FILES["unchained/chat_event_transport.py"],
             "chat_event_transport.py",

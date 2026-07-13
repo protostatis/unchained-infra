@@ -78,6 +78,31 @@ class TestProvisionStatusContract(unittest.TestCase):
 
 class TestBridgeProvisionStatus(unittest.IsolatedAsyncioTestCase):
 
+    def test_reconcile_restores_persisted_caller_tag(self):
+        """Bridge restart recovery retains slot ownership provenance."""
+        agent = _make_agent()
+        state = {
+            "agent_id": agent.agent_id,
+            "pid": 1234,
+            "port": 10001,
+            "temp_dir": "/tmp/fake-ab12",
+            "profile_dir_name": "Profile 5",
+            "ready": True,
+            "launched_at": 1,
+            "caller_tag": "chat-owner-tag",
+        }
+        with (
+            patch("chrome_bridge._list_prov_state_slots", return_value=["ab12"]),
+            patch("chrome_bridge._read_prov_state", return_value=state),
+            patch("chrome_bridge._classify_prov_pid", return_value="alive"),
+        ):
+            agent._reconcile_prov_chromes(force=True)
+
+        self.assertEqual(
+            agent._prov_chromes["ab12"]["caller_tag"],
+            "chat-owner-tag",
+        )
+
     async def test_empty_when_no_prov_chromes(self):
         """Returns empty slots dict when no provision Chromes exist."""
         agent = _make_agent()
@@ -101,6 +126,7 @@ class TestBridgeProvisionStatus(unittest.IsolatedAsyncioTestCase):
             "process": _FakeProcess(),
             "temp_dir": "/tmp/fake-ab12",
             "profile_dir_name": "Profile 5",
+            "caller_tag": "s-claude-abc12345-demo",
         }
 
         mock_urlopen.side_effect = _urlopen_factory({
@@ -120,6 +146,7 @@ class TestBridgeProvisionStatus(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ab12", slots)
         self.assertEqual(slots["ab12"]["profile"], "Profile 5")
         self.assertEqual(slots["ab12"]["port"], 10001)
+        self.assertEqual(slots["ab12"]["caller_tag"], "s-claude-abc12345-demo")
 
         tabs = slots["ab12"]["tabs"]
         self.assertEqual(len(tabs), 2)

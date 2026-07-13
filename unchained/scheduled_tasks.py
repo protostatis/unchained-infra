@@ -569,8 +569,9 @@ class ChatTriggerClient:
             body["session_id"] = session_id
         if headless:
             body["headless"] = True
-        if profile_path:
-            body["profile_path"] = profile_path
+        # Scheduled stable sessions carry explicit profile intent. An empty
+        # value means leave profile mode instead of preserving an earlier run.
+        body["profile_path"] = profile_path
 
         req = urllib.request.Request(
             f"{self.api_url}/web/chat",
