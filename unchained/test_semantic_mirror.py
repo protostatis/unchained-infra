@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "a5bb62b4f0f5c83448e08eec36f9be12d4e31db7e1e63064c56983e87a449b0a",
+            "db31b163bb6bbc581d813303fc82106e00528528535920e110c7f81166c1b79f",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -55,7 +55,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
 
     def test_capture_protocol_preserves_bounded_viewport_critical_styles(self):
         self.assertIn("MAX_CRITICAL_STYLE_BYTES = 512 * 1024", INSTALL_MIRROR_EXPRESSION)
-        self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 768", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("function applyCriticalComputedStyle", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("if (!isInViewport(source)) return", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("computed.getPropertyValue(property)", INSTALL_MIRROR_EXPRESSION)
@@ -71,6 +71,19 @@ class TestSemanticMirrorParsing(unittest.TestCase):
             "'stroke'",
         ):
             self.assertIn(property_name, INSTALL_MIRROR_EXPRESSION)
+
+    def test_capture_protocol_prioritizes_paint_before_geometry_budget(self):
+        properties_start = INSTALL_MIRROR_EXPRESSION.index(
+            "const CRITICAL_STYLE_PROPERTIES = ["
+        )
+        properties_end = INSTALL_MIRROR_EXPRESSION.index("]", properties_start)
+        properties = INSTALL_MIRROR_EXPRESSION[properties_start:properties_end]
+        for paint_property in ("'font-family'", "'color'", "'background-color'"):
+            self.assertLess(
+                properties.index(paint_property),
+                properties.index("'width'"),
+                f"{paint_property} must survive the per-node style budget",
+            )
 
     def test_capture_protocol_prioritizes_body_and_reports_style_fidelity(self):
         self.assertIn("MAX_HEAD_CAPTURE_BYTES = 384 * 1024", INSTALL_MIRROR_EXPRESSION)
