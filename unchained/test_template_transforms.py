@@ -645,7 +645,11 @@ const canvas = {
 };
 const image = {naturalWidth: 0, naturalHeight: 0};
 const rafQueue = [];
+const timers = new Map();
+let nextTimer = 1;
 globalThis.requestAnimationFrame = function(callback) { rafQueue.push(callback); return rafQueue.length; };
+globalThis.setTimeout = function(callback, delay) { const id = nextTimer++; timers.set(id, {callback, delay}); return id; };
+globalThis.clearTimeout = function(id) { timers.delete(id); };
 globalThis.window = {
   visualViewport: {scale: 2},
   matchMedia() { return {matches: true}; },
@@ -657,16 +661,26 @@ globalThis.document = {
 let agentViewSnapshot = {viewport: {width: 1280, height: 720}};
 function positionAgentViewMobileChat() {}
 function flushRaf() { while (rafQueue.length) rafQueue.shift()(); }
+function runTimers(delay) {
+  [...timers.entries()].filter(([, timer]) => timer.delay === delay).forEach(([id, timer]) => {
+    timers.delete(id);
+    timer.callback();
+  });
+}
 function expect(condition, message) { if (!condition) throw new Error(message); }
 """
         checks = r"""
-for (let index = 0; index < 10; index += 1) scheduleAgentViewSemanticFrameScale(false);
+for (let index = 0; index < 10; index += 1) handleAgentViewViewportResize();
 expect(rafQueue.length === 1, 'resize work was not coalesced');
 flushRaf();
 expect(!frames[0].style.width, 'pinch zoom rewrote iframe styles');
 
+runTimers(180);
+flushRaf();
+expect(frames[0].style.width === '1280px', 'settled zoom left the iframe unpositioned');
+
 window.visualViewport.scale = 1;
-scheduleAgentViewSemanticFrameScale(false);
+handleAgentViewViewportResize();
 flushRaf();
 expect(frames[0].style.width === '1280px', 'scaling did not recover after pinch');
 expect(!/NaN|Infinity/.test(JSON.stringify(frames)), 'valid scaling produced invalid CSS');

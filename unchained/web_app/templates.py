@@ -21058,11 +21058,31 @@ function positionAgentViewMobileChat(renderedHeight) {
 
 let agentViewSemanticScaleScheduled = false;
 let agentViewSemanticScaleSettleTimer = null;
+let agentViewPinchZoomResizing = false;
+let agentViewPinchZoomSettleTimer = null;
 
-function agentViewPinchZoomActive() {
+function agentViewPageZoomed() {
   const viewport = window.visualViewport;
   const scale = viewport ? Number(viewport.scale) : 1;
   return Number.isFinite(scale) && Math.abs(scale - 1) > .02;
+}
+
+function handleAgentViewViewportResize() {
+  const zoomed = agentViewPageZoomed();
+  if (zoomed) {
+    agentViewPinchZoomResizing = true;
+    if (agentViewPinchZoomSettleTimer) clearTimeout(agentViewPinchZoomSettleTimer);
+    agentViewPinchZoomSettleTimer = setTimeout(function() {
+      agentViewPinchZoomSettleTimer = null;
+      agentViewPinchZoomResizing = false;
+      scheduleAgentViewSemanticFrameScale(false);
+    }, 180);
+  } else {
+    agentViewPinchZoomResizing = false;
+    if (agentViewPinchZoomSettleTimer) clearTimeout(agentViewPinchZoomSettleTimer);
+    agentViewPinchZoomSettleTimer = null;
+  }
+  scheduleAgentViewSemanticFrameScale(!zoomed);
 }
 
 function scheduleAgentViewSemanticFrameScale(settle) {
@@ -21090,8 +21110,9 @@ function agentViewViewportDimension(value, fallback, minimum) {
 
 function scaleAgentViewSemanticFrame() {
   // Native pinch zoom already scales the composed preview. Rewriting two large,
-  // transformed iframes during the gesture can overwhelm mobile WebKit.
-  if (agentViewPinchZoomActive()) return;
+  // transformed iframes during the gesture can overwhelm mobile WebKit. Once
+  // the gesture settles, apply one layout pass even if the page stays zoomed.
+  if (agentViewPinchZoomResizing) return;
   const canvas = document.getElementById('agent-view-canvas');
   if (!canvas) return;
   const canvasWidth = Number(canvas.clientWidth);
@@ -21814,11 +21835,11 @@ document.addEventListener('keydown', function(event) {
   if (agentShellTaskEnabled) return;
   closeAgentView();
 });
-window.addEventListener('resize', function() { scheduleAgentViewSemanticFrameScale(true); });
-window.addEventListener('orientationchange', function() { scheduleAgentViewSemanticFrameScale(true); });
+window.addEventListener('resize', handleAgentViewViewportResize);
+window.addEventListener('orientationchange', handleAgentViewViewportResize);
 window.addEventListener('pageshow', function() { scheduleAgentViewSemanticFrameScale(false); });
 if (window.visualViewport && window.visualViewport.addEventListener) {
-  window.visualViewport.addEventListener('resize', function() { scheduleAgentViewSemanticFrameScale(true); });
+  window.visualViewport.addEventListener('resize', handleAgentViewViewportResize);
 }
 initializeAgentShellExperiment();
 if (typeof updateAgentStatusUI === 'function') {

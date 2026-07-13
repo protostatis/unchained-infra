@@ -1150,8 +1150,8 @@ if (agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, la
 """
         result = subprocess.run([node, "-e", check], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-    assert "window.addEventListener('resize', function() { scheduleAgentViewSemanticFrameScale(true); })" in runtime_scripts[0]
-    assert "window.visualViewport.addEventListener('resize'" in runtime_scripts[0]
+    assert "window.addEventListener('resize', handleAgentViewViewportResize)" in runtime_scripts[0]
+    assert "window.visualViewport.addEventListener('resize', handleAgentViewViewportResize)" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
     assert "Browser Preview" in CHAT_HTML, "browser preview should use a user-facing label"
