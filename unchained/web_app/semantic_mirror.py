@@ -100,9 +100,18 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const VIEWPORT_BUDGET_RESERVE = 0.4;
   const MAX_HEAD_CAPTURE_BYTES = 384 * 1024;
   const MAX_CRITICAL_STYLE_BYTES = 512 * 1024;
-  const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024;
+  // Leave enough of the global budget to cover every visible node.
+  const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 768;
+  // This list is priority ordered: applyCriticalComputedStyle stops at the
+  // per-node byte cap. Keep typography and paint ahead of long geometry lists
+  // so CSS-heavy pages retain their basic visual identity even when their
+  // largest author stylesheet cannot fit in the snapshot.
   const CRITICAL_STYLE_PROPERTIES = [
     'display', 'position', 'box-sizing',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+    'letter-spacing', 'white-space', 'text-align',
+    'color', 'background-color',
+    'fill', 'stroke', 'stroke-width',
     'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
     'top', 'right', 'bottom', 'left',
     'margin', 'padding', 'border', 'border-radius',
@@ -110,10 +119,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
     'overflow-x', 'overflow-y', 'object-fit', 'object-position',
     'transform', 'transform-origin', 'opacity', 'visibility', 'z-index',
-    'fill', 'stroke', 'stroke-width',
-    'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
-    'letter-spacing', 'white-space', 'text-align',
-    'color', 'background-color', 'background-image', 'background-size', 'background-position',
+    'background-image', 'background-size', 'background-position',
     'aspect-ratio'
   ];
   const OMITTED_TAGS = new Set([
