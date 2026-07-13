@@ -114,6 +114,27 @@ try:
 except ValueError:
     OPENCODE_RUN_TIMEOUT_S = 300.0
     log.warning("Invalid OPENCODE_RUN_TIMEOUT_S, using default 300")
+_OPENCODE_DEFAULT_MAX_EVENT_BYTES = 8 * 1024 * 1024
+_OPENCODE_MIN_EVENT_BYTES = 64 * 1024
+_OPENCODE_MAX_EVENT_BYTES_CAP = 16 * 1024 * 1024
+try:
+    OPENCODE_MAX_EVENT_BYTES = int(
+        os.environ.get("OPENCODE_MAX_EVENT_BYTES", str(_OPENCODE_DEFAULT_MAX_EVENT_BYTES))
+    )
+except ValueError:
+    OPENCODE_MAX_EVENT_BYTES = _OPENCODE_DEFAULT_MAX_EVENT_BYTES
+    log.warning(
+        "Invalid OPENCODE_MAX_EVENT_BYTES; using default %d",
+        _OPENCODE_DEFAULT_MAX_EVENT_BYTES,
+    )
+if not _OPENCODE_MIN_EVENT_BYTES <= OPENCODE_MAX_EVENT_BYTES <= _OPENCODE_MAX_EVENT_BYTES_CAP:
+    log.warning(
+        "OPENCODE_MAX_EVENT_BYTES must be between %d and %d; using default %d",
+        _OPENCODE_MIN_EVENT_BYTES,
+        _OPENCODE_MAX_EVENT_BYTES_CAP,
+        _OPENCODE_DEFAULT_MAX_EVENT_BYTES,
+    )
+    OPENCODE_MAX_EVENT_BYTES = _OPENCODE_DEFAULT_MAX_EVENT_BYTES
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -2648,6 +2669,40 @@ async def _opencode_timeout_guard(
         _kill_process(proc)
 
 
+class _OpenCodeEventTooLarge(Exception):
+    """Raised when one newline-delimited OpenCode event exceeds the bound."""
+
+
+async def _iter_opencode_event_lines(stream):
+    """Yield bounded event lines while preserving an unterminated final line."""
+    while True:
+        try:
+            raw_line = await stream.readuntil(b"\n")
+        except asyncio.LimitOverrunError as exc:
+            raise _OpenCodeEventTooLarge from exc
+        except asyncio.IncompleteReadError as exc:
+            raw_line = exc.partial
+        if not raw_line:
+            return
+        yield raw_line
+
+
+async def _stop_opencode_process(
+    proc: asyncio.subprocess.Process,
+    sid: str,
+    timeout_s: float = 3.0,
+) -> None:
+    """Kill and reap an abnormal OpenCode subprocess without blocking forever."""
+    if proc.returncode is None:
+        _kill_process(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        log.warning("Timed out waiting for OpenCode process to stop for session %s", sid)
+    except Exception:
+        log.debug("Failed waiting for OpenCode process for session %s", sid, exc_info=True)
+
+
 async def handle_message_opencode(
     ws,
     sid: str,
@@ -2744,6 +2799,7 @@ async def handle_message_opencode(
             env=env,
             cwd=CWD,
             start_new_session=True,
+            limit=OPENCODE_MAX_EVENT_BYTES,
         )
     except FileNotFoundError:
         await emit({
@@ -2779,97 +2835,110 @@ async def handle_message_opencode(
     seen_tool_parts: set[str] = set()
 
     try:
-        async for raw_line in proc.stdout:
-            if not raw_line:
-                break
-            line = raw_line.decode(errors="replace").strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            event_sid = str(event.get("sessionID") or "").strip()
-            if event_sid and not opencode_sessions.get(sid):
-                opencode_sessions[sid] = event_sid
-                _save_opencode_session(sid, event_sid, model=opencode_model)
-                if not is_resume:
-                    print(f"  OpenCode session: {event_sid[:12]}...")
-
-            etype = event.get("type", "")
-            if etype == "text":
-                part = event.get("part") if isinstance(event.get("part"), dict) else {}
-                part_id = str(part.get("id") or "").strip()
-                if part_id and part_id in seen_text_parts:
+        try:
+            async for raw_line in _iter_opencode_event_lines(proc.stdout):
+                if not raw_line:
+                    break
+                line = raw_line.decode(errors="replace").strip()
+                if not line:
                     continue
-                text = str(part.get("text") or "").strip()
-                if text:
-                    response_parts.append(text)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_sid = str(event.get("sessionID") or "").strip()
+                if event_sid and not opencode_sessions.get(sid):
+                    opencode_sessions[sid] = event_sid
+                    _save_opencode_session(sid, event_sid, model=opencode_model)
+                    if not is_resume:
+                        print(f"  OpenCode session: {event_sid[:12]}...")
+
+                etype = event.get("type", "")
+                if etype == "text":
+                    part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                    part_id = str(part.get("id") or "").strip()
+                    if part_id and part_id in seen_text_parts:
+                        continue
+                    text = str(part.get("text") or "").strip()
+                    if text:
+                        response_parts.append(text)
+                        if part_id:
+                            seen_text_parts.add(part_id)
+                    continue
+
+                if etype == "tool_use":
+                    part = event.get("part") if isinstance(event.get("part"), dict) else {}
+                    part_id = str(part.get("id") or "").strip()
+                    if part_id and part_id in seen_tool_parts:
+                        continue
                     if part_id:
-                        seen_text_parts.add(part_id)
-                continue
-
-            if etype == "tool_use":
-                part = event.get("part") if isinstance(event.get("part"), dict) else {}
-                part_id = str(part.get("id") or "").strip()
-                if part_id and part_id in seen_tool_parts:
-                    continue
-                if part_id:
-                    seen_tool_parts.add(part_id)
-                tool_name, tool_input = _opencode_tool_name_and_input(part)
-                out = _opencode_tool_output(part)
-                await emit({
-                    "type": "tool_start",
-                    "name": tool_name,
-                    "input": tool_input,
-                })
-
-                is_screenshot = False
-                screenshot_data = None
-                if "saved:" in out and "screenshot captured" in out:
-                    try:
-                        sc_path = out.split("saved:")[1].rstrip("]").strip()
-                        with open(sc_path, "r") as f:
-                            screenshot_data = f.read()
-                        is_screenshot = _is_base64_png_blob(screenshot_data)
-                    except Exception as e:
-                        log.info("  OpenCode screenshot read failed: %s", e)
-                elif _is_base64_png_blob(out):
-                    screenshot_data = out
-                    is_screenshot = True
-
-                if is_screenshot and screenshot_data:
+                        seen_tool_parts.add(part_id)
+                    tool_name, tool_input = _opencode_tool_name_and_input(part)
+                    out = _opencode_tool_output(part)
                     await emit({
-                        "type": "tool_result",
+                        "type": "tool_start",
                         "name": tool_name,
-                        "data": screenshot_data,
-                        "is_screenshot": True,
-                        "visible": True,
+                        "input": tool_input,
                     })
-                else:
-                    await emit({
-                        "type": "tool_result",
-                        "name": tool_name,
-                        "data": out[:12000],
-                        "is_screenshot": False,
-                        "visible": None,
-                    })
-                continue
 
-            if etype == "error":
-                err_msg = _extract_opencode_error_message(event)
-                if err_msg:
-                    error_text = err_msg
-                if is_resume and _is_stale_opencode_error(error_text):
+                    is_screenshot = False
+                    screenshot_data = None
+                    if "saved:" in out and "screenshot captured" in out:
+                        try:
+                            sc_path = out.split("saved:")[1].rstrip("]").strip()
+                            with open(sc_path, "r") as f:
+                                screenshot_data = f.read()
+                            is_screenshot = _is_base64_png_blob(screenshot_data)
+                        except Exception as e:
+                            log.info("  OpenCode screenshot read failed: %s", e)
+                    elif _is_base64_png_blob(out):
+                        screenshot_data = out
+                        is_screenshot = True
+
+                    if is_screenshot and screenshot_data:
+                        await emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "data": screenshot_data,
+                            "is_screenshot": True,
+                            "visible": True,
+                        })
+                    else:
+                        await emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "data": out[:12000],
+                            "is_screenshot": False,
+                            "visible": None,
+                        })
                     continue
-                if not error_text:
-                    error_text = "OpenCode CLI error"
-                await emit({"type": "error", "data": f"OpenCode CLI error: {error_text}"})
-                await emit({"type": "done"})
-                if proc.returncode is None:
-                    _kill_process(proc)
-                return
+
+                if etype == "error":
+                    err_msg = _extract_opencode_error_message(event)
+                    if err_msg:
+                        error_text = err_msg
+                    if is_resume and _is_stale_opencode_error(error_text):
+                        continue
+                    if not error_text:
+                        error_text = "OpenCode CLI error"
+                    await emit({"type": "error", "data": f"OpenCode CLI error: {error_text}"})
+                    await emit({"type": "done"})
+                    await _stop_opencode_process(proc, sid)
+                    return
+        except _OpenCodeEventTooLarge:
+            log.warning(
+                "OpenCode emitted a line exceeding %d bytes for session %s — "
+                "aborting this turn",
+                OPENCODE_MAX_EVENT_BYTES, sid,
+            )
+            await _stop_opencode_process(proc, sid)
+            await emit({
+                "type": "error",
+                "data": "OpenCode output exceeded event size limit. Try a simpler task or a model that produces less verbose output.",
+            })
+            await emit({"type": "done"})
+            return
 
         await proc.wait()
 
@@ -2932,7 +3001,7 @@ async def handle_message_opencode(
         # Upstream request cancellation is handled by /web/chat/cancel. Do not
         # inject duplicate terminal events.
         raise
-    except Exception:
+    except Exception as _exc:
         log.exception("OpenCode handler error for session %s", sid)
         # Best-effort: surface whatever context the failed process left behind
         _err_detail = error_text or ""
@@ -2951,7 +3020,10 @@ async def handle_message_opencode(
             if _stderr:
                 _err_detail = _stderr.split("\n")[-1][:200]
         if not _err_detail:
-            _err_detail = "OpenCode CLI failed while handling response."
+            # Surface a clean user-facing message; full detail is in the log above.
+            _exc_name = type(_exc).__name__
+            _err_detail = f"OpenCode CLI encountered an internal error ({_exc_name}). Check the agent log for details."
+        await _stop_opencode_process(proc, sid)
         await emit({"type": "error", "data": _err_detail})
         await emit({"type": "done"})
     finally:

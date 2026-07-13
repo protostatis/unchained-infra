@@ -26,6 +26,7 @@ jobs:
           cd unchained
           python test_open_core_boundary.py
           python test_cloud_tools_click.py
+          python test_opencode_agent.py
 
       - name: Run OSS boundary guards
         run: |
