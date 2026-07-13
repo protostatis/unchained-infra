@@ -34,7 +34,16 @@ SSH_CMD=(ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST")
 SCP_CMD=(scp "${SSH_OPTS[@]}")
 
 remote_bash() {
-    "${SSH_CMD[@]}" bash -s -- "$@"
+    # ssh joins command arguments into one remote shell command. Quote each
+    # script argument explicitly so a value such as the space-separated
+    # service list remains one positional argument on the remote host.
+    local remote_command="bash -s --"
+    local arg quoted_arg
+    for arg in "$@"; do
+        printf -v quoted_arg '%q' "$arg"
+        remote_command+=" $quoted_arg"
+    done
+    "${SSH_CMD[@]}" "$remote_command"
 }
 
 FORCE_BUILD=false
