@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "db31b163bb6bbc581d813303fc82106e00528528535920e110c7f81166c1b79f",
+            "6e1364c59deb512599fd4fa3f1bd88ea8b18932ae1798e578929413ed07a3f64",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -55,7 +55,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
 
     def test_capture_protocol_preserves_bounded_viewport_critical_styles(self):
         self.assertIn("MAX_CRITICAL_STYLE_BYTES = 512 * 1024", INSTALL_MIRROR_EXPRESSION)
-        self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 768", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1280", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("function applyCriticalComputedStyle", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("if (!isInViewport(source)) return", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("computed.getPropertyValue(property)", INSTALL_MIRROR_EXPRESSION)

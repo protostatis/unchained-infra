@@ -100,8 +100,11 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const VIEWPORT_BUDGET_RESERVE = 0.4;
   const MAX_HEAD_CAPTURE_BYTES = 384 * 1024;
   const MAX_CRITICAL_STYLE_BYTES = 512 * 1024;
-  // Leave enough of the global budget to cover every visible node.
-  const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 768;
+  // Each visible viewport element gets up to this many bytes of inline
+  // critical styles.  1280 bytes is enough for ~25 CSS declarations —
+  // display, position, box-sizing, typography, paint colors, geometry
+  // (width/height/margin/padding), and flex/grid layout properties.
+  const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1280;
   // This list is priority ordered: applyCriticalComputedStyle stops at the
   // per-node byte cap. Keep typography and paint ahead of long geometry lists
   // so CSS-heavy pages retain their basic visual identity even when their
@@ -806,7 +809,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     priorityNodes,
     nodeCounter,
     styleBytes: 0,
-    styleLimit: 128 * 1024,
+    styleLimit: 256 * 1024,
     criticalStyleBytes: 0,
     criticalStyleLimit: Math.min(MAX_CRITICAL_STYLE_BYTES, Math.floor(bodyLimit * 0.55)),
     criticalStyleTruncated: false,
