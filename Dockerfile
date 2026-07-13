@@ -34,6 +34,7 @@ COPY unchained/published_results.py .
 COPY unchained/provision_helpers.py .
 COPY unchained/template_utils.py .
 COPY unchained/agent_package.py .
+COPY unchained/chat_event_transport.py .
 COPY unchained/chrome_bridge.py .
 COPY unchained/chat_agent_cli.py .
 COPY unchained/chat_agent_openrouter.py .

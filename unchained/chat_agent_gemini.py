@@ -29,6 +29,7 @@ import httpx
 import websockets
 
 import cloud_tools
+from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
 from nudge import (
     NudgeState,
@@ -229,7 +230,9 @@ class GeminiChatAgent:
     async def connect(self):
         url = f"{self.server}/chat/ws"
         print(f"Connecting to {url} ...")
-        self.ws = await websockets.connect(url, ping_interval=20, ping_timeout=30)
+        self.ws = await websockets.connect(
+            url, ping_interval=20, ping_timeout=30, max_size=CHAT_WS_MAX_MESSAGE_BYTES
+        )
         await self.ws.send(json.dumps({"key": self.api_key, "agent_id": self.agent_id}))
         resp = json.loads(await self.ws.recv())
         if resp.get("type") != "auth_ok":
@@ -265,12 +268,12 @@ class GeminiChatAgent:
                             self.sessions.pop(sid, None)
                         new_sid = f"s-{self.agent_id}-{int(time.time() * 1000):x}"
                         print(f"[new_chat] Cleared sessions, new session: {new_sid}")
-                        await self.ws.send(json.dumps({
+                        await send_agent_event(self.ws, {
                             "type": "new_chat_ok",
                             "req_id": req_id,
                             "session_id": new_sid,
                             "active_slot": 1,
-                        }))
+                        })
                     elif msg.get("type") == "get_history":
                         req_id = msg.get("req_id", "")
                         sid = msg.get("session_id", "")
@@ -290,11 +293,11 @@ class GeminiChatAgent:
                             and isinstance(m.get("content"), str)
                             and m.get("content")
                         ]
-                        await self.ws.send(json.dumps({
+                        await send_agent_event(self.ws, {
                             "type": "history_response",
                             "req_id": req_id,
                             "messages": messages,
-                        }))
+                        })
                     elif msg.get("type") == "cancel":
                         sid = msg.get("session_id", "")
                         task = self.active_tasks.pop(sid, None)
@@ -313,7 +316,7 @@ class GeminiChatAgent:
     async def _send(self, session_id: str, event: dict):
         event["session_id"] = session_id
         try:
-            await self.ws.send(json.dumps(event))
+            await send_agent_event(self.ws, event)
         except Exception as e:
             print(f"Send error: {e}")
 

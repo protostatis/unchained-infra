@@ -32,7 +32,7 @@ async def _route_followup(core, session_id: str, message: str) -> None:
 
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
 
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=8)
     core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
     core._session_last_active[session_id] = time.time()

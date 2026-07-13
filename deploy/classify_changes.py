@@ -63,6 +63,7 @@ UNCHAINED_OWNERSHIP: dict[str, set[str]] = {
     "unchained/api.py": {"web"},
     "unchained/agent_stream.py": {"web"},
     "unchained/agent_package.py": {"web"},
+    "unchained/chat_event_transport.py": {"web", "trial-agent"},
     "unchained/template_utils.py": {"web"},
     "unchained/published_results.py": {"web"},
     "unchained/orchestrator.py": {"web"},

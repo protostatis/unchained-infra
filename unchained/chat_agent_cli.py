@@ -44,6 +44,12 @@ sys.path.insert(0, os.path.expanduser("~/Projects/unchained/unchained"))
 import subprocess
 import websockets  # noqa: E402
 
+from chat_event_transport import (  # noqa: E402
+    CHAT_WS_MAX_MESSAGE_BYTES,
+    SCREENSHOT_OMITTED_MESSAGE,
+    read_inline_screenshot,
+    send_agent_event,
+)
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -1443,7 +1449,7 @@ def _make_emitter(ws, sid: str, req_id: str):
         evt["session_id"] = sid
         if req_id:
             evt["req_id"] = req_id
-        await ws.send(json.dumps(evt))
+        await send_agent_event(ws, evt)
     return emit
 
 
@@ -2176,12 +2182,12 @@ async def handle_message_claude(
                 # Check if this is a screenshot result with temp file
                 is_screenshot = False
                 screenshot_data = None
+                screenshot_oversized = False
                 if "saved:" in result_text and "screenshot captured" in result_text:
                     # cdp_tool.py saves base64 to temp file; read it for the UI
                     try:
                         sc_path = result_text.split("saved:")[1].rstrip("]").strip()
-                        with open(sc_path, "r") as f:
-                            screenshot_data = f.read()
+                        screenshot_data, screenshot_oversized = read_inline_screenshot(sc_path)
                         is_screenshot = _is_base64_png_blob(screenshot_data)
                     except Exception:
                         pass
@@ -2189,7 +2195,16 @@ async def handle_message_claude(
                     is_screenshot = True
                     screenshot_data = result_text
 
-                if is_screenshot and screenshot_data:
+                if screenshot_oversized:
+                    await emit({
+                        "type": "tool_result",
+                        "name": "result",
+                        "data": SCREENSHOT_OMITTED_MESSAGE,
+                        "is_screenshot": False,
+                        "screenshot_omitted": True,
+                        "visible": True,
+                    })
+                elif is_screenshot and screenshot_data:
                     await emit({
                         "type": "tool_result",
                         "name": "result",
@@ -2499,15 +2514,15 @@ async def handle_message_codex(
                 # Detect screenshot results from cdp_tool.py
                 codex_is_screenshot = False
                 codex_screenshot_data = None
+                codex_screenshot_oversized = False
                 log.info("  Codex tool output (first 200): %s", out[:200])
                 if "saved:" in out and "screenshot captured" in out:
                     try:
                         sc_path = out.split("saved:")[1].rstrip("]").strip()
                         log.info("  Codex screenshot path: %s", sc_path)
-                        with open(sc_path, "r") as f:
-                            codex_screenshot_data = f.read()
+                        codex_screenshot_data, codex_screenshot_oversized = read_inline_screenshot(sc_path)
                         codex_is_screenshot = _is_base64_png_blob(codex_screenshot_data)
-                        log.info("  Codex screenshot valid: %s (len=%d)", codex_is_screenshot, len(codex_screenshot_data))
+                        log.info("  Codex screenshot valid: %s (len=%d)", codex_is_screenshot, len(codex_screenshot_data or ""))
                     except Exception as e:
                         log.info("  Codex screenshot read failed: %s", e)
                 else:
@@ -2519,13 +2534,19 @@ async def handle_message_codex(
                         log.info("  Codex screenshot fallback: file age=%.1fs", _sc_age)
                         if _sc_age < 30:  # file updated within last 30 seconds
                             try:
-                                with open(_sc_fallback, "r") as f:
-                                    codex_screenshot_data = f.read()
+                                codex_screenshot_data, codex_screenshot_oversized = read_inline_screenshot(_sc_fallback)
                                 codex_is_screenshot = _is_base64_png_blob(codex_screenshot_data)
                                 log.info("  Codex screenshot fallback valid: %s", codex_is_screenshot)
                             except Exception as e:
                                 log.info("  Codex screenshot fallback failed: %s", e)
-                if codex_is_screenshot and codex_screenshot_data:
+                if codex_screenshot_oversized:
+                    await emit({
+                        "type": "tool_result", "name": tool_name,
+                        "data": SCREENSHOT_OMITTED_MESSAGE,
+                        "is_screenshot": False, "screenshot_omitted": True,
+                        "visible": True,
+                    })
+                elif codex_is_screenshot and codex_screenshot_data:
                     await emit({
                         "type": "tool_result",
                         "name": tool_name, "data": codex_screenshot_data,
@@ -2884,11 +2905,11 @@ async def handle_message_opencode(
 
                     is_screenshot = False
                     screenshot_data = None
+                    screenshot_oversized = False
                     if "saved:" in out and "screenshot captured" in out:
                         try:
                             sc_path = out.split("saved:")[1].rstrip("]").strip()
-                            with open(sc_path, "r") as f:
-                                screenshot_data = f.read()
+                            screenshot_data, screenshot_oversized = read_inline_screenshot(sc_path)
                             is_screenshot = _is_base64_png_blob(screenshot_data)
                         except Exception as e:
                             log.info("  OpenCode screenshot read failed: %s", e)
@@ -2896,7 +2917,16 @@ async def handle_message_opencode(
                         screenshot_data = out
                         is_screenshot = True
 
-                    if is_screenshot and screenshot_data:
+                    if screenshot_oversized:
+                        await emit({
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "data": SCREENSHOT_OMITTED_MESSAGE,
+                            "is_screenshot": False,
+                            "screenshot_omitted": True,
+                            "visible": True,
+                        })
+                    elif is_screenshot and screenshot_data:
                         await emit({
                             "type": "tool_result",
                             "name": tool_name,
@@ -3171,7 +3201,12 @@ async def main():
     while True:
         try:
             print(f"Connecting to {SERVER} ...")
-            ws = await websockets.connect(SERVER, ping_interval=20, ping_timeout=30)
+            ws = await websockets.connect(
+                SERVER,
+                ping_interval=20,
+                ping_timeout=30,
+                max_size=CHAT_WS_MAX_MESSAGE_BYTES,
+            )
             opencode_models = _list_opencode_models() if _cli_binary_available(OPENCODE_BIN) else []
             if opencode_models:
                 print(f"OpenCode models: {len(opencode_models)} available")
@@ -3264,25 +3299,25 @@ async def main():
                     chat_session_id = _chat_session_id_for_data(data)
                     if chat_session_id:
                         payload["session_id"] = chat_session_id
-                    await ws.send(json.dumps(payload))
+                    await send_agent_event(ws, payload)
                 elif msg.get("type") == "new_chat":
                     req_id = msg.get("req_id", "")
                     sid = str(msg.get("session_id") or "").strip()
                     if not sid:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "new_chat_error",
                             "req_id": req_id,
                             "ok": False,
                             "error": "Missing session_id; active work was not cleared",
-                        }))
+                        })
                         continue
                     if not await _cancel_active_session_work(sid):
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "new_chat_error",
                             "req_id": req_id,
                             "ok": False,
                             "error": "Could not stop the active task; chat was not cleared",
-                        }))
+                        })
                         continue
                     current = _sync_active_slot(_normalize_slot(msg.get("slot")), "new_chat")
                     _clear_slot(current)
@@ -3291,12 +3326,12 @@ async def main():
                     opencode_sessions.clear()
                     _context_injected.clear()
                     print(f"[chat] New chat — cleared slot {current}")
-                    await ws.send(json.dumps({
+                    await send_agent_event(ws, {
                         "type": "new_chat_ok",
                         "req_id": req_id,
                         "ok": True,
                         "active_slot": current,
-                    }))
+                    })
                 elif msg.get("type") == "switch_slot":
                     req_id = msg.get("req_id", "")
                     slot = _normalize_slot(msg.get("slot")) or 1
@@ -3318,36 +3353,36 @@ async def main():
                     if saved_opencode.get("session_id") and saved_opencode.get("chat_session_id"):
                         opencode_sessions[saved_opencode["chat_session_id"]] = saved_opencode["session_id"]
                     print(f"[chat] Switched to slot {slot}")
-                    await ws.send(json.dumps({
+                    await send_agent_event(ws, {
                         "type": "switch_slot_ok",
                         "req_id": req_id,
                         "active_slot": slot,
-                    }))
+                    })
                 elif msg.get("type") == "get_slots":
                     req_id = msg.get("req_id", "")
                     info = _get_slots_info()
                     info["type"] = "slots_response"
                     info["req_id"] = req_id
-                    await ws.send(json.dumps(info))
+                    await send_agent_event(ws, info)
                 elif msg.get("type") == "get_archives":
                     req_id = msg.get("req_id", "")
                     archives = _list_archives()
-                    await ws.send(json.dumps({
+                    await send_agent_event(ws, {
                         "type": "archives_response",
                         "req_id": req_id,
                         "archives": archives,
-                    }))
+                    })
                 elif msg.get("type") == "restore_archive":
                     req_id = msg.get("req_id", "")
                     archive_id = msg.get("archive_id", "")
                     current = _sync_active_slot(_normalize_slot(msg.get("slot")), "restore_archive")
                     slot_data, chat_session_id = _restore_archive_into_slot(archive_id, current)
                     if slot_data is None:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "restore_archive_error",
                             "req_id": req_id,
                             "error": "Archive not found",
-                        }))
+                        })
                     else:
                         print(f"[chat] Restored archive {archive_id} into slot {current}")
                         payload = {
@@ -3357,46 +3392,46 @@ async def main():
                         }
                         if chat_session_id:
                             payload["session_id"] = chat_session_id
-                        await ws.send(json.dumps(payload))
+                        await send_agent_event(ws, payload)
                 elif msg.get("type") == "delete_archive":
                     req_id = msg.get("req_id", "")
                     archive_id = msg.get("archive_id", "")
                     ok = _delete_archive(archive_id)
-                    await ws.send(json.dumps({
+                    await send_agent_event(ws, {
                         "type": "delete_archive_ok" if ok else "delete_archive_error",
                         "req_id": req_id,
-                    }))
+                    })
                 elif msg.get("type") == "update_client":
                     req_id = msg.get("req_id", "")
                     ok, err = _spawn_remote_update()
                     if ok:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "update_client_ok",
                             "req_id": req_id,
                             "status": "updating",
-                        }))
+                        })
                     else:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "update_client_error",
                             "req_id": req_id,
                             "error": err or "Could not start update helper.",
-                        }))
+                        })
                 elif msg.get("type") == "install_research_desk":
                     req_id = msg.get("req_id", "")
                     ok, err, launcher_prefix = _spawn_remote_research_desk_install()
                     if ok:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "install_research_desk_ok",
                             "req_id": req_id,
                             "status": "installing",
                             "launcher_prefix": launcher_prefix,
-                        }))
+                        })
                     else:
-                        await ws.send(json.dumps({
+                        await send_agent_event(ws, {
                             "type": "install_research_desk_error",
                             "req_id": req_id,
                             "error": err or "Could not start Research Desk install helper.",
-                        }))
+                        })
 
         except Exception as e:
             log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
