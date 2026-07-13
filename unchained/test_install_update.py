@@ -1150,12 +1150,13 @@ if (agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, la
 """
         result = subprocess.run([node, "-e", check], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-    assert "window.addEventListener('resize', scaleAgentViewSemanticFrame)" in runtime_scripts[0]
+    assert "window.addEventListener('resize', function() { scheduleAgentViewSemanticFrameScale(true); })" in runtime_scripts[0]
+    assert "window.visualViewport.addEventListener('resize'" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
     assert "Browser Preview" in CHAT_HTML, "browser preview should use a user-facing label"
     assert "Same conversation" in CHAT_HTML, "chat rail should explain that it controls the preview"
-    assert "ensureAgentViewForBrowserActivity" in CHAT_HTML, "browser activity should reveal Agent View"
+    assert "ensureAgentViewForBrowserActivity(name)" in CHAT_HTML, "browser activity should identify the active tool"
     assert "http://127.0.0.1:8787" not in CHAT_HTML, "hosted chat should not deep-link to a separate localhost website"
     assert "if (isOpenCodeCli)" in CHAT_HTML, "Agent View handoff should be limited to OpenCode CLI"
     assert 'id="banner-kicker"' in CHAT_HTML, "Agent View banner kicker needs an addressable state"

@@ -588,8 +588,19 @@ expect(!body.classList.contains('agent-shell-chat-only'), 'Connected shell incor
 beginAgentViewResponseTurn();
 appendText({}, 'text-only answer');
 expect(body.classList.contains('agent-view-chat-expanded'), 'Text-only Auto turn did not expand chat');
-ensureAgentViewForBrowserActivity();
-expect(!body.classList.contains('agent-view-chat-expanded'), 'Browser work did not restore split task shell');
+ensureAgentViewForBrowserActivity('ddm');
+expect(body.classList.contains('agent-view-chat-expanded'), 'Non-navigation work collapsed fullscreen chat');
+expect(agentShellBrowserUsedThisTurn, 'Non-navigation work was not tracked as browser activity');
+ensureAgentViewForBrowserActivity('navigate');
+expect(!body.classList.contains('agent-view-chat-expanded'), 'Navigation did not restore the browser surface');
+expect(!body.classList.contains('agent-view-chat-open'), 'Mobile navigation left the chat surface open');
+
+expandAgentViewChat();
+beginAgentViewResponseTurn();
+expect(body.classList.contains('agent-view-chat-expanded'), 'Starting a turn collapsed fullscreen chat');
+ensureAgentViewForBrowserActivity('click');
+appendText({}, 'browser result');
+expect(body.classList.contains('agent-view-chat-expanded'), 'Non-navigation response reveal collapsed fullscreen chat');
 
 minimizeAgentViewChat();
 expect(body.classList.contains('chat-minimized'), 'Minimizing chat did not release the browser stage');
@@ -613,6 +624,78 @@ expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not 
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_agent_view_preview_scaling_coalesces_and_pauses_during_pinch(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Agent View runtime checks")
+
+        from web_app import templates
+
+        source = templates._AGENT_VIEW_JS
+        start = source.index("let agentViewSemanticScaleScheduled")
+        end = source.index("function renderAgentViewSemanticSnapshot", start)
+        scale_source = source[start:end]
+        harness = r"""
+const frames = [{style:{}}, {style:{}}];
+const canvas = {
+  clientWidth: 320,
+  clientHeight: 560,
+  classList: {contains() { return false; }},
+};
+const image = {naturalWidth: 0, naturalHeight: 0};
+const rafQueue = [];
+globalThis.requestAnimationFrame = function(callback) { rafQueue.push(callback); return rafQueue.length; };
+globalThis.window = {
+  visualViewport: {scale: 2},
+  matchMedia() { return {matches: true}; },
+};
+globalThis.document = {
+  getElementById(id) { return id === 'agent-view-canvas' ? canvas : (id === 'agent-view-image' ? image : null); },
+  querySelectorAll(selector) { return selector === '.agent-view-semantic-frame' ? frames : []; },
+};
+let agentViewSnapshot = {viewport: {width: 1280, height: 720}};
+function positionAgentViewMobileChat() {}
+function flushRaf() { while (rafQueue.length) rafQueue.shift()(); }
+function expect(condition, message) { if (!condition) throw new Error(message); }
+"""
+        checks = r"""
+for (let index = 0; index < 10; index += 1) scheduleAgentViewSemanticFrameScale(false);
+expect(rafQueue.length === 1, 'resize work was not coalesced');
+flushRaf();
+expect(!frames[0].style.width, 'pinch zoom rewrote iframe styles');
+
+window.visualViewport.scale = 1;
+scheduleAgentViewSemanticFrameScale(false);
+flushRaf();
+expect(frames[0].style.width === '1280px', 'scaling did not recover after pinch');
+expect(!/NaN|Infinity/.test(JSON.stringify(frames)), 'valid scaling produced invalid CSS');
+
+agentViewSnapshot = {viewport: {width: Infinity, height: NaN}};
+scheduleAgentViewSemanticFrameScale(false);
+flushRaf();
+expect(frames[0].style.width === '1280px' && frames[0].style.height === '720px', 'invalid dimensions did not use fallbacks');
+
+agentViewSnapshot = {viewport: {width: 100000, height: 100000}};
+scheduleAgentViewSemanticFrameScale(false);
+flushRaf();
+expect(frames[0].style.width === '8192px' && frames[0].style.height === '8192px', 'dimensions were not bounded');
+expect(!/NaN|Infinity/.test(JSON.stringify(frames)), 'bounded scaling produced invalid CSS');
+
+const transform = frames[0].style.transform;
+canvas.clientWidth = 0;
+scheduleAgentViewSemanticFrameScale(false);
+flushRaf();
+expect(frames[0].style.transform === transform, 'zero-size canvas rewrote iframe styles');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + scale_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
         from web_app import templates
 
@@ -628,6 +711,7 @@ expect(body.classList.contains('agent-shell-chat-only'), 'Offline state did not 
         self.assertEqual(trial.count('id="lane-picker-toggle"'), 1)
         self.assertIn('id="chat-card-history" class="chat-size-btn" aria-label="Open chat archives"', trial)
         self.assertIn('onclick="openArchives()"', trial)
+        self.assertIn('ensureAgentViewForBrowserActivity(name)', trial)
 
         for html in (
             templates.CLAUDE_CHAT_HTML,
