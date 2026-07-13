@@ -1,0 +1,334 @@
+[
+  {
+    "site_id": "google-search",
+    "url": "https://www.google.com/search?q=weather+seattle",
+    "category": "google",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:43Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "google-finance",
+    "url": "https://www.google.com/finance",
+    "category": "google",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:44Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "google-maps",
+    "url": "https://www.google.com/maps",
+    "category": "google",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:44Z",
+    "status": "fail",
+    "title": "Google Maps",
+    "final_url": "https://www.google.com/maps/@41.5130156,-87.9230976,15z?entry=ttu&g_ep=EgoyMDI2MDcwOC4wIKXMDSoASAFQAw%3D%3D",
+    "snapshot_bytes": 446943,
+    "issues": [
+      "omitted-inline-style-(224846B)",
+      "snapshot-truncated-(head-budget)"
+    ],
+    "diagnostics": {
+      "criticalStylesTruncated": false,
+      "criticalStyleBytes": 254266,
+      "bodyTruncated": false,
+      "bodyStyleString": "display:block!important;position:static!important;box-sizing:content-box!important;font-family:Roboto, Arial, sans-serif!important;font-size:16px!important;font-weight:400!important;font-style:normal!important;line-height:normal!important;letter-spacing:normal!important;white-space:normal!important;",
+      "paintPropertiesInBodyStyle": {
+        "font-family": true,
+        "color": true,
+        "background-color": true,
+        "display": true,
+        "position": true
+      },
+      "omittedAdoptedStyleSheets": 0,
+      "omittedInlineStyleBytes": 224846,
+      "inaccessibleStyleSheetLinks": 1,
+      "truncationStage": "head-budget",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "deviceScaleFactor": 2,
+        "scrollX": 0,
+        "scrollY": 0
+      }
+    }
+  },
+  {
+    "site_id": "stripe-docs",
+    "url": "https://stripe.com/docs",
+    "category": "react",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:50Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "vercel",
+    "url": "https://vercel.com",
+    "category": "react",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:51Z",
+    "status": "pass",
+    "title": "Agentic Infrastructure - Vercel",
+    "final_url": "https://vercel.com/",
+    "snapshot_bytes": 427624,
+    "issues": [],
+    "diagnostics": {
+      "criticalStylesTruncated": false,
+      "criticalStyleBytes": 140433,
+      "bodyTruncated": false,
+      "bodyStyleString": "display:block!important;position:relative!important;box-sizing:border-box!important;font-family:GeistSans, \"GeistSans Fallback\"!important;font-size:16px!important;font-weight:400!important;font-style:normal!important;line-height:24px!important;letter-spacing:normal!important;white-space:normal!impor",
+      "paintPropertiesInBodyStyle": {
+        "font-family": true,
+        "color": true,
+        "background-color": true,
+        "display": true,
+        "position": true
+      },
+      "omittedAdoptedStyleSheets": 0,
+      "omittedInlineStyleBytes": 0,
+      "inaccessibleStyleSheetLinks": 0,
+      "truncationStage": "",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "deviceScaleFactor": 1,
+        "scrollX": 0,
+        "scrollY": 0
+      }
+    }
+  },
+  {
+    "site_id": "airbnb",
+    "url": "https://www.airbnb.com",
+    "category": "react",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:57Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "github",
+    "url": "https://github.com",
+    "category": "dark-mode",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:34:58Z",
+    "status": "pass",
+    "title": "GitHub \u00b7 Change is constant. GitHub keeps you ahead. \u00b7 GitHub",
+    "final_url": "https://github.com/",
+    "snapshot_bytes": 656767,
+    "issues": [],
+    "diagnostics": {
+      "criticalStylesTruncated": false,
+      "criticalStyleBytes": 131233,
+      "bodyTruncated": false,
+      "bodyStyleString": "word-wrap: break-word;display:block!important;position:static!important;box-sizing:border-box!important;font-family:\"Mona Sans VF\", -apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"!important;font-size:14px!important;font-weight:",
+      "paintPropertiesInBodyStyle": {
+        "font-family": true,
+        "color": true,
+        "background-color": true,
+        "display": true,
+        "position": true
+      },
+      "omittedAdoptedStyleSheets": 0,
+      "omittedInlineStyleBytes": 0,
+      "inaccessibleStyleSheetLinks": 0,
+      "truncationStage": "",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "deviceScaleFactor": 1,
+        "scrollX": 0,
+        "scrollY": 0
+      }
+    }
+  },
+  {
+    "site_id": "tailwind-docs",
+    "url": "https://tailwindcss.com/docs/installation",
+    "category": "dark-mode",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:07Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "mdn",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/CSS",
+    "category": "dark-mode",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:08Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "reddit",
+    "url": "https://www.reddit.com/r/all/top",
+    "category": "web-components",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:08Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "youtube",
+    "url": "https://www.youtube.com/feed/trending",
+    "category": "web-components",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:09Z",
+    "status": "fail",
+    "title": "Home - YouTube",
+    "final_url": "https://www.youtube.com/",
+    "snapshot_bytes": 467823,
+    "issues": [
+      "body-style-missing-font-family",
+      "body-style-missing-color",
+      "body-style-missing-background-color"
+    ],
+    "diagnostics": {
+      "criticalStylesTruncated": false,
+      "criticalStyleBytes": 192298,
+      "bodyTruncated": false,
+      "bodyStyleString": "(empty)",
+      "paintPropertiesInBodyStyle": {
+        "font-family": false,
+        "color": false,
+        "background-color": false,
+        "display": false,
+        "position": false
+      },
+      "omittedAdoptedStyleSheets": 0,
+      "omittedInlineStyleBytes": 0,
+      "inaccessibleStyleSheetLinks": 3,
+      "truncationStage": "",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "deviceScaleFactor": 1,
+        "scrollX": 0,
+        "scrollY": 0
+      }
+    }
+  },
+  {
+    "site_id": "hacker-news",
+    "url": "https://news.ycombinator.com",
+    "category": "sticky",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:16Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "stack-overflow",
+    "url": "https://stackoverflow.com/questions",
+    "category": "sticky",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:17Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "npm-react",
+    "url": "https://www.npmjs.com/package/react",
+    "category": "virtualized",
+    "viewport_width": 1280,
+    "timestamp": "2026-07-13T23:35:17Z",
+    "status": "error",
+    "title": "",
+    "final_url": "",
+    "snapshot_bytes": 0,
+    "issues": [
+      "sent 1000 (OK); then received 1000 (OK)"
+    ]
+  },
+  {
+    "site_id": "google-search-mobile",
+    "url": "https://www.google.com/search?q=weather+seattle",
+    "category": "mobile",
+    "viewport_width": 390,
+    "timestamp": "2026-07-13T23:35:18Z",
+    "status": "fail",
+    "title": "weather seattle - Google Search",
+    "final_url": "https://www.google.com/search?q=weather+seattle",
+    "snapshot_bytes": 1405650,
+    "issues": [
+      "critical-styles-truncated-(524268B)",
+      "body-truncated",
+      "omitted-inline-style-(293542B)",
+      "snapshot-truncated-(body-budget)"
+    ],
+    "diagnostics": {
+      "criticalStylesTruncated": true,
+      "criticalStyleBytes": 524268,
+      "bodyTruncated": true,
+      "bodyStyleString": "display:block!important;position:relative!important;box-sizing:content-box!important;font-family:Roboto, Arial, sans-serif!important;font-size:14px!important;font-weight:400!important;font-style:normal!important;line-height:normal!important;letter-spacing:normal!important;white-space:normal!importan",
+      "paintPropertiesInBodyStyle": {
+        "font-family": true,
+        "color": true,
+        "background-color": true,
+        "display": true,
+        "position": true
+      },
+      "omittedAdoptedStyleSheets": 0,
+      "omittedInlineStyleBytes": 293542,
+      "inaccessibleStyleSheetLinks": 1,
+      "truncationStage": "body-budget",
+      "viewport": {
+        "width": 980,
+        "height": 2262,
+        "deviceScaleFactor": 1,
+        "scrollX": 0,
+        "scrollY": 0
+      }
+    }
+  }
+]

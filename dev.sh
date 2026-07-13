@@ -131,6 +131,7 @@ fi
 echo "[dev] Starting relay on port $RELAY_PORT ..."
 JWT_SECRET="$JWT_SECRET" \
 UNCHAINED_DB_PATH="$DEV_DB_PATH" \
+PRIVATE_CORE_TOKEN="$PRIVATE_CORE_TOKEN" \
     uv run python relay.py --port "$RELAY_PORT" > "$PIDDIR/relay.log" 2>&1 &
 echo $! > "$PIDDIR/relay.pid"
 sleep 1
