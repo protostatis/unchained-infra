@@ -154,9 +154,6 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     observedRoots: new WeakSet(),
     recordCount: 0,
     overflow: false,
-    viewportStyleRefresh: false,
-    criticalStyleAnchorX: Math.round(window.scrollX || 0),
-    criticalStyleAnchorY: Math.round(window.scrollY || 0),
     disposed: false,
     headId: '',
     outbound: ''
@@ -495,7 +492,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   }
 
   function cloneSanitized(source, budget, fidelity) {
-    if (!source || budget.nodes >= MAX_NODES || state.overflow) {
+    const nodeCounter = budget.nodeCounter;
+    if (!source || (nodeCounter && nodeCounter.count >= MAX_NODES) || state.overflow) {
       budget.truncated = true;
       return null;
     }
@@ -520,7 +518,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
 
     const priority = !budget.priorityNodes || budget.priorityNodes.has(source);
     if (!spend(budget, source.localName || '', 12, priority)) return null;
-    budget.nodes += 1;
+    if (nodeCounter) nodeCounter.count += 1;
     const clone = shallowSanitizedClone(source, budget, fidelity, priority);
     if (!clone) return null;
     if (clone.hasAttribute('data-ucm-placeholder')) return clone;
@@ -781,13 +779,14 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const shellLimit = 16 * 1024;
   const headLimit = Math.min(MAX_HEAD_CAPTURE_BYTES, Math.floor(captureLimit * 0.3));
   const bodyLimit = Math.max(0, captureLimit - shellLimit - headLimit);
+  const nodeCounter = {count: 0};
   const shellBudget = {
     bytes: 0,
     limit: shellLimit,
     nonPriorityBytes: 0,
     nonPriorityLimit: shellLimit,
     priorityNodes: null,
-    nodes: 0,
+    nodeCounter,
     criticalStyleBytes: 0,
     criticalStyleLimit: 0,
     criticalStyleTruncated: false,
@@ -799,7 +798,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     nonPriorityBytes: 0,
     nonPriorityLimit: Math.floor(bodyLimit * (1 - VIEWPORT_BUDGET_RESERVE)),
     priorityNodes,
-    nodes: 0,
+    nodeCounter,
     styleBytes: 0,
     styleLimit: 128 * 1024,
     criticalStyleBytes: 0,
@@ -813,7 +812,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     nonPriorityBytes: 0,
     nonPriorityLimit: headLimit,
     priorityNodes: null,
-    nodes: 0,
+    nodeCounter,
     styleBytes: 0,
     // Reserve room for stylesheet links and document metadata even when a page
     // carries megabytes of generated inline CSS.
@@ -1052,15 +1051,6 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
       const x = Math.round(window.scrollX || 0);
       const y = Math.round(window.scrollY || 0);
       state.scrollDirty.set(document, { x, y });
-      const refreshX = Math.max(200, Math.round((window.innerWidth || 0) * 0.5));
-      const refreshY = Math.max(200, Math.round((window.innerHeight || 0) * 0.5));
-      if (Math.abs(x - state.criticalStyleAnchorX) >= refreshX ||
-          Math.abs(y - state.criticalStyleAnchorY) >= refreshY) {
-        // Computed-style fallbacks are viewport-scoped. Refresh after a
-        // meaningful scroll so newly visible content receives the same safety
-        // net when author stylesheets cannot replay in the mirror iframe.
-        state.viewportStyleRefresh = true;
-      }
     } else if (target && target.nodeType === 1 && !isOmittedSubtree(target)) {
       if (!state.nodeToId.get(target)) idFor(target);
       state.scrollDirty.set(target, {
@@ -1128,8 +1118,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   state.drain = function drain() {
     const previousSeq = state.seq;
     const nextSeq = previousSeq + 1;
-    if (state.disposed || state.overflow || state.viewportStyleRefresh ||
-        location.href !== state.url || document.documentElement === null) {
+    if (state.disposed || state.overflow || location.href !== state.url || document.documentElement === null) {
       return resetPayload(previousSeq, nextSeq);
     }
 

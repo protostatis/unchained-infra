@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "a19cce7be880dd2192822e006728aabb423d8f13d1464d829fbadf0bed418438",
+            "a5bb62b4f0f5c83448e08eec36f9be12d4e31db7e1e63064c56983e87a449b0a",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -96,9 +96,9 @@ class TestSemanticMirrorParsing(unittest.TestCase):
 
     def test_capture_protocol_uses_safe_stylesheet_fallbacks(self):
         self.assertIn("httpEquiv === 'content-security-policy'", INSTALL_MIRROR_EXPRESSION)
-        self.assertIn("viewportStyleRefresh", INSTALL_MIRROR_EXPRESSION)
-        self.assertIn("criticalStyleAnchorY", INSTALL_MIRROR_EXPRESSION)
-        self.assertIn("Math.round((window.innerHeight || 0) * 0.5)", INSTALL_MIRROR_EXPRESSION)
+        self.assertNotIn("viewportStyleRefresh", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("const nodeCounter = {count: 0}", INSTALL_MIRROR_EXPRESSION)
+        self.assertEqual(INSTALL_MIRROR_EXPRESSION.count("nodeCounter,"), 3)
 
     def test_action_expression_binds_sequence_and_keeps_server_safety_guards(self):
         expression = mirror_action_expression(

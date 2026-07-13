@@ -748,7 +748,7 @@ const frame = {
 function expect(condition, message) { if (!condition) throw new Error(message); }
 """
         checks = r"""
-const replay = agentViewStylesheetReplayStatus(frame);
+const replay = agentViewStylesheetReplayStatus(frame, true);
 expect(replay.total === 2, 'inactive stylesheets were counted');
 expect(replay.failed === 1, 'active replay failure was not counted');
 agentViewUpdateFidelity({fidelity:{
@@ -761,7 +761,7 @@ agentViewUpdateFidelity({fidelity:{
   criticalStyleBytes:1024,
   headTruncated:true,
   truncationStage:'head-budget',
-}}, frame);
+}}, frame, true);
 expect(fidelityElement.textContent.includes('stylesheet replays failed'), 'replay failure was not surfaced');
 expect(fidelityElement.title.includes('inline styles 3/4'), 'style counts were not included in diagnostics');
 expect(fidelityElement.title.includes('computed fallback 1 KB'), 'computed fallback bytes were not included');
