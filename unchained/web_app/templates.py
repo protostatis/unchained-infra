@@ -20892,6 +20892,13 @@ function bindAgentViewInteractions(frame) {
     agentViewSendAction(context, {kind:'key',key:'Enter',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
   }, true);
   doc.addEventListener('scroll', function(event) {
+    // Hiding the previous iframe during a snapshot swap can clamp its scroll
+    // position to zero and emit a late event. Only the visible frame may own
+    // human scroll state or send source actions.
+    if (frame !== agentViewCurrentFrame()) {
+      _scrollDebug('inactive-frame-scroll', 'document', 0, 0, {});
+      return;
+    }
     const rawTarget = event.target;
     const isDocument = rawTarget === doc || rawTarget === doc.scrollingElement || rawTarget === doc.documentElement || rawTarget === doc.body;
     const target = isDocument ? (doc.scrollingElement || doc.documentElement || doc.body) : (rawTarget && rawTarget.nodeType === 1 ? rawTarget : null);

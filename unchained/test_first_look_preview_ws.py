@@ -713,6 +713,8 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn(".agent-view-semantic-frame.staging{visibility:hidden;pointer-events:none}", html)
         self.assertIn("frame.classList.add('staging')", html)
         self.assertIn("frame.classList.remove('staging')", html)
+        self.assertIn("if (frame !== agentViewCurrentFrame())", html)
+        self.assertIn("inactive-frame-scroll", html)
         self.assertIn("frame.style.transformOrigin = mobile ? 'top center' : 'center center'", html)
         self.assertIn("image.addEventListener('load', function() { scheduleAgentViewSemanticFrameScale(false); })", html)
         self.assertIn("patch-targets-omitted", html)
