@@ -710,6 +710,70 @@ expect(frames[0].style.transform === transform, 'zero-size canvas rewrote iframe
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_agent_view_reports_only_active_stylesheet_replay_failures(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is required for Agent View runtime checks")
+
+        from web_app import templates
+
+        source = templates._AGENT_VIEW_JS
+        start = source.index("function agentViewStylesheetReplayStatus")
+        end = source.index("function agentViewFindTarget", start)
+        fidelity_source = source[start:end]
+        harness = r"""
+const fidelityElement = {textContent:'', title:''};
+globalThis.document = {
+  getElementById(id) { return id === 'agent-view-fidelity' ? fidelityElement : null; },
+};
+function link({sheet=null, disabled=false, alternate=false, media=''}) {
+  return {
+    sheet,
+    disabled,
+    relList: {contains(value) { return value === 'alternate' && alternate; }},
+    getAttribute(name) { return name === 'media' ? media : ''; },
+  };
+}
+const links = [
+  link({sheet:{}}),
+  link({sheet:null}),
+  link({sheet:null, disabled:true}),
+  link({sheet:null, alternate:true}),
+  link({sheet:null, media:'print'}),
+];
+const frame = {
+  contentDocument: {querySelectorAll() { return links; }},
+  contentWindow: {matchMedia(media) { return {matches:media !== 'print'}; }},
+};
+function expect(condition, message) { if (!condition) throw new Error(message); }
+"""
+        checks = r"""
+const replay = agentViewStylesheetReplayStatus(frame, true);
+expect(replay.total === 2, 'inactive stylesheets were counted');
+expect(replay.failed === 1, 'active replay failure was not counted');
+agentViewUpdateFidelity({fidelity:{
+  sourceInlineStyleSheets:4,
+  capturedInlineStyleSheets:3,
+  sourceStyleSheetLinks:2,
+  omittedInlineStyleSheets:1,
+  capturedHeadBytes:2048,
+  capturedBodyBytes:4096,
+  criticalStyleBytes:1024,
+  headTruncated:true,
+  truncationStage:'head-budget',
+}}, frame, true);
+expect(fidelityElement.textContent.includes('stylesheet replays failed'), 'replay failure was not surfaced');
+expect(fidelityElement.title.includes('inline styles 3/4'), 'style counts were not included in diagnostics');
+expect(fidelityElement.title.includes('computed fallback 1 KB'), 'computed fallback bytes were not included');
+"""
+        result = subprocess.run(
+            [node],
+            input=harness + fidelity_source + checks,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
         from web_app import templates
 

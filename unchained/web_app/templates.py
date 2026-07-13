@@ -19979,7 +19979,7 @@ _AGENT_VIEW_STYLE = """<style id="agent-view-panel">
 .agent-view-canvas{position:relative;min-height:0;flex:1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 42% 34%,rgba(74,167,255,.08),transparent 38%),linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#05070a;background-size:auto,48px 48px,48px 48px,auto}
 #agent-view-image{display:none;width:100%;height:100%;object-fit:contain;background:#05070a}
 .agent-view-semantic-frame{display:none;position:absolute;left:50%;top:50%;border:0;background:#fff;pointer-events:auto;transform-origin:center center;color-scheme:light;box-shadow:0 24px 80px rgba(0,0,0,.34)}
-.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic .agent-view-semantic-frame.active{display:block}.agent-view-canvas.semantic-loading .agent-view-semantic-frame.active{pointer-events:none}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
+.agent-view-canvas.has-frame #agent-view-image{display:block}.agent-view-canvas.has-semantic .agent-view-semantic-frame.active,.agent-view-canvas.has-semantic .agent-view-semantic-frame.staging{display:block}.agent-view-semantic-frame.staging{visibility:hidden;pointer-events:none}.agent-view-canvas.semantic-loading .agent-view-semantic-frame.active{pointer-events:none}.agent-view-canvas.has-frame .agent-view-empty,.agent-view-canvas.has-semantic .agent-view-empty{display:none}
 .agent-view-empty{width:min(420px,82%);display:grid;place-items:center;text-align:center;gap:12px;color:#7f8c9d}
 .agent-view-orbit{width:74px;height:74px;position:relative;display:grid;place-items:center;border:1px solid rgba(110,231,161,.28);border-radius:50%;color:#9ae3b5;font:9px var(--mono,'IBM Plex Mono',monospace);letter-spacing:.12em}
 .agent-view-orbit::after{content:"";position:absolute;inset:-10px;border:1px dashed rgba(74,167,255,.22);border-radius:50%;animation:agentOrbit 12s linear infinite}
@@ -20892,6 +20892,13 @@ function bindAgentViewInteractions(frame) {
     agentViewSendAction(context, {kind:'key',key:'Enter',value:agentViewControlValue(context.element),checked:agentViewCheckedValue(context.element)});
   }, true);
   doc.addEventListener('scroll', function(event) {
+    // Hiding the previous iframe during a snapshot swap can clamp its scroll
+    // position to zero and emit a late event. Only the visible frame may own
+    // human scroll state or send source actions.
+    if (frame !== agentViewCurrentFrame()) {
+      _scrollDebug('inactive-frame-scroll', 'document', 0, 0, {});
+      return;
+    }
     const rawTarget = event.target;
     const isDocument = rawTarget === doc || rawTarget === doc.scrollingElement || rawTarget === doc.documentElement || rawTarget === doc.body;
     const target = isDocument ? (doc.scrollingElement || doc.documentElement || doc.body) : (rawTarget && rawTarget.nodeType === 1 ? rawTarget : null);
@@ -20956,9 +20963,70 @@ function agentViewSnapshotHtml(snapshot, renderToken) {
   const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
   const observerCss = 'html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
-    '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
+    '<meta charset="utf-8"><base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
     '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
     '<\\/head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '<\\/body><\\/html>';
+}
+
+function agentViewStylesheetReplayStatus(frame, loadSettled) {
+  const doc = frame && frame.contentDocument;
+  if (!doc) return {total:0, failed:0, pending:0};
+  const links = Array.from(doc.querySelectorAll('link[rel~="stylesheet"]'));
+  const active = links.filter(function(link) {
+    if (link.disabled || (link.relList && link.relList.contains('alternate'))) return false;
+    const media = String(link.getAttribute('media') || '').trim();
+    if (!media || !frame.contentWindow || typeof frame.contentWindow.matchMedia !== 'function') return true;
+    try { return frame.contentWindow.matchMedia(media).matches; } catch (_err) { return true; }
+  });
+  let failed = 0;
+  let pending = 0;
+  active.forEach(function(link) {
+    // Loaded cross-origin sheets expose link.sheet even when cssRules raises a
+    // SecurityError. Before iframe load settles, a null sheet is still pending.
+    if (!link.sheet && loadSettled) failed += 1;
+    else if (!link.sheet) pending += 1;
+  });
+  return {total:active.length, failed:failed, pending:pending};
+}
+
+function agentViewFormatBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes < 1024) return Math.round(bytes) + ' B';
+  return Math.round(bytes / 1024) + ' KB';
+}
+
+function agentViewUpdateFidelity(snapshot, frame, loadSettled) {
+  const fidelity = snapshot && snapshot.fidelity ? snapshot.fidelity : {};
+  const replay = agentViewStylesheetReplayStatus(frame, loadSettled);
+  const notes = [];
+  if (Number(fidelity.shadowRoots || 0)) notes.push(fidelity.shadowRoots + ' shadow');
+  if (Number(fidelity.visualRegions || 0)) notes.push(fidelity.visualRegions + ' visual placeholders');
+  if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
+  if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
+  if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' adopted styles omitted');
+  if (Number(fidelity.omittedInlineStyleSheets || 0)) notes.push(fidelity.omittedInlineStyleSheets + ' inline styles bounded');
+  if (replay.failed) notes.push(replay.failed + ' stylesheet replays failed; computed fallback active');
+  else if (replay.pending) notes.push(replay.pending + ' stylesheet replays loading');
+  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
+  if (fidelity.bodyTruncated) notes.push('body capture bounded');
+  else if (fidelity.headTruncated) notes.push('author styles bounded');
+  else if (fidelity.truncated) notes.push('capture bounded');
+  const fidelityEl = document.getElementById('agent-view-fidelity');
+  if (fidelityEl) {
+    fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture';
+    const details = [fidelityEl.textContent];
+    if (Number(fidelity.sourceInlineStyleSheets || 0)) {
+      details.push('inline styles ' + Number(fidelity.capturedInlineStyleSheets || 0) + '/' + Number(fidelity.sourceInlineStyleSheets || 0));
+    }
+    if (Number(fidelity.sourceStyleSheetLinks || 0)) {
+      details.push('stylesheet links ' + Number(fidelity.sourceStyleSheetLinks || 0) + ', replay failures ' + replay.failed);
+    }
+    details.push('head ' + agentViewFormatBytes(fidelity.capturedHeadBytes));
+    details.push('body ' + agentViewFormatBytes(fidelity.capturedBodyBytes));
+    details.push('computed fallback ' + agentViewFormatBytes(fidelity.criticalStyleBytes));
+    if (fidelity.truncationStage) details.push('stage ' + fidelity.truncationStage);
+    fidelityEl.title = details.join(' | ');
+  }
 }
 
 function agentViewFindTarget(root, targetId) {
@@ -21173,6 +21241,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
   if (!frame || !canvas) { agentViewSnapshotLoading = false; return; }
   const renderToken = ++agentViewRenderToken;
   let activated = false;
+  let frameLoadSettled = false;
   canvas.classList.add('semantic-loading');
   if (agentViewActiveFrame) {
     try {
@@ -21223,6 +21292,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
         }
       });
     } catch (_err) {}
+    agentViewUpdateFidelity(snapshot, frame, frameLoadSettled);
     const previousFrame = agentViewActiveFrame;
     const previousY = previousFrame && previousFrame.contentWindow
       ? Math.round(previousFrame.contentWindow.scrollY || 0) : 0;
@@ -21235,10 +21305,12 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
     });
     agentViewActiveFrame = frame;
     frame.classList.add('active');
+    frame.classList.remove('staging');
     frame.setAttribute('aria-hidden', 'false');
     frame.removeAttribute('tabindex');
     if (previousFrame && previousFrame !== frame) {
       previousFrame.classList.remove('active');
+      previousFrame.classList.remove('staging');
       previousFrame.setAttribute('aria-hidden', 'true');
       previousFrame.setAttribute('tabindex', '-1');
     }
@@ -21255,23 +21327,18 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
     }
   }
 
-  frame.onload = activateFrame;
+  frame.classList.add('staging');
+  frame.onload = function() {
+    frameLoadSettled = true;
+    if (activated) { agentViewUpdateFidelity(snapshot, frame, true); return; }
+    activateFrame();
+  };
   frame.srcdoc = agentViewSnapshotHtml(snapshot, renderToken);
   if (agentViewActivationTimer) clearTimeout(agentViewActivationTimer);
   agentViewActivationTimer = setTimeout(activateFrame, 1200);
   const location = document.getElementById('agent-view-location');
   if (location) { location.textContent = snapshot.url || 'attached target'; location.title = snapshot.url || ''; }
-  const fidelity = snapshot.fidelity || {};
-  const notes = [];
-  if (Number(fidelity.shadowRoots || 0)) notes.push(fidelity.shadowRoots + ' shadow');
-  if (Number(fidelity.visualRegions || 0)) notes.push(fidelity.visualRegions + ' visual placeholders');
-  if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
-  if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
-  if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
-  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
-  if (fidelity.truncated) notes.push('capture bounded');
-  const fidelityEl = document.getElementById('agent-view-fidelity');
-  if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
+  agentViewUpdateFidelity(snapshot, null);
   const seqEl = document.getElementById('agent-view-seq');
   if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
 }
