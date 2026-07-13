@@ -35,6 +35,7 @@ UNCHAINED_RUNTIME_FILES=(
     "provision_helpers.py"
     "template_utils.py"
     "agent_package.py"
+    "chat_event_transport.py"
     "chrome_bridge.py"
     "chat_agent_cli.py"
     "chat_agent_openrouter.py"

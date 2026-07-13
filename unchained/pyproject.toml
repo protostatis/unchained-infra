@@ -22,7 +22,7 @@ packages = ["benchmark"]
 py-modules = [
     "agent_package", "agent_stream", "api", "auth",
     "canvas_density", "canvas_intercept", "cdp", "cdp_tool",
-    "chat_agent_cli", "chat_agent_codex", "chat_agent_gemini",
+    "chat_agent_cli", "chat_agent_codex", "chat_agent_gemini", "chat_event_transport",
     "context_compact",
     "chat_agent_openrouter", "chat_agent_sdk",
     "chrome_bridge", "cloud_tools", "ddm", "dom_stream", "engage_cdp",

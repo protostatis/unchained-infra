@@ -41,6 +41,7 @@ import httpx
 import websockets
 
 import cloud_tools
+from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
 from nudge import (
     NudgeState,
@@ -854,7 +855,9 @@ class TrialAgent:
     async def connect(self):
         url = f"{self.server}/chat/ws"
         print(f"Connecting to {url} ...")
-        self.ws = await websockets.connect(url, ping_interval=20, ping_timeout=30)
+        self.ws = await websockets.connect(
+            url, ping_interval=20, ping_timeout=30, max_size=CHAT_WS_MAX_MESSAGE_BYTES
+        )
         await self.ws.send(json.dumps({"key": self.api_key}))
         resp = json.loads(await self.ws.recv())
         if resp.get("type") != "auth_ok":
@@ -913,7 +916,7 @@ class TrialAgent:
     async def _send(self, session_id: str, event: dict):
         event["session_id"] = session_id
         try:
-            await self.ws.send(json.dumps(event))
+            await send_agent_event(self.ws, event)
         except Exception as e:
             print(f"Send error: {e}")
 

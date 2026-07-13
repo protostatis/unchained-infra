@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.110"  # fix opencode CLI LimitOverrunError on large event lines
+VERSION = "0.3.111"  # bound large chat events and inline screenshot previews
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -53,6 +53,7 @@ _PACKAGE_FILES = {
     # dest path in ZIP → source filename
     "unchained/chrome_bridge.py": "chrome_bridge.py",
     "unchained/chat_agent_cli.py": "chat_agent_cli.py",
+    "unchained/chat_event_transport.py": "chat_event_transport.py",
     "unchained/scheduled_tasks.py": "scheduled_tasks.py",
     "unchained/scheduler_tool.py": "scheduler_tool.py",
     "scheduled_jobs.json": "scheduled_jobs.example.json",

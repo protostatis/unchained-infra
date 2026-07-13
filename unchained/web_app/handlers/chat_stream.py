@@ -12,6 +12,11 @@ import uuid
 
 from aiohttp import web
 
+from chat_event_transport import (
+    CHAT_WS_MAX_MESSAGE_BYTES,
+    bound_agent_event,
+    overlay_event,
+)
 
 from web_app.core import get_core as _core
 
@@ -33,6 +38,7 @@ _OPENCODE_CLI_SILENCE_TIMEOUT_S = 300
 
 def _broadcast_overlay(session_id: str, event: dict) -> None:
     """Push an event to the overlay via CDP Runtime.evaluate."""
+    event = overlay_event(event)
     core = _core()
     overlay = core._overlay_sessions.get(session_id)
     if not overlay or not overlay.injected:
@@ -245,7 +251,10 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
-    ws = web.WebSocketResponse(heartbeat=30)
+    ws = web.WebSocketResponse(
+        heartbeat=30,
+        max_msg_size=CHAT_WS_MAX_MESSAGE_BYTES,
+    )
     await ws.prepare(request)
 
     try:
@@ -286,6 +295,9 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(data, dict):
+                    continue
+                data = bound_agent_event(data, encoded_size=len(msg.data.encode("utf-8")))
 
                 msg_type = data.get("type", "")
 
@@ -332,7 +344,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     continue
 
                 req_id = data.get("req_id", "")
-                if req_id and msg_type in (
+                if req_id and (data.get("event_omitted") or msg_type in (
                     "history_response",
                     "new_chat_ok",
                     "new_chat_error",
@@ -345,7 +357,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     "restore_archive_error",
                     "delete_archive_ok",
                     "delete_archive_error",
-                ):
+                )):
                     rq = core._agent_req_queues.get(req_id)
                     if rq:
                         await rq.put(data)
@@ -686,11 +698,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 }
                 return web.json_response(resp, status=429)
 
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=8)
     old_q = core._response_queues.get(session_id)
     if old_q is not None:
         # Signal the previous turn's SSE stream to end cleanly
-        await old_q.put({"type": "done"})
+        if old_q.full():
+            old_q.get_nowait()
+        old_q.put_nowait({"type": "done"})
     core._response_queues[session_id] = q
     core._response_req_ids[session_id] = req_id
 

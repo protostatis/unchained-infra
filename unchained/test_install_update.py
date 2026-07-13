@@ -442,6 +442,8 @@ def test_deploy_script_uploads_research_desk_vendor_tree():
     assert 'cd "$SCRIPT_DIR"' in deploy_script
     assert 'source "$SCRIPT_DIR/deploy/runtime_context_files.sh"' in deploy_script
     assert "remote_bash()" in deploy_script
+    assert "printf -v quoted_arg '%q'" in deploy_script
+    assert '"${SSH_CMD[@]}" "$remote_command"' in deploy_script
     assert 'remote_bash "$REMOTE_DIR" <<\'EOF\'' in deploy_script
     assert 'echo "==> Uploading Research Desk vendor tree..."' in deploy_script
     assert 'RESEARCH_DESK_VENDOR_ROOT_UPLOAD_FILES=()' in deploy_script
