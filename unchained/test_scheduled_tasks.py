@@ -1,5 +1,6 @@
 """Unit tests for scheduled_tasks.py."""
 
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -50,6 +51,39 @@ class _FakeTriggerClient(ChatTriggerClient):
 
 
 class TestScheduledTasks(unittest.TestCase):
+    def test_trigger_sends_explicit_default_profile_intent(self):
+        captured = {}
+
+        class Response:
+            def __init__(self):
+                self.lines = [b'data: {"type":"done"}\n', b""]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def readline(self):
+                return self.lines.pop(0)
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = json.loads(request.data.decode())
+            captured["timeout"] = timeout
+            return Response()
+
+        client = ChatTriggerClient("https://example.test", "test-key")
+        with patch("scheduled_tasks.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = client.trigger(
+                prompt="run",
+                session_id="s-claude-abc12345-stable",
+                profile_path="",
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn("profile_path", captured["body"])
+        self.assertEqual(captured["body"]["profile_path"], "")
+
     def test_interval_and_daily_schedule_initialization(self):
         with tempfile.TemporaryDirectory() as td:
             jobs_path = Path(td) / "jobs.json"

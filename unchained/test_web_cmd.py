@@ -20,9 +20,13 @@ class TestHandleCmd(unittest.IsolatedAsyncioTestCase):
             sid: set(tabs) for sid, tabs in web._session_allowed_tabs.items()
         }
         self._saved_session_agents = dict(web._session_agent_map)
+        self._saved_session_profiles = dict(web._session_profile_paths)
+        self._saved_expired_profiles = dict(web._expired_profile_sessions)
         web._session_tabs.clear()
         web._session_allowed_tabs.clear()
         web._session_agent_map.clear()
+        web._session_profile_paths.clear()
+        web._expired_profile_sessions.clear()
 
     def tearDown(self):
         web._session_tabs.clear()
@@ -31,6 +35,10 @@ class TestHandleCmd(unittest.IsolatedAsyncioTestCase):
         web._session_allowed_tabs.update(self._saved_allowed_tabs)
         web._session_agent_map.clear()
         web._session_agent_map.update(self._saved_session_agents)
+        web._session_profile_paths.clear()
+        web._session_profile_paths.update(self._saved_session_profiles)
+        web._expired_profile_sessions.clear()
+        web._expired_profile_sessions.update(self._saved_expired_profiles)
 
     def _request(self, body=None, *, json_exc: Exception | None = None, headers=None):
         req = SimpleNamespace(headers=headers or {})
@@ -235,6 +243,63 @@ class TestHandleCmd(unittest.IsolatedAsyncioTestCase):
             8765,
             bring_to_front=False,
         )
+
+    @patch("cloud_tools.navigate", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_profile_relaunch_window_never_falls_back_to_default(
+        self,
+        mock_auth,
+        mock_nav,
+    ):
+        sid = "s-claude-abc12345-profile"
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        web._session_agent_map[sid] = "claude-abc12345"
+        web._session_profile_paths[sid] = "/chrome/Profile 7"
+        request = self._request({
+            "action": "navigate",
+            "session_id": sid,
+            "tab_id": "auto",
+            "url": "https://example.com",
+        })
+
+        response = await web.handle_cmd(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertEqual(data["code"], "profile_session_restoring")
+        mock_nav.assert_not_awaited()
+
+    @patch("cloud_tools.navigate", new_callable=AsyncMock)
+    @patch("web._authenticate")
+    async def test_expired_profile_session_never_falls_back_to_default(
+        self,
+        mock_auth,
+        mock_nav,
+    ):
+        sid = "s-claude-abc12345-expired"
+        mock_auth.return_value = {
+            "user_id": "u1",
+            "agent_id": "claude-abc12345",
+            "key_hash": "abc12345",
+        }
+        web._expired_profile_sessions[sid] = 1.0
+        request = self._request({
+            "action": "navigate",
+            "session_id": sid,
+            "tab_id": "auto",
+            "url": "https://example.com",
+        })
+
+        response = await web.handle_cmd(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 409)
+        self.assertEqual(data["code"], "profile_session_expired")
+        mock_nav.assert_not_awaited()
 
     @patch("cloud_tools.run_cdp_command", new_callable=AsyncMock)
     @patch("web._parse_relay", return_value=("relay.local", 8765))

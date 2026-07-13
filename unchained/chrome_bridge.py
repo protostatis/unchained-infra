@@ -1086,12 +1086,14 @@ class Agent:
                         "temp_dir": temp_dir,
                         "profile_dir_name": profile_dir_name,
                         "ready": ready,
+                        "caller_tag": state.get("caller_tag", ""),
                     }
                 else:
                     prov.setdefault("pid", pid)
                     prov.setdefault("port", port)
                     prov.setdefault("temp_dir", temp_dir)
                     prov.setdefault("profile_dir_name", profile_dir_name)
+                    prov.setdefault("caller_tag", state.get("caller_tag", ""))
                     prov["ready"] = ready
                 continue
             self._prov_chromes.pop(slot, None)
@@ -2188,6 +2190,7 @@ class Agent:
                 "profile": profile_dir,
                 "port": port,
                 "tabs": tabs_info,
+                "caller_tag": prov.get("caller_tag", ""),
             }
 
         await self.ws.send(json.dumps({

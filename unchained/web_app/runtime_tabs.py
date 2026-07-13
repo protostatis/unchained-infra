@@ -47,13 +47,36 @@ async def create_session_tab(
             await cdp.ws.close()
 
 
-async def close_session_tab(session_id: str):
+async def close_session_tab(
+    session_id: str,
+    *,
+    profile_lock_held: bool = False,
+    preserve_profile_path: str = "",
+    preserve_agent_id: str = "",
+    expected_tab_id: str | None = None,
+    expire_profile: bool = False,
+):
     """Close the Chrome tab via CDP Target.closeTarget.
 
     On failure, queue the tab for retry instead of silently dropping it.
     Skips cleanup if an overlay copilot session is active on this tab.
     """
     core = _core()
+    if not profile_lock_held:
+        from web_state import profile_session_guard
+
+        async with profile_session_guard(core, session_id):
+            return await close_session_tab(
+                session_id,
+                profile_lock_held=True,
+                preserve_profile_path=preserve_profile_path,
+                preserve_agent_id=preserve_agent_id,
+                expected_tab_id=expected_tab_id,
+                expire_profile=expire_profile,
+            )
+    current_tab_id = str(core._session_tabs.get(session_id, "") or "")
+    if expected_tab_id is not None and current_tab_id != expected_tab_id:
+        return
     # Clear overlay state — the tab is being closed
     core._overlay_sessions.pop(session_id, None)
     tab_id = core._session_tabs.pop(session_id, None)
@@ -61,10 +84,28 @@ async def close_session_tab(session_id: str):
         core._session_allowed_tabs.pop(session_id, None)
     agent_id = core._session_agent_map.pop(session_id, None)
     core._session_last_active.pop(session_id, None)
+    profile_path = ""
     if hasattr(core, "_session_profile_paths"):
-        core._session_profile_paths.pop(session_id, None)
+        profile_path = core._session_profile_paths.pop(session_id, None) or ""
     if hasattr(core, "_chat_preview_generations"):
         core._chat_preview_generations.pop(session_id, None)
+    # Profile recovery closes an expired local slot but must remain fail-closed
+    # while the replacement is launching. Restore intent before the first
+    # cleanup await so /web/cmd cannot fall through to default Chrome.
+    if preserve_profile_path and hasattr(core, "_session_profile_paths"):
+        core._session_profile_paths[session_id] = preserve_profile_path
+        core._session_last_active[session_id] = time.time()
+    if preserve_agent_id:
+        core._session_agent_map[session_id] = preserve_agent_id
+    expired_profiles = getattr(core, "_expired_profile_sessions", None)
+    if expired_profiles is not None:
+        if expire_profile and (profile_path or str(tab_id).startswith("prov-")):
+            expired_profiles[session_id] = time.time()
+            if len(expired_profiles) > 1024:
+                oldest = min(expired_profiles, key=expired_profiles.get)
+                expired_profiles.pop(oldest, None)
+        else:
+            expired_profiles.pop(session_id, None)
     if not tab_id or not agent_id:
         return
 
@@ -72,15 +113,27 @@ async def close_session_tab(session_id: str):
         relay_host, relay_port = core._parse_relay()
         import cloud_tools
         from chrome_bridge import _extract_prov_slot
+        from web_state import profile_session_caller_tag
         slot = _extract_prov_slot(str(tab_id))
+        caller_tag = profile_session_caller_tag(session_id)
 
         try:
-            await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
+            await cloud_tools.provision_cleanup(
+                agent_id,
+                relay_host,
+                relay_port,
+                slot=slot,
+                caller_tag=caller_tag,
+            )
             core._tabs_pending_close.pop(tab_id, None)
+            getattr(core, "_tabs_pending_close_caller_tags", {}).pop(tab_id, None)
             print(f"[tabs] Cleaned provision browser for session {session_id}")
             return
         except Exception:
             core._tabs_pending_close[tab_id] = (agent_id, 0)
+            tags = getattr(core, "_tabs_pending_close_caller_tags", None)
+            if tags is not None:
+                tags[tab_id] = caller_tag
             return
 
     from cdp import CDP
@@ -117,7 +170,11 @@ async def ensure_session_tab(session_id: str, agent_id: str) -> str | None:
                 agent_id,
                 core._MAX_TABS_PER_AGENT,
             )
-            await close_session_tab(oldest_sid)
+            await close_session_tab(
+                oldest_sid,
+                expected_tab_id=str(core._session_tabs.get(oldest_sid, "") or ""),
+                expire_profile=True,
+            )
 
     # Headless agents (e.g. headless-9aaabaf7) get clean cookies per session
     # so anti-bot scores don't carry over between users.
@@ -147,27 +204,50 @@ async def stale_tab_cleanup_loop():
         now = time.time()
 
         stale = [
-            sid for sid, ts in core._session_last_active.items()
+            (sid, str(core._session_tabs.get(sid, "") or ""))
+            for sid, ts in core._session_last_active.items()
             if now - ts > (core._STALE_TAB_SECONDS if sid.startswith("s-guest") else core._STALE_TAB_SECONDS_AGENT)
         ]
-        for sid in stale:
+        for sid, expected_tab_id in stale:
             print(f"[tabs] Closing stale tab for session {sid}")
-            await close_session_tab(sid)
+            await close_session_tab(
+                sid,
+                expected_tab_id=expected_tab_id,
+                expire_profile=True,
+            )
+
+        expired_profiles = getattr(core, "_expired_profile_sessions", {})
+        for sid, expired_at in list(expired_profiles.items()):
+            if now - expired_at > 24 * 60 * 60:
+                expired_profiles.pop(sid, None)
 
         for tab_id, (agent_id, retries) in list(core._tabs_pending_close.items()):
             if retries >= core._MAX_CLOSE_RETRIES:
                 print(f"[tabs] Giving up on tab {tab_id} after {retries} retries")
                 del core._tabs_pending_close[tab_id]
+                getattr(core, "_tabs_pending_close_caller_tags", {}).pop(tab_id, None)
                 continue
             if str(tab_id).startswith("prov-"):
                 relay_host, relay_port = core._parse_relay()
                 import cloud_tools
                 from chrome_bridge import _extract_prov_slot
                 slot = _extract_prov_slot(str(tab_id))
+                caller_tag = getattr(
+                    core,
+                    "_tabs_pending_close_caller_tags",
+                    {},
+                ).get(tab_id, "")
 
                 try:
-                    await cloud_tools.provision_cleanup(agent_id, relay_host, relay_port, slot=slot)
+                    await cloud_tools.provision_cleanup(
+                        agent_id,
+                        relay_host,
+                        relay_port,
+                        slot=slot,
+                        caller_tag=caller_tag,
+                    )
                     del core._tabs_pending_close[tab_id]
+                    getattr(core, "_tabs_pending_close_caller_tags", {}).pop(tab_id, None)
                     print("[tabs] Retry-cleaned provision browser")
                 except Exception:
                     core._tabs_pending_close[tab_id] = (agent_id, retries + 1)
@@ -181,6 +261,7 @@ async def stale_tab_cleanup_loop():
                 if cdp.ws:
                     await cdp.ws.close()
                 del core._tabs_pending_close[tab_id]
+                getattr(core, "_tabs_pending_close_caller_tags", {}).pop(tab_id, None)
                 print(f"[tabs] Retry-closed tab {tab_id}")
             except Exception:
                 core._tabs_pending_close[tab_id] = (agent_id, retries + 1)

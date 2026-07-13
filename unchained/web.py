@@ -683,6 +683,8 @@ _agent_req_queues = _state.agent_req_queues  # req_id -> one-shot response queue
 _session_tabs = _state.session_tabs  # session_id -> Chrome tab_id
 _session_allowed_tabs = _state.session_allowed_tabs  # session_id -> server-authorized Chrome tabs
 _session_profile_paths = _state.session_profile_paths  # session_id -> selected Chrome profile path
+_expired_profile_sessions = _state.expired_profile_sessions  # session_id -> expiry tombstone timestamp
+_session_profile_locks = _state.session_profile_locks  # session_id -> profile recovery lock
 _session_last_active = _state.session_last_active  # session_id -> timestamp
 _session_agent_map = _state.session_agent_map  # session_id -> agent_id for CDP routing
 _source_operation_locks = _state.source_operation_locks  # (agent_id, tab_id) -> asyncio.Lock
@@ -691,6 +693,7 @@ _STALE_TAB_SECONDS = 5 * 60  # 5 minutes — first-look guest sessions (headless
 _STALE_TAB_SECONDS_AGENT = 60 * 60  # 60 minutes — logged-in agent sessions (Chrome on user's machine)
 _stale_tab_task: asyncio.Task | None = None
 _tabs_pending_close = _state.tabs_pending_close  # tab_id -> (agent_id, retry_count)
+_tabs_pending_close_caller_tags = _state.tabs_pending_close_caller_tags  # tab_id -> owner tag
 _MAX_CLOSE_RETRIES = 3
 _MAX_TABS_PER_AGENT = 10
 _gemini_procs = _state.gemini_procs  # agent_id -> subprocess
@@ -1804,7 +1807,23 @@ async def handle_cmd(request: web.Request) -> web.Response:
     requested_tab_id = str(body.get("tab_id") or "auto").strip()
     tab_id = requested_tab_id
     if session_id:
+        if session_id in _expired_profile_sessions:
+            return web.json_response(
+                {
+                    "error": "Browser profile session expired. Select a Chrome profile and try again.",
+                    "code": "profile_session_expired",
+                },
+                status=409,
+            )
         active_tab_id = str(_session_tabs.get(session_id) or "").strip()
+        if _session_profile_paths.get(session_id) and not active_tab_id:
+            return web.json_response(
+                {
+                    "error": "Browser profile session is being restored. Please retry shortly.",
+                    "code": "profile_session_restoring",
+                },
+                status=409,
+            )
         allowed_tabs = _session_allowed_tabs.setdefault(session_id, set())
         if active_tab_id:
             allowed_tabs.add(active_tab_id)

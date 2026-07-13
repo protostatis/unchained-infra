@@ -11143,6 +11143,7 @@ let sending = false;
 let _cancelCtrl = null;
 let geminiProvisioned = false;
 let selectedProfilePath = '';
+let profileSelectionReady = false;
 let clientUpdateInFlight = false;
 let clientUpdateSawDisconnect = false;
 let clientUpdateError = '';
@@ -11236,6 +11237,7 @@ function _profileStoreKey() {
 
 function onProfileChange(profilePath) {
   selectedProfilePath = String(profilePath || '');
+  profileSelectionReady = true;
   try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
 }
 
@@ -11278,16 +11280,17 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
-  } else if (!gotProfiles && remembered) {
+  } else if (remembered) {
     const opt = document.createElement('option');
     opt.value = remembered;
-    opt.textContent = 'Saved profile (bridge offline)';
+    opt.textContent = gotProfiles ? 'Saved profile (unavailable)' : 'Saved profile (bridge offline)';
     sel.appendChild(opt);
     sel.value = remembered;
   } else {
     sel.value = '';
   }
   selectedProfilePath = sel.value || '';
+  profileSelectionReady = true;
 }
 
 function updateStatusPill(el, text, mode) {
@@ -11957,9 +11960,7 @@ async function doSend() {
       slot: activeSlot,
     };
     const profilePath = currentProfilePath();
-    if (profilePath) {
-      payload.profile_path = profilePath;
-    }
+    if (profileSelectionReady) payload.profile_path = profilePath;
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -15652,6 +15653,7 @@ let _isAdmin = false;
 let _userName = '';
 let _userPicture = '';
 let selectedProfilePath = '';
+let profileSelectionReady = false;
 let _latestOpenCodeModels = [];
 let _openCodeModelOptionsSignature = '';
 let _openCodeModelOptionsRequest = null;
@@ -16003,6 +16005,7 @@ function _profileStoreKey() {
 
 function onProfileChange(profilePath) {
   selectedProfilePath = String(profilePath || '');
+  profileSelectionReady = true;
   try { localStorage.setItem(_profileStoreKey(), selectedProfilePath); } catch(e) {}
 }
 
@@ -16045,16 +16048,17 @@ async function loadChatProfiles() {
 
   if ([...sel.options].some(opt => opt.value === remembered)) {
     sel.value = remembered;
-  } else if (!gotProfiles && remembered) {
+  } else if (remembered) {
     const opt = document.createElement('option');
     opt.value = remembered;
-    opt.textContent = 'Saved profile (bridge offline)';
+    opt.textContent = gotProfiles ? 'Saved profile (unavailable)' : 'Saved profile (bridge offline)';
     sel.appendChild(opt);
     sel.value = remembered;
   } else {
     sel.value = '';
   }
   selectedProfilePath = sel.value || '';
+  profileSelectionReady = true;
 }
 
 let lastAgentConnected = false;
@@ -17118,9 +17122,7 @@ async function doSend() {
       slot: activeSlot,
     };
     const profilePath = currentProfilePath();
-    if (profilePath) {
-      payload.profile_path = profilePath;
-    }
+    if (profileSelectionReady) payload.profile_path = profilePath;
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

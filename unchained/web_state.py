@@ -7,6 +7,8 @@ incrementally without changing behavior.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+import hashlib
 import subprocess
 import threading
 from _thread import LockType
@@ -33,6 +35,49 @@ class OverlaySessionState:
 
 
 @dataclass
+class ProfileSessionLockState:
+    """Reference-counted lock for one profile-session lifecycle."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+def profile_session_caller_tag(session_id: str) -> str:
+    """Return a stable bounded owner tag safe for bridge query strings."""
+    digest = hashlib.sha256(str(session_id).encode()).hexdigest()[:24]
+    return f"chat-{digest}"
+
+
+@asynccontextmanager
+async def profile_session_guard(core, session_id: str):
+    """Serialize profile mutations and remove unused lock entries safely."""
+    locks = getattr(core, "_session_profile_locks", None)
+    if locks is None:
+        locks = {}
+        core._session_profile_locks = locks
+    state = locks.get(session_id)
+    if state is None:
+        state = ProfileSessionLockState()
+        locks[session_id] = state
+    state.users += 1
+    try:
+        async with state.lock:
+            yield
+    finally:
+        state.users -= 1
+        current = locks.get(session_id)
+        tab_id = str(getattr(core, "_session_tabs", {}).get(session_id, "") or "")
+        profile_path = getattr(core, "_session_profile_paths", {}).get(session_id, "")
+        if (
+            current is state
+            and state.users == 0
+            and not profile_path
+            and not tab_id.startswith("prov-")
+        ):
+            locks.pop(session_id, None)
+
+
+@dataclass
 class ChatRuntimeState:
     chat_agents: dict[str, object] = field(default_factory=dict)
     response_queues: dict[str, asyncio.Queue] = field(default_factory=dict)
@@ -44,6 +89,10 @@ class ChatRuntimeState:
     # active target remains in session_tabs for backward compatibility.
     session_allowed_tabs: dict[str, set[str]] = field(default_factory=dict)
     session_profile_paths: dict[str, str] = field(default_factory=dict)
+    # Fail-closed tombstones for profile sessions evicted by lifecycle cleanup.
+    expired_profile_sessions: dict[str, float] = field(default_factory=dict)
+    # Serializes profile liveness checks and relaunches for one chat session.
+    session_profile_locks: dict[str, ProfileSessionLockState] = field(default_factory=dict)
     session_last_active: dict[str, float] = field(default_factory=dict)
     session_agent_map: dict[str, str] = field(default_factory=dict)
     # Serializes CDP operations that target the same source document. Semantic
@@ -56,6 +105,7 @@ class ChatRuntimeState:
     chat_preview_generations: dict[str, int] = field(default_factory=dict)
     stale_tab_task: asyncio.Task | None = None
     tabs_pending_close: dict[str, tuple[str, int]] = field(default_factory=dict)
+    tabs_pending_close_caller_tags: dict[str, str] = field(default_factory=dict)
     gemini_procs: dict[str, subprocess.Popen] = field(default_factory=dict)
     gemini_log_fhs: dict[str, TextIO] = field(default_factory=dict)
     gemini_last_active: dict[str, float] = field(default_factory=dict)

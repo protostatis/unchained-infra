@@ -19,6 +19,7 @@ from chat_event_transport import (
 )
 
 from web_app.core import get_core as _core
+from web_state import profile_session_caller_tag, profile_session_guard
 
 
 _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
@@ -182,6 +183,32 @@ def _normalize_profile_path(raw: object) -> str:
     return str(raw or "").strip()
 
 
+def _resolve_profile_intent(
+    body: dict,
+    current_tab: object,
+    remembered_profile_path: object,
+    expired_profile: bool = False,
+) -> tuple[str, str]:
+    """Resolve explicit default, exact profile, preserved profile, or expiry."""
+    if "profile_path" in body:
+        selected = _normalize_profile_path(body.get("profile_path"))
+        return ("profile", selected) if selected else ("default", "")
+    if expired_profile:
+        return "expired", ""
+    remembered = _normalize_profile_path(remembered_profile_path)
+    if remembered:
+        return "profile", remembered
+    if str(current_tab or "").startswith("prov-"):
+        return "expired", ""
+    return "unchanged", ""
+
+
+def _discard_response_registration(core, session_id: str) -> None:
+    """Remove both halves of a response-queue registration."""
+    core._response_queues.pop(session_id, None)
+    core._response_req_ids.pop(session_id, None)
+
+
 def _extract_scheduler_turn(message: str, *, allow_trigger: bool = True) -> tuple[bool, str]:
     text = str(message or "").strip()
     if not allow_trigger:
@@ -220,32 +247,179 @@ async def _allowed_profile_paths(core, agent_id: str) -> set[str]:
     return allowed
 
 
-async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
-    """Ensure session is pinned to a provision browser tab for selected profile."""
-    current_tab = core._session_tabs.get(session_id, "")
-    current_profile = core._session_profile_paths.get(session_id, "")
-    pending_close = current_tab and current_tab in getattr(core, "_tabs_pending_close", {})
-    if current_tab and current_profile == profile_path and not pending_close:
-        core._session_last_active[session_id] = time.time()
-        return current_tab
-
-    if current_tab:
-        await core._close_session_tab(session_id)
-
-    relay_host, relay_port = core._parse_relay()
-    import cloud_tools
-
-    print(f"[profile] Provisioning Chrome for session {session_id} profile={os.path.basename(profile_path)}")
-    launch = await cloud_tools.provision_launch(cdp_agent_id, profile_path, relay_host, relay_port)
-    tab_id = str((launch or {}).get("tab_id", "")).strip()
-    if not tab_id:
-        raise RuntimeError("Profile browser launch did not return tab_id")
-
+def _bind_profile_tab(
+    core,
+    session_id: str,
+    cdp_agent_id: str,
+    profile_path: str,
+    tab_id: str,
+) -> None:
+    """Atomically replace the server-side target for a profile session."""
     core._session_tabs[session_id] = tab_id
+    allowed_tabs = getattr(core, "_session_allowed_tabs", None)
+    if allowed_tabs is not None:
+        allowed_tabs[session_id] = {tab_id}
     core._session_agent_map[session_id] = cdp_agent_id
     core._session_last_active[session_id] = time.time()
     core._session_profile_paths[session_id] = profile_path
-    return tab_id
+    getattr(core, "_expired_profile_sessions", {}).pop(session_id, None)
+
+
+async def _live_profile_tab(
+    core,
+    session_id: str,
+    cdp_agent_id: str,
+    profile_path: str,
+    current_tab: str,
+) -> tuple[str, bool]:
+    """Return ``(live_tab, may_cleanup_slot)`` for the pinned provision."""
+    from chrome_bridge import _extract_prov_slot
+    import cloud_tools
+
+    slot = _extract_prov_slot(current_tab)
+    if not slot:
+        return "", False
+    relay_host, relay_port = core._parse_relay()
+    status = await cloud_tools.provision_status(cdp_agent_id, relay_host, relay_port)
+    slots = status.get("slots") if isinstance(status, dict) else None
+    if not isinstance(slots, dict):
+        raise RuntimeError("Profile browser returned invalid status")
+    slot_state = slots.get(slot)
+    if not isinstance(slot_state, dict):
+        return "", True
+    expected_profile = os.path.basename(profile_path)
+    actual_profile = str(slot_state.get("profile") or "")
+    caller_tag = str(slot_state.get("caller_tag") or "")
+    expected_caller_tag = profile_session_caller_tag(session_id)
+    if actual_profile != expected_profile:
+        return "", False
+    if caller_tag and caller_tag != expected_caller_tag:
+        return "", False
+    tab_entries = slot_state.get("tabs", [])
+    if not isinstance(tab_entries, list):
+        raise RuntimeError("Profile browser returned invalid tab status")
+    if any(isinstance(tab, dict) and tab.get("error") for tab in tab_entries):
+        raise RuntimeError("Profile browser tab status is unavailable")
+    live_tabs = [
+        str(tab.get("tab_id") or "").strip()
+        for tab in tab_entries
+        if isinstance(tab, dict) and tab.get("tab_id")
+    ]
+    if current_tab in live_tabs:
+        return current_tab, True
+    if not caller_tag:
+        # Legacy untagged slots are safe to keep only when the exact target is
+        # still present. Never clean or adopt another unowned legacy target.
+        return "", False
+    return (live_tabs[0] if live_tabs else ""), True
+
+
+def _detach_profile_target(
+    core,
+    session_id: str,
+    cdp_agent_id: str,
+    profile_path: str,
+) -> None:
+    """Drop an unowned stale target while preserving fail-closed intent."""
+    core._session_tabs.pop(session_id, None)
+    allowed_tabs = getattr(core, "_session_allowed_tabs", None)
+    if allowed_tabs is not None:
+        allowed_tabs.pop(session_id, None)
+    getattr(core, "_overlay_sessions", {}).pop(session_id, None)
+    getattr(core, "_chat_preview_generations", {}).pop(session_id, None)
+    core._session_profile_paths[session_id] = profile_path
+    core._session_agent_map[session_id] = cdp_agent_id
+
+
+async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
+    """Ensure a session is pinned to a live browser for the exact profile."""
+    async with profile_session_guard(core, session_id):
+        current_tab = core._session_tabs.get(session_id, "")
+        current_profile = core._session_profile_paths.get(session_id, "")
+        pending_close = current_tab and current_tab in getattr(core, "_tabs_pending_close", {})
+        may_cleanup_slot = True
+        if current_tab and current_profile == profile_path and not pending_close:
+            if not str(current_tab).startswith("prov-"):
+                may_cleanup_slot = False
+            else:
+                live_tab, may_cleanup_slot = await _live_profile_tab(
+                    core,
+                    session_id,
+                    cdp_agent_id,
+                    profile_path,
+                    current_tab,
+                )
+                if live_tab:
+                    _bind_profile_tab(core, session_id, cdp_agent_id, profile_path, live_tab)
+                    return live_tab
+            print(
+                f"[profile] Provision slot expired for session {session_id}; "
+                f"relaunching profile={os.path.basename(profile_path)}"
+            )
+
+        if current_tab:
+            if may_cleanup_slot:
+                await core._close_session_tab(
+                    session_id,
+                    profile_lock_held=True,
+                    preserve_profile_path=profile_path,
+                    preserve_agent_id=cdp_agent_id,
+                )
+            else:
+                _detach_profile_target(
+                    core,
+                    session_id,
+                    cdp_agent_id,
+                    profile_path,
+                )
+
+        relay_host, relay_port = core._parse_relay()
+        import cloud_tools
+
+        print(f"[profile] Provisioning Chrome for session {session_id} profile={os.path.basename(profile_path)}")
+        try:
+            launch = await cloud_tools.provision_launch(
+                cdp_agent_id,
+                profile_path,
+                relay_host,
+                relay_port,
+                caller_tag=profile_session_caller_tag(session_id),
+            )
+            tab_id = str((launch or {}).get("tab_id", "")).strip()
+            from chrome_bridge import _extract_prov_slot
+
+            tab_parts = tab_id.split("-", 2)
+            if (
+                not _extract_prov_slot(tab_id)
+                or len(tab_parts) != 3
+                or not tab_parts[2]
+            ):
+                raise RuntimeError("Profile browser launch did not return a slotted tab_id")
+        except Exception:
+            # Preserve profile intent after a failed relaunch. A later omitted
+            # profile request must retry this profile, never fall through to
+            # the default browser.
+            core._session_profile_paths[session_id] = profile_path
+            core._session_agent_map[session_id] = cdp_agent_id
+            core._session_last_active[session_id] = time.time()
+            raise
+
+        _bind_profile_tab(core, session_id, cdp_agent_id, profile_path, tab_id)
+        return tab_id
+
+
+async def _clear_profile_tab(core, session_id: str) -> None:
+    """Explicitly leave provisioned-profile mode without racing a relaunch."""
+    getattr(core, "_expired_profile_sessions", {}).pop(session_id, None)
+    current_tab = str(core._session_tabs.get(session_id, "") or "")
+    current_profile = core._session_profile_paths.get(session_id, "")
+    if not current_profile and not current_tab.startswith("prov-"):
+        return
+    async with profile_session_guard(core, session_id):
+        current_tab = str(core._session_tabs.get(session_id, "") or "")
+        current_profile = core._session_profile_paths.get(session_id, "")
+        if current_profile or current_tab.startswith("prov-"):
+            await core._close_session_tab(session_id, profile_lock_held=True)
 
 
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
@@ -387,7 +561,16 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                 if aid == agent_id
             ]
             for sid in agent_sessions:
-                asyncio.create_task(core._close_session_tab(sid))
+                expected_tab_id = str(core._session_tabs.get(sid, "") or "")
+                profile_path = core._session_profile_paths.get(sid, "")
+                asyncio.create_task(
+                    core._close_session_tab(
+                        sid,
+                        expected_tab_id=expected_tab_id,
+                        preserve_profile_path=profile_path,
+                        preserve_agent_id=agent_id if profile_path else "",
+                    )
+                )
         if is_current:
             print(f"[chat] Agent {agent_id} disconnected, cleaning {len(agent_sessions)} session tabs")
         else:
@@ -476,7 +659,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     openrouter_forced_notice = ""
     openrouter_budget_state: dict | None = None
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
-    selected_profile_path = _normalize_profile_path(body.get("profile_path"))
+    profile_selection_present = "profile_path" in body
 
     def _session_owned(sid: str) -> bool:
         parts = sid.split("-")
@@ -709,8 +892,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     core._response_req_ids[session_id] = req_id
 
     use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
-    if use_headless and selected_profile_path:
-        core._response_queues.pop(session_id, None)
+    tab_id = core._session_tabs.get(session_id)
+    remembered_profile_path = core._session_profile_paths.get(session_id, "")
+    profile_intent, effective_profile_path = _resolve_profile_intent(
+        body,
+        tab_id,
+        remembered_profile_path,
+        session_id in getattr(core, "_expired_profile_sessions", {}),
+    )
+    if use_headless and profile_intent == "profile":
+        _discard_response_registration(core, session_id)
         return web.json_response(
             {"error": "Profile selection is not supported in headless mode."},
             status=400,
@@ -723,23 +914,51 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             body.get("bridge_profile") if "bridge_profile" in body else None,
         )
     cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else (bridge_info.get("bridge_agent_id") or agent_id)
+    remembered_cdp_agent_id = core._session_agent_map.get(session_id, "")
+    if (
+        profile_intent == "profile"
+        and not profile_selection_present
+        and remembered_cdp_agent_id
+    ):
+        # Omitted profile intent must recover on the bridge that owns the
+        # remembered local path, never whichever bridge is currently default.
+        cdp_agent_id = remembered_cdp_agent_id
 
-    tab_id = core._session_tabs.get(session_id)
-    if selected_profile_path:
-        allowed_paths = await _allowed_profile_paths(core, cdp_agent_id)
-        if selected_profile_path not in allowed_paths:
-            core._response_queues.pop(session_id, None)
+    if profile_intent == "profile":
+        if profile_selection_present:
+            allowed_paths = await _allowed_profile_paths(core, cdp_agent_id)
+        else:
+            allowed_paths = {effective_profile_path}
+        if effective_profile_path not in allowed_paths:
+            _discard_response_registration(core, session_id)
             return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
         try:
-            tab_id = await _ensure_profile_tab(core, session_id, cdp_agent_id, selected_profile_path)
+            tab_id = await _ensure_profile_tab(
+                core,
+                session_id,
+                cdp_agent_id,
+                effective_profile_path,
+            )
         except Exception as e:
-            core._response_queues.pop(session_id, None)
-            return web.json_response({"error": f"Failed to launch selected profile: {e}"}, status=502)
-    elif tab_id and str(tab_id).startswith("prov-"):
-        # Keep the provisioned tab if the profile selector wasn't explicitly
-        # cleared. A stale/empty profile_path just means the user didn't
-        # re-select — not that they want to switch back to guest.
-        pass
+            _discard_response_registration(core, session_id)
+            message = (
+                "Failed to launch selected profile"
+                if profile_selection_present
+                else "Failed to restore selected profile"
+            )
+            return web.json_response({"error": f"{message}: {e}"}, status=502)
+    elif profile_intent == "default":
+        await _clear_profile_tab(core, session_id)
+        tab_id = None
+    elif profile_intent == "expired":
+        _discard_response_registration(core, session_id)
+        return web.json_response(
+            {
+                "error": "Browser profile session expired. Select a Chrome profile and try again.",
+                "code": "profile_session_expired",
+            },
+            status=409,
+        )
 
     try:
         ws_msg = {
@@ -772,8 +991,6 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             tab_id = await core._ensure_session_tab(session_id, cdp_agent_id)
         if tab_id:
             ws_msg["tab_id"] = tab_id
-        if not selected_profile_path:
-            core._session_profile_paths.pop(session_id, None)
         if cdp_agent_id:
             core._session_agent_map[session_id] = cdp_agent_id
         core._session_last_active[session_id] = time.time()
@@ -794,7 +1011,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             session_id=session_id,
             chat_agent_id=chat_agent_id,
         )
-        core._response_queues.pop(session_id, None)
+        _discard_response_registration(core, session_id)
         return web.json_response({"error": "Failed to reach chat agent"}, status=502)
 
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
@@ -927,7 +1144,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             if not stream_completed:
                 # Abnormal disconnect — clean up overlay state too
                 core._overlay_sessions.pop(session_id, None)
-                asyncio.create_task(core._close_session_tab(session_id))
+                expected_tab_id = str(core._session_tabs.get(session_id, "") or "")
+                profile_path = core._session_profile_paths.get(session_id, "")
+                asyncio.create_task(
+                    core._close_session_tab(
+                        session_id,
+                        expected_tab_id=expected_tab_id,
+                        preserve_profile_path=profile_path,
+                        preserve_agent_id=cdp_agent_id if profile_path else "",
+                    )
+                )
         if scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
         core._trace(
