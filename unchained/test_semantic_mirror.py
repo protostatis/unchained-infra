@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "6e1364c59deb512599fd4fa3f1bd88ea8b18932ae1798e578929413ed07a3f64",
+            "f339f316f56127d09fce9c40ebfd5b9ae1c6171025f8503f1c64189f0aab11e7",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),

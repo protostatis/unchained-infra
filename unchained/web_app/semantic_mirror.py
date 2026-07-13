@@ -462,6 +462,191 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     clone.setAttribute('style', existing + (existing && !existing.trim().endsWith(';') ? ';' : '') + declarations.join(''));
   }
 
+  // ── CSS rule filtering for over-budget style blocks ──────────────────────
+  //
+  // When an inline <style> block exceeds the styleLimit budget, filter its
+  // CSSOM rules to keep only those matching visible elements.  Two-tier
+  // priority:  tier 2 = viewport/ancestor match (element.matches),  tier 1 =
+  // used anywhere in the document (root.querySelector).  Tier 0 = unused.
+  //
+  // Performance guards: 100 ms deadline, max 20 000 selectors examined.
+  // On deadline abort, returns priority-only rules; if that also exceeds
+  // the deadline, falls back to empty string and lets the computed-style
+  // fallback handle styling.
+
+  const STYLE_FILTER_DEADLINE_MS = 100;
+  const STYLE_FILTER_MAX_SELECTORS = 20000;
+
+  let _visibleContext = null;
+
+  function collectVisibleStyleContext() {
+    if (_visibleContext) return _visibleContext;
+    const classes = new Set();
+    const ids = new Set();
+    const tags = new Set();
+    const elements = [];
+    walkOpenTree(document, (el) => {
+      if (!isInViewport(el)) return;
+      elements.push(el);
+      for (const cls of el.classList) classes.add(cls);
+      if (el.id) ids.add(el.id);
+      tags.add(el.localName);
+    }, MAX_NODES);
+    // Also include body and html for completeness.
+    if (document.body) {
+      elements.push(document.body);
+      for (const cls of document.body.classList) classes.add(cls);
+      if (document.body.id) ids.add(document.body.id);
+      tags.add('body');
+    }
+    if (document.documentElement) {
+      elements.push(document.documentElement);
+      for (const cls of document.documentElement.classList) classes.add(cls);
+      if (document.documentElement.id) ids.add(document.documentElement.id);
+      tags.add('html');
+    }
+    _visibleContext = { classes, ids, tags, elements };
+    return _visibleContext;
+  }
+
+  // Conservative selectors that must always be preserved.
+  const ALWAYS_KEEP_RE = /^(?:\*|html|body|:root|\[data-ucm-id\])$/i;
+  const PSEUDO_ELEMENT_RE = /::(?:before|after|marker|first-letter|first-line|placeholder|selection|backdrop|cue|part|slotted)/i;
+  const STATEFUL_RE = /:(?:hover|focus|active|visited|focus-within|focus-visible)\b/i;
+
+  function classifyCssRule(rule, context) {
+    // Only classify style rules; keep @-rules as-is.
+    if (rule.type !== CSSRule.STYLE_RULE) return 2; // keep
+    const selector = rule.selectorText || '';
+    if (!selector) return 0;
+    // Always-keep generic selectors.
+    if (ALWAYS_KEEP_RE.test(selector.trim())) return 2;
+    // Pseudo-elements are visually important but don't match elements.
+    if (PSEUDO_ELEMENT_RE.test(selector)) return 2;
+    // Stateful selectors may not match during capture but are needed.
+    if (STATEFUL_RE.test(selector)) return 2;
+    // Quick heuristic: check if selector references a visible class or ID.
+    // This catches the majority of cases without expensive querySelector.
+    for (const cls of context.classes) {
+      if (selector.includes('.' + cls)) return 2;
+    }
+    for (const id of context.ids) {
+      if (selector.includes('#' + id)) return 2;
+    }
+    // Check if selector references a visible tag.
+    for (const tag of context.tags) {
+      if (new RegExp('(?:^|[,\\s])' + tag + '(?:$|[,\\s.#\\[:])', 'i').test(selector)) return 2;
+    }
+    // If no quick match, try element.matches on visible elements (tier 2).
+    for (const el of context.elements) {
+      try {
+        if (el.matches(selector)) return 2;
+      } catch (_e) { /* invalid selector — keep */ }
+    }
+    // Try root.querySelector for used-anywhere (tier 1).
+    try {
+      if (document.querySelector(selector)) return 1;
+    } catch (_e) { /* invalid selector — keep */ }
+    return 0;
+  }
+
+  function filterCssRules(cssRules, context, byteBudget) {
+    const deadline = performance.now() + STYLE_FILTER_DEADLINE_MS;
+    const kept = [];
+    let totalBytes = 0;
+    let scanned = 0;
+    let deadlineHit = false;
+    let tier2Count = 0;
+    let tier1Count = 0;
+
+    function scanRules(rules) {
+      for (const rule of Array.from(rules || [])) {
+        if (performance.now() > deadline || scanned >= STYLE_FILTER_MAX_SELECTORS) {
+          deadlineHit = true;
+          return;
+        }
+        scanned += 1;
+
+        if (rule.type === CSSRule.STYLE_RULE) {
+          const tier = classifyCssRule(rule, context);
+          if (tier >= 2) tier2Count += 1;
+          else if (tier >= 1) tier1Count += 1;
+          if (tier > 0) {
+            const text = rule.cssText;
+            const cost = byteLength(text);
+            if (totalBytes + cost > byteBudget) {
+              // Over budget — keep only tier 2 (priority) rules.
+              if (tier >= 2 && totalBytes + cost <= byteBudget) {
+                kept.push(text);
+                totalBytes += cost;
+              }
+              continue;
+            }
+            kept.push(text);
+            totalBytes += cost;
+          }
+        } else if (rule.type === CSSRule.MEDIA_RULE) {
+          // Evaluate @media — keep if it matches the source viewport.
+          try {
+            if (window.matchMedia(rule.conditionText).matches) {
+              scanRules(rule.cssRules);
+            }
+          } catch (_e) {
+            // Can't evaluate — keep the rule as-is.
+            const text = rule.cssText;
+            const cost = byteLength(text);
+            if (totalBytes + cost <= byteBudget) {
+              kept.push(text);
+              totalBytes += cost;
+            }
+          }
+        } else if (rule.type === CSSRule.SUPPORTS_RULE) {
+          // Evaluate @supports — keep if condition is true.
+          try {
+            if (CSS.supports(rule.conditionText)) {
+              scanRules(rule.cssRules);
+            }
+          } catch (_e) {
+            const text = rule.cssText;
+            const cost = byteLength(text);
+            if (totalBytes + cost <= byteBudget) {
+              kept.push(text);
+              totalBytes += cost;
+            }
+          }
+        } else if (rule.type === CSSRule.KEYFRAMES_RULE || rule.type === CSSRule.FONT_FACE_RULE) {
+          // Keep @font-face and @keyframes — they're important for rendering.
+          const text = rule.cssText;
+          const cost = byteLength(text);
+          if (totalBytes + cost <= byteBudget) {
+            kept.push(text);
+            totalBytes += cost;
+          }
+        } else {
+          // Other @-rules (@layer, @property, @namespace, etc.) — keep.
+          const text = rule.cssText;
+          const cost = byteLength(text);
+          if (totalBytes + cost <= byteBudget) {
+            kept.push(text);
+            totalBytes += cost;
+          }
+        }
+      }
+    }
+
+    scanRules(cssRules);
+
+    return {
+      css: kept.join('\n'),
+      totalBytes,
+      scanned,
+      kept: kept.length,
+      tier2Count,
+      tier1Count,
+      deadlineHit,
+    };
+  }
+
   function shallowSanitizedClone(source, budget, fidelity, priority = true) {
     if (/^(?:canvas|video|iframe|frame|object|embed)$/.test(source.localName)) {
       const rect = source.getBoundingClientRect();
@@ -536,34 +721,74 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
 
     if (source.localName === 'style') {
       let liveCss = '';
+      let cssRules = null;
       try {
-        liveCss = Array.from(source.sheet?.cssRules || []).map((rule) => rule.cssText).join('\n');
+        cssRules = source.sheet?.cssRules || null;
+        liveCss = Array.from(cssRules || []).map((rule) => rule.cssText).join('\n');
       } catch (_error) {
         // Inaccessible sheets fall back to their DOM text below.
       }
       const text = safeCss(liveCss || source.textContent || '').replace(/</g, ' ');
       if (text) {
         const textBytes = byteLength(text);
-        if (Number.isFinite(budget.styleLimit) && budget.styleBytes + textBytes > budget.styleLimit) {
-          budget.truncated = true;
+        const remainingBudget = Number.isFinite(budget.styleLimit)
+          ? Math.max(0, budget.styleLimit - budget.styleBytes)
+          : Infinity;
+
+        if (textBytes <= remainingBudget) {
+          // Fits within budget — include unchanged.
+          if (!spend(budget, text, 0, priority)) {
+            if (fidelity) {
+              fidelity.omittedInlineStyleSheets += 1;
+              fidelity.omittedInlineStyleBytes += textBytes;
+            }
+            return clone;
+          }
+          if (Number.isFinite(budget.styleLimit)) budget.styleBytes += textBytes;
+          clone.appendChild(document.createTextNode(text));
           if (fidelity) {
-            fidelity.omittedInlineStyleSheets += 1;
-            fidelity.omittedInlineStyleBytes += textBytes;
+            fidelity.capturedInlineStyleSheets += 1;
+            fidelity.capturedInlineStyleBytes += textBytes;
           }
           return clone;
         }
-        if (!spend(budget, text, 0, priority)) {
-          if (fidelity) {
-            fidelity.omittedInlineStyleSheets += 1;
-            fidelity.omittedInlineStyleBytes += textBytes;
+
+        // Over budget — try CSS rule filtering if CSSOM rules are available.
+        if (cssRules && cssRules.length > 0) {
+          const context = collectVisibleStyleContext();
+          const filterBudget = Math.min(remainingBudget, textBytes);
+          const result = filterCssRules(cssRules, context, filterBudget);
+          const filteredText = safeCss(result.css || '').replace(/</g, ' ');
+          const filteredBytes = byteLength(filteredText);
+
+          if (filteredText && filteredBytes > 0 && filteredBytes <= remainingBudget) {
+            if (!spend(budget, filteredText, 0, priority)) {
+              if (fidelity) {
+                fidelity.omittedInlineStyleSheets += 1;
+                fidelity.omittedInlineStyleBytes += textBytes;
+              }
+              return clone;
+            }
+            if (Number.isFinite(budget.styleLimit)) budget.styleBytes += filteredBytes;
+            clone.appendChild(document.createTextNode(filteredText));
+            if (fidelity) {
+              fidelity.capturedInlineStyleSheets += 1;
+              fidelity.capturedInlineStyleBytes += filteredBytes;
+              fidelity.filteredInlineStyleSheets = (fidelity.filteredInlineStyleSheets || 0) + 1;
+              fidelity.filteredInlineStyleBytesSaved = (fidelity.filteredInlineStyleBytesSaved || 0) + (textBytes - filteredBytes);
+              fidelity.filterRulesScanned = (fidelity.filterRulesScanned || 0) + result.scanned;
+              fidelity.filterRulesKept = (fidelity.filterRulesKept || 0) + result.kept;
+              fidelity.filterDeadlineHits = (fidelity.filterDeadlineHits || 0) + (result.deadlineHit ? 1 : 0);
+            }
+            return clone;
           }
-          return clone;
         }
-        if (Number.isFinite(budget.styleLimit)) budget.styleBytes += textBytes;
-        clone.appendChild(document.createTextNode(text));
+
+        // Filtering failed or no CSSOM — omit entirely.
+        budget.truncated = true;
         if (fidelity) {
-          fidelity.capturedInlineStyleSheets += 1;
-          fidelity.capturedInlineStyleBytes += textBytes;
+          fidelity.omittedInlineStyleSheets += 1;
+          fidelity.omittedInlineStyleBytes += textBytes;
         }
         return clone;
       }
@@ -774,6 +999,11 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     capturedInlineStyleBytes: 0,
     omittedInlineStyleSheets: 0,
     omittedInlineStyleBytes: 0,
+    filteredInlineStyleSheets: 0,
+    filteredInlineStyleBytesSaved: 0,
+    filterRulesScanned: 0,
+    filterRulesKept: 0,
+    filterDeadlineHits: 0,
     capturedHeadBytes: 0,
     capturedBodyBytes: 0,
     headTruncated: false,
