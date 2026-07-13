@@ -708,7 +708,7 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn("--agent-view-mobile-chat-top", html)
         self.assertIn("function positionAgentViewMobileChat", html)
         self.assertIn("frame.style.transformOrigin = mobile ? 'top center' : 'center center'", html)
-        self.assertIn("image.addEventListener('load', scaleAgentViewSemanticFrame)", html)
+        self.assertIn("image.addEventListener('load', function() { scheduleAgentViewSemanticFrameScale(false); })", html)
         self.assertIn("patch-targets-omitted", html)
         self.assertNotIn("if (!target) throw new Error('semantic target missing')", html)
 

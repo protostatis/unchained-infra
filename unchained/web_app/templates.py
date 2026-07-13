@@ -20381,9 +20381,7 @@ function setAgentShellConnectionLayout(browserAvailable) {
     setAgentViewChatState('docked', 'chat');
     stopAgentViewSocket();
   }
-  requestAnimationFrame(function() {
-    scaleAgentViewSemanticFrame();
-  });
+  scheduleAgentViewSemanticFrameScale(true);
 }
 
 function arrangeAgentChatToolbar() {
@@ -21058,20 +21056,81 @@ function positionAgentViewMobileChat(renderedHeight) {
   document.body.classList.add('agent-view-browser-positioned');
 }
 
+let agentViewSemanticScaleScheduled = false;
+let agentViewSemanticScaleSettleTimer = null;
+let agentViewPinchZoomResizing = false;
+let agentViewPinchZoomSettleTimer = null;
+
+function agentViewPageZoomed() {
+  const viewport = window.visualViewport;
+  const scale = viewport ? Number(viewport.scale) : 1;
+  return Number.isFinite(scale) && Math.abs(scale - 1) > .02;
+}
+
+function handleAgentViewViewportResize() {
+  const zoomed = agentViewPageZoomed();
+  if (zoomed) {
+    agentViewPinchZoomResizing = true;
+    if (agentViewPinchZoomSettleTimer) clearTimeout(agentViewPinchZoomSettleTimer);
+    agentViewPinchZoomSettleTimer = setTimeout(function() {
+      agentViewPinchZoomSettleTimer = null;
+      agentViewPinchZoomResizing = false;
+      scheduleAgentViewSemanticFrameScale(false);
+    }, 180);
+  } else {
+    agentViewPinchZoomResizing = false;
+    if (agentViewPinchZoomSettleTimer) clearTimeout(agentViewPinchZoomSettleTimer);
+    agentViewPinchZoomSettleTimer = null;
+  }
+  scheduleAgentViewSemanticFrameScale(!zoomed);
+}
+
+function scheduleAgentViewSemanticFrameScale(settle) {
+  if (!agentViewSemanticScaleScheduled) {
+    agentViewSemanticScaleScheduled = true;
+    requestAnimationFrame(function() {
+      agentViewSemanticScaleScheduled = false;
+      scaleAgentViewSemanticFrame();
+    });
+  }
+  if (!settle) return;
+  if (agentViewSemanticScaleSettleTimer) clearTimeout(agentViewSemanticScaleSettleTimer);
+  agentViewSemanticScaleSettleTimer = setTimeout(function() {
+    agentViewSemanticScaleSettleTimer = null;
+    scheduleAgentViewSemanticFrameScale(false);
+  }, 240);
+}
+
+function agentViewViewportDimension(value, fallback, minimum) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0
+    ? Math.min(8192, Math.max(minimum, number))
+    : fallback;
+}
+
 function scaleAgentViewSemanticFrame() {
+  // Native pinch zoom already scales the composed preview. Rewriting two large,
+  // transformed iframes during the gesture can overwhelm mobile WebKit. Once
+  // the gesture settles, apply one layout pass even if the page stays zoomed.
+  if (agentViewPinchZoomResizing) return;
   const canvas = document.getElementById('agent-view-canvas');
   if (!canvas) return;
+  const canvasWidth = Number(canvas.clientWidth);
+  const canvasHeight = Number(canvas.clientHeight);
+  if (!Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) return;
   const image = document.getElementById('agent-view-image');
   if (canvas.classList.contains('has-frame') && image && image.naturalWidth && image.naturalHeight) {
-    const imageScale = Math.min(canvas.clientWidth / image.naturalWidth, canvas.clientHeight / image.naturalHeight);
+    const imageScale = Math.min(canvasWidth / image.naturalWidth, canvasHeight / image.naturalHeight);
     positionAgentViewMobileChat(image.naturalHeight * imageScale);
     return;
   }
   if (!agentViewSnapshot) return;
   const viewport = agentViewSnapshot.viewport || {};
-  const width = Math.max(320, Number(viewport.width || 1280));
-  const height = Math.max(240, Number(viewport.height || 720));
-  const scale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height);
+  const width = agentViewViewportDimension(viewport.width, 1280, 320);
+  const height = agentViewViewportDimension(viewport.height, 720, 240);
+  const rawScale = Math.min(canvasWidth / width, canvasHeight / height);
+  if (!Number.isFinite(rawScale) || rawScale <= 0) return;
+  const scale = Math.min(4, Math.max(.1, rawScale));
   const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
   document.querySelectorAll('.agent-view-semantic-frame').forEach(function(frame) {
     frame.style.width = width + 'px';
@@ -21079,10 +21138,10 @@ function scaleAgentViewSemanticFrame() {
     frame.style.top = mobile ? '0' : '50%';
     frame.style.transformOrigin = mobile ? 'top center' : 'center center';
     frame.style.transform = mobile
-      ? 'translate(-50%,0) scale(' + Math.max(.1, scale) + ')'
-      : 'translate(-50%,-50%) scale(' + Math.max(.1, scale) + ')';
+      ? 'translate(-50%,0) scale(' + scale + ')'
+      : 'translate(-50%,-50%) scale(' + scale + ')';
   });
-  positionAgentViewMobileChat(height * Math.max(.1, scale));
+  positionAgentViewMobileChat(height * scale);
 }
 
 function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captureEpoch, documentSeq, resync) {
@@ -21122,7 +21181,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
       if (agentViewActiveFrame.contentWindow) agentViewActiveFrame.contentWindow.blur();
     } catch (_err) {}
   }
-  scaleAgentViewSemanticFrame();
+  scheduleAgentViewSemanticFrameScale(false);
   setAgentViewState(agentViewActiveFrame ? 'Refreshing same browser tab' : 'Building interactive semantic view', false);
 
   function activateFrame() {
@@ -21188,7 +21247,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
     canvas.classList.remove('semantic-loading');
     canvas.classList.add('has-semantic');
     agentViewSnapshotLoading = false;
-    scaleAgentViewSemanticFrame();
+    scheduleAgentViewSemanticFrameScale(false);
     setAgentViewState(resync ? 'Live · tab refreshed' : 'Live · same browser', true);
     const queued = agentViewQueuedPatches.splice(0);
     for (let index = 0; index < queued.length && renderToken === agentViewRenderToken; index += 1) {
@@ -21473,7 +21532,7 @@ function startAgentViewSocket() {
       if (image) {
         if (!image.__ucmMobileLayoutBound) {
           image.__ucmMobileLayoutBound = true;
-          image.addEventListener('load', scaleAgentViewSemanticFrame);
+          image.addEventListener('load', function() { scheduleAgentViewSemanticFrameScale(false); });
         }
         image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
       }
@@ -21584,6 +21643,7 @@ function setAgentViewChatState(mode, surface) {
   if (mode === 'fullscreen') surface = 'chat';
   if (mode === 'minimized') surface = 'browser';
 
+  const stateChanged = agentViewChatMode !== mode || agentViewChatSurface !== surface;
   agentViewChatMode = mode;
   agentViewChatSurface = surface;
   document.body.classList.toggle('agent-view-chat-expanded', mode === 'fullscreen');
@@ -21601,10 +21661,7 @@ function setAgentViewChatState(mode, surface) {
       _agentViewRecalcMobileChatPosition();
     });
   }
-  if (agentShellTaskEnabled) {
-    requestAnimationFrame(scaleAgentViewSemanticFrame);
-    setTimeout(scaleAgentViewSemanticFrame, 240);
-  }
+  if (agentShellTaskEnabled && stateChanged) scheduleAgentViewSemanticFrameScale(true);
 }
 
 function expandAgentViewChat() {
@@ -21630,9 +21687,6 @@ function beginAgentViewResponseTurn() {
   agentShellBrowserUsedThisTurn = false;
   document.body.classList.remove('agent-shell-text-turn');
   if (agentShellTaskEnabled) {
-    if (document.body.classList.contains('agent-view-open')) {
-      setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
-    }
     setAgentShellPhase('planning', 'Understanding your task');
   }
 }
@@ -21645,6 +21699,10 @@ function maybeRevealAgentResponse() {
     return;
   }
   agentViewResponseRevealDone = true;
+  if (agentShellTaskEnabled && agentViewChatMode === 'fullscreen') {
+    if (!agentShellBrowserUsedThisTurn) document.body.classList.add('agent-shell-text-turn');
+    return;
+  }
   if (agentShellTaskEnabled && !agentShellBrowserUsedThisTurn) {
     document.body.classList.add('agent-shell-text-turn');
     setAgentViewChatState('fullscreen', 'chat');
@@ -21690,7 +21748,7 @@ function refreshAgentView() {
   requestAnimationFrame(startAgentViewSocket);
 }
 
-function ensureAgentViewForBrowserActivity() {
+function ensureAgentViewForBrowserActivity(toolName) {
   agentShellBrowserUsedThisTurn = true;
   document.body.classList.remove('agent-shell-text-turn');
   if (agentShellTaskEnabled) {
@@ -21698,7 +21756,10 @@ function ensureAgentViewForBrowserActivity() {
     agentShellBrowserReady = true;
     document.body.classList.remove('agent-shell-chat-only');
     if (!document.body.classList.contains('agent-view-open')) openAgentView({system:true});
-    if (agentViewChatMode === 'fullscreen') {
+    const shouldShowBrowser = toolName === 'navigate' && (
+      agentViewChatMode === 'fullscreen' || (_agentViewIsMobile() && agentViewChatSurface === 'chat')
+    );
+    if (shouldShowBrowser) {
       setAgentViewChatState('docked', _agentViewIsMobile() ? 'browser' : 'chat');
     }
     return;
@@ -21774,7 +21835,12 @@ document.addEventListener('keydown', function(event) {
   if (agentShellTaskEnabled) return;
   closeAgentView();
 });
-window.addEventListener('resize', scaleAgentViewSemanticFrame);
+window.addEventListener('resize', handleAgentViewViewportResize);
+window.addEventListener('orientationchange', handleAgentViewViewportResize);
+window.addEventListener('pageshow', function() { scheduleAgentViewSemanticFrameScale(false); });
+if (window.visualViewport && window.visualViewport.addEventListener) {
+  window.visualViewport.addEventListener('resize', handleAgentViewViewportResize);
+}
 initializeAgentShellExperiment();
 if (typeof updateAgentStatusUI === 'function') {
   const _agentShellUpdateAgentStatusUI = updateAgentStatusUI;
@@ -22074,7 +22140,7 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
         replacements = [
             TemplateReplacement(
                 "  if (BROWSER_TOOLS.has(name)) {",
-                "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity();",
+                "  if (BROWSER_TOOLS.has(name)) {\n    ensureAgentViewForBrowserActivity(name);",
                 "agent view auto-open on browser activity",
             ),
             TemplateReplacement(
