@@ -114,11 +114,27 @@ try:
 except ValueError:
     OPENCODE_RUN_TIMEOUT_S = 300.0
     log.warning("Invalid OPENCODE_RUN_TIMEOUT_S, using default 300")
+_OPENCODE_DEFAULT_MAX_EVENT_BYTES = 8 * 1024 * 1024
+_OPENCODE_MIN_EVENT_BYTES = 64 * 1024
+_OPENCODE_MAX_EVENT_BYTES_CAP = 16 * 1024 * 1024
 try:
-    OPENCODE_MAX_EVENT_BYTES = int(os.environ.get("OPENCODE_MAX_EVENT_BYTES", str(8 * 1024 * 1024)))
+    OPENCODE_MAX_EVENT_BYTES = int(
+        os.environ.get("OPENCODE_MAX_EVENT_BYTES", str(_OPENCODE_DEFAULT_MAX_EVENT_BYTES))
+    )
 except ValueError:
-    OPENCODE_MAX_EVENT_BYTES = 8 * 1024 * 1024
-    log.warning("Invalid OPENCODE_MAX_EVENT_BYTES, using default %d", OPENCODE_MAX_EVENT_BYTES)
+    OPENCODE_MAX_EVENT_BYTES = _OPENCODE_DEFAULT_MAX_EVENT_BYTES
+    log.warning(
+        "Invalid OPENCODE_MAX_EVENT_BYTES; using default %d",
+        _OPENCODE_DEFAULT_MAX_EVENT_BYTES,
+    )
+if not _OPENCODE_MIN_EVENT_BYTES <= OPENCODE_MAX_EVENT_BYTES <= _OPENCODE_MAX_EVENT_BYTES_CAP:
+    log.warning(
+        "OPENCODE_MAX_EVENT_BYTES must be between %d and %d; using default %d",
+        _OPENCODE_MIN_EVENT_BYTES,
+        _OPENCODE_MAX_EVENT_BYTES_CAP,
+        _OPENCODE_DEFAULT_MAX_EVENT_BYTES,
+    )
+    OPENCODE_MAX_EVENT_BYTES = _OPENCODE_DEFAULT_MAX_EVENT_BYTES
 
 # Derive stable agent ID from API key
 AGENT_ID = ""
@@ -2653,6 +2669,40 @@ async def _opencode_timeout_guard(
         _kill_process(proc)
 
 
+class _OpenCodeEventTooLarge(Exception):
+    """Raised when one newline-delimited OpenCode event exceeds the bound."""
+
+
+async def _iter_opencode_event_lines(stream):
+    """Yield bounded event lines while preserving an unterminated final line."""
+    while True:
+        try:
+            raw_line = await stream.readuntil(b"\n")
+        except asyncio.LimitOverrunError as exc:
+            raise _OpenCodeEventTooLarge from exc
+        except asyncio.IncompleteReadError as exc:
+            raw_line = exc.partial
+        if not raw_line:
+            return
+        yield raw_line
+
+
+async def _stop_opencode_process(
+    proc: asyncio.subprocess.Process,
+    sid: str,
+    timeout_s: float = 3.0,
+) -> None:
+    """Kill and reap an abnormal OpenCode subprocess without blocking forever."""
+    if proc.returncode is None:
+        _kill_process(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        log.warning("Timed out waiting for OpenCode process to stop for session %s", sid)
+    except Exception:
+        log.debug("Failed waiting for OpenCode process for session %s", sid, exc_info=True)
+
+
 async def handle_message_opencode(
     ws,
     sid: str,
@@ -2786,7 +2836,7 @@ async def handle_message_opencode(
 
     try:
         try:
-            async for raw_line in proc.stdout:
+            async for raw_line in _iter_opencode_event_lines(proc.stdout):
                 if not raw_line:
                     break
                 line = raw_line.decode(errors="replace").strip()
@@ -2874,17 +2924,15 @@ async def handle_message_opencode(
                         error_text = "OpenCode CLI error"
                     await emit({"type": "error", "data": f"OpenCode CLI error: {error_text}"})
                     await emit({"type": "done"})
-                    if proc.returncode is None:
-                        _kill_process(proc)
+                    await _stop_opencode_process(proc, sid)
                     return
-        except (ValueError, asyncio.LimitOverrunError):
+        except _OpenCodeEventTooLarge:
             log.warning(
                 "OpenCode emitted a line exceeding %d bytes for session %s — "
                 "aborting this turn",
                 OPENCODE_MAX_EVENT_BYTES, sid,
             )
-            if proc.returncode is None:
-                _kill_process(proc)
+            await _stop_opencode_process(proc, sid)
             await emit({
                 "type": "error",
                 "data": "OpenCode output exceeded event size limit. Try a simpler task or a model that produces less verbose output.",
@@ -2975,6 +3023,7 @@ async def handle_message_opencode(
             # Surface a clean user-facing message; full detail is in the log above.
             _exc_name = type(_exc).__name__
             _err_detail = f"OpenCode CLI encountered an internal error ({_exc_name}). Check the agent log for details."
+        await _stop_opencode_process(proc, sid)
         await emit({"type": "error", "data": _err_detail})
         await emit({"type": "done"})
     finally:

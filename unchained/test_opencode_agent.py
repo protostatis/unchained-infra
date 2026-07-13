@@ -1,6 +1,7 @@
 """Targeted tests for the local OpenCode CLI lane."""
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -50,6 +51,16 @@ class _FakeStream:
     async def read(self) -> bytes:
         return self._bytes
 
+    async def readuntil(self, separator: bytes = b"\n") -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        raise asyncio.IncompleteReadError(partial=b"", expected=None)
+
+
+class _OversizedStream(_FakeStream):
+    async def readuntil(self, separator: bytes = b"\n") -> bytes:
+        raise asyncio.LimitOverrunError("event exceeds configured limit", 100)
+
 
 class _FakeProc:
     def __init__(self, lines: list[str], returncode: int = 0, stderr: bytes = b""):
@@ -58,8 +69,10 @@ class _FakeProc:
         self.stderr = _FakeStream(stderr)
         self.returncode = returncode
         self.pid = 12345
+        self.wait_calls = 0
 
     async def wait(self):
+        self.wait_calls += 1
         return self.returncode
 
 
@@ -72,18 +85,16 @@ class _FakeWs:
 
 
 class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
-    def _load_module(self):
+    def _load_module(self, extra_env: dict[str, str] | None = None):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        env_patch = patch.dict(
-            os.environ,
-            {
-                "UNCHAINED_DATA_DIR": tempdir.name,
-                "UNCHAINED_API_KEY": "uc_live_test",
-                "OPENCODE_BIN": "opencode",
-            },
-            clear=False,
-        )
+        test_env = {
+            "UNCHAINED_DATA_DIR": tempdir.name,
+            "UNCHAINED_API_KEY": "uc_live_test",
+            "OPENCODE_BIN": "opencode",
+        }
+        test_env.update(extra_env or {})
+        env_patch = patch.dict(os.environ, test_env, clear=False)
         env_patch.start()
         self.addCleanup(env_patch.stop)
         module_name = "chat_agent_cli_opencode_test"
@@ -129,6 +140,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         async def fake_create_subprocess_exec(*cmd, **kwargs):
             captured["cmd"] = list(cmd)
             captured["env"] = kwargs.get("env", {})
+            captured["limit"] = kwargs.get("limit")
             return _FakeProc(lines)
 
         with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
@@ -152,6 +164,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         env = captured["env"]
         self.assertEqual(env["CDP_AGENT_ID"], "claude-abc12345")
         self.assertEqual(env["UNCHAINED_CHAT_SESSION_ID"], "s-claude-abc12345-test")
+        self.assertEqual(captured.get("limit"), mod.OPENCODE_MAX_EVENT_BYTES)
 
         event_types = [evt["type"] for evt in ws.events]
         self.assertEqual(event_types, ["tool_start", "tool_result", "text", "done"])
@@ -286,6 +299,96 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         event_types = [evt["type"] for evt in ws.events]
         self.assertEqual(event_types, ["error", "done"])
         self.assertEqual(ws.events[0]["data"], "OpenCode CLI error: tool execution failed")
+
+    async def test_opencode_reader_accepts_large_event_with_configured_limit(self):
+        mod = self._load_module()
+        payload = json.dumps({"type": "text", "part": {"text": "x" * (128 * 1024)}}).encode() + b"\n"
+        reader = asyncio.StreamReader(limit=mod.OPENCODE_MAX_EVENT_BYTES)
+        reader.feed_data(payload)
+        reader.feed_eof()
+
+        lines = [line async for line in mod._iter_opencode_event_lines(reader)]
+
+        self.assertEqual(lines, [payload])
+
+    async def test_opencode_reader_reports_oversized_event_and_preserves_partial_eof(self):
+        mod = self._load_module()
+        reader = asyncio.StreamReader(limit=64)
+        reader.feed_data(b"x" * 128 + b"\n")
+        reader.feed_eof()
+        with self.assertRaises(mod._OpenCodeEventTooLarge):
+            _ = [line async for line in mod._iter_opencode_event_lines(reader)]
+
+        partial = asyncio.StreamReader(limit=1024)
+        partial.feed_data(b'{"type":"text"}')
+        partial.feed_eof()
+        self.assertEqual(
+            [line async for line in mod._iter_opencode_event_lines(partial)],
+            [b'{"type":"text"}'],
+        )
+
+    async def test_opencode_oversized_event_kills_and_reaps_subprocess(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        proc = _FakeProc([], returncode=None)
+        proc.stdout = _OversizedStream()
+        captured: dict[str, object] = {}
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            captured["limit"] = kwargs.get("limit")
+            return proc
+
+        def fake_kill(target):
+            self.assertIs(target, proc)
+            proc.returncode = -9
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec), \
+             patch.object(mod, "_kill_process", side_effect=fake_kill):
+            await mod.handle_message_opencode(
+                ws,
+                "s-claude-abc12345-test",
+                "Produce a large event",
+                "opencode-cli:",
+            )
+
+        self.assertEqual(captured["limit"], mod.OPENCODE_MAX_EVENT_BYTES)
+        self.assertEqual([event["type"] for event in ws.events], ["error", "done"])
+        self.assertIn("exceeded event size limit", ws.events[0]["data"])
+        self.assertGreaterEqual(proc.wait_calls, 1)
+
+    async def test_opencode_processing_value_error_is_not_misreported_as_overrun(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        proc = _FakeProc([json.dumps({"type": "error", "error": {"message": "provider error"}})], returncode=None)
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            return proc
+
+        def fake_kill(target):
+            self.assertIs(target, proc)
+            proc.returncode = -9
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec), \
+             patch.object(mod, "_extract_opencode_error_message", side_effect=ValueError("processing bug")), \
+             patch.object(mod, "_kill_process", side_effect=fake_kill):
+            await mod.handle_message_opencode(
+                ws,
+                "s-claude-abc12345-test",
+                "Trigger processing failure",
+                "opencode-cli:",
+            )
+
+        self.assertEqual([event["type"] for event in ws.events], ["error", "done"])
+        self.assertIn("internal error (ValueError)", ws.events[0]["data"])
+        self.assertNotIn("event size limit", ws.events[0]["data"])
+        self.assertGreaterEqual(proc.wait_calls, 1)
+
+    def test_opencode_event_limit_rejects_unsafe_configuration(self):
+        default_limit = 8 * 1024 * 1024
+        for value in ("invalid", "0", "-1", str(32 * 1024 * 1024)):
+            with self.subTest(value=value):
+                mod = self._load_module({"OPENCODE_MAX_EVENT_BYTES": value})
+                self.assertEqual(mod.OPENCODE_MAX_EVENT_BYTES, default_limit)
 
     def test_opencode_model_list_parses_cli_lines(self):
         mod = self._load_module()
