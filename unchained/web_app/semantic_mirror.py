@@ -98,7 +98,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const MAX_SCROLL_POSITIONS = 500;
   const INLINE_RESULT_CHARS = 192 * 1024;
   const VIEWPORT_BUDGET_RESERVE = 0.4;
-  const MAX_CRITICAL_STYLE_BYTES = 384 * 1024;
+  const MAX_HEAD_CAPTURE_BYTES = 384 * 1024;
+  const MAX_CRITICAL_STYLE_BYTES = 512 * 1024;
   const MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024;
   const CRITICAL_STYLE_PROPERTIES = [
     'display', 'position', 'box-sizing',
@@ -153,6 +154,9 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     observedRoots: new WeakSet(),
     recordCount: 0,
     overflow: false,
+    viewportStyleRefresh: false,
+    criticalStyleAnchorX: Math.round(window.scrollX || 0),
+    criticalStyleAnchorY: Math.round(window.scrollY || 0),
     disposed: false,
     headId: '',
     outbound: ''
@@ -286,7 +290,10 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
       const type = (element.getAttribute('type') || '').toLowerCase();
       if (tag === 'input' && type === 'hidden') return true;
     }
-    if (tag === 'meta' && (element.getAttribute('http-equiv') || '').toLowerCase() === 'refresh') return true;
+    if (tag === 'meta') {
+      const httpEquiv = (element.getAttribute('http-equiv') || '').trim().toLowerCase();
+      if (httpEquiv === 'refresh' || httpEquiv === 'content-security-policy') return true;
+    }
     if (tag === 'link') {
       const rels = (element.getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
       if (rels.some((rel) => ACTIVE_LINK_RELS.has(rel))) return true;
@@ -527,12 +534,33 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
       } catch (_error) {
         // Inaccessible sheets fall back to their DOM text below.
       }
-      if (liveCss) {
-        const text = safeCss(liveCss).replace(/</g, ' ');
-        if (!spend(budget, text, 0, priority)) return clone;
+      const text = safeCss(liveCss || source.textContent || '').replace(/</g, ' ');
+      if (text) {
+        const textBytes = byteLength(text);
+        if (Number.isFinite(budget.styleLimit) && budget.styleBytes + textBytes > budget.styleLimit) {
+          budget.truncated = true;
+          if (fidelity) {
+            fidelity.omittedInlineStyleSheets += 1;
+            fidelity.omittedInlineStyleBytes += textBytes;
+          }
+          return clone;
+        }
+        if (!spend(budget, text, 0, priority)) {
+          if (fidelity) {
+            fidelity.omittedInlineStyleSheets += 1;
+            fidelity.omittedInlineStyleBytes += textBytes;
+          }
+          return clone;
+        }
+        if (Number.isFinite(budget.styleLimit)) budget.styleBytes += textBytes;
         clone.appendChild(document.createTextNode(text));
+        if (fidelity) {
+          fidelity.capturedInlineStyleSheets += 1;
+          fidelity.capturedInlineStyleBytes += textBytes;
+        }
         return clone;
       }
+      return clone;
     }
 
     if (source.shadowRoot && source.shadowRoot.mode === 'open') {
@@ -639,6 +667,39 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     return positions;
   }
 
+  function collectStyleDiagnostics() {
+    const result = {
+      sourceInlineStyleSheets: 0,
+      sourceStyleSheetLinks: 0,
+      accessibleStyleSheetLinks: 0,
+      inaccessibleStyleSheetLinks: 0,
+      pendingStyleSheetLinks: 0
+    };
+    walkOpenTree(document, (element) => {
+      if (element.localName === 'style') {
+        result.sourceInlineStyleSheets += 1;
+        return;
+      }
+      if (element.localName !== 'link') return;
+      const rels = (element.getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
+      if (!rels.includes('stylesheet')) return;
+      result.sourceStyleSheetLinks += 1;
+      if (!element.sheet) {
+        result.pendingStyleSheetLinks += 1;
+        return;
+      }
+      try {
+        void element.sheet.cssRules.length;
+        result.accessibleStyleSheetLinks += 1;
+      } catch (_error) {
+        // A SecurityError means the browser loaded a cross-origin stylesheet;
+        // it does not mean the stylesheet failed to render in the source page.
+        result.inaccessibleStyleSheetLinks += 1;
+      }
+    }, MAX_NODES);
+    return result;
+  }
+
   function serializeAdoptedStyleSheets(priorityNodes) {
     const entries = [];
     const MAX_ADOPTED_BYTES = 256 * 1024;
@@ -690,37 +751,95 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     return { entries, omittedSheets };
   }
 
+  const styleDiagnostics = collectStyleDiagnostics();
   const fidelity = {
     visualRegions: countVisualRegions(),
     crossOriginFrames: 0,
     shadowRoots: 0,
     omittedAdoptedStyleSheets: 0,
     omittedSensitiveFields: 0,
+    sourceInlineStyleSheets: styleDiagnostics.sourceInlineStyleSheets,
+    sourceStyleSheetLinks: styleDiagnostics.sourceStyleSheetLinks,
+    accessibleStyleSheetLinks: styleDiagnostics.accessibleStyleSheetLinks,
+    inaccessibleStyleSheetLinks: styleDiagnostics.inaccessibleStyleSheetLinks,
+    pendingStyleSheetLinks: styleDiagnostics.pendingStyleSheetLinks,
+    capturedInlineStyleSheets: 0,
+    capturedInlineStyleBytes: 0,
+    omittedInlineStyleSheets: 0,
+    omittedInlineStyleBytes: 0,
+    capturedHeadBytes: 0,
+    capturedBodyBytes: 0,
+    headTruncated: false,
+    bodyTruncated: false,
+    truncationStage: '',
     criticalStyleBytes: 0,
     criticalStylesTruncated: false,
     truncated: false
   };
   const priorityNodes = collectViewportPriorityNodes();
   const captureLimit = Math.floor(MAX_CAPTURE_BYTES * 0.72);
-  const budget = {
+  const shellLimit = 16 * 1024;
+  const headLimit = Math.min(MAX_HEAD_CAPTURE_BYTES, Math.floor(captureLimit * 0.3));
+  const bodyLimit = Math.max(0, captureLimit - shellLimit - headLimit);
+  const shellBudget = {
     bytes: 0,
-    limit: captureLimit,
+    limit: shellLimit,
     nonPriorityBytes: 0,
-    nonPriorityLimit: Math.floor(captureLimit * (1 - VIEWPORT_BUDGET_RESERVE)),
-    priorityNodes,
+    nonPriorityLimit: shellLimit,
+    priorityNodes: null,
     nodes: 0,
     criticalStyleBytes: 0,
-    criticalStyleLimit: MAX_CRITICAL_STYLE_BYTES,
+    criticalStyleLimit: 0,
     criticalStyleTruncated: false,
     truncated: false
   };
-  const htmlClone = document.documentElement ? cloneSanitized(document.documentElement, budget, fidelity) : null;
-  const headClone = htmlClone ? Array.from(htmlClone.children).find((child) => child.localName === 'head') : null;
-  const bodyClone = htmlClone ? Array.from(htmlClone.children).find((child) => child.localName === 'body') : null;
+  const bodyBudget = {
+    bytes: 0,
+    limit: bodyLimit,
+    nonPriorityBytes: 0,
+    nonPriorityLimit: Math.floor(bodyLimit * (1 - VIEWPORT_BUDGET_RESERVE)),
+    priorityNodes,
+    nodes: 0,
+    styleBytes: 0,
+    styleLimit: 128 * 1024,
+    criticalStyleBytes: 0,
+    criticalStyleLimit: Math.min(MAX_CRITICAL_STYLE_BYTES, Math.floor(bodyLimit * 0.55)),
+    criticalStyleTruncated: false,
+    truncated: false
+  };
+  const headBudget = {
+    bytes: 0,
+    limit: headLimit,
+    nonPriorityBytes: 0,
+    nonPriorityLimit: headLimit,
+    priorityNodes: null,
+    nodes: 0,
+    styleBytes: 0,
+    // Reserve room for stylesheet links and document metadata even when a page
+    // carries megabytes of generated inline CSS.
+    styleLimit: Math.max(0, headLimit - 64 * 1024),
+    criticalStyleBytes: 0,
+    criticalStyleLimit: 0,
+    criticalStyleTruncated: false,
+    truncated: false
+  };
+  // Capture the visible semantic body before optional author CSS. The body
+  // carries bounded computed-style fallbacks, so it remains usable when
+  // external stylesheets cannot replay from the Agent View origin.
+  const bodyClone = document.body ? cloneSanitized(document.body, bodyBudget, fidelity) : null;
+  const headClone = document.head ? cloneSanitized(document.head, headBudget, fidelity) : null;
+  const htmlClone = document.documentElement
+    ? shallowSanitizedClone(document.documentElement, shellBudget, fidelity, true)
+    : null;
   state.headId = document.head ? state.nodeToId.get(document.head) || '' : '';
-  fidelity.truncated = budget.truncated || state.overflow;
-  fidelity.criticalStyleBytes = budget.criticalStyleBytes;
-  fidelity.criticalStylesTruncated = budget.criticalStyleTruncated;
+  fidelity.headTruncated = headBudget.truncated;
+  fidelity.bodyTruncated = bodyBudget.truncated;
+  fidelity.truncated = shellBudget.truncated || headBudget.truncated || bodyBudget.truncated || state.overflow;
+  fidelity.truncationStage = bodyBudget.truncated
+    ? 'body-budget'
+    : (headBudget.truncated ? 'head-budget' : (shellBudget.truncated ? 'shell-budget' : ''));
+  fidelity.criticalStyleBytes = bodyBudget.criticalStyleBytes;
+  fidelity.criticalStylesTruncated = bodyBudget.criticalStyleTruncated;
 
   const adoptedResult = serializeAdoptedStyleSheets(priorityNodes);
   const adoptedStyles = adoptedResult.entries;
@@ -748,6 +867,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     hash: '',
     rawBytes: 0
   };
+  fidelity.capturedHeadBytes = byteLength(snapshot.head);
+  fidelity.capturedBodyBytes = byteLength(snapshot.body);
 
   function refreshSnapshotHash() {
     snapshot.hash = hashString(JSON.stringify([
@@ -759,13 +880,31 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   refreshSnapshotHash();
   let snapshotJson = stringifyWithSize(snapshot);
   if (byteLength(snapshotJson) > MAX_CAPTURE_BYTES) {
-    snapshot.body = '<div data-ucm-capture-truncated="output-limit"></div>';
+    // Keep the semantic body and its computed-style fallback before optional
+    // author CSS. This is the useful surface for both humans and interactions.
+    snapshot.head = '';
+    snapshot.fidelity.capturedHeadBytes = 0;
+    snapshot.fidelity.headTruncated = true;
+    snapshot.fidelity.truncationStage = 'output-head';
     snapshot.fidelity.truncated = true;
     refreshSnapshotHash();
     snapshotJson = stringifyWithSize(snapshot);
   }
   if (byteLength(snapshotJson) > MAX_CAPTURE_BYTES) {
-    snapshot.head = '';
+    const droppedSheets = snapshot.adoptedStyles.reduce(
+      (count, entry) => count + Math.max(1, Number(entry?.sheetCount || 0)), 0
+    );
+    snapshot.adoptedStyles = [];
+    snapshot.fidelity.omittedAdoptedStyleSheets += droppedSheets;
+    snapshot.fidelity.truncationStage = 'output-adopted-styles';
+    refreshSnapshotHash();
+    snapshotJson = stringifyWithSize(snapshot);
+  }
+  if (byteLength(snapshotJson) > MAX_CAPTURE_BYTES) {
+    snapshot.body = '<div data-ucm-capture-truncated="output-limit"></div>';
+    snapshot.fidelity.capturedBodyBytes = byteLength(snapshot.body);
+    snapshot.fidelity.bodyTruncated = true;
+    snapshot.fidelity.truncationStage = 'output-body';
     refreshSnapshotHash();
     snapshotJson = stringifyWithSize(snapshot);
   }
@@ -910,10 +1049,18 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   function onScrollEvent(event) {
     const target = event.target;
     if (target === document) {
-      state.scrollDirty.set(document, {
-        x: Math.round(window.scrollX || 0),
-        y: Math.round(window.scrollY || 0)
-      });
+      const x = Math.round(window.scrollX || 0);
+      const y = Math.round(window.scrollY || 0);
+      state.scrollDirty.set(document, { x, y });
+      const refreshX = Math.max(200, Math.round((window.innerWidth || 0) * 0.5));
+      const refreshY = Math.max(200, Math.round((window.innerHeight || 0) * 0.5));
+      if (Math.abs(x - state.criticalStyleAnchorX) >= refreshX ||
+          Math.abs(y - state.criticalStyleAnchorY) >= refreshY) {
+        // Computed-style fallbacks are viewport-scoped. Refresh after a
+        // meaningful scroll so newly visible content receives the same safety
+        // net when author stylesheets cannot replay in the mirror iframe.
+        state.viewportStyleRefresh = true;
+      }
     } else if (target && target.nodeType === 1 && !isOmittedSubtree(target)) {
       if (!state.nodeToId.get(target)) idFor(target);
       state.scrollDirty.set(target, {
@@ -981,7 +1128,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   state.drain = function drain() {
     const previousSeq = state.seq;
     const nextSeq = previousSeq + 1;
-    if (state.disposed || state.overflow || location.href !== state.url || document.documentElement === null) {
+    if (state.disposed || state.overflow || state.viewportStyleRefresh ||
+        location.href !== state.url || document.documentElement === null) {
       return resetPayload(previousSeq, nextSeq);
     }
 

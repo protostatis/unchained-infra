@@ -20956,9 +20956,67 @@ function agentViewSnapshotHtml(snapshot, renderToken) {
   const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
   const observerCss = 'html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
-    '<base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
+    '<meta charset="utf-8"><base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
     '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
     '<\\/head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '<\\/body><\\/html>';
+}
+
+function agentViewStylesheetReplayStatus(frame) {
+  const doc = frame && frame.contentDocument;
+  if (!doc) return {total:0, failed:0};
+  const links = Array.from(doc.querySelectorAll('link[rel~="stylesheet"]'));
+  const active = links.filter(function(link) {
+    if (link.disabled || (link.relList && link.relList.contains('alternate'))) return false;
+    const media = String(link.getAttribute('media') || '').trim();
+    if (!media || !frame.contentWindow || typeof frame.contentWindow.matchMedia !== 'function') return true;
+    try { return frame.contentWindow.matchMedia(media).matches; } catch (_err) { return true; }
+  });
+  let failed = 0;
+  active.forEach(function(link) {
+    // Loaded cross-origin sheets expose link.sheet even when cssRules raises a
+    // SecurityError. A null sheet after the iframe load indicates replay failed.
+    if (!link.sheet) failed += 1;
+  });
+  return {total:active.length, failed:failed};
+}
+
+function agentViewFormatBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes < 1024) return Math.round(bytes) + ' B';
+  return Math.round(bytes / 1024) + ' KB';
+}
+
+function agentViewUpdateFidelity(snapshot, frame) {
+  const fidelity = snapshot && snapshot.fidelity ? snapshot.fidelity : {};
+  const replay = agentViewStylesheetReplayStatus(frame);
+  const notes = [];
+  if (Number(fidelity.shadowRoots || 0)) notes.push(fidelity.shadowRoots + ' shadow');
+  if (Number(fidelity.visualRegions || 0)) notes.push(fidelity.visualRegions + ' visual placeholders');
+  if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
+  if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
+  if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' adopted styles omitted');
+  if (Number(fidelity.omittedInlineStyleSheets || 0)) notes.push(fidelity.omittedInlineStyleSheets + ' inline styles bounded');
+  if (replay.failed) notes.push(replay.failed + ' stylesheet replays failed; computed fallback active');
+  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
+  if (fidelity.bodyTruncated) notes.push('body capture bounded');
+  else if (fidelity.headTruncated) notes.push('author styles bounded');
+  else if (fidelity.truncated) notes.push('capture bounded');
+  const fidelityEl = document.getElementById('agent-view-fidelity');
+  if (fidelityEl) {
+    fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture';
+    const details = [fidelityEl.textContent];
+    if (Number(fidelity.sourceInlineStyleSheets || 0)) {
+      details.push('inline styles ' + Number(fidelity.capturedInlineStyleSheets || 0) + '/' + Number(fidelity.sourceInlineStyleSheets || 0));
+    }
+    if (Number(fidelity.sourceStyleSheetLinks || 0)) {
+      details.push('stylesheet links ' + Number(fidelity.sourceStyleSheetLinks || 0) + ', replay failures ' + replay.failed);
+    }
+    details.push('head ' + agentViewFormatBytes(fidelity.capturedHeadBytes));
+    details.push('body ' + agentViewFormatBytes(fidelity.capturedBodyBytes));
+    details.push('computed fallback ' + agentViewFormatBytes(fidelity.criticalStyleBytes));
+    if (fidelity.truncationStage) details.push('stage ' + fidelity.truncationStage);
+    fidelityEl.title = details.join(' | ');
+  }
 }
 
 function agentViewFindTarget(root, targetId) {
@@ -21223,6 +21281,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
         }
       });
     } catch (_err) {}
+    agentViewUpdateFidelity(snapshot, frame);
     const previousFrame = agentViewActiveFrame;
     const previousY = previousFrame && previousFrame.contentWindow
       ? Math.round(previousFrame.contentWindow.scrollY || 0) : 0;
@@ -21261,17 +21320,7 @@ function renderAgentViewSemanticSnapshot(snapshot, transportSeq, mirrorId, captu
   agentViewActivationTimer = setTimeout(activateFrame, 1200);
   const location = document.getElementById('agent-view-location');
   if (location) { location.textContent = snapshot.url || 'attached target'; location.title = snapshot.url || ''; }
-  const fidelity = snapshot.fidelity || {};
-  const notes = [];
-  if (Number(fidelity.shadowRoots || 0)) notes.push(fidelity.shadowRoots + ' shadow');
-  if (Number(fidelity.visualRegions || 0)) notes.push(fidelity.visualRegions + ' visual placeholders');
-  if (Number(fidelity.crossOriginFrames || 0)) notes.push(fidelity.crossOriginFrames + ' cross-origin frames omitted');
-  if (Number(fidelity.omittedSensitiveFields || 0)) notes.push(fidelity.omittedSensitiveFields + ' sensitive fields omitted');
-  if (Number(fidelity.omittedAdoptedStyleSheets || 0)) notes.push(fidelity.omittedAdoptedStyleSheets + ' styles omitted');
-  if (fidelity.criticalStylesTruncated) notes.push('critical styles bounded');
-  if (fidelity.truncated) notes.push('capture bounded');
-  const fidelityEl = document.getElementById('agent-view-fidelity');
-  if (fidelityEl) { fidelityEl.textContent = notes.length ? notes.join(' / ') : 'Full semantic capture'; fidelityEl.title = fidelityEl.textContent; }
+  agentViewUpdateFidelity(snapshot, null);
   const seqEl = document.getElementById('agent-view-seq');
   if (seqEl) seqEl.textContent = 'State ' + Number(transportSeq || 0);
 }

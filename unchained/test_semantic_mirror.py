@@ -33,7 +33,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "2001c272d2240c94c9053b322f8de4726598d6b979cca98730129927167cb53c",
+            "a19cce7be880dd2192822e006728aabb423d8f13d1464d829fbadf0bed418438",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -54,7 +54,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
         self.assertIn("canvas|video|iframe|frame|object|embed", INSTALL_MIRROR_EXPRESSION)
 
     def test_capture_protocol_preserves_bounded_viewport_critical_styles(self):
-        self.assertIn("MAX_CRITICAL_STYLE_BYTES = 384 * 1024", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("MAX_CRITICAL_STYLE_BYTES = 512 * 1024", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1024", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("function applyCriticalComputedStyle", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("if (!isInViewport(source)) return", INSTALL_MIRROR_EXPRESSION)
@@ -71,6 +71,34 @@ class TestSemanticMirrorParsing(unittest.TestCase):
             "'stroke'",
         ):
             self.assertIn(property_name, INSTALL_MIRROR_EXPRESSION)
+
+    def test_capture_protocol_prioritizes_body_and_reports_style_fidelity(self):
+        self.assertIn("MAX_HEAD_CAPTURE_BYTES = 384 * 1024", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("styleLimit: Math.max(0, headLimit - 64 * 1024)", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("function collectStyleDiagnostics", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("omittedInlineStyleSheets", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("capturedHeadBytes", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("truncationStage", INSTALL_MIRROR_EXPRESSION)
+        self.assertLess(
+            INSTALL_MIRROR_EXPRESSION.index(
+                "const bodyClone = document.body ? cloneSanitized(document.body, bodyBudget, fidelity)"
+            ),
+            INSTALL_MIRROR_EXPRESSION.index(
+                "const headClone = document.head ? cloneSanitized(document.head, headBudget, fidelity)"
+            ),
+        )
+        self.assertLess(
+            INSTALL_MIRROR_EXPRESSION.index("snapshot.head = ''"),
+            INSTALL_MIRROR_EXPRESSION.index(
+                "snapshot.body = '<div data-ucm-capture-truncated=\"output-limit\"></div>'"
+            ),
+        )
+
+    def test_capture_protocol_uses_safe_stylesheet_fallbacks(self):
+        self.assertIn("httpEquiv === 'content-security-policy'", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("viewportStyleRefresh", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("criticalStyleAnchorY", INSTALL_MIRROR_EXPRESSION)
+        self.assertIn("Math.round((window.innerHeight || 0) * 0.5)", INSTALL_MIRROR_EXPRESSION)
 
     def test_action_expression_binds_sequence_and_keeps_server_safety_guards(self):
         expression = mirror_action_expression(
