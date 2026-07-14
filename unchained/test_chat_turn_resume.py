@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import os
@@ -186,33 +187,183 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event["seq"] for event in events], [2, 3])
         self.assertEqual([event["type"] for event in events], ["text", "done"])
 
-    def test_agent_event_requires_exact_turn_agent_and_current_socket(self):
+    def test_agent_event_requires_exact_turn_agent_and_dispatch_socket(self):
+        dispatch_ws = object()
         turn = ChatTurnState(
             owner_user_id="user-1",
             owner_key_hash="key-1",
             session_id="s-agent-key-1",
             req_id="r-1",
             routing_agent_id="agent-1",
+            dispatch_ws=dispatch_ws,
         )
-        current_ws = object()
-        stale_ws = object()
+        replacement_ws = object()
         wrong_agent_ws = object()
         core = SimpleNamespace(
-            _chat_agents={"agent-1": current_ws, "agent-2": wrong_agent_ws}
+            _chat_agents={"agent-1": replacement_ws, "agent-2": wrong_agent_ws}
         )
 
         self.assertTrue(
-            chat_stream._agent_event_matches_turn(core, turn, "agent-1", current_ws, "r-1")
+            chat_stream._agent_event_matches_turn(core, turn, "agent-1", dispatch_ws, "r-1")
         )
         self.assertFalse(
-            chat_stream._agent_event_matches_turn(core, turn, "agent-1", current_ws, "r-old")
+            chat_stream._agent_event_matches_turn(core, turn, "agent-1", dispatch_ws, "r-old")
         )
         self.assertFalse(
             chat_stream._agent_event_matches_turn(core, turn, "agent-2", wrong_agent_ws, "r-1")
         )
         self.assertFalse(
-            chat_stream._agent_event_matches_turn(core, turn, "agent-1", stale_ws, "r-1")
+            chat_stream._agent_event_matches_turn(core, turn, "agent-1", replacement_ws, "r-1")
         )
+
+    async def test_dispatch_socket_events_survive_agent_supersession(self):
+        class ControlledWebSocket:
+            _STOP = object()
+
+            def __init__(self):
+                self.closed = False
+                self.inbound = asyncio.Queue()
+                self.processed = None
+
+            async def prepare(self, request):
+                return None
+
+            async def receive_json(self):
+                return {"key": "trial-key"}
+
+            async def send_json(self, data):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.processed is not None:
+                    self.processed.set()
+                    self.processed = None
+                item = await self.inbound.get()
+                if item is self._STOP:
+                    raise StopAsyncIteration
+                message, self.processed = item
+                return message
+
+            async def push_json(self, payload):
+                processed = asyncio.Event()
+                await self.inbound.put(
+                    (
+                        SimpleNamespace(
+                            type=chat_stream.web.WSMsgType.TEXT,
+                            data=json.dumps(payload),
+                        ),
+                        processed,
+                    )
+                )
+                await asyncio.wait_for(processed.wait(), timeout=1)
+
+            async def finish(self):
+                await self.inbound.put(self._STOP)
+
+            async def close(self, **kwargs):
+                self.closed = True
+
+        registry = ChatTurnRegistry()
+        original_ws = ControlledWebSocket()
+        replacement_ws = ControlledWebSocket()
+        close_calls = []
+
+        async def close_session_tab(session_id, **kwargs):
+            close_calls.append((session_id, kwargs))
+
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="trial-key",
+            TRIAL_AGENT_ID="agent-1",
+            _chat_agents={},
+            _chat_agent_caps={},
+            _chat_agent_users={},
+            _agent_req_queues={},
+            _response_queues={},
+            _response_req_ids={},
+            _chat_turns=registry,
+            _session_agent_map={},
+            _session_tabs={},
+            _session_profile_paths={},
+            _scheduler_turn_grants={},
+            _overlay_sessions={},
+            _close_session_tab=close_session_tab,
+        )
+
+        async def wait_until_current(expected):
+            for _ in range(100):
+                if core._chat_agents.get("agent-1") is expected:
+                    return
+                await asyncio.sleep(0)
+            self.fail("chat WebSocket was not registered")
+
+        with patch.object(chat_stream, "_core", return_value=core), patch.object(
+            chat_stream.web,
+            "WebSocketResponse",
+            side_effect=[original_ws, replacement_ws],
+        ):
+            original_task = asyncio.create_task(chat_stream.handle_chat_ws(SimpleNamespace()))
+            await wait_until_current(original_ws)
+            turn = ChatTurnState(
+                owner_user_id="user-1",
+                owner_key_hash="key-1",
+                session_id="s-agent-key-1",
+                req_id="r-1",
+                chat_agent_id="agent-1",
+                routing_agent_id="agent-1",
+                dispatch_ws=original_ws,
+            )
+            await registry.start(turn)
+
+            replacement_task = asyncio.create_task(chat_stream.handle_chat_ws(SimpleNamespace()))
+            await wait_until_current(replacement_ws)
+            try:
+                for event in (
+                    {"type": "tool_start", "name": "ddm"},
+                    {"type": "tool_result", "name": "ddm", "data": "layout"},
+                    {"type": "text", "data": "Final answer"},
+                    {"type": "done"},
+                ):
+                    await original_ws.push_json(
+                        {**event, "session_id": turn.session_id, "req_id": turn.req_id}
+                    )
+
+                self.assertEqual(
+                    [event["type"] for event in turn.journal],
+                    ["tool_start", "tool_result", "text", "done"],
+                )
+                self.assertEqual([event["seq"] for event in turn.journal], [1, 2, 3, 4])
+                self.assertTrue(turn.stream_finished)
+                self.assertIs(core._chat_agents["agent-1"], replacement_ws)
+
+                interrupted_turn = ChatTurnState(
+                    owner_user_id="user-1",
+                    owner_key_hash="key-1",
+                    session_id="s-agent-key-2",
+                    req_id="r-2",
+                    chat_agent_id="agent-1",
+                    routing_agent_id="agent-1",
+                    dispatch_ws=original_ws,
+                )
+                await registry.start(interrupted_turn)
+                await original_ws.finish()
+                await original_task
+
+                self.assertEqual(interrupted_turn.status, "error")
+                self.assertEqual(
+                    [event["type"] for event in interrupted_turn.journal],
+                    ["error", "done"],
+                )
+                self.assertIs(core._chat_agents["agent-1"], replacement_ws)
+            finally:
+                if not original_task.done():
+                    await original_ws.finish()
+                await replacement_ws.finish()
+                await asyncio.gather(original_task, replacement_task)
+
+        self.assertEqual([call[0] for call in close_calls], ["s-agent-key-2"])
 
     async def test_current_agent_disconnect_immediately_fails_turn_and_closes_target(self):
         registry = ChatTurnRegistry()
@@ -271,6 +422,7 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
             _close_session_tab=close_session_tab,
         )
         ws = DisconnectingWebSocket()
+        turn.dispatch_ws = ws
         with patch.object(chat_stream, "_core", return_value=core), patch.object(
             chat_stream.web, "WebSocketResponse", return_value=ws
         ):

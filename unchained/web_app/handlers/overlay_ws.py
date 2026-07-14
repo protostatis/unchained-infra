@@ -138,9 +138,25 @@ async def _route_followup(
                 notify_overlay=notify_overlay,
             )
 
+        agent_ws = core._chat_agents.get(agent_id)
+        if agent_ws is None or agent_ws.closed:
+            from web_app.handlers.chat_stream import _publish_turn_failure
+
+            failure_message = "Follow-up was not sent because the chat agent is unavailable."
+            _publish_turn_failure(core, turn, failure_message)
+            print(f"[overlay] follow-up agent unavailable for {agent_id}")
+            return _route_failure(
+                session_id,
+                "agent_unavailable",
+                failure_message,
+                503,
+                notify_overlay=False,
+            )
+
         turn.update_routing(
             chat_agent_id=str(getattr(prior_turn, "chat_agent_id", "") or agent_id),
             routing_agent_id=agent_id,
+            dispatch_ws=agent_ws,
             cdp_agent_id=overlay.agent_id,
             tab_id=overlay.tab_id,
         )
@@ -161,20 +177,6 @@ async def _route_followup(
         if overlay.slot is not None:
             ws_msg["slot"] = overlay.slot
 
-        agent_ws = core._chat_agents.get(agent_id)
-        if agent_ws is None or agent_ws.closed:
-            from web_app.handlers.chat_stream import _publish_turn_failure
-
-            failure_message = "Follow-up was not sent because the chat agent is unavailable."
-            _publish_turn_failure(core, turn, failure_message)
-            print(f"[overlay] follow-up agent unavailable for {agent_id}")
-            return _route_failure(
-                session_id,
-                "agent_unavailable",
-                failure_message,
-                503,
-                notify_overlay=False,
-            )
         try:
             await agent_ws.send_json(ws_msg)
             print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
