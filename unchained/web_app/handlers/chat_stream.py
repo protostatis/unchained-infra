@@ -58,6 +58,16 @@ def _turn_owned_by(turn, auth_info: dict) -> bool:
     return bool(owned_by(auth_info.get("user_id", ""), auth_info.get("key_hash", "")))
 
 
+def _agent_event_matches_turn(core, turn, agent_id: str, ws, req_id: str) -> bool:
+    """Accept turn events only from the exact currently registered transport."""
+    return bool(
+        req_id
+        and req_id == turn.req_id
+        and turn.routing_agent_id == agent_id
+        and core._chat_agents.get(agent_id) is ws
+    )
+
+
 def _revoke_turn_grant(core, turn) -> None:
     """Revoke a scheduler grant only after its turn has reached a terminal state."""
     if not getattr(turn, "stream_finished", False):
@@ -685,12 +695,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     # Signed-in resumable turns never infer request ownership
                     # from a session alone. A matching event reaches the journal
                     # before control-response compatibility handling below.
-                    if (
-                        req_id
-                        and req_id == turn.req_id
-                        and turn.routing_agent_id == agent_id
-                        and core._chat_agents.get(agent_id) is ws
-                    ):
+                    if _agent_event_matches_turn(core, turn, agent_id, ws, req_id):
                         _publish_turn_event(core, turn, data)
                         continue
                     if not (req_id and (data.get("event_omitted") or msg_type in (
@@ -744,6 +749,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             core._chat_agent_users.pop(agent_id, None)
         agent_sessions = []
         active_turns = []
+        active_turn_closes = []
         closed_sessions = 0
         if is_current:
             registry = _turn_registry(core)
@@ -769,35 +775,28 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                         preserve_agent_id=agent_id if profile_path else "",
                     )
                 )
-        if is_current:
+            for turn in active_turns:
+                if getattr(turn, "stream_finished", False):
+                    continue
+                _publish_turn_failure(
+                    core,
+                    turn,
+                    "Local agent disconnected before completing this response. Please retry after the client reconnects.",
+                )
+                closed_sessions += 1
+                expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
+                profile_path = core._session_profile_paths.get(turn.session_id, "")
+                active_turn_closes.append(
+                    core._close_session_tab(
+                        turn.session_id,
+                        expected_tab_id=expected_tab_id,
+                        preserve_profile_path=profile_path,
+                        preserve_agent_id=turn.cdp_agent_id if profile_path else "",
+                    )
+                )
             print(f"[chat] Agent {agent_id} disconnected, cleaning {closed_sessions} session tabs")
-            if active_turns:
-                async def fail_unreconnected_turns() -> None:
-                    # Hosted agents reconnect their WebSocket and keep their
-                    # task alive. Preserve its browser target until that short
-                    # reconnect window has elapsed.
-                    await asyncio.sleep(10)
-                    current_ws = core._chat_agents.get(agent_id)
-                    if current_ws is not None and current_ws is not ws and not current_ws.closed:
-                        return
-                    for turn in active_turns:
-                        if getattr(turn, "stream_finished", False):
-                            continue
-                        _publish_turn_failure(
-                            core,
-                            turn,
-                            "Local agent disconnected before completing this response. Please retry after the client reconnects.",
-                        )
-                        expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
-                        profile_path = core._session_profile_paths.get(turn.session_id, "")
-                        await core._close_session_tab(
-                            turn.session_id,
-                            expected_tab_id=expected_tab_id,
-                            preserve_profile_path=profile_path,
-                            preserve_agent_id=turn.cdp_agent_id if profile_path else "",
-                        )
-
-                asyncio.create_task(fail_unreconnected_turns())
+            if active_turn_closes:
+                await asyncio.gather(*active_turn_closes, return_exceptions=True)
         else:
             print(f"[chat] Agent {agent_id} stale connection closed (superseded by reconnect)")
 
@@ -1513,7 +1512,11 @@ async def handle_chat_active(request: web.Request) -> web.Response:
     session_id = str(request.query.get("session_id", "") or "").strip()
     registry = _turn_registry(core)
     turn = _registry_turn(registry, session_id) if session_id else None
-    if not turn or not _turn_owned_by(turn, auth_info):
+    if (
+        not turn
+        or not _turn_owned_by(turn, auth_info)
+        or getattr(turn, "status", "") not in {"active", "cancelling"}
+    ):
         return web.json_response({"active": False}, status=404)
     return web.json_response(
         turn.snapshot(include_events=True),

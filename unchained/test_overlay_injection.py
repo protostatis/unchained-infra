@@ -10,6 +10,7 @@ Verifies:
 7. Concurrent sessions with "auto" get independent overlay state
 """
 import asyncio
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -257,14 +258,16 @@ class TestOverlayAutoTabDownstreamConsumers(unittest.TestCase):
         async def _run_route():
             with patch("web_app.handlers.overlay_ws._core", return_value=core), \
                  patch("web_app.handlers.overlay_ws.asyncio.create_task", side_effect=_discard_task):
-                await _route_followup(core, "s-model-001", "follow up")
+                return await _route_followup(core, "s-model-001", "follow up")
 
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(_run_route())
+            result = loop.run_until_complete(_run_route())
         finally:
             loop.close()
 
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], 200)
         sent_msg = agent_ws.send_json.await_args.args[0]
         self.assertEqual(sent_msg["model"], "codex-cli:gpt-5.5")
 
@@ -320,19 +323,62 @@ class TestOverlayFollowupTurnRegistry(unittest.IsolatedAsyncioTestCase):
 
         core, prior_turn, agent_ws = await self._core_with_turn(terminal=False)
 
-        await _route_followup(core, prior_turn.session_id, "follow up")
+        with patch("web_app.handlers.chat_stream._broadcast_overlay") as broadcast:
+            result = await _route_followup(core, prior_turn.session_id, "follow up")
 
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["code"], "turn_active")
+        self.assertEqual(result["status"], 409)
         self.assertIs(core._chat_turns.get(prior_turn.session_id), prior_turn)
         agent_ws.send_json.assert_not_awaited()
         self.assertEqual(core._response_queues, {})
+        broadcast.assert_called_once()
+        overlay_event = broadcast.call_args.args[1]
+        self.assertEqual(overlay_event["type"], "error")
+        self.assertEqual(overlay_event["code"], "turn_active")
+
+    async def test_followup_without_retained_owner_returns_visible_failure(self):
+        from web_app.handlers.overlay_ws import _route_followup
+        from web_state import ChatTurnRegistry, OverlaySessionState
+
+        session_id = "s-overlay-no-owner"
+        core = SimpleNamespace(
+            _chat_turns=ChatTurnRegistry(),
+            _overlay_sessions={
+                session_id: OverlaySessionState(
+                    session_id=session_id,
+                    agent_id="cdp-agent-1",
+                    tab_id="auto",
+                    user_id="user-1",
+                    injected=True,
+                )
+            },
+            _chat_agents={},
+            _session_agents={},
+            _session_last_active={},
+            _response_queues={},
+            _response_req_ids={},
+        )
+
+        with patch("web_app.handlers.chat_stream._broadcast_overlay") as broadcast:
+            result = await _route_followup(core, session_id, "follow up")
+
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["code"], "turn_owner_missing")
+        self.assertEqual(result["status"], 409)
+        broadcast.assert_called_once()
+        self.assertEqual(broadcast.call_args.args[1]["type"], "error")
 
     async def test_terminal_turn_creates_canonical_followup_and_forwards_context(self):
         from web_app.handlers.overlay_ws import _route_followup
 
         core, prior_turn, agent_ws = await self._core_with_turn(terminal=True)
 
-        await _route_followup(core, prior_turn.session_id, "follow up")
+        result = await _route_followup(core, prior_turn.session_id, "follow up")
 
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["code"], "followup_routed")
+        self.assertEqual(result["status"], 200)
         current = core._chat_turns.get(prior_turn.session_id)
         self.assertIsNot(current, prior_turn)
         self.assertEqual(current.owner_user_id, "user-1")
@@ -351,13 +397,64 @@ class TestOverlayFollowupTurnRegistry(unittest.IsolatedAsyncioTestCase):
         core, prior_turn, _agent_ws = await self._core_with_turn(
             terminal=True, send_error=True
         )
-        with patch("web_app.handlers.chat_stream._core", return_value=core):
-            await _route_followup(core, prior_turn.session_id, "follow up")
+        with patch("web_app.handlers.chat_stream._broadcast_overlay") as broadcast:
+            result = await _route_followup(core, prior_turn.session_id, "follow up")
 
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["code"], "agent_send_failed")
+        self.assertEqual(result["status"], 502)
         current = core._chat_turns.get(prior_turn.session_id)
         self.assertEqual(current.status, "error")
         self.assertTrue(current.stream_finished)
         self.assertEqual([event["type"] for event in current.journal], ["error", "done"])
+        overlay_events = [call.args[1] for call in broadcast.call_args_list]
+        self.assertEqual([event["type"] for event in overlay_events], ["error", "done"])
+
+    async def test_http_handler_propagates_route_failure_status(self):
+        from web_app.handlers.overlay_ws import handle_overlay_followup
+
+        core, prior_turn, agent_ws = await self._core_with_turn(terminal=False)
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "session_id": prior_turn.session_id,
+                    "message": "follow up",
+                }
+            )
+        )
+
+        with patch("web_app.handlers.overlay_ws._core", return_value=core):
+            response = await handle_overlay_followup(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 409)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["code"], "turn_active")
+        self.assertEqual(payload["status"], 409)
+        agent_ws.send_json.assert_not_awaited()
+
+    async def test_http_handler_returns_route_success(self):
+        from web_app.handlers.overlay_ws import handle_overlay_followup
+
+        core, prior_turn, agent_ws = await self._core_with_turn(terminal=True)
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "session_id": prior_turn.session_id,
+                    "message": "follow up",
+                }
+            )
+        )
+
+        with patch("web_app.handlers.overlay_ws._core", return_value=core):
+            response = await handle_overlay_followup(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["code"], "followup_routed")
+        self.assertEqual(payload["status"], 200)
+        agent_ws.send_json.assert_awaited_once()
 
 
 class TestOverlayConcurrentSessions(unittest.TestCase):

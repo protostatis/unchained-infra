@@ -55,6 +55,7 @@ class TestWebRouteContracts(unittest.TestCase):
         actual = self._runtime_routes()
         expected = {
             ("GET", "/favicon.svg"),
+            ("GET", "/web/static/signed-chat-reconnect.js"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
             ("GET", "/web/unbrowser/sources"),

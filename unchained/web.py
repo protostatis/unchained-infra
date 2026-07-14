@@ -1422,6 +1422,24 @@ _WASMBROWSER_DIR = os.path.join(
 _WASMBROWSER_ALLOWED = {
     "engine.js", "dom.js", "bridge.js", "shims.js", "loader.js", "intel.js",
 }
+_SIGNED_CHAT_RECONNECT_ASSET = Path(__file__).with_name("web_app") / "static" / "signed-chat-reconnect.js"
+
+
+async def handle_signed_chat_reconnect_asset(request: web.Request) -> web.Response:
+    """Serve the fixed signed-chat reconnect runtime."""
+    del request
+    try:
+        body = _SIGNED_CHAT_RECONNECT_ASSET.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return web.Response(status=404)
+    return web.Response(
+        text=body,
+        content_type="application/javascript",
+        headers={
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 async def handle_wasmbrowser_asset(request: web.Request) -> web.Response:

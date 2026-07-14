@@ -36,12 +36,46 @@ def _retained_turn(registry, session_id: str):
     return registry.get(session_id)
 
 
-async def _route_followup(core, session_id: str, message: str) -> None:
+def _route_result(ok: bool, code: str, message: str, status: int) -> dict:
+    return {"ok": ok, "code": code, "message": message, "status": status}
+
+
+def _route_failure(
+    session_id: str,
+    code: str,
+    message: str,
+    status: int,
+    *,
+    notify_overlay: bool,
+) -> dict:
+    if notify_overlay:
+        from web_app.handlers.chat_stream import _broadcast_overlay
+
+        _broadcast_overlay(
+            session_id,
+            {"type": "error", "code": code, "data": message},
+        )
+    return _route_result(False, code, message, status)
+
+
+async def _route_followup(
+    core,
+    session_id: str,
+    message: str,
+    *,
+    notify_overlay: bool = True,
+) -> dict:
     """Route a follow-up without replacing an in-flight browser turn."""
     overlay = core._overlay_sessions.get(session_id)
     if not overlay:
         print(f"[overlay] follow-up dropped — no overlay state for {session_id}")
-        return
+        return _route_failure(
+            session_id,
+            "overlay_not_found",
+            "Follow-up was not sent because the overlay session is no longer available.",
+            404,
+            notify_overlay=notify_overlay,
+        )
 
     agent_id = core._session_agents.get(session_id) or overlay.agent_id
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
@@ -50,19 +84,37 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         prior_turn = _retained_turn(registry, session_id)
         if prior_turn and getattr(prior_turn, "status", "") in {"active", "cancelling"}:
             print(f"[overlay] follow-up dropped — turn active for {session_id}")
-            return
+            return _route_failure(
+                session_id,
+                "turn_active",
+                "Follow-up was not sent because another turn is still active.",
+                409,
+                notify_overlay=notify_overlay,
+            )
         if not prior_turn:
             # The overlay alone has a user ID but not the key hash required to
             # bind a signed-in turn safely. Unknown retained state must not be
             # turned into an unowned resumable request.
             print(f"[overlay] follow-up dropped — no retained turn owner for {session_id}")
-            return
+            return _route_failure(
+                session_id,
+                "turn_owner_missing",
+                "Follow-up was not sent because session ownership could not be verified.",
+                409,
+                notify_overlay=notify_overlay,
+            )
 
         owner_user_id = str(getattr(prior_turn, "owner_user_id", "") or "")
         owner_key_hash = str(getattr(prior_turn, "owner_key_hash", "") or "")
         if not owner_user_id or not owner_key_hash:
             print(f"[overlay] follow-up dropped — retained turn owner incomplete for {session_id}")
-            return
+            return _route_failure(
+                session_id,
+                "turn_owner_incomplete",
+                "Follow-up was not sent because session ownership is incomplete.",
+                409,
+                notify_overlay=notify_overlay,
+            )
 
         turn, created, conflict = await registry.start(
             ChatTurnState(
@@ -78,7 +130,13 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         )
         if conflict or not created:
             print(f"[overlay] follow-up dropped — turn race for {session_id}")
-            return
+            return _route_failure(
+                session_id,
+                "turn_conflict",
+                "Follow-up was not sent because another turn started first.",
+                409,
+                notify_overlay=notify_overlay,
+            )
 
         turn.update_routing(
             chat_agent_id=str(getattr(prior_turn, "chat_agent_id", "") or agent_id),
@@ -107,25 +165,46 @@ async def _route_followup(core, session_id: str, message: str) -> None:
         if agent_ws is None or agent_ws.closed:
             from web_app.handlers.chat_stream import _publish_turn_failure
 
-            _publish_turn_failure(core, turn, "Overlay follow-up agent is not connected.")
+            failure_message = "Follow-up was not sent because the chat agent is unavailable."
+            _publish_turn_failure(core, turn, failure_message)
             print(f"[overlay] follow-up agent unavailable for {agent_id}")
-            return
+            return _route_failure(
+                session_id,
+                "agent_unavailable",
+                failure_message,
+                503,
+                notify_overlay=False,
+            )
         try:
             await agent_ws.send_json(ws_msg)
             print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
         except Exception as e:
             from web_app.handlers.chat_stream import _publish_turn_failure
 
-            _publish_turn_failure(core, turn, "Failed to reach chat agent for overlay follow-up.")
+            failure_message = "Follow-up was not sent because the chat agent could not be reached."
+            _publish_turn_failure(core, turn, failure_message)
             print(f"[overlay] follow-up send failed: {e}")
-        return
+            return _route_failure(
+                session_id,
+                "agent_send_failed",
+                failure_message,
+                502,
+                notify_overlay=False,
+            )
+        return _route_result(True, "followup_routed", "Overlay follow-up sent.", 200)
 
     # Legacy fake-core and guest-compatible behavior. This remains queue based
     # because it has no signed-in owner identity or canonical journal.
     agent_ws = core._chat_agents.get(agent_id)
     if agent_ws is None or agent_ws.closed:
         print(f"[overlay] follow-up dropped — agent {agent_id} not connected")
-        return
+        return _route_failure(
+            session_id,
+            "agent_unavailable",
+            "Follow-up was not sent because the chat agent is unavailable.",
+            503,
+            notify_overlay=notify_overlay,
+        )
 
     q: asyncio.Queue = asyncio.Queue(maxsize=8)
     core._response_queues[session_id] = q
@@ -152,7 +231,13 @@ async def _route_followup(core, session_id: str, message: str) -> None:
     except Exception as e:
         print(f"[overlay] follow-up send failed: {e}")
         core._response_queues.pop(session_id, None)
-        return
+        return _route_failure(
+            session_id,
+            "agent_send_failed",
+            "Follow-up was not sent because the chat agent could not be reached.",
+            502,
+            notify_overlay=notify_overlay,
+        )
 
     # Drain responses and push to overlay via CDP
     async def _drain():
@@ -170,6 +255,7 @@ async def _route_followup(core, session_id: str, message: str) -> None:
             pass
 
     asyncio.create_task(_drain())
+    return _route_result(True, "followup_routed", "Overlay follow-up sent.", 200)
 
 
 async def handle_overlay_followup(request: web.Request) -> web.Response:
@@ -185,5 +271,10 @@ async def handle_overlay_followup(request: web.Request) -> web.Response:
     if not session_id or not message or len(message) > 4000:
         return web.json_response({"error": "invalid"}, status=400)
 
-    await _route_followup(core, session_id, message)
-    return web.json_response({"ok": True})
+    result = await _route_followup(
+        core,
+        session_id,
+        message,
+        notify_overlay=False,
+    )
+    return web.json_response(result, status=result["status"])
