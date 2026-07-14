@@ -20363,6 +20363,14 @@ let agentViewQueuedPatches = [];
 let agentViewActivationTimer = null;
 const agentViewInputTimers = new Map();
 const agentViewBoundDocuments = new WeakSet();
+let agentViewRefreshPending = false;
+let agentViewRefreshRaf = 0;
+let agentViewFallbackPending = null;
+let agentViewFallbackLoading = false;
+let agentViewFallbackBlobUrl = null;
+let agentViewFallbackNextBlobUrl = null;
+let agentViewFallbackPaintRaf = 0;
+let agentViewFallbackPaintGeneration = 0;
 const AGENT_SHELL_DEFAULT = 'task';
 let agentShellTaskEnabled = false;
 let agentShellBrowserReady = false;
@@ -21464,9 +21472,88 @@ function stopAgentViewSocket() {
   agentViewActivationTimer = null;
   if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
   agentViewRetryTimer = null;
+  agentViewFallbackPending = null;
+  agentViewFallbackLoading = false;
+  if (agentViewFallbackPaintRaf) { cancelAnimationFrame(agentViewFallbackPaintRaf); agentViewFallbackPaintRaf = 0; }
+  agentViewFallbackPaintGeneration++;
+  const fallbackImage = document.getElementById('agent-view-image');
+  if (fallbackImage) { fallbackImage.onload = null; fallbackImage.onerror = null; }
+  if (agentViewFallbackNextBlobUrl) {
+    if (fallbackImage) {
+      try {
+        if (agentViewFallbackBlobUrl) fallbackImage.src = agentViewFallbackBlobUrl;
+        else fallbackImage.removeAttribute('src');
+      } catch (_err) {}
+    }
+    try { URL.revokeObjectURL(agentViewFallbackNextBlobUrl); } catch (_err) {}
+  }
+  agentViewFallbackNextBlobUrl = null;
+  agentViewRefreshPending = false;
+  if (agentViewRefreshRaf) { cancelAnimationFrame(agentViewRefreshRaf); agentViewRefreshRaf = 0; }
   const socket = agentViewSocket;
   agentViewSocket = null;
   if (socket && socket.readyState < 2) { try { socket.close(); } catch (_err) {} }
+}
+
+function agentViewPaintFallbackFrame(mime, data, seq) {
+  agentViewFallbackPending = {mime: mime, data: data, seq: seq};
+  _agentViewFallbackScheduleRaf();
+}
+
+function _agentViewFallbackScheduleRaf() {
+  if (!agentViewFallbackPending || agentViewFallbackLoading || agentViewFallbackPaintRaf) return;
+  agentViewFallbackPaintRaf = requestAnimationFrame(function() {
+    agentViewFallbackPaintRaf = 0;
+    if (!agentViewFallbackPending || agentViewFallbackLoading) return;
+    agentViewFallbackLoading = true;
+    const generation = agentViewFallbackPaintGeneration;
+    const pending = agentViewFallbackPending;
+    agentViewFallbackPending = null;
+
+    let blob;
+    try {
+      const raw = atob(String(pending.data));
+      if (!raw) { agentViewFallbackLoading = false; _agentViewFallbackScheduleRaf(); return; }
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      blob = new Blob([bytes], {type: pending.mime || 'image/jpeg'});
+    } catch (_err) {
+      agentViewFallbackLoading = false; _agentViewFallbackScheduleRaf(); return;
+    }
+
+    let url;
+    try { url = URL.createObjectURL(blob); } catch (_err) { agentViewFallbackLoading = false; _agentViewFallbackScheduleRaf(); return; }
+    agentViewFallbackNextBlobUrl = url;
+
+    const image = document.getElementById('agent-view-image');
+    if (!image) { agentViewFallbackLoading = false; URL.revokeObjectURL(url); agentViewFallbackNextBlobUrl = null; _agentViewFallbackScheduleRaf(); return; }
+
+    image.onload = function() {
+      if (generation !== agentViewFallbackPaintGeneration) return;
+      if (agentViewFallbackBlobUrl) { try { URL.revokeObjectURL(agentViewFallbackBlobUrl); } catch (_err) {} }
+      agentViewFallbackBlobUrl = url;
+      agentViewFallbackNextBlobUrl = null;
+      agentViewFallbackLoading = false;
+      scheduleAgentViewSemanticFrameScale(false);
+      _agentViewFallbackScheduleRaf();
+    };
+
+    image.onerror = function() {
+      if (generation !== agentViewFallbackPaintGeneration) return;
+      try { URL.revokeObjectURL(url); } catch (_err) {}
+      agentViewFallbackNextBlobUrl = null;
+      agentViewFallbackLoading = false;
+      image.onload = null;
+      image.onerror = null;
+      try {
+        if (agentViewFallbackBlobUrl) image.src = agentViewFallbackBlobUrl;
+        else image.removeAttribute('src');
+      } catch (_err) {}
+      _agentViewFallbackScheduleRaf();
+    };
+
+    image.src = url;
+  });
 }
 
 function scheduleAgentViewRetry(generation) {
@@ -21501,6 +21588,8 @@ function startAgentViewSocket() {
   stopAgentViewSocket();
   agentViewBoundSessionId = sessionId;
   agentViewRetryAllowed = true;
+  agentViewLastSeq = 0;
+  agentViewDocumentSeq = 0;
   const generation = agentViewGeneration;
   setAgentViewState('Attaching to agent Chrome', false);
   const socket = new WebSocket(agentViewSocketUrl());
@@ -21595,16 +21684,9 @@ function startAgentViewSocket() {
       const seq = Number(event.seq || 0);
       if (seq && seq <= agentViewLastSeq) return;
       agentViewLastSeq = seq;
-      const image = document.getElementById('agent-view-image');
       const canvas = document.getElementById('agent-view-canvas');
       if (canvas) { canvas.classList.remove('has-semantic'); canvas.classList.add('has-frame'); }
-      if (image) {
-        if (!image.__ucmMobileLayoutBound) {
-          image.__ucmMobileLayoutBound = true;
-          image.addEventListener('load', function() { scheduleAgentViewSemanticFrameScale(false); });
-        }
-        image.src = 'data:' + (event.mime || 'image/jpeg') + ';base64,' + event.data;
-      }
+      agentViewPaintFallbackFrame(event.mime || 'image/jpeg', event.data, seq);
       const seqEl = document.getElementById('agent-view-seq');
       if (seqEl) seqEl.textContent = 'Fallback frame ' + seq;
       const fidelityEl = document.getElementById('agent-view-fidelity');
@@ -21800,6 +21882,10 @@ function closeAgentView(options) {
   stopAgentViewSocket();
   agentViewBoundSessionId = '';
   agentViewRetryAllowed = false;
+  if (agentViewFallbackBlobUrl) { try { URL.revokeObjectURL(agentViewFallbackBlobUrl); } catch (_err) {} }
+  agentViewFallbackBlobUrl = null;
+  const image = document.getElementById('agent-view-image');
+  if (image) { try { image.removeAttribute('src'); } catch (_err) {} image.onload = null; image.onerror = null; }
   if ((!options.system || options.restoreFocus) && document.body.classList.contains('agent-shell-task')) {
     const fallback = document.getElementById('topbar-agent-view');
     const target = agentViewReturnFocus && typeof agentViewReturnFocus.focus === 'function' ? agentViewReturnFocus : fallback;
@@ -21812,9 +21898,14 @@ function refreshAgentView() {
   if (!document.body.classList.contains('agent-view-open')) return;
   if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
   agentViewSemanticRecoveryTimer = null;
-  agentViewLastSeq = 0;
-  agentViewDocumentSeq = 0;
-  requestAnimationFrame(startAgentViewSocket);
+  if (agentViewRefreshPending) return;
+  agentViewRefreshPending = true;
+  agentViewRefreshRaf = requestAnimationFrame(function() {
+    agentViewRefreshRaf = 0;
+    agentViewRefreshPending = false;
+    if (!document.body.classList.contains('agent-view-open')) return;
+    startAgentViewSocket();
+  });
 }
 
 function ensureAgentViewForBrowserActivity(toolName) {
