@@ -936,6 +936,10 @@ async def _handle_preview_ws(
                 raise RuntimeError("Chrome did not return a target id")
             return candidate if candidate.startswith("prov-") else target_id
 
+        # Capture the original tab_id before resolution so the success path
+        # can compare-and-swap without racing a concurrent update.
+        stale_tab_id = tab_id
+        is_provisioned = tab_id.startswith("prov-")
         try:
             tab_id = await resolve_preview_tab(tab_id)
         except Exception as exc:
@@ -943,8 +947,6 @@ async def _handle_preview_ws(
             # restart. Re-pin to the bridge-selected page rather than
             # reconnecting forever to a dead target. Provisioned targets must
             # not fall through to a different Chrome/profile.
-            stale_tab_id = tab_id
-            is_provisioned = tab_id.startswith("prov-")
             if tab_id != "auto" and not is_provisioned:
                 try:
                     tab_id = await resolve_preview_tab("auto")
