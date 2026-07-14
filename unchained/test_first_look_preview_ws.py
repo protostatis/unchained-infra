@@ -716,7 +716,8 @@ class TestInteractiveAgentViewTemplate(unittest.TestCase):
         self.assertIn("if (frame !== agentViewCurrentFrame())", html)
         self.assertIn("inactive-frame-scroll", html)
         self.assertIn("frame.style.transformOrigin = mobile ? 'top center' : 'center center'", html)
-        self.assertIn("image.addEventListener('load', function() { scheduleAgentViewSemanticFrameScale(false); })", html)
+        self.assertIn("scheduleAgentViewSemanticFrameScale(false)", html)
+        self.assertIn("agentViewPaintFallbackFrame(event.mime", html)
         self.assertIn("patch-targets-omitted", html)
         self.assertNotIn("if (!target) throw new Error('semantic target missing')", html)
 

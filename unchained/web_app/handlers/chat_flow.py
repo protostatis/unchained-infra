@@ -1093,7 +1093,14 @@ async def _handle_preview_ws(
     ws = web.WebSocketResponse(heartbeat=30)
     if guest_id:
         core._attach_first_look_guest_cookies(ws, request, guest_id)
-    await ws.prepare(request)
+    try:
+        await ws.prepare(request)
+    except ConnectionResetError:
+        log.debug(
+            "client disconnected during WS handshake sid=%s",
+            sid_param,
+        )
+        return ws
     client_closed = asyncio.Event()
     send_lock = asyncio.Lock()
     action_queue: asyncio.Queue[dict] | None = (
