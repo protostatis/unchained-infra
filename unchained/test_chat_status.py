@@ -30,6 +30,35 @@ from web_app.handlers.chat_flow import normalize_bridge_profile
 import web
 
 
+class TestModelRouting(unittest.TestCase):
+    def test_local_agent_models_are_not_classified_as_openrouter(self):
+        local_models = (
+            "opencode-cli:opencode/deepseek-v4-flash-free",
+            "opencode-cli:openrouter/anthropic/claude-sonnet-4.6",
+            "codex-cli:openai/gpt-5",
+            "codex-sdk:openai/gpt-5",
+            "claude-sdk:anthropic/claude-sonnet-4.6",
+        )
+        for model in local_models:
+            with self.subTest(model=model):
+                self.assertFalse(web._is_openrouter_model(model))
+
+    def test_provider_model_ids_are_classified_as_openrouter(self):
+        for model in ("openai/gpt-5", "anthropic/claude-sonnet-4.6"):
+            with self.subTest(model=model):
+                self.assertTrue(web._is_openrouter_model(model))
+
+    def test_opencode_slash_model_routes_events_to_local_agent(self):
+        model = "opencode-cli:opencode/deepseek-v4-flash-free"
+        auth_info = {"key_hash": "abc12345", "agent_id": "claude-abc12345"}
+
+        self.assertTrue(web._is_opencode_cli_model(model))
+        self.assertFalse(web._is_openrouter_model(model))
+        chat_agent_id = web._resolve_chat_agent_id(auth_info, model)
+        routing_agent_id = web.TRIAL_AGENT_ID if web._is_openrouter_model(model) else chat_agent_id
+        self.assertEqual(routing_agent_id, "claude-abc12345")
+
+
 class TestHandleChatStatus(unittest.IsolatedAsyncioTestCase):
     """Ensure /web/chat/status reports chat and browser bridge separately."""
 

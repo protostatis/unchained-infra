@@ -59,12 +59,12 @@ def _turn_owned_by(turn, auth_info: dict) -> bool:
 
 
 def _agent_event_matches_turn(core, turn, agent_id: str, ws, req_id: str) -> bool:
-    """Accept turn events only from the exact currently registered transport."""
+    """Accept turn events only from the transport that received the turn."""
     return bool(
         req_id
         and req_id == turn.req_id
         and turn.routing_agent_id == agent_id
-        and core._chat_agents.get(agent_id) is ws
+        and getattr(turn, "dispatch_ws", None) is ws
     )
 
 
@@ -698,6 +698,19 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     if _agent_event_matches_turn(core, turn, agent_id, ws, req_id):
                         _publish_turn_event(core, turn, data)
                         continue
+                    if msg_type in {"done", "error", "cancelled"}:
+                        logger = getattr(core, "log", None)
+                        if logger:
+                            logger.warning(
+                                "[chat] dropped terminal turn event "
+                                "session=%s req_match=%s agent_match=%s "
+                                "dispatch_match=%s current_match=%s",
+                                sid,
+                                req_id == getattr(turn, "req_id", ""),
+                                agent_id == getattr(turn, "routing_agent_id", ""),
+                                ws is getattr(turn, "dispatch_ws", None),
+                                ws is core._chat_agents.get(agent_id),
+                            )
                     if not (req_id and (data.get("event_omitted") or msg_type in (
                         "history_response",
                         "new_chat_ok",
@@ -751,11 +764,18 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
         active_turns = []
         active_turn_closes = []
         closed_sessions = 0
+        registry = _turn_registry(core)
+        if registry and hasattr(registry, "active_for_transport"):
+            active_turns = registry.active_for_transport(agent_id, ws)
+        elif is_current and registry and hasattr(registry, "active_for_agent"):
+            active_turns = registry.active_for_agent(agent_id)
         if is_current:
-            registry = _turn_registry(core)
-            if registry and hasattr(registry, "active_for_agent"):
-                active_turns = registry.active_for_agent(agent_id)
-            active_turn_sessions = {turn.session_id for turn in active_turns}
+            all_active_turns = (
+                registry.active_for_agent(agent_id)
+                if registry and hasattr(registry, "active_for_agent")
+                else active_turns
+            )
+            active_turn_sessions = {turn.session_id for turn in all_active_turns}
             agent_sessions = [
                 sid
                 for sid, aid in list(core._session_agent_map.items())
@@ -775,30 +795,34 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                         preserve_agent_id=agent_id if profile_path else "",
                     )
                 )
-            for turn in active_turns:
-                if getattr(turn, "stream_finished", False):
-                    continue
-                _publish_turn_failure(
-                    core,
-                    turn,
-                    "Local agent disconnected before completing this response. Please retry after the client reconnects.",
+        for turn in active_turns:
+            if getattr(turn, "stream_finished", False):
+                continue
+            _publish_turn_failure(
+                core,
+                turn,
+                "Local agent disconnected before completing this response. Please retry after the client reconnects.",
+            )
+            closed_sessions += 1
+            expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
+            profile_path = core._session_profile_paths.get(turn.session_id, "")
+            active_turn_closes.append(
+                core._close_session_tab(
+                    turn.session_id,
+                    expected_tab_id=expected_tab_id,
+                    preserve_profile_path=profile_path,
+                    preserve_agent_id=turn.cdp_agent_id if profile_path else "",
                 )
-                closed_sessions += 1
-                expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
-                profile_path = core._session_profile_paths.get(turn.session_id, "")
-                active_turn_closes.append(
-                    core._close_session_tab(
-                        turn.session_id,
-                        expected_tab_id=expected_tab_id,
-                        preserve_profile_path=profile_path,
-                        preserve_agent_id=turn.cdp_agent_id if profile_path else "",
-                    )
-                )
+            )
+        if is_current:
             print(f"[chat] Agent {agent_id} disconnected, cleaning {closed_sessions} session tabs")
-            if active_turn_closes:
-                await asyncio.gather(*active_turn_closes, return_exceptions=True)
         else:
-            print(f"[chat] Agent {agent_id} stale connection closed (superseded by reconnect)")
+            print(
+                f"[chat] Agent {agent_id} stale connection closed "
+                f"(superseded by reconnect), cleaning {closed_sessions} session tabs"
+            )
+        if active_turn_closes:
+            await asyncio.gather(*active_turn_closes, return_exceptions=True)
 
     return ws
 
@@ -1309,6 +1333,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             turn.update_routing(
                 chat_agent_id=chat_agent_id,
                 routing_agent_id=routing_agent_id,
+                dispatch_ws=ws,
                 cdp_agent_id=cdp_agent_id,
                 tab_id=tab_id or "",
             )
