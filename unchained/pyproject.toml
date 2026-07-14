@@ -18,7 +18,14 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["benchmark"]
+packages = [
+    "benchmark",
+    "web_app",
+    "web_app.handlers",
+    "web_app.content",
+    "web_app.static",
+    "web_app.static.wasmbrowser",
+]
 py-modules = [
     "agent_package", "agent_stream", "api", "auth",
     "canvas_density", "canvas_intercept", "cdp", "cdp_tool",
@@ -33,6 +40,9 @@ py-modules = [
     "scheduled_tasks", "scheduler_agent", "scheduler_tool", "signup_agent", "stream_ctl",
     "template_utils", "web", "web_state", "webmcp",
 ]
+
+[tool.setuptools.package-data]
+web_app = ["content/*.md", "static/*.js", "static/wasmbrowser/*.js"]
 
 [project.scripts]
 unchained-ddm = "ddm:main"

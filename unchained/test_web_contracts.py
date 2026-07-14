@@ -55,6 +55,7 @@ class TestWebRouteContracts(unittest.TestCase):
         actual = self._runtime_routes()
         expected = {
             ("GET", "/favicon.svg"),
+            ("GET", "/web/static/signed-chat-reconnect.js"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
             ("GET", "/web/unbrowser/sources"),
@@ -96,6 +97,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/chat/ws"),
             ("POST", "/web/chat"),
             ("POST", "/web/chat/cancel"),
+            ("GET", "/web/chat/active"),
+            ("GET", "/web/chat/events"),
             ("POST", "/web/labs/you-navigate/run"),
             ("POST", "/web/labs/x-manager/run"),
             ("GET", "/web/chat/status"),

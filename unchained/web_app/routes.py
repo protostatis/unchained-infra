@@ -16,6 +16,7 @@ RouteSpec = tuple[str, str, str]
 
 ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/favicon.svg", "handle_favicon"),
+    ("GET", "/web/static/signed-chat-reconnect.js", "handle_signed_chat_reconnect_asset"),
     ("GET", "/web/wasmbrowser/{filename}", "handle_wasmbrowser_asset"),
     ("GET", "/og-image.png", "handle_og_image"),
     ("GET", "/robots.txt", "handle_robots_txt"),
@@ -94,6 +95,8 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/chat/ws", "web_app.handlers.chat_stream:handle_chat_ws"),
     ("POST", "/web/overlay-followup", "web_app.handlers.overlay_ws:handle_overlay_followup"),
     ("POST", "/web/chat", "web_app.handlers.chat_stream:handle_chat_msg"),
+    ("GET", "/web/chat/active", "web_app.handlers.chat_stream:handle_chat_active"),
+    ("GET", "/web/chat/events", "web_app.handlers.chat_stream:handle_chat_events"),
     ("POST", "/web/chat/cancel", "web_app.handlers.chat_stream:handle_chat_cancel"),
     ("GET", "/web/chat/status", "web_app.handlers.chat_flow:handle_chat_status"),
     ("GET", "/web/first-look/preflight", "web_app.handlers.chat_flow:handle_first_look_preflight"),

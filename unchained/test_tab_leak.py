@@ -1,14 +1,15 @@
-"""Tests for tab leak prevention (web.py and chrome_bridge.py changes).
+"""Tests for tab lifecycle management (web.py and chrome_bridge.py changes).
 
 Tests cover:
 1. _close_session_tab queues retry on failure
-2. SSE disconnect triggers tab close
+2. SSE disconnect preserves an in-flight tab for turn resumption
 3. Agent disconnect cleans all session tabs
 4. Per-agent tab cap with LRU eviction
 5. Stale tab cleanup loop (retry + reconciliation)
 6. Bridge orphan tab cleanup on reconnect (headless)
 """
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -437,7 +438,7 @@ class TestStaleTabCleanupRetry(unittest.TestCase):
 # Test SSE disconnect cleanup
 # ---------------------------------------------------------------------------
 class TestSSEDisconnectCleanup(unittest.TestCase):
-    """Change 1: SSE disconnect triggers tab close when stream not completed."""
+    """An SSE client disconnect must not destroy an in-flight browser turn."""
 
     def test_stream_completed_flag_logic(self):
         """stream_completed is True only after done/error event."""
@@ -470,6 +471,18 @@ class TestSSEDisconnectCleanup(unittest.TestCase):
                 break
         # Loop exited without done/error
         self.assertFalse(stream_completed)
+
+    def test_incomplete_sse_stream_does_not_close_the_session_tab(self):
+        """A reconnect must be able to attach to the still-running turn."""
+        from web_app.handlers import chat_stream
+
+        source = inspect.getsource(chat_stream.handle_chat_msg)
+        finalizer = source[source.rindex("finally:") :]
+        self.assertNotIn(
+            "close_session_tab(",
+            finalizer,
+            "SSE transport loss must preserve the tab until the turn lifecycle ends",
+        )
 
     def test_stream_completed_on_error_event(self):
         """Error event also sets stream_completed."""

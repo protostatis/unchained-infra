@@ -19,7 +19,7 @@ from chat_event_transport import (
 )
 
 from web_app.core import get_core as _core
-from web_state import profile_session_caller_tag, profile_session_guard
+from web_state import ChatTurnState, profile_session_caller_tag, profile_session_guard
 
 
 _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
@@ -30,6 +30,176 @@ _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 # turn while the local agent is still working in the background.
 _CODEX_CLI_SILENCE_TIMEOUT_S = 60
 _OPENCODE_CLI_SILENCE_TIMEOUT_S = 300
+
+
+def _turn_registry(core):
+    """Return the optional signed-in turn registry without breaking fake cores."""
+    registry = getattr(core, "_chat_turns", None)
+    return registry if all(hasattr(registry, name) for name in ("get", "start")) else None
+
+
+def _registry_turn(registry, session_id: str, req_id: str = ""):
+    """Look up a retained request while tolerating one-argument fake registries."""
+    if not registry:
+        return None
+    if req_id:
+        try:
+            return registry.get(session_id, req_id)
+        except TypeError:
+            pass
+    return registry.get(session_id)
+
+
+def _turn_owned_by(turn, auth_info: dict) -> bool:
+    """Use both authenticated identities for a retained turn lookup."""
+    owned_by = getattr(turn, "owned_by", None)
+    if not callable(owned_by):
+        return False
+    return bool(owned_by(auth_info.get("user_id", ""), auth_info.get("key_hash", "")))
+
+
+def _agent_event_matches_turn(core, turn, agent_id: str, ws, req_id: str) -> bool:
+    """Accept turn events only from the exact currently registered transport."""
+    return bool(
+        req_id
+        and req_id == turn.req_id
+        and turn.routing_agent_id == agent_id
+        and core._chat_agents.get(agent_id) is ws
+    )
+
+
+def _revoke_turn_grant(core, turn) -> None:
+    """Revoke a scheduler grant only after its turn has reached a terminal state."""
+    if not getattr(turn, "stream_finished", False):
+        return
+    grant_id = str(getattr(turn, "scheduler_grant_id", "") or "")
+    if grant_id:
+        getattr(core, "_scheduler_turn_grants", {}).pop(grant_id, None)
+
+
+def _publish_turn_event(core, turn, event: dict) -> dict | None:
+    """Journal an event before one overlay fan-out; never await subscriber I/O."""
+    published = turn.publish(event)
+    if published is None:
+        return None
+    _broadcast_overlay(turn.session_id, published)
+    if published.get("type") in {"error", "cancelled"}:
+        # Existing consumers expect a final done marker after terminal errors
+        # and cancellations. Keep it in the canonical journal so every
+        # reconnecting subscriber sees the same end-of-turn sequence.
+        _publish_turn_event(
+            core,
+            turn,
+            {"type": "done", "session_id": turn.session_id, "req_id": turn.req_id},
+        )
+    _revoke_turn_grant(core, turn)
+    return published
+
+
+def _publish_turn_failure(core, turn, message: str) -> None:
+    """Finish a started turn that could not be dispatched to its agent."""
+    _publish_turn_event(
+        core,
+        turn,
+        {
+            "type": "error",
+            "session_id": turn.session_id,
+            "req_id": turn.req_id,
+            "data": message,
+        },
+    )
+
+
+def _turn_timeout_task(core, turn, timeout_s: int) -> None:
+    """Start a detached local-CLI silence guard independent of SSE connections."""
+    if timeout_s <= 0:
+        return
+
+    async def watch() -> None:
+        while not getattr(turn, "stream_finished", True):
+            elapsed = time.time() - float(getattr(turn, "last_event_at", 0.0) or 0.0)
+            await asyncio.sleep(max(0.1, timeout_s - elapsed))
+            if getattr(turn, "stream_finished", True):
+                return
+            if time.time() - float(getattr(turn, "last_event_at", 0.0) or 0.0) < timeout_s:
+                continue
+            _publish_turn_failure(
+                core,
+                turn,
+                "Local CLI did not return a response in time. The provider may be rate-limited or stalled; please retry or switch models.",
+            )
+            return
+
+    asyncio.create_task(watch())
+
+
+async def _write_turn_sse(response: web.StreamResponse, event: dict) -> None:
+    """Write one journal item with its monotonic sequence as the SSE id."""
+    seq = int(event.get("seq", 0) or 0)
+    payload = json.dumps(event, separators=(",", ":"))
+    await response.write(f"id: {seq}\ndata: {payload}\n\n".encode())
+
+
+async def _stream_turn_journal(
+    request: web.Request,
+    turn,
+    *,
+    after: int = 0,
+) -> web.StreamResponse:
+    """Replay a turn journal then wait for notifications without owning the turn."""
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await response.prepare(request)
+    signal = turn.subscribe()
+    last_seq = max(0, after)
+    try:
+        while True:
+            events = turn.events_after(last_seq)
+            if events:
+                for event in events:
+                    await _write_turn_sse(response, event)
+                    last_seq = int(event.get("seq", last_seq) or last_seq)
+                if getattr(turn, "stream_finished", False) and last_seq >= turn.last_seq:
+                    break
+                continue
+            if getattr(turn, "stream_finished", False):
+                break
+            # Clear then re-check so a publish between the first journal read
+            # and clear cannot leave a subscriber waiting for a lost signal.
+            signal.clear()
+            if turn.events_after(last_seq) or getattr(turn, "stream_finished", False):
+                continue
+            try:
+                await asyncio.wait_for(signal.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                await response.write(b": keepalive\n\n")
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # aiohttp may expose transport closure with a backend-specific error.
+        # Detach only: state, scheduler grant, overlay, and browser tab survive.
+        pass
+    finally:
+        turn.unsubscribe(signal)
+    return response
+
+
+def _parse_after_sequence(request: web.Request) -> int | None:
+    """Parse a non-negative journal cursor from the replay endpoint."""
+    raw = request.query.get("after", request.headers.get("Last-Event-ID", "0"))
+    try:
+        value = int(str(raw or "0"))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +688,31 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     continue
 
                 req_id = data.get("req_id", "")
+                sid = data.get("session_id", "")
+                registry = _turn_registry(core)
+                turn = _registry_turn(registry, sid) if sid else None
+                if turn and getattr(turn, "status", "") in {"active", "cancelling"}:
+                    # Signed-in resumable turns never infer request ownership
+                    # from a session alone. A matching event reaches the journal
+                    # before control-response compatibility handling below.
+                    if _agent_event_matches_turn(core, turn, agent_id, ws, req_id):
+                        _publish_turn_event(core, turn, data)
+                        continue
+                    if not (req_id and (data.get("event_omitted") or msg_type in (
+                        "history_response",
+                        "new_chat_ok",
+                        "new_chat_error",
+                        "switch_slot_ok",
+                        "slots_response",
+                        "update_client_ok",
+                        "update_client_error",
+                        "archives_response",
+                        "restore_archive_ok",
+                        "restore_archive_error",
+                        "delete_archive_ok",
+                        "delete_archive_error",
+                    ))):
+                        continue
                 if req_id and (data.get("event_omitted") or msg_type in (
                     "history_response",
                     "new_chat_ok",
@@ -537,10 +732,9 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                         await rq.put(data)
                     continue
 
-                sid = data.get("session_id", "")
-                q = core._response_queues.get(sid)
+                q = getattr(core, "_response_queues", {}).get(sid)
                 if q:
-                    expected_rid = core._response_req_ids.get(sid, "")
+                    expected_rid = getattr(core, "_response_req_ids", {}).get(sid, "")
                     event_rid = data.get("req_id", "")
                     if event_rid and expected_rid and event_rid != expected_rid:
                         continue  # stale event from previous turn
@@ -554,13 +748,23 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             core._chat_agent_caps.pop(agent_id, None)
             core._chat_agent_users.pop(agent_id, None)
         agent_sessions = []
+        active_turns = []
+        active_turn_closes = []
+        closed_sessions = 0
         if is_current:
+            registry = _turn_registry(core)
+            if registry and hasattr(registry, "active_for_agent"):
+                active_turns = registry.active_for_agent(agent_id)
+            active_turn_sessions = {turn.session_id for turn in active_turns}
             agent_sessions = [
                 sid
                 for sid, aid in list(core._session_agent_map.items())
                 if aid == agent_id
             ]
             for sid in agent_sessions:
+                if sid in active_turn_sessions:
+                    continue
+                closed_sessions += 1
                 expected_tab_id = str(core._session_tabs.get(sid, "") or "")
                 profile_path = core._session_profile_paths.get(sid, "")
                 asyncio.create_task(
@@ -571,8 +775,28 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                         preserve_agent_id=agent_id if profile_path else "",
                     )
                 )
-        if is_current:
-            print(f"[chat] Agent {agent_id} disconnected, cleaning {len(agent_sessions)} session tabs")
+            for turn in active_turns:
+                if getattr(turn, "stream_finished", False):
+                    continue
+                _publish_turn_failure(
+                    core,
+                    turn,
+                    "Local agent disconnected before completing this response. Please retry after the client reconnects.",
+                )
+                closed_sessions += 1
+                expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
+                profile_path = core._session_profile_paths.get(turn.session_id, "")
+                active_turn_closes.append(
+                    core._close_session_tab(
+                        turn.session_id,
+                        expected_tab_id=expected_tab_id,
+                        preserve_profile_path=profile_path,
+                        preserve_agent_id=turn.cdp_agent_id if profile_path else "",
+                    )
+                )
+            print(f"[chat] Agent {agent_id} disconnected, cleaning {closed_sessions} session tabs")
+            if active_turn_closes:
+                await asyncio.gather(*active_turn_closes, return_exceptions=True)
         else:
             print(f"[chat] Agent {agent_id} stale connection closed (superseded by reconnect)")
 
@@ -670,8 +894,25 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     elif not _session_owned(session_id):
         session_id = f"s-{chat_agent_id}-{uuid.uuid4().hex[:8]}"
     scheduler_grant_id = ""
-    if scheduler_armed:
+    if scheduler_armed and guest_mode:
         scheduler_grant_id = core._mint_scheduler_turn_grant(auth_info.get("user_id", ""), session_id)
+    if not guest_mode:
+        # Fast-path a refresh/retry before quota and provider checks. The
+        # locked start below remains the race-safe authority for two genuinely
+        # simultaneous first requests.
+        existing_registry = _turn_registry(core)
+        existing_turn = _registry_turn(existing_registry, session_id)
+        if existing_turn and getattr(existing_turn, "status", "") in {"active", "cancelling"}:
+            if existing_turn.req_id == req_id and _turn_owned_by(existing_turn, auth_info):
+                return await _stream_turn_journal(request, existing_turn)
+            return web.json_response(
+                {
+                    "error": "chat_turn_active",
+                    "message": "A chat turn is already active for this session.",
+                    "req_id": existing_turn.req_id if _turn_owned_by(existing_turn, auth_info) else "",
+                },
+                status=409,
+            )
     analytics_route = core._analytics_route_from_request(request) or request.path
 
     core._track_event(
@@ -881,15 +1122,52 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 }
                 return web.json_response(resp, status=429)
 
-    q: asyncio.Queue = asyncio.Queue(maxsize=8)
-    old_q = core._response_queues.get(session_id)
-    if old_q is not None:
-        # Signal the previous turn's SSE stream to end cleanly
-        if old_q.full():
-            old_q.get_nowait()
-        old_q.put_nowait({"type": "done"})
-    core._response_queues[session_id] = q
-    core._response_req_ids[session_id] = req_id
+    turn = None
+    registry = None if guest_mode else _turn_registry(core)
+    q: asyncio.Queue | None = None
+    if registry:
+        candidate = ChatTurnState(
+            owner_user_id=str(auth_info.get("user_id", "") or ""),
+            owner_key_hash=str(auth_info.get("key_hash", "") or ""),
+            session_id=session_id,
+            req_id=req_id,
+            chat_agent_id=chat_agent_id,
+            routing_agent_id=core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id,
+        )
+        turn, turn_created, turn_conflict = await registry.start(candidate)
+        if turn_conflict:
+            return web.json_response(
+                {
+                    "error": "chat_turn_active",
+                    "message": "A chat turn is already active for this session.",
+                    "req_id": getattr(turn, "req_id", "") if _turn_owned_by(turn, auth_info) else "",
+                },
+                status=409,
+            )
+        if not turn_created:
+            # A retry with the same browser-generated request ID attaches to
+            # its existing journal instead of forwarding a duplicate prompt.
+            return await _stream_turn_journal(request, turn)
+        if scheduler_armed:
+            scheduler_grant_id = core._mint_scheduler_turn_grant(
+                auth_info.get("user_id", ""), session_id
+            )
+            turn.update_routing(scheduler_grant_id=scheduler_grant_id)
+    else:
+        # Guest and mock-core compatibility retains the old single queue path.
+        if scheduler_armed and not scheduler_grant_id:
+            scheduler_grant_id = core._mint_scheduler_turn_grant(
+                auth_info.get("user_id", ""), session_id
+            )
+        q = asyncio.Queue(maxsize=8)
+        old_q = core._response_queues.get(session_id)
+        if old_q is not None:
+            # Signal the previous turn's SSE stream to end cleanly.
+            if old_q.full():
+                old_q.get_nowait()
+            old_q.put_nowait({"type": "done"})
+        core._response_queues[session_id] = q
+        core._response_req_ids[session_id] = req_id
 
     use_headless = body.get("headless", False) and core.HEADLESS_AGENT_ID
     tab_id = core._session_tabs.get(session_id)
@@ -901,6 +1179,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         session_id in getattr(core, "_expired_profile_sessions", {}),
     )
     if use_headless and profile_intent == "profile":
+        if turn:
+            _publish_turn_failure(core, turn, "Profile selection is not supported in headless mode.")
         _discard_response_registration(core, session_id)
         return web.json_response(
             {"error": "Profile selection is not supported in headless mode."},
@@ -909,10 +1189,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     bridge_info = {}
     if not use_headless:
-        bridge_info = await core._resolve_bridge_agent(
-            auth_info,
-            body.get("bridge_profile") if "bridge_profile" in body else None,
-        )
+        try:
+            bridge_info = await core._resolve_bridge_agent(
+                auth_info,
+                body.get("bridge_profile") if "bridge_profile" in body else None,
+            )
+        except Exception:
+            if turn:
+                _publish_turn_failure(core, turn, "Failed to resolve the browser bridge.")
+            _discard_response_registration(core, session_id)
+            return web.json_response({"error": "Failed to resolve the browser bridge."}, status=502)
     cdp_agent_id = core.HEADLESS_AGENT_ID if use_headless else (bridge_info.get("bridge_agent_id") or agent_id)
     remembered_cdp_agent_id = core._session_agent_map.get(session_id, "")
     if (
@@ -926,10 +1212,18 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     if profile_intent == "profile":
         if profile_selection_present:
-            allowed_paths = await _allowed_profile_paths(core, cdp_agent_id)
+            try:
+                allowed_paths = await _allowed_profile_paths(core, cdp_agent_id)
+            except Exception:
+                if turn:
+                    _publish_turn_failure(core, turn, "Failed to validate the selected profile.")
+                _discard_response_registration(core, session_id)
+                return web.json_response({"error": "Failed to validate the selected profile."}, status=502)
         else:
             allowed_paths = {effective_profile_path}
         if effective_profile_path not in allowed_paths:
+            if turn:
+                _publish_turn_failure(core, turn, "Selected profile is invalid or unavailable.")
             _discard_response_registration(core, session_id)
             return web.json_response({"error": "Selected profile is invalid or unavailable."}, status=403)
         try:
@@ -946,11 +1240,27 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 if profile_selection_present
                 else "Failed to restore selected profile"
             )
+            if turn:
+                _publish_turn_failure(core, turn, f"{message}: {e}")
             return web.json_response({"error": f"{message}: {e}"}, status=502)
     elif profile_intent == "default":
-        await _clear_profile_tab(core, session_id)
+        try:
+            await _clear_profile_tab(core, session_id)
+        except Exception:
+            if turn:
+                _publish_turn_failure(core, turn, "Failed to leave the selected browser profile.")
+            _discard_response_registration(core, session_id)
+            return web.json_response(
+                {"error": "Failed to leave the selected browser profile."}, status=502
+            )
         tab_id = None
     elif profile_intent == "expired":
+        if turn:
+            _publish_turn_failure(
+                core,
+                turn,
+                "Browser profile session expired. Select a Chrome profile and try again.",
+            )
         _discard_response_registration(core, session_id)
         return web.json_response(
             {
@@ -960,6 +1270,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             status=409,
         )
 
+    routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
     try:
         ws_msg = {
             "type": "user_message",
@@ -994,6 +1305,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         if cdp_agent_id:
             core._session_agent_map[session_id] = cdp_agent_id
         core._session_last_active[session_id] = time.time()
+        if turn:
+            turn.update_routing(
+                chat_agent_id=chat_agent_id,
+                routing_agent_id=routing_agent_id,
+                cdp_agent_id=cdp_agent_id,
+                tab_id=tab_id or "",
+            )
+        # Record routing before forwarding so a concurrent reconnect or agent
+        # disconnect can resolve this exact turn without a response queue.
+        core._session_agents[session_id] = routing_agent_id
         await ws.send_json(ws_msg)
         core._trace(
             "chat.msg.forwarded",
@@ -1003,7 +1324,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             cdp_agent_id=cdp_agent_id,
         )
     except Exception:
-        if scheduler_grant_id:
+        if turn:
+            _publish_turn_failure(core, turn, "Failed to reach chat agent")
+        elif scheduler_grant_id:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
         core._trace(
             "chat.msg.forward_error",
@@ -1014,7 +1337,6 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         _discard_response_registration(core, session_id)
         return web.json_response({"error": "Failed to reach chat agent"}, status=502)
 
-    routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
     core._session_agents[session_id] = routing_agent_id
 
     # --- Inject overlay copilot into the task browser ---
@@ -1022,6 +1344,31 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     if not guest_mode and not is_openrouter:
         _inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message,
                         user_id=auth_info.get("user_id", ""), model=model, slot=slot)
+
+    if turn:
+        if openrouter_forced_model:
+            forced_evt = {
+                "type": "model_forced",
+                "reason": "openrouter_budget_limit",
+                "model": openrouter_forced_model,
+                "allowed_models": list(core._OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS),
+            }
+            if openrouter_forced_from_model:
+                forced_evt["requested_model"] = openrouter_forced_from_model
+            if openrouter_budget_state:
+                forced_evt["budget"] = openrouter_budget_state
+            _publish_turn_event(core, turn, forced_evt)
+        if openrouter_forced_notice:
+            _publish_turn_event(
+                core,
+                turn,
+                {"type": "text", "data": openrouter_forced_notice},
+            )
+        if is_opencode_cli:
+            _turn_timeout_task(core, turn, _OPENCODE_CLI_SILENCE_TIMEOUT_S)
+        elif is_codex_cli:
+            _turn_timeout_task(core, turn, _CODEX_CLI_SILENCE_TIMEOUT_S)
+        return await _stream_turn_journal(request, turn)
 
     resp = web.StreamResponse(
         status=200,
@@ -1141,20 +1488,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             has_overlay = overlay and overlay.injected
             if not has_overlay:
                 core._session_agents.pop(session_id, None)
-            if not stream_completed:
-                # Abnormal disconnect — clean up overlay state too
-                core._overlay_sessions.pop(session_id, None)
-                expected_tab_id = str(core._session_tabs.get(session_id, "") or "")
-                profile_path = core._session_profile_paths.get(session_id, "")
-                asyncio.create_task(
-                    core._close_session_tab(
-                        session_id,
-                        expected_tab_id=expected_tab_id,
-                        preserve_profile_path=profile_path,
-                        preserve_agent_id=cdp_agent_id if profile_path else "",
-                    )
-                )
-        if scheduler_grant_id:
+        # A disconnected SSE client is not a turn cancellation. Preserve the
+        # overlay/tab and leave a scheduler grant valid until the legacy turn
+        # reaches its terminal stream marker.
+        if scheduler_grant_id and stream_completed:
             core._scheduler_turn_grants.pop(scheduler_grant_id, None)
         core._trace(
             "chat.msg.stream_end",
@@ -1164,6 +1501,49 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         )
 
     return resp
+
+
+async def handle_chat_active(request: web.Request) -> web.Response:
+    """GET /web/chat/active — return sequenced events and current action state."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    session_id = str(request.query.get("session_id", "") or "").strip()
+    registry = _turn_registry(core)
+    turn = _registry_turn(registry, session_id) if session_id else None
+    if (
+        not turn
+        or not _turn_owned_by(turn, auth_info)
+        or getattr(turn, "status", "") not in {"active", "cancelling"}
+    ):
+        return web.json_response({"active": False}, status=404)
+    return web.json_response(
+        turn.snapshot(include_events=True),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_chat_events(request: web.Request) -> web.StreamResponse:
+    """GET /web/chat/events — replay and follow an SSE event-stream journal."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+    session_id = str(request.query.get("session_id", "") or "").strip()
+    req_id = str(request.query.get("req_id", "") or "").strip()
+    after = _parse_after_sequence(request)
+    if not session_id or not req_id or after is None:
+        return web.json_response({"error": "session_id, req_id, and valid after are required"}, status=400)
+    registry = _turn_registry(core)
+    turn = _registry_turn(registry, session_id, req_id)
+    if (
+        not turn
+        or not _turn_owned_by(turn, auth_info)
+        or str(getattr(turn, "req_id", "")) != req_id
+    ):
+        return web.json_response({"active": False}, status=404)
+    return await _stream_turn_journal(request, turn, after=after)
 
 
 async def handle_chat_cancel(request: web.Request) -> web.Response:
@@ -1191,6 +1571,47 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
         denied = web.json_response({"error": "session_id not owned by guest"}, status=403)
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
+
+    if not guest_mode:
+        registry = _turn_registry(core)
+        turn = _registry_turn(registry, session_id)
+        if turn:
+            if not _turn_owned_by(turn, auth_info):
+                return web.json_response({"error": "session_id not owned by user"}, status=403)
+            requested_req_id = str(body.get("req_id", "") or "").strip()
+            if requested_req_id and requested_req_id != turn.req_id:
+                return web.json_response(
+                    {
+                        "error": "chat_turn_mismatch",
+                        "message": "The requested turn is not active for this session.",
+                        "req_id": turn.req_id,
+                    },
+                    status=409,
+                )
+            if getattr(turn, "stream_finished", False):
+                return web.json_response({"ok": True, "status": turn.status, "req_id": turn.req_id})
+
+            turn.mark_cancelling()
+            routing_agent_id = turn.routing_agent_id or core._session_agents.get(
+                session_id, agent_id
+            )
+            ws = core._chat_agents.get(routing_agent_id)
+            if ws and not ws.closed:
+                try:
+                    await ws.send_json(
+                        {"type": "cancel", "session_id": session_id, "req_id": turn.req_id}
+                    )
+                except Exception:
+                    # The canonical cancellation below still releases the turn
+                    # for reconnecting tabs when an agent has just vanished.
+                    pass
+            _publish_turn_event(
+                core,
+                turn,
+                {"type": "cancelled", "session_id": session_id, "req_id": turn.req_id},
+            )
+            return web.json_response({"ok": True, "status": turn.status, "req_id": turn.req_id})
+
     default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
     routing_agent_id = core._session_agents.get(session_id, default_agent)
 

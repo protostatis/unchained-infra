@@ -22383,6 +22383,52 @@ HEADLESS_DEMO_HTML = _inject_safe_markdown_renderer(HEADLESS_DEMO_HTML, template
 CLAUDE_CHAT_HTML = _inject_safe_markdown_renderer(CLAUDE_CHAT_HTML, template_name="CLAUDE_CHAT_HTML")
 FIRST_LOOK_PREVIEW_HTML = _inject_safe_markdown_renderer(FIRST_LOOK_PREVIEW_HTML, template_name="FIRST_LOOK_PREVIEW_HTML")
 
+
+# This is deliberately added after all page-specific transforms so the asset
+# can wrap each signed-in page's final chat, slot, and Agent View helpers.
+_SIGNED_CHAT_RECONNECT_RUNTIME = (
+    '<script id="signed-chat-reconnect-runtime" '
+    'src="/web/static/signed-chat-reconnect.js"></script>'
+)
+
+
+def _inject_signed_chat_reconnect_runtime(html: str, *, template_name: str) -> str:
+    if 'id="signed-chat-reconnect-runtime"' in html:
+        return html
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "fetch('/web/chat', {",
+                "chatReconnectFetch('/web/chat', {",
+                "signed chat send fetch",
+            ),
+            TemplateReplacement(
+                "fetch('/web/chat/cancel', {",
+                "chatReconnectFetch('/web/chat/cancel', {",
+                "signed chat cancel fetch",
+            ),
+            TemplateReplacement(
+                "checkSession();",
+                "",
+                "signed chat deferred session initialization",
+            ),
+            TemplateReplacement(
+                "</body>",
+                _SIGNED_CHAT_RECONNECT_RUNTIME + "\n<script>checkSession();</script>\n</body>",
+                "signed chat reconnect runtime injection",
+            ),
+        ),
+        template_name=template_name,
+    )
+
+
+TRIAL_CHAT_HTML = _inject_signed_chat_reconnect_runtime(TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML")
+CLAUDE_CHAT_HTML = _inject_signed_chat_reconnect_runtime(CLAUDE_CHAT_HTML, template_name="CLAUDE_CHAT_HTML")
+CHAT_GEMINI_HTML = _inject_signed_chat_reconnect_runtime(CHAT_GEMINI_HTML, template_name="CHAT_GEMINI_HTML")
+CHAT_CLAUDE_SDK_HTML = _inject_signed_chat_reconnect_runtime(CHAT_CLAUDE_SDK_HTML, template_name="CHAT_CLAUDE_SDK_HTML")
+CHAT_CODEX_HTML = _inject_signed_chat_reconnect_runtime(CHAT_CODEX_HTML, template_name="CHAT_CODEX_HTML")
+
 # Backward-compat alias used by older tests and tooling.
 # Older tests assert an inline model expression in doSend().
 _CHAT_HTML_MODEL_SENTINEL = "model: currentModel()"

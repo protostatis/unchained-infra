@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import unittest
+from pathlib import Path
 
 from web_app.template_transforms import (
     TemplateReplacement,
@@ -990,6 +991,58 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertLess(transcript_reset, preview_reset)
         self.assertLess(preview_reset, draft_reset)
         self.assertLess(draft_reset, cleared)
+
+    def test_signed_in_chat_templates_recover_active_turns_but_guest_preview_does_not(self):
+        from web_app import templates
+
+        script_tag = (
+            '<script id="signed-chat-reconnect-runtime" '
+            'src="/web/static/signed-chat-reconnect.js"></script>'
+        )
+        signed_in_templates = {
+            "Trial": templates.TRIAL_CHAT_HTML,
+            "Gemini": templates.CHAT_GEMINI_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+            "Local CLI": templates.CLAUDE_CHAT_HTML,
+        }
+        for lane, html in signed_in_templates.items():
+            with self.subTest(lane=lane):
+                self.assertEqual(html.count(script_tag), 1)
+                self.assertEqual(html.count("chatReconnectFetch('/web/chat', {"), 1)
+                self.assertEqual(html.count("chatReconnectFetch('/web/chat/cancel', {"), 1)
+                self.assertEqual(html.count("chatReconnectFetch("), 2)
+                self.assertNotIn("window.fetch =", html)
+                self.assertNotIn("unchained_chat_active_turn_v1", html)
+                self.assertEqual(html.count("checkSession();"), 1)
+                self.assertIn(
+                    script_tag + "\n<script>checkSession();</script>\n</body>",
+                    html,
+                )
+
+        guest_preview = templates.FIRST_LOOK_PREVIEW_HTML
+        self.assertNotIn(script_tag, guest_preview)
+        self.assertNotIn("chatReconnectFetch", guest_preview)
+        self.assertIn("fetch('/web/chat', {", guest_preview)
+        self.assertIn("fetch('/web/chat/cancel', {", guest_preview)
+
+        asset = (
+            Path(__file__).with_name("web_app")
+            / "static"
+            / "signed-chat-reconnect.js"
+        ).read_text(encoding="utf-8")
+        active_index = asset.find("/web/chat/active")
+        events_index = asset.find("/web/chat/events")
+        self.assertNotEqual(active_index, -1)
+        self.assertNotEqual(events_index, -1)
+        self.assertLess(active_index, events_index)
+        self.assertIn("window.chatReconnectFetch = function", asset)
+        self.assertIn("function randomRequestId()", asset)
+        self.assertIn("headers.set('X-Request-ID', reqId)", asset)
+        self.assertNotIn("window.fetch =", asset)
+        self.assertNotIn("localStorage", asset)
+        self.assertNotIn("unchained_chat_active_turn_v1", asset)
+        self.assertNotIn("<script", asset)
 
     def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
         from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script

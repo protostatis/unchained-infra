@@ -113,6 +113,23 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bridge_configured", data)
         self.assertIn("bridge_connected", data)
 
+    async def test_signed_chat_reconnect_asset_headers(self):
+        response = await self._client.get("/web/static/signed-chat-reconnect.js")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.headers.get("content-type", "").split(";", 1)[0],
+            "application/javascript",
+        )
+        self.assertEqual(
+            response.headers.get("cache-control"),
+            "public, max-age=0, must-revalidate",
+        )
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+        self.assertIn("window.chatReconnectFetch = function", response.text)
+        self.assertIn("/web/chat/active", response.text)
+        self.assertIn("/web/chat/events", response.text)
+        self.assertNotIn("window.fetch =", response.text)
+
     async def test_use_case_routes_handoff_matching_first_look_tasks(self):
         cases = (
             (
