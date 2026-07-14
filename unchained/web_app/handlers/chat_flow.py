@@ -943,26 +943,65 @@ async def _handle_preview_ws(
             # restart. Re-pin to the bridge-selected page rather than
             # reconnecting forever to a dead target. Provisioned targets must
             # not fall through to a different Chrome/profile.
-            if tab_id != "auto" and not tab_id.startswith("prov-"):
+            stale_tab_id = tab_id
+            is_provisioned = tab_id.startswith("prov-")
+            if tab_id != "auto" and not is_provisioned:
                 try:
                     tab_id = await resolve_preview_tab("auto")
                 except Exception as fallback_exc:
                     exc = fallback_exc
                 else:
-                    core._session_tabs[sid_param] = tab_id
-                    if hasattr(core, "_session_allowed_tabs"):
-                        core._session_allowed_tabs[sid_param] = {tab_id}
+                    # Compare-and-swap: only update if another handler
+                    # hasn't already installed a fresh binding.
+                    if core._session_tabs.get(sid_param, "") == stale_tab_id:
+                        core._session_tabs[sid_param] = tab_id
+                        if hasattr(core, "_session_allowed_tabs"):
+                            core._session_allowed_tabs[sid_param] = {tab_id}
                     exc = None
             if exc is not None:
-                print(
-                    f"[preview-fsm] sid={sid_param} target pin failed: {exc!r}",
-                    flush=True,
+                # Only clear on a definitive "target not found" condition.
+                # Transient failures (timeouts, relay outages, private-core
+                # unresponsiveness) must NOT clear the binding — the next
+                # reconnect may find the same tab alive again.
+                exc_str = str(exc).lower()
+                is_target_not_found = (
+                    "not found" in exc_str
+                    or "did not return a target id" in exc_str
+                    or "no targets" in exc_str
+                    or "target does not exist" in exc_str
                 )
+                if is_target_not_found and not is_provisioned:
+                    # Compare-and-swap: only clear if the stored value is
+                    # still the stale tab we failed to resolve. Another
+                    # handler may have installed a fresh binding during the
+                    # async CDP calls above.
+                    if core._session_tabs.get(sid_param, "") == stale_tab_id:
+                        core._session_tabs.pop(sid_param, None)
+                        if hasattr(core, "_session_allowed_tabs"):
+                            core._session_allowed_tabs.pop(sid_param, None)
+                if is_provisioned:
+                    # Preserve provisioned bindings — falling through to
+                    # "auto" could attach to the wrong Chrome profile.
+                    print(
+                        f"[preview-fsm] sid={sid_param} target pin failed"
+                        f" (provisioned tab={stale_tab_id!r} preserved): {exc!r}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[preview-fsm] sid={sid_param} target pin failed"
+                        f" (tab={stale_tab_id!r}"
+                        f"{' cleared' if is_target_not_found else ' transient'}): {exc!r}",
+                        flush=True,
+                    )
                 return web.Response(status=503, text="browser target unavailable")
         else:
-            core._session_tabs[sid_param] = tab_id
-            if hasattr(core, "_session_allowed_tabs"):
-                core._session_allowed_tabs.setdefault(sid_param, set()).add(tab_id)
+            # Compare-and-swap on success too: don't overwrite a newer
+            # binding installed by another handler during the await.
+            if core._session_tabs.get(sid_param, "") == stale_tab_id or not core._session_tabs.get(sid_param):
+                core._session_tabs[sid_param] = tab_id
+                if hasattr(core, "_session_allowed_tabs"):
+                    core._session_allowed_tabs.setdefault(sid_param, set()).add(tab_id)
     else:
         guest_auth, guest_id, _ = core._first_look_guest_auth(request)
         try:
