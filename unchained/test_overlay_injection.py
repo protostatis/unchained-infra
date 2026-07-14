@@ -12,6 +12,7 @@ Verifies:
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -266,6 +267,97 @@ class TestOverlayAutoTabDownstreamConsumers(unittest.TestCase):
 
         sent_msg = agent_ws.send_json.await_args.args[0]
         self.assertEqual(sent_msg["model"], "codex-cli:gpt-5.5")
+
+
+class TestOverlayFollowupTurnRegistry(unittest.IsolatedAsyncioTestCase):
+    """Signed-in overlay follow-ups must share the canonical turn lifecycle."""
+
+    async def _core_with_turn(self, *, terminal: bool, send_error: bool = False):
+        from web_state import ChatTurnRegistry, ChatTurnState, OverlaySessionState
+
+        registry = ChatTurnRegistry()
+        prior_turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-overlay-registry",
+            req_id="prior-request",
+            chat_agent_id="chat-agent-1",
+            routing_agent_id="chat-agent-1",
+            cdp_agent_id="cdp-agent-1",
+            tab_id="auto",
+        )
+        await registry.start(prior_turn)
+        if terminal:
+            prior_turn.publish({"type": "done"})
+        overlay = OverlaySessionState(
+            session_id=prior_turn.session_id,
+            agent_id="cdp-agent-1",
+            tab_id="auto",
+            user_id="user-1",
+            model="codex-cli:gpt-5.5",
+            slot=2,
+            injected=False,
+        )
+        agent_ws = SimpleNamespace(
+            closed=False,
+            send_json=AsyncMock(
+                side_effect=RuntimeError("bridge closed") if send_error else None
+            ),
+        )
+        core = SimpleNamespace(
+            _chat_turns=registry,
+            _overlay_sessions={prior_turn.session_id: overlay},
+            _chat_agents={"chat-agent-1": agent_ws},
+            _session_agents={prior_turn.session_id: "chat-agent-1"},
+            _session_last_active={},
+            _response_queues={},
+            _response_req_ids={},
+        )
+        return core, prior_turn, agent_ws
+
+    async def test_active_turn_drops_followup_without_replacing_it(self):
+        from web_app.handlers.overlay_ws import _route_followup
+
+        core, prior_turn, agent_ws = await self._core_with_turn(terminal=False)
+
+        await _route_followup(core, prior_turn.session_id, "follow up")
+
+        self.assertIs(core._chat_turns.get(prior_turn.session_id), prior_turn)
+        agent_ws.send_json.assert_not_awaited()
+        self.assertEqual(core._response_queues, {})
+
+    async def test_terminal_turn_creates_canonical_followup_and_forwards_context(self):
+        from web_app.handlers.overlay_ws import _route_followup
+
+        core, prior_turn, agent_ws = await self._core_with_turn(terminal=True)
+
+        await _route_followup(core, prior_turn.session_id, "follow up")
+
+        current = core._chat_turns.get(prior_turn.session_id)
+        self.assertIsNot(current, prior_turn)
+        self.assertEqual(current.owner_user_id, "user-1")
+        self.assertEqual(current.owner_key_hash, "key-1")
+        self.assertEqual(current.status, "active")
+        self.assertEqual(core._response_queues, {})
+        sent = agent_ws.send_json.await_args.args[0]
+        self.assertEqual(sent["req_id"], current.req_id)
+        self.assertEqual(sent["model"], "codex-cli:gpt-5.5")
+        self.assertEqual(sent["tab_id"], "auto")
+        self.assertEqual(sent["slot"], 2)
+
+    async def test_followup_send_failure_terminalizes_its_registry_turn(self):
+        from web_app.handlers.overlay_ws import _route_followup
+
+        core, prior_turn, _agent_ws = await self._core_with_turn(
+            terminal=True, send_error=True
+        )
+        with patch("web_app.handlers.chat_stream._core", return_value=core):
+            await _route_followup(core, prior_turn.session_id, "follow up")
+
+        current = core._chat_turns.get(prior_turn.session_id)
+        self.assertEqual(current.status, "error")
+        self.assertTrue(current.stream_finished)
+        self.assertEqual([event["type"] for event in current.journal], ["error", "done"])
 
 
 class TestOverlayConcurrentSessions(unittest.TestCase):

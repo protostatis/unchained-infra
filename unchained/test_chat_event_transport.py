@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import mock_open, patch
+from unittest.mock import AsyncMock, mock_open, patch
 
 from aiohttp import ClientSession, web
 
@@ -144,6 +144,104 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertEqual(inspect.getsource(chat_agent_gemini).count("await self.ws.send(json.dumps("), 1)
         self.assertEqual(inspect.getsource(chat_agent_codex).count("await self.ws.send(json.dumps("), 1)
         self.assertEqual(inspect.getsource(chat_agent_openrouter).count("await self.ws.send(json.dumps("), 1)
+
+    def test_hosted_agents_correlate_turn_events_and_preserve_explicit_ids(self):
+        agents = (
+            (chat_agent_sdk, chat_agent_sdk.ChatAgent, "_send_event"),
+            (chat_agent_gemini, chat_agent_gemini.GeminiChatAgent, "_send"),
+            (chat_agent_codex, chat_agent_codex.CodexChatAgent, "_send"),
+            (chat_agent_openrouter, chat_agent_openrouter.TrialAgent, "_send"),
+        )
+
+        async def check_sender(module, cls, method):
+            agent = cls.__new__(cls)
+            agent.ws = object()
+            agent.active_req_ids = {"s-turn": "r-turn"}
+            with patch.object(module, "send_agent_event", new_callable=AsyncMock) as sender:
+                for event_type in (
+                    "tool_start", "tool_result", "text", "done", "error",
+                    "cancelled", "live_preview",
+                ):
+                    await getattr(agent, method)("s-turn", {"type": event_type})
+                await getattr(agent, method)("s-turn", {
+                    "type": "text", "req_id": "r-explicit",
+                })
+
+            events = [call.args[1] for call in sender.await_args_list]
+            self.assertTrue(all(event["req_id"] == "r-turn" for event in events[:-1]))
+            self.assertEqual(events[-1]["req_id"], "r-explicit")
+
+        for module, cls, method in agents:
+            with self.subTest(cls=cls.__name__):
+                asyncio.run(check_sender(module, cls, method))
+
+    def test_hosted_agents_do_not_clear_a_replacement_turn_correlation(self):
+        for cls in (
+            chat_agent_sdk.ChatAgent,
+            chat_agent_gemini.GeminiChatAgent,
+            chat_agent_codex.CodexChatAgent,
+            chat_agent_openrouter.TrialAgent,
+        ):
+            with self.subTest(cls=cls.__name__):
+                agent = cls.__new__(cls)
+                old_task = object()
+                replacement_task = object()
+                agent.active_tasks = {"s-turn": replacement_task}
+                agent.active_req_ids = {"s-turn": "r-new"}
+
+                agent._finish_task("s-turn", "r-old", old_task)
+                self.assertIs(agent.active_tasks["s-turn"], replacement_task)
+                self.assertEqual(agent.active_req_ids["s-turn"], "r-new")
+
+                agent._finish_task("s-turn", "r-new", replacement_task)
+                self.assertNotIn("s-turn", agent.active_tasks)
+                self.assertNotIn("s-turn", agent.active_req_ids)
+
+    def test_hosted_agents_keep_old_task_request_id_after_replacement(self):
+        agents = (
+            (chat_agent_sdk, chat_agent_sdk.ChatAgent, "_send_event"),
+            (chat_agent_gemini, chat_agent_gemini.GeminiChatAgent, "_send"),
+            (chat_agent_codex, chat_agent_codex.CodexChatAgent, "_send"),
+            (chat_agent_openrouter, chat_agent_openrouter.TrialAgent, "_send"),
+        )
+
+        async def check_old_task_context(module, cls, method):
+            agent = cls.__new__(cls)
+            agent.ws = object()
+            agent.active_req_ids = {"s-turn": "r-old"}
+            with patch.object(module, "send_agent_event", new_callable=AsyncMock) as sender:
+                token = module._task_req_id.set("r-old")
+                try:
+                    old_task = asyncio.create_task(
+                        getattr(agent, method)("s-turn", {"type": "error"})
+                    )
+                finally:
+                    module._task_req_id.reset(token)
+
+                agent.active_req_ids["s-turn"] = "r-new"
+                await old_task
+
+            self.assertEqual(sender.await_args.args[1]["req_id"], "r-old")
+
+        for module, cls, method in agents:
+            with self.subTest(cls=cls.__name__):
+                asyncio.run(check_old_task_context(module, cls, method))
+
+    def test_hosted_agents_correlate_cancellation_and_special_event_paths(self):
+        for cls, send_method in (
+            (chat_agent_sdk.ChatAgent, "_send_event"),
+            (chat_agent_gemini.GeminiChatAgent, "_send"),
+            (chat_agent_codex.CodexChatAgent, "_send"),
+            (chat_agent_openrouter.TrialAgent, "_send"),
+        ):
+            with self.subTest(cls=cls.__name__):
+                source = inspect.getsource(cls.run)
+                self.assertIn('{"type": "cancelled", "req_id": req_id}', source)
+                self.assertIn(f"self.{send_method}", inspect.getsource(cls._emit_intervention_event))
+        self.assertIn(
+            "await self._send(",
+            inspect.getsource(chat_agent_openrouter.TrialAgent._emit_live_preview),
+        )
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
         self.assertEqual(agent_package.VERSION, "0.3.112")

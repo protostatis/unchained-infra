@@ -17,6 +17,7 @@ The Gemini key can also come per-session from web.py (via provider_keys table).
 
 import argparse
 import asyncio
+from contextvars import ContextVar
 import json
 import os
 import re
@@ -112,6 +113,7 @@ MAX_SESSION_MESSAGES = 30
 TRIM_ON_ERROR = 10
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
+_task_req_id: ContextVar[str] = ContextVar("chat_agent_gemini_task_req_id", default="")
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,7 @@ class GeminiChatAgent:
         self.ws = None
         self.sessions: dict[str, list] = {}
         self.active_tasks: dict[str, asyncio.Task] = {}
+        self.active_req_ids: dict[str, str] = {}
 
     # --- Session persistence (same as OpenRouter agent) ---
 
@@ -250,16 +253,23 @@ class GeminiChatAgent:
                         continue
                     if msg.get("type") == "user_message":
                         sid = msg.get("session_id", "")
+                        req_id = ""
                         if sid:
-                            old_task = self.active_tasks.pop(sid, None)
+                            old_task = self.active_tasks.get(sid)
                             if old_task and not old_task.done():
                                 old_task.cancel()
                                 print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
-                        task = asyncio.create_task(self._handle_message(msg))
+                            req_id = str(msg.get("req_id", "") or "")
+                            self.active_req_ids[sid] = req_id
+                        token = _task_req_id.set(req_id)
+                        try:
+                            task = asyncio.create_task(self._handle_message(msg))
+                        finally:
+                            _task_req_id.reset(token)
                         if sid:
                             self.active_tasks[sid] = task
                             task.add_done_callback(
-                                lambda t, s=sid: self.active_tasks.pop(s, None)
+                                lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
                             )
                     elif msg.get("type") == "new_chat":
                         req_id = msg.get("req_id", "")
@@ -300,12 +310,13 @@ class GeminiChatAgent:
                         })
                     elif msg.get("type") == "cancel":
                         sid = msg.get("session_id", "")
-                        task = self.active_tasks.pop(sid, None)
+                        task = self.active_tasks.get(sid)
                         if task and not task.done():
+                            req_id = self.active_req_ids.get(sid, "")
                             task.cancel()
                             print(f"[{sid}] Cancelled")
-                            await self._send(sid, {"type": "cancelled"})
-                            await self._send(sid, {"type": "done"})
+                            await self._send(sid, {"type": "cancelled", "req_id": req_id})
+                            await self._send(sid, {"type": "done", "req_id": req_id})
             except websockets.ConnectionClosed:
                 print("Connection lost. Reconnecting in 3s...")
                 await asyncio.sleep(3)
@@ -313,8 +324,17 @@ class GeminiChatAgent:
                 print(f"Error: {e}. Reconnecting in 5s...")
                 await asyncio.sleep(5)
 
+    def _finish_task(self, session_id: str, req_id: str, task: asyncio.Task):
+        """Clear correlation state only when this task still owns the session."""
+        if self.active_tasks.get(session_id) is task:
+            self.active_tasks.pop(session_id, None)
+            if self.active_req_ids.get(session_id) == req_id:
+                self.active_req_ids.pop(session_id, None)
+
     async def _send(self, session_id: str, event: dict):
         event["session_id"] = session_id
+        req_id = _task_req_id.get() or getattr(self, "active_req_ids", {}).get(session_id, "")
+        event.setdefault("req_id", req_id)
         try:
             await send_agent_event(self.ws, event)
         except Exception as e:

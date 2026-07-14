@@ -15,22 +15,117 @@ import uuid
 from aiohttp import web
 
 from web_app.core import get_core as _core
+from web_state import ChatTurnState
+
+
+def _turn_registry(core):
+    """Return the optional signed-in turn registry without breaking fake cores."""
+    try:
+        if "_chat_turns" not in vars(core):
+            return None
+    except TypeError:
+        return None
+    registry = getattr(core, "_chat_turns", None)
+    return registry if all(hasattr(registry, name) for name in ("get", "start")) else None
+
+
+def _retained_turn(registry, session_id: str):
+    """Look up the current retained turn while tolerating simple fake registries."""
+    if not registry:
+        return None
+    return registry.get(session_id)
 
 
 async def _route_followup(core, session_id: str, message: str) -> None:
-    """Route a follow-up from the overlay through the normal chat path."""
+    """Route a follow-up without replacing an in-flight browser turn."""
     overlay = core._overlay_sessions.get(session_id)
     if not overlay:
         print(f"[overlay] follow-up dropped — no overlay state for {session_id}")
         return
 
     agent_id = core._session_agents.get(session_id) or overlay.agent_id
+    req_id = f"overlay-{uuid.uuid4().hex[:8]}"
+    registry = _turn_registry(core)
+    if registry:
+        prior_turn = _retained_turn(registry, session_id)
+        if prior_turn and getattr(prior_turn, "status", "") in {"active", "cancelling"}:
+            print(f"[overlay] follow-up dropped — turn active for {session_id}")
+            return
+        if not prior_turn:
+            # The overlay alone has a user ID but not the key hash required to
+            # bind a signed-in turn safely. Unknown retained state must not be
+            # turned into an unowned resumable request.
+            print(f"[overlay] follow-up dropped — no retained turn owner for {session_id}")
+            return
+
+        owner_user_id = str(getattr(prior_turn, "owner_user_id", "") or "")
+        owner_key_hash = str(getattr(prior_turn, "owner_key_hash", "") or "")
+        if not owner_user_id or not owner_key_hash:
+            print(f"[overlay] follow-up dropped — retained turn owner incomplete for {session_id}")
+            return
+
+        turn, created, conflict = await registry.start(
+            ChatTurnState(
+                owner_user_id=owner_user_id,
+                owner_key_hash=owner_key_hash,
+                session_id=session_id,
+                req_id=req_id,
+                chat_agent_id=str(getattr(prior_turn, "chat_agent_id", "") or agent_id),
+                routing_agent_id=agent_id,
+                cdp_agent_id=overlay.agent_id,
+                tab_id=overlay.tab_id,
+            )
+        )
+        if conflict or not created:
+            print(f"[overlay] follow-up dropped — turn race for {session_id}")
+            return
+
+        turn.update_routing(
+            chat_agent_id=str(getattr(prior_turn, "chat_agent_id", "") or agent_id),
+            routing_agent_id=agent_id,
+            cdp_agent_id=overlay.agent_id,
+            tab_id=overlay.tab_id,
+        )
+        core._session_agents[session_id] = agent_id
+        core._session_last_active[session_id] = time.time()
+
+        ws_msg = {
+            "type": "user_message",
+            "session_id": session_id,
+            "agent_id": overlay.agent_id,
+            "message": message,
+            "req_id": req_id,
+        }
+        if overlay.model:
+            ws_msg["model"] = overlay.model
+        if overlay.tab_id:
+            ws_msg["tab_id"] = overlay.tab_id
+        if overlay.slot is not None:
+            ws_msg["slot"] = overlay.slot
+
+        agent_ws = core._chat_agents.get(agent_id)
+        if agent_ws is None or agent_ws.closed:
+            from web_app.handlers.chat_stream import _publish_turn_failure
+
+            _publish_turn_failure(core, turn, "Overlay follow-up agent is not connected.")
+            print(f"[overlay] follow-up agent unavailable for {agent_id}")
+            return
+        try:
+            await agent_ws.send_json(ws_msg)
+            print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
+        except Exception as e:
+            from web_app.handlers.chat_stream import _publish_turn_failure
+
+            _publish_turn_failure(core, turn, "Failed to reach chat agent for overlay follow-up.")
+            print(f"[overlay] follow-up send failed: {e}")
+        return
+
+    # Legacy fake-core and guest-compatible behavior. This remains queue based
+    # because it has no signed-in owner identity or canonical journal.
     agent_ws = core._chat_agents.get(agent_id)
     if agent_ws is None or agent_ws.closed:
         print(f"[overlay] follow-up dropped — agent {agent_id} not connected")
         return
-
-    req_id = f"overlay-{uuid.uuid4().hex[:8]}"
 
     q: asyncio.Queue = asyncio.Queue(maxsize=8)
     core._response_queues[session_id] = q

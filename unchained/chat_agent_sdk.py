@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextvars import ContextVar
 import json
 import os
 import signal
@@ -70,6 +71,7 @@ SESSION_DIR = os.environ.get(
     ),
 )
 MAX_SESSION_MESSAGES = 30
+_task_req_id: ContextVar[str] = ContextVar("chat_agent_sdk_task_req_id", default="")
 
 
 def _resolve_model(model: str, default_model: str = MODEL) -> str:
@@ -92,6 +94,7 @@ class ChatAgent:
         self.client = anthropic.AsyncAnthropic()
         self.sessions: dict[str, list] = {}  # session_id → messages
         self.active_tasks: dict[str, asyncio.Task] = {}
+        self.active_req_ids: dict[str, str] = {}
 
     async def connect(self):
         """Connect to the chat WebSocket and authenticate."""
@@ -211,16 +214,23 @@ class ChatAgent:
 
                     if msg.get("type") == "user_message":
                         sid = msg.get("session_id", "")
+                        req_id = ""
                         if sid:
-                            old_task = self.active_tasks.pop(sid, None)
+                            old_task = self.active_tasks.get(sid)
                             if old_task and not old_task.done():
                                 old_task.cancel()
                                 print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
-                        task = asyncio.create_task(self._handle_message(msg))
+                            req_id = str(msg.get("req_id", "") or "")
+                            self.active_req_ids[sid] = req_id
+                        token = _task_req_id.set(req_id)
+                        try:
+                            task = asyncio.create_task(self._handle_message(msg))
+                        finally:
+                            _task_req_id.reset(token)
                         if sid:
                             self.active_tasks[sid] = task
                             task.add_done_callback(
-                                lambda t, s=sid: self.active_tasks.pop(s, None)
+                                lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
                             )
                     elif msg.get("type") == "new_chat":
                         req_id = msg.get("req_id", "")
@@ -250,12 +260,13 @@ class ChatAgent:
                         })
                     elif msg.get("type") == "cancel":
                         sid = msg.get("session_id", "")
-                        task = self.active_tasks.pop(sid, None)
+                        task = self.active_tasks.get(sid)
                         if task and not task.done():
+                            req_id = self.active_req_ids.get(sid, "")
                             task.cancel()
                             print(f"[{sid}] Cancelled")
-                            await self._send_event(sid, {"type": "cancelled"})
-                            await self._send_event(sid, {"type": "done"})
+                            await self._send_event(sid, {"type": "cancelled", "req_id": req_id})
+                            await self._send_event(sid, {"type": "done", "req_id": req_id})
 
             except websockets.ConnectionClosed:
                 print("Connection lost. Reconnecting in 3s...")
@@ -264,9 +275,18 @@ class ChatAgent:
                 print(f"Error: {e}. Reconnecting in 5s...")
                 await asyncio.sleep(5)
 
+    def _finish_task(self, session_id: str, req_id: str, task: asyncio.Task):
+        """Clear correlation state only when this task still owns the session."""
+        if self.active_tasks.get(session_id) is task:
+            self.active_tasks.pop(session_id, None)
+            if self.active_req_ids.get(session_id) == req_id:
+                self.active_req_ids.pop(session_id, None)
+
     async def _send_event(self, session_id: str, event: dict):
         """Send an event back through the WebSocket."""
         event["session_id"] = session_id
+        req_id = _task_req_id.get() or getattr(self, "active_req_ids", {}).get(session_id, "")
+        event.setdefault("req_id", req_id)
         try:
             await send_agent_event(self.ws, event)
         except Exception as e:

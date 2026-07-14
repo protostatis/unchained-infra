@@ -991,6 +991,32 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertLess(preview_reset, draft_reset)
         self.assertLess(draft_reset, cleared)
 
+    def test_signed_in_chat_templates_recover_active_turns_but_guest_preview_does_not(self):
+        from web_app import templates
+
+        signed_in_templates = {
+            "Trial": templates.TRIAL_CHAT_HTML,
+            "Gemini": templates.CHAT_GEMINI_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+            "Local CLI": templates.CLAUDE_CHAT_HTML,
+        }
+        for lane, html in signed_in_templates.items():
+            with self.subTest(lane=lane):
+                active_index = html.find("/web/chat/active")
+                events_index = html.find("/web/chat/events")
+                self.assertNotEqual(active_index, -1)
+                self.assertNotEqual(events_index, -1)
+                self.assertLess(
+                    active_index,
+                    events_index,
+                    "active turn state must be recovered before replaying events",
+                )
+
+        guest_preview = templates.FIRST_LOOK_PREVIEW_HTML
+        self.assertNotIn("/web/chat/active", guest_preview)
+        self.assertNotIn("/web/chat/events", guest_preview)
+
     def test_mcp_api_key_instructions_are_local_and_do_not_autofill(self):
         from agent_package import _WINDOWS_INSTALLER_TEMPLATE, _generate_public_install_script
         from web_app import templates
