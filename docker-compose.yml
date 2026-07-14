@@ -72,11 +72,11 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('localhost',8770),2); s.close()"]
-      interval: 30s
-      timeout: 3s
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8770,timeout=2); c.request('GET','/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 10s
 
   mcp:
     build:
