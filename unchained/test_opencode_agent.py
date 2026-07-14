@@ -225,6 +225,132 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_types, ["text", "done"])
         self.assertEqual(ws.events[0]["data"], "Recovered")
 
+    async def test_opencode_empty_tool_response_retries_same_session_once(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        sid = "s-claude-abc12345-test"
+        tool_event = json.dumps(
+            {
+                "type": "tool_use",
+                "sessionID": "oc-session-1",
+                "part": {
+                    "id": "tool-1",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "input": {"command": "uv run python cdp_tool.py ddm --text"},
+                        "output": "page text",
+                    },
+                },
+            }
+        )
+        final_event = json.dumps(
+            {
+                "type": "text",
+                "sessionID": "oc-session-1",
+                "part": {"id": "text-1", "type": "text", "text": "Recovered answer"},
+            }
+        )
+        procs = [_FakeProc([tool_event]), _FakeProc([final_event])]
+        calls = []
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            calls.append(list(cmd))
+            return procs[len(calls) - 1]
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            await mod.handle_message_opencode(
+                ws,
+                sid,
+                "Research this page",
+                "opencode-cli:opencode-go/deepseek-v4-pro",
+                req_id="req1",
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--session", calls[0])
+        self.assertIn("--session", calls[1])
+        self.assertIn("oc-session-1", calls[1])
+        continuation = procs[1].stdin.data.decode()
+        self.assertEqual(continuation, mod._OPENCODE_CONTINUATION_PROMPT)
+        self.assertNotIn("Research this page", continuation)
+        self.assertEqual(
+            [event["type"] for event in ws.events],
+            ["tool_start", "tool_result", "text", "done"],
+        )
+        self.assertEqual(ws.events[2]["data"], "Recovered answer")
+        history = mod._load_chat()["messages"]
+        self.assertEqual([message["role"] for message in history], ["user", "assistant"])
+        self.assertEqual(history[0]["content"], "Research this page")
+        self.assertEqual(history[1]["content"], "Recovered answer")
+
+    async def test_opencode_empty_continuation_falls_back_without_looping(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        tool_event = json.dumps(
+            {
+                "type": "tool_use",
+                "sessionID": "oc-session-1",
+                "part": {
+                    "id": "tool-1",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "input": {"command": "pwd"},
+                        "output": "/tmp",
+                    },
+                },
+            }
+        )
+        procs = [_FakeProc([tool_event]), _FakeProc([])]
+        call_count = 0
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            nonlocal call_count
+            proc = procs[call_count]
+            call_count += 1
+            return proc
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            await mod.handle_message_opencode(
+                ws,
+                "s-claude-abc12345-test",
+                "Use the browser",
+                "opencode-cli:opencode-go/deepseek-v4-pro",
+            )
+
+        self.assertEqual(call_count, 2)
+        self.assertEqual(
+            [event["type"] for event in ws.events],
+            ["tool_start", "tool_result", "text", "done"],
+        )
+        self.assertIn("after one continuation attempt", ws.events[2]["data"])
+        history = mod._load_chat()["messages"]
+        self.assertEqual([message["role"] for message in history], ["user", "assistant"])
+
+    async def test_opencode_empty_response_without_completed_tool_does_not_retry(self):
+        mod = self._load_module()
+        ws = _FakeWs()
+        call_count = 0
+        lines = [json.dumps({"type": "step_start", "sessionID": "oc-session-1"})]
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _FakeProc(lines)
+
+        with patch.object(mod.asyncio, "create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+            await mod.handle_message_opencode(
+                ws,
+                "s-claude-abc12345-test",
+                "Answer directly",
+                "opencode-cli:opencode-go/deepseek-v4-pro",
+            )
+
+        self.assertEqual(call_count, 1)
+        self.assertEqual([event["type"] for event in ws.events], ["text", "done"])
+        self.assertEqual(ws.events[0]["data"], "OpenCode CLI finished without a final response.")
+
     async def test_opencode_duplicate_text_and_tool_parts_are_emitted_once(self):
         mod = self._load_module()
         ws = _FakeWs()
