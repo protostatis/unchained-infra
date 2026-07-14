@@ -155,6 +155,7 @@ class ChatTurnState:
     req_id: str
     chat_agent_id: str = ""
     routing_agent_id: str = ""
+    dispatch_ws: object | None = field(default=None, repr=False)
     cdp_agent_id: str = ""
     tab_id: str = ""
     scheduler_grant_id: str = ""
@@ -196,6 +197,7 @@ class ChatTurnState:
         *,
         chat_agent_id: str = "",
         routing_agent_id: str = "",
+        dispatch_ws: object | None = None,
         cdp_agent_id: str = "",
         tab_id: str | None = None,
         scheduler_grant_id: str | None = None,
@@ -205,6 +207,8 @@ class ChatTurnState:
             self.chat_agent_id = chat_agent_id
         if routing_agent_id:
             self.routing_agent_id = routing_agent_id
+        if dispatch_ws is not None:
+            self.dispatch_ws = dispatch_ws
         if cdp_agent_id:
             self.cdp_agent_id = cdp_agent_id
         if tab_id is not None:
@@ -383,6 +387,14 @@ class ChatTurnRegistry:
             for turn in self.turns.values()
             if turn.status in {"active", "cancelling"}
             and turn.routing_agent_id == agent_id
+        ]
+
+    def active_for_transport(self, agent_id: str, dispatch_ws: object) -> list[ChatTurnState]:
+        """Return active turns dispatched through one exact agent connection."""
+        return [
+            turn
+            for turn in self.active_for_agent(agent_id)
+            if turn.dispatch_ws is dispatch_ws
         ]
 
     def prune(self) -> None:
