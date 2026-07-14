@@ -1084,8 +1084,18 @@ def _scheduler_preview_rows(user_id: str, jobs: list) -> list[dict]:
     return preview
 
 
+_LOCAL_AGENT_MODEL_PREFIXES = (
+    "claude-sdk:",
+    "codex-cli:",
+    "codex-sdk:",
+    "opencode-cli:",
+)
+
+
 def _is_openrouter_model(model: str) -> bool:
-    return "/" in (model or "")
+    """Return whether a model ID routes through the OpenRouter trial agent."""
+    value = (model or "").strip()
+    return "/" in value and not value.startswith(_LOCAL_AGENT_MODEL_PREFIXES)
 
 
 def _coerce_float(value, default: float = 0.0) -> float:
