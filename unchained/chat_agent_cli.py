@@ -1441,6 +1441,11 @@ _OPENCODE_STALE_SIGNALS = (
     "not found",
     "does not exist",
 )
+_OPENCODE_CONTINUATION_PROMPT = (
+    "Continue from the completed tool work for the preceding user request. "
+    "Do not repeat completed actions. Finish any necessary remaining tool work, "
+    "then return the final answer now.\n"
+)
 
 
 def _make_emitter(ws, sid: str, req_id: str):
@@ -2734,13 +2739,15 @@ async def handle_message_opencode(
     scheduler_armed: bool = False,
     scheduler_grant_id: str = "",
     req_id: str = "",
+    *,
+    _retry_mode: str = "",
 ):
     """Single opencode run call with JSON event parsing and session resume."""
     emit = _make_emitter(ws, sid, req_id)
     opencode_model = _resolve_opencode_model(model)
 
-    # Save user message locally
-    _append_message("user", user_text)
+    if not _retry_mode:
+        _append_message("user", user_text)
 
     opencode_sid = opencode_sessions.get(sid)
     if opencode_sid:
@@ -2831,12 +2838,15 @@ async def handle_message_opencode(
         return
     active_procs[sid] = proc
 
-    opencode_input = _build_opencode_prompt(
-        user_text,
-        is_resume=is_resume,
-        scheduler_armed=scheduler_armed,
-        history_context=history_context,
-    )
+    if _retry_mode == "continuation":
+        opencode_input = _OPENCODE_CONTINUATION_PROMPT
+    else:
+        opencode_input = _build_opencode_prompt(
+            user_text,
+            is_resume=is_resume,
+            scheduler_armed=scheduler_armed,
+            history_context=history_context,
+        )
     proc.stdin.write(opencode_input.encode())
     await proc.stdin.drain()
     proc.stdin.close()
@@ -2852,6 +2862,7 @@ async def handle_message_opencode(
 
     response_parts: list[str] = []
     error_text = ""
+    saw_completed_tool = False
     seen_text_parts: set[str] = set()
     seen_tool_parts: set[str] = set()
 
@@ -2895,6 +2906,9 @@ async def handle_message_opencode(
                         continue
                     if part_id:
                         seen_tool_parts.add(part_id)
+                    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+                    if str(state.get("status") or "").lower() in {"completed", "error"}:
+                        saw_completed_tool = True
                     tool_name, tool_input = _opencode_tool_name_and_input(part)
                     out = _opencode_tool_output(part)
                     await emit({
@@ -2948,7 +2962,11 @@ async def handle_message_opencode(
                     err_msg = _extract_opencode_error_message(event)
                     if err_msg:
                         error_text = err_msg
-                    if is_resume and _is_stale_opencode_error(error_text):
+                    if (
+                        is_resume
+                        and _retry_mode not in {"continuation", "stale"}
+                        and _is_stale_opencode_error(error_text)
+                    ):
                         continue
                     if not error_text:
                         error_text = "OpenCode CLI error"
@@ -2996,7 +3014,11 @@ async def handle_message_opencode(
                     stderr_bytes = b""
             stderr_text = stderr_bytes.decode(errors="replace").strip()
             combined_err = (error_text + " " + stderr_text).lower()
-            if is_resume and _is_stale_opencode_error(combined_err):
+            if (
+                is_resume
+                and _retry_mode not in {"continuation", "stale"}
+                and _is_stale_opencode_error(combined_err)
+            ):
                 log.info(
                     "  OpenCode stale session (%s), starting fresh",
                     (error_text or stderr_text or f"exit code {proc.returncode}")[:120],
@@ -3014,6 +3036,33 @@ async def handle_message_opencode(
                     scheduler_armed=scheduler_armed,
                     scheduler_grant_id=scheduler_grant_id,
                     req_id=req_id,
+                    _retry_mode="stale",
+                )
+            if (
+                _retry_mode != "continuation"
+                and proc.returncode == 0
+                and not error_text
+                and not stderr_text
+                and saw_completed_tool
+                and opencode_sessions.get(sid)
+            ):
+                continuation_sid = opencode_sessions[sid]
+                log.info(
+                    "  OpenCode finished tool work without final text; "
+                    "retrying continuation (session %s)",
+                    continuation_sid[:12],
+                )
+                return await handle_message_opencode(
+                    ws,
+                    sid,
+                    user_text,
+                    model,
+                    tab_id=tab_id,
+                    cdp_agent_id=cdp_agent_id,
+                    scheduler_armed=scheduler_armed,
+                    scheduler_grant_id=scheduler_grant_id,
+                    req_id=req_id,
+                    _retry_mode="continuation",
                 )
             if error_text:
                 response = f"OpenCode CLI error: {error_text}"
@@ -3021,6 +3070,8 @@ async def handle_message_opencode(
                 response = f"OpenCode CLI error: {stderr_text}"
             elif proc.returncode != 0:
                 response = f"OpenCode CLI error: exit code {proc.returncode}"
+            elif _retry_mode == "continuation":
+                response = "OpenCode CLI finished without a final response after one continuation attempt."
             else:
                 response = "OpenCode CLI finished without a final response."
 
