@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.113"  # retry OpenCode turns that finish tools without final text
+VERSION = "0.3.114"  # use a current CA bundle for packaged Windows TLS
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -68,6 +68,7 @@ httpx
 aiohttp==3.10.11
 PyJWT==2.9.0
 cryptography>=42.0
+certifi>=2026.1.4
 """
 
 
@@ -818,6 +819,38 @@ if (-not (Test-Path $pythonExe)) {
   exit 1
 }
 
+# Conda and other older Windows Python distributions can carry an expired
+# OpenSSL CA store even when Windows itself trusts the server certificate.
+# Force Python networking (WebSockets, urllib, aiohttp, and httpx) to use the
+# current certifi bundle installed in this isolated environment. Operators can
+# supply a private CA bundle explicitly without weakening certificate checks.
+& $pythonExe -c 'import re; from importlib.metadata import version; parts=tuple(int(x) for x in re.findall(r"\d+", version("certifi"))[:3]); raise SystemExit(0 if parts >= (2026, 1, 4) else 1)' 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Refreshing TLS certificate authorities..."
+  & $pythonExe -m pip install -q "certifi>=2026.1.4"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to install a current TLS CA bundle."
+    exit 1
+  }
+}
+$caBundle = [string]$env:UNCHAINED_CA_BUNDLE
+if ([string]::IsNullOrWhiteSpace($caBundle)) {
+  $caBundleOutput = @(& $pythonExe -c "import certifi; print(certifi.where())" 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $caBundleOutput.Count -gt 0) {
+    $caBundle = ([string]$caBundleOutput[-1]).Trim()
+  }
+}
+if ([string]::IsNullOrWhiteSpace($caBundle) -or -not (Test-Path -LiteralPath $caBundle -PathType Leaf)) {
+  Write-Error "ERROR: No usable TLS CA bundle was found. Reinstall dependencies with: .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
+  exit 1
+}
+& $pythonExe -c 'import ssl,sys; ssl.create_default_context(cafile=sys.argv[1])' $caBundle 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "ERROR: TLS CA bundle is not a valid PEM certificate file: $caBundle"
+  exit 1
+}
+$env:SSL_CERT_FILE = $caBundle
+
 function Resolve-DaemonPythonExe([string]$VenvPythonExe, [string]$BasePythonSource) {
   $venvDir = Split-Path -Parent $VenvPythonExe
   $venvPythonw = Join-Path $venvDir "pythonw.exe"
@@ -1231,6 +1264,10 @@ if (Test-Path "requirements.txt") {
 if ($oldReqs -ne $newReqs -and (Test-Path ".\.venv\Scripts\python.exe")) {
   Write-Host "Dependencies changed -- reinstalling..."
   & ".\.venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "ERROR: failed to install updated dependencies."
+    exit 1
+  }
 }
 
 Write-Host ""

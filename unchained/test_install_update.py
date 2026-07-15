@@ -123,10 +123,17 @@ def test_build_agent_zip_targets_python38_client_runtime():
         requirements = zf.read("unchained-agent/requirements.txt").decode()
         assert "aiohttp==3.10.11" in requirements
         assert "PyJWT==2.9.0" in requirements
+        assert "certifi>=2026.1.4" in requirements
 
         start_ps1 = zf.read("unchained-agent/start.ps1").decode()
         assert "Python 3.8+ not found" in start_ps1
         assert "sys.version_info >= (3, 8)" in start_ps1
+        assert "$env:UNCHAINED_CA_BUNDLE" in start_ps1
+        assert 'pip install -q "certifi>=2026.1.4"' in start_ps1
+        assert "import certifi; print(certifi.where())" in start_ps1
+        assert "Test-Path -LiteralPath $caBundle -PathType Leaf" in start_ps1
+        assert "ssl.create_default_context(cafile=sys.argv[1])" in start_ps1
+        assert "$env:SSL_CERT_FILE = $caBundle" in start_ps1
 
         readme = zf.read("unchained-agent/README.txt").decode()
         assert "Python 3.8+" in readme
@@ -178,6 +185,7 @@ def test_build_update_zip_no_env_with_launchers():
         assert '"start.bat"' in update_ps1
         assert '"stop.sh"' in update_ps1
         assert '"stop.ps1"' in update_ps1
+        assert "ERROR: failed to install updated dependencies." in update_ps1
         # Should NOT have .env
         assert "unchained-agent/.env" not in names, ".env should not be in update ZIP"
         # version.txt content
