@@ -131,7 +131,8 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertIn("event = overlay_event(event)", overlay_source)
 
     def test_every_agent_sender_uses_bounded_serialization(self):
-        self.assertIn("send_agent_event(ws, evt)", inspect.getsource(chat_agent_cli._make_emitter))
+        source = inspect.getsource(chat_agent_cli._make_emitter)
+        self.assertIn("send_agent_event(target, evt)", source)
         for cls, method in (
             (chat_agent_sdk.ChatAgent, "_send_event"),
             (chat_agent_gemini.GeminiChatAgent, "_send"),
@@ -244,7 +245,7 @@ class TestChatEventTransport(unittest.TestCase):
         )
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
-        self.assertEqual(agent_package.VERSION, "0.3.115")
+        self.assertEqual(agent_package.VERSION, "0.3.116")
         self.assertEqual(
             agent_package._PACKAGE_FILES["unchained/chat_event_transport.py"],
             "chat_event_transport.py",

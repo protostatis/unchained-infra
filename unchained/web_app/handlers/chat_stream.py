@@ -592,6 +592,68 @@ async def _clear_profile_tab(core, session_id: str) -> None:
             await core._close_session_tab(session_id, profile_lock_held=True)
 
 
+_DISCONNECT_GRACE_SECONDS = 30
+
+
+def _cancel_deferred_cleanup(core, agent_id: str) -> None:
+    """Cancel any pending deferred cleanup task for this agent."""
+    deferred = getattr(core, "_agent_deferred_cleanup", None)
+    task = deferred.get(agent_id) if isinstance(deferred, dict) else None
+    if task is not None and isinstance(task, asyncio.Task):
+        task.cancel()
+        deferred.pop(agent_id, None)
+
+
+async def _deferred_agent_cleanup(
+    core,
+    agent_id: str,
+    session_tabs: list[tuple[str, str, str, str]],
+    active_turn_ids: list[tuple[str, str]],
+):
+    """Wait a grace period, then clean up if the agent never reconnected.
+
+    Active turns are NOT failed immediately on disconnect.  Instead they stay
+    active through the grace window so a reconnect can rebind them.  Only after
+    the grace period expires are failures published and tabs closed.
+    """
+    try:
+        await asyncio.sleep(_DISCONNECT_GRACE_SECONDS)
+    except asyncio.CancelledError:
+        return
+
+    current_ws = core._chat_agents.get(agent_id)
+    if current_ws is not None:
+        return  # agent reconnected, nothing to clean
+
+    deferred = getattr(core, "_agent_deferred_cleanup", None)
+    if isinstance(deferred, dict):
+        deferred.pop(agent_id, None)
+
+    # Agent never reconnected — publish failures on all active turns.
+    registry = _turn_registry(core)
+    for session_id, req_id in active_turn_ids:
+        turn = _registry_turn(registry, session_id, req_id) if registry else None
+        if turn and not getattr(turn, "stream_finished", False):
+            _publish_turn_failure(
+                core,
+                turn,
+                "Local agent disconnected before completing this response. "
+                "Please retry after the client reconnects.",
+            )
+
+    for sid, expected_tab_id, profile_path, preserve_agent_id in session_tabs:
+        await core._close_session_tab(
+            sid,
+            expected_tab_id=expected_tab_id,
+            preserve_profile_path=profile_path,
+            preserve_agent_id=preserve_agent_id,
+        )
+
+    print(f"[chat] Agent {agent_id} deferred cleanup: "
+          f"failed {len(active_turn_ids)} turns, "
+          f"closed {len(session_tabs)} session tabs")
+
+
 async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the local chat agent."""
     core = _core()
@@ -626,8 +688,30 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
     if not isinstance(caps, dict):
         caps = {}
     await ws.send_json({"type": "auth_ok"})
+    old_ws = core._chat_agents.get(agent_id)
+    # Always cancel any pending deferred cleanup for this agent on
+    # reconnect — even if the old WS was already cleaned up and
+    # _chat_agents no longer contains it.
+    _cancel_deferred_cleanup(core, agent_id)
     core._chat_agents[agent_id] = ws
     core._chat_agent_caps[agent_id] = caps
+    # Migrate dispatch_ws on all of this agent's active turns so they
+    # can receive events through the new transport.  This covers both
+    # the overlap case (old WS still registered) and the disconnect-
+    # first case (old WS already cleaned from _chat_agents).
+    registry = _turn_registry(core)
+    if registry and hasattr(registry, "active_for_agent"):
+        for turn in registry.active_for_agent(agent_id):
+            if getattr(turn, "dispatch_ws", None) is not ws:
+                turn.dispatch_ws = ws
+                logger = getattr(core, "log", None)
+                if logger:
+                    logger.info(
+                        "[chat] agent %s %s — migrated dispatch_ws on turn %s",
+                        agent_id,
+                        "reconnected" if old_ws is not None and old_ws is not ws else "connected (cleanup after disconnect)",
+                        turn.req_id,
+                    )
     if not is_trial_agent and key_info:
         core._chat_agent_users[agent_id] = key_info.get("user_id", "")
     print(f"[chat] Agent {agent_id} connected")
@@ -760,7 +844,7 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             del core._chat_agents[agent_id]
             core._chat_agent_caps.pop(agent_id, None)
             core._chat_agent_users.pop(agent_id, None)
-        agent_sessions = []
+        session_tabs: list[tuple[str, str, str, str]] = []
         active_turns = []
         active_turn_closes = []
         closed_sessions = 0
@@ -769,6 +853,23 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
             active_turns = registry.active_for_transport(agent_id, ws)
         elif is_current and registry and hasattr(registry, "active_for_agent"):
             active_turns = registry.active_for_agent(agent_id)
+
+        # Keep active turns alive through the reconnect grace window.
+        # Failures and tab closures are published only after the grace
+        # period expires without a reconnect.
+        active_turn_ids: list[tuple[str, str]] = []
+        for turn in active_turns:
+            if getattr(turn, "stream_finished", False):
+                continue
+            active_turn_ids.append((turn.session_id, turn.req_id))
+            closed_sessions += 1
+            expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
+            profile_path = core._session_profile_paths.get(turn.session_id, "")
+            preserve_agent_id = turn.cdp_agent_id if profile_path else ""
+            session_tabs.append(
+                (turn.session_id, expected_tab_id, profile_path, preserve_agent_id)
+            )
+
         if is_current:
             all_active_turns = (
                 registry.active_for_agent(agent_id)
@@ -787,41 +888,59 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                 closed_sessions += 1
                 expected_tab_id = str(core._session_tabs.get(sid, "") or "")
                 profile_path = core._session_profile_paths.get(sid, "")
-                asyncio.create_task(
-                    core._close_session_tab(
-                        sid,
-                        expected_tab_id=expected_tab_id,
-                        preserve_profile_path=profile_path,
-                        preserve_agent_id=agent_id if profile_path else "",
-                    )
+                session_tabs.append(
+                    (sid, expected_tab_id, profile_path,
+                     agent_id if profile_path else "")
                 )
-        for turn in active_turns:
-            if getattr(turn, "stream_finished", False):
-                continue
-            _publish_turn_failure(
-                core,
-                turn,
-                "Local agent disconnected before completing this response. Please retry after the client reconnects.",
-            )
-            closed_sessions += 1
-            expected_tab_id = str(core._session_tabs.get(turn.session_id, "") or "")
-            profile_path = core._session_profile_paths.get(turn.session_id, "")
-            active_turn_closes.append(
-                core._close_session_tab(
-                    turn.session_id,
-                    expected_tab_id=expected_tab_id,
-                    preserve_profile_path=profile_path,
-                    preserve_agent_id=turn.cdp_agent_id if profile_path else "",
-                )
-            )
+
         if is_current:
-            print(f"[chat] Agent {agent_id} disconnected, cleaning {closed_sessions} session tabs")
+            print(f"[chat] Agent {agent_id} disconnected, "
+                  f"deferring {len(active_turn_ids)} turn failures + "
+                  f"{len(session_tabs)} session tab closes "
+                  f"(grace={_DISCONNECT_GRACE_SECONDS}s)")
         else:
             print(
                 f"[chat] Agent {agent_id} stale connection closed "
                 f"(superseded by reconnect), cleaning {closed_sessions} session tabs"
             )
-        if active_turn_closes:
+
+        if is_current and (session_tabs or active_turn_ids):
+            deferred = getattr(core, "_agent_deferred_cleanup", None)
+            if not isinstance(deferred, dict):
+                deferred = {}
+                core._agent_deferred_cleanup = deferred
+            task = asyncio.create_task(
+                _deferred_agent_cleanup(core, agent_id, session_tabs,
+                                        active_turn_ids)
+            )
+            deferred[agent_id] = task
+
+        if not is_current and active_turn_ids:
+            # Stale transport: publish failures immediately.  The replacement
+            # connection already superseded this socket; no grace period is
+            # needed because turn events can reach the replacement transport.
+            registry = _turn_registry(core)
+            for session_id, req_id in active_turn_ids:
+                turn = _registry_turn(registry, session_id, req_id) if registry else None
+                if turn and not getattr(turn, "stream_finished", False):
+                    _publish_turn_failure(
+                        core,
+                        turn,
+                        "Local agent disconnected before completing this response. "
+                        "Please retry after the client reconnects.",
+                    )
+
+        if not is_current and session_tabs:
+            # Stale transport: close tabs immediately (no deferral needed).
+            for sid, expected_tab_id, profile_path, preserve_agent_id in session_tabs:
+                await core._close_session_tab(
+                    sid,
+                    expected_tab_id=expected_tab_id,
+                    preserve_profile_path=profile_path,
+                    preserve_agent_id=preserve_agent_id,
+                )
+
+        if not is_current and active_turn_closes:
             await asyncio.gather(*active_turn_closes, return_exceptions=True)
 
     return ws

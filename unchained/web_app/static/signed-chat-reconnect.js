@@ -10,6 +10,7 @@
     normalMonitor: false,
     openTools: [],
     pendingStepIds: [],
+    draftMessage: '',
     renderedStepId: '',
     reqId: '',
     retry: 0,
@@ -19,6 +20,7 @@
     sessionId: '',
     steps: new Map(),
     unboundTools: [],
+    userBubble: null,
   };
 
   const reconnectStyle = document.createElement('style');
@@ -26,7 +28,9 @@
     'body.unchained-turn-active #sendbtn{display:none!important}' +
     'body.unchained-turn-active #cancelbtn{display:block!important}' +
     'body.unchained-turn-active #agent-bar{display:flex!important}' +
-    'body.unchained-turn-active #slotbar button{pointer-events:none!important;opacity:.4!important}';
+    'body.unchained-turn-active #slotbar button{pointer-events:none!important;opacity:.4!important}' +
+    '.bubble.user.unchained-message-not-sent{opacity:.72}' +
+    '.bubble.user.unchained-message-not-sent::after{content:"Not sent";display:block;margin-top:6px;font-size:11px;font-weight:600;opacity:.8}';
   document.head.appendChild(reconnectStyle);
 
   function randomRequestId() {
@@ -55,6 +59,18 @@
     reconnect.renderedStepId = '';
     reconnect.steps.clear();
     reconnect.unboundTools = [];
+  }
+
+  function preserveRejectedDraft() {
+    const message = String(reconnect.draftMessage || '');
+    const input = document.getElementById('msginput');
+    if (message && input && !String(input.value || '').trim()) {
+      input.value = message;
+      if (typeof autoGrow === 'function') autoGrow(input);
+    }
+    if (reconnect.userBubble && reconnect.userBubble.isConnected) {
+      reconnect.userBubble.classList.add('unchained-message-not-sent');
+    }
   }
 
   function rememberEvent(evt) {
@@ -373,11 +389,17 @@
       const data = await activeTurn(requestedSession);
       if (!isCurrentTurn() || reconnect.sessionId !== requestedSession) return;
       if (!data || !data.active) {
-        finishTurn('error', false);
+        // The turn may be terminal in the registry, but its journal may still
+        // hold a completed answer that can be replayed via /events.  Try
+        // events before falling back to a generic error finish.
+        await tryTerminalEventsFallback();
         return;
       }
       if (data.req_id && data.req_id !== reconnect.reqId) {
-        await restoreActiveTurn();
+        // A locally started request may resume only its own authoritative
+        // journal. Adopting another request here replays an older turn into a
+        // newly submitted prompt that the server never accepted.
+        finishTurn('error', false);
         return;
       }
       updateActivity(data);
@@ -388,6 +410,44 @@
     }
   }
 
+  async function tryTerminalEventsFallback() {
+    if (!isCurrentTurn()) return;
+    var requestedSession = reconnect.sessionId;
+    var requestedReqId = reconnect.reqId;
+    var hadEvents = false;
+    var sawTerminal = false;
+    try {
+      var query = new URLSearchParams({
+        session_id: requestedSession,
+        req_id: requestedReqId,
+        after: String(0),
+      });
+      var response = await nativeFetch('/web/chat/events?' + query.toString());
+      if (!response.ok || !response.body) throw new Error('events unavailable');
+      await readSse(response.body, function(evt) {
+        if (!isCurrentTurn() || reconnect.reqId !== requestedReqId) return;
+        hadEvents = true;
+        if (evt.type === 'done' || evt.type === 'error' || evt.type === 'cancelled') {
+          sawTerminal = true;
+        }
+        renderEvent(evt);
+      });
+    } catch(e) {
+      // Fall through to error finish below.
+    }
+    if (isCurrentTurn() && reconnect.reqId === requestedReqId) {
+      if (!hadEvents) {
+        finishTurn('error', false);
+      } else if (!sawTerminal) {
+        // Received events but no terminal marker — the stream may have been
+        // interrupted.  Retry from the last seen event position.
+        scheduleReconnect();
+      }
+      // If we had events AND saw a terminal event, renderEvent already
+      // called finishTurn for the terminal outcome.
+    }
+  }
+
   function beginTurn(body) {
     const requestedSession = String(body && body.session_id || currentSessionId());
     if (!requestedSession) return '';
@@ -395,6 +455,8 @@
     if (reconnect.retryTimer) clearTimeout(reconnect.retryTimer);
     reconnect.active = true;
     reconnect.bubble = Array.from(document.querySelectorAll('.bubble.asst')).pop() || null;
+    reconnect.userBubble = Array.from(document.querySelectorAll('.bubble.user')).pop() || null;
+    reconnect.draftMessage = String(body && body.message || '');
     reconnect.eventsController = null;
     reconnect.lastSeq = 0;
     reconnect.normalMonitor = true;
@@ -485,7 +547,15 @@
       const next = Object.assign({}, init || {}, {headers: headers});
       return nativeFetch(input, next).then(function(response) {
         if (response.ok && response.body && reqId) monitorNormalStream(response.clone(), reqId);
-        else setTimeout(reconcileTurn, 0);
+        else {
+          // HTTP errors are definitive rejections, not ambiguous transport
+          // failures. In particular, a 409 means this prompt was not sent and
+          // must not attach to an older active request for the same session.
+          if (isCurrentTurn() && reconnect.reqId === reqId) {
+            preserveRejectedDraft();
+            finishTurn('error', false);
+          }
+        }
         return response;
       }, function(error) {
         setTimeout(reconcileTurn, 0);

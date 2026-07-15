@@ -320,13 +320,17 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
             replacement_task = asyncio.create_task(chat_stream.handle_chat_ws(SimpleNamespace()))
             await wait_until_current(replacement_ws)
             try:
+                # Events are now dispatched through the replacement WS because
+                # dispatch_ws was migrated on reconnect.  The original transport
+                # is superseded and its events would be dropped — this is the
+                # intended fix for reconnect response loss.
                 for event in (
                     {"type": "tool_start", "name": "ddm"},
                     {"type": "tool_result", "name": "ddm", "data": "layout"},
                     {"type": "text", "data": "Final answer"},
                     {"type": "done"},
                 ):
-                    await original_ws.push_json(
+                    await replacement_ws.push_json(
                         {**event, "session_id": turn.session_id, "req_id": turn.req_id}
                     )
 
@@ -337,6 +341,21 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([event["seq"] for event in turn.journal], [1, 2, 3, 4])
                 self.assertTrue(turn.stream_finished)
                 self.assertIs(core._chat_agents["agent-1"], replacement_ws)
+
+                # Events from the original (stale) transport are rejected after
+                # dispatch_ws migration.  This prevents old-socket events from
+                # being silently dropped and never re-sent.
+                for event in (
+                    {"type": "text", "data": "stale event"},
+                ):
+                    await original_ws.push_json(
+                        {**event, "session_id": turn.session_id, "req_id": turn.req_id}
+                    )
+                # stale event should NOT appear in journal
+                self.assertEqual(
+                    [event["type"] for event in turn.journal],
+                    ["tool_start", "tool_result", "text", "done"],
+                )
 
                 interrupted_turn = ChatTurnState(
                     owner_user_id="user-1",
@@ -423,15 +442,27 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
         )
         ws = DisconnectingWebSocket()
         turn.dispatch_ws = ws
-        with patch.object(chat_stream, "_core", return_value=core), patch.object(
-            chat_stream.web, "WebSocketResponse", return_value=ws
-        ):
+
+        # Set grace period to 0 so deferred cleanup runs after a single
+        # event-loop yield instead of waiting 30s.
+        with patch.object(chat_stream, "_core", return_value=core), \
+             patch.object(chat_stream.web, "WebSocketResponse", return_value=ws), \
+             patch.object(chat_stream, "_DISCONNECT_GRACE_SECONDS", 0):
             response = await chat_stream.handle_chat_ws(SimpleNamespace())
+            # The finally block spawned a deferred cleanup task.  Await it
+            # directly while the grace-period patch is still active.
+            deferred = getattr(core, "_agent_deferred_cleanup", None)
+            task = deferred.get("agent-1") if isinstance(deferred, dict) else None
+            if task:
+                await task
 
         self.assertIs(response, ws)
+        # Turn is failed immediately (error published to journal).
         self.assertEqual(turn.status, "error")
         self.assertTrue(turn.stream_finished)
         self.assertEqual([event["type"] for event in turn.journal], ["error", "done"])
+        # Tab close is deferred.  With grace=0 the deferred cleanup runs
+        # after a single event-loop yield.
         self.assertEqual(
             close_calls,
             [
@@ -444,6 +475,495 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
                     },
                 )
             ],
+        )
+
+    async def test_deferred_tab_close_cancelled_on_reconnect(self):
+        """Tabs are not closed when agent reconnects during grace period."""
+        registry = ChatTurnRegistry()
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            chat_agent_id="agent-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+            tab_id="tab-1",
+        )
+        await registry.start(turn)
+        close_calls = []
+
+        async def close_session_tab(session_id, **kwargs):
+            close_calls.append((session_id, kwargs))
+
+        class ControllableWebSocket:
+            _STOP = object()
+            closed = False
+
+            def __init__(self):
+                self.inbound = asyncio.Queue()
+
+            async def prepare(self, request):
+                return None
+
+            async def receive_json(self):
+                return {"key": "trial-key"}
+
+            async def send_json(self, data):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                item = await self.inbound.get()
+                if item is self._STOP:
+                    raise StopAsyncIteration
+                self._msg_processed = True
+                return item
+
+            async def finish(self):
+                await self.inbound.put(self._STOP)
+
+            async def close(self, **kwargs):
+                self.closed = True
+
+        original_ws = ControllableWebSocket()
+        replacement_ws = ControllableWebSocket()
+        turn.dispatch_ws = original_ws
+
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="trial-key",
+            TRIAL_AGENT_ID="agent-1",
+            _chat_agents={},
+            _chat_agent_caps={},
+            _chat_agent_users={},
+            _agent_req_queues={},
+            _response_queues={},
+            _response_req_ids={},
+            _chat_turns=registry,
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_tabs={turn.session_id: turn.tab_id},
+            _session_profile_paths={turn.session_id: "/chrome/Profile 1"},
+            _scheduler_turn_grants={},
+            _overlay_sessions={},
+            _close_session_tab=close_session_tab,
+        )
+
+        async def wait_until_current(expected):
+            for _ in range(100):
+                if core._chat_agents.get("agent-1") is expected:
+                    return
+                await asyncio.sleep(0)
+            self.fail("chat WebSocket was not registered")
+
+        with patch.object(chat_stream, "_core", return_value=core), \
+             patch.object(chat_stream, "_DISCONNECT_GRACE_SECONDS", 300.0), \
+             patch.object(chat_stream.web,
+                          "WebSocketResponse",
+                          side_effect=[original_ws, replacement_ws]):
+            # First WS connects and stays alive (blocked on inbound queue).
+            original_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(original_ws)
+
+            # Now disconnect the first WS — this triggers deferred cleanup.
+            await original_ws.finish()
+            await original_task
+
+            # Verify deferred cleanup was spawned.
+            deferred = getattr(core, "_agent_deferred_cleanup", None)
+            self.assertIsInstance(deferred, dict)
+            self.assertIn("agent-1", deferred)
+
+            # Agent reconnects before grace period — cancels deferred cleanup.
+            replacement_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(replacement_ws)
+
+            # Tabs must NOT have been closed (grace period not reached and
+            # deferred cleanup detected the agent reconnected).
+            self.assertEqual(close_calls, [])
+
+            await replacement_ws.finish()
+            await replacement_task
+
+    async def test_agent_reconnect_delivers_final_answer(self):
+        """Agent reconnects and can deliver the final answer through new WS."""
+        registry = ChatTurnRegistry()
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            chat_agent_id="agent-1",
+            routing_agent_id="agent-1",
+        )
+        await registry.start(turn)
+
+        class ControlledWebSocket:
+            _STOP = object()
+
+            def __init__(self):
+                self.closed = False
+                self.inbound = asyncio.Queue()
+                self.processed = None
+
+            async def prepare(self, request):
+                return None
+
+            async def receive_json(self):
+                return {"key": "trial-key"}
+
+            async def send_json(self, data):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.processed is not None:
+                    self.processed.set()
+                    self.processed = None
+                item = await self.inbound.get()
+                if item is self._STOP:
+                    raise StopAsyncIteration
+                message, self.processed = item
+                return message
+
+            async def push_json(self, payload):
+                processed = asyncio.Event()
+                await self.inbound.put(
+                    (
+                        SimpleNamespace(
+                            type=chat_stream.web.WSMsgType.TEXT,
+                            data=json.dumps(payload),
+                        ),
+                        processed,
+                    )
+                )
+                await asyncio.wait_for(processed.wait(), timeout=1)
+
+            async def finish(self):
+                await self.inbound.put(self._STOP)
+
+            async def close(self, **kwargs):
+                self.closed = True
+
+        original_ws = ControlledWebSocket()
+        replacement_ws = ControlledWebSocket()
+
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="trial-key",
+            TRIAL_AGENT_ID="agent-1",
+            _chat_agents={},
+            _chat_agent_caps={},
+            _chat_agent_users={},
+            _agent_req_queues={},
+            _response_queues={},
+            _response_req_ids={},
+            _chat_turns=registry,
+            _session_agent_map={},
+            _session_tabs={},
+            _session_profile_paths={},
+            _scheduler_turn_grants={},
+            _overlay_sessions={},
+        )
+
+        async def wait_until_current(expected):
+            for _ in range(100):
+                if core._chat_agents.get("agent-1") is expected:
+                    return
+                await asyncio.sleep(0)
+            self.fail("chat WebSocket was not registered")
+
+        with patch.object(chat_stream, "_core", return_value=core), \
+             patch.object(chat_stream.web,
+                          "WebSocketResponse",
+                          side_effect=[original_ws, replacement_ws]):
+            original_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(original_ws)
+            turn.dispatch_ws = original_ws
+
+            # Agent reconnects with new WS.
+            replacement_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(replacement_ws)
+
+            try:
+                # dispatch_ws should have been migrated to the new WS.
+                self.assertIs(turn.dispatch_ws, replacement_ws)
+
+                # Agent delivers events through the new WS.
+                await replacement_ws.push_json(
+                    {"type": "text", "data": "Answer after reconnect",
+                     "session_id": turn.session_id, "req_id": turn.req_id}
+                )
+                await replacement_ws.push_json(
+                    {"type": "done",
+                     "session_id": turn.session_id, "req_id": turn.req_id}
+                )
+
+                self.assertEqual(
+                    [e["type"] for e in turn.journal],
+                    ["text", "done"],
+                )
+                self.assertTrue(turn.stream_finished)
+
+                # Stale events through the old WS are rejected.
+                await original_ws.push_json(
+                    {"type": "text", "data": "stale",
+                     "session_id": turn.session_id, "req_id": turn.req_id}
+                )
+                self.assertEqual(
+                    [e["type"] for e in turn.journal],
+                    ["text", "done"],  # stale event not added
+                )
+            finally:
+                await original_ws.finish()
+                await replacement_ws.finish()
+                await asyncio.gather(original_task, replacement_task)
+
+    async def test_disconnect_first_then_reconnect_delivers_answer(self):
+        """Turn stays active through grace when old WS disconnects before reconnect.
+
+        This tests the realistic ordering: original WS closes → turn enters
+        grace period (NOT failed) → replacement connects → dispatch_ws migrated
+        → agent delivers final answer through replacement.
+        """
+        registry = ChatTurnRegistry()
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            chat_agent_id="agent-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+            tab_id="tab-1",
+        )
+        await registry.start(turn)
+        close_calls = []
+
+        async def close_session_tab(session_id, **kwargs):
+            close_calls.append((session_id, kwargs))
+
+        class ControllableWebSocket:
+            _STOP = object()
+
+            def __init__(self):
+                self.closed = False
+                self.inbound = asyncio.Queue()
+                self.processed = None
+
+            async def prepare(self, request):
+                return None
+
+            async def receive_json(self):
+                return {"key": "trial-key"}
+
+            async def send_json(self, data):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.processed is not None:
+                    self.processed.set()
+                    self.processed = None
+                item = await self.inbound.get()
+                if item is self._STOP:
+                    raise StopAsyncIteration
+                message, self.processed = item
+                return message
+
+            async def push_json(self, payload):
+                processed = asyncio.Event()
+                await self.inbound.put(
+                    (
+                        SimpleNamespace(
+                            type=chat_stream.web.WSMsgType.TEXT,
+                            data=json.dumps(payload),
+                        ),
+                        processed,
+                    )
+                )
+                await asyncio.wait_for(processed.wait(), timeout=1)
+
+            async def finish(self):
+                await self.inbound.put(self._STOP)
+
+            async def close(self, **kwargs):
+                self.closed = True
+
+        original_ws = ControllableWebSocket()
+        replacement_ws = ControllableWebSocket()
+
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="trial-key",
+            TRIAL_AGENT_ID="agent-1",
+            _chat_agents={},
+            _chat_agent_caps={},
+            _chat_agent_users={},
+            _agent_req_queues={},
+            _response_queues={},
+            _response_req_ids={},
+            _chat_turns=registry,
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_tabs={turn.session_id: turn.tab_id},
+            _session_profile_paths={},
+            _scheduler_turn_grants={},
+            _overlay_sessions={},
+            _close_session_tab=close_session_tab,
+        )
+
+        async def wait_until_current(expected):
+            for _ in range(100):
+                if core._chat_agents.get("agent-1") is expected:
+                    return
+                await asyncio.sleep(0)
+            self.fail("chat WebSocket was not registered")
+
+        with patch.object(chat_stream, "_core", return_value=core), \
+             patch.object(chat_stream.web,
+                          "WebSocketResponse",
+                          side_effect=[original_ws, replacement_ws]), \
+             patch.object(chat_stream, "_DISCONNECT_GRACE_SECONDS", 300.0):
+            # 1. Original WS connects, turn is bound to it.
+            original_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(original_ws)
+            turn.dispatch_ws = original_ws
+
+            # 2. Original WS DISCONNECTS. Turn should stay active (deferred).
+            await original_ws.finish()
+            await original_task
+
+            # Turn is still active — NOT failed yet.
+            self.assertEqual(turn.status, "active")
+            self.assertFalse(turn.stream_finished)
+
+            # 3. Replacement WS connects within grace. Turn migrates.
+            replacement_task = asyncio.create_task(
+                chat_stream.handle_chat_ws(SimpleNamespace())
+            )
+            await wait_until_current(replacement_ws)
+
+            try:
+                # dispatch_ws should be migrated.
+                self.assertIs(turn.dispatch_ws, replacement_ws)
+                # Turn still active.
+                self.assertEqual(turn.status, "active")
+
+                # 4. Agent delivers final answer through replacement.
+                await replacement_ws.push_json(
+                    {"type": "text", "data": "Delivered after reconnect",
+                     "session_id": turn.session_id, "req_id": turn.req_id}
+                )
+                await replacement_ws.push_json(
+                    {"type": "done",
+                     "session_id": turn.session_id, "req_id": turn.req_id}
+                )
+
+                self.assertEqual(
+                    [e["type"] for e in turn.journal],
+                    ["text", "done"],
+                )
+                self.assertTrue(turn.stream_finished)
+                # Tabs were not closed (reconnected within grace).
+                self.assertEqual(close_calls, [])
+            finally:
+                await replacement_ws.finish()
+                await replacement_task
+
+    async def test_grace_expiration_publishes_failure(self):
+        """After grace period without reconnect, turn failure is published."""
+        registry = ChatTurnRegistry()
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            chat_agent_id="agent-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+            tab_id="tab-1",
+        )
+        await registry.start(turn)
+        close_calls = []
+
+        async def close_session_tab(session_id, **kwargs):
+            close_calls.append((session_id, kwargs))
+
+        class DisconnectingWebSocket:
+            closed = False
+
+            async def prepare(self, request):
+                return None
+
+            async def receive_json(self):
+                return {"key": "trial-key"}
+
+            async def send_json(self, data):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def close(self, **kwargs):
+                self.closed = True
+
+        ws = DisconnectingWebSocket()
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="trial-key",
+            TRIAL_AGENT_ID="agent-1",
+            _chat_agents={},
+            _chat_agent_caps={},
+            _chat_agent_users={},
+            _agent_req_queues={},
+            _response_queues={},
+            _response_req_ids={},
+            _chat_turns=registry,
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_tabs={turn.session_id: turn.tab_id},
+            _session_profile_paths={},
+            _scheduler_turn_grants={},
+            _overlay_sessions={},
+            _close_session_tab=close_session_tab,
+        )
+        turn.dispatch_ws = ws
+
+        # Grace period set to 0 so deferred cleanup fires immediately.
+        with patch.object(chat_stream, "_core", return_value=core), \
+             patch.object(chat_stream.web, "WebSocketResponse", return_value=ws), \
+             patch.object(chat_stream, "_DISCONNECT_GRACE_SECONDS", 0):
+            response = await chat_stream.handle_chat_ws(SimpleNamespace())
+            # Await the deferred cleanup task.
+            deferred = getattr(core, "_agent_deferred_cleanup", None)
+            task = deferred.get("agent-1") if isinstance(deferred, dict) else None
+            if task:
+                await task
+
+        self.assertIs(response, ws)
+        # Turn should be failed after grace expiration.
+        self.assertEqual(turn.status, "error")
+        self.assertTrue(turn.stream_finished)
+        self.assertEqual([e["type"] for e in turn.journal], ["error", "done"])
+        self.assertEqual(
+            close_calls,
+            [("s-agent-key-1", {"expected_tab_id": "tab-1",
+                                "preserve_profile_path": "",
+                                "preserve_agent_id": ""})],
         )
 
 

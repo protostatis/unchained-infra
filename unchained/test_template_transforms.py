@@ -1039,6 +1039,13 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("window.chatReconnectFetch = function", asset)
         self.assertIn("function randomRequestId()", asset)
         self.assertIn("headers.set('X-Request-ID', reqId)", asset)
+        self.assertIn("preserveRejectedDraft();", asset)
+        self.assertIn("finishTurn('error', false);", asset)
+        self.assertNotIn("else setTimeout(reconcileTurn, 0);", asset)
+        mismatch = asset[asset.index("if (data.req_id && data.req_id !== reconnect.reqId)") :]
+        mismatch = mismatch[:mismatch.index("updateActivity(data);")]
+        self.assertIn("finishTurn('error', false);", mismatch)
+        self.assertNotIn("restoreActiveTurn()", mismatch)
         self.assertNotIn("window.fetch =", asset)
         self.assertNotIn("localStorage", asset)
         self.assertNotIn("unchained_chat_active_turn_v1", asset)

@@ -9699,14 +9699,26 @@ function updateAgentStatusUI(data) {
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
   const mismatch = !!data.mismatch;
-  const setupReady = bridgeConnected;
+
+  // Bridge status debounce: require 2 consecutive failures before showing
+  // offline. A single success resets and shows online immediately.
+  if (typeof _bridgeFailCount === 'undefined') _bridgeFailCount = 0;
+  var debouncedBridge = bridgeConnected;
+  if (bridgeConnected) {
+    _bridgeFailCount = 0;
+  } else {
+    _bridgeFailCount++;
+    if (_bridgeFailCount < 2) debouncedBridge = true;
+  }
+
+  const setupReady = debouncedBridge;
   const wasSetupReady = lastLocalSetupReady;
 
   if (chatConnected) updateStatusPill(el, 'agent online', 'online');
   else if (mismatch) updateStatusPill(el, 'agent mismatch', 'warn');
   else updateStatusPill(el, 'agent offline', '');
 
-  if (bridgeConnected) updateStatusPill(bridgeEl, 'bridge online', 'online');
+  if (debouncedBridge) updateStatusPill(bridgeEl, 'bridge online', 'online');
   else updateStatusPill(bridgeEl, 'bridge offline', '');
 
   lastLocalSetupReady = setupReady;
@@ -9721,10 +9733,10 @@ function updateAgentStatusUI(data) {
   if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
 
   if (banner) {
-    if (bridgeConnected) {
+    if (debouncedBridge) {
       banner.style.display = 'none';
     } else {
-      if (chatConnected && !bridgeConnected && bannerMsg) {
+      if (chatConnected && !debouncedBridge && bannerMsg) {
         bannerMsg.textContent = 'Your browser bridge is offline on this machine.';
         if (bannerDetail) bannerDetail.textContent = 'The trial agent is reachable, but browser actions still need the local connector. Run the install command here and keep it open.';
       } else if (mismatch && bannerMsg) {
@@ -9740,8 +9752,8 @@ function updateAgentStatusUI(data) {
       banner.style.display = 'flex';
     }
   }
-  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = bridgeConnected ? '' : 'none'; }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, wasSetupReady);
+  { const av = document.getElementById('topbar-agent-view'); if (av) av.style.display = debouncedBridge ? '' : 'none'; }
+  maybeAutoOpenInstallModal(chatConnected, debouncedBridge, mismatch, wasSetupReady);
 }
 
 function showMain() {
@@ -16255,11 +16267,21 @@ function updateAgentStatusUI(data) {
   const isOpenCodeCli = model.startsWith('opencode-cli:');
   const chatConnected = !!data.chat_connected;
   const bridgeConnected = !!data.bridge_connected;
+  // Bridge status debounce: require 2 consecutive failures before showing
+  // offline.  A single success resets and shows online immediately.
+  if (typeof _bridgeFailCount === 'undefined') _bridgeFailCount = 0;
+  var debouncedBridge = bridgeConnected;
+  if (bridgeConnected) {
+    _bridgeFailCount = 0;
+  } else {
+    _bridgeFailCount++;
+    if (_bridgeFailCount < 2) debouncedBridge = true;
+  }
   const mismatch = !!data.mismatch;
   const codexCliSupported = data.codex_cli_supported !== false;
   const opencodeCliSupported = data.opencode_cli_supported !== false;
   const cliName = localCliNameForModel();
-  const setupReady = chatConnected && bridgeConnected && (!isCodexCli || codexCliSupported) && (!isOpenCodeCli || opencodeCliSupported);
+  const setupReady = chatConnected && debouncedBridge && (!isCodexCli || codexCliSupported) && (!isOpenCodeCli || opencodeCliSupported);
   const wasSetupReady = lastLocalSetupReady;
   if (clientUpdateInFlight) {
     if (!data.client_connected) clientUpdateSawDisconnect = true;
@@ -16314,7 +16336,7 @@ function updateAgentStatusUI(data) {
     }
   }
 
-  if (bridgeConnected) {
+  if (debouncedBridge) {
     updateStatusPill(bridgeEl, 'bridge online', 'online');
   } else {
     updateStatusPill(bridgeEl, 'bridge offline', '');
@@ -16330,7 +16352,7 @@ function updateAgentStatusUI(data) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli online', 'online');
     else if (isOpenCodeCli) updateStatusPill(chatEl, 'opencode cli online', 'online');
     else updateStatusPill(chatEl, 'agent online', 'online');
-    if (bridgeConnected) {
+    if (debouncedBridge) {
       if (isOpenCodeCli) {
         if (banner) banner.style.display = 'none';
         if (bannerKicker) bannerKicker.textContent = 'Browser preview';
@@ -16364,7 +16386,7 @@ function updateAgentStatusUI(data) {
     if (isCodexCli) updateStatusPill(chatEl, 'codex cli offline', '');
     else if (isOpenCodeCli) updateStatusPill(chatEl, 'opencode cli offline', '');
     else updateStatusPill(chatEl, 'agent offline', '');
-    if (bridgeConnected) {
+    if (debouncedBridge) {
       if (bannerMsg) bannerMsg.textContent = 'Start the local chat agent on this computer.';
       if (bannerDetail) bannerDetail.textContent = 'Your browser bridge is online, but chat needs the local agent. Run the install command or restart the agent process.';
     } else if (bannerDetail) {
@@ -16372,7 +16394,7 @@ function updateAgentStatusUI(data) {
     }
     if (banner) banner.style.display = 'flex';
   }
-  maybeAutoOpenInstallModal(chatConnected, bridgeConnected, mismatch, isCodexCli, codexCliSupported, isOpenCodeCli, opencodeCliSupported, wasSetupReady);
+  maybeAutoOpenInstallModal(chatConnected, debouncedBridge, mismatch, isCodexCli, codexCliSupported, isOpenCodeCli, opencodeCliSupported, wasSetupReady);
 }
 
 function showMain() {
