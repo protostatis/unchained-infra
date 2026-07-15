@@ -111,7 +111,7 @@ jobs:
           }
           Remove-Job $job -Force -ErrorAction SilentlyContinue
           Write-Host $output
-          if ($output -match "ERROR:|FATAL:|Could not install|not recognized as the name") {
+          if ($output -match 'ERROR:|FATAL:|Could not install|not recognized as the name|NativeCommandError|Agent start failed|File "<string>"') {
             Write-Error "install script reported a failure"; exit 1
           }
 

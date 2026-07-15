@@ -151,6 +151,25 @@ def test_build_agent_zip_targets_python38_client_runtime():
     print("  Packaged client runtime is aligned to Python 3.8+")
 
 
+def test_windows_certifi_check_avoids_legacy_native_quote_loss():
+    """Avoid Python literals that Windows PowerShell 5.1 strips from native args."""
+    from agent_package import _START_PS1
+
+    certifi_check = next(
+        line for line in _START_PS1.splitlines()
+        if line.startswith("& $pythonExe -c ") and "importlib.metadata" in line
+    )
+    # Windows PowerShell 5.1 strips embedded double quotes from native
+    # arguments when the PowerShell string itself is single-quoted.
+    assert certifi_check.startswith('& $pythonExe -c "')
+    python_source = certifi_check.split('"', 2)[1]
+    assert "version(sys.argv[1])" in python_source
+    assert "split(sys.argv[2])" in python_source
+    assert "'" not in python_source and '"' not in python_source
+    assert '" certifi "." 2>$null' in certifi_check
+    print("  Windows certifi version check avoids PowerShell 5.1 quote loss")
+
+
 def test_build_update_zip_no_env_with_launchers():
     from agent_package import build_update_zip, VERSION
     zip_bytes = build_update_zip()
@@ -1801,6 +1820,7 @@ if __name__ == "__main__":
     tests = [
         ("agent_package: version constants", test_version_constants),
         ("agent_package: build_agent_zip has version.txt + update.sh", test_build_agent_zip_contains_version_and_update),
+        ("agent_package: Windows certifi check avoids native quote loss", test_windows_certifi_check_avoids_legacy_native_quote_loss),
         ("agent_package: build_update_zip (no .env, with launchers)", test_build_update_zip_no_env_with_launchers),
         ("agent_package: _generate_public_install_script", test_generate_public_install_script),
         ("agent_package: public install handler importable", test_public_install_script_handler_importable),
