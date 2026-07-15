@@ -111,6 +111,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_json_events_emit_existing_sse_contract(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         captured: dict[str, object] = {}
         lines = [
             json.dumps(
@@ -179,6 +180,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_stale_session_retries_fresh_and_clears_saved_mapping(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         sid = "s-claude-abc12345-test"
         model = "opencode-cli:anthropic/claude-sonnet-4-6"
         mod.opencode_sessions[sid] = "stale-session"
@@ -228,6 +230,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_empty_tool_response_retries_same_session_once(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         sid = "s-claude-abc12345-test"
         tool_event = json.dumps(
             {
@@ -287,6 +290,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_empty_continuation_falls_back_without_looping(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         tool_event = json.dumps(
             {
                 "type": "tool_use",
@@ -331,6 +335,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_empty_response_without_completed_tool_does_not_retry(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         call_count = 0
         lines = [json.dumps({"type": "step_start", "sessionID": "oc-session-1"})]
 
@@ -354,6 +359,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_duplicate_text_and_tool_parts_are_emitted_once(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         tool_event = {
             "type": "tool_use",
             "sessionID": "oc-session-1",
@@ -398,6 +404,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_explicit_error_event_emits_done(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         lines = [
             json.dumps(
                 {
@@ -456,6 +463,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_oversized_event_kills_and_reaps_subprocess(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         proc = _FakeProc([], returncode=None)
         proc.stdout = _OversizedStream()
         captured: dict[str, object] = {}
@@ -485,6 +493,7 @@ class TestOpenCodeCliLane(unittest.IsolatedAsyncioTestCase):
     async def test_opencode_processing_value_error_is_not_misreported_as_overrun(self):
         mod = self._load_module()
         ws = _FakeWs()
+        mod._current_agent_ws = ws
         proc = _FakeProc([json.dumps({"type": "error", "error": {"message": "provider error"}})], returncode=None)
 
         async def fake_create_subprocess_exec(*cmd, **kwargs):
