@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.114"  # use a current CA bundle for packaged Windows TLS
+VERSION = "0.3.115"  # avoid native-argument quote loss on Windows PowerShell 5.1
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -824,7 +824,7 @@ if (-not (Test-Path $pythonExe)) {
 # Force Python networking (WebSockets, urllib, aiohttp, and httpx) to use the
 # current certifi bundle installed in this isolated environment. Operators can
 # supply a private CA bundle explicitly without weakening certificate checks.
-& $pythonExe -c 'import re; from importlib.metadata import version; parts=tuple(int(x) for x in re.findall(r"\d+", version("certifi"))[:3]); raise SystemExit(0 if parts >= (2026, 1, 4) else 1)' 2>$null
+& $pythonExe -c "import sys; from importlib.metadata import version; parts=tuple(int(x) for x in version(sys.argv[1]).split(sys.argv[2])[:3]); raise SystemExit(0 if parts >= (2026, 1, 4) else 1)" certifi "." 2>$null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Refreshing TLS certificate authorities..."
   & $pythonExe -m pip install -q "certifi>=2026.1.4"
