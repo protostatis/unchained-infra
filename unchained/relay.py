@@ -56,8 +56,12 @@ class Relay:
         self.agent_users: dict[str, str] = {}  # agent_id → user_id
         self.agent_profiles: dict[str, str] = {}  # agent_id → profile name
         self._next_channel: dict[str, int] = {}  # agent_id → channel counter
-        # client_ws → (agent_id, channel_id) for routing replies
-        self.clients: dict[ServerConnection, tuple[str, int]] = {}
+        # Connection-generation counter to prevent cross-wiring when a bridge
+        # reconnects. Channel numbers reset to 1 per generation; old-generation
+        # clients are closed so they cannot route messages to the wrong agent.
+        self._agent_generation: dict[str, int] = {}  # agent_id → gen
+        # client_ws → (agent_id, generation, channel_id) for routing replies
+        self.clients: dict[ServerConnection, tuple[str, int, int]] = {}
         # Pending HTTP proxy requests: req_id → asyncio.Future
         self._pending_http: dict[str, asyncio.Future] = {}
         self.shared_token = (
@@ -373,7 +377,24 @@ class Relay:
             self.agents[agent_id] = ws
             self.agent_users[agent_id] = key_info["user_id"]
             self.agent_profiles[agent_id] = profile
+            gen = self._agent_generation.get(agent_id, 0) + 1
+            self._agent_generation[agent_id] = gen
             self._next_channel[agent_id] = 1
+            # Close any stale clients from a previous agent generation so
+            # channel numbers cannot cross-wire across reconnect boundaries.
+            stale_clients = [
+                c for c, (aid, g, _) in list(self.clients.items())
+                if aid == agent_id and g != gen
+            ]
+            for client_ws in stale_clients:
+                self.clients.pop(client_ws, None)
+                try:
+                    await client_ws.close(4001, "Agent reconnected")
+                except Exception:
+                    pass
+            if stale_clients:
+                print(f"[relay] agent {agent_id} reconnected gen={gen} — "
+                      f"closed {len(stale_clients)} stale clients")
             print(f"[relay] agent {agent_id} connected (user={key_info['user_id']}, profile={profile}, key={api_key[:12]}...)")
 
             await ws.send(json.dumps({
@@ -382,9 +403,10 @@ class Relay:
             }))
 
             # Message loop: forward agent responses to the right client
+            agent_gen = gen
             async for raw in ws:
                 msg = json.loads(raw)
-                await self._handle_agent_message(agent_id, msg)
+                await self._handle_agent_message(agent_id, msg, agent_gen)
 
         except asyncio.TimeoutError:
             print(f"[relay] agent {agent_id} timed out")
@@ -401,7 +423,7 @@ class Relay:
                     self.agent_profiles.pop(agent_id, None)
                     self._next_channel.pop(agent_id, None)
                     # Close all clients connected to this agent
-                    to_close = [c for c, (aid, _) in self.clients.items()
+                    to_close = [c for c, (aid, *_rest) in self.clients.items()
                                 if aid == agent_id]
                     for client_ws in to_close:
                         self.clients.pop(client_ws, None)
@@ -411,8 +433,14 @@ class Relay:
                             pass
                     print(f"[relay] agent {agent_id} disconnected")
 
-    async def _handle_agent_message(self, agent_id: str, msg: dict):
-        """Process a message from an agent."""
+    async def _handle_agent_message(self, agent_id: str, msg: dict,
+                                     agent_gen: int = 0):
+        """Process a message from an agent.
+
+        ``agent_gen`` is the connection generation that received this message.
+        Only clients from the same generation can receive the reply, preventing
+        old-generation messages from cross-wiring into new-generation channels.
+        """
         t = msg.get("type", "")
         if t == "ping":
             # Respond to heartbeat
@@ -433,8 +461,8 @@ class Relay:
                 fut.set_result(msg)
             # Also forward to client if one is waiting on this channel
             channel = msg.get("channel", msg.get("req_id", 0))
-            for client_ws, (aid, ch) in list(self.clients.items()):
-                if aid == agent_id and ch == channel:
+            for client_ws, (aid, gen, ch) in list(self.clients.items()):
+                if aid == agent_id and ch == channel and gen == agent_gen:
                     try:
                         await client_ws.send(json.dumps(msg))
                     except Exception:
@@ -443,8 +471,8 @@ class Relay:
         elif t in ("ws_recv", "ws_opened", "ws_error", "ws_closed"):
             # Forward to the client that owns this channel
             channel = msg.get("channel", 0)
-            for client_ws, (aid, ch) in list(self.clients.items()):
-                if aid == agent_id and ch == channel:
+            for client_ws, (aid, gen, ch) in list(self.clients.items()):
+                if aid == agent_id and ch == channel and gen == agent_gen:
                     try:
                         await client_ws.send(json.dumps(msg))
                     except Exception:
@@ -486,11 +514,13 @@ class Relay:
             return
 
         # Allocate a channel
+        gen = self._agent_generation.get(agent_id, 1)
         channel = self._next_channel.get(agent_id, 1)
         self._next_channel[agent_id] = channel + 1
-        self.clients[ws] = (agent_id, channel)
+        self.clients[ws] = (agent_id, gen, channel)
+        client_gen = gen
 
-        print(f"[relay] client → agent {agent_id} tab {tab_id} (channel {channel})")
+        print(f"[relay] client → agent {agent_id} tab {tab_id} (gen={gen} channel {channel})")
 
         try:
             # Ask agent to open a WebSocket to the tab
@@ -534,9 +564,13 @@ class Relay:
             pass
         finally:
             self.clients.pop(ws, None)
-            # Tell agent to close the channel
+            # Only send ws_close if the agent still belongs to the same
+            # generation.  A new agent registration increments the generation
+            # and closes stale clients in its auth handler, so this guard
+            # prevents an old client from closing a new agent's channel.
             agent_ws = self.agents.get(agent_id)
-            if agent_ws:
+            current_gen = self._agent_generation.get(agent_id, 0)
+            if agent_ws and current_gen == client_gen:
                 try:
                     await agent_ws.send(json.dumps({
                         "type": "ws_close",
@@ -544,7 +578,7 @@ class Relay:
                     }))
                 except Exception:
                     pass
-            print(f"[relay] client disconnected (agent {agent_id}, channel {channel})")
+            print(f"[relay] client disconnected (agent {agent_id}, gen={client_gen}, channel {channel})")
 
     # --- HTTP API proxy ---
 

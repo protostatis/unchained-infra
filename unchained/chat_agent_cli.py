@@ -1448,13 +1448,36 @@ _OPENCODE_CONTINUATION_PROMPT = (
 )
 
 
-def _make_emitter(ws, sid: str, req_id: str):
-    """Return an async helper that tags every event with session_id and req_id."""
+# Module-level reference to the current agent WebSocket, updated on each
+# reconnect iteration. Active handle_message tasks use this instead of a
+# captured ws that may be stale after reconnection.
+_current_agent_ws = None
+
+# Events buffered while the WebSocket transport is unavailable.  Flushed
+# in FIFO order on the next successful reconnect so that turns completed
+# during a brief disconnect window still reach the server.
+_pending_agent_events: list[dict] = []
+
+
+def _make_emitter(sid: str, req_id: str):
+    """Return an async helper that tags every event with session_id and req_id.
+
+    Uses _current_agent_ws so that events are sent through the most recently
+    connected transport.  Events produced while no transport is available are
+    buffered and flushed on reconnect.
+    """
     async def emit(evt: dict):
         evt["session_id"] = sid
         if req_id:
             evt["req_id"] = req_id
-        await send_agent_event(ws, evt)
+        target = _current_agent_ws
+        if target is None:
+            _pending_agent_events.append(evt)
+            return
+        # Flush any events that accumulated while disconnected.
+        while _pending_agent_events:
+            await send_agent_event(target, _pending_agent_events.pop(0))
+        await send_agent_event(target, evt)
     return emit
 
 
@@ -1842,7 +1865,7 @@ async def handle_message_claude(
     req_id: str = "",
 ):
     """Single claude -p call with streaming tool events and session resume."""
-    emit = _make_emitter(ws, sid, req_id)
+    emit = _make_emitter(sid, req_id)
     cli_model = _MODEL_CLI_MAP.get(model, "opus")
 
     # Save user message locally
@@ -2327,7 +2350,7 @@ async def handle_message_codex(
     req_id: str = "",
 ):
     """Single codex exec call with JSON event parsing and session resume."""
-    emit = _make_emitter(ws, sid, req_id)
+    emit = _make_emitter(sid, req_id)
     codex_model = _resolve_codex_model(model)
 
     # Save user message locally
@@ -2743,7 +2766,7 @@ async def handle_message_opencode(
     _retry_mode: str = "",
 ):
     """Single opencode run call with JSON event parsing and session resume."""
-    emit = _make_emitter(ws, sid, req_id)
+    emit = _make_emitter(sid, req_id)
     opencode_model = _resolve_opencode_model(model)
 
     if not _retry_mode:
@@ -3139,7 +3162,7 @@ async def handle_message(
     req_id: str = "",
 ):
     """Dispatch to local Claude CLI or Codex CLI handler by model prefix."""
-    emit = _make_emitter(ws, sid, req_id)
+    emit = _make_emitter(sid, req_id)
     if _is_codex_cli_model(model):
         if not _cli_binary_available(CODEX_BIN):
             await emit({
@@ -3278,6 +3301,13 @@ async def main():
             resp = json.loads(await ws.recv())
             assert resp["type"] == "auth_ok", f"Auth failed: {resp}"
             print("Authenticated. Waiting for messages...")
+
+            global _current_agent_ws
+            _current_agent_ws = ws
+
+            # Flush any events buffered while disconnected.
+            while _pending_agent_events:
+                await send_agent_event(ws, _pending_agent_events.pop(0))
 
             async for raw in ws:
                 msg = json.loads(raw)
@@ -3484,7 +3514,13 @@ async def main():
                             "error": err or "Could not start Research Desk install helper.",
                         })
 
+            # async-for loop ended normally (server closed cleanly).
+            # Clear the global so pending tasks buffer rather than send
+            # through the closed socket.
+            _current_agent_ws = None
+
         except Exception as e:
+            _current_agent_ws = None
             log.error("WebSocket error: %s. Reconnecting in 3s...", e, exc_info=True)
             await asyncio.sleep(3)
 
