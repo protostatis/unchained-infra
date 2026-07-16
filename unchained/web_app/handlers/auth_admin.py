@@ -29,6 +29,11 @@ _GITHUB_OAUTH_MAX_AGE = 600
 _GITHUB_AUTHORIZE_URL_DEFAULT = "https://github.com/login/oauth/authorize"
 _GITHUB_TOKEN_URL_DEFAULT = "https://github.com/login/oauth/access_token"
 _GITHUB_API_BASE_DEFAULT = "https://api.github.com"
+_APPROVED_ACCOUNT_ACTIVATION_URL = (
+    "https://unchainedsky.com/install?utm_source=lifecycle_email"
+    "&utm_medium=email&utm_campaign=approved_account_activation"
+    "&ref=welcome_install"
+)
 
 
 def _normalize_source(raw_source: str | None) -> str:
@@ -73,6 +78,15 @@ def _user_status(user: dict) -> str:
 
 def _user_type(user: dict, fallback: str = "claude") -> str:
     return user.get("user_type") or fallback
+
+
+def _approved_account_email_body(display: str) -> str:
+    return (
+        f"<p>Hi {display},</p>"
+        "<p>Your account is ready. Connect one computer to run browser tasks.</p>"
+        f'<p><a href="{_APPROVED_ACCOUNT_ACTIVATION_URL}">Connect this computer</a></p>'
+        "<p>— The Unchained Team</p>"
+    )
 
 
 def _ensure_user_api_key(core, user: dict, email: str) -> str:
@@ -120,10 +134,7 @@ def _send_signup_emails(
         core.send_email(
             email,
             "Unchained — You're in!",
-            f"<p>Hi {display},</p>"
-            "<p>Your account has been approved! "
-            '<a href="https://api.unchainedsky.com/chat">Visit unchainedsky.com/chat</a> to get started.</p>'
-            "<p>— The Unchained Team</p>",
+            _approved_account_email_body(display),
         )
     elif is_trial_branch:
         core.send_email(
@@ -1796,10 +1807,7 @@ async def handle_admin_approve(request: web.Request) -> web.Response:
     core.send_email(
         email,
         "Unchained — You're in!",
-        f"<p>Hi {user.get('name') or email},</p>"
-        "<p>Your account has been approved! "
-        '<a href="https://api.unchainedsky.com/chat">Visit unchainedsky.com/chat</a> to get started.</p>'
-        "<p>— The Unchained Team</p>",
+        _approved_account_email_body(user.get("name") or email),
     )
     return web.json_response({"ok": True, "user": user})
 
