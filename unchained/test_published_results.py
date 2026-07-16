@@ -81,6 +81,11 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
         sitemap = asyncio.run(web.handle_sitemap_xml(None))
         self.assertIn(f"https://unchainedsky.com/r/{slug}", sitemap.text)
 
+    def test_static_growth_pages_are_in_sitemap(self):
+        sitemap = asyncio.run(web.handle_sitemap_xml(None))
+        self.assertIn("https://unchainedsky.com/chrome-tax", sitemap.text)
+        self.assertIn("https://unchainedsky.com/mcp-guide", sitemap.text)
+
     def test_rejection_deletes_pending_but_not_approved_result(self):
         pending_slug = self._publish("Compare pending deletion behavior")
         self.assertTrue(published_results.reject_result(pending_slug, "review"))

@@ -285,6 +285,15 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('<a href="/unbrowser">unbrowser</a>', web.LANDING_HTML)
         self.assertIn('<a href="/chrome-tax">Why lighter?</a>', web.LANDING_HTML)
 
+    def test_mcp_guide_has_search_and_social_metadata(self):
+        html = web._build_mcp_guide_html()
+        self.assertIn(
+            '<link rel="canonical" href="https://unchainedsky.com/mcp-guide">',
+            html,
+        )
+        self.assertIn('<meta name="description"', html)
+        self.assertIn('<meta property="og:title"', html)
+
     def test_landing_developer_navigation_keyboard_contract(self):
         self.assertIn("function setLandingDeveloperMenuOpen(open,focusFirst)", web.LANDING_HTML)
         self.assertIn("event.key==='ArrowDown'", web.LANDING_HTML)

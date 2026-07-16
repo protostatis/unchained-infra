@@ -261,12 +261,17 @@ def _trace(event: str, **fields):
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
     "/unbrowser",
+    "/chrome-tax",
     "/mcp-guide",
     "/mcp",
     "/privacy",
     "/privacy-policy",
     "/data-deletion",
     "/case-study/zillow-rental",
+    "/use/apartment-hunting",
+    "/use/flight-comparison",
+    "/use/competitor-monitoring",
+    "/use/price-tracking",
     "/trial",
     "/local",
     "/setup",
@@ -278,6 +283,8 @@ _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/chat-claude",
     "/app",
     "/scheduler",
+    "/labs/research-desk",
+    "/cli",
     "/admin",
 }
 _ANALYTICS_INLINE_GSI_ROUTES = {
@@ -1552,11 +1559,13 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/chrome-tax", "0.8", "monthly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
         ("https://unchainedsky.com/use/flight-comparison", "0.8", "monthly"),
         ("https://unchainedsky.com/use/competitor-monitoring", "0.8", "monthly"),
         ("https://unchainedsky.com/use/price-tracking", "0.8", "monthly"),
         ("https://unchainedsky.com/mcp", "0.7", "monthly"),
+        ("https://unchainedsky.com/mcp-guide", "0.7", "monthly"),
         ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
         ("https://unchainedsky.com/privacy", "0.3", "yearly"),
     ]
@@ -2032,6 +2041,13 @@ def _build_mcp_guide_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCP Docs | Unchained</title>
+  <meta name="description" content="Connect AI agents to Unchained browser automation over MCP with local-browser setup and integration guidance.">
+  <link rel="canonical" href="https://unchainedsky.com/mcp-guide">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://unchainedsky.com/mcp-guide">
+  <meta property="og:title" content="MCP Browser Automation Docs | Unchained">
+  <meta property="og:description" content="Local-browser setup and integration guidance for connecting AI agents to Unchained over MCP.">
+  <meta property="og:image" content="https://unchainedsky.com/og-image.png">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>

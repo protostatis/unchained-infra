@@ -58,8 +58,50 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertIn("session_id", event_cols)
             self.assertIn("route_effective", event_cols)
             self.assertIn("latency_ms", event_cols)
+            self.assertIn("referrer_host", event_cols)
+            self.assertIn("user_agent_hash", event_cols)
+            self.assertIn("user_agent_class", event_cols)
+            self.assertIn("is_bot", event_cols)
             self.assertIn("session_id", session_cols)
             self.assertIn("visitor_id", session_cols)
+
+    def test_track_records_privacy_safe_traffic_quality_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            req = _req(
+                "/unbrowser",
+                "1.2.3.4",
+                "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+            )
+            req.headers["Referer"] = "https://github.com/protostatis/unbrowser"
+            self.assertTrue(store.track("page_view", request=req, route="/unbrowser"))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT referrer_host, user_agent_hash, user_agent_class, is_bot "
+                "FROM analytics_events"
+            ).fetchone()
+            conn.close()
+
+            self.assertEqual(row[0], "github.com")
+            self.assertRegex(row[1], r"^ua:[0-9a-f]{20}$")
+            self.assertEqual(row[2], "chrome_like")
+            self.assertEqual(row[3], 0)
+
+    def test_track_flags_declared_automation_user_agents(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            req = _req("/first-look", "1.2.3.4", "ExampleCrawler/1.0")
+            self.assertTrue(store.track("page_view", request=req, route="/first-look"))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT user_agent_class, is_bot FROM analytics_events"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row, ("declared_automation", 1))
 
     def test_track_dedupe(self):
         with tempfile.TemporaryDirectory() as td:
@@ -259,6 +301,21 @@ class TestAnalyticsStore(unittest.TestCase):
 
 
 class TestWebAnalyticsContext(unittest.TestCase):
+    def test_growth_and_seo_routes_are_page_view_allowlisted(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        expected = {
+            "/chrome-tax",
+            "/use/apartment-hunting",
+            "/use/flight-comparison",
+            "/use/competitor-monitoring",
+            "/use/price-tracking",
+            "/labs/research-desk",
+            "/cli",
+        }
+        self.assertTrue(expected.issubset(web._ANALYTICS_PAGE_VIEW_ROUTES))
+
     def test_track_event_uses_request_analytics_headers(self):
         os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
         import web
