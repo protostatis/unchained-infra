@@ -55,6 +55,8 @@ from nudge import (
     _is_base64_png_blob,
     _extract_domain,
     _tool_progress_sig,
+    _summarize_structured_tool_result,
+    _extract_tool_result_text,
     LOOP_SHORT_CIRCUIT_REPEAT_THRESHOLD,
 )
 
@@ -71,6 +73,80 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
+
+
+async def _emit_cli_tool_result(
+    emit,
+    text: str,
+    *,
+    is_error: bool = False,
+    visible: bool = True,
+) -> None:
+    """Emit one ``tool_result`` event for a completed tool call.
+
+    A completed tool call always emits a result event so the UI action step
+    leaves its "running" state. ``text`` may be empty for structured results
+    (e.g. WebSearch); in that case a hidden ``"completed"`` placeholder is sent
+    so the step still resolves without showing meaningless content.
+    """
+    text = text or ""
+    is_screenshot = False
+    screenshot_data = None
+    screenshot_oversized = False
+    if "saved:" in text and "screenshot captured" in text:
+        # cdp_tool.py saves base64 to temp file; read it for the UI
+        try:
+            sc_path = text.split("saved:")[1].rstrip("]").strip()
+            screenshot_data, screenshot_oversized = read_inline_screenshot(sc_path)
+            is_screenshot = _is_base64_png_blob(screenshot_data)
+        except Exception:
+            pass
+    elif _is_base64_png_blob(text):
+        is_screenshot = True
+        screenshot_data = text
+
+    if is_error:
+        await emit({
+            "type": "tool_result",
+            "name": "result",
+            "data": (text or "tool failed")[:3000],
+            "is_screenshot": False,
+            "visible": visible or bool(text),
+        })
+    elif screenshot_oversized:
+        await emit({
+            "type": "tool_result",
+            "name": "result",
+            "data": SCREENSHOT_OMITTED_MESSAGE,
+            "is_screenshot": False,
+            "screenshot_omitted": True,
+            "visible": True,
+        })
+    elif is_screenshot and screenshot_data:
+        await emit({
+            "type": "tool_result",
+            "name": "result",
+            "data": screenshot_data,
+            "is_screenshot": True,
+            "visible": True,
+        })
+    elif text:
+        await emit({
+            "type": "tool_result",
+            "name": "result",
+            "data": text[:3000],
+            "is_screenshot": False,
+            "visible": visible,
+        })
+    else:
+        # Completed but no displayable payload — keep the step from freezing.
+        await emit({
+            "type": "tool_result",
+            "name": "result",
+            "data": "completed",
+            "is_screenshot": False,
+            "visible": False,
+        })
 
 
 def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
@@ -2184,80 +2260,27 @@ async def handle_message_claude(
                     return
 
         elif etype == "user":
-            # Tool result — check both Bash stdout and content blocks
-            result_text = ""
-            tool_result = event.get("tool_use_result", {})
-            if isinstance(tool_result, str):
-                result_text = tool_result
-            elif isinstance(tool_result, dict):
-                result_text = tool_result.get("stdout", "")
-            if not result_text:
-                # WebFetch/WebSearch/other tools return content blocks
-                msg = event.get("message", {})
-                for block in msg.get("content", []):
-                    if block.get("type") == "tool_result":
-                        content = block.get("content", "")
-                        if isinstance(content, str):
-                            result_text = content
-                        elif isinstance(content, list):
-                            result_text = " ".join(
-                                b.get("text", "") for b in content
-                                if b.get("type") == "text"
-                            )
-                        if result_text:
-                            break
-            if result_text:
-                # Check if this is a screenshot result with temp file
-                is_screenshot = False
-                screenshot_data = None
-                screenshot_oversized = False
-                if "saved:" in result_text and "screenshot captured" in result_text:
-                    # cdp_tool.py saves base64 to temp file; read it for the UI
-                    try:
-                        sc_path = result_text.split("saved:")[1].rstrip("]").strip()
-                        screenshot_data, screenshot_oversized = read_inline_screenshot(sc_path)
-                        is_screenshot = _is_base64_png_blob(screenshot_data)
-                    except Exception:
-                        pass
-                elif _is_base64_png_blob(result_text):
-                    is_screenshot = True
-                    screenshot_data = result_text
+            # Tool result — check both Bash stdout and content blocks.
+            # A completed tool call must always emit a tool_result event so the
+            # UI action step leaves its "running" state. Emission is driven by
+            # the presence of a result block, NOT by whether we extracted
+            # displayable text (structured results like WebSearch carry none).
+            tracked_first_result = False
 
-                if screenshot_oversized:
-                    await emit({
-                        "type": "tool_result",
-                        "name": "result",
-                        "data": SCREENSHOT_OMITTED_MESSAGE,
-                        "is_screenshot": False,
-                        "screenshot_omitted": True,
-                        "visible": True,
-                    })
-                elif is_screenshot and screenshot_data:
-                    await emit({
-                        "type": "tool_result",
-                        "name": "result",
-                        "data": screenshot_data,
-                        "is_screenshot": True,
-                        "visible": True,
-                    })
-                else:
-                    await emit({
-                        "type": "tool_result",
-                        "name": "result",
-                        "data": result_text[:3000],
-                        "is_screenshot": False,
-                    })
-
-                # Stagnation tracking: build progress signature from last pending tool call
-                if pending_tool_calls:
+            async def _track_and_emit(text, *, is_error=False, visible=True):
+                nonlocal tracked_first_result
+                await _emit_cli_tool_result(
+                    emit, text, is_error=is_error, visible=visible
+                )
+                # Stagnation tracking mirrors the original behavior: record once
+                # per user message against the last pending tool call (the Bash
+                # branch carries navigation/find context of interest).
+                if not tracked_first_result and pending_tool_calls:
+                    tracked_first_result = True
                     last_tc = pending_tool_calls[-1]
-                    step_sig = _tool_progress_sig(
-                        last_tc["name"],
-                        last_tc["input"],
-                        result_text[:1500],
+                    turn_step_sigs.append(
+                        _tool_progress_sig(last_tc["name"], last_tc["input"], text[:1500])
                     )
-                    turn_step_sigs.append(step_sig)
-                    # Track --text --find queries for find-repetition detection
                     if last_tc["name"] == "Bash":
                         cmd_str = last_tc["input"].get("command", "")
                         if "--text --find" in cmd_str:
@@ -2268,13 +2291,30 @@ async def handle_message_claude(
                                     query = parts[1].strip().split()[0].lower()
                                 if query:
                                     turn_find_queries.append(query)
-
                     nudge_state.live_tool_log.append({
                         "turn": turn,
                         "tool": last_tc["name"],
                         "args": last_tc["input"],
-                        "output_preview": result_text[:3000],
+                        "output_preview": text[:3000],
                     })
+
+            tool_result = event.get("tool_use_result", {})
+            if isinstance(tool_result, str) and tool_result:
+                await _track_and_emit(tool_result)
+            elif isinstance(tool_result, dict) and tool_result.get("stdout"):
+                await _track_and_emit(tool_result.get("stdout", ""))
+            else:
+                # WebFetch/WebSearch/other tools return content blocks. Emit one
+                # completion per tool_result block so parallel results in a
+                # single user message all resolve (not just the first).
+                msg = event.get("message", {})
+                for block in msg.get("content", []):
+                    if block.get("type") != "tool_result":
+                        continue
+                    content = block.get("content", "")
+                    text = _extract_tool_result_text(content)
+                    is_error = bool(block.get("is_error"))
+                    await _track_and_emit(text, is_error=is_error, visible=bool(text))
 
         elif etype == "result":
             response = event.get("result", "")
