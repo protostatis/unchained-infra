@@ -229,7 +229,32 @@ async def _write_turn_sse(response: web.StreamResponse, event: dict) -> None:
     """Write one journal item with its monotonic sequence as the SSE id."""
     seq = int(event.get("seq", 0) or 0)
     payload = json.dumps(event, separators=(",", ":"))
-    await response.write(f"id: {seq}\ndata: {payload}\n\n".encode())
+    if _SSE_DEBUG:
+        _core()._trace(
+            "chat.msg.sse_write",
+            req_id=str(event.get("req_id") or ""),
+            session_id=str(event.get("session_id") or ""),
+            type=str(event.get("type") or ""),
+            seq=seq,
+        )
+    try:
+        await response.write(f"id: {seq}\ndata: {payload}\n\n".encode())
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        raise
+    except Exception as _write_err:
+        # A non-socket write failure (closed transport, etc.) drops the stream
+        # before `done` reaches the browser — the "UI stops updating until
+        # refresh" symptom. Record exactly which event failed so the freeze is
+        # diagnosable, then re-raise so the journal loop's finally cleans up.
+        _core()._trace(
+            "chat.msg.sse_write_failed",
+            req_id=str(event.get("req_id") or ""),
+            session_id=str(event.get("session_id") or ""),
+            type=str(event.get("type") or ""),
+            seq=seq,
+            error=_safe_exc_name(_write_err),
+        )
+        raise
 
 
 async def _stream_turn_journal(
@@ -1863,14 +1888,6 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 )
 
             sse = f"data: {json.dumps(evt)}\n\n"
-            if _SSE_DEBUG:
-                core._trace(
-                    "chat.msg.sse_write",
-                    req_id=req_id,
-                    session_id=session_id,
-                    type=str(evt.get("type") or ""),
-                    seq=last_stream_event_at,
-                )
             try:
                 await resp.write(sse.encode())
             except (ConnectionResetError, BrokenPipeError):
@@ -1878,22 +1895,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     "client_disconnected", error_code="client_disconnected"
                 )
                 break
-            except Exception as _write_err:
-                # A non-socket write failure (e.g. closed transport) drops the
-                # stream before `done` reaches the browser, producing the
-                # "UI stops updating until refresh" symptom. Record exactly
-                # which event failed so the freeze is diagnosable, then stop
-                # gracefully instead of propagating and masking the cause.
-                record_first_look_terminal(
-                    "error", error_code="server_stream_write_error"
-                )
-                core._trace(
-                    "chat.msg.sse_write_failed",
-                    req_id=req_id,
-                    session_id=session_id,
-                    type=str(evt.get("type") or ""),
-                    error=_safe_exc_name(_write_err),
-                )
+            except Exception:
+                record_first_look_terminal("error", error_code="server_stream_error")
                 break
 
             # Broadcast to overlay copilot subscribers

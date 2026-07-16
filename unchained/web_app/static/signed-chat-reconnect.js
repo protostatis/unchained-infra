@@ -239,7 +239,11 @@
     }
     if (evt.type === 'tool_result') {
       const tool = takeTool(evt);
-      if (tool) setToolResult(tool, evt.data, evt.is_screenshot, evt.visible);
+      // Journal events may have their body omitted (oversized/redacted), so
+      // evt.data can be undefined. A missing body must not throw inside
+      // setToolResult (parseIntelBars(undefined)) and break the replay — that
+      // would leave an interrupted turn unrecoverable until a manual refresh.
+      if (tool) setToolResult(tool, evt.data == null ? '' : evt.data, !!evt.is_screenshot, evt.visible);
       return;
     }
     if (evt.type === 'text') {

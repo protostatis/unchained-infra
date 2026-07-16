@@ -10346,6 +10346,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -10354,6 +10355,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -10490,77 +10492,6 @@ async function doCancel() {
   if (_cancelCtrl) _cancelCtrl.abort();
 }
 
-// Self-heal after a chat SSE stream ends without a terminal `done` event.
-// Fetches the turn journal from the server and re-renders any events that were
-// missed, so an interrupted turn (browser backgrounded, network blip, server
-// write error) resolves without the user manually refreshing the page.
-async function _recoverInterruptedTurn(bubble, {session_id, req_id}) {
-  if (!session_id) return;
-  // Show a transient "reconnecting" notice; removed once replay lands.
-  let notice = bubble.querySelector('.turn-recovery');
-  if (!notice) {
-    notice = document.createElement('div');
-    notice.className = 'turn-recovery';
-    notice.style.cssText = 'font-size:12px;color:#dcc58a;opacity:.85;margin:4px 0';
-    bubble.appendChild(notice);
-  }
-  notice.textContent = 'Response interrupted — reconnecting…';
-
-  let journal;
-  try {
-    const qs = new URLSearchParams({session_id, after: '0'});
-    if (req_id) qs.set('req_id', req_id);
-    const rr = await fetch('/web/chat/events?' + qs.toString());
-    if (!rr.ok) return;
-    journal = await rr.text();
-  } catch(e) {
-    return;
-  }
-
-  // Reset rendered action state so replay rebuilds cleanly (no duplicates).
-  bubble.querySelectorAll('.action-group, .action-standalone, .turn-recovery').forEach(el => el.remove());
-  bubble._rawText = '';
-  _currentGroup = null;
-  _currentGroupDot = null;
-  _currentGroupSteps = 0;
-  let currentTool = null;
-  const dispatch = (evt) => {
-    if (evt.type === 'tool_start') {
-      currentTool = addToolCall(bubble, evt.name, evt.input);
-    } else if (evt.type === 'tool_result') {
-      if (currentTool) { setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible); currentTool = null; }
-    } else if (evt.type === 'text') {
-      appendText(bubble, evt.data);
-    } else if (evt.type === 'cancelled') {
-      appendText(bubble, '[Cancelled by user]');
-    } else if (evt.type === 'error') {
-      appendText(bubble, 'Error: ' + evt.data);
-    } else if (evt.type === 'done') {
-      _finalizeGroup();
-      document.getElementById('agent-bar').classList.remove('active');
-      _turnCount = 0;
-      _navTrail = [];
-      renderNavTrail();
-    }
-  };
-
-  let buf = journal;
-  let nl;
-  while ((nl = buf.indexOf('\n\n')) !== -1) {
-    const chunk = buf.slice(0, nl);
-    buf = buf.slice(nl + 2);
-    for (const line of chunk.split('\n')) {
-      if (!line.startsWith('data: ')) continue;
-      const raw = line.slice(6);
-      let evt;
-      try { evt = JSON.parse(raw); } catch { continue; }
-      if (evt.type) dispatch(evt);
-    }
-  }
-  if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
-  scrollToBottom();
-}
-
 async function doSend() {
   if (sending || newChatPending) return;
   if (!(await syncTrialSessionFromStorage(true))) return;
@@ -10644,57 +10575,6 @@ async function doSend() {
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    let gotDone = false;
-    let lastReqId = '';
-
-    // Shared dispatch so the live stream and the interruption-replay path
-    // render events identically. Returns false to stop the live loop early
-    // (e.g. a terminal error that already cancelled the reader).
-    const dispatch = (evt) => {
-      if (evt.req_id) lastReqId = evt.req_id;
-      if (evt.type === 'tool_start') {
-        currentTool = addToolCall(bubble, evt.name, evt.input);
-      } else if (evt.type === 'tool_result') {
-        if (currentTool) {
-          setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
-          currentTool = null;
-        }
-      } else if (evt.type === 'text') {
-        appendText(bubble, evt.data);
-      } else if (evt.type === 'model_forced') {
-        if (Array.isArray(evt.allowed_models) && evt.allowed_models.length > 0) {
-          _POST_CAP_ALLOWED_MODELS = evt.allowed_models
-            .map(v => (v || '').trim())
-            .filter(Boolean);
-        }
-        if (evt.budget && typeof evt.budget === 'object') {
-          _openrouterUsage = evt.budget;
-        } else if (!_openrouterUsage) {
-          _openrouterUsage = { capped: true };
-        } else {
-          _openrouterUsage.capped = true;
-        }
-        if (evt.model && _modelOptionExists(evt.model)) {
-          document.getElementById('modelsel').value = evt.model;
-          _persistTrialModel(evt.model);
-        }
-        _applyOpenRouterCapUi();
-        _syncCustomModelUi();
-      } else if (evt.type === 'cancelled') {
-        appendText(bubble, '[Cancelled by user]');
-      } else if (evt.type === 'error') {
-        appendText(bubble, 'Error: ' + evt.data);
-        return false;
-      } else if (evt.type === 'done') {
-        _finalizeGroup();
-        document.getElementById('agent-bar').classList.remove('active');
-        _turnCount = 0;
-        _navTrail = [];
-        renderNavTrail();
-        gotDone = true;
-      }
-      return true;
-    };
 
     while (true) {
       const {done, value} = await reader.read();
@@ -10711,21 +10591,50 @@ async function doSend() {
           const raw = line.slice(6);
           let evt;
           try { evt = JSON.parse(raw); } catch { continue; }
-          if (!dispatch(evt)) {
+
+          if (evt.type === 'tool_start') {
+            currentTool = addToolCall(bubble, evt.name, evt.input);
+          } else if (evt.type === 'tool_result') {
+            if (currentTool) {
+              setToolResult(currentTool, evt.data, evt.is_screenshot, evt.visible);
+              currentTool = null;
+            }
+          } else if (evt.type === 'text') {
+            appendText(bubble, evt.data);
+          } else if (evt.type === 'model_forced') {
+            if (Array.isArray(evt.allowed_models) && evt.allowed_models.length > 0) {
+              _POST_CAP_ALLOWED_MODELS = evt.allowed_models
+                .map(v => (v || '').trim())
+                .filter(Boolean);
+            }
+            if (evt.budget && typeof evt.budget === 'object') {
+              _openrouterUsage = evt.budget;
+            } else if (!_openrouterUsage) {
+              _openrouterUsage = { capped: true };
+            } else {
+              _openrouterUsage.capped = true;
+            }
+            if (evt.model && _modelOptionExists(evt.model)) {
+              document.getElementById('modelsel').value = evt.model;
+              _persistTrialModel(evt.model);
+            }
+            _applyOpenRouterCapUi();
+            _syncCustomModelUi();
+          } else if (evt.type === 'cancelled') {
+            appendText(bubble, '[Cancelled by user]');
+          } else if (evt.type === 'error') {
+            appendText(bubble, 'Error: ' + evt.data);
             try { await reader.cancel(); } catch(e) {}
             return;
+          } else if (evt.type === 'done') {
+            _finalizeGroup();
+            document.getElementById('agent-bar').classList.remove('active');
+            _turnCount = 0;
+            _navTrail = [];
+            renderNavTrail();
           }
         }
       }
-    }
-
-    // The stream ended without a terminal `done` event. This is the
-    // "UI stops updating until I refresh" symptom: the server turn likely
-    // completed but the SSE connection dropped (browser backgrounded, network
-    // blip, or a server write error). Self-heal by replaying the turn journal
-    // from the server instead of leaving the user to manually refresh.
-    if (!gotDone && !_cancelCtrl?.signal?.aborted) {
-      await _recoverInterruptedTurn(bubble, {session_id: sessionId, req_id: lastReqId});
     }
   } catch(e) {
     const thinking = bubble.querySelector('.thinking');
@@ -11896,6 +11805,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -11904,6 +11814,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -14394,6 +14305,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -14402,6 +14314,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -17043,6 +16956,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -17051,6 +16965,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);

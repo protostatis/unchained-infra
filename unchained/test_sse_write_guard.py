@@ -1,12 +1,16 @@
-"""Regression test for the server-side SSE write guard.
+"""Regression test for server-side SSE write observability on the real
+signed-in chat path.
 
-Covers:
-- _safe_exc_name returns a short class name (no message/PII).
-- _SSE_DEBUG reflects UNCHAINED_SSE_DEBUG env (default off).
-- A non-socket write failure in the SSE loop is caught and recorded as
-  server_stream_write_error instead of silently dropping the turn or
-  propagating an unhandled exception (the "UI stops updating until refresh"
-  freeze root cause on the server side).
+The signed-in chat turn is served by `_stream_turn_journal`, which writes
+events through `_write_turn_sse`. That is the path that delivers `done` to
+the browser; when its write fails (non-socket transport error) the UI can
+go silent until refresh. This test asserts that `_write_turn_sse`:
+
+- traces each written event when UNCHAINED_SSE_DEBUG=1
+  (chat.msg.sse_write), making the freeze diagnosable;
+- on a non-socket write failure traces chat.msg.sse_write_failed with the
+  event type/seq and a safe exception name, then re-raises so the journal
+  loop's finally cleans up (instead of silently dropping the turn).
 """
 
 import asyncio
@@ -20,101 +24,71 @@ import web_app.handlers.chat_stream as cs
 
 class SafeExcNameTest(unittest.TestCase):
     def test_safe_exc_name(self):
-        self.assertEqual(cs._safe_exc_name(RuntimeError("secret detail")), "RuntimeError")
+        self.assertEqual(cs._safe_exc_name(RuntimeError("secret")), "RuntimeError")
         self.assertEqual(cs._safe_exc_name(ValueError()), "ValueError")
 
-    def test_sse_debug_default_off(self):
-        # Ensure default (no env) is off.
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("UNCHAINED_SSE_DEBUG", None)
-            importlib.reload(cs)
-            self.assertFalse(cs._SSE_DEBUG)
-
-    def test_sse_debug_on(self):
+    def test_sse_debug_toggle(self):
         with mock.patch.dict(os.environ, {"UNCHAINED_SSE_DEBUG": "1"}):
             importlib.reload(cs)
             self.assertTrue(cs._SSE_DEBUG)
-        # restore default for other tests
+        os.environ.pop("UNCHAINED_SSE_DEBUG", None)
+        importlib.reload(cs)
+        self.assertFalse(cs._SSE_DEBUG)
+
+
+class WriteTurnSseTest(unittest.TestCase):
+    def test_non_socket_write_error_is_traced_and_raised(self):
+        traced = []
+
+        class FakeCore:
+            def _trace(self, event, **fields):
+                traced.append((event, fields))
+
+        class FailingResp:
+            async def write(self, b):
+                raise RuntimeError("transport closed mid-write")
+
+        # Route _core() to our fake so _trace is captured.
+        with mock.patch.object(cs, "_core", return_value=FakeCore()):
+            event = {
+                "type": "tool_result", "seq": 2, "req_id": "r1",
+                "session_id": "s1", "data": "completed", "name": "result",
+            }
+            with self.assertRaises(RuntimeError):
+                asyncio.run(cs._write_turn_sse(FailingResp(), event))
+
+        failed = [t for t in traced if t[0] == "chat.msg.sse_write_failed"]
+        self.assertEqual(len(failed), 1, "expected one sse_write_failed trace")
+        self.assertEqual(failed[0][1]["type"], "tool_result")
+        self.assertEqual(failed[0][1]["seq"], 2)
+        self.assertEqual(failed[0][1]["error"], "RuntimeError")
+
+    def test_successful_write_traced_when_debug_on(self):
+        traced = []
+
+        class FakeCore:
+            def _trace(self, event, **fields):
+                traced.append((event, fields))
+
+        class OkResp:
+            def __init__(self):
+                self.written = 0
+
+            async def write(self, b):
+                self.written += 1
+
+        with mock.patch.dict(os.environ, {"UNCHAINED_SSE_DEBUG": "1"}):
+            importlib.reload(cs)
+            with mock.patch.object(cs, "_core", return_value=FakeCore()):
+                event = {"type": "done", "seq": 3, "req_id": "r1", "session_id": "s1"}
+                asyncio.run(cs._write_turn_sse(OkResp(), event))
         os.environ.pop("UNCHAINED_SSE_DEBUG", None)
         importlib.reload(cs)
 
-
-class SseWriteGuardTest(unittest.TestCase):
-    def test_non_socket_write_error_is_recorded_not_raised(self):
-        """Simulate the SSE write loop's per-event write failing on a non-socket
-        error. The loop must break (not raise) and record server_stream_write_error.
-        """
-        recorded = {}
-
-        def fake_record_terminal(outcome, *, error_code=""):
-            recorded["outcome"] = outcome
-            recorded["error_code"] = error_code
-
-        resp = _BOUND_RESP
-
-        async def run():
-            # Build a tiny queue: tool_start, (failing) tool_result, done
-            q = asyncio.Queue()
-            for evt in [
-                {"type": "tool_start", "name": "websearch", "input": "q"},
-                {"type": "tool_result", "name": "result", "data": "completed",
-                 "is_screenshot": False, "visible": False},
-                {"type": "done", "session_id": "s-x"},
-            ]:
-                q.put_nowait(evt)
-
-            # Replicate the exact write-guard branch from chat_stream.py so this
-            # test fails if that branch ever starts raising again.
-            stream_completed = False
-            raised = None
-            try:
-                while True:
-                    try:
-                        evt = q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    sse = "data: {}\n\n".format("{}")
-                    try:
-                        await resp.write(sse.encode())
-                    except (ConnectionResetError, BrokenPipeError):
-                        fake_record_terminal("client_disconnected",
-                                             error_code="client_disconnected")
-                        break
-                    except Exception as _write_err:
-                        fake_record_terminal("error",
-                                             error_code="server_stream_write_error")
-                        cs._safe_exc_name(_write_err)  # mirrors trace payload
-                        break
-                    if evt.get("type") == "done":
-                        stream_completed = True
-                        break
-            except Exception as e:  # pragma: no cover
-                raised = e
-            return raised, stream_completed
-
-        raised, stream_completed = asyncio.run(run())
-        self.assertIsNone(raised, "write guard must not propagate the exception")
-        self.assertEqual(recorded.get("error_code"), "server_stream_write_error")
-        self.assertFalse(stream_completed)
-
-
-# Shared fake response injected into the test above.
-_BOUND_RESP = None
-
-
-def setUpModule():
-    global _BOUND_RESP
-
-    class _Resp:
-        def __init__(self):
-            self.writes = 0
-
-        async def write(self, b):
-            self.writes += 1
-            if self.writes == 2:
-                raise RuntimeError("transport closed mid-write")
-
-    _BOUND_RESP = _Resp()
+        writes = [t for t in traced if t[0] == "chat.msg.sse_write"]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][1]["type"], "done")
+        self.assertEqual(writes[0][1]["seq"], 3)
 
 
 if __name__ == "__main__":
