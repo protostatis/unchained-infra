@@ -1200,8 +1200,8 @@ h1{font-size:clamp(44px,8vw,104px);line-height:.88;letter-spacing:-.06em;margin:
       <h1>Web access for agents. No <a href="/chrome-tax" class="chrome-tax-link">Chrome tax</a>.</h1>
       <p class="lede">unbrowser is a lightweight MCP browser for LLM agents: one native binary, stateful sessions, bounded JavaScript, forms, cookies, and low-token BlockMaps before you escalate to a full Unchained Chrome session.</p>
       <div class="actions">
-        <a class="btn" href="/go/unbrowser-github" data-acquisition-link>Install locally</a>
-        <a class="btn secondary" href="/go/unbrowser-smithery" data-acquisition-link>Open on Smithery</a>
+        <a class="btn" href="#live-demo">Try the live scan</a>
+        <a class="btn secondary" href="/go/unbrowser-github" data-acquisition-link>Install locally</a>
       </div>
     </div>
     <aside class="artifact" aria-label="unbrowser run profile">
@@ -1275,7 +1275,7 @@ ssrf_guard: enabled</pre>
       <p>The hosted Streamable HTTP MCP endpoint is shared infrastructure for directory scanners, Smithery, Glama, and quick public-page smoke tests.</p>
       <p>Do not send private cookies, secrets, or authenticated browsing tasks through it. Install the local binary for production workflows.</p>
       <div class="directory" aria-label="Directory links">
-        <a class="chip" href="https://smithery.ai/servers/protostatis-dev/unbrowser" rel="me">Smithery listing</a>
+        <a class="chip" href="/go/unbrowser-smithery" data-acquisition-link>Smithery listing</a>
         <a class="chip" href="https://glama.ai/mcp/servers/protostatis/unbrowser">Glama listing</a>
         <a class="chip" href="https://github.com/protostatis/unbrowser">GitHub repo</a>
         <a class="chip" href="https://unchainedsky.com/unbrowser-mcp">Hosted MCP endpoint</a>

@@ -373,22 +373,33 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
 
     def test_unbrowser_page_links_public_directories(self):
-        self.assertIn("https://smithery.ai/servers/protostatis-dev/unbrowser", web.UNBROWSER_PAGE_HTML)
+        self.assertIn(
+            '<link rel="me" href="https://smithery.ai/servers/protostatis-dev/unbrowser">',
+            web.UNBROWSER_PAGE_HTML,
+        )
         self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
 
-    def test_unbrowser_hero_ctas_use_fixed_server_owned_redirects(self):
+    def test_unbrowser_hero_ctas_are_demo_first_with_measured_install(self):
         self.assertIn(
-            'href="/go/unbrowser-github" data-acquisition-link>Install locally</a>',
+            '<a class="btn" href="#live-demo">Try the live scan</a>',
             web.UNBROWSER_PAGE_HTML,
         )
         self.assertIn(
-            'href="/go/unbrowser-smithery" data-acquisition-link>Open on Smithery</a>',
+            '<section class="demo" id="live-demo"',
             web.UNBROWSER_PAGE_HTML,
         )
-        self.assertNotIn(
-            'href="/go/unbrowser-smithery" rel="me"',
+        self.assertIn(
+            '<a class="btn secondary" href="/go/unbrowser-github" data-acquisition-link>Install locally</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            '<a class="chip" href="/go/unbrowser-smithery" data-acquisition-link>Smithery listing</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            "new EventSource(withAcquisition('/web/unbrowser/stream?scenario='",
             web.UNBROWSER_PAGE_HTML,
         )
         self.assertIn("['utm_campaign',96]", web.UNBROWSER_PAGE_HTML)
