@@ -41,6 +41,16 @@ _FIRST_LOOK_TERMINAL_OUTCOMES = frozenset(
     {"completed", "error", "cancelled", "client_disconnected"}
 )
 
+# Opt-in verbose SSE tracing. Off by default so production logs stay quiet;
+# set UNCHAINED_SSE_DEBUG=1 to log every event forwarded to the browser (this
+# is what makes the "UI stops updating until refresh" freeze diagnosable).
+_SSE_DEBUG = os.environ.get("UNCHAINED_SSE_DEBUG", "") == "1"
+
+
+def _safe_exc_name(exc: BaseException) -> str:
+    """Return a short, safe class name for an exception (no message/PII)."""
+    return type(exc).__name__
+
 
 def _first_look_search_attribution(body: dict) -> dict[str, str]:
     """Return only the exact bounded SearchAgentSky result handoff triad."""
@@ -1853,6 +1863,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 )
 
             sse = f"data: {json.dumps(evt)}\n\n"
+            if _SSE_DEBUG:
+                core._trace(
+                    "chat.msg.sse_write",
+                    req_id=req_id,
+                    session_id=session_id,
+                    type=str(evt.get("type") or ""),
+                    seq=last_stream_event_at,
+                )
             try:
                 await resp.write(sse.encode())
             except (ConnectionResetError, BrokenPipeError):
@@ -1860,8 +1878,22 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     "client_disconnected", error_code="client_disconnected"
                 )
                 break
-            except Exception:
-                record_first_look_terminal("error", error_code="server_stream_error")
+            except Exception as _write_err:
+                # A non-socket write failure (e.g. closed transport) drops the
+                # stream before `done` reaches the browser, producing the
+                # "UI stops updating until refresh" symptom. Record exactly
+                # which event failed so the freeze is diagnosable, then stop
+                # gracefully instead of propagating and masking the cause.
+                record_first_look_terminal(
+                    "error", error_code="server_stream_write_error"
+                )
+                core._trace(
+                    "chat.msg.sse_write_failed",
+                    req_id=req_id,
+                    session_id=session_id,
+                    type=str(evt.get("type") or ""),
+                    error=_safe_exc_name(_write_err),
+                )
                 break
 
             # Broadcast to overlay copilot subscribers
