@@ -647,10 +647,10 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Prefilled, not run.", research_html)
         self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research_html)
         self.assertIn('const FIRST_LOOK_TASK = "research";', research_html)
-        self.assertIn("first_look_run_complete", research_html)
         self.assertIn("first_look_complete_trial", research_html)
         self.assertIn("first_look_complete_install", research_html)
-        self.assertIn("'/web/analytics/event'", research_html)
+        self.assertNotIn("trackFirstLookEvent", research_html)
+        self.assertNotIn("first_look_run_complete", research_html)
         self.assertIn("firstLookAttributionSuffix", research_html)
         self.assertIn("applyFirstLookAttribution", research_html)
         self.assertIn("first_look_trial", research_html)
@@ -681,7 +681,9 @@ class TestWebTemplateContracts(unittest.TestCase):
             search_result_html,
         )
         self.assertIn("params.set('from_result', FIRST_LOOK_FROM_RESULT)", search_result_html)
-        self.assertIn("meta.from_result = FIRST_LOOK_FROM_RESULT", search_result_html)
+        self.assertIn("ref: FIRST_LOOK_REF", search_result_html)
+        self.assertIn("task: FIRST_LOOK_TASK", search_result_html)
+        self.assertIn("from_result: FIRST_LOOK_FROM_RESULT", search_result_html)
 
         invalid_result_html = _build_first_look_preview_html(
             prompt_limit=5,

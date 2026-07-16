@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import time
@@ -315,6 +316,91 @@ class _FakeRequest:
 
 
 class TestAnalyticsHandlers(unittest.IsolatedAsyncioTestCase):
+    async def test_single_ingest_rejects_server_only_first_look_events_without_persistence(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+        from web_app.handlers import analytics as analytics_handlers
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                for event in (
+                    "first_look_run_accepted",
+                    "FIRST_LOOK_RUN_REJECTED",
+                    "first look run terminal",
+                ):
+                    with self.subTest(event=event):
+                        with patch.object(analytics_handlers, "_core", return_value=web):
+                            resp = await analytics_handlers.handle_analytics_event(
+                                _FakeRequest({"event": event})
+                            )
+                        self.assertEqual(resp.status, 400)
+                        self.assertEqual(
+                            json.loads(resp.body.decode())["error"],
+                            "event reserved for server use",
+                        )
+
+                conn = sqlite3.connect(db_path)
+                count = conn.execute("SELECT COUNT(*) FROM analytics_events").fetchone()[0]
+                conn.close()
+                self.assertEqual(count, 0)
+
+                inserted = web._track_event(
+                    _FakeRequest({}),
+                    "first_look_run_accepted",
+                    event_id="server-event",
+                    source="server",
+                    meta={"run_id": "0123456789abcdefabcd"},
+                )
+                self.assertTrue(inserted)
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
+    async def test_batch_ingest_rejects_server_only_events_and_persists_allowed_event_only(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+        from web_app.handlers import analytics as analytics_handlers
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                body = {
+                    "events": [
+                        {"event": "first_look_run_accepted"},
+                        {"event": "first_look_run_rejected"},
+                        {"event": "first_look_run_terminal"},
+                        {"event": "cta_click", "cta_id": "first_look_trial"},
+                    ]
+                }
+                with patch.object(analytics_handlers, "_core", return_value=web):
+                    resp = await analytics_handlers.handle_analytics_events(
+                        _FakeRequest(body, path="/web/analytics/events")
+                    )
+
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(
+                    json.loads(resp.body.decode()),
+                    {"ok": True, "received": 4, "accepted": 1, "rejected": 3},
+                )
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute(
+                    "SELECT event FROM analytics_events ORDER BY id"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(rows, [("cta_click",)])
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
     async def test_event_ingest_is_rate_limited(self):
         from web_app.handlers import analytics as analytics_handlers
 

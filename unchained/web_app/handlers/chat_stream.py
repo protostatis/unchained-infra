@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -30,6 +31,87 @@ _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 # turn while the local agent is still working in the background.
 _CODEX_CLI_SILENCE_TIMEOUT_S = 60
 _OPENCODE_CLI_SILENCE_TIMEOUT_S = 300
+_FIRST_LOOK_AGENT_SILENCE_TIMEOUT_S = 360
+
+_FIRST_LOOK_SEARCH_REF = "searchagentsky-result"
+_FIRST_LOOK_SEARCH_TASK = "search-result"
+_FIRST_LOOK_RESULT_ID_RE = re.compile(r"^[a-z0-9]{12}$")
+_FIRST_LOOK_TERMINAL_EVENT_TYPES = frozenset({"done", "error", "cancelled"})
+_FIRST_LOOK_TERMINAL_OUTCOMES = frozenset(
+    {"completed", "error", "cancelled", "client_disconnected"}
+)
+
+
+def _first_look_search_attribution(body: dict) -> dict[str, str]:
+    """Return only the exact bounded SearchAgentSky result handoff triad."""
+    ref = str(body.get("ref", "") or "").strip()
+    task = str(body.get("task", "") or "").strip()
+    from_result = str(body.get("from_result", "") or "").strip().lower()
+    if (
+        ref == _FIRST_LOOK_SEARCH_REF
+        and task == _FIRST_LOOK_SEARCH_TASK
+        and _FIRST_LOOK_RESULT_ID_RE.fullmatch(from_result)
+    ):
+        return {
+            "ref": _FIRST_LOOK_SEARCH_REF,
+            "task": _FIRST_LOOK_SEARCH_TASK,
+            "from_result": from_result,
+        }
+    return {}
+
+
+def _first_look_run_id(req_id: str) -> str:
+    """Build an opaque, bounded correlation ID without retaining request input."""
+    return hashlib.sha256(str(req_id or "").encode("utf-8")).hexdigest()[:20]
+
+
+def _first_look_terminal_outcome(event: dict, req_id: str) -> str:
+    """Classify an exact-request terminal agent event, rejecting stale events."""
+    if not isinstance(event, dict):
+        return ""
+    event_type = str(event.get("type", "") or "")
+    if event_type not in _FIRST_LOOK_TERMINAL_EVENT_TYPES:
+        return ""
+    if not req_id or str(event.get("req_id", "") or "") != req_id:
+        return ""
+    if event_type == "done":
+        return "completed"
+    return event_type
+
+
+def _track_first_look_run_event(
+    core,
+    request: web.Request,
+    event: str,
+    *,
+    run_id: str,
+    attribution: dict[str, str],
+    status_code: int = 0,
+    error_code: str = "",
+    outcome: str = "",
+    latency_ms: int = 0,
+):
+    """Persist one privacy-bounded server-owned First Look lifecycle event."""
+    meta = {"run_id": run_id}
+    if outcome in _FIRST_LOOK_TERMINAL_OUTCOMES:
+        meta["outcome"] = outcome
+    meta.update(attribution)
+    analytics_route = core._analytics_route_from_request(request) or request.path
+    return core._track_event(
+        request,
+        event,
+        event_id=f"{event}:{run_id}",
+        session_id=core._analytics_session_id_from_request(request),
+        page_view_id=core._analytics_page_view_id_from_request(request),
+        route="/web/chat",
+        route_intended=analytics_route,
+        route_effective=analytics_route,
+        source="server",
+        status_code=status_code,
+        error_code=error_code,
+        latency_ms=latency_ms,
+        meta=meta,
+    )
 
 
 def _turn_registry(core):
@@ -377,6 +459,27 @@ def _discard_response_registration(core, session_id: str) -> None:
     """Remove both halves of a response-queue registration."""
     core._response_queues.pop(session_id, None)
     core._response_req_ids.pop(session_id, None)
+
+
+def _signal_superseded_response_queue(
+    queue: asyncio.Queue,
+    *,
+    guest_mode: bool,
+    session_id: str,
+    req_id: str,
+) -> None:
+    """End an old queue without changing legacy non-guest semantics."""
+    if guest_mode:
+        terminal_events = (
+            {"type": "cancelled", "session_id": session_id, "req_id": req_id},
+            {"type": "done", "session_id": session_id, "req_id": req_id},
+        )
+    else:
+        terminal_events = ({"type": "done"},)
+    for terminal_event in terminal_events:
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(terminal_event)
 
 
 def _extract_scheduler_turn(message: str, *, allow_trigger: bool = True) -> tuple[bool, str]:
@@ -953,8 +1056,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "invalid json body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid json body"}, status=400)
 
-    wants_guest_first_look = bool(body.get("first_look_guest")) and bool(body.get("headless"))
+    wants_guest_first_look = (
+        body.get("first_look_guest") is True and body.get("headless") is True
+    )
     auth_info = None if wants_guest_first_look else core._authenticate(request)
     guest_mode = False
     guest_id = ""
@@ -965,13 +1072,60 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             return web.json_response({"error": "Not authenticated"}, status=401)
         auth_info, guest_id, guest_quota_count = core._first_look_guest_auth(request)
         guest_mode = True
+
+    # Guest dispatch IDs are server-owned so a caller cannot reuse an
+    # X-Request-ID to merge two runs into one analytics correlation key.
+    req_id = uuid.uuid4().hex if guest_mode else core._request_id(request)
+    first_look_run_id = _first_look_run_id(req_id) if guest_mode else ""
+    first_look_attribution = _first_look_search_attribution(body) if guest_mode else {}
+    first_look_accepted = False
+    first_look_accepted_at = 0.0
+    first_look_terminal = ""
+
+    def reject_first_look(response: web.StreamResponse, reason: str):
+        if guest_mode and not first_look_accepted:
+            _track_first_look_run_event(
+                core,
+                request,
+                "first_look_run_rejected",
+                run_id=first_look_run_id,
+                attribution=first_look_attribution,
+                status_code=int(getattr(response, "status", 0) or 0),
+                error_code=reason,
+            )
+        return response
+
+    def record_first_look_terminal(outcome: str, *, error_code: str = "") -> bool:
+        nonlocal first_look_terminal
+        if (
+            not guest_mode
+            or not first_look_accepted
+            or first_look_terminal
+            or outcome not in _FIRST_LOOK_TERMINAL_OUTCOMES
+        ):
+            return False
+        first_look_terminal = outcome
+        latency_ms = max(0, int((time.monotonic() - first_look_accepted_at) * 1000))
+        _track_first_look_run_event(
+            core,
+            request,
+            "first_look_run_terminal",
+            run_id=first_look_run_id,
+            attribution=first_look_attribution,
+            status_code=200,
+            error_code=error_code,
+            outcome=outcome,
+            latency_ms=latency_ms,
+        )
+        return True
+
     if guest_mode and not core.HEADLESS_AGENT_ID:
         err = web.json_response({"error": "headless_bridge_not_configured"}, status=503)
         core._attach_first_look_guest_cookies(err, request, guest_id, quota_count=guest_quota_count)
-        return err
+        return reject_first_look(err, "headless_bridge_not_configured")
 
-    req_id = core._request_id(request)
-    raw_message = body.get("message", "").strip()
+    raw_message_value = body.get("message", "")
+    raw_message = raw_message_value.strip() if isinstance(raw_message_value, str) else ""
     scheduler_armed, message = _extract_scheduler_turn(
         raw_message,
         allow_trigger=bool(body.get("allow_scheduler_trigger", True)),
@@ -993,9 +1147,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     )
 
     if not message:
-        return web.json_response({"error": "message required"}, status=400)
+        return reject_first_look(
+            web.json_response({"error": "message required"}, status=400),
+            "message_required",
+        )
     if not agent_id:
-        return web.json_response({"error": "agent_id required"}, status=400)
+        return reject_first_look(
+            web.json_response({"error": "agent_id required"}, status=400),
+            "agent_id_required",
+        )
 
     is_gemini = model and model.startswith("gemini")
     is_claude_sdk = core._is_claude_sdk_model(model)
@@ -1004,9 +1164,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_opencode_cli = core._is_opencode_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
     if guest_mode and not is_openrouter:
-        return web.json_response(
-            {"error": "guest_mode_requires_openrouter_model"},
-            status=400,
+        return reject_first_look(
+            web.json_response(
+                {"error": "guest_mode_requires_openrouter_model"},
+                status=400,
+            ),
+            "guest_model_invalid",
         )
     if core._is_pending_user(auth_info) and not is_openrouter:
         return core._pending_limited_response()
@@ -1014,12 +1177,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         guest_mode=guest_mode,
         is_openrouter=is_openrouter,
     ):
-        return web.json_response(
-            {
-                "error": "scheduler_trigger_requires_local_bridge_lane",
-                "message": "The /schedule trigger is supported only on bridge-backed local agent lanes, not the guest/trial OpenRouter lane.",
-            },
-            status=400,
+        return reject_first_look(
+            web.json_response(
+                {
+                    "error": "scheduler_trigger_requires_local_bridge_lane",
+                    "message": "The /schedule trigger is supported only on bridge-backed local agent lanes, not the guest/trial OpenRouter lane.",
+                },
+                status=400,
+            ),
+            "scheduler_unsupported",
         )
     openrouter_forced_model = ""
     openrouter_forced_from_model = ""
@@ -1058,25 +1224,26 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             )
     analytics_route = core._analytics_route_from_request(request) or request.path
 
-    core._track_event(
-        request,
-        "chat_message_send",
-        session_id=core._analytics_session_id_from_request(request) or session_id,
-        page_view_id=core._analytics_page_view_id_from_request(request),
-        route="/web/chat",
-        route_intended=body.get("route_intended", analytics_route),
-        route_effective=body.get("route_effective", analytics_route),
-        user_id=auth_info.get("user_id", ""),
-        user_type=auth_info.get("user_type", ""),
-        source="web",
-        meta={
-            "model": model or "",
-            "headless": bool(body.get("headless", False)),
-            "scheduler_armed": scheduler_armed,
-            "chat_session_id": session_id,
-        },
-        status_code=200,
-    )
+    if not guest_mode:
+        core._track_event(
+            request,
+            "chat_message_send",
+            session_id=core._analytics_session_id_from_request(request) or session_id,
+            page_view_id=core._analytics_page_view_id_from_request(request),
+            route="/web/chat",
+            route_intended=body.get("route_intended", analytics_route),
+            route_effective=body.get("route_effective", analytics_route),
+            user_id=auth_info.get("user_id", ""),
+            user_type=auth_info.get("user_type", ""),
+            source="web",
+            meta={
+                "model": model or "",
+                "headless": bool(body.get("headless", False)),
+                "scheduler_armed": scheduler_armed,
+                "chat_session_id": session_id,
+            },
+            status_code=200,
+        )
 
     if is_gemini:
         import signup_agent
@@ -1176,9 +1343,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             )
     elif is_openrouter:
         if not core.TRIAL_AGENT_ID:
-            return web.json_response(
-                {"error": "Trial agent is not configured. Please try a Claude model."},
-                status=503,
+            return reject_first_look(
+                web.json_response(
+                    {"error": "Trial agent is not configured. Please try a Claude model."},
+                    status=503,
+                ),
+                "trial_agent_not_configured",
             )
         user_id = auth_info.get("user_id", "")
         requested_model = (model or core._OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
@@ -1200,9 +1370,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 )
         ws = core._chat_agents.get(core.TRIAL_AGENT_ID)
         if ws is None or ws.closed:
-            return web.json_response(
-                {"error": "Trial agent is not available. Please try a Claude model."},
-                status=503,
+            return reject_first_look(
+                web.json_response(
+                    {"error": "Trial agent is not available. Please try a Claude model."},
+                    status=503,
+                ),
+                "trial_agent_unavailable",
             )
     else:
         ws = core._chat_agents.get(agent_id)
@@ -1226,7 +1399,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 core._attach_first_look_guest_cookies(
                     quota_resp, request, guest_id, quota_count=guest_quota_count,
                 )
-                return quota_resp
+                return reject_first_look(quota_resp, "quota_exceeded")
             guest_quota_count += 1
             guest_quota_increment = True
         else:
@@ -1305,10 +1478,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         q = asyncio.Queue(maxsize=8)
         old_q = core._response_queues.get(session_id)
         if old_q is not None:
-            # Signal the previous turn's SSE stream to end cleanly.
-            if old_q.full():
-                old_q.get_nowait()
-            old_q.put_nowait({"type": "done"})
+            # Guest First Look needs correlated cancellation; legacy/mock
+            # non-guest paths retain their historical done-only signal.
+            _signal_superseded_response_queue(
+                old_q,
+                guest_mode=guest_mode,
+                session_id=session_id,
+                req_id=core._response_req_ids.get(session_id, ""),
+            )
         core._response_queues[session_id] = q
         core._response_req_ids[session_id] = req_id
 
@@ -1325,9 +1502,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         if turn:
             _publish_turn_failure(core, turn, "Profile selection is not supported in headless mode.")
         _discard_response_registration(core, session_id)
-        return web.json_response(
-            {"error": "Profile selection is not supported in headless mode."},
-            status=400,
+        return reject_first_look(
+            web.json_response(
+                {"error": "Profile selection is not supported in headless mode."},
+                status=400,
+            ),
+            "headless_profile_unsupported",
         )
 
     bridge_info = {}
@@ -1393,8 +1573,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             if turn:
                 _publish_turn_failure(core, turn, "Failed to leave the selected browser profile.")
             _discard_response_registration(core, session_id)
-            return web.json_response(
-                {"error": "Failed to leave the selected browser profile."}, status=502
+            return reject_first_look(
+                web.json_response(
+                    {"error": "Failed to leave the selected browser profile."},
+                    status=502,
+                ),
+                "profile_clear_failed",
             )
         tab_id = None
     elif profile_intent == "expired":
@@ -1405,12 +1589,15 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 "Browser profile session expired. Select a Chrome profile and try again.",
             )
         _discard_response_registration(core, session_id)
-        return web.json_response(
-            {
-                "error": "Browser profile session expired. Select a Chrome profile and try again.",
-                "code": "profile_session_expired",
-            },
-            status=409,
+        return reject_first_look(
+            web.json_response(
+                {
+                    "error": "Browser profile session expired. Select a Chrome profile and try again.",
+                    "code": "profile_session_expired",
+                },
+                status=409,
+            ),
+            "profile_session_expired",
         )
 
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
@@ -1460,6 +1647,17 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         # disconnect can resolve this exact turn without a response queue.
         core._session_agents[session_id] = routing_agent_id
         await ws.send_json(ws_msg)
+        if guest_mode:
+            first_look_accepted = True
+            first_look_accepted_at = time.monotonic()
+            _track_first_look_run_event(
+                core,
+                request,
+                "first_look_run_accepted",
+                run_id=first_look_run_id,
+                attribution=first_look_attribution,
+                status_code=200,
+            )
         core._trace(
             "chat.msg.forwarded",
             req_id=req_id,
@@ -1479,7 +1677,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             chat_agent_id=chat_agent_id,
         )
         _discard_response_registration(core, session_id)
-        return web.json_response({"error": "Failed to reach chat agent"}, status=502)
+        dispatch_error = web.json_response(
+            {"error": "Failed to reach chat agent"}, status=502
+        )
+        if guest_mode and first_look_accepted:
+            record_first_look_terminal("error", error_code="server_post_dispatch_error")
+            return dispatch_error
+        return reject_first_look(dispatch_error, "agent_dispatch_failed")
 
     core._session_agents[session_id] = routing_agent_id
 
@@ -1529,37 +1733,63 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             guest_id,
             quota_count=guest_quota_count if guest_quota_increment else None,
         )
-    await resp.prepare(request)
-    if openrouter_forced_model:
-        forced_evt = {
-            "type": "model_forced",
-            "reason": "openrouter_budget_limit",
-            "model": openrouter_forced_model,
-            "allowed_models": list(core._OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS),
-        }
-        if openrouter_forced_from_model:
-            forced_evt["requested_model"] = openrouter_forced_from_model
-        if openrouter_budget_state:
-            forced_evt["budget"] = openrouter_budget_state
-        await resp.write(f"data: {json.dumps(forced_evt)}\n\n".encode())
-    if openrouter_forced_notice:
-        await resp.write(
-            f"data: {json.dumps({'type': 'text', 'data': openrouter_forced_notice})}\n\n".encode()
-        )
-
     stream_completed = False
     last_stream_event_at = time.time()
+    first_look_last_agent_event_at = time.monotonic()
     local_cli_silence_timeout_s = 0
     if is_opencode_cli:
         local_cli_silence_timeout_s = _OPENCODE_CLI_SILENCE_TIMEOUT_S
     elif is_codex_cli:
         local_cli_silence_timeout_s = _CODEX_CLI_SILENCE_TIMEOUT_S
     try:
+        await resp.prepare(request)
+        if openrouter_forced_model:
+            forced_evt = {
+                "type": "model_forced",
+                "reason": "openrouter_budget_limit",
+                "model": openrouter_forced_model,
+                "allowed_models": list(core._OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS),
+            }
+            if openrouter_forced_from_model:
+                forced_evt["requested_model"] = openrouter_forced_from_model
+            if openrouter_budget_state:
+                forced_evt["budget"] = openrouter_budget_state
+            await resp.write(f"data: {json.dumps(forced_evt)}\n\n".encode())
+        if openrouter_forced_notice:
+            await resp.write(
+                f"data: {json.dumps({'type': 'text', 'data': openrouter_forced_notice})}\n\n".encode()
+            )
+
         while True:
             try:
                 evt = await asyncio.wait_for(q.get(), timeout=15)
             except asyncio.TimeoutError:
-                if not use_headless and not is_openrouter and not guest_mode:
+                first_look_failure_code = ""
+                if guest_mode:
+                    current_ws = core._chat_agents.get(routing_agent_id)
+                    if current_ws is not ws or getattr(ws, "closed", False):
+                        first_look_failure_code = "agent_disconnected"
+                    elif (
+                        time.monotonic() - first_look_last_agent_event_at
+                        >= _FIRST_LOOK_AGENT_SILENCE_TIMEOUT_S
+                    ):
+                        first_look_failure_code = "agent_timeout"
+
+                if first_look_failure_code:
+                    record_first_look_terminal(
+                        "error", error_code=first_look_failure_code
+                    )
+                    evt = {
+                        "type": "error",
+                        "data": (
+                            "The shared browser agent disconnected. Please retry."
+                            if first_look_failure_code == "agent_disconnected"
+                            else "The shared browser run timed out. Please retry."
+                        ),
+                        "session_id": session_id,
+                        "req_id": req_id,
+                    }
+                elif not use_headless and not is_openrouter and not guest_mode:
                     current_ws = core._chat_agents.get(chat_agent_id)
                     if current_ws is not ws or getattr(ws, "closed", False):
                         evt = {
@@ -1576,7 +1806,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
                         stream_completed = True
                         break
-                if local_cli_silence_timeout_s and time.time() - last_stream_event_at >= local_cli_silence_timeout_s:
+                if first_look_failure_code:
+                    pass
+                elif local_cli_silence_timeout_s and time.time() - last_stream_event_at >= local_cli_silence_timeout_s:
                     evt = {
                         "type": "error",
                         "data": "Local CLI did not return a response in time. The provider may be rate-limited or stalled; please retry or switch models.",
@@ -1591,18 +1823,45 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
                     stream_completed = True
                     break
-                try:
-                    await resp.write(b": keepalive\n\n")
-                except (ConnectionResetError, Exception):
-                    break
-                continue
+                else:
+                    try:
+                        await resp.write(b": keepalive\n\n")
+                    except (ConnectionResetError, BrokenPipeError):
+                        record_first_look_terminal(
+                            "client_disconnected", error_code="client_disconnected"
+                        )
+                        break
+                    except Exception:
+                        record_first_look_terminal("error", error_code="server_stream_error")
+                        break
+                    continue
 
             last_stream_event_at = time.time()
+            if guest_mode:
+                first_look_last_agent_event_at = time.monotonic()
+
+            event_type = str(evt.get("type", "") or "")
+            event_outcome = _first_look_terminal_outcome(evt, req_id)
+            if guest_mode and event_type in _FIRST_LOOK_TERMINAL_EVENT_TYPES:
+                # Stale and uncorrelated terminal events must neither end this
+                # run nor reach its client stream.
+                if not event_outcome:
+                    continue
+                record_first_look_terminal(
+                    event_outcome,
+                    error_code="agent_error" if event_outcome == "error" else "",
+                )
 
             sse = f"data: {json.dumps(evt)}\n\n"
             try:
                 await resp.write(sse.encode())
-            except (ConnectionResetError, Exception):
+            except (ConnectionResetError, BrokenPipeError):
+                record_first_look_terminal(
+                    "client_disconnected", error_code="client_disconnected"
+                )
+                break
+            except Exception:
+                record_first_look_terminal("error", error_code="server_stream_error")
                 break
 
             # Broadcast to overlay copilot subscribers
@@ -1614,7 +1873,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     done_evt["req_id"] = req_id
                 try:
                     await resp.write(f"data: {json.dumps(done_evt)}\n\n".encode())
-                except (ConnectionResetError, Exception):
+                except (ConnectionResetError, BrokenPipeError):
+                    pass
+                except Exception:
                     pass
                 stream_completed = True
                 break
@@ -1622,6 +1883,18 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             if evt.get("type") == "done":
                 stream_completed = True
                 break
+    except (ConnectionResetError, BrokenPipeError):
+        record_first_look_terminal(
+            "client_disconnected", error_code="client_disconnected"
+        )
+    except asyncio.CancelledError:
+        record_first_look_terminal(
+            "client_disconnected", error_code="handler_cancelled"
+        )
+        raise
+    except Exception:
+        record_first_look_terminal("error", error_code="server_stream_error")
+        raise
     finally:
         # Only clean up if we still own the queue (a new turn may have replaced it)
         if core._response_queues.get(session_id) is q:

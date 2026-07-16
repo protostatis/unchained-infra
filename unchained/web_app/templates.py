@@ -18411,31 +18411,6 @@ function applyFirstLookAttribution(root) {
   });
 }
 
-function trackFirstLookEvent(eventName, ctaId) {
-  const analytics = window.__ucAnalytics || {};
-  const meta = {remaining: remainingGuestRuns};
-  if (FIRST_LOOK_REF) meta.ref = FIRST_LOOK_REF;
-  if (FIRST_LOOK_TASK) meta.task = FIRST_LOOK_TASK;
-  if (FIRST_LOOK_FROM_RESULT) meta.from_result = FIRST_LOOK_FROM_RESULT;
-  try {
-    fetch('/web/analytics/event', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin',
-      keepalive: true,
-      body: JSON.stringify({
-        event: eventName,
-        session_id: analytics.sessionId || '',
-        page_view_id: analytics.pageViewId || '',
-        route: window.location.pathname,
-        cta_id: ctaId || '',
-        source: 'web',
-        meta: meta
-      })
-    }).catch(function() {});
-  } catch (_err) {}
-}
-
 function sessionStoreKey() {
   return agentId ? ('unchained_session_' + agentId + '_first_look_preview') : '';
 }
@@ -19385,7 +19360,10 @@ async function doSend() {
         session_id: sessionId,
         model: 'google/gemini-3.1-flash-lite',
         headless: true,
-        first_look_guest: true
+        first_look_guest: true,
+        ref: FIRST_LOOK_REF,
+        task: FIRST_LOOK_TASK,
+        from_result: FIRST_LOOK_FROM_RESULT
       }),
       signal: cancelCtrl.signal
     });
@@ -19487,7 +19465,6 @@ async function doSend() {
             appendSignal(String(evt.data || ''));
             closePreviewSocket();
           } else if (evt.type === 'done') {
-            trackFirstLookEvent('first_look_run_complete', 'first_look_shared_browser');
             if (previewHasFrame) {
               document.getElementById('preview-mode').textContent = 'run complete';
               setPreviewNote('Run complete. Keeping the final browser frame.', 'ok');

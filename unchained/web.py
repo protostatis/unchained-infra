@@ -30,7 +30,7 @@ import httpx
 import jwt
 from aiohttp import web
 
-from analytics import AnalyticsStore
+from analytics import AnalyticsStore, _safe_event_name
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
@@ -439,6 +439,13 @@ def _track_redirect(
 
 
 _analytics_ingest_buckets: dict[str, list[float]] = {}  # ip -> timestamps
+_ANALYTICS_SERVER_ONLY_EVENTS = frozenset(
+    {
+        "first_look_run_accepted",
+        "first_look_run_rejected",
+        "first_look_run_terminal",
+    }
+)
 
 
 def _analytics_ingest_allow(
@@ -466,6 +473,8 @@ def _coerce_analytics_event_payload(raw: dict, request: web.Request) -> tuple[di
     event = str(raw.get("event", "")).strip()
     if not event:
         return None, "event required"
+    if _safe_event_name(event) in _ANALYTICS_SERVER_ONLY_EVENTS:
+        return None, "event reserved for server use"
     meta = raw.get("meta")
     if not isinstance(meta, dict):
         meta = {}
