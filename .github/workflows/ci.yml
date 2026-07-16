@@ -28,6 +28,12 @@ jobs:
           python test_cloud_tools_click.py
           python test_opencode_agent.py
           python test_chat_event_transport.py
+          python test_sse_write_guard.py
+
+      - name: Run JS chat recovery test
+        run: |
+          cd unchained
+          node test_sse_recovery_render.js
 
       - name: Run OSS boundary guards
         run: |
