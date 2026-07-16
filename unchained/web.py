@@ -88,6 +88,18 @@ def _resolve_analytics_db_path(auth_db_path: str) -> str:
 
 
 _analytics = AnalyticsStore(db_path=_resolve_analytics_db_path(_auth.db_path))
+try:
+    _activation_backfill_count = _auth.backfill_install_bootstrap_markers(
+        _analytics.db_path
+    )
+    log.info(
+        "[growth] durable install activation backfill matched %d account(s)",
+        _activation_backfill_count,
+    )
+except Exception as exc:
+    # Startup remains available, but lifecycle outreach must stay disabled
+    # until a later backfill succeeds and is verified.
+    log.warning("[growth] durable install activation backfill failed: %s", exc)
 
 # Google OAuth config (from env)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -219,11 +231,11 @@ def _is_rate_limited_user(user: dict | None) -> bool:
     return True
 
 
-def send_email(to: str, subject: str, body_html: str):
-    """Send email via SMTP. Fails silently with a log if not configured."""
+def send_email(to: str, subject: str, body_html: str) -> bool:
+    """Return whether the SMTP server accepted the message for delivery."""
     if not SMTP_HOST:
-        log.warning("[email] SMTP_HOST not configured, skipping email to %s: %s", to, subject)
-        return
+        log.warning("[email] SMTP_HOST not configured; skipped subject: %s", subject)
+        return False
     try:
         msg = MIMEText(body_html, "html")
         msg["Subject"] = subject
@@ -233,10 +245,15 @@ def send_email(to: str, subject: str, body_html: str):
             server.starttls()
             if SMTP_USER:
                 server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(FROM_EMAIL, [to], msg.as_string())
-        log.info("[email] Sent to %s: %s", to, subject)
+            refused = server.sendmail(FROM_EMAIL, [to], msg.as_string())
+        if refused:
+            log.error("[email] SMTP refused recipient for subject: %s", subject)
+            return False
+        log.info("[email] SMTP accepted subject: %s", subject)
+        return True
     except Exception as e:
-        log.error("[email] Failed to send to %s: %s", to, e)
+        log.error("[email] SMTP send failed for subject %s: %s", subject, e)
+        return False
 
 
 def _request_id(request: web.Request) -> str:
