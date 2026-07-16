@@ -9,7 +9,13 @@ import os
 _ANALYTICS_CLIENT_SNIPPET = r"""<script data-uc-analytics-client>
 (function(){
   var ROUTE = window.location.pathname || '';
-  var _ref = (function(){ try{ return new URLSearchParams(location.search).get('ref') || ''; }catch(_e){ return ''; } })();
+  var _ref = (function(){
+    try{
+      return (new URLSearchParams(location.search).get('ref') || '')
+        .replace(/[^A-Za-z0-9._:-]/g, '')
+        .slice(0, 64);
+    }catch(_e){ return ''; }
+  })();
   var STORAGE_KEY = 'uc_analytics_session_id';
   var SESSION_HEADER = 'X-Unchained-Analytics-Session';
   var PAGE_VIEW_HEADER = 'X-Unchained-Analytics-Page-View';

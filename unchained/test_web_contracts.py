@@ -58,6 +58,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/web/static/signed-chat-reconnect.js"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
+            ("GET", "/go/unbrowser-github"),
+            ("GET", "/go/unbrowser-smithery"),
             ("GET", "/web/unbrowser/sources"),
             ("GET", "/web/unbrowser/runtime"),
             ("GET", "/web/unbrowser/stream"),
@@ -265,6 +267,12 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('id="landing-nav-links"', web.LANDING_HTML)
         for href in ("#calculator", "#capability", "#start"):
             self.assertIn(f'href="{href}"', web.LANDING_HTML)
+        self.assertIn("https://searchagentsky.com/?ref=unchained-nav", web.LANDING_HTML)
+        self.assertIn("https://searchagentsky.com/?ref=unchained-footer", web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_research_nav"', web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_research_footer"', web.LANDING_HTML)
+        self.assertIn("utm_campaign=brand_handoff", web.LANDING_HTML)
+        self.assertIn("/demo?ref=unchained-home&task=research", web.LANDING_HTML)
 
     def test_landing_developer_navigation_exposes_lightweight_routes(self):
         self.assertIn(
@@ -278,6 +286,15 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn('<a href="/unbrowser">unbrowser</a>', web.LANDING_HTML)
         self.assertIn('<a href="/chrome-tax">Why lighter?</a>', web.LANDING_HTML)
+
+    def test_mcp_guide_has_search_and_social_metadata(self):
+        html = web._build_mcp_guide_html()
+        self.assertIn(
+            '<link rel="canonical" href="https://unchainedsky.com/mcp-guide">',
+            html,
+        )
+        self.assertIn('<meta name="description"', html)
+        self.assertIn('<meta property="og:title"', html)
 
     def test_landing_developer_navigation_keyboard_contract(self):
         self.assertIn("function setLandingDeveloperMenuOpen(open,focusFirst)", web.LANDING_HTML)
@@ -296,7 +313,11 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_landing_v4_default_route_clears_preview_cookie(self):
         async def _render(query: dict[str, str], cookies: dict[str, str]):
-            return await web.handle_index(SimpleNamespace(query=query, cookies=cookies))
+            request = SimpleNamespace(query=query, cookies=cookies, path="/")
+            with patch.object(web, "_track_page_view") as track_page_view:
+                response = await web.handle_index(request)
+            track_page_view.assert_called_once_with(request)
+            return response
 
         response = asyncio.run(_render({"ui": "v4"}, {"ui": "v3"}))
         self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", response.text)
@@ -356,6 +377,22 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
+
+    def test_unbrowser_hero_ctas_use_fixed_server_owned_redirects(self):
+        self.assertIn(
+            'href="/go/unbrowser-github" data-acquisition-link>Install locally</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            'href="/go/unbrowser-smithery" data-acquisition-link>Open on Smithery</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertNotIn(
+            'href="/go/unbrowser-smithery" rel="me"',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn("['utm_campaign',96]", web.UNBROWSER_PAGE_HTML)
+        self.assertNotIn("utm_term", web.UNBROWSER_PAGE_HTML)
 
     def test_unbrowser_page_live_demo_contract(self):
         self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)
@@ -624,6 +661,90 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Flight comparison task", flight_html)
         self.assertIn("current round-trip flight options", flight_html)
         self.assertIn("Prefilled, not run.", flight_html)
+
+        research_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="research",
+            ref="searchagentsky-result",
+        )
+        self.assertIn('data-task="research"', research_html)
+        self.assertIn("Research comparison task", research_html)
+        self.assertIn("public documentation", research_html)
+        self.assertIn("Prefilled, not run.", research_html)
+        self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research_html)
+        self.assertIn('const FIRST_LOOK_TASK = "research";', research_html)
+        self.assertIn("first_look_complete_trial", research_html)
+        self.assertIn("first_look_complete_install", research_html)
+        self.assertNotIn("trackFirstLookEvent", research_html)
+        self.assertNotIn("first_look_run_complete", research_html)
+        self.assertIn("firstLookAttributionSuffix", research_html)
+        self.assertIn("applyFirstLookAttribution", research_html)
+        self.assertIn("first_look_trial", research_html)
+        self.assertIn("sessionStorage.removeItem('uc_completion_nudge_v2_shown')", research_html)
+        self.assertNotIn("install now — 30 seconds", research_html)
+        self.assertNotIn("No run limit", research_html)
+        self.assertNotIn("30\\u201360 seconds", research_html)
+        self.assertNotIn(">Any site<", research_html)
+        self.assertNotIn("browse any site", research_html.lower())
+
+        search_result_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="searchagentsky-result",
+            from_result="ag0000000001",
+        )
+        self.assertIn('data-task="search-result"', search_result_html)
+        self.assertIn("Continue this SearchAgentSky answer", search_result_html)
+        self.assertIn(
+            "https://searchagentsky.com/r/ag0000000001",
+            search_result_html,
+        )
+        self.assertIn("verify the three most time-sensitive claims", search_result_html)
+        self.assertIn('const FIRST_LOOK_TASK = "search-result";', search_result_html)
+        self.assertIn(
+            'const FIRST_LOOK_FROM_RESULT = "ag0000000001";',
+            search_result_html,
+        )
+        self.assertIn("params.set('from_result', FIRST_LOOK_FROM_RESULT)", search_result_html)
+        self.assertIn("ref: FIRST_LOOK_REF", search_result_html)
+        self.assertIn("task: FIRST_LOOK_TASK", search_result_html)
+        self.assertIn("from_result: FIRST_LOOK_FROM_RESULT", search_result_html)
+
+        invalid_result_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="searchagentsky-result",
+            from_result='bad"><script>alert(1)</script>',
+        )
+        self.assertNotIn('id="task-handoff"', invalid_result_html)
+        self.assertNotIn("searchagentsky.com/r/bad", invalid_result_html)
+        self.assertIn('const FIRST_LOOK_TASK = "";', invalid_result_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', invalid_result_html)
+
+        mismatched_ref_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="other-campaign",
+            from_result="ag0000000001",
+        )
+        self.assertNotIn('id="task-handoff"', mismatched_ref_html)
+        self.assertNotIn("searchagentsky.com/r/ag0000000001", mismatched_ref_html)
+        self.assertIn('const FIRST_LOOK_TASK = "";', mismatched_ref_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', mismatched_ref_html)
+
+        unrelated_task_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="research",
+            ref="searchagentsky-result",
+            from_result="ag0000000001",
+        )
+        self.assertIn('const FIRST_LOOK_TASK = "research";', unrelated_task_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', unrelated_task_html)
 
         untrusted_task = 'apartment"><script>alert(1)</script>'
         fallback_html = _build_first_look_preview_html(

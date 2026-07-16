@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import atexit
 import importlib
+import json
 import os
 import re
 import secrets
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -113,6 +115,121 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bridge_configured", data)
         self.assertIn("bridge_connected", data)
 
+    async def test_landing_research_bridge_has_client_measurement(self):
+        analytics_db = os.environ["UNCHAINED_ANALYTICS_DB_PATH"]
+
+        def _landing_page_views() -> int:
+            if not os.path.exists(analytics_db):
+                return 0
+            with sqlite3.connect(analytics_db) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM analytics_events WHERE event = 'page_view' AND route = '/'"
+                ).fetchone()
+            return int(row[0] if row else 0)
+
+        before = _landing_page_views()
+        page = await self._client.get(
+            "/",
+            headers={"User-Agent": f"landing-measurement-{secrets.token_hex(8)}"},
+        )
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(_landing_page_views(), before + 1)
+        self.assertIn("data-uc-analytics-client", page.text)
+        self.assertIn('data-analytics-cta="landing_research_nav"', page.text)
+        self.assertIn('data-analytics-cta="landing_research_footer"', page.text)
+        self.assertIn(".replace(/[^A-Za-z0-9._:-]/g, '')", page.text)
+
+    async def test_unbrowser_acquisition_and_outbound_events_are_server_owned(self):
+        analytics_db = os.environ["UNCHAINED_ANALYTICS_DB_PATH"]
+        browser_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 AppleWebKit/537.36 "
+                "Chrome/140.0 Safari/537.36"
+            )
+        }
+        campaign = {
+            "ref": "unbrowser-readme",
+            "utm_source": "github",
+            "utm_medium": "repository",
+            "utm_campaign": "unbrowser_guide",
+        }
+
+        def _event_count(event: str, route: str) -> int:
+            with sqlite3.connect(analytics_db) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM analytics_events WHERE event = ? AND route = ?",
+                    (event, route),
+                ).fetchone()
+            return int(row[0] if row else 0)
+
+        page_views_before = _event_count("page_view", "/unbrowser")
+        head = await self._client.head(
+            "/unbrowser",
+            params=campaign,
+            headers=browser_headers,
+        )
+        self.assertEqual(head.status_code, 200)
+        self.assertEqual(_event_count("page_view", "/unbrowser"), page_views_before)
+
+        page = await self._client.get(
+            "/unbrowser",
+            params=campaign,
+            headers=browser_headers,
+        )
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(_event_count("page_view", "/unbrowser"), page_views_before + 1)
+        self.assertIn('href="/go/unbrowser-github" data-acquisition-link', page.text)
+        with sqlite3.connect(analytics_db) as conn:
+            page_meta = conn.execute(
+                "SELECT meta_json FROM analytics_events "
+                "WHERE event = 'page_view' AND route = '/unbrowser' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(json.loads(page_meta[0]), campaign)
+
+        outbound_route = "/go/unbrowser-github"
+        outbound_before = _event_count("unbrowser_outbound_click", outbound_route)
+        outbound_head = await self._client.head(
+            outbound_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(outbound_head.status_code, 302)
+        self.assertEqual(
+            outbound_head.headers.get("Location"),
+            "https://github.com/protostatis/unbrowser",
+        )
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", outbound_route),
+            outbound_before,
+        )
+
+        outbound = await self._client.get(
+            outbound_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(outbound.status_code, 302)
+        self.assertEqual(
+            outbound.headers.get("Location"),
+            "https://github.com/protostatis/unbrowser",
+        )
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", outbound_route),
+            outbound_before + 1,
+        )
+        with sqlite3.connect(analytics_db) as conn:
+            row = conn.execute(
+                "SELECT route_effective, referrer_path, user_agent_class, is_bot, meta_json "
+                "FROM analytics_events WHERE event = 'unbrowser_outbound_click' "
+                "AND route = ? ORDER BY id DESC LIMIT 1",
+                (outbound_route,),
+            ).fetchone()
+        self.assertEqual(row[:4], ("https://github.com/protostatis/unbrowser", "/unbrowser", "chrome_like", 0))
+        self.assertEqual(
+            json.loads(row[4]),
+            {**campaign, "destination": "github_repository"},
+        )
+
     async def test_signed_chat_reconnect_asset_headers(self):
         response = await self._client.get("/web/static/signed-chat-reconnect.js")
         self.assertEqual(response.status_code, 200, response.text)
@@ -157,6 +274,68 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(label, first_look.text)
                 self.assertIn(prompt_fragment, first_look.text)
                 self.assertIn("Prefilled, not run.", first_look.text)
+
+        demo_handoff = await self._client.get(
+            "/demo?ref=searchagentsky-result&task=research",
+            follow_redirects=False,
+        )
+        self.assertEqual(demo_handoff.status_code, 302)
+        self.assertEqual(
+            demo_handoff.headers.get("Location"),
+            "/first-look?ref=searchagentsky-result&task=research",
+        )
+        research = await self._client.get(demo_handoff.headers["Location"])
+        self.assertEqual(research.status_code, 200)
+        self.assertIn('data-task="research"', research.text)
+        self.assertIn("Research comparison task", research.text)
+        self.assertIn("Prefilled, not run.", research.text)
+        self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research.text)
+        self.assertIn("data-uc-analytics-client", research.text)
+
+        search_result = await self._client.get(
+            "/first-look",
+            params={
+                "ref": "searchagentsky-result",
+                "task": "search-result",
+                "from_result": "ag0000000001",
+            },
+        )
+        self.assertEqual(search_result.status_code, 200)
+        self.assertIn('data-task="search-result"', search_result.text)
+        self.assertIn("Continue this SearchAgentSky answer", search_result.text)
+        self.assertIn("https://searchagentsky.com/r/ag0000000001", search_result.text)
+        self.assertIn('const FIRST_LOOK_TASK = "search-result";', search_result.text)
+        self.assertIn(
+            'const FIRST_LOOK_FROM_RESULT = "ag0000000001";',
+            search_result.text,
+        )
+
+        search_result_demo = await self._client.get(
+            "/demo?ref=searchagentsky-result&task=search-result&from_result=ag0000000001",
+            follow_redirects=False,
+        )
+        self.assertEqual(search_result_demo.status_code, 302)
+        self.assertEqual(
+            search_result_demo.headers.get("Location"),
+            "/first-look?ref=searchagentsky-result&task=search-result&from_result=ag0000000001",
+        )
+
+        mismatched_search_result_demo = await self._client.get(
+            "/demo?ref=other-campaign&task=search-result&from_result=ag0000000001",
+            follow_redirects=False,
+        )
+        self.assertEqual(mismatched_search_result_demo.status_code, 302)
+        self.assertEqual(
+            mismatched_search_result_demo.headers.get("Location"),
+            "/first-look?ref=other-campaign",
+        )
+
+        unsafe_demo = await self._client.get(
+            "/demo?ref=%3Cscript%3Ebad%3C/script%3E&task=unknown",
+            follow_redirects=False,
+        )
+        self.assertEqual(unsafe_demo.status_code, 302)
+        self.assertEqual(unsafe_demo.headers.get("Location"), "/first-look?ref=scriptbadscript")
 
         untrusted_task = 'apartment"><script>alert(1)</script>'
         fallback = await self._client.get("/first-look", params={"task": untrusted_task})

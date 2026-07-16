@@ -30,7 +30,7 @@ import httpx
 import jwt
 from aiohttp import web
 
-from analytics import AnalyticsStore
+from analytics import AnalyticsStore, _safe_event_name
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
@@ -261,12 +261,17 @@ def _trace(event: str, **fields):
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
     "/unbrowser",
+    "/chrome-tax",
     "/mcp-guide",
     "/mcp",
     "/privacy",
     "/privacy-policy",
     "/data-deletion",
     "/case-study/zillow-rental",
+    "/use/apartment-hunting",
+    "/use/flight-comparison",
+    "/use/competitor-monitoring",
+    "/use/price-tracking",
     "/trial",
     "/local",
     "/setup",
@@ -278,6 +283,8 @@ _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/chat-claude",
     "/app",
     "/scheduler",
+    "/labs/research-desk",
+    "/cli",
     "/admin",
 }
 _ANALYTICS_INLINE_GSI_ROUTES = {
@@ -295,6 +302,16 @@ _ANALYTICS_SESSION_HEADER = "X-Unchained-Analytics-Session"
 _ANALYTICS_PAGE_VIEW_HEADER = "X-Unchained-Analytics-Page-View"
 _ANALYTICS_ROUTE_HEADER = "X-Unchained-Analytics-Route"
 _ANALYTICS_GATE_TYPE_HEADER = "X-Unchained-Analytics-Gate-Type"
+_ANALYTICS_ACQUISITION_QUERY_FIELDS = {
+    "ref": 64,
+    "task": 64,
+    "utm_source": 64,
+    "utm_medium": 64,
+    "utm_campaign": 96,
+}
+_ANALYTICS_ACQUISITION_TASKS = frozenset(
+    {"apartment", "flight", "research", "search-result"}
+)
 _analytics_last_cleanup_ts = 0.0
 
 
@@ -388,10 +405,34 @@ def _analytics_gate_type_from_request(request: web.Request | None) -> str:
     return _analytics_header_value(request, _ANALYTICS_GATE_TYPE_HEADER, 32)
 
 
+def _analytics_acquisition_meta(request: web.Request | None) -> dict[str, str]:
+    """Return only bounded campaign tokens; never persist arbitrary query data."""
+    if request is None:
+        return {}
+    try:
+        query = request.query
+    except Exception:
+        return {}
+    meta: dict[str, str] = {}
+    for field, limit in _ANALYTICS_ACQUISITION_QUERY_FIELDS.items():
+        try:
+            raw = str(query.get(field, "") or "").strip()
+        except Exception:
+            continue
+        if not raw or len(raw) > limit or not re.fullmatch(r"[A-Za-z0-9._:-]+", raw):
+            continue
+        if field == "task" and raw not in _ANALYTICS_ACQUISITION_TASKS:
+            continue
+        meta[field] = raw
+    return meta
+
+
 def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: dict | None = None):
+    if str(getattr(request, "method", "GET") or "GET").upper() != "GET":
+        return False
     route = request.path
     if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
-        return
+        return False
     if auth_info is None:
         auth_info = _authenticate(request)
     gate_type = ""
@@ -399,7 +440,10 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: 
         gate_type = "inline_gsi"
     elif route in _ANALYTICS_LINK_GATE_ROUTES:
         gate_type = "link_signin"
-    _track_event(
+    event_meta = dict(meta or {})
+    for field, value in _analytics_acquisition_meta(request).items():
+        event_meta.setdefault(field, value)
+    return _track_event(
         request,
         "page_view",
         route=route,
@@ -411,7 +455,7 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: 
         source="web",
         status_code=200,
         dedupe_ttl_s=5.0,
-        meta=meta,
+        meta=event_meta,
     )
 
 
@@ -439,6 +483,17 @@ def _track_redirect(
 
 
 _analytics_ingest_buckets: dict[str, list[float]] = {}  # ip -> timestamps
+_ANALYTICS_SERVER_ONLY_EVENTS = frozenset(
+    {
+        "first_look_run_accepted",
+        "first_look_run_rejected",
+        "first_look_run_terminal",
+        "unbrowser_demo_run_accepted",
+        "unbrowser_demo_run_rejected",
+        "unbrowser_demo_run_terminal",
+        "unbrowser_outbound_click",
+    }
+)
 
 
 def _analytics_ingest_allow(
@@ -466,6 +521,8 @@ def _coerce_analytics_event_payload(raw: dict, request: web.Request) -> tuple[di
     event = str(raw.get("event", "")).strip()
     if not event:
         return None, "event required"
+    if _safe_event_name(event) in _ANALYTICS_SERVER_ONLY_EVENTS:
+        return None, "event reserved for server use"
     meta = raw.get("meta")
     if not isinstance(meta, dict):
         meta = {}
@@ -1543,11 +1600,13 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/chrome-tax", "0.8", "monthly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
         ("https://unchainedsky.com/use/flight-comparison", "0.8", "monthly"),
         ("https://unchainedsky.com/use/competitor-monitoring", "0.8", "monthly"),
         ("https://unchainedsky.com/use/price-tracking", "0.8", "monthly"),
         ("https://unchainedsky.com/mcp", "0.7", "monthly"),
+        ("https://unchainedsky.com/mcp-guide", "0.7", "monthly"),
         ("https://unchainedsky.com/case-study/zillow-rental", "0.6", "monthly"),
         ("https://unchainedsky.com/privacy", "0.3", "yearly"),
     ]
@@ -1598,6 +1657,7 @@ async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
     # preview cookies are ignored on plain "/" visits so V4 is truly default.
+    _track_page_view(request)
     query_variant = request.query.get("ui")
     preview_cookie = request.cookies.get("ui")
     variant = query_variant or ""
@@ -1609,7 +1669,10 @@ async def handle_index(request: web.Request) -> web.Response:
         template = LANDING_V4_HTML
     else:
         template = LANDING_HTML
-    html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    html = inject_google_client_id(
+        template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL),
+        GOOGLE_CLIENT_ID,
+    )
     response = web.Response(text=html, content_type="text/html")
     if request.query.get("ui") in {"v2", "v3"}:
         # Persist the choice for ~1 day so deep-links inside the site keep the
@@ -2019,6 +2082,13 @@ def _build_mcp_guide_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MCP Docs | Unchained</title>
+  <meta name="description" content="Connect AI agents to Unchained browser automation over MCP with local-browser setup and integration guidance.">
+  <link rel="canonical" href="https://unchainedsky.com/mcp-guide">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://unchainedsky.com/mcp-guide">
+  <meta property="og:title" content="MCP Browser Automation Docs | Unchained">
+  <meta property="og:description" content="Local-browser setup and integration guidance for connecting AI agents to Unchained over MCP.">
+  <meta property="og:image" content="https://unchainedsky.com/og-image.png">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>

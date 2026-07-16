@@ -1200,8 +1200,8 @@ h1{font-size:clamp(44px,8vw,104px);line-height:.88;letter-spacing:-.06em;margin:
       <h1>Web access for agents. No <a href="/chrome-tax" class="chrome-tax-link">Chrome tax</a>.</h1>
       <p class="lede">unbrowser is a lightweight MCP browser for LLM agents: one native binary, stateful sessions, bounded JavaScript, forms, cookies, and low-token BlockMaps before you escalate to a full Unchained Chrome session.</p>
       <div class="actions">
-        <a class="btn" href="https://github.com/protostatis/unbrowser">Install locally</a>
-        <a class="btn secondary" href="https://smithery.ai/servers/protostatis-dev/unbrowser" rel="me">Open on Smithery</a>
+        <a class="btn" href="/go/unbrowser-github" data-acquisition-link>Install locally</a>
+        <a class="btn secondary" href="/go/unbrowser-smithery" data-acquisition-link>Open on Smithery</a>
       </div>
     </div>
     <aside class="artifact" aria-label="unbrowser run profile">
@@ -1287,6 +1287,9 @@ ssrf_guard: enabled</pre>
   (function(){
     var state={scenarios:[],current:null,cards:new Map(),results:new Map(),eventSource:null,pinned:null,latest:null,preview:null,facts:0};
     var els={prompts:document.getElementById('ub-prompts'),runtime:document.getElementById('ub-runtime'),metrics:document.querySelector('.demo-metrics'),sources:document.getElementById('ub-sources'),inspector:document.getElementById('ub-inspector'),brief:document.getElementById('ub-brief'),metricSources:document.getElementById('ub-metric-sources'),metricOk:document.getElementById('ub-metric-ok'),metricHard:document.getElementById('ub-metric-hard'),metricFacts:document.getElementById('ub-metric-facts')};
+    var acquisition=(function(){var out=new URLSearchParams();var current=new URLSearchParams(location.search);var tasks={apartment:1,flight:1,research:1,'search-result':1};[['ref',64],['task',64],['utm_source',64],['utm_medium',64],['utm_campaign',96]].forEach(function(spec){var value=(current.get(spec[0])||'').trim();if(!value||value.length>spec[1]||!/^[A-Za-z0-9._:-]+$/.test(value))return;if(spec[0]==='task'&&!tasks[value])return;out.set(spec[0],value)});return out})();
+    function withAcquisition(path){var url=new URL(path,location.origin);acquisition.forEach(function(value,key){url.searchParams.set(key,value)});return url.pathname+(url.search?'?'+url.searchParams.toString():'')+url.hash}
+    document.querySelectorAll('[data-acquisition-link]').forEach(function(link){link.setAttribute('href',withAcquisition(link.getAttribute('href')||'/unbrowser'))});
     function esc(v){return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]})}
     function fmt(n){return new Intl.NumberFormat('en-US').format(n||0)}
     function compact(v,n){var s=String(v||'').replace(/\s+/g,' ').trim();return s.length>n?s.slice(0,n-3)+'...':s}
@@ -1311,7 +1314,7 @@ ssrf_guard: enabled</pre>
     function renderInspector(r,label,title,message){if(!r){els.inspector.innerHTML='<div class="eyebrow">'+esc(label)+'</div><h3>'+esc(title)+'</h3><p>'+esc(message||'')+'</p>';topAlignInspector();return}var p=r.preview||{},d=p.density||{},heads=p.headings||[],links=p.links||[],structures=p.structure||[],challenge=p.challenge;els.inspector.innerHTML='<div class="eyebrow">'+esc(label)+'</div><h3>'+esc(r.name||p.title||'Source')+'</h3><a class="demo-url" href="'+esc(p.url||r.url||'#')+'" target="_blank" rel="noreferrer">'+esc(p.url||r.url||'No URL')+'</a><div class="demo-kv"><span>Live '+esc(liveTime(r.retrievedAt))+'</span><span>HTTP '+esc(p.httpStatus||'--')+'</span><span>'+fmt(d.bodyTextChars||r.chars||0)+' chars</span><span>'+fmt(d.links||0)+' links</span><span>'+fmt(d.headings||heads.length)+' headings</span><span>'+esc(r.route||'unbrowser')+'</span></div>'+(challenge?'<div class="demo-section"><strong>Challenge detected</strong><p>'+esc(challenge.provider||'bot wall')+': '+esc(challenge.reason||'site requested browser escalation')+'</p></div>':'')+'<div class="demo-section"><strong>Title</strong><p>'+esc(p.title||'No title extracted')+'</p></div><div class="demo-section"><strong>Top headings</strong>'+miniList(heads,'No headings surfaced.')+'</div><div class="demo-section"><strong>Top links</strong>'+linkList(links)+'</div><div class="demo-section"><strong>Structure</strong>'+miniList(structures,'No structure returned.')+'</div>';topAlignInspector()}
     function miniList(items,empty){if(!items.length)return '<p>'+esc(empty)+'</p>';return '<ul>'+items.map(function(x){return '<li>'+esc(x)+'</li>'}).join('')+'</ul>'}
     function linkList(items){if(!items.length)return '<p>No high-signal links returned.</p>';return '<ul>'+items.map(function(x){return '<li>'+esc(x.text||'Untitled')+'<br><small>'+esc(compact(x.href||'',80))+'</small></li>'}).join('')+'</ul>'}
-    function start(){if(!state.current)return;resetRunState();renderSources(state.current.sources||[]);scrollToCoverage();setLaunchBusy(true);var es=new EventSource('/web/unbrowser/stream?scenario='+encodeURIComponent(state.current.id));state.eventSource=es;es.addEventListener('source_started',function(e){setStarted(JSON.parse(e.data))});es.addEventListener('source_result',function(e){setResult(JSON.parse(e.data))});es.addEventListener('fact_extracted',function(){state.facts++;updateMetrics()});es.addEventListener('brief_ready',function(e){var b=JSON.parse(e.data);els.brief.hidden=false;els.brief.querySelector('p').textContent=b.summary||'Scan complete.';els.brief.querySelector('.tags').innerHTML=(b.citations||[]).map(function(c){return '<span>'+esc(c)+'</span>'}).join('')});es.addEventListener('done',function(){es.close();state.eventSource=null;setLaunchBusy(false)});es.onerror=function(){es.close();state.eventSource=null;setLaunchBusy(false);renderInspector(null,'Scan stopped','Live scan unavailable','The server could not complete this scan. The unbrowser binary may be missing or busy.')};}
+    function start(){if(!state.current)return;resetRunState();renderSources(state.current.sources||[]);scrollToCoverage();setLaunchBusy(true);var es=new EventSource(withAcquisition('/web/unbrowser/stream?scenario='+encodeURIComponent(state.current.id)));state.eventSource=es;es.addEventListener('source_started',function(e){setStarted(JSON.parse(e.data))});es.addEventListener('source_result',function(e){setResult(JSON.parse(e.data))});es.addEventListener('fact_extracted',function(){state.facts++;updateMetrics()});es.addEventListener('brief_ready',function(e){var b=JSON.parse(e.data);els.brief.hidden=false;els.brief.querySelector('p').textContent=b.summary||'Scan complete.';els.brief.querySelector('.tags').innerHTML=(b.citations||[]).map(function(c){return '<span>'+esc(c)+'</span>'}).join('')});es.addEventListener('done',function(){es.close();state.eventSource=null;setLaunchBusy(false)});es.onerror=function(){es.close();state.eventSource=null;setLaunchBusy(false);renderInspector(null,'Scan stopped','Live scan unavailable','The server could not complete this scan. The unbrowser binary may be missing or busy.')};}
     fetch('/web/unbrowser/runtime').then(function(r){return r.json()}).then(function(data){els.runtime.textContent=data.unbrowserAvailable?'Live unbrowser installed':'unbrowser missing'}).catch(function(){els.runtime.textContent='runtime unknown'});
     fetch('/web/unbrowser/sources').then(function(r){return r.json()}).then(function(data){state.scenarios=data||[];renderPrompts();selectScenario((state.scenarios[0]||{}).id)}).catch(function(){renderInspector(null,'Demo unavailable','Could not load source presets','The static unbrowser page still works, but the live demo endpoints are unavailable.')});
   })();
@@ -6581,7 +6584,7 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div><div class="scan" aria-hidden="true"></div>
-<nav class="topnav" aria-label="Primary"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><button type="button" class="menu-toggle" id="landing-menu-toggle" aria-expanded="false" aria-controls="landing-nav-links" aria-label="Open navigation menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"><span></span><span></span></span></button><div class="links" id="landing-nav-links"><a href="#calculator">Preview</a><a href="#capability">Capability</a><a href="#start">Start</a><div class="developer-menu" id="landing-developer-menu"><button type="button" class="developer-toggle" id="landing-developer-toggle" aria-expanded="false" aria-controls="landing-developer-links">For developers</button><div class="developer-links" id="landing-developer-links" role="group" aria-label="Developer resources"><a href="/unbrowser">unbrowser</a><a href="/chrome-tax">Why lighter?</a></div></div><a href="/trial" class="signin" id="landing-auth-link">Start free trial</a></div></div></nav>
+<nav class="topnav" aria-label="Primary"><div class="topnav-inner"><a href="/" class="brand">UN<span>CHAIN</span>ED</a><button type="button" class="menu-toggle" id="landing-menu-toggle" aria-expanded="false" aria-controls="landing-nav-links" aria-label="Open navigation menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"><span></span><span></span></span></button><div class="links" id="landing-nav-links"><a href="#calculator">Preview</a><a href="#capability">Capability</a><a href="#start">Start</a><a href="https://searchagentsky.com/?ref=unchained-nav&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=brand_handoff" data-analytics-cta="landing_research_nav">Research</a><div class="developer-menu" id="landing-developer-menu"><button type="button" class="developer-toggle" id="landing-developer-toggle" aria-expanded="false" aria-controls="landing-developer-links">For developers</button><div class="developer-links" id="landing-developer-links" role="group" aria-label="Developer resources"><a href="/unbrowser">unbrowser</a><a href="/chrome-tax">Why lighter?</a></div></div><a href="/trial" class="signin" id="landing-auth-link">Start free trial</a></div></div></nav>
 <section class="hero">
   <div class="hero-tag">You navigate. The agent drives.</div>
   <h1>You call the shots. <em>Unchained runs the steps.</em></h1>
@@ -6616,14 +6619,14 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 <section class="section reveal" id="capability"><div class="section-label">Capabilities</div><h2 class="section-title">Built for browser work that <em>chat can&rsquo;t do alone</em></h2><p class="section-desc">Pasted text is easy for any chatbot. Unchained is for tasks where the useful work lives in a browser profile: tabs, buttons, forms, changing pages, and actions you want to review before completion.</p><div class="matrix"><table><thead><tr><th>Capability</th><th>Chatbot</th><th>WebFetch</th><th class="highlight">Unchained</th><th>Manual Chrome</th></tr></thead><tbody><tr><td>Work from a selected Chrome profile</td><td class="no">✗</td><td class="no">✗</td><td class="yes highlight">✓</td><td class="yes">✓</td></tr><tr><td>Send follow-up commands from mobile</td><td class="partial">chat only</td><td class="no">✗</td><td class="yes highlight">✓</td><td class="no">desk only</td></tr><tr><td>Click through workflows</td><td class="no">✗</td><td class="partial">◐</td><td class="yes highlight">✓</td><td class="yes">✓</td></tr><tr><td>Draft forms, then ask before final submit</td><td class="no">✗</td><td class="no">✗</td><td class="partial highlight">review</td><td class="yes">✓</td></tr><tr><td>Compare across sources</td><td class="partial">copy-paste</td><td class="partial">partial</td><td class="yes highlight">✓</td><td class="partial">slow</td></tr><tr><td>Monitor changes</td><td class="partial">manual</td><td class="partial">custom</td><td class="yes highlight">✓</td><td class="partial">slow/manual</td></tr></tbody></table></div></section>
 <section class="section reveal" id="start"><div class="section-label">Start</div><h2 class="section-title">Choose how to try Unchained</h2><p class="section-desc">Watch the product first, start a guided trial for a real browser task, or connect the browser tools to your own agent workflow.</p><div class="decision-tree"><div class="path-grid"><div class="path-card"><div class="path-eyebrow">No setup</div><h3>Watch it work first</h3><p>Best if you want to understand the product before installing anything.</p><ul><li>Shared browser demo</li><li>Public-site examples</li><li>No local profile needed</li></ul><a class="rec-cta secondary" href="/demo">Try live demo &rarr;</a></div><div class="path-card recommended"><div class="path-eyebrow">Recommended</div><h3>Start a guided trial</h3><p>Best if you have a real browser task and want setup handled step by step.</p><ul><li>Guided bridge install</li><li>Use a Chrome profile you choose</li><li>Review before final actions</li></ul><a class="rec-cta" href="/trial">Start free trial &rarr;</a></div><div class="path-card"><div class="path-eyebrow">Developers</div><h3>Use MCP / CLI</h3><p>Best if you already work from Claude, Codex, OpenCode, or another MCP client.</p><ul><li>Browser tools for agents</li><li>Local workflow control</li><li>Programmable automation</li></ul><div class="path-links"><a href="/local">Claude CLI</a><a href="/local?provider=codex-cli">Codex CLI</a><a href="/local?provider=opencode-cli">OpenCode CLI</a></div><a class="rec-cta secondary" href="/mcp">Set up MCP / CLI &rarr;</a></div></div></div></section>
 <section class="cta-section"><h2>Hand off the browser work you already repeat.</h2><p>Start with a demo, then use the guided trial when you want Unchained to help with a real browser task.</p><div class="hero-actions"><a href="/demo" class="cta-btn">Try live demo &rarr;</a><a href="/trial" class="ghost-btn">Start free trial</a></div></section>
-<footer><div class="footer-links"><a href="/demo">Demo</a><a href="/trial">Free Tier</a><a href="/unbrowser">unbrowser</a><a href="/use/apartment-hunting">Apartments</a><a href="/use/flight-comparison">Flights</a><a href="/mcp">MCP</a><a href="/privacy">Privacy</a><a href="/data-deletion">Data deletion</a><a href="mailto:__CONTACT_EMAIL__">Contact</a></div><div>UNCHAINED — browser work from a profile you control</div></footer>
+<footer><div class="footer-links"><a href="/demo">Demo</a><a href="/trial">Free Tier</a><a href="https://searchagentsky.com/?ref=unchained-footer&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=brand_handoff" data-analytics-cta="landing_research_footer">Research</a><a href="/unbrowser">unbrowser</a><a href="/use/apartment-hunting">Apartments</a><a href="/use/flight-comparison">Flights</a><a href="/mcp">MCP</a><a href="/privacy">Privacy</a><a href="/data-deletion">Data deletion</a><a href="mailto:__CONTACT_EMAIL__">Contact</a></div><div>UNCHAINED — browser work from a profile you control</div></footer>
 <script>
 const $=id=>document.getElementById(id);
 const SCENARIOS=[
   {id:'apartment',label:'Shortlist apartments',hint:'Find options, remove noise, prepare outreach',tip:'Zillow · Apartments.com · Craigslist → ranked shortlist',url:'profile://rentals/zillow-apartments-maps',prompt:'Find 2BR apartments in Brooklyn under $4,000 with laundry and a reasonable commute.',steps:['Open saved rental sites','Apply filters and scan listings','Cross-check commute, fees, and duplicates','Rank the strongest matches','Prepare a shortlist for review'],review:['Approve which listings to contact','Edit the message before sending','Keep final decisions with you'],output:['Ranked table with links and tradeoffs','Suggested next actions','Draft outreach text'],note:'Best when the task spans several housing sites and you want a shortlist before contacting anyone.',href:'/demo',cta:'Try live demo'},
   {id:'travel',label:'Compare travel options',hint:'Flights, hotels, constraints, shortlist',tip:'Google Flights · Kayak · airline sites → savings you’d miss',url:'profile://travel/flights-hotels-calendar',prompt:'Compare flight and hotel options for a 3-day work trip, then summarize the best tradeoffs.',steps:['Search travel sites','Compare price, timing, and location','Capture cancellation details','Build a short options list','Pause before booking'],review:['Choose the itinerary','Confirm before purchase','Save or share the summary'],output:['Comparison table','Recommended picks','Links back to sources'],note:'Good for planning and comparison. Purchases stay behind your confirmation.',href:'/trial',cta:'Start free trial'},
   {id:'ops',label:'Repeat an ops workflow',hint:'Portals, status fields, weekly report',tip:'vendor portals · status pages → auto weekly briefing',url:'profile://work/vendor-portals/status',prompt:'Check vendor portals, collect status updates, and prepare a weekly summary.',steps:['Open selected work sites','Navigate recurring pages','Collect relevant status fields','Flag exceptions','Draft the weekly report'],review:['Review flagged issues','Approve the final summary','Reuse the workflow next week'],output:['Status summary','Exception list','Repeatable run outline'],note:'Best when the same browser workflow repeats and the final report needs human review.',href:'/mcp',cta:'Set up MCP / CLI'},
-  {id:'research',label:'Research across tabs',hint:'Sources, specs, constraints, recommendation',tip:'multi-source compare → sourced recommendation table',url:'profile://research/sources-comparison',prompt:'Compare products across several sites and build a recommendation table.',steps:['Search across selected sources','Open candidate pages','Extract prices, specs, and constraints','Compare options','Summarize tradeoffs'],review:['Check source links','Adjust criteria','Choose what to act on'],output:['Sourced comparison table','Pros and cons','Recommendation ready to review'],note:'Useful when the answer depends on multiple sources, not a single pasted page.',href:'/demo',cta:'Try live demo'}
+  {id:'research',label:'Research across tabs',hint:'Sources, specs, constraints, recommendation',tip:'multi-source compare → sourced recommendation table',url:'profile://research/sources-comparison',prompt:'Compare products across several sites and build a recommendation table.',steps:['Search across selected sources','Open candidate pages','Extract prices, specs, and constraints','Compare options','Summarize tradeoffs'],review:['Check source links','Adjust criteria','Choose what to act on'],output:['Sourced comparison table','Pros and cons','Recommendation ready to review'],note:'Useful when the answer depends on multiple sources, not a single pasted page.',href:'/demo?ref=unchained-home&task=research',cta:'Try live demo'}
 ];
 function esc(text){return String(text).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))}
 function renderScenario(id){const s=SCENARIOS.find(x=>x.id===id)||SCENARIOS[0];$('task-prompt').textContent=s.prompt;$('preview-url').textContent=s.url;$('step-timeline').innerHTML=s.steps.map((step,i)=>'<div class="timeline-step"><span class="num">'+(i+1)+'</span><span class="txt">'+esc(step)+'</span></div>').join('');requestAnimationFrame(()=>$('step-timeline').querySelectorAll('.timeline-step').forEach((el,i)=>setTimeout(()=>el.classList.add('in'),75*i)));$('review-list').innerHTML=s.review.map(item=>'<div class="review-item">'+esc(item)+'</div>').join('');$('output-list').innerHTML=s.output.map(item=>'<div class="output-item">'+esc(item)+'</div>').join('');$('profile-note').textContent=s.note;const cta=$('preview-cta');cta.href=s.href;cta.textContent=s.cta+' →';document.querySelectorAll('.scenario-card').forEach(card=>card.classList.toggle('active',card.dataset.id===s.id))}
@@ -15494,7 +15497,7 @@ body{
 <!-- Login -->
 <div id="login">
   <h1>Unchained</h1>
-  <div class="sub">Connect your real Chrome to Claude CLI or Codex CLI on this computer.</div>
+  <div class="sub">Connect your real Chrome to Claude CLI, Codex CLI, or OpenCode CLI on this computer.</div>
   <div class="login-badge">Mode: <strong>Local CLI + your Chrome</strong></div>
   <div id="g_id_onload"
        data-client_id="__GOOGLE_CLIENT_ID__"
@@ -16418,7 +16421,8 @@ function showMain() {
       opt.textContent = _opencodeOptionLabel(saved.slice('opencode-cli:'.length));
       document.getElementById('modelsel').appendChild(opt);
     }
-    document.getElementById('modelsel').value = saved || providerDefault;
+    const savedOpenCode = saved && saved.startsWith('opencode-cli:') ? saved : '';
+    document.getElementById('modelsel').value = savedOpenCode || providerDefault;
   } else if (saved && document.querySelector('#modelsel option[value="' + CSS.escape(saved) + '"]')) {
     document.getElementById('modelsel').value = saved;
   }
@@ -18202,6 +18206,11 @@ body{
 .install-nudge:hover{color:var(--text);border-color:rgba(233,69,96,0.3)}
 .install-nudge a{color:var(--accent);text-decoration:none;font-weight:500}
 .install-nudge a:hover{text-decoration:underline}
+.install-nudge strong{display:block;color:var(--text);font-size:14px;margin-bottom:4px}
+.install-nudge p{margin:0 0 10px;line-height:1.45}
+.install-nudge-actions{display:flex;gap:8px;flex-wrap:wrap}
+.install-nudge-actions a{display:inline-flex;align-items:center;justify-content:center;padding:7px 10px;border:1px solid #444;border-radius:7px}
+.install-nudge-actions a.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .quota-dismiss{
   display:block;margin-top:12px;background:none;border:none;
   color:var(--muted);font-size:13px;cursor:pointer;
@@ -18232,12 +18241,12 @@ body{
     <button class="quota-secondary" type="button" onclick="showSampleRun();dismissQuota()">View sample run</button>
     <a href="/trial" class="quota-cta">Start Free Trial &rarr;</a>
     <div class="quota-grid">
-      <div class="quota-item"><strong>Any site</strong><span>Browse the sites you actually use, not just public demos.</span></div>
+      <div class="quota-item"><strong>More sites</strong><span>Use compatible sites beyond the selected public demos, subject to site and provider constraints.</span></div>
       <div class="quota-item"><strong>Your logins</strong><span>Use your own cookies, sessions, and saved accounts.</span></div>
-      <div class="quota-item"><strong>Stronger models</strong><span>Claude, GPT-4o, Gemini Pro — not demo-tier.</span></div>
-      <div class="quota-item"><strong>No run limit</strong><span>Unlimited tasks on your own machine.</span></div>
+      <div class="quota-item"><strong>Choose your model</strong><span>Use a supported local CLI or your configured provider.</span></div>
+      <div class="quota-item"><strong>Your own workflow</strong><span>Run within your provider and local resource limits.</span></div>
     </div>
-    <div class="quota-or">or install now — 30 seconds</div>
+    <div class="quota-or">or review the installer first</div>
     <div class="quota-install">
       <div class="qi-label">macOS / Linux</div>
       <div class="qi-cmd"><code>curl -fsSL https://unchainedsky.com/install.sh | bash</code><button class="qi-copy" aria-label="Copy install command" onclick="navigator.clipboard.writeText('curl -fsSL https://unchainedsky.com/install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button></div>
@@ -18260,7 +18269,7 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" style="display:block"><strong>Live shared browser</strong> — run a demo on selected public sites. <a href="/trial">Unlock the full browser</a> for any site.</div>
+  <div id="model-notice" style="display:block"><strong>Live shared browser</strong> — run a demo on selected public sites. <a href="/trial">Unlock the full browser</a> for supported sites and your chosen profile.</div>
   __FIRST_LOOK_TASK_HANDOFF_HTML__
 
   <div id="workspace">
@@ -18279,7 +18288,7 @@ body{
             <button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">&#128240;</span> Group the top Hacker News stories</button>
             <button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</button>
           </div>
-          <div class="hint-note">Tasks typically complete in 30–60 seconds</div>
+          <div class="hint-note">Run time varies by site and task.</div>
           <div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>
           <div class="hint-footer">Live browser demo</div>
         </div>
@@ -18331,6 +18340,9 @@ body{
 <script>
 const FIRST_LOOK_GUEST_LIMIT = __FIRST_LOOK_GUEST_LIMIT__;
 let remainingGuestRuns = __FIRST_LOOK_GUEST_REMAINING__;
+const FIRST_LOOK_REF = __FIRST_LOOK_REF_JSON__;
+const FIRST_LOOK_TASK = __FIRST_LOOK_TASK_JSON__;
+const FIRST_LOOK_FROM_RESULT = __FIRST_LOOK_FROM_RESULT_JSON__;
 let agentId = '';
 let sessionId = '';
 let sending = false;
@@ -18379,6 +18391,27 @@ function esc(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function firstLookAttributionSuffix() {
+  const params = new URLSearchParams();
+  if (FIRST_LOOK_REF) params.set('ref', FIRST_LOOK_REF);
+  if (FIRST_LOOK_TASK) params.set('task', FIRST_LOOK_TASK);
+  if (FIRST_LOOK_FROM_RESULT) params.set('from_result', FIRST_LOOK_FROM_RESULT);
+  const query = params.toString();
+  return query ? ('?' + query) : '';
+}
+
+function applyFirstLookAttribution(root) {
+  const scope = root || document;
+  const suffix = firstLookAttributionSuffix();
+  scope.querySelectorAll('a[href="/trial"],a[href="/install"]').forEach(function (link) {
+    const baseHref = link.getAttribute('href');
+    link.dataset.analyticsCta = baseHref === '/install'
+      ? 'first_look_install'
+      : 'first_look_trial';
+    if (suffix) link.setAttribute('href', baseHref + suffix);
+  });
 }
 
 function sessionStoreKey() {
@@ -18524,14 +18557,15 @@ function updateQuotaCopy() {
     if (remainingGuestRuns > 0) {
       bar.innerHTML = '<strong>' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs left.</strong> The shared preview works best on selected public sites.';
     } else {
-      bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/trial" style="color:var(--accent)">Start a free trial</a> to browse any site with the full agent.';
+      bar.innerHTML = '<strong>Guest runs used up.</strong> <a href="/trial" style="color:var(--accent)">Start a free trial</a> to use the full agent on supported sites.';
     }
   }
+  applyFirstLookAttribution(bar || document);
 }
 
 function showQuotaFeedback() {
   updateQuotaCopy();
-  const trialLink = document.querySelector('#quota-bar a[href="/trial"]');
+  const trialLink = document.querySelector('#quota-bar a[href^="/trial"]');
   if (trialLink) trialLink.focus();
 }
 
@@ -18627,10 +18661,12 @@ async function doNewChat() {
           '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
           '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
         '</div>' +
-        '<div class="hint-note">Tasks typically complete in 30\u201360 seconds</div>' +
+        '<div class="hint-note">Run time varies by site and task.</div>' +
         '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
         '<div class="hint-footer">Live browser demo</div>' +
       '</div>';
+    sessionStorage.removeItem('uc_completion_nudge_v2_shown');
+    applyFirstLookAttribution(chat);
     document.querySelectorAll('.hint-item').forEach(function (item) {
       item.addEventListener('click', function () {
         fillExample(item.dataset.prompt || '', item.dataset.url || '');
@@ -19327,7 +19363,10 @@ async function doSend() {
         session_id: sessionId,
         model: 'google/gemini-3.1-flash-lite',
         headless: true,
-        first_look_guest: true
+        first_look_guest: true,
+        ref: FIRST_LOOK_REF,
+        task: FIRST_LOOK_TASK,
+        from_result: FIRST_LOOK_FROM_RESULT
       }),
       signal: cancelCtrl.signal
     });
@@ -19337,7 +19376,7 @@ async function doSend() {
       if (resp.status === 429 && data.error === 'demo_quota_exceeded') {
         remainingGuestRuns = 0;
         updateQuotaCopy();
-        addLine('system', 'Quota', 'Guest runs used up. Start a free trial to browse any site with the full agent.');
+        addLine('system', 'Quota', 'Guest runs used up. Start a free trial to use the full agent on supported sites.');
         return;
       }
       if (data.error === 'headless_bridge_not_configured') {
@@ -19442,16 +19481,31 @@ async function doSend() {
             setTimeout(() => {
               if (!sending && previewSocket === wsAtDone) closePreviewSocket();
             }, 1000);
-            // Install nudge after task completion (once per session)
-            if (!sessionStorage.getItem('uc_install_nudge_shown')) {
-              sessionStorage.setItem('uc_install_nudge_shown', '1');
+            // Conversion choices after task completion (once per session).
+            if (!sessionStorage.getItem('uc_completion_nudge_v2_shown')) {
+              sessionStorage.setItem('uc_completion_nudge_v2_shown', '1');
               var nudge = document.createElement('div');
               nudge.className = 'install-nudge';
-              nudge.textContent = 'Want this on your own browser with your logins? ';
-              var nudgeLink = document.createElement('a');
-              nudgeLink.href = '/install';
-              nudgeLink.textContent = 'Install in 30 seconds \u2192';
-              nudge.appendChild(nudgeLink);
+              var nudgeTitle = document.createElement('strong');
+              nudgeTitle.textContent = 'Your live run is complete.';
+              var nudgeCopy = document.createElement('p');
+              nudgeCopy.textContent = 'Continue with a free trial, or connect the browser tools to your own workflow.';
+              var nudgeActions = document.createElement('div');
+              nudgeActions.className = 'install-nudge-actions';
+              var trialLink = document.createElement('a');
+              trialLink.href = '/trial' + firstLookAttributionSuffix();
+              trialLink.className = 'primary';
+              trialLink.dataset.analyticsCta = 'first_look_complete_trial';
+              trialLink.textContent = 'Start free trial \u2192';
+              var installLink = document.createElement('a');
+              installLink.href = '/install' + firstLookAttributionSuffix();
+              installLink.dataset.analyticsCta = 'first_look_complete_install';
+              installLink.textContent = 'Connect this browser';
+              nudgeActions.appendChild(trialLink);
+              nudgeActions.appendChild(installLink);
+              nudge.appendChild(nudgeTitle);
+              nudge.appendChild(nudgeCopy);
+              nudge.appendChild(nudgeActions);
               document.getElementById('chat').appendChild(nudge);
               document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
             }
@@ -19502,6 +19556,7 @@ document.querySelectorAll('.hint-item').forEach(function (item) {
   });
 });
 
+applyFirstLookAttribution(document);
 updateQuotaCopy();
 updateSendAvailability();
 autoGrow(document.getElementById('msginput'));
@@ -22796,7 +22851,7 @@ h1{margin:10px 0 12px;font-size:clamp(38px,6vw,68px);line-height:0.95;letter-spa
         <div class="kicker">Secure local agent</div>
         <h1>Connect this computer.</h1>
         <div class="sub">Download the Unchained agent, leave it running, and return to chat when both local status pills are online.</div>
-        <div class="prereq"><b>Before you install</b>For local chat, Claude CLI or Codex CLI should already be installed and logged in. This installer only adds the Unchained browser agent.</div>
+        <div class="prereq"><b>Before you install</b>For local chat, Claude CLI, Codex CLI, or OpenCode CLI should already be installed and logged in. This installer only adds the Unchained browser agent.</div>
       </section>
 
       <div>

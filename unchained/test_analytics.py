@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import time
@@ -57,8 +58,50 @@ class TestAnalyticsStore(unittest.TestCase):
             self.assertIn("session_id", event_cols)
             self.assertIn("route_effective", event_cols)
             self.assertIn("latency_ms", event_cols)
+            self.assertIn("referrer_host", event_cols)
+            self.assertIn("user_agent_hash", event_cols)
+            self.assertIn("user_agent_class", event_cols)
+            self.assertIn("is_bot", event_cols)
             self.assertIn("session_id", session_cols)
             self.assertIn("visitor_id", session_cols)
+
+    def test_track_records_privacy_safe_traffic_quality_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            req = _req(
+                "/unbrowser",
+                "1.2.3.4",
+                "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+            )
+            req.headers["Referer"] = "https://github.com/protostatis/unbrowser"
+            self.assertTrue(store.track("page_view", request=req, route="/unbrowser"))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT referrer_host, user_agent_hash, user_agent_class, is_bot "
+                "FROM analytics_events"
+            ).fetchone()
+            conn.close()
+
+            self.assertEqual(row[0], "github.com")
+            self.assertRegex(row[1], r"^ua:[0-9a-f]{20}$")
+            self.assertEqual(row[2], "chrome_like")
+            self.assertEqual(row[3], 0)
+
+    def test_track_flags_declared_automation_user_agents(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/auth.db"
+            store = AnalyticsStore(db_path=db_path)
+            req = _req("/first-look", "1.2.3.4", "ExampleCrawler/1.0")
+            self.assertTrue(store.track("page_view", request=req, route="/first-look"))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT user_agent_class, is_bot FROM analytics_events"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row, ("declared_automation", 1))
 
     def test_track_dedupe(self):
         with tempfile.TemporaryDirectory() as td:
@@ -258,6 +301,21 @@ class TestAnalyticsStore(unittest.TestCase):
 
 
 class TestWebAnalyticsContext(unittest.TestCase):
+    def test_growth_and_seo_routes_are_page_view_allowlisted(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        expected = {
+            "/chrome-tax",
+            "/use/apartment-hunting",
+            "/use/flight-comparison",
+            "/use/competitor-monitoring",
+            "/use/price-tracking",
+            "/labs/research-desk",
+            "/cli",
+        }
+        self.assertTrue(expected.issubset(web._ANALYTICS_PAGE_VIEW_ROUTES))
+
     def test_track_event_uses_request_analytics_headers(self):
         os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
         import web
@@ -301,6 +359,80 @@ class TestWebAnalyticsContext(unittest.TestCase):
                 web._analytics = original_analytics
                 web._analytics_last_cleanup_ts = original_cleanup
 
+    def test_page_views_are_get_only_and_keep_only_bounded_acquisition_tokens(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                request = SimpleNamespace(
+                    headers={"User-Agent": "Mozilla/5.0 Chrome/140.0"},
+                    remote="10.0.0.90",
+                    path="/unbrowser",
+                    method="HEAD",
+                    query={
+                        "ref": "unbrowser-readme",
+                        "task": "research",
+                        "utm_source": "github",
+                        "utm_medium": "repository",
+                        "utm_campaign": "unbrowser_guide",
+                        "utm_term": "private search terms",
+                        "email": "person@example.com",
+                    },
+                )
+                with patch.object(
+                    web,
+                    "_authenticate",
+                    side_effect=AssertionError("HEAD must skip authentication"),
+                ):
+                    self.assertFalse(web._track_page_view(request))
+                request.method = "GET"
+                self.assertTrue(web._track_page_view(request, auth_info={}))
+
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute(
+                    "SELECT event, route, meta_json FROM analytics_events ORDER BY id"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0][:2], ("page_view", "/unbrowser"))
+                self.assertEqual(
+                    json.loads(rows[0][2]),
+                    {
+                        "ref": "unbrowser-readme",
+                        "task": "research",
+                        "utm_source": "github",
+                        "utm_medium": "repository",
+                        "utm_campaign": "unbrowser_guide",
+                    },
+                )
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
+    def test_acquisition_tokens_are_rejected_instead_of_rewritten(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        request = SimpleNamespace(
+            query={
+                "ref": "person@example.com",
+                "task": "untrusted_task",
+                "utm_source": "github/repository",
+                "utm_medium": "repository",
+                "utm_campaign": "x" * 97,
+            }
+        )
+        self.assertEqual(
+            web._analytics_acquisition_meta(request),
+            {"utm_medium": "repository"},
+        )
+
 
 class _FakeRequest:
     def __init__(self, body, path="/web/analytics/event"):
@@ -315,6 +447,99 @@ class _FakeRequest:
 
 
 class TestAnalyticsHandlers(unittest.IsolatedAsyncioTestCase):
+    async def test_single_ingest_rejects_server_only_events_without_persistence(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+        from web_app.handlers import analytics as analytics_handlers
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                for event in (
+                    "first_look_run_accepted",
+                    "FIRST_LOOK_RUN_REJECTED",
+                    "first look run terminal",
+                    "unbrowser_demo_run_accepted",
+                    "UNBROWSER_DEMO_RUN_REJECTED",
+                    "unbrowser demo run terminal",
+                    "unbrowser_outbound_click",
+                ):
+                    with self.subTest(event=event):
+                        with patch.object(analytics_handlers, "_core", return_value=web):
+                            resp = await analytics_handlers.handle_analytics_event(
+                                _FakeRequest({"event": event})
+                            )
+                        self.assertEqual(resp.status, 400)
+                        self.assertEqual(
+                            json.loads(resp.body.decode())["error"],
+                            "event reserved for server use",
+                        )
+
+                conn = sqlite3.connect(db_path)
+                count = conn.execute("SELECT COUNT(*) FROM analytics_events").fetchone()[0]
+                conn.close()
+                self.assertEqual(count, 0)
+
+                inserted = web._track_event(
+                    _FakeRequest({}),
+                    "first_look_run_accepted",
+                    event_id="server-event",
+                    source="server",
+                    meta={"run_id": "0123456789abcdefabcd"},
+                )
+                self.assertTrue(inserted)
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
+    async def test_batch_ingest_rejects_server_only_events_and_persists_allowed_event_only(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+        from web_app.handlers import analytics as analytics_handlers
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                body = {
+                    "events": [
+                        {"event": "first_look_run_accepted"},
+                        {"event": "first_look_run_rejected"},
+                        {"event": "first_look_run_terminal"},
+                        {"event": "unbrowser_demo_run_accepted"},
+                        {"event": "unbrowser_demo_run_rejected"},
+                        {"event": "unbrowser_demo_run_terminal"},
+                        {"event": "unbrowser_outbound_click"},
+                        {"event": "cta_click", "cta_id": "first_look_trial"},
+                    ]
+                }
+                with patch.object(analytics_handlers, "_core", return_value=web):
+                    resp = await analytics_handlers.handle_analytics_events(
+                        _FakeRequest(body, path="/web/analytics/events")
+                    )
+
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(
+                    json.loads(resp.body.decode()),
+                    {"ok": True, "received": 8, "accepted": 1, "rejected": 7},
+                )
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute(
+                    "SELECT event FROM analytics_events ORDER BY id"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(rows, [("cta_click",)])
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
     async def test_event_ingest_is_rate_limited(self):
         from web_app.handlers import analytics as analytics_handlers
 

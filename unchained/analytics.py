@@ -23,8 +23,23 @@ MAX_USER_TYPE_LEN = 32
 MAX_GATE_TYPE_LEN = 32
 MAX_CTA_ID_LEN = 64
 MAX_ERROR_CODE_LEN = 64
+MAX_REFERRER_HOST_LEN = 255
 MAX_META_BYTES = 4096
 SESSION_BUCKET_SECONDS = 30 * 60
+
+_BOT_USER_AGENT_TOKENS = (
+    "bot",
+    "crawler",
+    "spider",
+    "slurp",
+    "headless",
+    "playwright",
+    "puppeteer",
+    "curl/",
+    "wget/",
+    "python-requests",
+    "go-http-client",
+)
 
 LOGIN_ROUTES = (
     "/trial",
@@ -99,6 +114,41 @@ def _referrer_path(request) -> str:
     return (parsed.path or "").strip()[:MAX_ROUTE_LEN]
 
 
+def _referrer_host(request) -> str:
+    ref = (request.headers.get("Referer", "") if request else "").strip()
+    if not ref:
+        return ""
+    try:
+        parsed = urlparse(ref)
+    except Exception:
+        return ""
+    return (parsed.hostname or "").strip().lower()[:MAX_REFERRER_HOST_LEN]
+
+
+def _user_agent_profile(request) -> tuple[str, str, int]:
+    """Return a privacy-safe UA fingerprint, coarse class, and bot flag."""
+    ua = _user_agent(request)
+    if not ua:
+        return "", "missing", 0
+    digest = hashlib.sha256(ua.encode("utf-8")).hexdigest()
+    if any(token in ua for token in _BOT_USER_AGENT_TOKENS):
+        ua_class = "declared_automation"
+        is_bot = 1
+    elif "chrome" in ua or "crios" in ua:
+        ua_class = "chrome_like"
+        is_bot = 0
+    elif "firefox" in ua or "fxios" in ua:
+        ua_class = "firefox_like"
+        is_bot = 0
+    elif "safari" in ua:
+        ua_class = "safari_like"
+        is_bot = 0
+    else:
+        ua_class = "other"
+        is_bot = 0
+    return f"ua:{digest[:20]}", ua_class, is_bot
+
+
 def _parse_int(value, default: int = 0) -> int:
     try:
         return int(value)
@@ -129,6 +179,10 @@ class AnalyticsStore:
         "cta_id": "TEXT",
         "error_code": "TEXT",
         "latency_ms": "INTEGER",
+        "referrer_host": "TEXT",
+        "user_agent_hash": "TEXT",
+        "user_agent_class": "TEXT",
+        "is_bot": "INTEGER",
     }
 
     _SESSION_COLUMNS: dict[str, str] = {
@@ -414,6 +468,8 @@ class AnalyticsStore:
         intended = _trim_text(route_intended, MAX_ROUTE_LEN) or route_text
         effective = _trim_text(route_effective, MAX_ROUTE_LEN) or route_text
         ref_path = _referrer_path(request)
+        ref_host = _referrer_host(request)
+        user_agent_hash, user_agent_class, is_bot = _user_agent_profile(request)
         source_text = _trim_text(source, MAX_SOURCE_LEN)
         user_type_text = _trim_text(user_type, MAX_USER_TYPE_LEN)
         gate_type_text = _trim_text(gate_type, MAX_GATE_TYPE_LEN)
@@ -462,8 +518,9 @@ class AnalyticsStore:
         with self._conn_ctx() as conn:
             conn.execute(
                 "INSERT INTO analytics_events (ts, event, event_id, session_id, page_view_id, visitor_id, user_id, user_type, route, "
-                "route_intended, route_effective, referrer_path, source, gate_type, cta_id, error_code, status_code, latency_ms, meta_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "route_intended, route_effective, referrer_path, referrer_host, user_agent_hash, user_agent_class, is_bot, "
+                "source, gate_type, cta_id, error_code, status_code, latency_ms, meta_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     ts,
                     name,
@@ -477,6 +534,10 @@ class AnalyticsStore:
                     intended,
                     effective,
                     ref_path,
+                    ref_host,
+                    user_agent_hash,
+                    user_agent_class,
+                    is_bot,
                     source_text,
                     gate_type_text,
                     cta_id_text,

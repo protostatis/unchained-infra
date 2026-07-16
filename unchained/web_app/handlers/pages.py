@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from html import escape
+from urllib.parse import urlencode
 
 from aiohttp import web
 
@@ -30,7 +32,46 @@ _FIRST_LOOK_TASK_HANDOFFS = {
             "source link. Do not book anything."
         ),
     },
+    "research": {
+        "label": "Research comparison task",
+        "prompt": (
+            "Compare three current browser automation or agent-tool products using "
+            "their public documentation. Build a sourced table of capabilities, setup, "
+            "pricing claims, and tradeoffs. Do not sign in, purchase, or submit forms."
+        ),
+    },
+    "search-result": {
+        "label": "Continue this SearchAgentSky answer",
+        "prompt": "",
+    },
 }
+
+_UNBROWSER_OUTBOUND_DESTINATIONS = {
+    "/go/unbrowser-github": (
+        "https://github.com/protostatis/unbrowser",
+        "unbrowser_install_github",
+        "github_repository",
+    ),
+    "/go/unbrowser-smithery": (
+        "https://smithery.ai/servers/protostatis-dev/unbrowser",
+        "unbrowser_open_smithery",
+        "smithery_listing",
+    ),
+}
+
+
+def _sanitize_first_look_ref(value: str) -> str:
+    """Keep acquisition attribution bounded and safe for analytics and URLs."""
+    return "".join(
+        ch for ch in str(value or "")
+        if ch.isascii() and (ch.isalnum() or ch in "._:-")
+    )[:64]
+
+
+def _sanitize_first_look_result_id(value: str) -> str:
+    """Accept only the opaque public-result identifier used by SearchAgentSky."""
+    text = str(value or "").strip().lower()
+    return text if re.fullmatch(r"[a-z0-9]{12}", text) else ""
 
 
 _LEGAL_LAST_UPDATED = "July 12, 2026"
@@ -249,6 +290,27 @@ async def handle_unbrowser_page(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_unbrowser_outbound(request: web.Request) -> web.Response:
+    """Record fixed unbrowser CTA outcomes before leaving the site."""
+    destination, cta_id, destination_id = _UNBROWSER_OUTBOUND_DESTINATIONS[request.path]
+    if str(getattr(request, "method", "GET") or "GET").upper() == "GET":
+        core = _core()
+        meta = core._analytics_acquisition_meta(request)
+        meta["destination"] = destination_id
+        core._track_event(
+            request,
+            "unbrowser_outbound_click",
+            route=request.path,
+            route_intended=request.path,
+            route_effective=destination,
+            cta_id=cta_id,
+            source="server",
+            status_code=302,
+            meta=meta,
+        )
+    raise web.HTTPFound(destination)
+
+
 async def handle_chrome_tax_page(request: web.Request) -> web.Response:
     """Serve the Chrome Tax Calculator — value-first artifact for the breadcrumb trail."""
     core = _core()
@@ -264,10 +326,33 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
-def _build_first_look_preview_html(*, prompt_limit: int, remaining: int, task: str = "") -> str:
+def _build_first_look_preview_html(
+    *,
+    prompt_limit: int,
+    remaining: int,
+    task: str = "",
+    ref: str = "",
+    from_result: str = "",
+) -> str:
+    safe_result_id = _sanitize_first_look_result_id(from_result)
     task_key = task if task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    safe_ref = _sanitize_first_look_ref(ref)
+    if task_key == "search-result":
+        if not safe_result_id or safe_ref != "searchagentsky-result":
+            task_key = ""
+            safe_result_id = ""
+    else:
+        safe_result_id = ""
     handoff = _FIRST_LOOK_TASK_HANDOFFS.get(task_key)
     prompt = handoff["prompt"] if handoff else ""
+    if handoff and task_key == "search-result":
+        prompt = (
+            "Open the public SearchAgentSky answer at "
+            f"https://searchagentsky.com/r/{safe_result_id}. Review its cited sources, "
+            "then verify the three most time-sensitive claims with current public sources. "
+            "Return what still holds, what changed, and source links. Do not sign in, "
+            "purchase, or submit forms."
+        )
     handoff_html = ""
     if handoff:
         handoff_html = (
@@ -283,8 +368,20 @@ def _build_first_look_preview_html(*, prompt_limit: int, remaining: int, task: s
     html = html.replace("__FIRST_LOOK_TASK_HANDOFF_HTML__", handoff_html)
     html = html.replace("__FIRST_LOOK_TASK_PROMPT_HTML__", escape(prompt))
     html = html.replace(
+        "__FIRST_LOOK_REF_JSON__",
+        json.dumps(safe_ref).replace("<", r"\u003c"),
+    )
+    html = html.replace(
+        "__FIRST_LOOK_TASK_JSON__",
+        json.dumps(task_key).replace("<", r"\u003c"),
+    )
+    html = html.replace(
         "__FIRST_LOOK_TASK_PROMPT_JSON__",
         json.dumps(prompt).replace("<", r"\u003c"),
+    )
+    html = html.replace(
+        "__FIRST_LOOK_FROM_RESULT_JSON__",
+        json.dumps(safe_result_id).replace("<", r"\u003c"),
     )
     return html
 
@@ -634,20 +731,34 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
 async def handle_first_look_page(request: web.Request) -> web.Response:
     """Serve the first-look page (now uses the preview template)."""
     core = _core()
-    ref = request.query.get('ref', '')[:64]
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
+    from_result = _sanitize_first_look_result_id(request.query.get("from_result", ""))
     requested_task = request.query.get("task", "")
     task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    if task == "search-result":
+        if not from_result or ref != "searchagentsky-result":
+            task = ""
+            from_result = ""
+    else:
+        from_result = ""
     meta = {}
     if ref:
         meta["ref"] = ref
     if task:
         meta["task"] = task
+    if from_result:
+        meta["from_result"] = from_result
     core._track_page_view(request, meta=meta or None)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
-    html = _build_first_look_preview_html(
-        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
-        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
-        task=task,
+    html = core.inject_google_client_id(
+        _build_first_look_preview_html(
+            prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+            remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+            task=task,
+            ref=ref,
+            from_result=from_result,
+        ),
+        core.GOOGLE_CLIENT_ID,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
@@ -657,20 +768,34 @@ async def handle_first_look_page(request: web.Request) -> web.Response:
 async def handle_first_look_preview_page(request: web.Request) -> web.Response:
     """Serve the guest-safe preview route for first-look review."""
     core = _core()
-    ref = request.query.get("ref", "")[:64]
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
+    from_result = _sanitize_first_look_result_id(request.query.get("from_result", ""))
     requested_task = request.query.get("task", "")
     task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    if task == "search-result":
+        if not from_result or ref != "searchagentsky-result":
+            task = ""
+            from_result = ""
+    else:
+        from_result = ""
     meta = {"route": "first-look-preview"}
     if ref:
         meta["ref"] = ref
     if task:
         meta["task"] = task
+    if from_result:
+        meta["from_result"] = from_result
     core._track_page_view(request, meta=meta)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
-    html = _build_first_look_preview_html(
-        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
-        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
-        task=task,
+    html = core.inject_google_client_id(
+        _build_first_look_preview_html(
+            prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+            remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+            task=task,
+            ref=ref,
+            from_result=from_result,
+        ),
+        core.GOOGLE_CLIENT_ID,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
@@ -680,8 +805,28 @@ async def handle_first_look_preview_page(request: web.Request) -> web.Response:
 async def handle_demo_page(request: web.Request) -> web.Response:
     """Redirect /demo to /first-look for backward compatibility."""
     core = _core()
-    core._track_redirect(request, "/first-look", reason="legacy_route_alias")
-    raise web.HTTPFound("/first-look")
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
+    from_result = _sanitize_first_look_result_id(request.query.get("from_result", ""))
+    requested_task = request.query.get("task", "")
+    task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    if task == "search-result":
+        if not from_result or ref != "searchagentsky-result":
+            task = ""
+            from_result = ""
+    else:
+        from_result = ""
+    params = {}
+    if ref:
+        params["ref"] = ref
+    if task:
+        params["task"] = task
+    if from_result:
+        params["from_result"] = from_result
+    location = "/first-look"
+    if params:
+        location += "?" + urlencode(params)
+    core._track_redirect(request, location, reason="legacy_route_alias")
+    raise web.HTTPFound(location)
 
 
 async def handle_local_page(request: web.Request) -> web.Response:
