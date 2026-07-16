@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import importlib
+import json
 import os
 import re
 import secrets
@@ -137,6 +138,97 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn('data-analytics-cta="landing_research_nav"', page.text)
         self.assertIn('data-analytics-cta="landing_research_footer"', page.text)
         self.assertIn(".replace(/[^A-Za-z0-9._:-]/g, '')", page.text)
+
+    async def test_unbrowser_acquisition_and_outbound_events_are_server_owned(self):
+        analytics_db = os.environ["UNCHAINED_ANALYTICS_DB_PATH"]
+        browser_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 AppleWebKit/537.36 "
+                "Chrome/140.0 Safari/537.36"
+            )
+        }
+        campaign = {
+            "ref": "unbrowser-readme",
+            "utm_source": "github",
+            "utm_medium": "repository",
+            "utm_campaign": "unbrowser_guide",
+        }
+
+        def _event_count(event: str, route: str) -> int:
+            with sqlite3.connect(analytics_db) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM analytics_events WHERE event = ? AND route = ?",
+                    (event, route),
+                ).fetchone()
+            return int(row[0] if row else 0)
+
+        page_views_before = _event_count("page_view", "/unbrowser")
+        head = await self._client.head(
+            "/unbrowser",
+            params=campaign,
+            headers=browser_headers,
+        )
+        self.assertEqual(head.status_code, 200)
+        self.assertEqual(_event_count("page_view", "/unbrowser"), page_views_before)
+
+        page = await self._client.get(
+            "/unbrowser",
+            params=campaign,
+            headers=browser_headers,
+        )
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(_event_count("page_view", "/unbrowser"), page_views_before + 1)
+        self.assertIn('href="/go/unbrowser-github" data-acquisition-link', page.text)
+        with sqlite3.connect(analytics_db) as conn:
+            page_meta = conn.execute(
+                "SELECT meta_json FROM analytics_events "
+                "WHERE event = 'page_view' AND route = '/unbrowser' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(json.loads(page_meta[0]), campaign)
+
+        outbound_route = "/go/unbrowser-github"
+        outbound_before = _event_count("unbrowser_outbound_click", outbound_route)
+        outbound_head = await self._client.head(
+            outbound_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(outbound_head.status_code, 302)
+        self.assertEqual(
+            outbound_head.headers.get("Location"),
+            "https://github.com/protostatis/unbrowser",
+        )
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", outbound_route),
+            outbound_before,
+        )
+
+        outbound = await self._client.get(
+            outbound_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(outbound.status_code, 302)
+        self.assertEqual(
+            outbound.headers.get("Location"),
+            "https://github.com/protostatis/unbrowser",
+        )
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", outbound_route),
+            outbound_before + 1,
+        )
+        with sqlite3.connect(analytics_db) as conn:
+            row = conn.execute(
+                "SELECT route_effective, referrer_path, user_agent_class, is_bot, meta_json "
+                "FROM analytics_events WHERE event = 'unbrowser_outbound_click' "
+                "AND route = ? ORDER BY id DESC LIMIT 1",
+                (outbound_route,),
+            ).fetchone()
+        self.assertEqual(row[:4], ("https://github.com/protostatis/unbrowser", "/unbrowser", "chrome_like", 0))
+        self.assertEqual(
+            json.loads(row[4]),
+            {**campaign, "destination": "github_repository"},
+        )
 
     async def test_signed_chat_reconnect_asset_headers(self):
         response = await self._client.get("/web/static/signed-chat-reconnect.js")

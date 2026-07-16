@@ -58,6 +58,8 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/web/static/signed-chat-reconnect.js"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
+            ("GET", "/go/unbrowser-github"),
+            ("GET", "/go/unbrowser-smithery"),
             ("GET", "/web/unbrowser/sources"),
             ("GET", "/web/unbrowser/runtime"),
             ("GET", "/web/unbrowser/stream"),
@@ -375,6 +377,22 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("https://glama.ai/mcp/servers/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://github.com/protostatis/unbrowser", web.UNBROWSER_PAGE_HTML)
         self.assertIn("https://unchainedsky.com/unbrowser-mcp", web.UNBROWSER_PAGE_HTML)
+
+    def test_unbrowser_hero_ctas_use_fixed_server_owned_redirects(self):
+        self.assertIn(
+            'href="/go/unbrowser-github" data-acquisition-link>Install locally</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            'href="/go/unbrowser-smithery" data-acquisition-link>Open on Smithery</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertNotIn(
+            'href="/go/unbrowser-smithery" rel="me"',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn("['utm_campaign',96]", web.UNBROWSER_PAGE_HTML)
+        self.assertNotIn("utm_term", web.UNBROWSER_PAGE_HTML)
 
     def test_unbrowser_page_live_demo_contract(self):
         self.assertIn("/web/unbrowser/sources", web.UNBROWSER_PAGE_HTML)

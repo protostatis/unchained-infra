@@ -11,12 +11,15 @@ import json
 import os
 import shutil
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
 
 from aiohttp import web
+
+from web_app.core import get_core as _core
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,47 @@ _SCAN_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("UNBROWSER_DEMO_MAX_CONCU
 _SOURCE_CONCURRENCY = max(1, int(os.environ.get("UNBROWSER_DEMO_SOURCE_CONCURRENT", "4")))
 _SOURCE_TIMEOUT_SECONDS = float(os.environ.get("UNBROWSER_DEMO_SOURCE_TIMEOUT", "25"))
 _UNBROWSER_COMMAND = os.environ.get("UNBROWSER_DEMO_BIN", "unbrowser")
+_UNBROWSER_TERMINAL_OUTCOMES = frozenset(
+    {"completed", "error", "cancelled", "client_disconnected"}
+)
+
+
+def _track_unbrowser_run_event(
+    core,
+    request: web.Request,
+    event: str,
+    *,
+    run_id: str,
+    scenario: Scenario,
+    status_code: int,
+    error_code: str = "",
+    outcome: str = "",
+    latency_ms: int = 0,
+):
+    """Persist one bounded, server-owned demo lifecycle event."""
+    meta = core._analytics_acquisition_meta(request)
+    meta.update(
+        {
+            "run_id": run_id,
+            "scenario_id": scenario.id,
+            "source_count": len(scenario.sources),
+        }
+    )
+    if outcome in _UNBROWSER_TERMINAL_OUTCOMES:
+        meta["outcome"] = outcome
+    return core._track_event(
+        request,
+        event,
+        event_id=f"{event}:{run_id}",
+        route="/web/unbrowser/stream",
+        route_intended="/unbrowser",
+        route_effective="/unbrowser",
+        source="server",
+        status_code=status_code,
+        error_code=error_code,
+        latency_ms=latency_ms,
+        meta=meta,
+    )
 
 
 async def handle_unbrowser_sources(request: web.Request) -> web.Response:
@@ -325,10 +369,31 @@ async def handle_unbrowser_runtime(request: web.Request) -> web.Response:
 
 async def handle_unbrowser_stream(request: web.Request) -> web.StreamResponse:
     """Stream one fixed-source live scan as Server-Sent Events."""
+    if str(getattr(request, "method", "GET") or "GET").upper() != "GET":
+        return web.Response(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache, no-transform",
+            },
+        )
+    core = _core()
     scenario = SCENARIOS.get(request.query.get("scenario", "ai-agents"), SCENARIOS["ai-agents"])
+    run_id = uuid.uuid4().hex[:20]
+    started = time.monotonic()
     try:
         await asyncio.wait_for(_SCAN_SEMAPHORE.acquire(), timeout=0.1)
     except TimeoutError:
+        _track_unbrowser_run_event(
+            core,
+            request,
+            "unbrowser_demo_run_rejected",
+            run_id=run_id,
+            scenario=scenario,
+            status_code=429,
+            error_code="demo_busy",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
         return web.json_response({"error": "unbrowser demo is busy; try again shortly"}, status=429)
 
     response = web.StreamResponse(
@@ -340,10 +405,71 @@ async def handle_unbrowser_stream(request: web.Request) -> web.StreamResponse:
             "X-Accel-Buffering": "no",
         },
     )
+    accepted = False
     try:
         await response.prepare(request)
+        _track_unbrowser_run_event(
+            core,
+            request,
+            "unbrowser_demo_run_accepted",
+            run_id=run_id,
+            scenario=scenario,
+            status_code=200,
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        accepted = True
         await _run_scan(response, scenario)
-    except (ConnectionResetError, asyncio.CancelledError):
+        _track_unbrowser_run_event(
+            core,
+            request,
+            "unbrowser_demo_run_terminal",
+            run_id=run_id,
+            scenario=scenario,
+            status_code=200,
+            outcome="completed",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+    except (ConnectionResetError, BrokenPipeError):
+        if accepted:
+            _track_unbrowser_run_event(
+                core,
+                request,
+                "unbrowser_demo_run_terminal",
+                run_id=run_id,
+                scenario=scenario,
+                status_code=499,
+                error_code="client_disconnected",
+                outcome="client_disconnected",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+        raise
+    except asyncio.CancelledError:
+        if accepted:
+            _track_unbrowser_run_event(
+                core,
+                request,
+                "unbrowser_demo_run_terminal",
+                run_id=run_id,
+                scenario=scenario,
+                status_code=499,
+                error_code="cancelled",
+                outcome="cancelled",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
+        raise
+    except Exception:
+        if accepted:
+            _track_unbrowser_run_event(
+                core,
+                request,
+                "unbrowser_demo_run_terminal",
+                run_id=run_id,
+                scenario=scenario,
+                status_code=500,
+                error_code="scan_failed",
+                outcome="error",
+                latency_ms=int((time.monotonic() - started) * 1000),
+            )
         raise
     finally:
         _SCAN_SEMAPHORE.release()

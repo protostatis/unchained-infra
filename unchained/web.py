@@ -302,6 +302,16 @@ _ANALYTICS_SESSION_HEADER = "X-Unchained-Analytics-Session"
 _ANALYTICS_PAGE_VIEW_HEADER = "X-Unchained-Analytics-Page-View"
 _ANALYTICS_ROUTE_HEADER = "X-Unchained-Analytics-Route"
 _ANALYTICS_GATE_TYPE_HEADER = "X-Unchained-Analytics-Gate-Type"
+_ANALYTICS_ACQUISITION_QUERY_FIELDS = {
+    "ref": 64,
+    "task": 64,
+    "utm_source": 64,
+    "utm_medium": 64,
+    "utm_campaign": 96,
+}
+_ANALYTICS_ACQUISITION_TASKS = frozenset(
+    {"apartment", "flight", "research", "search-result"}
+)
 _analytics_last_cleanup_ts = 0.0
 
 
@@ -395,10 +405,34 @@ def _analytics_gate_type_from_request(request: web.Request | None) -> str:
     return _analytics_header_value(request, _ANALYTICS_GATE_TYPE_HEADER, 32)
 
 
+def _analytics_acquisition_meta(request: web.Request | None) -> dict[str, str]:
+    """Return only bounded campaign tokens; never persist arbitrary query data."""
+    if request is None:
+        return {}
+    try:
+        query = request.query
+    except Exception:
+        return {}
+    meta: dict[str, str] = {}
+    for field, limit in _ANALYTICS_ACQUISITION_QUERY_FIELDS.items():
+        try:
+            raw = str(query.get(field, "") or "").strip()
+        except Exception:
+            continue
+        if not raw or len(raw) > limit or not re.fullmatch(r"[A-Za-z0-9._:-]+", raw):
+            continue
+        if field == "task" and raw not in _ANALYTICS_ACQUISITION_TASKS:
+            continue
+        meta[field] = raw
+    return meta
+
+
 def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: dict | None = None):
+    if str(getattr(request, "method", "GET") or "GET").upper() != "GET":
+        return False
     route = request.path
     if route not in _ANALYTICS_PAGE_VIEW_ROUTES:
-        return
+        return False
     if auth_info is None:
         auth_info = _authenticate(request)
     gate_type = ""
@@ -406,7 +440,10 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: 
         gate_type = "inline_gsi"
     elif route in _ANALYTICS_LINK_GATE_ROUTES:
         gate_type = "link_signin"
-    _track_event(
+    event_meta = dict(meta or {})
+    for field, value in _analytics_acquisition_meta(request).items():
+        event_meta.setdefault(field, value)
+    return _track_event(
         request,
         "page_view",
         route=route,
@@ -418,7 +455,7 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: 
         source="web",
         status_code=200,
         dedupe_ttl_s=5.0,
-        meta=meta,
+        meta=event_meta,
     )
 
 
@@ -451,6 +488,10 @@ _ANALYTICS_SERVER_ONLY_EVENTS = frozenset(
         "first_look_run_accepted",
         "first_look_run_rejected",
         "first_look_run_terminal",
+        "unbrowser_demo_run_accepted",
+        "unbrowser_demo_run_rejected",
+        "unbrowser_demo_run_terminal",
+        "unbrowser_outbound_click",
     }
 )
 

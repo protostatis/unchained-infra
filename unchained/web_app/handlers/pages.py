@@ -46,6 +46,19 @@ _FIRST_LOOK_TASK_HANDOFFS = {
     },
 }
 
+_UNBROWSER_OUTBOUND_DESTINATIONS = {
+    "/go/unbrowser-github": (
+        "https://github.com/protostatis/unbrowser",
+        "unbrowser_install_github",
+        "github_repository",
+    ),
+    "/go/unbrowser-smithery": (
+        "https://smithery.ai/servers/protostatis-dev/unbrowser",
+        "unbrowser_open_smithery",
+        "smithery_listing",
+    ),
+}
+
 
 def _sanitize_first_look_ref(value: str) -> str:
     """Keep acquisition attribution bounded and safe for analytics and URLs."""
@@ -275,6 +288,27 @@ async def handle_unbrowser_page(request: web.Request) -> web.Response:
     core._track_page_view(request)
     html = core.inject_google_client_id(UNBROWSER_PAGE_HTML, core.GOOGLE_CLIENT_ID)
     return web.Response(text=html, content_type="text/html")
+
+
+async def handle_unbrowser_outbound(request: web.Request) -> web.Response:
+    """Record fixed unbrowser CTA outcomes before leaving the site."""
+    destination, cta_id, destination_id = _UNBROWSER_OUTBOUND_DESTINATIONS[request.path]
+    if str(getattr(request, "method", "GET") or "GET").upper() == "GET":
+        core = _core()
+        meta = core._analytics_acquisition_meta(request)
+        meta["destination"] = destination_id
+        core._track_event(
+            request,
+            "unbrowser_outbound_click",
+            route=request.path,
+            route_intended=request.path,
+            route_effective=destination,
+            cta_id=cta_id,
+            source="server",
+            status_code=302,
+            meta=meta,
+        )
+    raise web.HTTPFound(destination)
 
 
 async def handle_chrome_tax_page(request: web.Request) -> web.Response:
