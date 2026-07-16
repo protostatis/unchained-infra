@@ -122,6 +122,76 @@ def _extract_domain(url: str) -> str:
     return host
 
 
+def _safe_label(value: object) -> str:
+    """Coerce an arbitrary result-field value to a display string safely."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _summarize_structured_tool_result(content: object) -> str:
+    """Build a short, non-empty summary from a structured tool-result body.
+
+    Claude's WebSearch tool (and similar built-ins) return a list of typed
+    result items such as ``web_search_result`` rather than plain ``text``
+    blocks. Summarizing them keeps the chat UI's action step from freezing on
+    "running" when no extractable text is present.
+    """
+    if not isinstance(content, list) or not content:
+        return ""
+    items = [item for item in content if isinstance(item, dict)]
+    if not items:
+        return ""
+    # WebSearch-style results
+    search_items = [item for item in items if item.get("type") == "web_search_result"]
+    if search_items:
+        titles = [
+            _safe_label(item.get("title") or item.get("url"))
+            for item in search_items
+        ]
+        titles = [t for t in titles if t][:5]
+        summary = f"Found {len(search_items)} result"
+        summary += "s" if len(search_items) != 1 else ""
+        if titles:
+            summary += ": " + ", ".join(titles)
+        return summary[:3000]
+    # Generic fallback: surface any url/title fields we can find.
+    generic = []
+    for item in items[:5]:
+        label = _safe_label(item.get("title") or item.get("name") or item.get("url"))
+        if label:
+            generic.append(label)
+    if generic:
+        return "Results: " + ", ".join(generic)[:3000]
+    return "completed"
+
+
+def _extract_tool_result_text(content: object) -> str:
+    """Return display text for a tool-result ``content`` payload.
+
+    Handles plain strings, lists of ``text`` blocks, and structured built-in
+    results (e.g. WebSearch). Returns ``""`` when nothing displayable exists —
+    callers must treat a completed tool call with empty text as a hidden
+    ``"completed"`` rather than suppressing the completion event entirely.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text = " ".join(
+            _safe_label(b.get("text", ""))
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
+        if text:
+            return text
+        return _summarize_structured_tool_result(content)
+    return ""
+
+
 def intervention_runtime_available() -> bool:
     """Check if progress_critic is importable and intervention is enabled."""
     return bool(INTERVENTION_ENABLED and score_tool_log and build_intervention_feedback)
