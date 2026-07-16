@@ -465,7 +465,7 @@ async def handle_install_bootstrap(request: web.Request) -> web.Response:
         )
         return web.json_response({"error": "token required"}, status=400)
 
-    token_info = core._auth.validate_install_token(token, consume=True)
+    token_info = core._auth.consume_install_token_for_bootstrap(token)
     if not token_info:
         core._track_event(
             request,

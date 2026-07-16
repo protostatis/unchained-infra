@@ -85,6 +85,32 @@ class Auth:
                     used INTEGER DEFAULT 0
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS lifecycle_email_suppressions (
+                    user_id TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL DEFAULT 'user_request',
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS lifecycle_email_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    campaign TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN (
+                            'reserved', 'sending', 'smtp_accepted', 'failed', 'cancelled'
+                        )
+                    ),
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE (user_id, campaign)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lifecycle_email_delivery_status "
+                "ON lifecycle_email_deliveries(campaign, status, created_at)"
+            )
             # Migration: add status column (existing users default to 'approved')
             try:
                 conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
@@ -121,6 +147,16 @@ class Auth:
                 "openrouter_total_tokens INTEGER DEFAULT 0",
                 "openrouter_usage_events INTEGER DEFAULT 0",
                 "openrouter_last_usage_at REAL",
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+            # Durable activation markers outlive the analytics retention window.
+            for col_def in (
+                "first_install_bootstrap_at REAL",
+                "last_install_bootstrap_at REAL",
+                "install_bootstrap_count INTEGER DEFAULT 0",
             ):
                 try:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
@@ -231,20 +267,253 @@ class Auth:
         Returns ``{user_id, api_key}`` or ``None``.
         When ``consume`` is true, the token is marked used on success.
         """
+        now = time.time()
+        with self._conn() as conn:
+            if consume:
+                row = conn.execute(
+                    "UPDATE install_tokens SET used = 1 "
+                    "WHERE token = ? AND used = 0 AND expires_at > ? "
+                    "RETURNING user_id, api_key",
+                    (token, now),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT user_id, api_key FROM install_tokens "
+                    "WHERE token = ? AND used = 0 AND expires_at > ?",
+                    (token, now),
+                ).fetchone()
+        if row is None:
+            return None
+        return {"user_id": row[0], "api_key": row[1]}
+
+    def consume_install_token_for_bootstrap(self, token: str) -> dict | None:
+        """Atomically consume a token and stamp its account's durable activation."""
+        now = time.time()
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT user_id, api_key FROM install_tokens "
-                "WHERE token = ? AND used = 0 AND expires_at > ?",
-                (token, time.time()),
+                "UPDATE install_tokens SET used = 1 "
+                "WHERE token = ? AND used = 0 AND expires_at > ? "
+                "AND EXISTS ("
+                "SELECT 1 FROM users WHERE users.user_id = install_tokens.user_id"
+                ") RETURNING user_id, api_key",
+                (token, now),
             ).fetchone()
             if row is None:
                 return None
-            if consume:
-                conn.execute(
-                    "UPDATE install_tokens SET used = 1 WHERE token = ?",
-                    (token,),
+            conn.execute(
+                "UPDATE users SET "
+                "first_install_bootstrap_at = COALESCE(first_install_bootstrap_at, ?), "
+                "last_install_bootstrap_at = ?, "
+                "install_bootstrap_count = COALESCE(install_bootstrap_count, 0) + 1 "
+                "WHERE user_id = ?",
+                (now, now, row[0]),
+            )
+        return {"user_id": row[0], "api_key": row[1]}
+
+    def get_install_activation(self, user_id: str) -> dict | None:
+        """Return durable install activation state for an account."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT first_install_bootstrap_at, last_install_bootstrap_at, "
+                "COALESCE(install_bootstrap_count, 0) FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "first_install_bootstrap_at": row[0],
+            "last_install_bootstrap_at": row[1],
+            "install_bootstrap_count": int(row[2] or 0),
+        }
+
+    def backfill_install_bootstrap_markers(self, analytics_db_path: str) -> int:
+        """Merge retained server-owned bootstrap events into durable user state.
+
+        The merge is idempotent: repeat runs keep the earliest first event, the
+        latest last event, and the largest observed count.
+        """
+        analytics_path = os.path.abspath(analytics_db_path)
+        analytics = sqlite3.connect(f"file:{analytics_path}?mode=ro", uri=True)
+        try:
+            rows = analytics.execute(
+                "SELECT user_id, MIN(ts), MAX(ts), COUNT(*) "
+                "FROM analytics_events "
+                "WHERE event = 'install_bootstrap_success' "
+                "AND user_id IS NOT NULL AND TRIM(user_id) <> '' "
+                "GROUP BY user_id"
+            ).fetchall()
+        finally:
+            analytics.close()
+
+        updated = 0
+        with self._conn() as conn:
+            for user_id, first_at, last_at, event_count in rows:
+                cur = conn.execute(
+                    "UPDATE users SET "
+                    "first_install_bootstrap_at = CASE "
+                    "WHEN first_install_bootstrap_at IS NULL THEN ? "
+                    "ELSE MIN(first_install_bootstrap_at, ?) END, "
+                    "last_install_bootstrap_at = CASE "
+                    "WHEN last_install_bootstrap_at IS NULL THEN ? "
+                    "ELSE MAX(last_install_bootstrap_at, ?) END, "
+                    "install_bootstrap_count = MAX(COALESCE(install_bootstrap_count, 0), ?) "
+                    "WHERE user_id = ?",
+                    (first_at, first_at, last_at, last_at, int(event_count), user_id),
                 )
-            return {"user_id": row[0], "api_key": row[1]}
+                updated += int(cur.rowcount > 0)
+        return updated
+
+    # --- Lifecycle email safety state ---
+
+    def suppress_lifecycle_email(
+        self,
+        user_id: str,
+        reason: str = "user_request",
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Persist a global lifecycle-email suppression for an account."""
+        uid = str(user_id or "").strip()
+        if not uid:
+            raise ValueError("user_id required")
+        reason_code = str(reason or "user_request").strip().lower()
+        allowed_reasons = {
+            "user_request",
+            "provider_suppression",
+            "hard_bounce",
+            "complaint",
+            "admin_hold",
+        }
+        if reason_code not in allowed_reasons:
+            raise ValueError("unsupported suppression reason")
+        created_at = float(now if now is not None else time.time())
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO lifecycle_email_suppressions (user_id, reason, created_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+                "reason = excluded.reason",
+                (uid, reason_code, created_at),
+            )
+            conn.execute(
+                "UPDATE lifecycle_email_deliveries SET status = 'cancelled', updated_at = ? "
+                "WHERE user_id = ? AND status = 'reserved'",
+                (created_at, uid),
+            )
+
+    def is_lifecycle_email_suppressed(self, user_id: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM lifecycle_email_suppressions WHERE user_id = ?",
+                (str(user_id or "").strip(),),
+            ).fetchone()
+        return row is not None
+
+    def reserve_lifecycle_email(
+        self,
+        user_id: str,
+        campaign: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Atomically reserve one campaign send unless suppressed or duplicated."""
+        uid = str(user_id or "").strip()
+        campaign_name = str(campaign or "").strip()
+        if not uid or not campaign_name:
+            raise ValueError("user_id and campaign required")
+        if len(campaign_name) > 120:
+            raise ValueError("campaign must be 120 characters or fewer")
+        created_at = float(now if now is not None else time.time())
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO lifecycle_email_deliveries "
+                "(user_id, campaign, status, created_at, updated_at) "
+                "SELECT ?, ?, 'reserved', ?, ? "
+                "WHERE EXISTS (SELECT 1 FROM users WHERE user_id = ? "
+                "AND first_install_bootstrap_at IS NULL "
+                "AND COALESCE(status, 'approved') = 'approved') "
+                "AND NOT EXISTS (SELECT 1 FROM lifecycle_email_suppressions WHERE user_id = ?) "
+                "ON CONFLICT(user_id, campaign) DO NOTHING",
+                (uid, campaign_name, created_at, created_at, uid, uid),
+            )
+        return cur.rowcount > 0
+
+    def recheck_lifecycle_email_reservation(
+        self,
+        user_id: str,
+        campaign: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Recheck a reserved send immediately before SMTP acceptance.
+
+        A false result permanently cancels the reservation. Reserved rows are
+        intentionally never auto-retried, giving the ledger at-most-once
+        semantics across process crashes.
+        """
+        uid = str(user_id or "").strip()
+        campaign_name = str(campaign or "").strip()
+        checked_at = float(now if now is not None else time.time())
+        with self._conn() as conn:
+            claimed = conn.execute(
+                "UPDATE lifecycle_email_deliveries SET status = 'sending', updated_at = ? "
+                "WHERE user_id = ? AND campaign = ? AND status = 'reserved' "
+                "AND EXISTS (SELECT 1 FROM users WHERE users.user_id = ? "
+                "AND first_install_bootstrap_at IS NULL "
+                "AND COALESCE(status, 'approved') = 'approved') "
+                "AND NOT EXISTS (SELECT 1 FROM lifecycle_email_suppressions "
+                "WHERE lifecycle_email_suppressions.user_id = ?) "
+                "RETURNING 1",
+                (checked_at, uid, campaign_name, uid, uid),
+            ).fetchone()
+            if claimed is not None:
+                return True
+            conn.execute(
+                "UPDATE lifecycle_email_deliveries SET status = 'cancelled', updated_at = ? "
+                "WHERE user_id = ? AND campaign = ? AND status = 'reserved'",
+                (checked_at, uid, campaign_name),
+            )
+        return False
+
+    def mark_lifecycle_email_delivery(
+        self,
+        user_id: str,
+        campaign: str,
+        status: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Finalize a claimed lifecycle send once after an SMTP attempt."""
+        state = str(status or "").strip().lower()
+        if state not in {"smtp_accepted", "failed"}:
+            raise ValueError("status must be smtp_accepted or failed")
+        updated_at = float(now if now is not None else time.time())
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE lifecycle_email_deliveries SET status = ?, updated_at = ? "
+                "WHERE user_id = ? AND campaign = ? AND status = 'sending'",
+                (
+                    state,
+                    updated_at,
+                    str(user_id or "").strip(),
+                    str(campaign or "").strip(),
+                ),
+            )
+        return cur.rowcount > 0
+
+    def get_lifecycle_email_delivery(self, user_id: str, campaign: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT status, created_at, updated_at "
+                "FROM lifecycle_email_deliveries WHERE user_id = ? AND campaign = ?",
+                (str(user_id or "").strip(), str(campaign or "").strip()),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "status": row[0],
+            "created_at": row[1],
+            "updated_at": row[2],
+        }
 
     def cleanup_expired_tokens(self):
         """Delete expired or used install tokens."""
