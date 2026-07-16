@@ -41,6 +41,16 @@ _FIRST_LOOK_TERMINAL_OUTCOMES = frozenset(
     {"completed", "error", "cancelled", "client_disconnected"}
 )
 
+# Opt-in verbose SSE tracing. Off by default so production logs stay quiet;
+# set UNCHAINED_SSE_DEBUG=1 to log every event forwarded to the browser (this
+# is what makes the "UI stops updating until refresh" freeze diagnosable).
+_SSE_DEBUG = os.environ.get("UNCHAINED_SSE_DEBUG", "") == "1"
+
+
+def _safe_exc_name(exc: BaseException) -> str:
+    """Return a short, safe class name for an exception (no message/PII)."""
+    return type(exc).__name__
+
 
 def _first_look_search_attribution(body: dict) -> dict[str, str]:
     """Return only the exact bounded SearchAgentSky result handoff triad."""
@@ -219,7 +229,32 @@ async def _write_turn_sse(response: web.StreamResponse, event: dict) -> None:
     """Write one journal item with its monotonic sequence as the SSE id."""
     seq = int(event.get("seq", 0) or 0)
     payload = json.dumps(event, separators=(",", ":"))
-    await response.write(f"id: {seq}\ndata: {payload}\n\n".encode())
+    if _SSE_DEBUG:
+        _core()._trace(
+            "chat.msg.sse_write",
+            req_id=str(event.get("req_id") or ""),
+            session_id=str(event.get("session_id") or ""),
+            type=str(event.get("type") or ""),
+            seq=seq,
+        )
+    try:
+        await response.write(f"id: {seq}\ndata: {payload}\n\n".encode())
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        raise
+    except Exception as _write_err:
+        # A non-socket write failure (closed transport, etc.) drops the stream
+        # before `done` reaches the browser — the "UI stops updating until
+        # refresh" symptom. Record exactly which event failed so the freeze is
+        # diagnosable, then re-raise so the journal loop's finally cleans up.
+        _core()._trace(
+            "chat.msg.sse_write_failed",
+            req_id=str(event.get("req_id") or ""),
+            session_id=str(event.get("session_id") or ""),
+            type=str(event.get("type") or ""),
+            seq=seq,
+            error=_safe_exc_name(_write_err),
+        )
+        raise
 
 
 async def _stream_turn_journal(

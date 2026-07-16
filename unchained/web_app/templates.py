@@ -10346,6 +10346,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -10354,6 +10355,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -11803,6 +11805,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -11811,6 +11814,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -14301,6 +14305,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -14309,6 +14314,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
@@ -16950,6 +16956,7 @@ function addToolCall(bubble, name, input) {
 }
 
 function parseIntelBars(text) {
+  if (typeof text !== 'string') return null;
   const m = text.match(/strategy:\s*(\S+)\s*\((\d+)%\)(?:.*?runner-up:\s*(\S+)\s*\((\d+)%\))?/);
   if (!m) return null;
   const bars = [{label: m[1], pct: parseInt(m[2])}];
@@ -16958,6 +16965,7 @@ function parseIntelBars(text) {
 }
 
 function setToolResult(el, result, isScreenshot, visible) {
+  if (result == null) result = '';
   const isStep = el.classList.contains('action-step');
   const dotCls = isStep ? 'as-dot' : 'standalone-dot';
   const dot = el.querySelector('.' + dotCls);
