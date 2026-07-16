@@ -265,6 +265,12 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('id="landing-nav-links"', web.LANDING_HTML)
         for href in ("#calculator", "#capability", "#start"):
             self.assertIn(f'href="{href}"', web.LANDING_HTML)
+        self.assertIn("https://searchagentsky.com/?ref=unchained-nav", web.LANDING_HTML)
+        self.assertIn("https://searchagentsky.com/?ref=unchained-footer", web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_research_nav"', web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_research_footer"', web.LANDING_HTML)
+        self.assertIn("utm_campaign=brand_handoff", web.LANDING_HTML)
+        self.assertIn("/demo?ref=unchained-home&task=research", web.LANDING_HTML)
 
     def test_landing_developer_navigation_exposes_lightweight_routes(self):
         self.assertIn(
@@ -296,7 +302,11 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_landing_v4_default_route_clears_preview_cookie(self):
         async def _render(query: dict[str, str], cookies: dict[str, str]):
-            return await web.handle_index(SimpleNamespace(query=query, cookies=cookies))
+            request = SimpleNamespace(query=query, cookies=cookies, path="/")
+            with patch.object(web, "_track_page_view") as track_page_view:
+                response = await web.handle_index(request)
+            track_page_view.assert_called_once_with(request)
+            return response
 
         response = asyncio.run(_render({"ui": "v4"}, {"ui": "v3"}))
         self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", response.text)
@@ -624,6 +634,32 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("Flight comparison task", flight_html)
         self.assertIn("current round-trip flight options", flight_html)
         self.assertIn("Prefilled, not run.", flight_html)
+
+        research_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="research",
+            ref="searchagentsky-result",
+        )
+        self.assertIn('data-task="research"', research_html)
+        self.assertIn("Research comparison task", research_html)
+        self.assertIn("public documentation", research_html)
+        self.assertIn("Prefilled, not run.", research_html)
+        self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research_html)
+        self.assertIn('const FIRST_LOOK_TASK = "research";', research_html)
+        self.assertIn("first_look_run_complete", research_html)
+        self.assertIn("first_look_complete_trial", research_html)
+        self.assertIn("first_look_complete_install", research_html)
+        self.assertIn("'/web/analytics/event'", research_html)
+        self.assertIn("firstLookAttributionSuffix", research_html)
+        self.assertIn("applyFirstLookAttribution", research_html)
+        self.assertIn("first_look_trial", research_html)
+        self.assertIn("sessionStorage.removeItem('uc_completion_nudge_v2_shown')", research_html)
+        self.assertNotIn("install now — 30 seconds", research_html)
+        self.assertNotIn("No run limit", research_html)
+        self.assertNotIn("30\\u201360 seconds", research_html)
+        self.assertNotIn(">Any site<", research_html)
+        self.assertNotIn("browse any site", research_html.lower())
 
         untrusted_task = 'apartment"><script>alert(1)</script>'
         fallback_html = _build_first_look_preview_html(

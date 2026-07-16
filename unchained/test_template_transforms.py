@@ -927,6 +927,9 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("rec-cta", templates.LANDING_HTML)
         self.assertIn('href="/unbrowser"', templates.LANDING_HTML)
         self.assertIn('href="/chrome-tax"', templates.LANDING_HTML)
+        self.assertIn("https://searchagentsky.com/?ref=unchained-nav", templates.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_research_nav"', templates.LANDING_HTML)
+        self.assertIn("/demo?ref=unchained-home&task=research", templates.LANDING_HTML)
         self.assertNotIn("Drive my browser", templates.LANDING_HTML)
         self.assertNotIn("narrative rhythm", templates.LANDING_HTML)
         self.assertNotIn("Sign in / Sign up", templates.LANDING_HTML)
@@ -948,6 +951,12 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertNotIn("https://api.unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertIn("API key handling", templates.SETUP_HTML)
         self.assertIn("Your Chrome profile stays on your machine", templates.INSTALL_ONBOARD_HTML)
+        self.assertIn("Claude CLI, Codex CLI, or OpenCode CLI", templates.CLAUDE_CHAT_HTML)
+        self.assertIn("savedOpenCode || providerDefault", templates.CLAUDE_CHAT_HTML)
+        self.assertIn(
+            "Claude CLI, Codex CLI, or OpenCode CLI should already be installed",
+            templates.INSTALL_ONBOARD_HTML,
+        )
 
     def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
         from web_app import templates

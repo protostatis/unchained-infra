@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from html import escape
+from urllib.parse import urlencode
 
 from aiohttp import web
 
@@ -30,7 +31,23 @@ _FIRST_LOOK_TASK_HANDOFFS = {
             "source link. Do not book anything."
         ),
     },
+    "research": {
+        "label": "Research comparison task",
+        "prompt": (
+            "Compare three current browser automation or agent-tool products using "
+            "their public documentation. Build a sourced table of capabilities, setup, "
+            "pricing claims, and tradeoffs. Do not sign in, purchase, or submit forms."
+        ),
+    },
 }
+
+
+def _sanitize_first_look_ref(value: str) -> str:
+    """Keep acquisition attribution bounded and safe for analytics and URLs."""
+    return "".join(
+        ch for ch in str(value or "")
+        if ch.isascii() and (ch.isalnum() or ch in "._:-")
+    )[:64]
 
 
 _LEGAL_LAST_UPDATED = "July 12, 2026"
@@ -264,8 +281,11 @@ async def handle_mcp_guide_page(request: web.Request) -> web.Response:
     return web.Response(text=core._build_mcp_guide_html(), content_type="text/html")
 
 
-def _build_first_look_preview_html(*, prompt_limit: int, remaining: int, task: str = "") -> str:
+def _build_first_look_preview_html(
+    *, prompt_limit: int, remaining: int, task: str = "", ref: str = ""
+) -> str:
     task_key = task if task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    safe_ref = _sanitize_first_look_ref(ref)
     handoff = _FIRST_LOOK_TASK_HANDOFFS.get(task_key)
     prompt = handoff["prompt"] if handoff else ""
     handoff_html = ""
@@ -282,6 +302,14 @@ def _build_first_look_preview_html(*, prompt_limit: int, remaining: int, task: s
     html = html.replace("__FIRST_LOOK_GUEST_REMAINING__", str(max(0, int(remaining))))
     html = html.replace("__FIRST_LOOK_TASK_HANDOFF_HTML__", handoff_html)
     html = html.replace("__FIRST_LOOK_TASK_PROMPT_HTML__", escape(prompt))
+    html = html.replace(
+        "__FIRST_LOOK_REF_JSON__",
+        json.dumps(safe_ref).replace("<", r"\u003c"),
+    )
+    html = html.replace(
+        "__FIRST_LOOK_TASK_JSON__",
+        json.dumps(task_key).replace("<", r"\u003c"),
+    )
     html = html.replace(
         "__FIRST_LOOK_TASK_PROMPT_JSON__",
         json.dumps(prompt).replace("<", r"\u003c"),
@@ -634,7 +662,7 @@ async def handle_data_deletion_page(request: web.Request) -> web.Response:
 async def handle_first_look_page(request: web.Request) -> web.Response:
     """Serve the first-look page (now uses the preview template)."""
     core = _core()
-    ref = request.query.get('ref', '')[:64]
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
     requested_task = request.query.get("task", "")
     task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
     meta = {}
@@ -644,10 +672,14 @@ async def handle_first_look_page(request: web.Request) -> web.Response:
         meta["task"] = task
     core._track_page_view(request, meta=meta or None)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
-    html = _build_first_look_preview_html(
-        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
-        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
-        task=task,
+    html = core.inject_google_client_id(
+        _build_first_look_preview_html(
+            prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+            remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+            task=task,
+            ref=ref,
+        ),
+        core.GOOGLE_CLIENT_ID,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
@@ -657,7 +689,7 @@ async def handle_first_look_page(request: web.Request) -> web.Response:
 async def handle_first_look_preview_page(request: web.Request) -> web.Response:
     """Serve the guest-safe preview route for first-look review."""
     core = _core()
-    ref = request.query.get("ref", "")[:64]
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
     requested_task = request.query.get("task", "")
     task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
     meta = {"route": "first-look-preview"}
@@ -667,10 +699,14 @@ async def handle_first_look_preview_page(request: web.Request) -> web.Response:
         meta["task"] = task
     core._track_page_view(request, meta=meta)
     _, guest_id, quota_count = core._first_look_guest_auth(request)
-    html = _build_first_look_preview_html(
-        prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
-        remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
-        task=task,
+    html = core.inject_google_client_id(
+        _build_first_look_preview_html(
+            prompt_limit=core._FIRST_LOOK_GUEST_PROMPT_LIMIT,
+            remaining=max(0, core._FIRST_LOOK_GUEST_PROMPT_LIMIT - quota_count),
+            task=task,
+            ref=ref,
+        ),
+        core.GOOGLE_CLIENT_ID,
     )
     resp = web.Response(text=html, content_type="text/html")
     core._attach_first_look_guest_cookies(resp, request, guest_id, quota_count=quota_count)
@@ -680,8 +716,19 @@ async def handle_first_look_preview_page(request: web.Request) -> web.Response:
 async def handle_demo_page(request: web.Request) -> web.Response:
     """Redirect /demo to /first-look for backward compatibility."""
     core = _core()
-    core._track_redirect(request, "/first-look", reason="legacy_route_alias")
-    raise web.HTTPFound("/first-look")
+    ref = _sanitize_first_look_ref(request.query.get("ref", ""))
+    requested_task = request.query.get("task", "")
+    task = requested_task if requested_task in _FIRST_LOOK_TASK_HANDOFFS else ""
+    params = {}
+    if ref:
+        params["ref"] = ref
+    if task:
+        params["task"] = task
+    location = "/first-look"
+    if params:
+        location += "?" + urlencode(params)
+    core._track_redirect(request, location, reason="legacy_route_alias")
+    raise web.HTTPFound(location)
 
 
 async def handle_local_page(request: web.Request) -> web.Response:

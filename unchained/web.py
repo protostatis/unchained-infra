@@ -1598,6 +1598,7 @@ async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
     # preview cookies are ignored on plain "/" visits so V4 is truly default.
+    _track_page_view(request)
     query_variant = request.query.get("ui")
     preview_cookie = request.cookies.get("ui")
     variant = query_variant or ""
@@ -1609,7 +1610,10 @@ async def handle_index(request: web.Request) -> web.Response:
         template = LANDING_V4_HTML
     else:
         template = LANDING_HTML
-    html = template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL)
+    html = inject_google_client_id(
+        template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL),
+        GOOGLE_CLIENT_ID,
+    )
     response = web.Response(text=html, content_type="text/html")
     if request.query.get("ui") in {"v2", "v3"}:
         # Persist the choice for ~1 day so deep-links inside the site keep the

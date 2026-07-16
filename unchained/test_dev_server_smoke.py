@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -113,6 +114,30 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bridge_configured", data)
         self.assertIn("bridge_connected", data)
 
+    async def test_landing_research_bridge_has_client_measurement(self):
+        analytics_db = os.environ["UNCHAINED_ANALYTICS_DB_PATH"]
+
+        def _landing_page_views() -> int:
+            if not os.path.exists(analytics_db):
+                return 0
+            with sqlite3.connect(analytics_db) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM analytics_events WHERE event = 'page_view' AND route = '/'"
+                ).fetchone()
+            return int(row[0] if row else 0)
+
+        before = _landing_page_views()
+        page = await self._client.get(
+            "/",
+            headers={"User-Agent": f"landing-measurement-{secrets.token_hex(8)}"},
+        )
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(_landing_page_views(), before + 1)
+        self.assertIn("data-uc-analytics-client", page.text)
+        self.assertIn('data-analytics-cta="landing_research_nav"', page.text)
+        self.assertIn('data-analytics-cta="landing_research_footer"', page.text)
+        self.assertIn(".replace(/[^A-Za-z0-9._:-]/g, '')", page.text)
+
     async def test_signed_chat_reconnect_asset_headers(self):
         response = await self._client.get("/web/static/signed-chat-reconnect.js")
         self.assertEqual(response.status_code, 200, response.text)
@@ -157,6 +182,30 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(label, first_look.text)
                 self.assertIn(prompt_fragment, first_look.text)
                 self.assertIn("Prefilled, not run.", first_look.text)
+
+        demo_handoff = await self._client.get(
+            "/demo?ref=searchagentsky-result&task=research",
+            follow_redirects=False,
+        )
+        self.assertEqual(demo_handoff.status_code, 302)
+        self.assertEqual(
+            demo_handoff.headers.get("Location"),
+            "/first-look?ref=searchagentsky-result&task=research",
+        )
+        research = await self._client.get(demo_handoff.headers["Location"])
+        self.assertEqual(research.status_code, 200)
+        self.assertIn('data-task="research"', research.text)
+        self.assertIn("Research comparison task", research.text)
+        self.assertIn("Prefilled, not run.", research.text)
+        self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research.text)
+        self.assertIn("data-uc-analytics-client", research.text)
+
+        unsafe_demo = await self._client.get(
+            "/demo?ref=%3Cscript%3Ebad%3C/script%3E&task=unknown",
+            follow_redirects=False,
+        )
+        self.assertEqual(unsafe_demo.status_code, 302)
+        self.assertEqual(unsafe_demo.headers.get("Location"), "/first-look?ref=scriptbadscript")
 
         untrusted_task = 'apartment"><script>alert(1)</script>'
         fallback = await self._client.get("/first-look", params={"task": untrusted_task})
