@@ -18339,6 +18339,7 @@ const FIRST_LOOK_GUEST_LIMIT = __FIRST_LOOK_GUEST_LIMIT__;
 let remainingGuestRuns = __FIRST_LOOK_GUEST_REMAINING__;
 const FIRST_LOOK_REF = __FIRST_LOOK_REF_JSON__;
 const FIRST_LOOK_TASK = __FIRST_LOOK_TASK_JSON__;
+const FIRST_LOOK_FROM_RESULT = __FIRST_LOOK_FROM_RESULT_JSON__;
 let agentId = '';
 let sessionId = '';
 let sending = false;
@@ -18393,6 +18394,7 @@ function firstLookAttributionSuffix() {
   const params = new URLSearchParams();
   if (FIRST_LOOK_REF) params.set('ref', FIRST_LOOK_REF);
   if (FIRST_LOOK_TASK) params.set('task', FIRST_LOOK_TASK);
+  if (FIRST_LOOK_FROM_RESULT) params.set('from_result', FIRST_LOOK_FROM_RESULT);
   const query = params.toString();
   return query ? ('?' + query) : '';
 }
@@ -18414,6 +18416,7 @@ function trackFirstLookEvent(eventName, ctaId) {
   const meta = {remaining: remainingGuestRuns};
   if (FIRST_LOOK_REF) meta.ref = FIRST_LOOK_REF;
   if (FIRST_LOOK_TASK) meta.task = FIRST_LOOK_TASK;
+  if (FIRST_LOOK_FROM_RESULT) meta.from_result = FIRST_LOOK_FROM_RESULT;
   try {
     fetch('/web/analytics/event', {
       method: 'POST',

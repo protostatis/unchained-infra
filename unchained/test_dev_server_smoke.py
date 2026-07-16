@@ -200,6 +200,44 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn('const FIRST_LOOK_REF = "searchagentsky-result";', research.text)
         self.assertIn("data-uc-analytics-client", research.text)
 
+        search_result = await self._client.get(
+            "/first-look",
+            params={
+                "ref": "searchagentsky-result",
+                "task": "search-result",
+                "from_result": "ag0000000001",
+            },
+        )
+        self.assertEqual(search_result.status_code, 200)
+        self.assertIn('data-task="search-result"', search_result.text)
+        self.assertIn("Continue this SearchAgentSky answer", search_result.text)
+        self.assertIn("https://searchagentsky.com/r/ag0000000001", search_result.text)
+        self.assertIn('const FIRST_LOOK_TASK = "search-result";', search_result.text)
+        self.assertIn(
+            'const FIRST_LOOK_FROM_RESULT = "ag0000000001";',
+            search_result.text,
+        )
+
+        search_result_demo = await self._client.get(
+            "/demo?ref=searchagentsky-result&task=search-result&from_result=ag0000000001",
+            follow_redirects=False,
+        )
+        self.assertEqual(search_result_demo.status_code, 302)
+        self.assertEqual(
+            search_result_demo.headers.get("Location"),
+            "/first-look?ref=searchagentsky-result&task=search-result&from_result=ag0000000001",
+        )
+
+        mismatched_search_result_demo = await self._client.get(
+            "/demo?ref=other-campaign&task=search-result&from_result=ag0000000001",
+            follow_redirects=False,
+        )
+        self.assertEqual(mismatched_search_result_demo.status_code, 302)
+        self.assertEqual(
+            mismatched_search_result_demo.headers.get("Location"),
+            "/first-look?ref=other-campaign",
+        )
+
         unsafe_demo = await self._client.get(
             "/demo?ref=%3Cscript%3Ebad%3C/script%3E&task=unknown",
             follow_redirects=False,

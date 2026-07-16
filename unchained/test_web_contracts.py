@@ -661,6 +661,62 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn(">Any site<", research_html)
         self.assertNotIn("browse any site", research_html.lower())
 
+        search_result_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="searchagentsky-result",
+            from_result="ag0000000001",
+        )
+        self.assertIn('data-task="search-result"', search_result_html)
+        self.assertIn("Continue this SearchAgentSky answer", search_result_html)
+        self.assertIn(
+            "https://searchagentsky.com/r/ag0000000001",
+            search_result_html,
+        )
+        self.assertIn("verify the three most time-sensitive claims", search_result_html)
+        self.assertIn('const FIRST_LOOK_TASK = "search-result";', search_result_html)
+        self.assertIn(
+            'const FIRST_LOOK_FROM_RESULT = "ag0000000001";',
+            search_result_html,
+        )
+        self.assertIn("params.set('from_result', FIRST_LOOK_FROM_RESULT)", search_result_html)
+        self.assertIn("meta.from_result = FIRST_LOOK_FROM_RESULT", search_result_html)
+
+        invalid_result_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="searchagentsky-result",
+            from_result='bad"><script>alert(1)</script>',
+        )
+        self.assertNotIn('id="task-handoff"', invalid_result_html)
+        self.assertNotIn("searchagentsky.com/r/bad", invalid_result_html)
+        self.assertIn('const FIRST_LOOK_TASK = "";', invalid_result_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', invalid_result_html)
+
+        mismatched_ref_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="search-result",
+            ref="other-campaign",
+            from_result="ag0000000001",
+        )
+        self.assertNotIn('id="task-handoff"', mismatched_ref_html)
+        self.assertNotIn("searchagentsky.com/r/ag0000000001", mismatched_ref_html)
+        self.assertIn('const FIRST_LOOK_TASK = "";', mismatched_ref_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', mismatched_ref_html)
+
+        unrelated_task_html = _build_first_look_preview_html(
+            prompt_limit=5,
+            remaining=3,
+            task="research",
+            ref="searchagentsky-result",
+            from_result="ag0000000001",
+        )
+        self.assertIn('const FIRST_LOOK_TASK = "research";', unrelated_task_html)
+        self.assertIn('const FIRST_LOOK_FROM_RESULT = "";', unrelated_task_html)
+
         untrusted_task = 'apartment"><script>alert(1)</script>'
         fallback_html = _build_first_look_preview_html(
             prompt_limit=5,
