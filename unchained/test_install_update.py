@@ -1293,6 +1293,9 @@ def test_install_page_prefers_native_installer():
     assert 'id="install-agentstatus"' in INSTALL_ONBOARD_HTML, "install chat status pill missing"
     assert 'id="install-bridgestatus"' in INSTALL_ONBOARD_HTML, "install bridge status pill missing"
     assert "/web/chat/status" in INSTALL_ONBOARD_HTML, "install status poll endpoint missing"
+    assert "__INSTALL_RETURN_PATH_ENCODED__" in INSTALL_ONBOARD_HTML, "attributed sign-in path placeholder missing"
+    assert "const INSTALL_RETURN_PATH = '__INSTALL_RETURN_PATH__';" in INSTALL_ONBOARD_HTML, "attributed install return path missing"
+    assert "encodeURIComponent(INSTALL_RETURN_PATH)" in INSTALL_ONBOARD_HTML, "401 sign-in must preserve attribution"
     print("  INSTALL_ONBOARD_HTML prefers native installer flow")
 
 

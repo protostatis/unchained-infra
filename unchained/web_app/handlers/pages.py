@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from aiohttp import web
 
@@ -47,6 +47,12 @@ _FIRST_LOOK_TASK_HANDOFFS = {
 }
 
 _UNBROWSER_OUTBOUND_DESTINATIONS = {
+    "/go/unbrowser-connect": (
+        "/install?ref=unbrowser_demo_complete_v1&utm_source=unchainedsky"
+        "&utm_medium=product&utm_campaign=unbrowser_demo_complete_v1",
+        "unbrowser_connect_computer",
+        "unchained_install",
+    ),
     "/go/unbrowser-github": (
         "https://github.com/protostatis/unbrowser",
         "unbrowser_install_github",
@@ -253,7 +259,15 @@ async def handle_install_page(request: web.Request) -> web.Response:
     """Serve the one-click installer onboarding page."""
     core = _core()
     core._track_page_view(request)
+    acquisition = core._analytics_acquisition_meta(request)
+    install_return_path = "/install"
+    if acquisition:
+        install_return_path = f"/install?{urlencode(acquisition)}"
     html = core.inject_google_client_id(core.INSTALL_ONBOARD_HTML, core.GOOGLE_CLIENT_ID)
+    html = html.replace(
+        "__INSTALL_RETURN_PATH_ENCODED__",
+        quote(install_return_path, safe=""),
+    ).replace("__INSTALL_RETURN_PATH__", install_return_path)
     return web.Response(text=html, content_type="text/html")
 
 
