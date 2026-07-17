@@ -179,6 +179,10 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.status_code, 200, page.text)
         self.assertEqual(_event_count("page_view", "/unbrowser"), page_views_before + 1)
         self.assertIn('href="/go/unbrowser-github" data-acquisition-link', page.text)
+        self.assertIn(
+            'href="/go/unbrowser-connect" data-acquisition-link>Connect this computer</a>',
+            page.text,
+        )
         with sqlite3.connect(analytics_db) as conn:
             page_meta = conn.execute(
                 "SELECT meta_json FROM analytics_events "
@@ -228,6 +232,51 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             json.loads(row[4]),
             {**campaign, "destination": "github_repository"},
+        )
+
+        connect_route = "/go/unbrowser-connect"
+        connect_destination = (
+            "/install?ref=unbrowser_demo_complete_v1&utm_source=unchainedsky"
+            "&utm_medium=product&utm_campaign=unbrowser_demo_complete_v1"
+        )
+        connect_before = _event_count("unbrowser_outbound_click", connect_route)
+        connect_head = await self._client.head(
+            connect_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(connect_head.status_code, 302)
+        self.assertEqual(connect_head.headers.get("Location"), connect_destination)
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", connect_route),
+            connect_before,
+        )
+
+        connect = await self._client.get(
+            connect_route,
+            params=campaign,
+            headers={**browser_headers, "Referer": "http://127.0.0.1/unbrowser"},
+        )
+        self.assertEqual(connect.status_code, 302)
+        self.assertEqual(connect.headers.get("Location"), connect_destination)
+        self.assertEqual(
+            _event_count("unbrowser_outbound_click", connect_route),
+            connect_before + 1,
+        )
+        with sqlite3.connect(analytics_db) as conn:
+            connect_row = conn.execute(
+                "SELECT route_effective, referrer_path, cta_id, meta_json "
+                "FROM analytics_events WHERE event = 'unbrowser_outbound_click' "
+                "AND route = ? ORDER BY id DESC LIMIT 1",
+                (connect_route,),
+            ).fetchone()
+        self.assertEqual(
+            connect_row[:3],
+            (connect_destination, "/unbrowser", "unbrowser_connect_computer"),
+        )
+        self.assertEqual(
+            json.loads(connect_row[3]),
+            {**campaign, "destination": "unchained_install"},
         )
 
     async def test_signed_chat_reconnect_asset_headers(self):

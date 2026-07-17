@@ -58,6 +58,7 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/web/static/signed-chat-reconnect.js"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
+            ("GET", "/go/unbrowser-connect"),
             ("GET", "/go/unbrowser-github"),
             ("GET", "/go/unbrowser-smithery"),
             ("GET", "/web/unbrowser/sources"),
@@ -411,6 +412,33 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("/web/unbrowser/stream", web.UNBROWSER_PAGE_HTML)
         self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
         self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
+
+    def test_unbrowser_completed_demo_reveals_measured_activation_handoff(self):
+        self.assertIn(
+            '<div id="ub-complete" class="demo-complete" hidden>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            '<a class="btn" href="/go/unbrowser-connect" data-acquisition-link>Connect this computer</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            "document.querySelectorAll('[data-acquisition-link]')",
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn("els.complete.hidden=true", web.UNBROWSER_PAGE_HTML)
+        self.assertIn(
+            "setLaunchBusy(false);els.complete.hidden=false",
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            "setLaunchBusy(false);els.complete.hidden=true;renderInspector",
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            'href="/go/unbrowser-connect" data-acquisition-link',
+            web.UNBROWSER_PAGE_HTML,
+        )
 
     def test_web_image_installs_unbrowser_binary_package(self):
         dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"

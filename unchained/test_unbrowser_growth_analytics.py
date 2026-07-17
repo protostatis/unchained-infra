@@ -8,6 +8,7 @@ import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote, urlencode
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -48,6 +49,24 @@ class _Core:
         call["meta"] = dict(kwargs.get("meta") or {})
         self.calls.append({"event": event, **call})
         return True
+
+
+class _InstallCore:
+    INSTALL_ONBOARD_HTML = core_module.INSTALL_ONBOARD_HTML
+    GOOGLE_CLIENT_ID = ""
+
+    def __init__(self):
+        self.page_views = 0
+
+    def _track_page_view(self, _request):
+        self.page_views += 1
+        return True
+
+    def _analytics_acquisition_meta(self, request):
+        return core_module._analytics_acquisition_meta(request)
+
+    def inject_google_client_id(self, html, _client_id):
+        return html
 
 
 class _StreamResponse:
@@ -103,6 +122,42 @@ class UnbrowserOutboundAnalyticsTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_completed_demo_connect_records_then_redirects_to_fixed_install_campaign(self):
+        core = _Core()
+        request = _Request(
+            "/go/unbrowser-connect",
+            query={
+                "utm_source": "mcp_so",
+                "utm_medium": "marketplace",
+                "utm_campaign": "unbrowser_directory",
+                "private": "must-not-be-stored",
+            },
+        )
+        with patch.object(pages, "_core", return_value=core):
+            with self.assertRaises(aiohttp_web.HTTPFound) as raised:
+                await pages.handle_unbrowser_outbound(request)
+
+        expected = (
+            "/install?ref=unbrowser_demo_complete_v1&utm_source=unchainedsky"
+            "&utm_medium=product&utm_campaign=unbrowser_demo_complete_v1"
+        )
+        self.assertEqual(raised.exception.location, expected)
+        self.assertEqual(len(core.calls), 1)
+        call = core.calls[0]
+        self.assertEqual(call["event"], "unbrowser_outbound_click")
+        self.assertEqual(call["route"], "/go/unbrowser-connect")
+        self.assertEqual(call["route_effective"], expected)
+        self.assertEqual(call["cta_id"], "unbrowser_connect_computer")
+        self.assertEqual(
+            call["meta"],
+            {
+                "utm_source": "mcp_so",
+                "utm_medium": "marketplace",
+                "utm_campaign": "unbrowser_directory",
+                "destination": "unchained_install",
+            },
+        )
+
     async def test_head_redirects_without_recording_a_click(self):
         core = _Core()
         request = _Request("/go/unbrowser-smithery", method="HEAD")
@@ -115,6 +170,48 @@ class UnbrowserOutboundAnalyticsTests(unittest.IsolatedAsyncioTestCase):
             "https://smithery.ai/servers/protostatis-dev/unbrowser",
         )
         self.assertEqual(core.calls, [])
+
+
+class InstallAttributionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sign_in_return_preserves_only_bounded_acquisition_fields(self):
+        core = _InstallCore()
+        request = _Request(
+            "/install",
+            query={
+                "ref": "unbrowser_demo_complete_v1",
+                "utm_source": "unchainedsky",
+                "utm_medium": "product",
+                "utm_campaign": "unbrowser_demo_complete_v1",
+                "private": "must-not-be-stored",
+            },
+        )
+        with patch.object(pages, "_core", return_value=core):
+            response = await pages.handle_install_page(request)
+
+        acquisition = core_module._analytics_acquisition_meta(request)
+        expected_path = f"/install?{urlencode(acquisition)}"
+        self.assertEqual(core.page_views, 1)
+        self.assertEqual(response.status, 200)
+        self.assertIn(
+            f'href="/local?next={quote(expected_path, safe="")}">Sign In</a>',
+            response.text,
+        )
+        self.assertIn(
+            f"const INSTALL_RETURN_PATH = '{expected_path}';",
+            response.text,
+        )
+        self.assertNotIn("must-not-be-stored", response.text)
+        self.assertNotIn("__INSTALL_RETURN_PATH", response.text)
+
+    async def test_sign_in_return_falls_back_to_plain_install_path(self):
+        core = _InstallCore()
+        request = _Request("/install")
+        with patch.object(pages, "_core", return_value=core):
+            response = await pages.handle_install_page(request)
+
+        self.assertIn('href="/local?next=%2Finstall">Sign In</a>', response.text)
+        self.assertIn("const INSTALL_RETURN_PATH = '/install';", response.text)
+        self.assertNotIn("__INSTALL_RETURN_PATH", response.text)
 
 
 class UnbrowserDemoLifecycleTests(unittest.IsolatedAsyncioTestCase):
