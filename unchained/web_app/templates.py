@@ -8663,7 +8663,7 @@ body{
       <span class="detail" id="banner-detail">The browser bridge is required for trial browsing; model status is tracked separately.</span>
     </div>
     <div class="banner-actions">
-      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" aria-hidden="true">or</span>
       <span class="sr-only">or use the terminal command</span>
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
@@ -8699,7 +8699,7 @@ body{
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
         <button class="modal-copy modal-retry" onclick="showTrialInstallCmd()" id="retry-btn" type="button" style="display:none" data-analytics-cta="post_login_terminal_command">Retry Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
@@ -9737,12 +9737,12 @@ function updateAgentStatusUI(data) {
   updateSendAvailability(setupReady);
   updateTrialInstallGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Pick the one-click installer or terminal command. No Claude or Codex CLI required for trial.';
+  if (bannerDetail) bannerDetail.textContent = 'Pick the native installer or terminal command. No Claude or Codex CLI required for trial.';
   if (bannerCurl) {
     bannerCurl.textContent = trialInstallCommandLabel(false);
     bannerCurl.dataset.reconnect = '0';
   }
-  if (bannerConnect) bannerConnect.textContent = 'Use one-click installer';
+  if (bannerConnect) bannerConnect.textContent = 'Open native installer';
 
   if (banner) {
     if (debouncedBridge) {
@@ -12546,10 +12546,10 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
     <div class="copy">
       <span class="banner-kicker">Local setup required</span>
       <span id="banner-msg">Connect this computer to run browser tasks.</span>
-      <span class="detail" id="banner-detail">Requires Codex CLI. Pick the one-click installer or terminal command.</span>
+      <span class="detail" id="banner-detail">Requires Codex CLI. Pick the native installer or terminal command.</span>
     </div>
     <div class="banner-actions">
-      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" aria-hidden="true">or</span>
       <span class="sr-only">or use the terminal command</span>
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
@@ -12585,7 +12585,7 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
@@ -12781,8 +12781,8 @@ function updateAgentStatusUI(data) {
   updateSendAvailability(setupReady);
   updateLocalCliGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the one-click installer or terminal command.';
-  if (bannerConnect) bannerConnect.textContent = 'Use one-click installer';
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the native installer or terminal command.';
+  if (bannerConnect) bannerConnect.textContent = 'Open native installer';
   if (bannerCurl) {
     bannerCurl.textContent = localInstallCommandLabel(false);
     bannerCurl.dataset.reconnect = '0';
@@ -12817,7 +12817,7 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
-    if (bannerConnect) bannerConnect.textContent = 'Use one-click installer';
+    if (bannerConnect) bannerConnect.textContent = 'Open native installer';
     if (bannerCurl) {
       bannerCurl.textContent = localInstallCommandLabel(true);
       bannerCurl.dataset.reconnect = '1';
@@ -15598,7 +15598,7 @@ body{
       <span class="detail" id="banner-detail">Status has two parts: Browser bridge and chat agent are tracked separately.</span>
     </div>
     <div class="banner-actions">
-      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" id="banner-method-or" aria-hidden="true">or</span>
       <span class="sr-only" id="banner-installer-label">or use the terminal command</span>
       <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
@@ -15634,7 +15634,7 @@ body{
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Use one-click installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
         <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
@@ -16324,8 +16324,8 @@ function updateAgentStatusUI(data) {
   updateLocalCliGuidance();
   if (bannerKicker) bannerKicker.textContent = 'Local setup required';
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the one-click installer or terminal command.';
-  if (bannerConnect) { bannerConnect.textContent = 'Use one-click installer'; bannerConnect.style.display = ''; }
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the native installer or terminal command.';
+  if (bannerConnect) { bannerConnect.textContent = 'Open native installer'; bannerConnect.style.display = ''; }
   if (bannerCurl) {
     bannerCurl.textContent = localInstallCommandLabel(false);
     bannerCurl.style.display = '';
@@ -16395,7 +16395,7 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
-    if (bannerConnect) bannerConnect.textContent = 'Use one-click installer';
+    if (bannerConnect) bannerConnect.textContent = 'Open native installer';
     if (bannerCurl) {
       bannerCurl.textContent = localInstallCommandLabel(true);
       bannerCurl.dataset.reconnect = '1';

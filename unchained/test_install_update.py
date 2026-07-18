@@ -1094,7 +1094,7 @@ def test_chat_html_has_install_modal():
     assert "showInstallCmd" in CHAT_HTML, "showInstallCmd JS missing"
     assert "copyInstallCmd" in CHAT_HTML, "copyInstallCmd JS missing"
     assert "closeInstallModal" in CHAT_HTML, "closeInstallModal JS missing"
-    assert "Use one-click installer" in CHAT_HTML, "primary installer action missing"
+    assert "Open native installer" in CHAT_HTML, "primary installer action missing"
     assert "Get terminal command" in CHAT_HTML, "terminal install option missing"
     assert "Connect this computer" in CHAT_HTML, "connect modal title missing"
     assert "Choose one install method" in CHAT_HTML, "install method choice copy missing"
@@ -1157,7 +1157,7 @@ def _assert_native_installer_first_contract(
     assert _TERMINAL_COMMAND_CTA in terminal_banner, template_name
     assert 'onclick=' not in installer_banner, template_name
     assert not re.search(r"\sdownload(?:\s|=|>)", installer_banner), template_name
-    assert ">Use one-click installer</a>" in banner, template_name
+    assert ">Open native installer</a>" in banner, template_name
     assert "or use the terminal command" in banner, template_name
 
     modal_end = markup.index('<div id="chat">', modal_start)
