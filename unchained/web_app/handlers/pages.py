@@ -13,6 +13,7 @@ from aiohttp import web
 from web_app.core import get_core as _core
 from web_app.research_desk_page import build_research_desk_html as _build_research_desk_html
 from web_app.templates import (
+    BROWSERBASE_ALTERNATIVE_HTML,
     BROWSER_MCP_ALTERNATIVE_HTML,
     CHROME_TAX_HTML,
     FIRST_LOOK_PREVIEW_HTML,
@@ -344,6 +345,17 @@ async def handle_browser_mcp_alternative_page(request: web.Request) -> web.Respo
     core._track_page_view(request)
     html = core.inject_google_client_id(
         BROWSER_MCP_ALTERNATIVE_HTML,
+        core.GOOGLE_CLIENT_ID,
+    )
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_browserbase_alternative_page(request: web.Request) -> web.Response:
+    """Serve the source-linked Browserbase comparison page."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.inject_google_client_id(
+        BROWSERBASE_ALTERNATIVE_HTML,
         core.GOOGLE_CLIENT_ID,
     )
     return web.Response(text=html, content_type="text/html")

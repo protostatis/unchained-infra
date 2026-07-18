@@ -1337,6 +1337,172 @@ ssrf_guard: enabled</pre>
 </body>
 </html>"""
 
+BROWSERBASE_ALTERNATIVE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browserbase Alternative: Browserbase vs Unchained (2026)</title>
+  <meta name="description" content="Compare Browserbase and Unchained for browser agents: managed cloud sessions and observability versus a guided, on-machine Chrome workspace.">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://unchainedsky.com/browserbase-alternative">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Unchained">
+  <meta property="og:url" content="https://unchainedsky.com/browserbase-alternative">
+  <meta property="og:title" content="Browserbase Alternative: Browserbase vs Unchained (2026)">
+  <meta property="og:description" content="A source-linked guide to managed cloud browser infrastructure versus a guided, on-machine Chrome workspace.">
+  <meta property="og:image" content="https://unchainedsky.com/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Browserbase Alternative: Browserbase vs Unchained (2026)">
+  <meta name="twitter:description" content="Choose between Browserbase cloud sessions and an Unchained on-machine browser workflow.">
+  <meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#0b0a10;--surface:#16131f;--surface-2:#1d1928;--line:#302a3e;
+      --text:#f1ede2;--muted:#ada799;--dim:#777064;--accent:#ff6a3d;
+      --signal:#b6f25c;--cloud:#8ca5ff;--max:1120px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;min-width:320px;color:var(--text);line-height:1.65;
+      font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+      background:radial-gradient(circle at 12% 0%,rgba(182,242,92,.07),transparent 29rem),radial-gradient(circle at 88% 14%,rgba(255,106,61,.08),transparent 31rem),var(--bg);
+    }
+    a{color:inherit}a:focus-visible{outline:2px solid var(--signal);outline-offset:4px}
+    .skip-link{position:absolute;left:-9999px;top:.75rem;z-index:5;padding:.65rem .85rem;background:var(--text);color:var(--bg)}.skip-link:focus{left:.75rem}
+    .site-header{border-bottom:1px solid rgba(255,255,255,.08);background:rgba(11,10,16,.88);backdrop-filter:blur(16px)}
+    .nav{width:min(var(--max),calc(100% - 2.5rem));min-height:4.4rem;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:1.25rem}
+    .brand{font-size:.82rem;font-weight:800;letter-spacing:.18em;text-decoration:none}.brand span{color:var(--accent)}
+    .nav-links{display:flex;gap:1.15rem;color:var(--muted);font-size:.88rem}.nav-links a:hover{color:var(--text)}
+    main,footer{width:min(var(--max),calc(100% - 2.5rem));margin:auto}
+    .hero{padding:clamp(4.7rem,9vw,8rem) 0 4.5rem;border-bottom:1px solid var(--line)}
+    .eyebrow{margin:0 0 1.1rem;color:var(--signal);font:700 .74rem/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.14em;text-transform:uppercase}
+    h1,h2,h3{margin-top:0;font-weight:600;letter-spacing:-.025em}h1{max-width:980px;margin-bottom:0;font-size:clamp(2.55rem,7vw,5.45rem);line-height:1.02}
+    .lede{max-width:850px;margin:1.55rem 0 0;color:#d6d1c7;font-size:clamp(1.05rem,2vw,1.3rem)}
+    .cta{display:inline-flex;align-items:center;justify-content:center;min-height:3.25rem;margin-top:1.65rem;padding:.78rem 1.15rem;border-radius:8px;background:var(--signal);color:#07110d;font-weight:800;text-decoration:none;box-shadow:0 12px 34px rgba(182,242,92,.14)}.cta:hover{filter:brightness(1.06)}
+    .cta-note{display:inline-block;margin-left:.8rem;color:var(--muted);font-size:.84rem;vertical-align:middle}
+    .verdict{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:2.5rem 0 0;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}.verdict article{padding:1.45rem;background:var(--surface)}.verdict article:first-child{border-top:3px solid var(--cloud)}.verdict article:last-child{border-top:3px solid var(--signal)}.verdict h2{margin-bottom:.55rem;font-size:1.32rem}.verdict p{margin:0;color:var(--muted)}
+    .section{padding:4.5rem 0;border-bottom:1px solid var(--line)}.section-head{max-width:790px;margin-bottom:2rem}.section h2{margin-bottom:.75rem;font-size:clamp(2rem,4.5vw,3.25rem);line-height:1.08}.section-head p{margin:0;color:var(--muted);font-size:1.04rem}
+    .answer{max-width:900px;padding:1.5rem;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;background:var(--surface)}.answer p{margin:0}.answer p+p{margin-top:.9rem;color:var(--muted)}
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px}table{width:100%;min-width:770px;border-collapse:collapse;background:var(--surface)}th,td{padding:1rem 1.05rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--surface-2);color:var(--muted);font-size:.75rem;letter-spacing:.1em;text-transform:uppercase}th:first-child,td:first-child{width:19%;color:var(--muted);font-size:.88rem;font-weight:700}tbody tr:last-child td{border-bottom:0}
+    .choices{display:grid;grid-template-columns:1fr 1fr;gap:1.1rem}.choice{padding:1.5rem;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.choice.browserbase{border-top:3px solid var(--cloud)}.choice.unchained{border-top:3px solid var(--signal)}.choice h2{font-size:1.65rem}.choice ul{margin:1rem 0 0;padding-left:1.2rem}.choice li+li{margin-top:.65rem}
+    .lane{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1.4rem;align-items:center;padding:1.6rem;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.lane h3{margin-bottom:.45rem;font-size:1.35rem}.lane p{margin:0;color:var(--muted)}.lane a{color:#07110d;background:var(--signal);padding:.8rem 1rem;border-radius:8px;text-decoration:none;font-weight:800;white-space:nowrap}
+    .copy{max-width:900px}.copy p{margin:0 0 1rem}.disclosure{padding:1.25rem;border:1px solid rgba(255,106,61,.45);border-radius:12px;background:rgba(255,106,61,.06)}.copy a,.sources a{color:#d7f7a6;text-underline-offset:.18em}
+    .sources{display:grid;gap:.85rem;margin:0;padding:0;list-style:none}.sources li{padding:1rem 1.1rem;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.sources strong{display:block;margin-bottom:.2rem}.sources span{color:var(--muted)}
+    footer{padding:2.5rem 0 3.5rem;color:var(--muted);font-size:.84rem}footer p{margin:.35rem 0}footer a{color:var(--text)}.motto{color:var(--accent);font-weight:800;letter-spacing:.12em}
+    @media(max-width:760px){.nav{width:min(var(--max),calc(100% - 1.5rem));align-items:flex-start;flex-direction:column;padding:1rem 0}.nav-links{width:100%;justify-content:space-between;gap:.7rem}main,footer{width:min(var(--max),calc(100% - 1.5rem))}.verdict,.choices,.lane{grid-template-columns:1fr}.cta-note{display:block;margin:.75rem 0 0}.lane a{justify-self:start}.section{padding:3.5rem 0}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to comparison</a>
+  <header class="site-header">
+    <nav class="nav" aria-label="Primary navigation">
+      <a class="brand" href="/" aria-label="Unchained home">UN<span>CHAIN</span>ED</a>
+      <div class="nav-links"><a href="#comparison">Compare</a><a href="#sources">Sources</a><a href="/privacy">Privacy</a></div>
+    </nav>
+  </header>
+  <main id="main-content">
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">Unchained drives. You navigate. &middot; Reviewed <time datetime="2026-07-18">July 18, 2026</time></p>
+      <h1 id="page-title">Browserbase vs Unchained: cloud browser fleet or on-machine workspace?</h1>
+      <p class="lede">Browserbase excels at managed cloud browser sessions, parallel workloads, persistent cloud contexts, and built-in observability. Unchained fits a different job: let a supported AI workflow navigate a Chrome context on your computer through a guided hosted control surface.</p>
+      <a class="cta" href="/trial?ref=browserbase_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=browserbase_alternative_v1" data-analytics-cta="browserbase_alternative_trial">Open a guided local-browser trial</a>
+      <p class="cta-note">The guided path uses a dedicated Unchained Chrome workspace; developer-path profile controls vary.</p>
+      <div class="verdict" aria-label="Quick verdict">
+        <article><h2>Choose Browserbase for managed cloud infrastructure</h2><p>Its documented model is API-created, isolated browser sessions with plan-dependent concurrency, cloud Contexts, and session inspection.</p></article>
+        <article><h2>Choose Unchained for an on-machine browser workflow</h2><p>Use a guided local Chrome workspace or a supported developer path when the job needs browser state on your computer and hosted direction.</p></article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="short-answer">
+      <div class="section-head"><p class="eyebrow">Answer first</p><h2 id="short-answer">Is Unchained a Browserbase alternative?</h2></div>
+      <div class="answer">
+        <p><strong>For a narrow, user-controlled workflow, sometimes. For a managed browser fleet, no.</strong> Browserbase documents a cloud platform whose basic unit is an isolated browser session created through its API. Its platform supports concurrent sessions, reusable cloud Contexts, Live View, recordings, and replay.</p>
+        <p>Unchained connects a supported AI path to a Chrome workspace on the user's computer and adds guided hosted control. The guided trial opens a dedicated workspace; supported MCP and CLI paths can expose different profile and interaction controls. If your product needs cloud fleet operations or recorded session inspection, Browserbase is likely the better fit.</p>
+      </div>
+    </section>
+
+    <section class="section" id="comparison" aria-labelledby="comparison-heading">
+      <div class="section-head"><p class="eyebrow">Side by side</p><h2 id="comparison-heading">Different operating models</h2><p>This is a fit comparison, not a benchmark. It makes no pricing, speed, reliability, security, or universal privacy claim.</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Question</th><th>Browserbase</th><th>Unchained</th></tr></thead>
+          <tbody>
+            <tr><td>Where Chrome runs</td><td>An isolated browser session runs in Browserbase's cloud infrastructure.</td><td>A local connector gives the supported workflow a Chrome context on the user's computer.</td></tr>
+            <tr><td>Session state</td><td>Sessions start fresh by default. An optional Browserbase Context can persist cookies, authentication, and application data across sessions.</td><td>The guided trial opens a dedicated on-machine Chrome workspace that can retain its sign-in state. Profile controls differ across supported developer paths.</td></tr>
+            <tr><td>Scale model</td><td>Browserbase documents parallel sessions plus plan-dependent concurrency and session-creation limits.</td><td>Unchained is positioned here for a selected on-machine workspace, not as a substitute for a managed parallel browser fleet.</td></tr>
+            <tr><td>Inspection</td><td>The Session Inspector includes Live View, video recordings, event timelines, and replay capabilities.</td><td>The hosted product guides and displays browser work; supported web, MCP, and CLI paths do not promise identical controls or Browserbase-style replay.</td></tr>
+            <tr><td>Starting point</td><td>Create and configure a cloud session through Browserbase's API, then connect an automation framework.</td><td>Start a guided local-browser trial, or use a supported MCP or CLI setup when that path fits.</td></tr>
+            <tr><td>Best fit</td><td>Teams building cloud browser infrastructure for parallel automation, testing, or agent workloads.</td><td>People who want a supported AI path to navigate an on-machine browser workspace without directing every browser step.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section choices" aria-label="Which product should you choose">
+      <article class="choice browserbase">
+        <p class="eyebrow">Browserbase is stronger when</p>
+        <h2>You are operating browsers as cloud infrastructure</h2>
+        <ul>
+          <li>Your application needs API-created, isolated cloud browser sessions.</li>
+          <li>You expect parallel workloads and want documented concurrency controls.</li>
+          <li>You need built-in Live View, recordings, event inspection, or replay.</li>
+          <li>You want cloud Contexts to reuse authentication and application data between sessions.</li>
+        </ul>
+      </article>
+      <article class="choice unchained">
+        <p class="eyebrow">Unchained fits when</p>
+        <h2>You want the agent to drive an on-machine workspace</h2>
+        <ul>
+          <li>The task depends on a signed-in Chrome context on your computer.</li>
+          <li>You want to set the outcome and boundaries instead of scripting every click.</li>
+          <li>You prefer a guided hosted product surface, with supported MCP and CLI paths available.</li>
+          <li>You do not need Unchained to replace managed cloud concurrency or Browserbase observability.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="section" aria-labelledby="public-research-heading">
+      <div class="section-head"><p class="eyebrow">Use the lightest lane</p><h2 id="public-research-heading">Need public research, not browser control?</h2><p>Neither a cloud browser fleet nor a local connector should be the default for every question.</p></div>
+      <div class="lane">
+        <div><h3>SearchAgentSky is the public-web research product</h3><p>Use it for a current, cited answer from public sources with no local client. Use Unchained when the task needs a signed-in browser context or browser actions; use Browserbase when you are building managed cloud browser infrastructure.</p></div>
+        <a href="https://searchagentsky.com/?ref=browserbase-alternative-public&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=browserbase_alternative_v1" rel="noopener noreferrer" data-analytics-cta="browserbase_alternative_public_search">Search public sources</a>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="data-flow-heading">
+      <div class="section-head"><p class="eyebrow">Data flow</p><h2 id="data-flow-heading">Compare the actual workflow, not a privacy slogan</h2></div>
+      <div class="copy">
+        <p class="disclosure"><strong>Unchained is not local-only.</strong> Chrome workspace files remain on the user's computer, but commands, browser-derived page context, tool results, and related service data needed to run the workflow may be transmitted to Unchained and configured AI providers, and some service data may be stored. Review the current <a href="/privacy">Unchained privacy policy</a> before connecting sensitive work.</p>
+        <p>Browserbase sessions run in its cloud. Its documentation says session recording and logging are enabled by default and configurable, while Contexts persist browser data and are encrypted at rest. Review Browserbase's current settings and policies for your deployment. Neither architecture is inherently the right privacy choice for every workload.</p>
+      </div>
+    </section>
+
+    <section class="section" id="sources" aria-labelledby="sources-heading">
+      <div class="section-head"><p class="eyebrow">Verify the claims</p><h2 id="sources-heading">Current first-party sources</h2><p>Browserbase can change its product and documentation. Check these official pages before deciding.</p></div>
+      <ul class="sources">
+        <li><strong><a href="https://docs.browserbase.com/platform/browser/getting-started/create-browser-session" rel="noopener noreferrer">Browserbase: Create a browser session</a></strong><span>Defines an isolated cloud browser session, API creation, configuration, and default recording/logging settings.</span></li>
+        <li><strong><a href="https://docs.browserbase.com/platform/browser/core-features/contexts" rel="noopener noreferrer">Browserbase: Contexts</a></strong><span>Documents fresh sessions by default and optional persistence of cookies, authentication, and application data.</span></li>
+        <li><strong><a href="https://docs.browserbase.com/platform/browser/observability/observability" rel="noopener noreferrer">Browserbase: Observability</a></strong><span>Documents Session Inspector, Live View, video recordings, event timelines, and replay.</span></li>
+        <li><strong><a href="https://docs.browserbase.com/optimizations/concurrency/overview" rel="noopener noreferrer">Browserbase: Concurrency management</a></strong><span>Documents parallel sessions and plan-dependent browser and session-creation limits.</span></li>
+        <li><strong><a href="/mcp-guide">Unchained MCP guide</a></strong><span>Current setup and integration guidance for the supported MCP path.</span></li>
+        <li><strong><a href="/privacy">Unchained privacy policy</a></strong><span>Current disclosures for browser-derived data, AI providers, service storage, and user choices.</span></li>
+      </ul>
+    </section>
+  </main>
+  <footer>
+    <p>Unchained is not affiliated with, endorsed by, or sponsored by Browserbase. Browserbase and related marks belong to their respective owners.</p>
+    <p>This comparison was last reviewed July 18, 2026. <a href="/">Return to Unchained</a>.</p>
+    <p class="motto">UNCHAINED DRIVES. YOU NAVIGATE.</p>
+  </footer>
+</body>
+</html>"""
+
+
 BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>

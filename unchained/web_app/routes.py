@@ -30,6 +30,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/chrome-tax", "web_app.handlers.pages:handle_chrome_tax_page"),
     (
         "GET",
+        "/browserbase-alternative",
+        "web_app.handlers.pages:handle_browserbase_alternative_page",
+    ),
+    (
+        "GET",
         "/browser-mcp-alternative",
         "web_app.handlers.pages:handle_browser_mcp_alternative_page",
     ),
