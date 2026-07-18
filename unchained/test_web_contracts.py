@@ -670,6 +670,39 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
 
+    def test_first_look_examples_are_explicit_one_click_runs(self):
+        from web_app.handlers.pages import _build_first_look_preview_html
+
+        html = _build_first_look_preview_html(prompt_limit=5, remaining=3)
+        self.assertIn(
+            "One click attempts a guest run when the shared browser is ready",
+            html,
+        )
+        self.assertIn(
+            "An accepted run uses one of your remaining guest runs.",
+            html,
+        )
+        self.assertEqual(html.count('aria-label="Run live:'), 6)
+        self.assertEqual(html.count('aria-describedby="guest-run-disclosure"'), 6)
+        for cta_id in (
+            "first_look_example_wikipedia_run",
+            "first_look_example_hacker_news_run",
+            "first_look_example_weather_run",
+        ):
+            self.assertEqual(html.count(f'data-analytics-cta="{cta_id}"'), 2)
+        self.assertIn("function runExample(prompt, url)", html)
+        self.assertIn("fillExample(prompt, url);\n  return doSend();", html)
+        self.assertEqual(
+            html.count(
+                "runExample(item.dataset.prompt || '', item.dataset.url || '');"
+            ),
+            2,
+        )
+        self.assertNotIn(
+            "fillExample(item.dataset.prompt || '', item.dataset.url || '');",
+            html,
+        )
+
     def test_use_case_templates_link_to_allowlisted_first_look_tasks(self):
         self.assertIn('href="/first-look?task=apartment"', web.USE_CASE_APARTMENT_HTML)
         self.assertIn("Try a Live Apartment Task", web.USE_CASE_APARTMENT_HTML)

@@ -18299,11 +18299,11 @@ body{
         <div id="chat-hints">
           <div class="hint-badge" id="quota-copy">__FIRST_LOOK_GUEST_REMAINING__ of __FIRST_LOOK_GUEST_LIMIT__ guest runs &middot; selected public sites</div>
           <div class="hint-title">Run the shared browser over a live canvas.</div>
-          <div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>
+          <div class="hint-sub" id="guest-run-disclosure">Pick a public task. One click attempts a guest run when the shared browser is ready and streams the work here. An accepted run uses one of your remaining guest runs.</div>
           <div class="hint-examples">
-            <button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Compare computing pioneers on Wikipedia</button>
-            <button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">&#128240;</span> Group the top Hacker News stories</button>
-            <button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Pick the better outdoor coffee day in NYC</button>
+            <button type="button" class="hint-item" aria-label="Run live: compare computing pioneers on Wikipedia" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_wikipedia_run" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">&#128187;</span> Run live: Compare computing pioneers on Wikipedia</button>
+            <button type="button" class="hint-item" aria-label="Run live: group the top Hacker News stories" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_hacker_news_run" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">&#128240;</span> Run live: Group the top Hacker News stories</button>
+            <button type="button" class="hint-item" aria-label="Run live: pick the better outdoor coffee day in NYC" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_weather_run" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">&#9749;</span> Run live: Pick the better outdoor coffee day in NYC</button>
           </div>
           <div class="hint-note">Run time varies by site and task.</div>
           <div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>
@@ -18672,11 +18672,11 @@ async function doNewChat() {
       '<div id="chat-hints">' +
         '<div class="hint-badge" id="quota-copy">' + remainingGuestRuns + ' of ' + FIRST_LOOK_GUEST_LIMIT + ' guest runs \u00b7 selected public sites</div>' +
         '<div class="hint-title">Run the shared browser over a live canvas.</div>' +
-        '<div class="hint-sub">Pick a public task. The browser behind this panel will navigate, inspect, and stream its work in real time.</div>' +
+        '<div class="hint-sub" id="guest-run-disclosure">Pick a public task. One click attempts a guest run when the shared browser is ready and streams the work here. An accepted run uses one of your remaining guest runs.</div>' +
         '<div class="hint-examples">' +
-          '<button type="button" class="hint-item" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Compare computing pioneers on Wikipedia</button>' +
-          '<button type="button" class="hint-item" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Group the top Hacker News stories</button>' +
-          '<button type="button" class="hint-item" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Pick the better outdoor coffee day in NYC</button>' +
+          '<button type="button" class="hint-item" aria-label="Run live: compare computing pioneers on Wikipedia" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_wikipedia_run" data-prompt="On Wikipedia, compare Ada Lovelace, Grace Hopper, and Katherine Johnson. For each, give field, lifespan, and one major contribution, then rank them by birth year." data-url="https://www.wikipedia.org/"><span class="hint-emoji">\ud83d\udcbb</span> Run live: Compare computing pioneers on Wikipedia</button>' +
+          '<button type="button" class="hint-item" aria-label="Run live: group the top Hacker News stories" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_hacker_news_run" data-prompt="Open Hacker News, list the top 5 stories right now, group them into 2 or 3 themes, and tell me which one a browser-tools builder should read first." data-url="https://news.ycombinator.com/"><span class="hint-emoji">\ud83d\udcf0</span> Run live: Group the top Hacker News stories</button>' +
+          '<button type="button" class="hint-item" aria-label="Run live: pick the better outdoor coffee day in NYC" aria-describedby="guest-run-disclosure" data-analytics-cta="first_look_example_weather_run" data-prompt="Check weather.gov for New York City and tell me whether today or tomorrow is better for an outdoor coffee, using temperature, wind, and rain to justify the answer." data-url="https://www.weather.gov/"><span class="hint-emoji">\u2615</span> Run live: Pick the better outdoor coffee day in NYC</button>' +
         '</div>' +
         '<div class="hint-note">Run time varies by site and task.</div>' +
         '<div class="hint-actions"><a class="hint-cta" href="/trial">Unlock Full Browser</a></div>' +
@@ -18686,7 +18686,7 @@ async function doNewChat() {
     applyFirstLookAttribution(chat);
     document.querySelectorAll('.hint-item').forEach(function (item) {
       item.addEventListener('click', function () {
-        fillExample(item.dataset.prompt || '', item.dataset.url || '');
+        runExample(item.dataset.prompt || '', item.dataset.url || '');
       });
     });
     resetPreview();
@@ -19314,6 +19314,11 @@ function fillExample(prompt, url) {
   input.focus();
 }
 
+function runExample(prompt, url) {
+  fillExample(prompt, url);
+  return doSend();
+}
+
 async function doCancel() {
   if (!sessionId) return;
   try {
@@ -19569,7 +19574,7 @@ document.getElementById('msginput').addEventListener('keydown', function (event)
 });
 document.querySelectorAll('.hint-item').forEach(function (item) {
   item.addEventListener('click', function () {
-    fillExample(item.dataset.prompt || '', item.dataset.url || '');
+    runExample(item.dataset.prompt || '', item.dataset.url || '');
   });
 });
 
