@@ -22,6 +22,7 @@ import os
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 import web
+from web_app.templates import CHROME_TAX_HTML
 
 
 class TestWebRouteContracts(unittest.TestCase):
@@ -296,6 +297,137 @@ class TestWebTemplateContracts(unittest.TestCase):
         )
         self.assertIn('<meta name="description"', html)
         self.assertIn('<meta property="og:title"', html)
+
+    def test_chrome_tax_is_answer_first_playwright_mcp_alternative(self):
+        html = CHROME_TAX_HTML
+        canonical = re.search(r'<link rel="canonical" href="([^"]+)">', html)
+
+        self.assertIsNotNone(canonical)
+        self.assertEqual(canonical.group(1), "https://unchainedsky.com/chrome-tax")
+        self.assertEqual(html.count("<h1>"), 1)
+        self.assertIn(
+            "<title>Playwright MCP Alternative: Unbrowser vs Unchained MCP | "
+            "Unchained</title>",
+            html,
+        )
+        self.assertIn(
+            "<h1>A Playwright MCP alternative when your agent does not need "
+            "<em>pixels</em>.</h1>",
+            html,
+        )
+        self.assertIn(
+            "Unbrowser, Playwright MCP, and Unchained MCP expose",
+            html,
+        )
+        self.assertIn("When not to use Unbrowser", html)
+        self.assertIn("Unbrowser is not a drop-in replacement", html)
+
+        campaign = (
+            "ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;"
+            "utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1"
+        )
+        self.assertGreaterEqual(html.count(f'href="/unbrowser?{campaign}"'), 2)
+        self.assertGreaterEqual(html.count(f'href="/mcp?{campaign}"'), 2)
+        self.assertIn("Try Unbrowser on public sites — no signup", html)
+        self.assertIn("Want DDM + a local bridge? Set up Unchained MCP", html)
+
+        self.assertIn('id="assumptions"', html)
+        self.assertIn("This is a transparent planning model, not a benchmark result", html)
+        self.assertIn("not universal benchmarks, provider quotes, or guaranteed savings", html)
+        self.assertIn("https://github.com/microsoft/playwright-mcp", html)
+        self.assertIn("https://github.com/protostatis/unbrowser", html)
+        self.assertIn("https://searchagentsky.com/guides/browser-agents-mcp", html)
+        self.assertNotIn("RAM wasted", html)
+        self.assertNotIn("Numbers from real measurements", html)
+        self.assertNotIn("Every metric, side by side", html)
+        self.assertNotIn(
+            'href="https://unchainedsky.com/unbrowser" class="cta-btn"',
+            html,
+        )
+
+    def test_chrome_tax_claims_match_runtime_boundaries(self):
+        html = CHROME_TAX_HTML
+
+        self.assertIn("Persistent or isolated browser profiles", html)
+        self.assertIn(
+            "The official Playwright MCP extension can connect to existing Chrome "
+            "tabs and logged-in browser state",
+            html,
+        )
+        self.assertIn(
+            "Browser profile and login state are not exclusive to Unchained",
+            html,
+        )
+        self.assertIn("It is not the only path to logged-in browser state", html)
+        self.assertNotIn("Need pixels or your login?", html)
+
+        self.assertIn(
+            "Direct MCP tool calls invoke browser actions directly; automatic "
+            "confirmation is not implied",
+            html,
+        )
+        self.assertIn(
+            "Hosted Agent View has a separate confirmation and review flow",
+            html,
+        )
+        self.assertNotIn("Human review for sensitive browser actions", html)
+
+        self.assertIn("Default navigation skips scripts", html)
+        self.assertIn("optional bounded QuickJS", html)
+        self.assertIn("heavy hydration may remain partial", html)
+        self.assertIn("JavaScript execution (bounded/full)", html)
+        self.assertRegex(
+            html,
+            re.compile(
+                r"unbrowser: \{[^}]+js:'partial'[^}]+"
+                r"heavy hydration may be partial",
+                re.DOTALL,
+            ),
+        )
+        self.assertIn("Playwright MCP or Unchained MCP", html)
+
+        self.assertIn('<meta name="twitter:card" content="summary">', html)
+        self.assertNotIn('<meta property="og:image"', html)
+        self.assertNotIn('<meta name="twitter:image"', html)
+        self.assertNotIn("summary_large_image", html)
+
+    def test_chrome_tax_controls_and_responsive_contract(self):
+        html = CHROME_TAX_HTML
+
+        for control_id in (
+            "sessions",
+            "pages",
+            "tasks",
+            "deployment",
+            "current-tool",
+            "llm-cost",
+            "scale-slider",
+        ):
+            self.assertRegex(html, rf'<label[^>]+for="{re.escape(control_id)}"')
+
+        self.assertIn("input:focus-visible", html)
+        self.assertIn("select:focus-visible", html)
+        self.assertNotIn("setupCapabilityClicks", html)
+        self.assertNotIn("th.addEventListener('click'", html)
+        capability_header_css = re.search(
+            r"\.capability-table th \{([^}]*)\}",
+            html,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(capability_header_css)
+        self.assertNotIn("cursor:pointer", capability_header_css.group(1))
+
+        self.assertIn("@media (max-height:800px), (max-width:640px)", html)
+        self.assertIn(
+            "position:static; inset:auto; transform:none; animation:none;",
+            html,
+        )
+        self.assertIn(
+            "grid-template-columns:minmax(0,86px) minmax(0,1fr) "
+            "minmax(0,64px);",
+            html,
+        )
+        self.assertIn("@media (max-width:480px)", html)
 
     def test_landing_developer_navigation_keyboard_contract(self):
         self.assertIn("function setLandingDeveloperMenuOpen(open,focusFirst)", web.LANDING_HTML)
