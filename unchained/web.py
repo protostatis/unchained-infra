@@ -333,6 +333,10 @@ _ANALYTICS_ACQUISITION_QUERY_FIELDS = {
 _ANALYTICS_ACQUISITION_TASKS = frozenset(
     {"apartment", "flight", "research", "search-result"}
 )
+_ANALYTICS_LANDING_VARIANT_META_KEY = "landing_variant"
+_ANALYTICS_LANDING_VARIANTS = frozenset(
+    {"landing_value_prop_v1", "landing_legacy_v2", "landing_legacy_v3"}
+)
 _analytics_last_cleanup_ts = 0.0
 
 
@@ -448,7 +452,13 @@ def _analytics_acquisition_meta(request: web.Request | None) -> dict[str, str]:
     return meta
 
 
-def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: dict | None = None):
+def _track_page_view(
+    request: web.Request,
+    auth_info: dict | None = None,
+    meta: dict | None = None,
+    *,
+    landing_variant: str = "",
+):
     if str(getattr(request, "method", "GET") or "GET").upper() != "GET":
         return False
     route = request.path
@@ -462,6 +472,11 @@ def _track_page_view(request: web.Request, auth_info: dict | None = None, meta: 
     elif route in _ANALYTICS_LINK_GATE_ROUTES:
         gate_type = "link_signin"
     event_meta = dict(meta or {})
+    # The landing marker is server-owned. Never let generic event metadata or
+    # request query fields manufacture an arbitrary experiment dimension.
+    event_meta.pop(_ANALYTICS_LANDING_VARIANT_META_KEY, None)
+    if landing_variant in _ANALYTICS_LANDING_VARIANTS:
+        event_meta[_ANALYTICS_LANDING_VARIANT_META_KEY] = landing_variant
     for field, value in _analytics_acquisition_meta(request).items():
         event_meta.setdefault(field, value)
     return _track_event(
@@ -1679,18 +1694,22 @@ async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
     # preview cookies are ignored on plain "/" visits so V4 is truly default.
-    _track_page_view(request)
     query_variant = request.query.get("ui")
     preview_cookie = request.cookies.get("ui")
     variant = query_variant or ""
     if variant == "v3":
         template = LANDING_V3_HTML
+        landing_variant = "landing_legacy_v3"
     elif variant == "v2":
         template = LANDING_V2_HTML
+        landing_variant = "landing_legacy_v2"
     elif variant in {"v4", "default"}:
         template = LANDING_V4_HTML
+        landing_variant = "landing_value_prop_v1"
     else:
         template = LANDING_HTML
+        landing_variant = "landing_value_prop_v1"
+    _track_page_view(request, landing_variant=landing_variant)
     html = inject_google_client_id(
         template.replace("__CONTACT_EMAIL__", CONTACT_EMAIL),
         GOOGLE_CLIENT_ID,
