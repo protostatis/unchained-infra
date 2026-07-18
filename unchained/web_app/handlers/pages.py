@@ -12,7 +12,12 @@ from aiohttp import web
 
 from web_app.core import get_core as _core
 from web_app.research_desk_page import build_research_desk_html as _build_research_desk_html
-from web_app.templates import CHROME_TAX_HTML, FIRST_LOOK_PREVIEW_HTML, UNBROWSER_PAGE_HTML
+from web_app.templates import (
+    BROWSER_MCP_ALTERNATIVE_HTML,
+    CHROME_TAX_HTML,
+    FIRST_LOOK_PREVIEW_HTML,
+    UNBROWSER_PAGE_HTML,
+)
 
 
 _FIRST_LOOK_TASK_HANDOFFS = {
@@ -330,6 +335,17 @@ async def handle_chrome_tax_page(request: web.Request) -> web.Response:
     core = _core()
     core._track_page_view(request)
     html = core.inject_google_client_id(CHROME_TAX_HTML, core.GOOGLE_CLIENT_ID)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_browser_mcp_alternative_page(request: web.Request) -> web.Response:
+    """Serve the source-linked BrowserMCP.io comparison page."""
+    core = _core()
+    core._track_page_view(request)
+    html = core.inject_google_client_id(
+        BROWSER_MCP_ALTERNATIVE_HTML,
+        core.GOOGLE_CLIENT_ID,
+    )
     return web.Response(text=html, content_type="text/html")
 
 

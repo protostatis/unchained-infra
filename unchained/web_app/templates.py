@@ -1337,6 +1337,198 @@ ssrf_guard: enabled</pre>
 </body>
 </html>"""
 
+BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser MCP Alternative: BrowserMCP vs Unchained (2026)</title>
+  <meta name="description" content="Compare BrowserMCP.io and Unchained for controlling a real Chrome browser: setup, workflow, data flow, session control, and the best fit for each approach.">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://unchainedsky.com/browser-mcp-alternative">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Unchained">
+  <meta property="og:url" content="https://unchainedsky.com/browser-mcp-alternative">
+  <meta property="og:title" content="Browser MCP Alternative: BrowserMCP vs Unchained (2026)">
+  <meta property="og:description" content="A source-linked comparison of BrowserMCP.io and Unchained for real-Chrome browser work.">
+  <meta property="og:image" content="https://unchainedsky.com/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Browser MCP Alternative: BrowserMCP vs Unchained (2026)">
+  <meta name="twitter:description" content="Compare setup, workflow, data flow, session continuity, and who each real-Chrome approach fits.">
+  <meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#09090d;
+      --surface:#12131a;
+      --surface-2:#171923;
+      --line:#2a2d39;
+      --text:#f3f1eb;
+      --muted:#aaa9b3;
+      --accent:#ff6a3d;
+      --signal:#b6f25c;
+      --max:1120px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      min-width:320px;
+      background:
+        radial-gradient(circle at 8% 0%,rgba(182,242,92,.08),transparent 28rem),
+        radial-gradient(circle at 92% 16%,rgba(255,106,61,.08),transparent 30rem),
+        var(--bg);
+      color:var(--text);
+      font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+      line-height:1.65;
+    }
+    a{color:inherit}
+    a:focus-visible,button:focus-visible{outline:2px solid var(--signal);outline-offset:4px}
+    .skip-link{position:absolute;left:-9999px;top:.75rem;z-index:5;padding:.65rem .85rem;background:var(--text);color:var(--bg)}
+    .skip-link:focus{left:.75rem}
+    .site-header{border-bottom:1px solid rgba(255,255,255,.08);background:rgba(9,9,13,.86);backdrop-filter:blur(16px)}
+    .nav{width:min(var(--max),calc(100% - 2.5rem));min-height:4.4rem;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:1.25rem}
+    .brand{font-size:.82rem;font-weight:800;letter-spacing:.18em;text-decoration:none}.brand span{color:var(--accent)}
+    .nav-links{display:flex;align-items:center;gap:1.2rem;color:var(--muted);font-size:.88rem}
+    .nav-links a:hover{color:var(--text)}
+    main{width:min(var(--max),calc(100% - 2.5rem));margin:0 auto}
+    .hero{padding:clamp(4.5rem,9vw,8rem) 0 4.5rem;border-bottom:1px solid var(--line)}
+    .eyebrow{margin:0 0 1.15rem;color:var(--signal);font:700 .75rem/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.14em;text-transform:uppercase}
+    h1,h2,h3{font-family:Georgia,"Times New Roman",serif;font-weight:400;letter-spacing:-.025em}
+    h1{max-width:920px;margin:0;font-size:clamp(2.55rem,7vw,5.6rem);line-height:1}
+    .lede{max-width:800px;margin:1.6rem 0 0;color:#d4d1ca;font-size:clamp(1.05rem,2vw,1.3rem)}
+    .verdict{display:grid;grid-template-columns:1fr 1fr;gap:1px;margin:2.4rem 0;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+    .verdict article{padding:1.35rem;background:var(--surface)}
+    .verdict h2{margin:0 0 .55rem;font-size:1.35rem}.verdict p{margin:0;color:var(--muted)}
+    .cta{display:inline-flex;align-items:center;justify-content:center;min-height:3.25rem;margin-top:1.6rem;padding:.75rem 1.1rem;border-radius:8px;background:var(--signal);color:#10120c;font-weight:800;text-decoration:none;box-shadow:0 12px 34px rgba(182,242,92,.15)}
+    .cta:hover{filter:brightness(1.06)}
+    .cta-note{display:inline-block;margin:0 0 0 .8rem;color:var(--muted);font-size:.84rem;vertical-align:middle}
+    .section{padding:4.5rem 0;border-bottom:1px solid var(--line)}
+    .section-head{max-width:760px;margin-bottom:2rem}.section h2{margin:0 0 .75rem;font-size:clamp(2rem,4.5vw,3.35rem);line-height:1.08}.section-head p{margin:0;color:var(--muted);font-size:1.05rem}
+    .answer{max-width:850px;padding:1.5rem;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;background:var(--surface)}
+    .answer p{margin:0}.answer p+p{margin-top:.85rem;color:var(--muted)}
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px}
+    table{width:100%;min-width:760px;border-collapse:collapse;background:var(--surface)}
+    th,td{padding:1rem 1.05rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{background:var(--surface-2);color:var(--muted);font-size:.75rem;letter-spacing:.1em;text-transform:uppercase}
+    th:first-child,td:first-child{width:19%;color:var(--muted);font-size:.88rem;font-weight:700}
+    tbody tr:last-child td{border-bottom:0}
+    td a,.copy a,.sources a,.note a{color:#d7f7a6;text-underline-offset:.18em}
+    .choices{display:grid;grid-template-columns:1fr 1fr;gap:1.1rem}
+    .choice{padding:1.5rem;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+    .choice h2{font-size:1.7rem}.choice ul{margin:1rem 0 0;padding-left:1.2rem}.choice li+li{margin-top:.65rem}.choice.browsermcp{border-top:3px solid #8ca5ff}.choice.unchained{border-top:3px solid var(--signal)}
+    .copy{max-width:850px}.copy p{margin:0 0 1rem}.privacy{padding:1.25rem;border:1px solid rgba(255,106,61,.45);border-radius:12px;background:rgba(255,106,61,.06)}
+    .sources{display:grid;gap:.85rem;margin:0;padding:0;list-style:none}.sources li{padding:1rem 1.1rem;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+    .sources strong{display:block;margin-bottom:.2rem}.sources span{color:var(--muted)}
+    .note{margin-top:1.3rem;padding:1.1rem;border-left:3px solid #8ca5ff;background:var(--surface);color:var(--muted)}
+    footer{width:min(var(--max),calc(100% - 2.5rem));margin:0 auto;padding:2.5rem 0 3.5rem;color:var(--muted);font-size:.84rem}
+    footer p{margin:.35rem 0}footer a{color:var(--text)}
+    @media(max-width:760px){
+      .nav{width:min(var(--max),calc(100% - 1.5rem));align-items:flex-start;flex-direction:column;padding:1rem 0}.nav-links{width:100%;justify-content:space-between;gap:.75rem}
+      main,footer{width:min(var(--max),calc(100% - 1.5rem))}.verdict,.choices{grid-template-columns:1fr}.cta-note{display:block;margin:.75rem 0 0}.section{padding:3.5rem 0}
+    }
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to comparison</a>
+  <header class="site-header">
+    <nav class="nav" aria-label="Primary navigation">
+      <a class="brand" href="/" aria-label="Unchained home">UN<span>CHAIN</span>ED</a>
+      <div class="nav-links"><a href="/mcp-guide">MCP guide</a><a href="/privacy">Privacy</a><a href="#sources">Sources</a></div>
+    </nav>
+  </header>
+  <main id="main-content">
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">Comparison guide &middot; Updated <time datetime="2026-07-18">July 18, 2026</time></p>
+      <h1 id="page-title">BrowserMCP vs Unchained: two ways to control your real Chrome</h1>
+      <p class="lede">BrowserMCP.io is a strong fit when you want its published MCP server configuration and Chrome extension/current-tab workflow, with a public Apache-2.0 repository for its core MCP code. Unchained fits when you want a selected-profile workflow with an authenticated local bridge, hosted web control, mobile follow-ups, and a guided trial.</p>
+      <a class="cta" href="/trial?ref=browser_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=browser_mcp_alternative_v1" data-analytics-cta="browser_mcp_alternative_trial">Start a guided browser trial</a>
+      <p class="cta-note">Start with a guided path; no pricing change is implied by this comparison.</p>
+      <div class="verdict" aria-label="Quick verdict">
+        <article><h2>Choose BrowserMCP.io for direct MCP control</h2><p>Use its documented server configuration and installed extension to connect the current tab, then direct it from your MCP client.</p></article>
+        <article><h2>Choose Unchained for a guided control plane</h2><p>Choose a Chrome profile and direct the session from a supported hosted web, MCP, or CLI path; controls vary by path.</p></article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="short-answer">
+      <div class="section-head"><p class="eyebrow">Answer first</p><h2 id="short-answer">The short answer</h2></div>
+      <div class="answer">
+        <p>Both products let an agent work through a real Chrome session with existing browser state. The meaningful difference is the operating model, not a claim that one universally replaces the other.</p>
+        <p>BrowserMCP.io documents an MCP server configuration plus a separately installed Chrome extension centered on the current tab you connect. Its public Apache-2.0 repository contains core MCP code but says it cannot currently be built on its own because required monorepo utilities and types are not included. Unchained connects a Chrome profile on your computer to its hosted service through an authenticated bridge, adding a guided product surface and remote follow-up controls; exact UI and interaction controls vary across hosted web, MCP, and CLI paths.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="comparison">
+      <div class="section-head"><p class="eyebrow">Side by side</p><h2 id="comparison">BrowserMCP.io vs Unchained</h2><p>Only documented or directly product-backed differences are included. There are no invented speed, token, reliability, or pricing claims.</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Question</th><th>BrowserMCP.io</th><th>Unchained</th></tr></thead>
+          <tbody>
+            <tr><td>How Chrome connects</td><td>Install the extension, open its popup on the tab you want, and click Connect.</td><td>Run a local agent and choose a Chrome profile for the browser workflow.</td></tr>
+            <tr><td>Primary control surface</td><td>A compatible MCP application runs the documented <code>@browsermcp/mcp@latest</code> package; the installed Chrome extension connects the current tab.</td><td>Hosted web chat, supported MCP or CLI clients, and mobile follow-up controls can direct the selected session, with controls depending on the chosen path.</td></tr>
+            <tr><td>Operating model</td><td>The project describes its browser automation as local and says browser activity remains on the device.</td><td>A local agent connects Chrome to Unchained over an authenticated tunnel; Unchained is not a local-only service.</td></tr>
+            <tr><td>User direction</td><td>You select and connect the current tab, then direct work from the MCP client.</td><td>You choose a Chrome profile and direct the session through the selected Unchained path. Hosted web, MCP, and CLI paths do not promise identical interaction controls.</td></tr>
+            <tr><td>Setup path</td><td>Install Node.js, add the documented MCP server configuration, and separately install the Chrome extension.</td><td>A guided browser trial, with MCP and CLI paths available for developer workflows.</td></tr>
+            <tr><td>Best fit</td><td>Developers who want BrowserMCP.io's documented server-package and extension/current-tab workflow inside an existing MCP client.</td><td>People who want a guided browser-work product with profile selection, hosted continuity, and optional MCP or CLI paths.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section choices" aria-label="Which product should you choose">
+      <article class="choice browsermcp">
+        <p class="eyebrow">BrowserMCP.io is better when</p>
+        <h2>You want a direct local MCP setup</h2>
+        <ul>
+          <li>You already have a compatible MCP client and prefer to configure the server yourself.</li>
+          <li>You want to inspect the public Apache-2.0 core MCP repository, while accepting its README's warning that it cannot currently be built on its own.</li>
+          <li>You are comfortable installing BrowserMCP.io's separately documented Chrome extension.</li>
+          <li>You want to explicitly connect and control the current browser tab.</li>
+          <li>Its documented on-device browser-activity model is a requirement for your workflow.</li>
+        </ul>
+      </article>
+      <article class="choice unchained">
+        <p class="eyebrow">Unchained is better when</p>
+        <h2>You want guidance and continuity</h2>
+        <ul>
+          <li>You want to start through a guided browser trial rather than assemble the flow yourself.</li>
+          <li>You want to choose a Chrome profile and continue instructions through a hosted web or mobile surface.</li>
+          <li>You want a hosted control plane while keeping the selected Chrome profile on your computer.</li>
+          <li>You want MCP or CLI access as optional paths, without assuming every path exposes the same UI controls.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="section" aria-labelledby="data-flow">
+      <div class="section-head"><p class="eyebrow">Data flow</p><h2 id="data-flow">The privacy tradeoff is material</h2></div>
+      <div class="copy">
+        <p class="privacy"><strong>Unchained is not local-only.</strong> Your Chrome profile remains on your machine, but commands, browser-derived page context, tool results, and related service data needed to run the workflow may be transmitted to Unchained and configured AI providers, and some service data may be stored. Review the current <a href="/privacy">Unchained privacy policy</a> before connecting sensitive work.</p>
+        <p>BrowserMCP.io describes its browser automation as local and says browser activity remains on the device. Your chosen MCP client, model, extensions, websites, and other services can still have their own data practices; review each component you use.</p>
+      </div>
+    </section>
+
+    <section class="section" id="sources" aria-labelledby="source-heading">
+      <div class="section-head"><p class="eyebrow">Verify the claims</p><h2 id="source-heading">Official sources</h2><p>Product behavior can change. Check the linked documentation before deciding.</p></div>
+      <ul class="sources">
+        <li><strong><a href="https://github.com/BrowserMCP/mcp" rel="noopener noreferrer">BrowserMCP.io core MCP repository</a></strong><span>Apache-2.0 public repository containing the core MCP code. Its README says it cannot currently be built on its own because required monorepo utilities and types are not included.</span></li>
+        <li><strong><a href="https://docs.browsermcp.io/setup-server" rel="noopener noreferrer">BrowserMCP.io MCP server setup</a></strong><span>Official Node.js prerequisite and <code>npx @browsermcp/mcp@latest</code> configuration for supported MCP applications.</span></li>
+        <li><strong><a href="https://docs.browsermcp.io/setup-extension" rel="noopener noreferrer">BrowserMCP.io Chrome extension setup</a></strong><span>Official steps to install the separately distributed Chrome extension, pin it, and connect the current tab; browser actions are then performed on that tab.</span></li>
+        <li><strong><a href="/mcp-guide">Unchained MCP guide</a></strong><span>Current Unchained MCP setup and integration guidance.</span></li>
+        <li><strong><a href="/privacy">Unchained privacy policy</a></strong><span>Current disclosures for browser-derived data, AI providers, service storage, and user choices.</span></li>
+      </ul>
+      <aside class="note"><strong>Scope and name clarification:</strong> this page compares Unchained with BrowserMCP.io's documented server-and-extension product. The linked BrowserMCP/mcp repository is an Apache-2.0 public core-code repository, not evidence that source code for the Chrome extension or complete product setup is public, or that the complete setup is independently buildable. A separate Agent360 product also uses the name Browser MCP at <a href="https://browsermcp.dev/" rel="noopener noreferrer">browsermcp.dev</a>; it is not the BrowserMCP.io product compared here.</aside>
+    </section>
+  </main>
+  <footer>
+    <p>Unchained is not affiliated with, endorsed by, or sponsored by BrowserMCP.io or Agent360. BrowserMCP and related marks belong to their respective owners.</p>
+    <p>This comparison was last reviewed July 18, 2026. <a href="/">Return to Unchained</a>.</p>
+  </footer>
+</body>
+</html>"""
+
+
 CHROME_TAX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
