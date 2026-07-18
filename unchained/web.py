@@ -280,6 +280,7 @@ def _trace(event: str, **fields):
 
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
+    "/browserbase-alternative",
     "/browser-mcp-alternative",
     "/unbrowser",
     "/chrome-tax",
@@ -1636,6 +1637,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/browserbase-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/browser-mcp-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/chrome-tax", "0.8", "monthly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
