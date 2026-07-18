@@ -474,15 +474,36 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("!landingMenu.contains(event.target)", web.LANDING_HTML)
         self.assertIn("landingMenu.querySelectorAll('a')", web.LANDING_HTML)
 
-    def test_landing_v4_default_route_clears_preview_cookie(self):
-        async def _render(query: dict[str, str], cookies: dict[str, str]):
-            request = SimpleNamespace(query=query, cookies=cookies, path="/")
+    def test_landing_route_tracks_resolved_variant_and_manages_preview_cookie(self):
+        async def _render(
+            query: dict[str, str],
+            cookies: dict[str, str],
+            expected_template: str,
+            expected_marker: str,
+        ):
+            request = SimpleNamespace(
+                query=query, cookies=cookies, path="/", method="GET"
+            )
             with patch.object(web, "_track_page_view") as track_page_view:
                 response = await web.handle_index(request)
-            track_page_view.assert_called_once_with(request)
+            track_page_view.assert_called_once_with(
+                request, landing_variant=expected_marker
+            )
+            expected_html = web.inject_google_client_id(
+                expected_template.replace("__CONTACT_EMAIL__", web.CONTACT_EMAIL),
+                web.GOOGLE_CLIENT_ID,
+            )
+            self.assertEqual(response.text, expected_html)
             return response
 
-        response = asyncio.run(_render({"ui": "v4"}, {"ui": "v3"}))
+        response = asyncio.run(
+            _render(
+                {"ui": "v4"},
+                {"ui": "v3"},
+                web.LANDING_V4_HTML,
+                "landing_value_prop_v1",
+            )
+        )
         self.assertIn(
             "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
             response.text,
@@ -490,7 +511,14 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("ui", response.cookies)
         self.assertEqual(response.cookies["ui"]["max-age"], "0")
 
-        default_response = asyncio.run(_render({"ui": "default"}, {"ui": "v2"}))
+        default_response = asyncio.run(
+            _render(
+                {"ui": "default"},
+                {"ui": "v2"},
+                web.LANDING_V4_HTML,
+                "landing_value_prop_v1",
+            )
+        )
         self.assertIn(
             "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
             default_response.text,
@@ -498,7 +526,14 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("ui", default_response.cookies)
         self.assertEqual(default_response.cookies["ui"]["max-age"], "0")
 
-        stale_cookie_response = asyncio.run(_render({}, {"ui": "v3"}))
+        stale_cookie_response = asyncio.run(
+            _render(
+                {},
+                {"ui": "v3"},
+                web.LANDING_HTML,
+                "landing_value_prop_v1",
+            )
+        )
         self.assertIn(
             "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
             stale_cookie_response.text,
@@ -506,16 +541,41 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("ui", stale_cookie_response.cookies)
         self.assertEqual(stale_cookie_response.cookies["ui"]["max-age"], "0")
 
-        unknown_query_response = asyncio.run(_render({"ui": "unknown"}, {"ui": "v3"}))
+        unknown_query_response = asyncio.run(
+            _render(
+                {"ui": "unknown"},
+                {"ui": "v3"},
+                web.LANDING_HTML,
+                "landing_value_prop_v1",
+            )
+        )
         self.assertIn(
             "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
             unknown_query_response.text,
         )
         self.assertNotIn("ui", unknown_query_response.cookies)
 
-        v3_response = asyncio.run(_render({"ui": "v3"}, {}))
+        v3_response = asyncio.run(
+            _render(
+                {"ui": "v3"},
+                {},
+                web.LANDING_V3_HTML,
+                "landing_legacy_v3",
+            )
+        )
         self.assertIn("AI Browser Agent for Everyday Web Tasks", v3_response.text)
         self.assertEqual(v3_response.cookies["ui"].value, "v3")
+
+        v2_response = asyncio.run(
+            _render(
+                {"ui": "v2"},
+                {},
+                web.LANDING_V2_HTML,
+                "landing_legacy_v2",
+            )
+        )
+        self.assertIn('<div class="poem" id="poem">', v2_response.text)
+        self.assertEqual(v2_response.cookies["ui"].value, "v2")
 
     def test_chat_markdown_rendering_sanitizes_assistant_output(self):
         chat_templates = {

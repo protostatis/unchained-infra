@@ -434,6 +434,164 @@ class TestWebAnalyticsContext(unittest.TestCase):
         )
 
 
+class TestLandingVariantAnalytics(unittest.IsolatedAsyncioTestCase):
+    async def test_root_page_views_store_only_the_server_resolved_variant(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        cases = (
+            ("missing", {}, web.LANDING_HTML, "landing_value_prop_v1"),
+            ("v4", {"ui": "v4"}, web.LANDING_V4_HTML, "landing_value_prop_v1"),
+            ("default", {"ui": "default"}, web.LANDING_V4_HTML, "landing_value_prop_v1"),
+            ("v2", {"ui": "v2"}, web.LANDING_V2_HTML, "landing_legacy_v2"),
+            ("v3", {"ui": "v3"}, web.LANDING_V3_HTML, "landing_legacy_v3"),
+            (
+                "invalid",
+                {
+                    "ui": "v2<script>",
+                    "landing_variant": "landing_legacy_v2",
+                    "meta": '{"landing_variant":"landing_legacy_v3"}',
+                    "email": "private@example.com",
+                    "ref": "growth-check",
+                    "task": "research",
+                    "utm_source": "github",
+                    "utm_medium": "repository",
+                    "utm_campaign": "landing_value_prop_v1",
+                },
+                web.LANDING_HTML,
+                "landing_value_prop_v1",
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                for index, (name, query, template, _marker) in enumerate(cases, start=1):
+                    with self.subTest(variant=name):
+                        request = SimpleNamespace(
+                            headers={
+                                "User-Agent": "Mozilla/5.0 Chrome/140.0",
+                                "X-Forwarded-For": f"198.51.100.{index}",
+                            },
+                            remote="10.0.0.90",
+                            path="/",
+                            method="GET",
+                            query=query,
+                            cookies={},
+                        )
+                        with patch.object(web, "_authenticate", return_value={}):
+                            response = await web.handle_index(request)
+                        expected_html = web.inject_google_client_id(
+                            template.replace("__CONTACT_EMAIL__", web.CONTACT_EMAIL),
+                            web.GOOGLE_CLIENT_ID,
+                        )
+                        self.assertEqual(response.text, expected_html)
+
+                head_request = SimpleNamespace(
+                    headers={
+                        "User-Agent": "Mozilla/5.0 Chrome/140.0",
+                        "X-Forwarded-For": "198.51.100.200",
+                    },
+                    remote="10.0.0.90",
+                    path="/",
+                    method="HEAD",
+                    query={"ui": "v2"},
+                    cookies={},
+                )
+                with patch.object(
+                    web,
+                    "_authenticate",
+                    side_effect=AssertionError("HEAD must skip authentication"),
+                ):
+                    await web.handle_index(head_request)
+
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute(
+                    "SELECT meta_json FROM analytics_events ORDER BY id"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(len(rows), len(cases))
+                metadata = [json.loads(row[0]) for row in rows]
+                self.assertEqual(
+                    [meta["landing_variant"] for meta in metadata],
+                    [case[3] for case in cases],
+                )
+                for meta in metadata:
+                    self.assertIn(
+                        meta["landing_variant"], web._ANALYTICS_LANDING_VARIANTS
+                    )
+                self.assertEqual(
+                    metadata[-1],
+                    {
+                        "landing_variant": "landing_value_prop_v1",
+                        "ref": "growth-check",
+                        "task": "research",
+                        "utm_source": "github",
+                        "utm_medium": "repository",
+                        "utm_campaign": "landing_value_prop_v1",
+                    },
+                )
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
+    async def test_reserved_landing_marker_rejects_generic_or_unbounded_meta(self):
+        os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+        import web
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = f"{td}/analytics.db"
+            original_analytics = web._analytics
+            original_cleanup = web._analytics_last_cleanup_ts
+            web._analytics = AnalyticsStore(db_path=db_path)
+            web._analytics_last_cleanup_ts = time.time()
+            try:
+                request = SimpleNamespace(
+                    headers={"User-Agent": "Mozilla/5.0 Chrome/140.0"},
+                    remote="198.51.100.210",
+                    path="/",
+                    method="GET",
+                    query={},
+                )
+                self.assertTrue(
+                    web._track_page_view(
+                        request,
+                        auth_info={},
+                        meta={"landing_variant": "caller_spoof", "context": "kept"},
+                        landing_variant="landing_legacy_v2",
+                    )
+                )
+                request.remote = "198.51.100.211"
+                self.assertTrue(
+                    web._track_page_view(
+                        request,
+                        auth_info={},
+                        meta={"landing_variant": "caller_spoof"},
+                        landing_variant="x" * 500,
+                    )
+                )
+
+                conn = sqlite3.connect(db_path)
+                rows = conn.execute(
+                    "SELECT meta_json FROM analytics_events ORDER BY id"
+                ).fetchall()
+                conn.close()
+                self.assertEqual(
+                    [json.loads(row[0]) for row in rows],
+                    [
+                        {"context": "kept", "landing_variant": "landing_legacy_v2"},
+                        {},
+                    ],
+                )
+            finally:
+                web._analytics = original_analytics
+                web._analytics_last_cleanup_ts = original_cleanup
+
+
 class _FakeRequest:
     def __init__(self, body, path="/web/analytics/event"):
         self._body = body
