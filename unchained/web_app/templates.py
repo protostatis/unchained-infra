@@ -1342,19 +1342,17 @@ CHROME_TAX_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Chrome Tax — What Heavy Browsers Cost Your Agent</title>
-<meta name="description" content="Estimate the RAM, cold-start, and token overhead of using Chrome-based browsers for agent web tasks.">
+<title>Playwright MCP Alternative: Unbrowser vs Unchained MCP | Unchained</title>
+<meta name="description" content="Compare Playwright MCP, Unbrowser, and Unchained MCP by runtime, JavaScript scope, browser-state options, and agent workflow.">
 <link rel="canonical" href="https://unchainedsky.com/chrome-tax">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://unchainedsky.com/chrome-tax">
-<meta property="og:title" content="The Chrome Tax — What Heavy Browsers Cost Your Agent">
-<meta property="og:description" content="Estimate the RAM, cold-start, and token overhead of defaulting agent web tasks to Chrome.">
-<meta property="og:image" content="https://unchainedsky.com/static/chrome-tax-og.svg">
+<meta property="og:title" content="Playwright MCP Alternative: Unbrowser vs Unchained MCP">
+<meta property="og:description" content="Choose between SSR-first Unbrowser, Playwright browser and extension modes, and Unchained's DDM-oriented local bridge.">
 <meta property="og:site_name" content="Unchained Sky">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="The Chrome Tax — What Heavy Browsers Cost Your Agent">
-<meta name="twitter:description" content="Estimate the RAM, cold-start, and token overhead of using Chrome-based browsers for agent web tasks.">
-<meta name="twitter:image" content="https://unchainedsky.com/static/chrome-tax-og.svg">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Playwright MCP Alternative: Unbrowser vs Unchained MCP">
+<meta name="twitter:description" content="A task-first guide to bounded Unbrowser, full-browser Playwright MCP, and Unchained's DDM-oriented MCP workflow.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -1380,11 +1378,14 @@ body {
     radial-gradient(circle at 80% 100%,rgba(16,185,129,0.04) 0%,transparent 40%);
 }
 .mono { font-family:'JetBrains Mono',monospace; }
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible {
+  outline:3px solid var(--info); outline-offset:3px;
+}
 
 /* HERO */
 .hero {
   min-height:100vh; display:flex; flex-direction:column;
-  justify-content:center; align-items:center; padding:4rem 2rem;
+  justify-content:center; align-items:center; padding:4rem 2rem 6rem;
   text-align:center; position:relative;
 }
 .hero::before {
@@ -1427,14 +1428,28 @@ body {
 .hero-stat-detail {
   font-size:0.9rem; color:var(--text-sec); margin-top:0.5rem; max-width:420px;
 }
+.hero-actions {
+  display:flex; flex-wrap:wrap; justify-content:center; gap:0.8rem;
+  margin-bottom:2.75rem; position:relative;
+}
 .scroll-hint {
   position:absolute; bottom:2rem; left:50%; transform:translateX(-50%);
   color:var(--muted); font-size:0.75rem; letter-spacing:0.2em;
   text-transform:uppercase; animation:bounce 2s infinite;
+  width:max-content; max-width:calc(100vw - 2rem);
 }
 @keyframes bounce {
   0%,100% { transform:translateX(-50%) translateY(0); opacity:0.5; }
   50% { transform:translateX(-50%) translateY(8px); opacity:1; }
+}
+@media (max-height:800px), (max-width:640px) {
+  .hero { min-height:auto; padding:3.5rem 1.25rem 3rem; }
+  .hero-tag { margin-bottom:1.25rem; }
+  .hero-sub,.hero-actions,.hero-stat { margin-bottom:2rem; }
+  .scroll-hint {
+    position:static; inset:auto; transform:none; animation:none;
+    width:auto; max-width:100%;
+  }
 }
 
 /* SECTIONS */
@@ -1452,6 +1467,34 @@ body {
   color:var(--text-sec); max-width:600px; margin-bottom:3rem; font-size:1.05rem;
 }
 
+/* ANSWER-FIRST COMPARISON */
+.choice-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; }
+@media (max-width:850px) { .choice-grid { grid-template-columns:1fr; } }
+.choice-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:14px; padding:1.6rem; display:flex; flex-direction:column;
+}
+.choice-card.recommended { border-color:rgba(16,185,129,0.65); background:var(--savings-dim); }
+.choice-label {
+  font-size:0.68rem; letter-spacing:0.13em; text-transform:uppercase;
+  color:var(--muted); margin-bottom:0.55rem;
+}
+.choice-card.recommended .choice-label { color:var(--savings); }
+.choice-card h3 { font-family:'Spectral',serif; font-size:1.45rem; font-weight:400; margin-bottom:0.75rem; }
+.choice-card p { color:var(--text-sec); font-size:0.92rem; margin-bottom:1rem; }
+.choice-card ul { color:var(--text-sec); padding-left:1.1rem; margin:auto 0 1.2rem; }
+.choice-card li { margin-bottom:0.4rem; }
+.choice-link { color:var(--accent); font-weight:600; text-decoration:none; }
+.choice-link:hover { text-decoration:underline; }
+.limits-box,.assumption-note {
+  margin-top:1.25rem; padding:1.35rem 1.5rem; border-radius:12px;
+  background:var(--bg-elev); border:1px solid var(--border);
+}
+.limits-box h3,.assumption-note h3 { font-size:1rem; margin-bottom:0.55rem; }
+.limits-box p,.assumption-note p { color:var(--text-sec); font-size:0.9rem; }
+.source-links { display:flex; flex-wrap:wrap; gap:0.8rem 1.25rem; margin-top:1rem; }
+.source-links a { color:var(--info); font-size:0.88rem; }
+
 /* PRESETS */
 .presets { display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:2.5rem; }
 .preset-btn {
@@ -1467,7 +1510,7 @@ body {
 }
 
 /* CALC GRID */
-.calc-grid { display:grid; grid-template-columns:380px 1fr; gap:2rem; align-items:start; }
+.calc-grid { display:grid; grid-template-columns:minmax(0,380px) minmax(0,1fr); gap:2rem; align-items:start; }
 @media (max-width:900px) { .calc-grid { grid-template-columns:1fr; } }
 
 /* INPUTS */
@@ -1491,7 +1534,7 @@ body {
 }
 .slider {
   -webkit-appearance:none; appearance:none; width:100%; height:6px;
-  background:var(--border); border-radius:3px; outline:none; cursor:pointer;
+  background:var(--border); border-radius:3px; cursor:pointer;
 }
 .slider::-webkit-slider-thumb {
   -webkit-appearance:none; appearance:none; width:20px; height:20px;
@@ -1515,12 +1558,12 @@ body {
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235c5e6e'%3E%3Cpath d='M6 9L1 4h10z'/%3E%3C/svg%3E");
   background-repeat:no-repeat; background-position:right 1rem center; padding-right:2.5rem;
 }
-.select-group:focus { outline:none; border-color:var(--accent); }
+.select-group:focus { border-color:var(--accent); }
 .select-group option { background:var(--surface); }
 
 /* RESULTS */
-.results-dashboard { display:flex; flex-direction:column; gap:1.5rem; }
-.pain-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+.results-dashboard { display:flex; flex-direction:column; gap:1.5rem; min-width:0; }
+.pain-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; }
 @media (max-width:600px) { .pain-grid { grid-template-columns:1fr; } }
 .pain-card {
   background:var(--surface); border:1px solid var(--border);
@@ -1550,7 +1593,7 @@ body {
 /* CHARTS */
 .chart-card {
   background:var(--surface); border:1px solid var(--border);
-  border-radius:12px; padding:2rem;
+  border-radius:12px; padding:2rem; min-width:0; overflow:hidden;
 }
 .chart-card h3 {
   font-size:0.75rem; text-transform:uppercase; letter-spacing:0.15em;
@@ -1558,15 +1601,15 @@ body {
 }
 .bar-chart { display:flex; flex-direction:column; gap:1rem; }
 .bar-row {
-  display:grid; grid-template-columns:140px 1fr 80px;
+  display:grid; grid-template-columns:minmax(0,140px) minmax(80px,1fr) minmax(60px,80px);
   align-items:center; gap:1rem;
 }
-.bar-label { font-size:0.85rem; text-align:right; color:var(--text-sec); }
+.bar-label { font-size:0.85rem; text-align:right; color:var(--text-sec); overflow-wrap:anywhere; }
 .bar-label.current { color:var(--cost); font-weight:600; }
 .bar-label.recommended { color:var(--savings); font-weight:600; }
 .bar-track {
   height:28px; background:var(--bg-elev); border-radius:6px;
-  overflow:hidden; position:relative;
+  overflow:hidden; position:relative; min-width:0;
 }
 .bar-fill {
   height:100%; border-radius:6px;
@@ -1580,11 +1623,21 @@ body {
 .bar-fill.neutral { background:linear-gradient(90deg,var(--info),#4f46e5); }
 .bar-fill.dim { background:var(--border-light); color:var(--text-sec); }
 .bar-fill.zero { background:transparent; border-left:2px solid var(--dim); }
-.bar-value { font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; }
+.bar-value { font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; overflow-wrap:anywhere; }
+@media (max-width:600px) {
+  .chart-card { padding:1rem; }
+  .bar-row {
+    grid-template-columns:minmax(0,86px) minmax(0,1fr) minmax(0,64px);
+    gap:0.5rem;
+  }
+  .bar-label { text-align:left; font-size:0.75rem; }
+  .bar-value { font-size:0.72rem; }
+}
 
 /* PROJECTION */
-.projection-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; }
+.projection-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1rem; }
 @media (max-width:700px) { .projection-grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:480px) { .projection-grid { grid-template-columns:1fr; } }
 .projection-card {
   background:var(--surface); border:1px solid var(--border);
   border-radius:12px; padding:1.5rem; text-align:center;
@@ -1611,9 +1664,8 @@ body {
 .capability-table th {
   color:var(--muted); font-weight:500; font-size:0.75rem;
   text-transform:uppercase; letter-spacing:0.05em;
-  cursor:pointer; user-select:none; transition:color 0.2s;
+  transition:color 0.2s;
 }
-.capability-table th:hover { color:var(--text); }
 .capability-table th.active { color:var(--accent); }
 .capability-table th:first-child,.capability-table td:first-child {
   text-align:left; font-weight:600;
@@ -1636,7 +1688,7 @@ body {
 }
 .scale-display .label { font-size:0.9rem; color:var(--text-sec); }
 .scale-readout {
-  display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem;
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem;
   margin:1.5rem 0; padding:1.25rem; background:var(--bg-elev);
   border:1px solid var(--border); border-radius:10px;
 }
@@ -1654,7 +1706,7 @@ body {
 .scale-chart {
   display:flex; align-items:flex-end; gap:0; height:220px;
   margin-top:1.5rem; padding:0 0.5rem 2rem; border-bottom:1px solid var(--border);
-  position:relative; overflow-x:auto;
+  position:relative; overflow-x:auto; max-width:100%; min-width:0;
 }
 .scale-group {
   flex:1; display:flex; flex-direction:column; align-items:center;
@@ -1695,6 +1747,11 @@ body {
 .legend-dot {
   display:inline-block; width:10px; height:10px; border-radius:50%;
   margin-right:0.5rem; vertical-align:middle;
+}
+@media (max-width:600px) {
+  .scale-section { padding:1.25rem; }
+  .scale-readout { grid-template-columns:1fr; }
+  .scale-legend { flex-direction:column; gap:0.5rem; }
 }
 
 /* DECISION */
@@ -1761,6 +1818,9 @@ body {
   font-weight:700; font-size:1rem; transition:transform 0.2s,box-shadow 0.2s;
 }
 .cta-btn:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(16,185,129,0.3); }
+.cta-btn.secondary { background:transparent; color:var(--text); border:1px solid var(--border-light); }
+.cta-btn.secondary:hover { border-color:var(--accent); box-shadow:0 8px 30px rgba(249,115,22,0.16); }
+.cta-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:0.8rem; }
 
 /* FOOTER */
 footer {
@@ -1781,43 +1841,91 @@ footer a:hover { text-decoration:underline; }
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-tag">A Field Report</div>
-  <h1>Every time your agent launches Chrome,<br>you're paying a <em>tax</em>.</h1>
-  <p class="hero-sub">In memory. In cold starts. In tokens. In infrastructure you didn't need. Here's the math — and the middle ground between curl and Chrome.</p>
-  <div class="hero-stat">
-    <div class="hero-stat-value" id="hero-stat-value">14 GB</div>
-    <div class="hero-stat-label" id="hero-stat-label">RAM wasted on 50 Chrome sessions</div>
-    <div class="hero-stat-detail" id="hero-stat-detail">That's 14,000 megabytes to read web pages your agent never needed to render.</div>
+  <div class="hero-tag">Browser automation decision guide</div>
+  <h1>A Playwright MCP alternative when your agent does not need <em>pixels</em>.</h1>
+  <p class="hero-sub">Unbrowser is the SSR/static-first tier for public web tasks, with optional bounded QuickJS and no rendering. Playwright MCP provides full-browser automation with persistent, isolated, and extension-connected state. Choose Unchained MCP for its DDM-oriented local bridge and agent-client setup.</p>
+  <div class="hero-actions" aria-label="Choose a browser path">
+    <a href="/unbrowser?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" class="cta-btn" data-analytics-cta="chrome_tax_try_unbrowser">Try Unbrowser on public sites — no signup</a>
+    <a href="/mcp?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" class="cta-btn secondary" data-analytics-cta="chrome_tax_use_real_chrome">Want DDM + a local bridge? Set up Unchained MCP</a>
   </div>
-  <div class="scroll-hint">Scroll to calculate yours</div>
+  <div class="hero-stat">
+    <div class="hero-stat-value" id="hero-stat-value">2.7 GB</div>
+    <div class="hero-stat-label" id="hero-stat-label">Modelled RAM for 10 Playwright sessions</div>
+    <div class="hero-stat-detail" id="hero-stat-detail">Illustrative output using the declared 280 MB per-session assumption below. Measure your own runtime before making a capacity decision.</div>
+  </div>
+  <div class="scroll-hint">Compare paths, then model a scenario</div>
+</section>
+
+<!-- ANSWER-FIRST COMPARISON -->
+<section class="section" id="choose-runtime">
+  <div class="section-label">Choose by task</div>
+  <h2 class="section-title">Unbrowser, Playwright MCP, and Unchained MCP expose <em>different tool surfaces</em></h2>
+  <p class="section-desc">Unbrowser is not a drop-in replacement for every Playwright workflow. Browser profile and login state are not exclusive to Unchained: Playwright MCP supports persistent and isolated profiles plus an extension path to existing Chrome tabs. Choose by runtime and tool surface.</p>
+  <div class="choice-grid">
+    <article class="choice-card recommended">
+      <div class="choice-label">No-rendering tier</div>
+      <h3>Unbrowser</h3>
+      <p>Use a stateful native runtime for SSR/static-first public pages when pixels are unnecessary. Default navigation skips scripts; optional bounded QuickJS can execute some page scripts, while heavy hydration may remain partial.</p>
+      <ul><li>Compact BlockMap output for agent context</li><li>Cookies and session state without Chrome</li><li>Signals for challenges and incomplete hydration</li></ul>
+      <a class="choice-link" href="/unbrowser?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" data-analytics-cta="chrome_tax_choice_unbrowser">Run the public demo &rarr;</a>
+    </article>
+    <article class="choice-card">
+      <div class="choice-label">Rendered automation tier</div>
+      <h3>Playwright MCP</h3>
+      <p>Use a full browser when the job depends on rendered visual state, screenshots, layout, canvas, WebGL, or Playwright's testing and automation surface.</p>
+      <ul><li>Structured accessibility snapshots</li><li>Persistent or isolated browser profiles</li><li>The official Playwright MCP extension can connect to existing Chrome tabs and logged-in browser state</li></ul>
+      <a class="choice-link" href="https://github.com/microsoft/playwright-mcp" rel="noopener">Read the official Playwright MCP documentation &rarr;</a>
+    </article>
+    <article class="choice-card">
+      <div class="choice-label">DDM + local bridge tier</div>
+      <h3>Unchained MCP + real Chrome</h3>
+      <p>Use Unchained when its DDM page-layout output, CDP tools, local agent/bridge, and setup paths for Claude, Codex, or OpenCode fit the workflow. It is not the only path to logged-in browser state.</p>
+      <ul><li>DDM page layout plus CDP navigation, click, type, and evaluation tools</li><li>Local bridge with selected-profile setup</li><li>MCP and CLI paths for supported agent clients</li></ul>
+      <p>Direct MCP tool calls invoke browser actions directly; automatic confirmation is not implied. Hosted Agent View has a separate confirmation and review flow.</p>
+      <a class="choice-link" href="/mcp?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" data-analytics-cta="chrome_tax_choice_real_chrome">Set up Unchained MCP &rarr;</a>
+    </article>
+  </div>
+  <aside class="limits-box" id="unbrowser-limits">
+    <h3>When not to use Unbrowser</h3>
+    <p>Do not choose Unbrowser when success depends on screenshots or pixel layout, canvas or WebGL, exact Chrome/V8 behavior, browser extensions, or full framework hydration. Its default navigation skips scripts, and its opt-in QuickJS execution is bounded and partial. Both Playwright MCP and Unchained MCP can work with existing browser state in supported setups: choose Playwright for its accessibility-snapshot, testing, profile, and extension surface; choose Unchained for its DDM/CDP local-bridge workflow.</p>
+  </aside>
+  <div class="source-links" aria-label="Comparison sources">
+    <a href="https://github.com/protostatis/unbrowser" rel="noopener">Unbrowser source and limitations</a>
+    <a href="https://github.com/microsoft/playwright-mcp" rel="noopener">Official Playwright MCP documentation</a>
+    <a href="https://searchagentsky.com/guides/browser-agents-mcp">Source-backed Browser Agents &amp; MCP guide</a>
+  </div>
 </section>
 
 <!-- CALCULATOR -->
 <section class="section">
-  <div class="section-label">The Calculator</div>
-  <h2 class="section-title">What's <em>your</em> Chrome tax?</h2>
-  <p class="section-desc">Adjust the sliders to match your workload. Everything updates in real time. Pick a preset to start from a realistic scenario.</p>
+  <div class="section-label">Illustrative calculator</div>
+  <h2 class="section-title">Model a workload with <em>declared assumptions</em></h2>
+  <p class="section-desc">Adjust the workload inputs to explore one planning scenario. The runtime, memory, cold-start, token, duration, and infrastructure values are fixed assumptions in this page—not universal benchmarks, provider quotes, or guaranteed savings.</p>
+  <div class="assumption-note">
+    <h3>Read the model before the result</h3>
+    <p>Presets are illustrative. Real outcomes vary by tool and browser version, page shape, output format, concurrency, cache state, host, and pricing. Validate the same task on your own infrastructure before choosing capacity or estimating cost.</p>
+  </div>
   <div class="presets" id="presets"></div>
   <div class="calc-grid">
     <div class="inputs-panel">
       <h3>Your Workload</h3>
       <div class="input-group">
-        <label>Concurrent sessions <span class="input-value" id="sessions-val">10</span></label>
+        <label for="sessions">Concurrent sessions <span class="input-value" id="sessions-val">10</span></label>
         <input type="range" class="slider" id="sessions" min="1" max="500" value="10">
         <div class="slider-ticks"><span>1</span><span>100</span><span>500</span></div>
       </div>
       <div class="input-group">
-        <label>Pages per task <span class="input-value" id="pages-val">5</span></label>
+        <label for="pages">Pages per task <span class="input-value" id="pages-val">5</span></label>
         <input type="range" class="slider" id="pages" min="1" max="100" value="5">
         <div class="slider-ticks"><span>1</span><span>50</span><span>100</span></div>
       </div>
       <div class="input-group">
-        <label>Tasks per day <span class="input-value" id="tasks-val">100</span></label>
+        <label for="tasks">Tasks per day <span class="input-value" id="tasks-val">100</span></label>
         <input type="range" class="slider" id="tasks" min="1" max="10000" value="100">
         <div class="slider-ticks"><span>1</span><span>5K</span><span>10K</span></div>
       </div>
       <div class="input-group">
-        <label style="display:block;margin-bottom:0.5rem;">Deployment target</label>
+        <label for="deployment" style="display:block;margin-bottom:0.5rem;">Deployment target</label>
         <select class="select-group" id="deployment">
           <option value="lambda">AWS Lambda</option>
           <option value="fly">Fly.io</option>
@@ -1827,7 +1935,7 @@ footer a:hover { text-decoration:underline; }
         </select>
       </div>
       <div class="input-group">
-        <label style="display:block;margin-bottom:0.5rem;">Current browser tool</label>
+        <label for="current-tool" style="display:block;margin-bottom:0.5rem;">Current browser tool</label>
         <select class="select-group" id="current-tool">
           <option value="playwright" selected>Playwright</option>
           <option value="puppeteer">Puppeteer</option>
@@ -1836,13 +1944,13 @@ footer a:hover { text-decoration:underline; }
         </select>
       </div>
       <div class="input-group">
-        <label style="display:block;margin-bottom:0.5rem;">LLM cost per 1K tokens</label>
+        <label for="llm-cost" style="display:block;margin-bottom:0.5rem;">Illustrative LLM cost per 1K tokens</label>
         <select class="select-group" id="llm-cost">
-          <option value="0.01" selected>GPT-4 ($0.01)</option>
-          <option value="0.015">Claude 3 ($0.015)</option>
-          <option value="0.005">GPT-3.5 ($0.005)</option>
-          <option value="0.0005">Llama 3 ($0.0005)</option>
-          <option value="0">Local model (free)</option>
+          <option value="0.01" selected>$0.01 / 1K</option>
+          <option value="0.015">$0.015 / 1K</option>
+          <option value="0.005">$0.005 / 1K</option>
+          <option value="0.0005">$0.0005 / 1K</option>
+          <option value="0">$0 in this model</option>
         </select>
       </div>
     </div>
@@ -1861,9 +1969,9 @@ footer a:hover { text-decoration:underline; }
           <div class="pain-comparison" id="pain-cold-comparison"></div>
         </div>
         <div class="pain-card savings">
-          <div class="pain-label">If you switched</div>
+          <div class="pain-label">Modelled difference</div>
           <div class="pain-value" id="pain-savings">$0</div>
-          <div class="pain-detail" id="pain-savings-detail">Saved per day with unbrowser</div>
+          <div class="pain-detail" id="pain-savings-detail">Illustrative daily difference</div>
           <div class="pain-comparison" id="pain-savings-comparison"></div>
         </div>
       </div>
@@ -1881,9 +1989,9 @@ footer a:hover { text-decoration:underline; }
 
 <!-- COST PROJECTION -->
 <section class="section reveal">
-  <div class="section-label">Cost Projection</div>
-  <h2 class="section-title">What this costs <em>over time</em></h2>
-  <p class="section-desc">The tax compounds. Every task pays it — in cloud compute and in LLM tokens. Here's what your current setup costs, and what you'd save with a lighter tool.</p>
+  <div class="section-label">Scenario projection</div>
+  <h2 class="section-title">What the model produces <em>over time</em></h2>
+  <p class="section-desc">These outputs extend the declared workload and cost assumptions linearly. They are planning comparisons, not measured bills, quotes, or guaranteed savings.</p>
   <div class="projection-grid" id="projection-grid"></div>
 </section>
 
@@ -1891,7 +1999,7 @@ footer a:hover { text-decoration:underline; }
 <section class="section reveal">
   <div class="section-label">The Full Picture</div>
   <h2 class="section-title">Not just cost — <em>capability</em></h2>
-  <p class="section-desc">A cheaper tool that can't do your task isn't a savings. Here's what each browser tool actually supports. Click a column to highlight.</p>
+  <p class="section-desc">A lighter tool is useful only when it handles the task. This high-level matrix is a routing aid, not a compatibility guarantee. Verify edge cases against each project's current documentation.</p>
   <div class="capability-section">
     <table class="capability-table" id="capability-table">
       <thead>
@@ -1911,14 +2019,14 @@ footer a:hover { text-decoration:underline; }
 
 <!-- SCALE SIMULATOR -->
 <section class="section reveal">
-  <div class="section-label">Scale Dynamics</div>
-  <h2 class="section-title">How the tax <em>scales</em></h2>
-  <p class="section-desc">The pain grows linearly — but the gap between Chrome and lighter tools grows with it. Drag to see how your costs change from 1 to 500 concurrent sessions.</p>
+  <div class="section-label">Linear scenario</div>
+  <h2 class="section-title">How the assumptions <em>scale</em></h2>
+  <p class="section-desc">This page multiplies the per-session assumptions linearly from 1 to 500 sessions. Real systems may share processes, queue work, cache state, or hit nonlinear limits.</p>
   <div class="scale-section">
-    <div class="scale-display">
+    <label class="scale-display" for="scale-slider">
       <span class="big-num" id="scale-sessions">50</span>
       <span class="label">concurrent sessions</span>
-    </div>
+    </label>
     <input type="range" class="slider" id="scale-slider" min="1" max="500" value="50">
     <div class="slider-ticks"><span>1</span><span>125</span><span>250</span><span>375</span><span>500</span></div>
     <div class="scale-readout" id="scale-readout"></div>
@@ -1934,7 +2042,7 @@ footer a:hover { text-decoration:underline; }
 <section class="section reveal">
   <div class="section-label">Decision Framework</div>
   <h2 class="section-title">Which tool should <em>you</em> use?</h2>
-  <p class="section-desc">Answer honestly. We'll recommend the lightest tool that handles your workload — and tell you when you actually need Chrome.</p>
+  <p class="section-desc">Use this as a first routing question, then verify the chosen tool on the actual page and workflow.</p>
   <div class="decision-tree">
     <div class="decision-question" id="decision-q">Does your task need to see pixels — screenshots, canvas, or visual layout?</div>
     <div class="decision-options" id="decision-opts"></div>
@@ -1942,11 +2050,22 @@ footer a:hover { text-decoration:underline; }
   </div>
 </section>
 
+<!-- ASSUMPTIONS -->
+<section class="section reveal" id="assumptions">
+  <div class="section-label">Methodology</div>
+  <h2 class="section-title">Calculator assumptions and <em>limits</em></h2>
+  <div class="assumption-note">
+    <h3>This is a transparent planning model, not a benchmark result</h3>
+    <p>The table below declares the page's per-tool binary, memory, cold-start, and token inputs. Total memory is per-session memory multiplied by concurrent sessions and a deployment multiplier. Token volume is tokens per page multiplied by pages per task and tasks per day. The compute model assumes 0.05 hours per task and applies the page's illustrative infrastructure rate; token cost uses the rate selected above. None of those constants adapts to a real runtime, provider bill, cache, page, or model.</p>
+    <p>Reproduce the same workload on the versions and infrastructure you plan to use before treating a difference as operational or financial evidence.</p>
+  </div>
+</section>
+
 <!-- FULL TABLE -->
 <section class="section reveal">
-  <div class="section-label">The Reference</div>
-  <h2 class="section-title">Full comparison</h2>
-  <p class="section-desc">Every metric, side by side. This is the data behind the calculator.</p>
+  <div class="section-label">Declared inputs</div>
+  <h2 class="section-title">Values used by this page</h2>
+  <p class="section-desc">These constants drive the calculator. They are visible so you can judge the model, not because they are universal values for every workload.</p>
   <div style="overflow-x:auto;">
     <table class="full-table" id="full-table"></table>
   </div>
@@ -1954,39 +2073,42 @@ footer a:hover { text-decoration:underline; }
 
 <!-- CTA -->
 <section class="cta-section">
-  <h2>There's a middle ground between curl and Chrome.</h2>
-  <p>unbrowser is a 10MB binary that gives your agent JavaScript execution, cookies, forms, and clicks — without the 280MB per-session tax.</p>
-  <a href="https://unchainedsky.com/unbrowser" class="cta-btn" data-analytics-cta="chrome_tax_try_unbrowser">Try unbrowser</a>
+  <h2>Start with the browser tier the task needs.</h2>
+  <p>Try the fixed public-site Unbrowser demo without an account, or set up Unchained MCP when you want its DDM tools and local bridge. Playwright MCP remains a full-browser option for pixels and existing browser state.</p>
+  <div class="cta-actions">
+    <a href="/unbrowser?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" class="cta-btn" data-analytics-cta="chrome_tax_try_unbrowser_bottom">Try Unbrowser on public sites — no signup</a>
+    <a href="/mcp?ref=playwright_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=playwright_mcp_alternative_v1" class="cta-btn secondary" data-analytics-cta="chrome_tax_use_real_chrome_bottom">Set up Unchained MCP</a>
+  </div>
 </section>
 
 <footer>
   Built by <a href="https://unchainedsky.com" data-analytics-cta="chrome_tax_footer_home">Unchained Sky</a> ·
-  <a href="https://unchainedsky.com/unbrowser" data-analytics-cta="chrome_tax_footer_unbrowser">unbrowser</a> — stateful WebFetch for LLM agents ·
-  Numbers from real measurements ·
-  <a href="https://github.com/unchainedsky/chrome-tax-calculator" data-analytics-cta="chrome_tax_methodology">Methodology</a>
+  <a href="https://github.com/protostatis/unbrowser">Unbrowser source</a> ·
+  <a href="#assumptions" data-analytics-cta="chrome_tax_methodology">Calculator methodology</a> ·
+  <a href="https://searchagentsky.com/guides/browser-agents-mcp">Cited browser-agent research</a>
 </footer>
 
 <script>
 // === DATA ===
 const TOOLS = {
   curl: { name:'curl', cat:'Static', binaryMB:2, ramMB:2, coldMs:10, tokens:3000,
-    js:'no', clicks:'no', cookies:'no', forms:'no', render:'no', stealth:'no', challenge:'no',
+    js:'no', clicks:'no', cookies:'no', forms:'no', render:'no',
     output:'Raw HTML', best:'Static pages', limits:'No JS, no interaction', color:'neutral' },
   webfetch: { name:'WebFetch', cat:'Provider', binaryMB:0, ramMB:0, coldMs:500, tokens:2000,
-    js:'partial', clicks:'no', cookies:'no', forms:'no', render:'no', stealth:'no', challenge:'no',
+    js:'partial', clicks:'no', cookies:'no', forms:'no', render:'no',
     output:'Markdown', best:'Quick summaries', limits:'No session, opaque JS', color:'neutral' },
-  unbrowser: { name:'unbrowser', cat:'Middle tier', binaryMB:10, ramMB:30, coldMs:100, tokens:500,
-    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'no', stealth:'yes', challenge:'yes',
-    output:'BlockMap', best:'Agent browsing (non-visual)', limits:'No rendering, no CAPTCHA solving', color:'savings' },
+  unbrowser: { name:'unbrowser', cat:'Middle tier', binaryMB:10, ramMB:50, coldMs:100, tokens:500,
+    js:'partial', clicks:'partial', cookies:'yes', forms:'partial', render:'no',
+    output:'BlockMap', best:'SSR/static-first agent browsing', limits:'Opt-in bounded QuickJS; heavy hydration may be partial; no rendering', color:'savings' },
   playwright: { name:'Playwright', cat:'Full browser', binaryMB:350, ramMB:280, coldMs:8000, tokens:12000,
-    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'no', challenge:'no',
-    output:'Raw HTML / Screenshots', best:'Visual tasks, testing', limits:'Heavy, detectable', color:'cost' },
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes',
+    output:'Accessibility snapshots / Screenshots', best:'Visual tasks, testing', limits:'Full browser runtime', color:'cost' },
   puppeteer: { name:'Puppeteer', cat:'Full browser', binaryMB:350, ramMB:300, coldMs:10000, tokens:12000,
-    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'no', challenge:'no',
-    output:'Raw HTML / Screenshots', best:'Visual scraping', limits:'Same as Playwright', color:'cost' },
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes',
+    output:'DOM / Screenshots', best:'Visual scraping', limits:'Full browser runtime', color:'cost' },
   browserbase: { name:'Browserbase', cat:'Managed', binaryMB:0, ramMB:0, coldMs:2000, tokens:12000,
-    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes', stealth:'partial', challenge:'no',
-    output:'Raw HTML / Screenshots', best:'Managed Chrome at scale', limits:'Per-session cost, external dep', color:'cost' }
+    js:'yes', clicks:'yes', cookies:'yes', forms:'yes', render:'yes',
+    output:'DOM / Screenshots', best:'Managed Chrome at scale', limits:'External managed runtime', color:'cost' }
 };
 
 const DEPLOY = {
@@ -2006,27 +2128,25 @@ const PRESETS = [
 ];
 
 const CAPS = [
-  { key:'js', label:'JavaScript execution' },
+  { key:'js', label:'JavaScript execution (bounded/full)' },
   { key:'clicks', label:'Clicks & interaction' },
   { key:'cookies', label:'Cookies & session' },
   { key:'forms', label:'Form submission' },
-  { key:'render', label:'Visual rendering' },
-  { key:'stealth', label:'Anti-bot stealth' },
-  { key:'challenge', label:'Challenge detection' }
+  { key:'render', label:'Visual rendering' }
 ];
 
 const DECISION_TREE = [
-  { q:'Does your task need to see pixels — screenshots, canvas, or visual layout?', yes:'chrome', no:1 },
-  { q:'Does the page require JavaScript to load its content?', yes:2, no:'curl' },
-  { q:'Do you need to interact — clicks, forms, or multi-step flows?', yes:3, no:'webfetch' },
-  { q:'Do you need cookies or session state across requests?', yes:'unbrowser', no:'unbrowser' }
+  { q:'Does success require screenshots, pixel layout, canvas or WebGL, exact Chrome behavior, browser extensions, or full framework hydration?', yes:'chrome', no:1 },
+  { q:'Can the task use SSR or static HTML, with optional bounded QuickJS where partial hydration is acceptable?', yes:2, no:'chrome' },
+  { q:'Do you need clicks, forms, cookies, or multi-step session state?', yes:'unbrowser', no:3 },
+  { q:'Is raw static HTML enough for the result?', yes:'curl', no:'webfetch' }
 ];
 
 const REC = {
   curl: { tool:'curl', reason:'Your page is static HTML. No JavaScript, no interaction needed. curl with a readability extractor is all you need.' },
   webfetch: { tool:'WebFetch', reason:'The page needs JS but you just want the text. Provider-side WebFetch handles this — no browser to deploy.' },
-  unbrowser: { tool:'unbrowser', reason:'You need JS, interaction, and session — but no rendering. unbrowser is the lightest tool that handles all three. 10MB binary, 30MB RAM, 500 tokens per page.' },
-  chrome: { tool:'Playwright / Chrome', reason:'You need visual rendering. Only a full browser engine will work here. unbrowser cannot do screenshots, canvas, or WebGL.' }
+  unbrowser: { tool:'unbrowser', reason:'The task can tolerate optional bounded QuickJS and partial hydration, needs interaction or session state, and does not require rendering. Validate Unbrowser on the actual target page.' },
+  chrome: { tool:'Playwright MCP or Unchained MCP', reason:'This task needs a full browser. Playwright MCP supports persistent and isolated profiles plus an extension connection to existing Chrome tabs; choose Unchained MCP when its DDM/CDP local-bridge workflow is the better fit.' }
 };
 
 let state = { sessions:10, pages:5, tasks:100, deploy:'local', tool:'playwright', llmCost:0.01 };
@@ -2037,10 +2157,7 @@ const fmtBytes = mb => mb>=1024 ? (mb/1024).toFixed(1)+' GB' : Math.round(mb)+' 
 const fmtMoney = n => n>=1000 ? '$'+(n/1000).toFixed(1)+'K' : '$'+n.toFixed(2);
 
 function realWorld(ramMB) {
-  if (ramMB >= 1024) return "That's "+Math.round(ramMB/150)+" Chrome tabs of memory";
-  if (ramMB >= 500) return "~"+Math.round(ramMB/150)+" Chrome tabs worth";
-  if (ramMB >= 100) return "~"+Math.round(ramMB/7)+" Spotify playlists";
-  return Math.round(ramMB)+" MB";
+  return fmtBytes(ramMB)+' in this page model; measure the deployed runtime for a capacity decision';
 }
 
 function calcTool(key, sessions, pages, tasks, deploy) {
@@ -2088,13 +2205,13 @@ function renderPainCards() {
   
   const dailySavings = current.totalCost - alt.totalCost;
   document.getElementById('pain-savings').textContent = fmtMoney(dailySavings);
-  document.getElementById('pain-savings-detail').textContent = 'Per day with unbrowser';
+  document.getElementById('pain-savings-detail').textContent = 'Illustrative daily difference';
   document.getElementById('pain-savings-comparison').textContent = fmtMoney(current.totalCost)+' → '+fmtMoney(alt.totalCost);
   
   // Hero stat
   document.getElementById('hero-stat-value').textContent = fmtBytes(current.totalRam);
-  document.getElementById('hero-stat-label').textContent = 'RAM for '+sessions+' '+current.name+' sessions';
-  document.getElementById('hero-stat-detail').textContent = realWorld(current.totalRam)+'. Your agent never needed to render any of it.';
+  document.getElementById('hero-stat-label').textContent = 'Modelled RAM for '+sessions+' '+current.name+' sessions';
+  document.getElementById('hero-stat-detail').textContent = 'Using the declared '+current.ramMB+' MB per-session assumption. Validate it on your own workload.';
 }
 
 function renderChart(containerId, metric, title, fmtFn) {
@@ -2143,7 +2260,7 @@ function renderProjection() {
     return '<div class="projection-card '+(isSave?'savings':'')+'">'+
       '<div class="period">'+p.label+'</div>'+
       '<div class="amount">'+(isSave?fmtMoney(save):fmtMoney(cost))+'</div>'+
-      '<div class="detail">'+(isSave?'saved with unbrowser':'current cost')+'</div>'+
+      '<div class="detail">'+(isSave?'modelled difference':'modelled current cost')+'</div>'+
     '</div>';
   }).join('');
 }
@@ -2259,9 +2376,10 @@ function showDecisionResult(recKey) {
   if (!key) {
     // Determine from answers
     if (decisionAnswers[0]) key = 'chrome';
-    else if (!decisionAnswers[1]) key = 'curl';
-    else if (!decisionAnswers[2]) key = 'webfetch';
-    else key = 'unbrowser';
+    else if (!decisionAnswers[1]) key = 'chrome';
+    else if (decisionAnswers[2]) key = 'unbrowser';
+    else if (decisionAnswers[3]) key = 'curl';
+    else key = 'webfetch';
   }
   const r = REC[key];
   document.getElementById('decision-opts').innerHTML = '<button class="decision-btn" onclick="resetDecision()">Start over</button>';
@@ -2281,8 +2399,8 @@ function resetDecision() {
 // FULL TABLE
 function renderFullTable() {
   const tools = ['curl','webfetch','unbrowser','playwright','puppeteer','browserbase'];
-  const headers = ['Tool','Category','Binary','RAM/Session','Cold Start','JS','Clicks','Cookies','Forms','Render','Stealth','Tokens/Page','Best For'];
-  const keys = ['name','cat','binaryMB','ramMB','coldMs','js','clicks','cookies','forms','render','stealth','tokens','best'];
+  const headers = ['Tool','Category','Binary','RAM/Session','Cold Start','JS','Clicks','Cookies','Forms','Render','Tokens/Page','Best For'];
+  const keys = ['name','cat','binaryMB','ramMB','coldMs','js','clicks','cookies','forms','render','tokens','best'];
   
   let html = '<thead><tr>'+headers.map(h => '<th>'+h+'</th>').join('')+'</tr></thead><tbody>';
   html += tools.map(k => {
@@ -2333,13 +2451,6 @@ function setupReveal() {
   document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
 }
 
-// === CAPABILITY CLICK ===
-function setupCapabilityClicks() {
-  document.querySelectorAll('.capability-table th[data-tool]').forEach(th => {
-    th.addEventListener('click', () => renderCapability(th.dataset.tool));
-  });
-}
-
 // === SCALE SLIDER ===
 function setupScale() {
   const slider = document.getElementById('scale-slider');
@@ -2351,7 +2462,6 @@ document.querySelectorAll('input,select').forEach(el => el.addEventListener('inp
 renderPresets();
 renderDecision();
 setupReveal();
-setupCapabilityClicks();
 setupScale();
 updateAll();
 </script>
