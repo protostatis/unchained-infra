@@ -285,6 +285,14 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("landing_job_", web.LANDING_HTML)
 
     def test_landing_explains_when_the_connector_is_worth_installing(self):
+        self.assertIn("Unchained drives. You navigate.", web.LANDING_HTML)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            web.LANDING_HTML,
+        )
+        self.assertIn("give Unchained the outcome&mdash;not every click", web.LANDING_HTML)
+        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", web.LANDING_HTML)
+        self.assertIn("UNCHAINED DRIVES. YOU NAVIGATE.", web.LANDING_HTML)
         self.assertIn("One system, two jobs", web.LANDING_HTML)
         self.assertIn("Do not install anything for a <em>public-web answer.</em>", web.LANDING_HTML)
         self.assertIn("when the task needs <em>a signed-in browser and actions.</em>", web.LANDING_HTML)
