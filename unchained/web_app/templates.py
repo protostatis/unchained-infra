@@ -1343,7 +1343,7 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Browser MCP Alternative: BrowserMCP vs Unchained (2026)</title>
-  <meta name="description" content="Compare BrowserMCP.io and Unchained for controlling a real Chrome browser: setup, workflow, data flow, review points, and the best fit for each approach.">
+  <meta name="description" content="Compare BrowserMCP.io and Unchained for controlling a real Chrome browser: setup, workflow, data flow, session control, and the best fit for each approach.">
   <meta name="robots" content="index,follow">
   <link rel="canonical" href="https://unchainedsky.com/browser-mcp-alternative">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -1355,7 +1355,7 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
   <meta property="og:image" content="https://unchainedsky.com/og-image.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Browser MCP Alternative: BrowserMCP vs Unchained (2026)">
-  <meta name="twitter:description" content="Compare setup, workflow, data flow, review points, and who each real-Chrome approach fits.">
+  <meta name="twitter:description" content="Compare setup, workflow, data flow, session continuity, and who each real-Chrome approach fits.">
   <meta name="twitter:image" content="https://unchainedsky.com/og-image.png">
   <style>
     :root{
@@ -1443,12 +1443,12 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
     <section class="hero" aria-labelledby="page-title">
       <p class="eyebrow">Comparison guide &middot; Updated <time datetime="2026-07-18">July 18, 2026</time></p>
       <h1 id="page-title">BrowserMCP vs Unchained: two ways to control your real Chrome</h1>
-      <p class="lede">BrowserMCP.io is a strong fit when you want an open-source MCP server and extension that controls the Chrome tab you connect. Unchained fits when you want a selected-profile workflow with an authenticated local bridge, hosted web control, mobile follow-ups, a guided trial, and review points.</p>
+      <p class="lede">BrowserMCP.io is a strong fit when you want its published MCP server configuration and Chrome extension/current-tab workflow, with a public Apache-2.0 repository for its core MCP code. Unchained fits when you want a selected-profile workflow with an authenticated local bridge, hosted web control, mobile follow-ups, and a guided trial.</p>
       <a class="cta" href="/trial?ref=browser_mcp_alternative&amp;utm_source=unchainedsky&amp;utm_medium=seo_content&amp;utm_campaign=browser_mcp_alternative_v1" data-analytics-cta="browser_mcp_alternative_trial">Start a guided browser trial</a>
       <p class="cta-note">Start with a guided path; no pricing change is implied by this comparison.</p>
       <div class="verdict" aria-label="Quick verdict">
-        <article><h2>Choose BrowserMCP.io for direct MCP control</h2><p>Connect the current tab through its extension, then direct it from your existing MCP client.</p></article>
-        <article><h2>Choose Unchained for a guided control plane</h2><p>Choose a Chrome profile, continue from web or mobile, and keep review points around consequential actions.</p></article>
+        <article><h2>Choose BrowserMCP.io for direct MCP control</h2><p>Use its documented server configuration and installed extension to connect the current tab, then direct it from your MCP client.</p></article>
+        <article><h2>Choose Unchained for a guided control plane</h2><p>Choose a Chrome profile and direct the session from a supported hosted web, MCP, or CLI path; controls vary by path.</p></article>
       </div>
     </section>
 
@@ -1456,7 +1456,7 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
       <div class="section-head"><p class="eyebrow">Answer first</p><h2 id="short-answer">The short answer</h2></div>
       <div class="answer">
         <p>Both products let an agent work through a real Chrome session with existing browser state. The meaningful difference is the operating model, not a claim that one universally replaces the other.</p>
-        <p>BrowserMCP.io documents a local extension-and-server flow centered on the tab you explicitly connect. Unchained connects a Chrome profile on your computer to its hosted service through an authenticated bridge, adding a guided product surface, remote follow-up controls, and review-oriented workflows.</p>
+        <p>BrowserMCP.io documents an MCP server configuration plus a separately installed Chrome extension centered on the current tab you connect. Its public Apache-2.0 repository contains core MCP code but says it cannot currently be built on its own because required monorepo utilities and types are not included. Unchained connects a Chrome profile on your computer to its hosted service through an authenticated bridge, adding a guided product surface and remote follow-up controls; exact UI and interaction controls vary across hosted web, MCP, and CLI paths.</p>
       </div>
     </section>
 
@@ -1467,11 +1467,11 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
           <thead><tr><th>Question</th><th>BrowserMCP.io</th><th>Unchained</th></tr></thead>
           <tbody>
             <tr><td>How Chrome connects</td><td>Install the extension, open its popup on the tab you want, and click Connect.</td><td>Run a local agent and choose a Chrome profile for the browser workflow.</td></tr>
-            <tr><td>Primary control surface</td><td>Your configured MCP client directs the connected tab.</td><td>Hosted web chat, supported MCP or CLI clients, and mobile follow-up controls direct the selected session.</td></tr>
+            <tr><td>Primary control surface</td><td>A compatible MCP application runs the documented <code>@browsermcp/mcp@latest</code> package; the installed Chrome extension connects the current tab.</td><td>Hosted web chat, supported MCP or CLI clients, and mobile follow-up controls can direct the selected session, with controls depending on the chosen path.</td></tr>
             <tr><td>Operating model</td><td>The project describes its browser automation as local and says browser activity remains on the device.</td><td>A local agent connects Chrome to Unchained over an authenticated tunnel; Unchained is not a local-only service.</td></tr>
-            <tr><td>Human control</td><td>You select and connect the tab, then direct work from the MCP client.</td><td>You select the profile, review progress, and keep confirmation points around final actions.</td></tr>
-            <tr><td>Setup path</td><td>Chrome extension plus MCP-server configuration in a compatible client.</td><td>A guided browser trial, with MCP and CLI paths available for developer workflows.</td></tr>
-            <tr><td>Best fit</td><td>Developers who want a direct, open-source BrowserMCP.io setup inside an existing MCP workflow.</td><td>People who want a guided browser-work product with session continuity and review-oriented controls.</td></tr>
+            <tr><td>User direction</td><td>You select and connect the current tab, then direct work from the MCP client.</td><td>You choose a Chrome profile and direct the session through the selected Unchained path. Hosted web, MCP, and CLI paths do not promise identical interaction controls.</td></tr>
+            <tr><td>Setup path</td><td>Install Node.js, add the documented MCP server configuration, and separately install the Chrome extension.</td><td>A guided browser trial, with MCP and CLI paths available for developer workflows.</td></tr>
+            <tr><td>Best fit</td><td>Developers who want BrowserMCP.io's documented server-package and extension/current-tab workflow inside an existing MCP client.</td><td>People who want a guided browser-work product with profile selection, hosted continuity, and optional MCP or CLI paths.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1483,7 +1483,8 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
         <h2>You want a direct local MCP setup</h2>
         <ul>
           <li>You already have a compatible MCP client and prefer to configure the server yourself.</li>
-          <li>You want the open-source BrowserMCP.io extension and server as your primary interface.</li>
+          <li>You want to inspect the public Apache-2.0 core MCP repository, while accepting its README's warning that it cannot currently be built on its own.</li>
+          <li>You are comfortable installing BrowserMCP.io's separately documented Chrome extension.</li>
           <li>You want to explicitly connect and control the current browser tab.</li>
           <li>Its documented on-device browser-activity model is a requirement for your workflow.</li>
         </ul>
@@ -1494,8 +1495,8 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
         <ul>
           <li>You want to start through a guided browser trial rather than assemble the flow yourself.</li>
           <li>You want to choose a Chrome profile and continue instructions through a hosted web or mobile surface.</li>
-          <li>You want work summarized with sources and review points before consequential final actions.</li>
-          <li>You want MCP or CLI access alongside a product-level control plane.</li>
+          <li>You want a hosted control plane while keeping the selected Chrome profile on your computer.</li>
+          <li>You want MCP or CLI access as optional paths, without assuming every path exposes the same UI controls.</li>
         </ul>
       </article>
     </section>
@@ -1511,12 +1512,13 @@ BROWSER_MCP_ALTERNATIVE_HTML = """<!DOCTYPE html>
     <section class="section" id="sources" aria-labelledby="source-heading">
       <div class="section-head"><p class="eyebrow">Verify the claims</p><h2 id="source-heading">Official sources</h2><p>Product behavior can change. Check the linked documentation before deciding.</p></div>
       <ul class="sources">
-        <li><strong><a href="https://github.com/BrowserMCP/mcp" rel="noopener noreferrer">BrowserMCP.io official repository</a></strong><span>Architecture, license, local-browser description, and MCP-client configuration.</span></li>
-        <li><strong><a href="https://docs.browsermcp.io/setup-extension" rel="noopener noreferrer">BrowserMCP.io extension setup</a></strong><span>Extension installation and the current-tab Connect workflow.</span></li>
+        <li><strong><a href="https://github.com/BrowserMCP/mcp" rel="noopener noreferrer">BrowserMCP.io core MCP repository</a></strong><span>Apache-2.0 public repository containing the core MCP code. Its README says it cannot currently be built on its own because required monorepo utilities and types are not included.</span></li>
+        <li><strong><a href="https://docs.browsermcp.io/setup-server" rel="noopener noreferrer">BrowserMCP.io MCP server setup</a></strong><span>Official Node.js prerequisite and <code>npx @browsermcp/mcp@latest</code> configuration for supported MCP applications.</span></li>
+        <li><strong><a href="https://docs.browsermcp.io/setup-extension" rel="noopener noreferrer">BrowserMCP.io Chrome extension setup</a></strong><span>Official steps to install the separately distributed Chrome extension, pin it, and connect the current tab; browser actions are then performed on that tab.</span></li>
         <li><strong><a href="/mcp-guide">Unchained MCP guide</a></strong><span>Current Unchained MCP setup and integration guidance.</span></li>
         <li><strong><a href="/privacy">Unchained privacy policy</a></strong><span>Current disclosures for browser-derived data, AI providers, service storage, and user choices.</span></li>
       </ul>
-      <aside class="note"><strong>Name clarification:</strong> this page compares Unchained with the open-source project at BrowserMCP.io and its official GitHub organization. A separate Agent360 product also uses the name Browser MCP at <a href="https://browsermcp.dev/" rel="noopener noreferrer">browsermcp.dev</a>; it is not the BrowserMCP.io project compared here.</aside>
+      <aside class="note"><strong>Scope and name clarification:</strong> this page compares Unchained with BrowserMCP.io's documented server-and-extension product. The linked BrowserMCP/mcp repository is an Apache-2.0 public core-code repository, not evidence that source code for the Chrome extension or complete product setup is public, or that the complete setup is independently buildable. A separate Agent360 product also uses the name Browser MCP at <a href="https://browsermcp.dev/" rel="noopener noreferrer">browsermcp.dev</a>; it is not the BrowserMCP.io product compared here.</aside>
     </section>
   </main>
   <footer>

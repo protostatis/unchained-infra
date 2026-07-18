@@ -56,10 +56,63 @@ class TestBrowserMcpAlternativeContracts(TestCase):
         self.assertIn(cta, html)
         self.assertLess(html.index(cta), html.index('<div class="verdict"'))
 
-    def test_page_has_sources_disclosures_and_name_clarification(self):
+    def test_browsermcp_sources_separate_core_server_and_extension(self):
         html = BROWSER_MCP_ALTERNATIVE_HTML
-        self.assertIn("https://github.com/BrowserMCP/mcp", html)
-        self.assertIn("https://docs.browsermcp.io/setup-extension", html)
+        source_cards = (
+            (
+                "https://github.com/BrowserMCP/mcp",
+                "BrowserMCP.io core MCP repository",
+            ),
+            (
+                "https://docs.browsermcp.io/setup-server",
+                "BrowserMCP.io MCP server setup",
+            ),
+            (
+                "https://docs.browsermcp.io/setup-extension",
+                "BrowserMCP.io Chrome extension setup",
+            ),
+        )
+        source_positions = []
+        for href, label in source_cards:
+            card_link = (
+                f'<a href="{href}" rel="noopener noreferrer">{label}</a>'
+            )
+            self.assertIn(card_link, html)
+            source_positions.append(html.index(card_link))
+        self.assertEqual(source_positions, sorted(source_positions))
+        self.assertIn("Apache-2.0 public repository containing the core MCP code", html)
+        self.assertIn("it cannot currently be built on its own", html)
+        self.assertIn("npx @browsermcp/mcp@latest", html)
+        self.assertIn("separately distributed Chrome extension", html)
+        self.assertIn(
+            "not evidence that source code for the Chrome extension or complete "
+            "product setup is public, or that the complete setup is independently "
+            "buildable",
+            html,
+        )
+
+    def test_copy_forbids_extension_and_cross_path_control_overclaims(self):
+        html = BROWSER_MCP_ALTERNATIVE_HTML
+        self.assertNotIn("open-source", html.lower())
+        for forbidden_claim in (
+            "review points",
+            "confirmation points",
+            "review-oriented",
+            "work summarized with sources",
+            "before consequential final actions",
+        ):
+            self.assertNotIn(forbidden_claim, html.lower())
+        self.assertIn(
+            "exact UI and interaction controls vary across hosted web, MCP, and CLI paths",
+            html,
+        )
+        self.assertIn(
+            "Hosted web, MCP, and CLI paths do not promise identical interaction controls",
+            html,
+        )
+
+    def test_page_has_privacy_disclosure_and_name_clarification(self):
+        html = BROWSER_MCP_ALTERNATIVE_HTML
         self.assertIn("https://browsermcp.dev/", html)
         self.assertIn("Unchained is not local-only.", html)
         self.assertIn("browser-derived page context", html)

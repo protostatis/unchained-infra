@@ -45,7 +45,6 @@ from web_app.routes import ROUTE_SPECS, register_route_specs
 from web_app.templates import (
     ADMIN_HTML,
     BRANDED_TAB_HTML,
-    BROWSER_MCP_ALTERNATIVE_HTML,
     CASE_STUDY_ZILLOW_HTML,
     USE_CASE_APARTMENT_HTML,
     USE_CASE_FLIGHTS_HTML,
