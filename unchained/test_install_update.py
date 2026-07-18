@@ -1094,7 +1094,7 @@ def test_chat_html_has_install_modal():
     assert "showInstallCmd" in CHAT_HTML, "showInstallCmd JS missing"
     assert "copyInstallCmd" in CHAT_HTML, "copyInstallCmd JS missing"
     assert "closeInstallModal" in CHAT_HTML, "closeInstallModal JS missing"
-    assert "Download Agent Installer" in CHAT_HTML, "installer download button missing"
+    assert "Use one-click installer" in CHAT_HTML, "primary installer action missing"
     assert "Get terminal command" in CHAT_HTML, "terminal install option missing"
     assert "Connect this computer" in CHAT_HTML, "connect modal title missing"
     assert "Choose one install method" in CHAT_HTML, "install method choice copy missing"
@@ -1113,8 +1113,102 @@ def test_chat_html_has_install_modal():
     assert "Use the same install command to update/reconnect" in CHAT_HTML, "Codex update copy should clarify install/update flow"
     assert "Copy Command" in CHAT_HTML, "copy command button missing"
     assert "download" in CHAT_HTML.lower(), "download link missing"
-    assert CHAT_HTML.index('id="banner-curl"') < CHAT_HTML.index('id="banner-connect"'), "curl action should come before connect"
+    assert CHAT_HTML.index('id="banner-connect"') < CHAT_HTML.index('id="banner-curl"'), "native installer should come before terminal command"
     print(f"  CHAT_HTML has install modal + buttons")
+
+
+_POST_LOGIN_INSTALL_PATH = (
+    "/install?ref=post_login_install"
+    "&utm_source=unchainedsky"
+    "&utm_medium=product"
+    "&utm_campaign=approved_unactivated_post_login_v1"
+)
+_POST_LOGIN_INSTALL_HTML_HREF = _POST_LOGIN_INSTALL_PATH.replace("&", "&amp;")
+_NATIVE_INSTALL_CTA = 'data-analytics-cta="post_login_native_installer"'
+_TERMINAL_COMMAND_CTA = 'data-analytics-cta="post_login_terminal_command"'
+
+
+def _guided_setup_tag(markup: str, element: str, element_id: str) -> str:
+    match = re.search(
+        rf'<{element}\b[^>]*\bid="{re.escape(element_id)}"[^>]*>',
+        markup,
+    )
+    assert match, f"{element_id} action missing"
+    return match.group(0)
+
+
+def _assert_native_installer_first_contract(
+    template_name: str,
+    markup: str,
+    *,
+    terminal_cta_count: int,
+) -> None:
+    banner_start = markup.index('<div id="download-banner"')
+    modal_start = markup.index("<!-- Install modal -->", banner_start)
+    banner = markup[banner_start:modal_start]
+    installer_banner = _guided_setup_tag(banner, "a", "banner-connect")
+    terminal_banner = _guided_setup_tag(banner, "a", "banner-curl")
+
+    assert banner.index(installer_banner) < banner.index(terminal_banner), template_name
+    assert 'class="primary"' in installer_banner, template_name
+    assert 'class="secondary"' in terminal_banner, template_name
+    assert f'href="{_POST_LOGIN_INSTALL_HTML_HREF}"' in installer_banner, template_name
+    assert _NATIVE_INSTALL_CTA in installer_banner, template_name
+    assert _TERMINAL_COMMAND_CTA in terminal_banner, template_name
+    assert 'onclick=' not in installer_banner, template_name
+    assert not re.search(r"\sdownload(?:\s|=|>)", installer_banner), template_name
+    assert ">Use one-click installer</a>" in banner, template_name
+    assert "or use the terminal command" in banner, template_name
+
+    modal_end = markup.index('<div id="chat">', modal_start)
+    modal = markup[modal_start:modal_end]
+    method_start = modal.index('<div class="method-grid">')
+    method_end = modal.index('<p class="modal-short">', method_start)
+    methods = modal[method_start:method_end]
+    actions_start = modal.index('<div class="modal-actions">')
+    actions_end = modal.index('<p class="modal-note"', actions_start)
+    actions = modal[actions_start:actions_end]
+
+    assert "Pick one: installer or terminal command." in modal, template_name
+    assert methods.index(_NATIVE_INSTALL_CTA) < methods.index("<b>Terminal command</b>"), template_name
+    assert methods.index("Option A") < methods.index("Option B"), template_name
+    assert methods.index("<b>Installer</b>") < methods.index("<b>Terminal command</b>"), template_name
+    assert "Option B command" in modal, template_name
+    assert actions.index(_NATIVE_INSTALL_CTA) < actions.index(_TERMINAL_COMMAND_CTA), template_name
+
+    native_links = re.findall(
+        rf'<a\b[^>]*{re.escape(_NATIVE_INSTALL_CTA)}[^>]*>',
+        markup,
+    )
+    assert len(native_links) == 3, f"{template_name}: expected three measured installer links"
+    for link in native_links:
+        assert f'href="{_POST_LOGIN_INSTALL_HTML_HREF}"' in link, template_name
+        assert 'onclick=' not in link, template_name
+        assert not re.search(r"\sdownload(?:\s|=|>)", link), template_name
+
+    assert markup.count(_TERMINAL_COMMAND_CTA) == terminal_cta_count, template_name
+    assert 'role="dialog"' in modal, template_name
+    assert markup.count("document.addEventListener('keydown', handleInstallModalKeydown);") == 1, template_name
+    assert markup.count("document.removeEventListener('keydown', handleInstallModalKeydown);") == 1, template_name
+
+
+def test_post_login_guided_setup_prefers_measured_native_installer():
+    """All current trial/local renders put the measured installer ahead of terminal fallback."""
+    from web import CHAT_CODEX_HTML, CHAT_HTML, CLAUDE_CHAT_HTML, TRIAL_CHAT_HTML
+
+    renders = (
+        ("TRIAL_CHAT_HTML", TRIAL_CHAT_HTML, 3),
+        ("CLAUDE_CHAT_HTML", CLAUDE_CHAT_HTML, 2),
+        ("CHAT_CODEX_HTML", CHAT_CODEX_HTML, 2),
+        ("CHAT_HTML", CHAT_HTML, 2),
+    )
+    for template_name, markup, terminal_cta_count in renders:
+        _assert_native_installer_first_contract(
+            template_name,
+            markup,
+            terminal_cta_count=terminal_cta_count,
+        )
+    print("  trial/local generated renders prefer the measured native installer")
 
 
 def test_chat_html_has_opencode_cockpit_handoff():
@@ -1842,6 +1936,7 @@ if __name__ == "__main__":
         ("web: new handlers importable", test_web_imports),
         ("web: routes registered", test_web_routes_registered),
         ("web: CHAT_HTML has install modal", test_chat_html_has_install_modal),
+        ("web: trial/local guided setup prefers measured native installer", test_post_login_guided_setup_prefers_measured_native_installer),
         ("web: CHAT_HTML has OpenCode cockpit handoff", test_chat_html_has_opencode_cockpit_handoff),
         ("web: SETUP_HTML has status + installer banner", test_setup_html_has_status_and_install_banner),
         ("web: native installer lookup prefers freshest artifact", test_native_installer_path_prefers_freshest_artifact),
