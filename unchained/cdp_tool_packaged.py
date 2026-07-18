@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import re
+import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -41,31 +44,140 @@ DATA_DIR = os.environ.get("UNCHAINED_DATA_DIR",
                           os.path.join(os.path.expanduser("~"), ".unchained"))
 
 
+def _pid_is_running(pid: int) -> bool:
+    """Return whether a local process with ``pid`` still exists."""
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        try:
+            output = subprocess.check_output(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'running' }}",
+                ],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
+            )
+            return output.strip() == "running"
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _process_cmdline(pid: int) -> str:
+    """Return a process command line, or an empty string when unavailable."""
+    if pid <= 0:
+        return ""
+    if platform.system() == "Windows":
+        ps_cmd = (
+            f'$p = Get-CimInstance Win32_Process -Filter "ProcessId = {pid}" '
+            "-ErrorAction SilentlyContinue; "
+            'if ($p) { [string]$p.CommandLine }'
+        )
+        try:
+            return subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
+            ).strip()
+        except Exception:
+            return ""
+    proc_cmdline = f"/proc/{pid}/cmdline"
+    if os.path.exists(proc_cmdline):
+        try:
+            with open(proc_cmdline, "rb") as f:
+                return f.read().replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+        except OSError:
+            return ""
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        ).strip()
+    except Exception:
+        return ""
+
+
 def _parse_prov_slot(tab_id: str = TAB_ID):
     """Extract the provision slot from a prov-<slot>-<id> tab id."""
     if not tab_id.startswith("prov-"):
         return ""
     parts = tab_id.split("-", 2)
-    if len(parts) < 3 or not parts[1]:
+    if len(parts) < 3 or not re.fullmatch(r"[0-9a-f]{4}", parts[1]):
         return ""
     return parts[1]
 
 
-def _load_prov_slot_state(slot: str):
-    """Load provision slot state, returning {} when the slot is stale/missing."""
-    if not slot:
-        return {}
+def _provision_slot_status(slot: str):
+    """Classify a persisted provision slot without taking ownership of it.
+
+    The bridge owns lifecycle cleanup. This client only decides whether it is
+    safe to route this command to a provisioned Chrome instead of port 9222.
+    """
+    if not re.fullmatch(r"[0-9a-f]{4}", slot):
+        return "stale", {}
     state_file = os.path.join(DATA_DIR, "provision_slots", f"{slot}.json")
     try:
         with open(state_file) as f:
-            state = json.loads(f.read())
+            state = json.load(f)
     except Exception:
-        return {}
+        return "stale", {}
+    if not isinstance(state, dict):
+        return "stale", {}
     try:
         port = int(state.get("port", 0))
+        pid = int(state.get("pid", 0))
     except Exception:
-        port = 0
-    if port <= 0:
+        return "stale", state
+    temp_dir = str(state.get("temp_dir") or "")
+    if port <= 0 or pid <= 0 or not temp_dir:
+        return "stale", state
+    state_agent_id = str(state.get("agent_id") or "")
+    if BRIDGE_AGENT_ID and state_agent_id and state_agent_id != BRIDGE_AGENT_ID:
+        return "unavailable", state
+    if not _pid_is_running(pid):
+        return "stale", state
+    cmdline = _process_cmdline(pid)
+    if not cmdline:
+        return "unavailable", state
+    user_data_arg = f"--user-data-dir={temp_dir}"
+    port_marker = f"--remote-debugging-port={port}"
+    if not _has_process_arg(cmdline, user_data_arg) or not _has_process_arg(cmdline, port_marker):
+        return "stale", state
+    if not bool(state.get("ready", True)):
+        return "starting", state
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json/version")
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            version = json.loads(resp.read())
+    except Exception:
+        return "unavailable", state
+    if not isinstance(version, dict) or not str(version.get("webSocketDebuggerUrl") or "").startswith("ws://"):
+        return "unavailable", state
+    return "active", state
+
+
+def _has_process_arg(cmdline: str, arg: str) -> bool:
+    """Match one complete quoted or unquoted command-line argument."""
+    return bool(re.search(rf"(?<!\S)[\"']?{re.escape(arg)}[\"']?(?=\s|$)", cmdline))
+
+
+def _load_prov_slot_state(slot: str):
+    """Load state only when the saved Chrome identity is healthy."""
+    status, state = _provision_slot_status(slot)
+    if status != "active":
         return {}
     return state
 
@@ -79,8 +191,6 @@ def _active_prov_slot():
     slot = _parse_prov_slot(TAB_ID)
     if not slot:
         return ""
-    # A stale prov-* CDP_TAB_ID can leak into a later default-profile turn.
-    # Treat it as default unless the slot still has live local state.
     return slot if _load_prov_slot_state(slot) else ""
 
 
@@ -112,6 +222,15 @@ def _format_tab_id_for_display(real_id: str, slot: str) -> str:
     if slot:
         return f"prov-{slot}-{short}"
     return short
+
+
+def _provision_slot_error(slot: str, status: str) -> str:
+    """Describe a non-routable provision slot without risking profile crossover."""
+    if status == "starting":
+        return f"Provisioned Chrome slot '{slot}' is still starting. Retry shortly."
+    if status == "stale":
+        return f"Provisioned Chrome slot '{slot}' is no longer running. Re-provision to continue."
+    return f"Provisioned Chrome slot '{slot}' is unavailable. Retry or re-provision to continue."
 
 
 def cmd(action, **kwargs):
@@ -147,9 +266,10 @@ def cmd(action, **kwargs):
         sys.exit(1)
 
 
-def _chrome_tabs():
+def _chrome_tabs(port=None):
     """List page tabs from local Chrome's HTTP API."""
-    port = _resolve_cdp_port()
+    if port is None:
+        port = _resolve_cdp_port()
     req = urllib.request.Request(f"http://{CDP_HOST}:{port}/json")
     with urllib.request.urlopen(req, timeout=5) as resp:
         tabs = json.loads(resp.read())
@@ -195,24 +315,40 @@ def main():
             i += 1
     args = filtered
 
-    # When the session uses a provisioned Chrome, the bridge routes by
-    # tab id prefix: bare ids hit default Chrome (9222), prov-prefixed ids
-    # hit the provisioned Chrome's port. Rewrite any non-prov-prefixed
-    # value the agent passes so it stays inside the active slot.
-    prov_slot = _active_prov_slot()
+    # When the session uses a provisioned Chrome, the bridge routes by tab id
+    # prefix: bare ids hit default Chrome (9222), prov-prefixed ids hit the
+    # provisioned Chrome's port. A non-routable provision slot always fails
+    # closed so an action cannot silently cross into the default profile.
+    env_slot = _parse_prov_slot(TAB_ID)
+    prov_slot = ""
+    prov_state = {}
+    if env_slot:
+        env_status, env_state = _provision_slot_status(env_slot)
+        if env_status == "active":
+            prov_slot = env_slot
+            prov_state = env_state
+        else:
+            print(f"Error: {_provision_slot_error(env_slot, env_status)}", file=sys.stderr)
+            sys.exit(1)
+
     if not prov_slot and tab_id.startswith("prov-"):
-        # The chat/session may have retained a provisioned tab id after that
-        # provisioned Chrome was cleaned up.  Falling back to auto lets the
-        # default-profile bridge select its current tab instead of sending an
-        # impossible prov-* tab id to the server.
-        tab_id = "auto"
+        print("Error: Provision tab is not bound to this chat session.", file=sys.stderr)
+        sys.exit(1)
+    elif prov_slot and tab_id.startswith("prov-") and _parse_prov_slot(tab_id) != prov_slot:
+        print(
+            f"Error: Provision tab targets slot '{_parse_prov_slot(tab_id)}', "
+            f"but this session is bound to slot '{prov_slot}'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if prov_slot and tab_id and not tab_id.startswith("prov-"):
         tab_id = f"prov-{prov_slot}-{tab_id}"
+    cdp_port = int(prov_state.get("port", CDP_PORT)) if prov_state else CDP_PORT
 
     try:
         # --- Tab management ---
         if command == "tabs":
-            tabs = _chrome_tabs()
+            tabs = _chrome_tabs(cdp_port)
             print(f"=== Open Tabs ({len(tabs)}) ===")
             for t in tabs:
                 tid = _format_tab_id_for_display(t["id"], prov_slot)
@@ -231,7 +367,7 @@ def main():
             if not args:
                 print("Usage: cdp_tool.py close-tab <tab_id>", file=sys.stderr)
                 sys.exit(1)
-            tabs = _chrome_tabs()
+            tabs = _chrome_tabs(cdp_port)
             # Accept either bare ids or the prov-<slot>-<id> form printed by
             # `tabs` / `new-tab` when in a provisioned session.
             target = args[0]
@@ -248,7 +384,7 @@ def main():
                 sys.exit(1)
             close_id = matches[0]["id"]
             req = urllib.request.Request(
-                f"http://{CDP_HOST}:{_resolve_cdp_port()}/json/close/{close_id}", method="PUT")
+                f"http://{CDP_HOST}:{cdp_port}/json/close/{close_id}", method="PUT")
             urllib.request.urlopen(req, timeout=5)
             print(f"Closed tab {_format_tab_id_for_display(close_id, prov_slot)}")
             return
