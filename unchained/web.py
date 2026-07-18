@@ -45,6 +45,7 @@ from web_app.routes import ROUTE_SPECS, register_route_specs
 from web_app.templates import (
     ADMIN_HTML,
     BRANDED_TAB_HTML,
+    BROWSER_MCP_ALTERNATIVE_HTML,
     CASE_STUDY_ZILLOW_HTML,
     USE_CASE_APARTMENT_HTML,
     USE_CASE_FLIGHTS_HTML,
@@ -280,6 +281,7 @@ def _trace(event: str, **fields):
 
 _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/",
+    "/browser-mcp-alternative",
     "/unbrowser",
     "/chrome-tax",
     "/mcp-guide",
@@ -1620,6 +1622,7 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/demo", "0.8", "weekly"),
+        ("https://unchainedsky.com/browser-mcp-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/chrome-tax", "0.8", "monthly"),
         ("https://unchainedsky.com/use/apartment-hunting", "0.8", "monthly"),
         ("https://unchainedsky.com/use/flight-comparison", "0.8", "monthly"),
@@ -2189,7 +2192,7 @@ def _build_mcp_guide_html() -> str:
     </div>
     <section class="hero">
       <h1>Zero-Config MCP Setup</h1>
-      <p>Reference docs for connecting your existing installed agent to Unchained MCP and shipping the `/mcp` onboarding route.</p>
+      <p>Reference docs for connecting your existing installed agent to Unchained MCP and shipping the `/mcp` onboarding route. Comparing approaches? <a href="/browser-mcp-alternative">See BrowserMCP.io vs Unchained.</a></p>
       <div class="notice">If your agent is already installed and running, use `https://api.unchainedsky.com/mcp` directly and reuse your current `agent_id`.</div>
     </section>
 
