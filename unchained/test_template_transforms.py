@@ -902,11 +902,15 @@ if (!select.options.some(option => option.value === select.value)) {
     def test_ux_contract_copy_and_demo_routes(self):
         from web_app import templates
 
-        self.assertIn("SearchAgentSky + Unchained", templates.LANDING_HTML)
+        self.assertIn("Unchained drives. You navigate.", templates.LANDING_HTML)
         self.assertIn(
             "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
             templates.LANDING_HTML,
         )
+        self.assertIn("give Unchained the outcome&mdash;not every click", templates.LANDING_HTML)
+        self.assertIn("One system, two jobs", templates.LANDING_HTML)
+        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", templates.LANDING_HTML)
+        self.assertIn("UNCHAINED DRIVES. YOU NAVIGATE.", templates.LANDING_HTML)
         self.assertIn("font-family:'Familjen Grotesk',system-ui,sans-serif", templates.LANDING_HTML)
         self.assertNotIn("Instrument Serif", templates.LANDING_HTML)
         self.assertIn("dedicated Chrome workspace", templates.LANDING_HTML)
