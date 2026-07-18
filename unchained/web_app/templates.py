@@ -17576,6 +17576,18 @@ body{
   border-radius:999px!important;
   background:rgba(255,107,74,0.2)!important;
 }
+#download-banner a.primary{
+  color:#fff!important;
+  border-color:rgba(255,107,74,0.82)!important;
+  background:linear-gradient(135deg,rgba(255,107,74,0.58),rgba(222,62,89,0.38))!important;
+  font-weight:700!important;
+}
+#download-banner a.secondary{
+  color:#cbd5e1!important;
+  border-color:rgba(255,255,255,0.16)!important;
+  background:rgba(255,255,255,0.035)!important;
+  font-weight:600!important;
+}
 #download-banner a:hover{
   background:rgba(255,107,74,0.28)!important;
   border-color:var(--accent-strong)!important;

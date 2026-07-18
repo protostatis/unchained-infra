@@ -1191,6 +1191,40 @@ def _assert_native_installer_first_contract(
     assert markup.count("document.addEventListener('keydown', handleInstallModalKeydown);") == 1, template_name
     assert markup.count("document.removeEventListener('keydown', handleInstallModalKeydown);") == 1, template_name
 
+    # The final injected chat theme has a general !important banner-link rule.
+    # Its later primary/secondary rules must preserve the visual hierarchy in
+    # the rendered page rather than only leaving class names in source markup.
+    important_general = markup.rfind(
+        "#download-banner a{\n  color:#ffd8cf!important;"
+    )
+    if important_general >= 0:
+        final_primary = markup.find(
+            "#download-banner a.primary{", important_general
+        )
+        final_secondary = markup.find(
+            "#download-banner a.secondary{", final_primary
+        )
+        assert final_primary > important_general, template_name
+        assert final_secondary > final_primary, template_name
+        primary_rule = markup[
+            final_primary:markup.index("}", final_primary) + 1
+        ]
+        secondary_rule = markup[
+            final_secondary:markup.index("}", final_secondary) + 1
+        ]
+        assert "font-weight:700!important" in primary_rule, template_name
+        assert "background:linear-gradient" in primary_rule, template_name
+        assert (
+            "background:rgba(255,255,255,0.035)!important"
+            in secondary_rule
+        ), template_name
+    else:
+        final_general = markup.rfind("#download-banner a{")
+        final_primary = markup.rfind("#download-banner a.primary{")
+        final_secondary = markup.rfind("#download-banner a.secondary{")
+        assert final_primary > final_general >= 0, template_name
+        assert final_secondary > final_primary, template_name
+
 
 def test_post_login_guided_setup_prefers_measured_native_installer():
     """All current trial/local renders put the measured installer ahead of terminal fallback."""
