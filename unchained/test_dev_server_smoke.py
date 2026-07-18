@@ -115,7 +115,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bridge_configured", data)
         self.assertIn("bridge_connected", data)
 
-    async def test_landing_research_bridge_has_client_measurement(self):
+    async def test_landing_product_choice_has_client_measurement(self):
         analytics_db = os.environ["UNCHAINED_ANALYTICS_DB_PATH"]
 
         def _landing_page_views() -> int:
@@ -135,8 +135,9 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.status_code, 200, page.text)
         self.assertEqual(_landing_page_views(), before + 1)
         self.assertIn("data-uc-analytics-client", page.text)
-        self.assertIn('data-analytics-cta="landing_research_nav"', page.text)
-        self.assertIn('data-analytics-cta="landing_research_footer"', page.text)
+        self.assertIn('data-analytics-cta="landing_public_search_nav"', page.text)
+        self.assertIn('data-analytics-cta="landing_public_search_footer"', page.text)
+        self.assertIn('data-analytics-cta="landing_connect_chrome_start"', page.text)
         self.assertIn(".replace(/[^A-Za-z0-9._:-]/g, '')", page.text)
 
     async def test_unbrowser_acquisition_and_outbound_events_are_server_owned(self):
@@ -411,7 +412,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["email"], "dev@localhost")
 
         expected_pages = {
-            "/": "You call the shots.",
+            "/": "Search the open web.",
             "/tab": "Ready for navigation",
             "/local": "client-update-btn",
             "/local?provider=codex-cli": "client-update-btn",

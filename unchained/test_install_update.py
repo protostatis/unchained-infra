@@ -1524,7 +1524,9 @@ def test_trial_chat_has_guided_install_ux():
     assert "Trial setup required" in TRIAL_CHAT_HTML, "trial guided setup banner missing"
     assert "Choose one install method" in TRIAL_CHAT_HTML, "trial install method choice copy missing"
     assert "Do not run both" in TRIAL_CHAT_HTML, "trial either/or install guidance missing"
-    assert "No Claude or Codex CLI required for trial" in TRIAL_CHAT_HTML, "trial prerequisite copy missing"
+    assert (
+        "No Claude, Codex, or OpenCode CLI is required for the guided trial" in TRIAL_CHAT_HTML
+    ), "trial prerequisite copy missing"
     assert "maybeAutoOpenInstallModal" in TRIAL_CHAT_HTML, "trial auto-open install behavior missing"
     assert "lastLocalSetupReady" in TRIAL_CHAT_HTML, "trial send readiness guard missing"
     assert "sr-only" in TRIAL_CHAT_HTML, "trial accessible either/or text missing"
@@ -1533,7 +1535,9 @@ def test_trial_chat_has_guided_install_ux():
     assert '<button id="sendbtn" onclick="doSend()" disabled>' in TRIAL_CHAT_HTML, "trial send button should default disabled before status loads"
     assert "Retry Command" in TRIAL_CHAT_HTML, "trial install command retry missing"
     assert "--setup-accent" in TRIAL_CHAT_HTML, "trial setup color variables missing"
-    assert "to reconnect this browser" in TRIAL_CHAT_HTML, "trial reconnect modal copy missing"
+    assert "to reconnect the local workspace" in TRIAL_CHAT_HTML, "trial reconnect modal copy missing"
+    assert "Uses sites where you are already signed in" not in TRIAL_CHAT_HTML, "trial must not imply existing-profile reuse"
+    assert "Sites see your normal browser session" not in TRIAL_CHAT_HTML, "trial must not imply current-session reuse"
     assert "btn.disabled = !ready" in TRIAL_CHAT_HTML, "trial send button should be disabled semantically when setup is blocked"
     assert 'href="/test"' not in TRIAL_CHAT_HTML, "trial navigation should not expose the Control sandbox"
     print("  TRIAL_CHAT_HTML has chat+bridge status pills + guided install UX")

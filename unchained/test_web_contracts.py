@@ -257,9 +257,15 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("last_output", rows[0])
 
     def test_landing_auth_cta_points_to_auth_entry(self):
-        self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', web.LANDING_HTML)
+        self.assertIn(
+            'href="/trial" class="signin" id="landing-auth-link" '
+            'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
+            web.LANDING_HTML,
+        )
         self.assertIn("normalizeLandingRoute", web.LANDING_HTML)
-        self.assertIn("Open trial", web.LANDING_HTML)
+        self.assertIn("if(path==='/demo')return fallback", web.LANDING_HTML)
+        self.assertIn("Open my browser workspace", web.LANDING_HTML)
+        self.assertIn("Open local workspace", web.LANDING_HTML)
         self.assertNotIn('href="/setup" class="signin">Sign in</a>', web.LANDING_HTML)
 
     def test_landing_mobile_navigation_has_accessible_disclosure(self):
@@ -267,14 +273,30 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('id="landing-menu-toggle" aria-expanded="false"', web.LANDING_HTML)
         self.assertIn('aria-controls="landing-nav-links"', web.LANDING_HTML)
         self.assertIn('id="landing-nav-links"', web.LANDING_HTML)
-        for href in ("#calculator", "#capability", "#start"):
+        for href in ("#fit", "#calculator", "#start"):
             self.assertIn(f'href="{href}"', web.LANDING_HTML)
         self.assertIn("https://searchagentsky.com/?ref=unchained-nav", web.LANDING_HTML)
         self.assertIn("https://searchagentsky.com/?ref=unchained-footer", web.LANDING_HTML)
-        self.assertIn('data-analytics-cta="landing_research_nav"', web.LANDING_HTML)
-        self.assertIn('data-analytics-cta="landing_research_footer"', web.LANDING_HTML)
-        self.assertIn("utm_campaign=brand_handoff", web.LANDING_HTML)
-        self.assertIn("/demo?ref=unchained-home&task=research", web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_public_search_nav"', web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_public_search_footer"', web.LANDING_HTML)
+        self.assertIn("utm_campaign=landing_value_prop_v1", web.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_connect_chrome_start"', web.LANDING_HTML)
+        self.assertIn("cta.dataset.analyticsCta='landing_preview_'+s.id", web.LANDING_HTML)
+        self.assertNotIn("landing_job_", web.LANDING_HTML)
+
+    def test_landing_explains_when_the_connector_is_worth_installing(self):
+        self.assertIn("One system, two jobs", web.LANDING_HTML)
+        self.assertIn("Do not install anything for a <em>public-web answer.</em>", web.LANDING_HTML)
+        self.assertIn("when the task needs <em>a signed-in browser and actions.</em>", web.LANDING_HTML)
+        self.assertIn("No Claude, Codex, or OpenCode CLI required for the guided trial", web.LANDING_HTML)
+        self.assertIn("it does not attach to the Chrome profile you are currently browsing in", web.LANDING_HTML)
+        self.assertIn("dedicated Unchained Chrome workspace whose files stay on this computer", web.LANDING_HTML)
+        self.assertIn("may be sent to Unchained and the selected AI provider", web.LANDING_HTML)
+        self.assertIn("Quit the local agent to stop browser automation", web.LANDING_HTML)
+        self.assertIn("Start read-only", web.LANDING_HTML)
+        self.assertNotIn("Chrome profile you already use", web.LANDING_HTML)
+        self.assertNotIn("saved tabs", web.LANDING_HTML)
+        self.assertNotIn("$200/mo above ask", web.LANDING_HTML)
 
     def test_landing_developer_navigation_exposes_lightweight_routes(self):
         self.assertIn(
@@ -453,22 +475,34 @@ class TestWebTemplateContracts(unittest.TestCase):
             return response
 
         response = asyncio.run(_render({"ui": "v4"}, {"ui": "v3"}))
-        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", response.text)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            response.text,
+        )
         self.assertIn("ui", response.cookies)
         self.assertEqual(response.cookies["ui"]["max-age"], "0")
 
         default_response = asyncio.run(_render({"ui": "default"}, {"ui": "v2"}))
-        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", default_response.text)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            default_response.text,
+        )
         self.assertIn("ui", default_response.cookies)
         self.assertEqual(default_response.cookies["ui"]["max-age"], "0")
 
         stale_cookie_response = asyncio.run(_render({}, {"ui": "v3"}))
-        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", stale_cookie_response.text)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            stale_cookie_response.text,
+        )
         self.assertIn("ui", stale_cookie_response.cookies)
         self.assertEqual(stale_cookie_response.cookies["ui"]["max-age"], "0")
 
         unknown_query_response = asyncio.run(_render({"ui": "unknown"}, {"ui": "v3"}))
-        self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", unknown_query_response.text)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            unknown_query_response.text,
+        )
         self.assertNotIn("ui", unknown_query_response.cookies)
 
         v3_response = asyncio.run(_render({"ui": "v3"}, {}))

@@ -902,34 +902,49 @@ if (!select.options.some(option => option.value === select.value)) {
     def test_ux_contract_copy_and_demo_routes(self):
         from web_app import templates
 
-        self.assertIn("You navigate. The agent drives.", templates.LANDING_HTML)
+        self.assertIn("SearchAgentSky + Unchained", templates.LANDING_HTML)
+        self.assertIn(
+            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            templates.LANDING_HTML,
+        )
         self.assertIn("font-family:'Familjen Grotesk',system-ui,sans-serif", templates.LANDING_HTML)
         self.assertNotIn("Instrument Serif", templates.LANDING_HTML)
-        self.assertIn("Chrome profile", templates.LANDING_HTML)
-        self.assertIn("Product preview", templates.LANDING_HTML)
+        self.assertIn("dedicated Chrome workspace", templates.LANDING_HTML)
+        self.assertIn("When Unchained earns the connector", templates.LANDING_HTML)
         self.assertIn('aria-live="polite"', templates.LANDING_HTML)
         self.assertIn("prefers-reduced-motion:reduce", templates.LANDING_HTML)
-        self.assertIn("See what you can <em>hand off</em>", templates.LANDING_HTML)
+        self.assertIn(
+            "Use it when the task needs <em>a signed-in browser and actions.</em>",
+            templates.LANDING_HTML,
+        )
         self.assertIn("workflow-preview", templates.LANDING_HTML)
         self.assertIn("SCENARIOS", templates.LANDING_HTML)
-        self.assertIn("Shortlist apartments", templates.LANDING_HTML)
+        self.assertIn("Read an account dashboard", templates.LANDING_HTML)
+        self.assertIn("Prepare a portal update", templates.LANDING_HTML)
         self.assertIn("Prepared result", templates.LANDING_HTML)
         self.assertIn("decision-tree", templates.LANDING_HTML)
-        self.assertIn("Watch it work first", templates.LANDING_HTML)
-        self.assertIn("Start a guided trial", templates.LANDING_HTML)
-        self.assertIn("Recommended", templates.LANDING_HTML)
-        self.assertIn("Built for browser work", templates.LANDING_HTML)
-        self.assertIn('href="/demo" class="cta-btn">Try live demo', templates.LANDING_HTML)
-        self.assertIn('href="/trial" class="signin" id="landing-auth-link">Start free trial</a>', templates.LANDING_HTML)
-        self.assertIn("Start free trial", templates.LANDING_HTML)
-        self.assertIn("Guided bridge install", templates.LANDING_HTML)
-        self.assertIn("Work from a selected Chrome profile", templates.LANDING_HTML)
+        self.assertIn("Watch a browser task", templates.LANDING_HTML)
+        self.assertIn("Open a local browser workspace", templates.LANDING_HTML)
+        self.assertIn("When your task needs it", templates.LANDING_HTML)
+        self.assertIn("A local browser workspace for a <em>supported AI path.</em>", templates.LANDING_HTML)
+        self.assertIn("Search public sources &mdash; no install", templates.LANDING_HTML)
+        self.assertIn(
+            'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
+            templates.LANDING_HTML,
+        )
+        self.assertIn("No Claude, Codex, or OpenCode CLI required for the guided trial", templates.LANDING_HTML)
+        self.assertIn("Dedicated Unchained Chrome workspace on macOS or Windows", templates.LANDING_HTML)
+        self.assertIn("it does not attach to the Chrome profile you are currently browsing in", templates.LANDING_HTML)
+        self.assertNotIn("Chrome profile you already use", templates.LANDING_HTML)
+        self.assertNotIn("saved tabs", templates.LANDING_HTML)
         self.assertIn("rec-cta", templates.LANDING_HTML)
         self.assertIn('href="/unbrowser"', templates.LANDING_HTML)
         self.assertIn('href="/chrome-tax"', templates.LANDING_HTML)
         self.assertIn("https://searchagentsky.com/?ref=unchained-nav", templates.LANDING_HTML)
-        self.assertIn('data-analytics-cta="landing_research_nav"', templates.LANDING_HTML)
-        self.assertIn("/demo?ref=unchained-home&task=research", templates.LANDING_HTML)
+        self.assertIn('data-analytics-cta="landing_public_search_nav"', templates.LANDING_HTML)
+        self.assertIn("utm_campaign=landing_value_prop_v1", templates.LANDING_HTML)
+        self.assertIn("may be sent to Unchained and the selected AI provider", templates.LANDING_HTML)
+        self.assertNotIn("$200/mo above ask", templates.LANDING_HTML)
         self.assertNotIn("Drive my browser", templates.LANDING_HTML)
         self.assertNotIn("narrative rhythm", templates.LANDING_HTML)
         self.assertNotIn("Sign in / Sign up", templates.LANDING_HTML)
@@ -939,7 +954,12 @@ if (!select.options.some(option => option.value === select.value)) {
 
         self.assertNotIn("Signing up as: <strong>Trial</strong>", templates.TRIAL_CHAT_HTML)
         self.assertNotIn("Signing up as: <strong>Claude</strong>", templates.CLAUDE_CHAT_HTML)
-        self.assertIn("Mode: <strong>Your Chrome + free models</strong>", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Mode: <strong>Dedicated local Chrome + free models</strong>", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Open a local Chrome workspace", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Starts in its own local Chrome data directory", templates.TRIAL_CHAT_HTML)
+        self.assertIn("Sign in there only to sites your task needs", templates.TRIAL_CHAT_HTML)
+        self.assertNotIn("Uses sites where you are already signed in", templates.TRIAL_CHAT_HTML)
+        self.assertNotIn("Sites see your normal browser session", templates.TRIAL_CHAT_HTML)
         self.assertIn("Mode: <strong>Local CLI + your Chrome</strong>", templates.CLAUDE_CHAT_HTML)
         self.assertIn("Unchained Chat", templates.CLAUDE_CHAT_HTML)
         self.assertIn('role="dialog" aria-modal="true"', templates.FIRST_LOOK_PREVIEW_HTML)
@@ -954,9 +974,10 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("Claude CLI, Codex CLI, or OpenCode CLI", templates.CLAUDE_CHAT_HTML)
         self.assertIn("savedOpenCode || providerDefault", templates.CLAUDE_CHAT_HTML)
         self.assertIn(
-            "Claude CLI, Codex CLI, or OpenCode CLI should already be installed",
+            "The guided Unchained trial does not require Claude, Codex, or OpenCode CLI",
             templates.INSTALL_ONBOARD_HTML,
         )
+        self.assertIn("install and sign in to that CLI separately", templates.INSTALL_ONBOARD_HTML)
 
     def test_new_chat_transaction_storage_and_guest_failure_ordering(self):
         from web_app import templates
