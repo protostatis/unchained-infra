@@ -8542,8 +8542,8 @@ body{
 #install-modal .modal-code code{color:var(--text)}
 #install-modal .command-label{display:block;margin:0 0 6px;color:#c8cedb;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
 #install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
-#install-modal .modal-copy{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
-#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:var(--setup-soft);padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
+#install-modal .modal-copy{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:var(--setup-soft);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(233,69,96,0.36),rgba(233,69,96,0.18));border:1px solid rgba(233,69,96,0.72);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none}
 #install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
 #install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
 #install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
@@ -8773,10 +8773,10 @@ body{
       <span class="detail" id="banner-detail">The browser bridge is required for trial browsing; model status is tracked separately.</span>
     </div>
     <div class="banner-actions">
-      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" aria-hidden="true">or</span>
-      <span class="sr-only">or use the installer</span>
-      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <span class="sr-only">or use the terminal command</span>
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
       <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
@@ -8786,32 +8786,32 @@ body{
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
-      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-desc" id="install-modal-desc">Pick one: installer or terminal command.</p>
       <p class="modal-short" id="install-cli-requirement">No Claude or Codex CLI required for trial. This only connects your browser.</p>
       <div class="install-methods" aria-label="Install method choices">
         <div class="method-intro"><b>Choose one install method</b><span>Both options connect this browser for the trial. Do not run both.</span></div>
         <div class="method-grid">
-          <div class="method-card active">
+          <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Terminal command</b>
-            <span class="method-cta">Use the command below</span>
-          </div>
-          <a class="method-card" href="/install">
-            <span class="method-label">Option B</span>
             <b>Installer</b>
             <span class="method-cta">Open installer page</span>
           </a>
+          <div class="method-card">
+            <span class="method-label">Option B</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
         </div>
       </div>
       <p class="modal-short">After installing, leave the connector running and return here.</p>
       <div class="modal-code">
-        <span class="command-label">Option A command</span>
+        <span class="command-label">Option B command</span>
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
-        <button class="modal-copy modal-retry" onclick="showTrialInstallCmd()" id="retry-btn" type="button" style="display:none">Retry Command</button>
-        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
+        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
+        <button class="modal-copy modal-retry" onclick="showTrialInstallCmd()" id="retry-btn" type="button" style="display:none" data-analytics-cta="post_login_terminal_command">Retry Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
       <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
@@ -9847,12 +9847,12 @@ function updateAgentStatusUI(data) {
   updateSendAvailability(setupReady);
   updateTrialInstallGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Pick terminal command or installer. No Claude or Codex CLI required for trial.';
+  if (bannerDetail) bannerDetail.textContent = 'Pick the native installer or terminal command. No Claude or Codex CLI required for trial.';
   if (bannerCurl) {
     bannerCurl.textContent = trialInstallCommandLabel(false);
     bannerCurl.dataset.reconnect = '0';
   }
-  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerConnect) bannerConnect.textContent = 'Open native installer';
 
   if (banner) {
     if (debouncedBridge) {
@@ -10817,8 +10817,8 @@ async function showTrialInstallCmd(reconnect) {
   const copyBtn = document.getElementById('copy-btn');
   document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
   document.getElementById('install-modal-desc').textContent = reconnect
-    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this browser.' : 'Pick one: terminal command or installer to reconnect this browser.')
-    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+    ? (isWin ? 'Pick one: installer or PowerShell command to reconnect this browser.' : 'Pick one: installer or terminal command to reconnect this browser.')
+    : (isWin ? 'Pick one: installer or PowerShell command.' : 'Pick one: installer or terminal command.');
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+ and curl.';
@@ -12612,8 +12612,8 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
 #install-modal .modal-code code{color:var(--text)}
 #install-modal .command-label{display:block;margin:0 0 6px;color:#c8cedb;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
 #install-modal .modal-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
-#install-modal .modal-copy{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
-#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:#f0c4cf;padding:8px 12px;border-radius:10px;font-size:12px;text-decoration:none}
+#install-modal .modal-copy{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);color:#f0c4cf;padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
+#install-modal .modal-installer{display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(233,69,96,0.36),rgba(233,69,96,0.18));border:1px solid rgba(233,69,96,0.72);color:#fff;padding:8px 12px;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none}
 #install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
 #install-modal .modal-skip{background:transparent;border:1px solid rgba(255,255,255,0.14);color:var(--muted);padding:8px 12px;border-radius:10px;font-size:12px;cursor:pointer}
 #install-modal .modal-skip:hover{border-color:var(--accent);color:var(--text)}
@@ -12656,13 +12656,13 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
     <div class="copy">
       <span class="banner-kicker">Local setup required</span>
       <span id="banner-msg">Connect this computer to run browser tasks.</span>
-      <span class="detail" id="banner-detail">Requires Codex CLI. Pick terminal command or installer.</span>
+      <span class="detail" id="banner-detail">Requires Codex CLI. Pick the native installer or terminal command.</span>
     </div>
     <div class="banner-actions">
-      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" aria-hidden="true">or</span>
-      <span class="sr-only">or use the installer</span>
-      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <span class="sr-only">or use the terminal command</span>
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
       <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
@@ -12672,31 +12672,31 @@ _API_CHAT_CODEX_LOCAL_SETUP_REPLACEMENTS = (
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
-      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-desc" id="install-modal-desc">Pick one: installer or terminal command.</p>
       <p class="modal-short" id="install-cli-requirement">Requires Codex CLI to be installed and logged in.</p>
       <div class="install-methods" aria-label="Install method choices">
         <div class="method-intro"><b>Choose one install method</b><span>Both options install the same Unchained local agent. Do not run both.</span></div>
         <div class="method-grid">
-          <div class="method-card active">
+          <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Terminal command</b>
-            <span class="method-cta">Use the command below</span>
-          </div>
-          <a class="method-card" href="/install">
-            <span class="method-label">Option B</span>
             <b>Installer</b>
             <span class="method-cta">Open installer page</span>
           </a>
+          <div class="method-card">
+            <span class="method-label">Option B</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
         </div>
       </div>
       <p class="modal-short">After installing, leave the agent running and return here.</p>
       <div class="modal-code">
-        <span class="command-label">Option A command</span>
+        <span class="command-label">Option B command</span>
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
-        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
+        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
       <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
@@ -12891,8 +12891,8 @@ function updateAgentStatusUI(data) {
   updateSendAvailability(setupReady);
   updateLocalCliGuidance();
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
-  if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the native installer or terminal command.';
+  if (bannerConnect) bannerConnect.textContent = 'Open native installer';
   if (bannerCurl) {
     bannerCurl.textContent = localInstallCommandLabel(false);
     bannerCurl.dataset.reconnect = '0';
@@ -12927,7 +12927,7 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
-    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+    if (bannerConnect) bannerConnect.textContent = 'Open native installer';
     if (bannerCurl) {
       bannerCurl.textContent = localInstallCommandLabel(true);
       bannerCurl.dataset.reconnect = '1';
@@ -13012,8 +13012,8 @@ function updateAgentStatusUI(data) {
   updateLocalCliGuidance();
   document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
   document.getElementById('install-modal-desc').textContent = reconnect
-    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this computer.' : 'Pick one: terminal command or installer to reconnect this computer.')
-    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+    ? (isWin ? 'Pick one: installer or PowerShell command to reconnect this computer.' : 'Pick one: installer or terminal command to reconnect this computer.')
+    : (isWin ? 'Pick one: installer or PowerShell command.' : 'Pick one: installer or terminal command.');
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
@@ -15526,12 +15526,13 @@ body{
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  background:rgba(255,255,255,0.035);
-  border:1px solid var(--line);
-  color:#d7deea;
+  background:linear-gradient(135deg,rgba(255,107,74,0.36),rgba(255,107,74,0.18));
+  border:1px solid rgba(255,107,74,0.72);
+  color:#fff;
   padding:8px 12px;
   border-radius:10px;
   font-size:12px;
+  font-weight:700;
   text-decoration:none;
 }
 #install-modal .modal-installer:hover{border-color:var(--accent);color:#fff}
@@ -15707,10 +15708,10 @@ body{
       <span class="detail" id="banner-detail">Status has two parts: Browser bridge and chat agent are tracked separately.</span>
     </div>
     <div class="banner-actions">
-      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="primary">Get terminal command</a>
+      <a href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" id="banner-connect" class="primary" data-analytics-cta="post_login_native_installer">Open native installer</a>
       <span class="method-or" id="banner-method-or" aria-hidden="true">or</span>
-      <span class="sr-only" id="banner-installer-label">or use the installer</span>
-      <a href="/install" id="banner-connect" class="secondary">Download Agent Installer</a>
+      <span class="sr-only" id="banner-installer-label">or use the terminal command</span>
+      <a href="#" onclick="showBannerInstall();return false" id="banner-curl" class="secondary" data-analytics-cta="post_login_terminal_command">Get terminal command</a>
       <button type="button" id="banner-agent-view" class="agent-view-launch" style="display:none" aria-expanded="false" onclick="openAgentView()">Show Agent View</button>
     </div>
   </div>
@@ -15720,31 +15721,31 @@ body{
     <div class="modal-card">
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
-      <p class="modal-desc" id="install-modal-desc">Pick one: terminal command or installer.</p>
+      <p class="modal-desc" id="install-modal-desc">Pick one: installer or terminal command.</p>
       <p class="modal-short" id="install-cli-requirement">Requires Claude CLI to be installed and logged in.</p>
       <div class="install-methods" aria-label="Install method choices">
         <div class="method-intro"><b>Choose one install method</b><span>Both options install the same Unchained local agent. Do not run both.</span></div>
         <div class="method-grid">
-          <div class="method-card active">
+          <a class="method-card active" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">
             <span class="method-label">Option A</span>
-            <b>Terminal command</b>
-            <span class="method-cta">Use the command below</span>
-          </div>
-          <a class="method-card" href="/install">
-            <span class="method-label">Option B</span>
             <b>Installer</b>
             <span class="method-cta">Open installer page</span>
           </a>
+          <div class="method-card">
+            <span class="method-label">Option B</span>
+            <b>Terminal command</b>
+            <span class="method-cta">Use the command below</span>
+          </div>
         </div>
       </div>
       <p class="modal-short">After installing, leave the agent running and return here.</p>
       <div class="modal-code">
-        <span class="command-label">Option A command</span>
+        <span class="command-label">Option B command</span>
         <code id="install-cmd">Loading command...</code>
       </div>
       <div class="modal-actions">
-        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn">Copy Command</button>
-        <a class="modal-installer" href="/install">Download Agent Installer</a>
+        <a class="modal-installer" href="/install?ref=post_login_install&amp;utm_source=unchainedsky&amp;utm_medium=product&amp;utm_campaign=approved_unactivated_post_login_v1" data-analytics-cta="post_login_native_installer">Open native installer</a>
+        <button class="modal-copy" onclick="copyInstallCmd()" id="copy-btn" data-analytics-cta="post_login_terminal_command">Copy Command</button>
         <button class="modal-skip" onclick="closeInstallModal()" type="button">Skip for now</button>
       </div>
       <p class="modal-note" id="install-modal-note">Links expire in 15 minutes. Requires Python 3.8+ and curl.</p>
@@ -16433,8 +16434,8 @@ function updateAgentStatusUI(data) {
   updateLocalCliGuidance();
   if (bannerKicker) bannerKicker.textContent = 'Local setup required';
   if (bannerMsg) bannerMsg.textContent = 'Connect this computer to run browser tasks.';
-  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick terminal command or installer.';
-  if (bannerConnect) { bannerConnect.textContent = 'Download Agent Installer'; bannerConnect.style.display = ''; }
+  if (bannerDetail) bannerDetail.textContent = 'Requires ' + cliName + '. Pick the native installer or terminal command.';
+  if (bannerConnect) { bannerConnect.textContent = 'Open native installer'; bannerConnect.style.display = ''; }
   if (bannerCurl) {
     bannerCurl.textContent = localInstallCommandLabel(false);
     bannerCurl.style.display = '';
@@ -16504,7 +16505,7 @@ function updateAgentStatusUI(data) {
     updateStatusPill(chatEl, 'agent mismatch', 'warn');
     if (bannerMsg) bannerMsg.textContent = 'A different local chat agent is connected for this account.';
     if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should control the active chat.';
-    if (bannerConnect) bannerConnect.textContent = 'Download Agent Installer';
+    if (bannerConnect) bannerConnect.textContent = 'Open native installer';
     if (bannerCurl) {
       bannerCurl.textContent = localInstallCommandLabel(true);
       bannerCurl.dataset.reconnect = '1';
@@ -17383,8 +17384,8 @@ async function showInstallCmd(reconnect) {
   updateLocalCliGuidance();
   document.getElementById('install-modal-title').textContent = reconnect ? 'Reconnect this computer' : 'Connect this computer';
   document.getElementById('install-modal-desc').textContent = reconnect
-    ? (isWin ? 'Pick one: PowerShell command or installer to reconnect this computer.' : 'Pick one: terminal command or installer to reconnect this computer.')
-    : (isWin ? 'Pick one: PowerShell command or installer.' : 'Pick one: terminal command or installer.');
+    ? (isWin ? 'Pick one: installer or PowerShell command to reconnect this computer.' : 'Pick one: installer or terminal command to reconnect this computer.')
+    : (isWin ? 'Pick one: installer or PowerShell command.' : 'Pick one: installer or terminal command.');
   document.getElementById('install-modal-note').textContent = isWin
     ? 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+.'
     : 'The command is scoped to this signed-in account and expires in 15 minutes. Requires Python 3.8+ and curl.';
@@ -17684,6 +17685,18 @@ body{
   border:1px solid rgba(255,107,74,0.5)!important;
   border-radius:999px!important;
   background:rgba(255,107,74,0.2)!important;
+}
+#download-banner a.primary{
+  color:#fff!important;
+  border-color:rgba(255,107,74,0.82)!important;
+  background:linear-gradient(135deg,rgba(255,107,74,0.58),rgba(222,62,89,0.38))!important;
+  font-weight:700!important;
+}
+#download-banner a.secondary{
+  color:#cbd5e1!important;
+  border-color:rgba(255,255,255,0.16)!important;
+  background:rgba(255,255,255,0.035)!important;
+  font-weight:600!important;
 }
 #download-banner a:hover{
   background:rgba(255,107,74,0.28)!important;
