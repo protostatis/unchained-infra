@@ -287,15 +287,25 @@ class Auth:
         return {"user_id": row[0], "api_key": row[1]}
 
     def consume_install_token_for_bootstrap(self, token: str) -> dict | None:
-        """Atomically consume a token and stamp its account's durable activation."""
+        """Atomically consume a valid token and stamp end-user activation.
+
+        Legacy/service API keys may intentionally exist without a ``users`` row.
+        They can bootstrap while active, but have no lifecycle state to update.
+        """
         now = time.time()
         with self._conn() as conn:
             row = conn.execute(
                 "UPDATE install_tokens SET used = 1 "
                 "WHERE token = ? AND used = 0 AND expires_at > ? "
-                "AND EXISTS ("
+                "AND ("
+                "EXISTS ("
                 "SELECT 1 FROM users WHERE users.user_id = install_tokens.user_id"
-                ") RETURNING user_id, api_key",
+                ") OR EXISTS ("
+                "SELECT 1 FROM api_keys "
+                "WHERE api_keys.key = install_tokens.api_key "
+                "AND api_keys.user_id = install_tokens.user_id "
+                "AND api_keys.active = 1"
+                ")) RETURNING user_id, api_key",
                 (token, now),
             ).fetchone()
             if row is None:

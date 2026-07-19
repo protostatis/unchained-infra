@@ -100,6 +100,23 @@ class TestActivationLifecycleState(unittest.TestCase):
         orphan = self.auth.create_install_token("missing-user", "orphan-key")
         self.assertIsNone(self.auth.consume_install_token_for_bootstrap(orphan))
 
+    def test_active_service_key_without_user_can_bootstrap_without_activation_marker(self):
+        service_user_id = "installer-ci-service"
+        service_key = self.auth.create_key(service_user_id)
+        token = self.auth.create_install_token(service_user_id, service_key)
+
+        self.assertEqual(
+            self.auth.consume_install_token_for_bootstrap(token),
+            {"user_id": service_user_id, "api_key": service_key},
+        )
+        self.assertIsNone(self.auth.get_install_activation(service_user_id))
+        self.assertIsNone(self.auth.consume_install_token_for_bootstrap(token))
+
+        revoked_key = self.auth.create_key(service_user_id)
+        revoked_token = self.auth.create_install_token(service_user_id, revoked_key)
+        self.auth.revoke_key(revoked_key)
+        self.assertIsNone(self.auth.consume_install_token_for_bootstrap(revoked_token))
+
     def test_distinct_bootstraps_keep_first_timestamp_and_increment_count(self):
         user = self._user()
         first = self.auth.create_install_token(user["user_id"], user["api_key"])
