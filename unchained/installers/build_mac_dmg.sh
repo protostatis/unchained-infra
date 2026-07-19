@@ -6,6 +6,7 @@ UNCHAINED_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DMG="${1:-$SCRIPT_DIR/unchained-installer-mac.dmg}"
 VOL_NAME="${UNCHAINED_DMG_VOLUME_NAME:-Unchained Installer}"
 APP_NAME="Unchained Installer.app"
+APP_CERT="${UNCHAINED_APP_CERT:-}"
 
 if ! command -v hdiutil >/dev/null 2>&1; then
   echo "ERROR: hdiutil is required (macOS)." >&2
@@ -143,6 +144,13 @@ README
 
 cp -R "$WORKDIR/$APP_NAME" "$DMG_ROOT/$APP_NAME"
 ln -s /Applications "$DMG_ROOT/Applications"
+
+if [[ -n "$APP_CERT" ]]; then
+  codesign --force --timestamp --options runtime \
+    --sign "$APP_CERT" \
+    "$DMG_ROOT/$APP_NAME"
+  codesign --verify --deep --strict --verbose=4 "$DMG_ROOT/$APP_NAME"
+fi
 
 mkdir -p "$(dirname "$OUT_DMG")"
 rm -f "$OUT_DMG"

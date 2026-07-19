@@ -68,16 +68,21 @@ echo "==> Notarizing PKG..."
 xcrun notarytool submit "$FINAL_PKG" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$FINAL_PKG"
 xcrun stapler validate "$FINAL_PKG"
-spctl -a -vvv -t install "$FINAL_PKG" || true
+spctl -a -vvv -t install "$FINAL_PKG"
 
 if [[ "$BUILD_DMG" == "1" ]]; then
   echo "==> Building signed DMG payload app..."
   UNCHAINED_APP_CERT="$APP_CERT" "$SCRIPT_DIR/build_mac_dmg.sh" "$FINAL_DMG"
 
+  echo "==> Signing DMG..."
+  codesign --force --timestamp --sign "$APP_CERT" "$FINAL_DMG"
+  codesign --verify --verbose=4 "$FINAL_DMG"
+
   echo "==> Notarizing DMG..."
   xcrun notarytool submit "$FINAL_DMG" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$FINAL_DMG"
   xcrun stapler validate "$FINAL_DMG"
+  spctl -a -vvv -t open --context context:primary-signature "$FINAL_DMG"
 fi
 
 echo ""
