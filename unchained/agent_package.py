@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.117"  # fix: emit tool_result for structured results (WebSearch) so UI action step stops freezing
+VERSION = "0.3.118"  # fix: reject stale provision-slot metadata before routing browser commands
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
