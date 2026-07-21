@@ -29,6 +29,7 @@ jobs:
           python test_opencode_agent.py
           python test_chat_event_transport.py
           python test_sse_write_guard.py
+          python test_search_console_verification.py
 
       - name: Run JS chat recovery test
         run: |
