@@ -22,6 +22,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/robots.txt", "handle_robots_txt"),
     ("GET", "/sitemap.xml", "handle_sitemap_xml"),
     ("GET", "/google83c650022d8db556.html", "handle_google_verification"),
+    (
+        "GET",
+        "/google333e7a6c98af8946.html",
+        "handle_google_verification_current",
+    ),
     ("GET", "/", "handle_index"),
     ("GET", "/unbrowser", "web_app.handlers.pages:handle_unbrowser_page"),
     ("GET", "/go/unbrowser-connect", "web_app.handlers.pages:handle_unbrowser_outbound"),

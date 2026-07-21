@@ -1692,6 +1692,16 @@ async def handle_google_verification(request: web.Request) -> web.Response:
     )
 
 
+async def handle_google_verification_current(request: web.Request) -> web.Response:
+    """Serve the current Google Search Console HTML-file verification."""
+    del request
+    return web.Response(
+        text="google-site-verification: google333e7a6c98af8946.html",
+        content_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 async def handle_index(request: web.Request) -> web.Response:
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
