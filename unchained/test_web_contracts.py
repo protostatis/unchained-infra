@@ -704,6 +704,16 @@ class TestWebTemplateContracts(unittest.TestCase):
         dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
         self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
 
+    def test_hosted_runtime_modules_are_packaged_for_deploy(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        dockerfile = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+        runtime_context = (
+            repo_root / "deploy" / "runtime_context_files.sh"
+        ).read_text(encoding="utf-8")
+        for module in ("credit.py", "hosted_conversations.py"):
+            self.assertIn(f"COPY unchained/{module} .", dockerfile)
+            self.assertIn(f'"{module}"', runtime_context)
+
     def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
         from web_app.handlers.unbrowser_demo import SCENARIOS
 
