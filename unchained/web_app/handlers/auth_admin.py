@@ -1706,6 +1706,36 @@ async def handle_auth_me(request: web.Request) -> web.Response:
         openrouter_usage = {}
         if user and (user_type == "trial" or status == "pending"):
             openrouter_usage = core._openrouter_budget_state_for_user(user["user_id"])
+
+        # Credit state (backward-compatible, added for trial users)
+        credit_state = {}
+        if user:
+            try:
+                from credit import CreditLedger
+                ledger = CreditLedger(db_path=core._auth.db_path)
+                account = ledger.ensure_account(user["user_id"])
+                # Grant initial trial credit from existing OpenRouter budget
+                if user_type == "trial" or status == "pending":
+                    budget_state = core._openrouter_budget_state_for_user(user["user_id"])
+                    ledger.ensure_trial_grant_from_openrouter_budget(
+                        user["user_id"],
+                        current_spend_usd=budget_state.get("spent_usd", 0),
+                        budget_usd=budget_state.get("budget_usd", 0),
+                    )
+                held = ledger.held_reservation_total(account["account_id"])
+                available = account["balance_micro_usd"] - held
+                credit_state = {
+                    "balance_micro_usd": account["balance_micro_usd"],
+                    "balance_usd": account["balance_usd"],
+                    "held_micro_usd": held,
+                    "available_micro_usd": max(0, available),
+                    "available_usd": round(max(0, available) / 1_000_000, 6),
+                    "total_granted_micro_usd": account["total_granted_micro_usd"],
+                    "total_spent_micro_usd": account["total_spent_micro_usd"],
+                }
+            except Exception:
+                pass
+
         return web.json_response(
             {
                 "authenticated": True,
@@ -1720,6 +1750,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                 "demo_prompt_count": core._auth.get_demo_count(email) if email else 0,
                 "demo_unlimited": core._is_demo_unlimited(user) if user else False,
                 "openrouter_usage": openrouter_usage,
+                "credit": credit_state,
                 "is_admin": email.lower() in core.ADMIN_EMAILS,
                 "name": user.get("name", "") if user else "",
                 "picture": user.get("picture", "") if user else "",
@@ -2239,3 +2270,134 @@ async def handle_scheduler_agent_delete(request: web.Request) -> web.Response:
         extra={"ok": True, "deleted_id": job_id},
     )
     return web.json_response(payload)
+
+
+# ---------------------------------------------------------------------------
+# User-facing credit status/history
+# ---------------------------------------------------------------------------
+
+
+async def handle_credit_status(request: web.Request) -> web.Response:
+    """GET /web/credit/status — return authenticated user's credit account state."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    user_id = auth_info.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "No user ID"}, status=400)
+
+    from credit import CreditLedger
+
+    ledger = CreditLedger(db_path=core._auth.db_path)
+    account = ledger.ensure_account(user_id)
+    held = ledger.held_reservation_total(account["account_id"])
+    available = account["balance_micro_usd"] - held
+
+    return web.json_response({
+        "user_id": user_id,
+        "account_id": account["account_id"],
+        "balance_micro_usd": account["balance_micro_usd"],
+        "balance_usd": account["balance_usd"],
+        "held_micro_usd": held,
+        "held_usd": round(held / 1_000_000, 6),
+        "available_micro_usd": max(0, available),
+        "available_usd": round(max(0, available) / 1_000_000, 6),
+        "total_granted_micro_usd": account["total_granted_micro_usd"],
+        "total_granted_usd": account["total_granted_usd"],
+        "total_spent_micro_usd": account["total_spent_micro_usd"],
+        "total_spent_usd": account["total_spent_usd"],
+    })
+
+
+async def handle_credit_history(request: web.Request) -> web.Response:
+    """GET /web/credit/status/history?limit=50 — return authenticated user's ledger."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    user_id = auth_info.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "No user ID"}, status=400)
+
+    try:
+        limit = min(200, max(1, int(request.query.get("limit", "50"))))
+    except ValueError:
+        limit = 50
+
+    from credit import CreditLedger
+
+    ledger = CreditLedger(db_path=core._auth.db_path)
+    entries = ledger.get_ledger_for_user(user_id, limit=limit)
+    runs = ledger.get_runs_for_user(user_id, limit=limit)
+
+    return web.json_response({
+        "user_id": user_id,
+        "ledger_entries": entries,
+        "runs": runs,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Admin credit grant
+# ---------------------------------------------------------------------------
+
+
+async def handle_admin_credit_grant(request: web.Request) -> web.Response:
+    """POST /admin/credit/grant — admin grants credit to a user.
+
+    JSON body:
+        {"user_id": "u-...", "amount_usd": 1.0, "reason": "..."}
+    """
+    core = _core()
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    user_id = str(body.get("user_id", "")).strip()
+    try:
+        amount_usd = float(body.get("amount_usd", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "amount_usd must be a number"}, status=400)
+
+    reason = str(body.get("reason", "admin_grant")).strip()
+
+    if not user_id:
+        return web.json_response({"error": "user_id required"}, status=400)
+    if amount_usd <= 0:
+        return web.json_response({"error": "amount_usd must be positive"}, status=400)
+
+    from credit import CreditLedger, _usd_to_micro
+
+    ledger = CreditLedger(db_path=core._auth.db_path)
+    amount_micro = _usd_to_micro(amount_usd)
+
+    import uuid
+    idem_key = f"admin-grant-{user_id}-{uuid.uuid4().hex[:12]}"
+
+    admin_auth = core._authenticate(request)
+    admin_email = admin_auth.get("email", "") if admin_auth else ""
+
+    try:
+        result = ledger.grant(
+            user_id=user_id,
+            amount_micro_usd=amount_micro,
+            idempotency_key=idem_key,
+            metadata={"reason": reason, "admin_email": admin_email},
+        )
+        return web.json_response({
+            "ok": True,
+            "granted_micro_usd": amount_micro,
+            "granted_usd": amount_usd,
+            "new_balance_micro_usd": result.get("balance_micro_usd"),
+            "new_balance_usd": result.get("balance_usd"),
+            "idempotency_key": idem_key,
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)

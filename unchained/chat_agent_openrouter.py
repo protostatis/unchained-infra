@@ -36,6 +36,7 @@ import re
 import signal
 import sys
 import time
+import uuid as _uuid_module
 from dataclasses import dataclass, field
 
 import httpx
@@ -115,6 +116,12 @@ _task_req_id: ContextVar[str] = ContextVar("chat_agent_openrouter_task_req_id", 
 LOCAL_SESSION_ID = "local-openrouter"
 LOCAL_TOOL_PREVIEW_CHARS = 240
 LOCAL_CONTEXT_KEEP_TAIL = 10
+
+
+def _uuid_hex() -> str:
+    """Return a random hex UUID string."""
+    return _uuid_module.uuid4().hex
+
 
 # ---------------------------------------------------------------------------
 # System prompt — built from CLAUDE.md + function-call tool reference
@@ -661,6 +668,114 @@ class TrialAgent:
         # session_id → active asyncio Task (for cancel support)
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.active_req_ids: dict[str, str] = {}
+        # Per-session billing run IDs (set from ws_msg["billing_run_id"])
+        self._session_billing_runs: dict[str, str] = {}
+
+    @property
+    def _credit_base_url(self) -> str:
+        """Convert the WebSocket server URL to an HTTPS URL for credit API calls."""
+        base = self.server
+        if base.startswith("wss://"):
+            base = "https://" + base[6:]
+        elif base.startswith("ws://"):
+            base = "http://" + base[5:]
+        return base.rstrip("/")
+
+    @staticmethod
+    def _credit_shared_token() -> str:
+        """Get the shared token for service-authenticated credit endpoints."""
+        return (
+            os.environ.get("RELAY_SHARED_TOKEN", "").strip()
+            or os.environ.get("PRIVATE_CORE_TOKEN", "").strip()
+        )
+
+    async def _credit_reserve(
+        self,
+        client: httpx.AsyncClient,
+        run_id: str,
+        model: str,
+        idempotency_key: str,
+    ) -> dict | None:
+        """Call the credit reserve endpoint. Returns reservation dict or None."""
+        token = self._credit_shared_token()
+        if not token or not run_id:
+            return None
+        url = f"{self._credit_base_url}/web/credit/reserve"
+        body = {
+            "run_id": run_id,
+            "model": model,
+            "idempotency_key": idempotency_key,
+        }
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                return resp.json()
+            return None
+        except Exception:
+            return None
+
+    async def _credit_settle(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+        actual_cost_micro_usd: int,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+    ) -> dict | None:
+        """Call the credit settle endpoint. Returns settlement dict or None."""
+        token = self._credit_shared_token()
+        if not token or not call_id:
+            return None
+        url = f"{self._credit_base_url}/web/credit/settle"
+        body = {
+            "call_id": call_id,
+            "actual_cost_micro_usd": actual_cost_micro_usd,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                return resp.json()
+            return None
+        except Exception:
+            return None
+
+    async def _credit_release(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+    ) -> dict | None:
+        """Call the credit release endpoint. Returns release dict or None."""
+        token = self._credit_shared_token()
+        if not token or not call_id:
+            return None
+        url = f"{self._credit_base_url}/web/credit/release"
+        body = {"call_id": call_id}
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                return resp.json()
+            return None
+        except Exception:
+            return None
 
     def _session_path(self, session_id: str) -> str:
         os.makedirs(SESSION_DIR, exist_ok=True)
@@ -889,6 +1004,10 @@ class TrialAgent:
                         continue
                     if msg.get("type") == "user_message":
                         sid = msg.get("session_id", "")
+                        # Store billing run ID for credit accounting
+                        billing_rid = str(msg.get("billing_run_id", "")).strip()
+                        if billing_rid:
+                            self._session_billing_runs[sid] = billing_rid
                         req_id = ""
                         # Cancel any existing task for this session before starting a new one
                         if sid:
@@ -1483,8 +1602,9 @@ class TrialAgent:
         user_id: str = "",
         reasoning: bool = True,
     ) -> dict:
+        effective_model = model or self.model
         body: dict = {
-            "model": model or self.model,
+            "model": effective_model,
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.2,
@@ -1496,6 +1616,97 @@ class TrialAgent:
         else:
             body["tools"] = TOOLS
             body["tool_choice"] = "auto"
+
+        # --- Credit reserve before API call ---
+        billing_run_id = self._session_billing_runs.get(session_id, "")
+        token = self._credit_shared_token()
+        credit_client: httpx.AsyncClient | None = None
+        reserved_call_id: str | None = None
+        if billing_run_id and token:
+            credit_client = httpx.AsyncClient()
+            idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"
+            try:
+                reservation = await self._credit_reserve(
+                    credit_client, billing_run_id, effective_model, idem_key
+                )
+                if reservation and not reservation.get("already_reserved"):
+                    reserved_call_id = reservation.get("call_id", "")
+            except Exception:
+                reserved_call_id = None
+
+        try:
+            data = await self._do_openrouter_call(client, body, effective_model, session_id)
+            # --- Credit settle after success ---
+            if reserved_call_id and credit_client:
+                usage_data = _extract_openrouter_usage(data)
+                cost_usd = usage_data.get("cost_usd", 0)
+                actual_cost_micro = max(1, round(cost_usd * 1_000_000)) if cost_usd > 0 else 1
+                try:
+                    await self._credit_settle(
+                        credit_client,
+                        reserved_call_id,
+                        actual_cost_micro_usd=actual_cost_micro,
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get("completion_tokens", 0),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            # --- Credit release on failure ---
+            if reserved_call_id and credit_client:
+                try:
+                    await self._credit_release(credit_client, reserved_call_id)
+                except Exception:
+                    pass
+            raise
+        finally:
+            if credit_client:
+                try:
+                    await credit_client.aclose()
+                except Exception:
+                    pass
+
+        usage = _extract_openrouter_usage(data)
+        usage_log = (
+            f"model={body.get('model', self.model)} "
+            f"prompt_tokens={usage.get('prompt_tokens', 0)} "
+            f"completion_tokens={usage.get('completion_tokens', 0)} "
+            f"total_tokens={usage.get('total_tokens', 0)} "
+            f"cost_usd={float(usage.get('cost_usd', 0.0)):.9f} "
+            f"estimated_cost_usd={float(usage.get('estimated_cost_usd', 0.0)):.9f}"
+        )
+        if session_id:
+            print(f"[{session_id}] OpenRouter usage: {usage_log}")
+        else:
+            print(f"[openrouter] usage: {usage_log}")
+        try:
+            await self._emit_openrouter_usage_event(
+                session_id=session_id,
+                user_id=user_id,
+                model=body.get("model", self.model),
+                payload=data,
+            )
+        except Exception as e:
+            if session_id:
+                print(f"[{session_id}] Failed to emit OpenRouter usage event: {e}")
+            else:
+                print(f"[openrouter] Failed to emit usage event: {e}")
+        return data
+
+    async def _do_openrouter_call(
+        self,
+        client: httpx.AsyncClient,
+        body: dict,
+        effective_model: str,
+        session_id: str = "",
+    ) -> dict:
+        _FALLBACK_MODEL = os.environ.get(
+            "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
+            self.model,
+        ).strip() or self.model
+        _RETRY_CODES = (500, 502, 503)
+
         headers = {
             "Authorization": f"Bearer {self.openrouter_key}",
             "Content-Type": "application/json",
@@ -1505,12 +1716,7 @@ class TrialAgent:
         resp = await client.post(
             OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
         )
-        # On 429, immediately switch to fallback model — don't waste time retrying
-        # the same rate-limited model.
-        _FALLBACK_MODEL = os.environ.get(
-            "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
-            self.model,
-        ).strip() or self.model
+        # On 429, immediately switch to fallback model
         if resp.status_code == 429 and _FALLBACK_MODEL != body.get("model"):
             print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
             body["model"] = _FALLBACK_MODEL
@@ -1519,7 +1725,6 @@ class TrialAgent:
                 timeout=httpx.Timeout(10.0, read=300.0),
             )
         # Retry on 500/502/503 (transient server errors)
-        _RETRY_CODES = (500, 502, 503)
         if resp.status_code in _RETRY_CODES:
             for attempt in range(1, 4):
                 delay = 2 * attempt
@@ -1556,35 +1761,8 @@ class TrialAgent:
                 )
                 if resp.is_success:
                     data = resp.json()
-                    if resp.is_success:
-                        data = resp.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
-        usage = _extract_openrouter_usage(data)
-        usage_log = (
-            f"model={body.get('model', self.model)} "
-            f"prompt_tokens={usage.get('prompt_tokens', 0)} "
-            f"completion_tokens={usage.get('completion_tokens', 0)} "
-            f"total_tokens={usage.get('total_tokens', 0)} "
-            f"cost_usd={float(usage.get('cost_usd', 0.0)):.9f} "
-            f"estimated_cost_usd={float(usage.get('estimated_cost_usd', 0.0)):.9f}"
-        )
-        if session_id:
-            print(f"[{session_id}] OpenRouter usage: {usage_log}")
-        else:
-            print(f"[openrouter] usage: {usage_log}")
-        try:
-            await self._emit_openrouter_usage_event(
-                session_id=session_id,
-                user_id=user_id,
-                model=body.get("model", self.model),
-                payload=data,
-            )
-        except Exception as e:
-            if session_id:
-                print(f"[{session_id}] Failed to emit OpenRouter usage event: {e}")
-            else:
-                print(f"[openrouter] Failed to emit usage event: {e}")
         return data
 
     async def _execute_tool(self, agent_id: str, name: str, args: dict, tab_id: str | None = None) -> str:

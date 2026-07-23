@@ -1436,6 +1436,10 @@ def _authenticate(request: web.Request) -> dict | None:
     for session in sessions:
         user = _auth.find_user_by_email(session["email"])
         if user and user.get("api_key"):
+            status = user.get("status", "approved")
+            # Rejected accounts cannot continue using existing sessions/keys
+            if status == "rejected":
+                continue
             api_key = user["api_key"]
             key_hash = _key_hash(api_key)
             agent_id = f"claude-{key_hash}"
@@ -1443,7 +1447,7 @@ def _authenticate(request: web.Request) -> dict | None:
                 "user_id": session["user_id"], "key": api_key,
                 "agent_id": agent_id, "key_hash": key_hash,
                 "email": session["email"],
-                "status": user.get("status", "approved"),
+                "status": status,
                 "user_type": user.get("user_type", "claude"),
             }
 
@@ -1455,8 +1459,29 @@ def _authenticate(request: web.Request) -> dict | None:
         if info:
             key_hash = _key_hash(key)
             agent_id = f"claude-{key_hash}"
-            return {"user_id": info["user_id"], "key": key,
-                    "agent_id": agent_id, "key_hash": key_hash}
+            result = {"user_id": info["user_id"], "key": key,
+                      "agent_id": agent_id, "key_hash": key_hash}
+            # Hydrate email/status/user_type from the users table
+            with _auth._conn() as conn:
+                user_row = conn.execute(
+                    "SELECT email, name, picture, status, user_type FROM users WHERE api_key = ?",
+                    (key,),
+                ).fetchone()
+            if user_row:
+                status = user_row[3] or "approved"
+                # Rejected accounts cannot continue using existing keys
+                if status == "rejected":
+                    return None
+                result["email"] = user_row[0] or ""
+                result["name"] = user_row[1] or ""
+                result["picture"] = user_row[2] or ""
+                result["status"] = status
+                result["user_type"] = user_row[4] or "claude"
+            else:
+                # Fallback: service accounts may have keys without a users row
+                result["status"] = "approved"
+                result["user_type"] = "claude"
+            return result
 
     return None
 

@@ -1226,6 +1226,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     openrouter_forced_from_model = ""
     openrouter_forced_notice = ""
     openrouter_budget_state: dict | None = None
+    billing_run_id = ""  # opaque billing run ID for trial agent
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     profile_selection_present = "profile_path" in body
 
@@ -1388,6 +1389,17 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         user_id = auth_info.get("user_id", "")
         requested_model = (model or core._OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
         model = requested_model
+        # --- Model allowlist enforcement ---
+        from credit import is_hosted_model_allowed as _credit_is_hosted_model_allowed
+        if not _credit_is_hosted_model_allowed(model):
+            return reject_first_look(
+                web.json_response(
+                    {"error": f"Model '{model}' is not in the hosted trial allowlist. "
+                              "Please select an approved trial model."},
+                    status=400,
+                ),
+                "model_not_allowed",
+            )
         if user_id:
             openrouter_budget_state = core._openrouter_budget_state_for_user(user_id)
             if openrouter_budget_state.get("capped") and not core._is_openrouter_post_cap_allowed_model(
@@ -1403,6 +1415,37 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     "Switched to a free model for continued access. "
                     "After the $1 cap, available models are Trinity and StepFun."
                 )
+
+            # --- Credit run creation for billing ---
+            try:
+                from credit import CreditLedger
+                credit_ledger = CreditLedger(db_path=core._auth.db_path)
+                if not getattr(core, "_credit_ledger", None):
+                    core._credit_ledger = credit_ledger
+            except Exception:
+                credit_ledger = None
+
+            if credit_ledger:
+                # Ensure trial grant from existing OpenRouter budget
+                budget_state = core._openrouter_budget_state_for_user(user_id)
+                credit_ledger.ensure_trial_grant_from_openrouter_budget(
+                    user_id,
+                    current_spend_usd=budget_state.get("spent_usd", 0),
+                    budget_usd=budget_state.get("budget_usd", 0),
+                )
+                # Create a billing run for this chat turn
+                try:
+                    billing_run = credit_ledger.create_run(
+                        user_id=user_id,
+                        model=model,
+                        idempotency_key=f"chat-turn-{req_id}",
+                    )
+                    billing_run_id = billing_run.get("run_id", "")
+                except Exception:
+                    billing_run_id = ""
+            else:
+                billing_run_id = ""
+
         ws = core._chat_agents.get(core.TRIAL_AGENT_ID)
         if ws is None or ws.closed:
             return reject_first_look(
@@ -1653,6 +1696,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             ws_msg["model"] = model
         if is_openrouter and auth_info.get("user_id"):
             ws_msg["user_id"] = auth_info["user_id"]
+        if billing_run_id:
+            ws_msg["billing_run_id"] = billing_run_id
         if is_gemini:
             core._gemini_last_active[chat_agent_id] = time.time()
         elif is_claude_sdk:
