@@ -673,7 +673,12 @@ class TrialAgent:
 
     @property
     def _credit_base_url(self) -> str:
-        """Convert the WebSocket server URL to an HTTPS URL for credit API calls."""
+        """Convert the WebSocket server URL to an HTTPS URL for credit API calls.
+
+        When UNCHAINED_SERVER is ``ws://web:8080`` (Docker internal network),
+        this becomes ``http://web:8080`` — the internal web service is always
+        reachable without TLS inside the Docker network.
+        """
         base = self.server
         if base.startswith("wss://"):
             base = "https://" + base[6:]
@@ -682,12 +687,16 @@ class TrialAgent:
         return base.rstrip("/")
 
     @staticmethod
-    def _credit_shared_token() -> str:
-        """Get the shared token for service-authenticated credit endpoints."""
-        return (
-            os.environ.get("RELAY_SHARED_TOKEN", "").strip()
-            or os.environ.get("PRIVATE_CORE_TOKEN", "").strip()
-        )
+    def _credit_service_token() -> str:
+        """Narrowly-scoped credit service token.
+
+        Uses CREDIT_SERVICE_TOKEN env var. Falls back to TRIAL_AGENT_KEY.
+        Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
+        """
+        token = os.environ.get("CREDIT_SERVICE_TOKEN", "").strip()
+        if token:
+            return token
+        return os.environ.get("TRIAL_AGENT_KEY", "").strip()
 
     async def _credit_reserve(
         self,
@@ -697,7 +706,7 @@ class TrialAgent:
         idempotency_key: str,
     ) -> dict | None:
         """Call the credit reserve endpoint. Returns reservation dict or None."""
-        token = self._credit_shared_token()
+        token = self._credit_service_token()
         if not token or not run_id:
             return None
         url = f"{self._credit_base_url}/web/credit/reserve"
@@ -729,7 +738,7 @@ class TrialAgent:
         total_tokens: int = 0,
     ) -> dict | None:
         """Call the credit settle endpoint. Returns settlement dict or None."""
-        token = self._credit_shared_token()
+        token = self._credit_service_token()
         if not token or not call_id:
             return None
         url = f"{self._credit_base_url}/web/credit/settle"
@@ -759,7 +768,7 @@ class TrialAgent:
         call_id: str,
     ) -> dict | None:
         """Call the credit release endpoint. Returns release dict or None."""
-        token = self._credit_shared_token()
+        token = self._credit_service_token()
         if not token or not call_id:
             return None
         url = f"{self._credit_base_url}/web/credit/release"
@@ -1619,7 +1628,7 @@ class TrialAgent:
 
         # --- Credit reserve before API call ---
         billing_run_id = self._session_billing_runs.get(session_id, "")
-        token = self._credit_shared_token()
+        token = self._credit_service_token()
         credit_client: httpx.AsyncClient | None = None
         reserved_call_id: str | None = None
         if billing_run_id and token:

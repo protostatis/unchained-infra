@@ -23,6 +23,27 @@ from web_app.core import get_core as _core
 from web_state import ChatTurnState, profile_session_caller_tag, profile_session_guard
 
 
+def _finish_credit_run(core, session_id: str, status: str = "completed") -> None:
+    """Finish a billing run for this session on agent-terminal events.
+
+    Only fires when the control plane has a billing_run_id stored for the
+    session. Idempotent — calling it multiple times is safe (already-finished
+    runs are skipped). Browser disconnect alone does NOT trigger this path.
+    """
+    billing = getattr(core, "_session_billing_runs", None)
+    if not isinstance(billing, dict):
+        return
+    run_id = billing.pop(session_id, "")
+    if not run_id:
+        return
+    try:
+        from credit import CreditLedger
+        ledger = CreditLedger(db_path=core._auth.db_path)
+        ledger.finish_run(run_id, status=status)
+    except Exception:
+        pass
+
+
 _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 
 # Local browser-agent turns can legitimately be quiet while the CLI is waiting
@@ -175,7 +196,8 @@ def _publish_turn_event(core, turn, event: dict) -> dict | None:
     if published is None:
         return None
     _broadcast_overlay(turn.session_id, published)
-    if published.get("type") in {"error", "cancelled"}:
+    event_type = published.get("type", "")
+    if event_type in {"error", "cancelled"}:
         # Existing consumers expect a final done marker after terminal errors
         # and cancellations. Keep it in the canonical journal so every
         # reconnecting subscriber sees the same end-of-turn sequence.
@@ -184,12 +206,18 @@ def _publish_turn_event(core, turn, event: dict) -> dict | None:
             turn,
             {"type": "done", "session_id": turn.session_id, "req_id": turn.req_id},
         )
+    if event_type in {"done", "error", "cancelled"}:
+        # Agent-terminal event — finish the billing run (once).
+        # Browser disconnect alone does NOT reach this path.
+        credit_status = "completed" if event_type == "done" else "cancelled"
+        _finish_credit_run(core, turn.session_id, status=credit_status)
     _revoke_turn_grant(core, turn)
     return published
 
 
 def _publish_turn_failure(core, turn, message: str) -> None:
     """Finish a started turn that could not be dispatched to its agent."""
+    _finish_credit_run(core, turn.session_id, status="cancelled")
     _publish_turn_event(
         core,
         turn,
@@ -1441,6 +1469,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         idempotency_key=f"chat-turn-{req_id}",
                     )
                     billing_run_id = billing_run.get("run_id", "")
+                    if billing_run_id:
+                        billing_runs = getattr(core, "_session_billing_runs", None)
+                        if billing_runs is None:
+                            billing_runs = {}
+                            core._session_billing_runs = billing_runs
+                        # Store early so terminal events can find it
+                        billing_runs[session_id] = billing_run_id
                 except Exception:
                     billing_run_id = ""
             else:
@@ -1948,6 +1983,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             _broadcast_overlay(session_id, evt)
 
             if evt.get("type") == "error":
+                _finish_credit_run(core, session_id, status="cancelled")
                 done_evt = {"type": "done", "session_id": session_id}
                 if req_id:
                     done_evt["req_id"] = req_id
@@ -1961,6 +1997,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 break
 
             if evt.get("type") == "done":
+                _finish_credit_run(core, session_id, status="completed")
                 stream_completed = True
                 break
     except (ConnectionResetError, BrokenPipeError):

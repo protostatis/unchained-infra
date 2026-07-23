@@ -2379,6 +2379,27 @@ async def _on_startup(app_: web.Application):
     _stale_tab_task = _state.stale_tab_task
     _gemini_cleanup_task = _state.gemini_cleanup_task
     _headless_watchdog_task = _state.headless_watchdog_task
+    # Credit stale-run sweep — releases held reservations for abandoned runs
+    _state.credit_sweep_task = asyncio.create_task(_credit_stale_sweep_loop())
+
+
+async def _credit_stale_sweep_loop():
+    """Periodically sweep stale credit runs, releasing held reservations."""
+    import os as _os
+    interval = max(60, int(_os.environ.get("CREDIT_SWEEP_INTERVAL_SECONDS", "600")))
+    try:
+        from credit import CreditLedger
+        ledger = CreditLedger(db_path=_auth.db_path)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                expired = ledger.sweep_stale_runs()
+                if expired:
+                    log.info("[credit] sweep: expired %d stale run(s)", expired)
+            except Exception as e:
+                log.warning("[credit] sweep error: %s", e)
+    except asyncio.CancelledError:
+        pass
 
 
 async def _on_cleanup(app_: web.Application):
@@ -2390,9 +2411,12 @@ async def _on_cleanup(app_: web.Application):
         _state.gemini_cleanup_task.cancel()
     if _state.headless_watchdog_task:
         _state.headless_watchdog_task.cancel()
+    if getattr(_state, "credit_sweep_task", None):
+        _state.credit_sweep_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
     _state.headless_watchdog_task = None
+    _state.credit_sweep_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
     _headless_watchdog_task = None

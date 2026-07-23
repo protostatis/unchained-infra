@@ -3,16 +3,14 @@
 Service-authenticated endpoints that the trial agent (chat_agent_openrouter.py)
 calls to reserve credit before OpenRouter API calls and settle/release afterward.
 
-All endpoints use the shared PRIVATE_CORE_TOKEN for service auth.
+Uses a narrowly-scoped CREDIT_SERVICE_TOKEN (fallback: TRIAL_AGENT_KEY).
+Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
 """
 
 from __future__ import annotations
 
-import hashlib
 import hmac
-import json
 import os
-import time
 
 from aiohttp import web
 
@@ -22,8 +20,8 @@ from credit import (
     InsufficientBalanceError,
     RunNotActiveError,
     _default_reservation,
-    _usd_to_micro,
     _micro_to_usd,
+    credit_service_token,
     is_hosted_model_allowed as _is_hosted_model_allowed,
 )
 
@@ -31,19 +29,15 @@ from web_app.core import get_core as _core
 
 
 def _validate_service_auth(request: web.Request) -> bool:
-    """Check that the request's Bearer token matches the shared
-    RELAY_SHARED_TOKEN or PRIVATE_CORE_TOKEN (service auth).
-    """
-    core = _core()
-    shared = (os.environ.get("RELAY_SHARED_TOKEN") or
-              os.environ.get("PRIVATE_CORE_TOKEN", "")).strip()
-    if not shared:
+    """Check that the request's Bearer token matches the credit service token."""
+    expected = credit_service_token()
+    if not expected:
         return False
     auth = request.headers.get("Authorization", "")
     if not auth.lower().startswith("bearer "):
         return False
     token = auth[7:].strip()
-    return hmac.compare_digest(token, shared)
+    return hmac.compare_digest(token, expected)
 
 
 def _json_error(status: int, message: str) -> web.Response:

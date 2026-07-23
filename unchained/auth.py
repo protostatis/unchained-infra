@@ -183,7 +183,10 @@ class Auth:
             """)
 
     def _conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
 
     def validate_key(self, key: str) -> dict | None:
         """Validate an API key. Returns ``{user_id, key}`` or ``None``."""

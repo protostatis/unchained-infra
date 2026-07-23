@@ -201,6 +201,7 @@ services:
       - GITHUB_OAUTH_TOKEN_URL=${GITHUB_OAUTH_TOKEN_URL:-}
       - GITHUB_API_BASE=${GITHUB_API_BASE:-}
       - UNCHAINED_SSE_DEBUG=${UNCHAINED_SSE_DEBUG:-0}
+      - CREDIT_SERVICE_TOKEN=${CREDIT_SERVICE_TOKEN:-${TRIAL_AGENT_KEY}}
     depends_on:
       - relay
       - private-core
@@ -256,6 +257,7 @@ services:
       - SESSION_DIR=/data/sessions
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
+      - CREDIT_SERVICE_TOKEN=${CREDIT_SERVICE_TOKEN:-${TRIAL_AGENT_KEY}}
     depends_on:
       - relay
       - web

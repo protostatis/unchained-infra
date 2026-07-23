@@ -5,29 +5,35 @@ credit accounts, immutable ledger entries, inference runs, per-call reservations
 and provider usage records.
 
 Uses SQLite WAL, foreign_keys, busy_timeout, short BEGIN IMMEDIATE transactions.
+Every mutation helper reads AND writes within the same BEGIN IMMEDIATE connection
+to avoid TOCTOU (the old pattern called ``ensure_account`` or ``get_account``
+through a separate connection leak, creating a stale-read window).
+
+Stale-run sweep: ``sweep_stale_runs(ttl_seconds)`` releases held reservations
+and marks active runs as ``exhausted`` when they exceed the TTL.
 
 Usage:
     from credit import CreditLedger
 
     ledger = CreditLedger(db_path="/path/to/auth.db")
-    account = ledger.ensure_account("u-abc123")
-    run_id = ledger.create_run(account_id=account["account_id"],
-                                user_id="u-abc123",
-                                idempotency_key="chat-turn-...")
-    call_id = ledger.reserve_call(run_id=run_id, model="google/gemini-flash-lite",
-                                  reservation_micro_usd=10, idempotency_key="or-call-...")
+    run = ledger.create_run(user_id="u-abc123",
+                            idempotency_key="chat-turn-...")
+    call = ledger.reserve_call(run_id=run["run_id"], model="google/...",
+                               idempotency_key="or-call-...")
     # ... make the API call ...
-    ledger.settle_call(call_id, actual_cost_micro_usd=7)
+    ledger.settle_call(call["call_id"], actual_cost_micro_usd=7)
+    ledger.finish_run(run["run_id"])
 """
 
 from __future__ import annotations
 
-import hashlib
+import logging
 import os
 import sqlite3
 import time
 import uuid as _uuid_module
 
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Schema constants
@@ -68,50 +74,56 @@ def _begin_immediate(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Service token for credit internal endpoints
+# ---------------------------------------------------------------------------
+
+def credit_service_token() -> str:
+    """Narrowly-scoped token for credit internal endpoints.
+
+    Uses CREDIT_SERVICE_TOKEN env var. Falls back to TRIAL_AGENT_KEY if unset.
+    Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
+    """
+    token = os.environ.get("CREDIT_SERVICE_TOKEN", "").strip()
+    if token:
+        return token
+    return os.environ.get("TRIAL_AGENT_KEY", "").strip()
+
+
+# ---------------------------------------------------------------------------
 # Model catalog / allowlist
 # ---------------------------------------------------------------------------
 
-# Hosted model catalog — models the server is willing to reserve for.
-# Each entry maps a model identifier to a conservative per-call reservation
-# in micro-USD. Unknown/unlisted models are rejected.
-# Conservative means each reservation covers at least one typical
-# provider call; actual settlement may be lower.
 HOSTED_MODEL_CATALOG: dict[str, int] = {
-    # Google Gemini family
-    "google/gemini-3.1-flash-lite": 5,  # very cheap
+    "google/gemini-3.1-flash-lite": 5,
     "google/gemini-2.5-flash-lite": 5,
     "google/gemini-2.5-flash": 10,
     "google/gemini-2.5-pro": 50,
-    "google/gemma-3-27b-it:free": 0,  # free tier
-    # Trinity / StepFun free-tier fallbacks
+    "google/gemma-3-27b-it:free": 0,
     "arcee-ai/trinity-large-preview:free": 0,
     "stepfun/step-3.5-flash:free": 0,
-    # Meta Llama
     "meta-llama/llama-3.3-70b-instruct:free": 0,
-    # DeepSeek
     "deepseek/deepseek-chat-v3-0324:free": 0,
     "deepseek/deepseek-chat:free": 0,
     "deepseek/deepseek-r1:free": 0,
 }
 
-# Default reservation when a model is in the catalog but has no explicit
-# reservation amount (free models). 1 micro-USD = $0.000001 — effectively
-# prevents zero-reservation call accounting gaps.
 _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD: int = max(
     1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "100"))
-)  # default $0.0001 per call
+)
+
+# Stale-run sweep TTL (seconds). Active runs older than this are expired.
+STALE_RUN_TTL_SECONDS: int = max(
+    60, int(os.environ.get("CREDIT_STALE_RUN_TTL_SECONDS", "7200"))
+)  # default 2 hours
 
 
 def _default_reservation(model: str) -> int:
-    """Return the conservative per-call reservation in micro-USD."""
     m = (model or "").strip()
     if not m:
         return _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD
     catalog_val = HOSTED_MODEL_CATALOG.get(m)
     if catalog_val is not None:
-        if catalog_val > 0:
-            return catalog_val
-        return 1  # free model, but non-zero to track
+        return max(1, catalog_val) if catalog_val > 0 else 1
     return _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD
 
 
@@ -121,12 +133,6 @@ def is_hosted_model_allowed(
     admin_allowlist: set[str] | None = None,
     allow_slash_models: bool = False,
 ) -> bool:
-    """Check if a model is in the hosted catalog or admin-allowed.
-
-    By default, only models in HOSTED_MODEL_CATALOG are allowed.
-    Models containing slashes that aren't in the catalog are rejected
-    unless ``allow_slash_models`` is True (admin override).
-    """
     m = (model or "").strip()
     if not m:
         return False
@@ -139,14 +145,26 @@ def is_hosted_model_allowed(
     return False
 
 
-# Default admin-allowable models (can be extended via env)
 _ADMIN_ALLOWLIST_ENV = os.environ.get("CREDIT_ADMIN_ALLOWLIST", "").strip()
 _ADMIN_ALLOWLIST: set[str] = set(
     m.strip() for m in _ADMIN_ALLOWLIST_ENV.split(",") if m.strip()
 )
-
-# Whether slash-containing models not in the catalog are allowed (off by default)
 _ALLOW_SLASH_MODELS = os.environ.get("CREDIT_ALLOW_SLASH_MODELS", "") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Exceptions (defined before CreditLedger so class-level constants can
+# reference them)
+# ---------------------------------------------------------------------------
+
+class InsufficientBalanceError(Exception):
+    """Not enough available credit (balance minus held reservations)."""
+    pass
+
+
+class RunNotActiveError(Exception):
+    """Run is not in active state."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +187,6 @@ class CreditLedger:
         with self._conn() as conn:
             _begin_immediate(conn)
 
-            # Credit accounts
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_accounts (
                     account_id TEXT PRIMARY KEY,
@@ -183,14 +200,14 @@ class CreditLedger:
                 )
             """)
 
-            # Immutable ledger entries (append-only)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_ledger (
                     entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
                     entry_type TEXT NOT NULL CHECK (
-                        entry_type IN ('grant', 'reversal', 'reservation', 'settlement', 'release', 'fee')
+                        entry_type IN ('grant', 'reversal', 'reservation',
+                                       'settlement', 'release', 'fee')
                     ),
                     amount_micro_usd INTEGER NOT NULL,
                     balance_after_micro_usd INTEGER NOT NULL,
@@ -204,7 +221,6 @@ class CreditLedger:
                 )
             """)
 
-            # Inference runs
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_runs (
                     run_id TEXT PRIMARY KEY,
@@ -226,7 +242,6 @@ class CreditLedger:
                 )
             """)
 
-            # Per-provider-call reservations
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_call_reservations (
                     call_id TEXT PRIMARY KEY,
@@ -249,7 +264,6 @@ class CreditLedger:
                 )
             """)
 
-            # Provider usage records
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_provider_usage (
                     usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,7 +283,7 @@ class CreditLedger:
                 )
             """)
 
-            # Indexes
+            # Indexes — including created_at for stale-run sweep + audit
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_credit_ledger_account "
                 "ON credit_ledger(account_id, created_at)"
@@ -283,8 +297,16 @@ class CreditLedger:
                 "ON credit_runs(user_id)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_credit_runs_created_at "
+                "ON credit_runs(created_at, status)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_credit_call_reservations_run "
                 "ON credit_call_reservations(run_id, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_credit_call_reservations_created "
+                "ON credit_call_reservations(created_at, status)"
             )
 
             conn.execute("COMMIT")
@@ -294,59 +316,59 @@ class CreditLedger:
     # ------------------------------------------------------------------
 
     def ensure_account(self, user_id: str) -> dict:
-        """Get or create a credit account for a user.
-
-        Returns {account_id, user_id, balance_micro_usd, ...}
-        """
         uid = str(user_id or "").strip()
         if not uid:
             raise ValueError("user_id required")
         now = _now_ts()
         with self._conn() as conn:
             _begin_immediate(conn)
-            row = conn.execute(
-                "SELECT account_id, user_id, balance_micro_usd, total_granted_micro_usd, "
-                "total_spent_micro_usd, created_at, updated_at "
-                "FROM credit_accounts WHERE user_id = ?",
-                (uid,),
-            ).fetchone()
-            if row:
-                conn.execute("COMMIT")
-                return {
-                    "account_id": row[0],
-                    "user_id": row[1],
-                    "balance_micro_usd": int(row[2]),
-                    "total_granted_micro_usd": int(row[3]),
-                    "total_spent_micro_usd": int(row[4]),
-                    "balance_usd": _micro_to_usd(int(row[2])),
-                    "total_granted_usd": _micro_to_usd(int(row[3])),
-                    "total_spent_usd": _micro_to_usd(int(row[4])),
-                    "created_at": row[5],
-                    "updated_at": row[6],
-                }
-            account_id = f"ca-{_uuid_hex()[:12]}"
-            conn.execute(
-                "INSERT INTO credit_accounts (account_id, user_id, balance_micro_usd, "
-                "total_granted_micro_usd, total_spent_micro_usd, created_at, updated_at) "
-                "VALUES (?, ?, 0, 0, 0, ?, ?)",
-                (account_id, uid, now, now),
-            )
-            conn.execute("COMMIT")
+            return self._ensure_account_under_lock(conn, uid, now)
+
+    @staticmethod
+    def _ensure_account_under_lock(
+        conn: sqlite3.Connection, user_id: str, now: float
+    ) -> dict:
+        """Read or create an account within an existing BEGIN IMMEDIATE context."""
+        row = conn.execute(
+            "SELECT account_id, user_id, balance_micro_usd, total_granted_micro_usd, "
+            "total_spent_micro_usd, created_at, updated_at "
+            "FROM credit_accounts WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row:
             return {
-                "account_id": account_id,
-                "user_id": uid,
-                "balance_micro_usd": 0,
-                "total_granted_micro_usd": 0,
-                "total_spent_micro_usd": 0,
-                "balance_usd": 0.0,
-                "total_granted_usd": 0.0,
-                "total_spent_usd": 0.0,
-                "created_at": now,
-                "updated_at": now,
+                "account_id": row[0],
+                "user_id": row[1],
+                "balance_micro_usd": int(row[2]),
+                "total_granted_micro_usd": int(row[3]),
+                "total_spent_micro_usd": int(row[4]),
+                "balance_usd": _micro_to_usd(int(row[2])),
+                "total_granted_usd": _micro_to_usd(int(row[3])),
+                "total_spent_usd": _micro_to_usd(int(row[4])),
+                "created_at": row[5],
+                "updated_at": row[6],
             }
+        account_id = f"ca-{_uuid_hex()[:12]}"
+        conn.execute(
+            "INSERT INTO credit_accounts (account_id, user_id, balance_micro_usd, "
+            "total_granted_micro_usd, total_spent_micro_usd, created_at, updated_at) "
+            "VALUES (?, ?, 0, 0, 0, ?, ?)",
+            (account_id, user_id, now, now),
+        )
+        return {
+            "account_id": account_id,
+            "user_id": user_id,
+            "balance_micro_usd": 0,
+            "total_granted_micro_usd": 0,
+            "total_spent_micro_usd": 0,
+            "balance_usd": 0.0,
+            "total_granted_usd": 0.0,
+            "total_spent_usd": 0.0,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def get_account(self, user_id: str) -> dict | None:
-        """Get credit account state for a user."""
         uid = str(user_id or "").strip()
         if not uid:
             return None
@@ -373,21 +395,16 @@ class CreditLedger:
             }
 
     def get_balance(self, user_id: str) -> int:
-        """Return balance_micro_usd for a user (0 if no account)."""
         acct = self.get_account(user_id)
         return acct["balance_micro_usd"] if acct else 0
 
     # ------------------------------------------------------------------
-    # Idempotent grant / reversal
+    # Idempotent grant / reversal (TOCTOU-safe)
     # ------------------------------------------------------------------
 
     def grant(self, user_id: str, amount_micro_usd: int, *,
               idempotency_key: str = "",
               metadata: dict | None = None) -> dict:
-        """Idempotently add credit to a user's account.
-
-        Returns updated account state and the grant entry.
-        """
         uid = str(user_id or "").strip()
         if not uid:
             raise ValueError("user_id required")
@@ -401,12 +418,11 @@ class CreditLedger:
         now = _now_ts()
 
         with self._conn() as conn:
-            account = self.ensure_account(uid)
+            _begin_immediate(conn)
+            # Read account under the SAME lock — no separate ensure_account call
+            account = self._ensure_account_under_lock(conn, uid, now)
             account_id = account["account_id"]
 
-            _begin_immediate(conn)
-
-            # Check idempotency
             existing = conn.execute(
                 "SELECT entry_id, amount_micro_usd, balance_after_micro_usd "
                 "FROM credit_ledger WHERE account_id = ? AND idempotency_key = ?",
@@ -427,7 +443,6 @@ class CreditLedger:
                 "WHERE account_id = ?",
                 (new_balance, new_granted, now, account_id),
             )
-
             conn.execute(
                 "INSERT INTO credit_ledger "
                 "(account_id, idempotency_key, entry_type, amount_micro_usd, "
@@ -436,7 +451,6 @@ class CreditLedger:
                 (account_id, ikey, amount_micro_usd, new_balance,
                  _json_meta(metadata or {}), now),
             )
-
             conn.execute("COMMIT")
 
             return {
@@ -451,10 +465,6 @@ class CreditLedger:
     def reverse_grant(self, user_id: str, amount_micro_usd: int, *,
                       idempotency_key: str = "",
                       metadata: dict | None = None) -> dict:
-        """Idempotently reverse (deduct) credit from a user.
-
-        Only usable when no reservations are held against the reversed amount.
-        """
         uid = str(user_id or "").strip()
         if not uid:
             raise ValueError("user_id required")
@@ -468,12 +478,11 @@ class CreditLedger:
         now = _now_ts()
 
         with self._conn() as conn:
-            account = self.ensure_account(uid)
+            _begin_immediate(conn)
+            # Read under the SAME lock
+            account = self._ensure_account_under_lock(conn, uid, now)
             account_id = account["account_id"]
 
-            _begin_immediate(conn)
-
-            # Check idempotency
             existing = conn.execute(
                 "SELECT entry_id FROM credit_ledger "
                 "WHERE account_id = ? AND idempotency_key = ?",
@@ -483,7 +492,6 @@ class CreditLedger:
                 conn.execute("COMMIT")
                 return {**account, "already_applied": True}
 
-            # Check held reservations — balance must cover held + reversal
             held = self._held_reservation_total_under_lock(conn, account_id)
             available = account["balance_micro_usd"] - held
             if available < amount_micro_usd:
@@ -503,7 +511,6 @@ class CreditLedger:
                 "WHERE account_id = ?",
                 (new_balance, new_granted, now, account_id),
             )
-
             conn.execute(
                 "INSERT INTO credit_ledger "
                 "(account_id, idempotency_key, entry_type, amount_micro_usd, "
@@ -512,7 +519,6 @@ class CreditLedger:
                 (account_id, ikey, -amount_micro_usd, new_balance,
                  _json_meta(metadata or {}), now),
             )
-
             conn.execute("COMMIT")
 
             return {
@@ -534,7 +540,6 @@ class CreditLedger:
         return max(0, int(row[0] or 0))
 
     def held_reservation_total(self, account_id: str) -> int:
-        """Return total currently held micro-USD for an account."""
         with self._conn() as conn:
             return self._held_reservation_total_under_lock(conn, account_id)
 
@@ -546,10 +551,6 @@ class CreditLedger:
                    model: str = "unknown",
                    idempotency_key: str = "",
                    metadata: dict | None = None) -> dict:
-        """Create an inference run.
-
-        Returns {run_id, ...}
-        """
         uid = str(user_id or "").strip()
         if not uid:
             raise ValueError("user_id required")
@@ -562,12 +563,10 @@ class CreditLedger:
         model_name = (model or "unknown").strip()
 
         with self._conn() as conn:
-            account = self.ensure_account(uid)
+            _begin_immediate(conn)
+            account = self._ensure_account_under_lock(conn, uid, now)
             account_id = account["account_id"]
 
-            _begin_immediate(conn)
-
-            # Idempotency check
             existing = conn.execute(
                 "SELECT run_id, status, reserved_micro_usd, settled_micro_usd "
                 "FROM credit_runs WHERE account_id = ? AND idempotency_key = ?",
@@ -610,10 +609,6 @@ class CreditLedger:
     def finish_run(self, run_id: str, *,
                    status: str = "completed",
                    release_held: bool = True) -> dict:
-        """Finish an inference run.
-
-        If ``release_held`` is True, all remaining held reservations are released.
-        """
         if status not in ("completed", "cancelled", "exhausted"):
             raise ValueError(f"Invalid finish status: {status}")
 
@@ -722,12 +717,6 @@ class CreditLedger:
         idempotency_key: str = "",
         user_id: str = "",
     ) -> dict:
-        """Reserve credit for an upcoming provider API call.
-
-        Deducts from available balance (balance - held = available).
-        Returns {call_id, ...}
-        Raises InsufficientBalanceError if not enough available credit.
-        """
         if reservation_micro_usd < 0:
             reservation_micro_usd = 0
         if reservation_micro_usd == 0:
@@ -743,7 +732,6 @@ class CreditLedger:
         with self._conn() as conn:
             _begin_immediate(conn)
 
-            # Verify run exists and is active
             run_row = conn.execute(
                 "SELECT run_id, account_id, user_id, status FROM credit_runs "
                 "WHERE run_id = ?",
@@ -759,7 +747,6 @@ class CreditLedger:
             account_id = run_row[1]
             run_owner = run_row[2]
 
-            # Enforce user_id ownership if provided
             if user_id and user_id != run_owner:
                 conn.execute("ROLLBACK")
                 raise ValueError(
@@ -767,7 +754,6 @@ class CreditLedger:
                     f"(owner: {run_owner})"
                 )
 
-            # Idempotency check (scoped to run)
             existing = conn.execute(
                 "SELECT call_id, status, reserved_micro_usd, settled_micro_usd "
                 "FROM credit_call_reservations "
@@ -785,7 +771,6 @@ class CreditLedger:
                     "already_reserved": True,
                 }
 
-            # Check available balance
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
                 (account_id,),
@@ -811,8 +796,6 @@ class CreditLedger:
                 (call_id, run_id, account_id, run_owner, model_name,
                  reservation_micro_usd, ikey, now),
             )
-
-            # Log in ledger
             conn.execute(
                 "INSERT INTO credit_ledger "
                 "(account_id, idempotency_key, entry_type, amount_micro_usd, "
@@ -823,14 +806,11 @@ class CreditLedger:
                  run_id, call_id, model_name,
                  _json_meta({"type": "reservation"}), now),
             )
-
-            # Update run counters
             conn.execute(
                 "UPDATE credit_runs SET reserved_micro_usd = reserved_micro_usd + ?, "
                 "call_count = call_count + 1 WHERE run_id = ?",
                 (reservation_micro_usd, run_id),
             )
-
             conn.execute("COMMIT")
 
             return {
@@ -855,12 +835,6 @@ class CreditLedger:
         total_tokens: int = 0,
         provider_response: dict | None = None,
     ) -> dict:
-        """Settle a reserved call with actual usage.
-
-        Only the reserved amount (``actual_cost_micro_usd`` capped at
-        ``reserved_micro_usd``) is deducted from the balance. The remaining
-        reservation amount is released back.
-        """
         now = _now_ts()
 
         with self._conn() as conn:
@@ -877,11 +851,7 @@ class CreditLedger:
                 raise ValueError(f"Call not found: {call_id}")
             if row[5] == "settled":
                 conn.execute("COMMIT")
-                return {
-                    "call_id": call_id,
-                    "status": "settled",
-                    "already_settled": True,
-                }
+                return {"call_id": call_id, "status": "settled", "already_settled": True}
             if row[5] != "held":
                 conn.execute("ROLLBACK")
                 raise ValueError(f"Cannot settle call in state: {row[5]}")
@@ -891,15 +861,10 @@ class CreditLedger:
             user_id = row[3]
             model_name = row[4]
             reserved = int(row[6])
-            previously_settled = int(row[7])
 
-            # Actual cost is capped at reserved amount
             actual = max(0, min(actual_cost_micro_usd, reserved))
-
-            # Release the difference back
             released = reserved - actual
 
-            # Update account balance: deduct actual cost
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
                 (account_id,),
@@ -912,22 +877,18 @@ class CreditLedger:
                 "updated_at = ? WHERE account_id = ?",
                 (new_balance, actual, now, account_id),
             )
-
-            # Update reservation
             conn.execute(
                 "UPDATE credit_call_reservations SET status = 'settled', "
                 "settled_micro_usd = ?, settled_at = ? WHERE call_id = ?",
                 (actual, now, call_id),
             )
-
-            # Log settlement
             conn.execute(
                 "INSERT INTO credit_ledger "
                 "(account_id, idempotency_key, entry_type, amount_micro_usd, "
                 "balance_after_micro_usd, run_id, call_id, model, "
                 "metadata_json, created_at) "
                 "VALUES (?, ?, 'settlement', ?, ?, ?, ?, ?, ?, ?)",
-                (account_id, f"settle-{call_id}-{_now_ts()}", -actual, new_balance,
+                (account_id, f"settle-{call_id}-{now}", -actual, new_balance,
                  run_id, call_id, model_name,
                  _json_meta({
                      "type": "settlement",
@@ -937,7 +898,6 @@ class CreditLedger:
                  }), now),
             )
 
-            # Record provider usage
             pt = max(0, int(prompt_tokens or 0))
             ct = max(0, int(completion_tokens or 0))
             tt = max(0, int(total_tokens or 0))
@@ -953,14 +913,11 @@ class CreditLedger:
                  pt, ct, tt, actual,
                  _json_meta(provider_response or {}), now),
             )
-
-            # Update run
             conn.execute(
                 "UPDATE credit_runs SET settled_micro_usd = settled_micro_usd + ? "
                 "WHERE run_id = ?",
                 (actual, run_id),
             )
-
             conn.execute("COMMIT")
 
             return {
@@ -981,7 +938,6 @@ class CreditLedger:
             }
 
     def release_call(self, call_id: str) -> dict:
-        """Release a held call reservation — no cost is deducted."""
         now = _now_ts()
 
         with self._conn() as conn:
@@ -998,11 +954,7 @@ class CreditLedger:
                 raise ValueError(f"Call not found: {call_id}")
             if row[5] == "released":
                 conn.execute("COMMIT")
-                return {
-                    "call_id": call_id,
-                    "status": "released",
-                    "already_released": True,
-                }
+                return {"call_id": call_id, "status": "released", "already_released": True}
             if row[5] != "held":
                 conn.execute("ROLLBACK")
                 raise ValueError(f"Cannot release call in state: {row[5]}")
@@ -1012,14 +964,12 @@ class CreditLedger:
             reserved = int(row[6])
             run_id = row[1]
 
-            # Mark released
             conn.execute(
                 "UPDATE credit_call_reservations SET status = 'released', "
                 "released_at = ? WHERE call_id = ?",
                 (now, call_id),
             )
 
-            # Log release (no balance change; credit was not deducted, only held)
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
                 (account_id,),
@@ -1032,14 +982,11 @@ class CreditLedger:
                 "balance_after_micro_usd, run_id, call_id, model, "
                 "metadata_json, created_at) "
                 "VALUES (?, ?, 'release', ?, ?, ?, ?, ?, ?, ?)",
-                (account_id, f"release-{call_id}-{_now_ts()}", reserved, balance,
+                (account_id, f"release-{call_id}-{now}", reserved, balance,
                  run_id, call_id, model_name,
-                 _json_meta({
-                     "type": "release",
-                     "released_micro_usd": reserved,
-                 }), now),
+                 _json_meta({"type": "release", "released_micro_usd": reserved}),
+                 now),
             )
-
             conn.execute("COMMIT")
 
             return {
@@ -1051,9 +998,9 @@ class CreditLedger:
             }
 
     @staticmethod
-    def _release_held_calls_under_lock(conn: sqlite3.Connection, run_id: str,
-                                        account_id: str, now: float) -> None:
-        """Release all held call reservations for a run."""
+    def _release_held_calls_under_lock(
+        conn: sqlite3.Connection, run_id: str, account_id: str, now: float
+    ) -> None:
         held_calls = conn.execute(
             "SELECT call_id, reserved_micro_usd, settled_micro_usd, model "
             "FROM credit_call_reservations "
@@ -1088,65 +1035,58 @@ class CreditLedger:
                      now),
                 )
 
-    def release_all_held(self, account_id: str) -> int:
-        """Release all held call reservations for an account. Returns count."""
+    # ------------------------------------------------------------------
+    # Stale-run sweep — crash recovery
+    # ------------------------------------------------------------------
+
+    def sweep_stale_runs(self, ttl_seconds: int = 0) -> int:
+        """Release held reservations and mark active runs as *exhausted*
+        when their ``created_at`` exceeds *ttl_seconds*.
+
+        Returns the number of runs expired.  This is safe to call periodically
+        (it is idempotent — already-finished runs are skipped).
+        """
+        if ttl_seconds <= 0:
+            ttl_seconds = STALE_RUN_TTL_SECONDS
+        cutoff = _now_ts() - ttl_seconds
         now = _now_ts()
+        expired_count = 0
+
         with self._conn() as conn:
             _begin_immediate(conn)
-            self._release_held_calls_under_lock_all(conn, account_id, now)
-            held = conn.execute(
-                "SELECT COUNT(*) FROM credit_call_reservations "
-                "WHERE account_id = ? AND status = 'held'",
-                (account_id,),
-            ).fetchone()
-            conn.execute("COMMIT")
-            return int(held[0])
 
-    @staticmethod
-    def _release_held_calls_under_lock_all(conn: sqlite3.Connection,
-                                            account_id: str, now: float) -> None:
-        held_calls = conn.execute(
-            "SELECT call_id, run_id, reserved_micro_usd, settled_micro_usd, model "
-            "FROM credit_call_reservations "
-            "WHERE account_id = ? AND status = 'held'",
-            (account_id,),
-        ).fetchall()
-        for call in held_calls:
-            call_id = call[0]
-            run_id = call[1]
-            reserved = int(call[2])
-            settled = int(call[3])
-            model_name = call[4]
-            if reserved > settled:
+            stale = conn.execute(
+                "SELECT run_id, account_id FROM credit_runs "
+                "WHERE status = 'active' AND created_at < ?",
+                (cutoff,),
+            ).fetchall()
+
+            for run_id, account_id in stale:
+                # Release all held calls for this run
+                self._release_held_calls_under_lock(conn, run_id, account_id, now)
+                # Mark run as exhausted
                 conn.execute(
-                    "UPDATE credit_call_reservations SET status = 'released', "
-                    "released_at = ? WHERE call_id = ?",
-                    (now, call_id),
+                    "UPDATE credit_runs SET status = 'exhausted', "
+                    "finished_at = ? WHERE run_id = ?",
+                    (now, run_id),
                 )
-                balance = int(
-                    conn.execute(
-                        "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
-                        (account_id,),
-                    ).fetchone()[0]
-                )
-                conn.execute(
-                    "INSERT INTO credit_ledger "
-                    "(account_id, idempotency_key, entry_type, amount_micro_usd, "
-                    "balance_after_micro_usd, run_id, call_id, model, "
-                    "metadata_json, created_at) "
-                    "VALUES (?, ?, 'release', ?, ?, ?, ?, ?, ?, ?)",
-                    (account_id, f"release-{call_id}-{now}", reserved, balance,
-                     run_id, call_id, model_name,
-                     _json_meta({"type": "release", "released_micro_usd": reserved}),
-                     now),
-                )
+                expired_count += 1
+
+            conn.execute("COMMIT")
+
+        if expired_count:
+            log.info(
+                "[credit] sweep: expired %d stale run(s) "
+                "(ttl=%ds cutoff_age=%.0fs)",
+                expired_count, ttl_seconds, ttl_seconds,
+            )
+        return expired_count
 
     # ------------------------------------------------------------------
     # History / ledger queries
     # ------------------------------------------------------------------
 
     def get_ledger_for_user(self, user_id: str, limit: int = 100) -> list[dict]:
-        """Return immutable ledger entries for a user."""
         uid = str(user_id or "").strip()
         account = self.get_account(uid)
         if not account:
@@ -1180,7 +1120,6 @@ class CreditLedger:
         ]
 
     def get_usage_for_run(self, run_id: str) -> list[dict]:
-        """Get provider usage records for a run."""
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT usage_id, call_id, model, prompt_tokens, completion_tokens, "
@@ -1205,8 +1144,15 @@ class CreditLedger:
         ]
 
     # ------------------------------------------------------------------
-    # Trial grant initialisation
+    # Trial grant initialisation (without swallowing programming errors)
     # ------------------------------------------------------------------
+
+    # Errors that are expected during trial-grant (idempotency / integrity)
+    _NON_PROGRAMMING_GRANT_ERRORS: tuple[type[BaseException], ...] = (
+        ValueError,
+        sqlite3.IntegrityError,
+        InsufficientBalanceError,
+    )
 
     def ensure_trial_grant_from_openrouter_budget(
         self,
@@ -1217,6 +1163,9 @@ class CreditLedger:
         """Lazily create an opening trial grant from existing OpenRouter budget.
 
         Grant amount = budget - spend (converted to micro-USD). Idempotent.
+
+        Raises programming / schema / I/O errors so callers can detect real
+        failures instead of silently returning partial state.
         """
         uid = str(user_id or "").strip()
         if not uid:
@@ -1226,7 +1175,6 @@ class CreditLedger:
         if grant_micro <= 0:
             return {"granted_micro_usd": 0, "reason": "no_remaining_budget"}
 
-        # Use a stable, idempotent key to prevent double-grants on first run
         ikey = f"trial-grant-openrouter-budget-{uid}"
         try:
             result = self.grant(uid, grant_micro, idempotency_key=ikey)
@@ -1235,31 +1183,17 @@ class CreditLedger:
                 "granted_micro_usd": grant_micro if not result.get("already_applied") else 0,
                 "idempotency_key": ikey,
             }
-        except Exception:
-            # If already applied or error, try to return current account
+        except self._NON_PROGRAMMING_GRANT_ERRORS:
+            # Idempotency / integrity conflict — already applied or constraint
             acct = self.get_account(uid)
             if acct:
                 return {
                     **acct,
                     "granted_micro_usd": 0,
                     "idempotency_key": ikey,
-                    "reason": "already_granted_or_error",
+                    "reason": "already_granted_or_constraint",
                 }
             return {"granted_micro_usd": 0, "reason": "error"}
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-class InsufficientBalanceError(Exception):
-    """Not enough available credit (balance minus held reservations)."""
-    pass
-
-
-class RunNotActiveError(Exception):
-    """Run is not in active state."""
-    pass
 
 
 # ---------------------------------------------------------------------------

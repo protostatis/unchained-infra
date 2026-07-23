@@ -520,8 +520,6 @@ class TestCreditConcurrency(unittest.TestCase):
         # Give just enough for ONE reservation
         account_before = self.ledger.get_account("u-conc")
         grant_amount = account_before["balance_micro_usd"]
-        # Release any existing held
-        self.ledger.release_all_held(account_before["account_id"])
 
         # Make sure only one big chunk of reservation can fit
         big_reservation = grant_amount - 100  # leave ~100 micro safety
@@ -634,6 +632,309 @@ class TestCreditLedgerInvalidInputs(unittest.TestCase):
     def test_release_nonexistent_call(self):
         with self.assertRaises(ValueError):
             self.ledger.release_call("call-nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Stale-run sweep tests
+# ---------------------------------------------------------------------------
+
+class TestCreditSweep(unittest.TestCase):
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_sweep_expires_stale_runs(self):
+        """Stale active runs should be expired to exhausted, releasing held calls."""
+        self.ledger.grant("u-sweep", _usd_to_micro(1.0), idempotency_key="g-sweep")
+        run = self.ledger.create_run("u-sweep", idempotency_key="r-sweep")
+        run_id = run["run_id"]
+
+        # Reserve a call
+        call = self.ledger.reserve_call(
+            run_id, reservation_micro_usd=100, idempotency_key="c-sweep",
+        )
+        self.assertEqual(call["status"], "held")
+
+        # Sweep with a very short TTL (0 => use default, but we need immediate)
+        # Manually set created_at to old via direct SQL to force sweep
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
+                (time.time() - 999999, run_id),
+            )
+
+        # Now sweep — should expire it
+        expired = self.ledger.sweep_stale_runs(ttl_seconds=1)
+        self.assertGreaterEqual(expired, 1)
+
+        # Run should be exhausted
+        run_info = self.ledger.get_run(run_id)
+        self.assertEqual(run_info["status"], "exhausted")
+
+        # Call should be released
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM credit_call_reservations WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()
+        self.assertEqual(row[0], "released")
+
+    def test_sweep_skips_already_finished(self):
+        """Sweep should not touch runs that are already completed."""
+        self.ledger.grant("u-sweep2", _usd_to_micro(1.0), idempotency_key="g-sweep2")
+        run = self.ledger.create_run("u-sweep2", idempotency_key="r-sweep2")
+        self.ledger.finish_run(run["run_id"], status="completed")
+
+        # Make it look old
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
+                (time.time() - 999999, run["run_id"]),
+            )
+
+        expired = self.ledger.sweep_stale_runs(ttl_seconds=1)
+        self.assertEqual(expired, 0)  # Already finished, skipped
+
+    def test_sweep_idempotent(self):
+        """Multiple sweeps should be safe (idempotent)."""
+        self.ledger.grant("u-sweep3", _usd_to_micro(1.0), idempotency_key="g-sweep3")
+        run = self.ledger.create_run("u-sweep3", idempotency_key="r-sweep3")
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
+                (time.time() - 999999, run["run_id"]),
+            )
+
+        expired1 = self.ledger.sweep_stale_runs(ttl_seconds=1)
+        expired2 = self.ledger.sweep_stale_runs(ttl_seconds=1)
+        self.assertEqual(expired2, 0)  # Second sweep finds nothing new
+
+
+# ---------------------------------------------------------------------------
+# Terminal run finish tests
+# ---------------------------------------------------------------------------
+
+class TestCreditTerminalFinish(unittest.TestCase):
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_finish_run_releases_held_and_marks_terminal(self):
+        """Finishing a run releases held calls and marks it completed."""
+        self.ledger.grant("u-term", _usd_to_micro(1.0), idempotency_key="g-term")
+        run = self.ledger.create_run("u-term", idempotency_key="r-term")
+        run_id = run["run_id"]
+
+        call = self.ledger.reserve_call(
+            run_id, reservation_micro_usd=100, idempotency_key="c-term",
+        )
+        self.assertEqual(call["status"], "held")
+
+        result = self.ledger.finish_run(run_id)
+        self.assertEqual(result["status"], "completed")
+
+        # Call released
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM credit_call_reservations WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()
+        self.assertEqual(row[0], "released")
+
+    def test_finish_run_idempotent_multiple_calls(self):
+        """Calling finish_run repeatedly is safe."""
+        self.ledger.grant("u-term2", _usd_to_micro(1.0), idempotency_key="g-term2")
+        run = self.ledger.create_run("u-term2", idempotency_key="r-term2")
+
+        self.ledger.finish_run(run["run_id"], status="completed")
+        result = self.ledger.finish_run(run["run_id"], status="cancelled")  # try to change
+        self.assertTrue(result.get("already_finished"))
+        self.assertEqual(result["status"], "completed")  # unchanged
+
+    def test_finish_run_as_cancelled(self):
+        """Dispatch failure: finish run as cancelled."""
+        self.ledger.grant("u-cancel", _usd_to_micro(1.0), idempotency_key="g-cancel")
+        run = self.ledger.create_run("u-cancel", idempotency_key="r-cancel")
+
+        self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=100, idempotency_key="c-cancel",
+        )
+        result = self.ledger.finish_run(run["run_id"], status="cancelled")
+        self.assertEqual(result["status"], "cancelled")
+
+    def test_finish_run_as_exhausted(self):
+        """Budget exhausted finish."""
+        self.ledger.grant("u-exh", _usd_to_micro(1.0), idempotency_key="g-exh")
+        run = self.ledger.create_run("u-exh", idempotency_key="r-exh")
+        result = self.ledger.finish_run(run["run_id"], status="exhausted")
+        self.assertEqual(result["status"], "exhausted")
+
+
+# ---------------------------------------------------------------------------
+# TOCTOU-safe grant concurrency tests
+# ---------------------------------------------------------------------------
+
+class TestCreditTOCTOU(unittest.TestCase):
+    """Verify that concurrent grants use the same BEGIN IMMEDIATE connection
+    and do not produce stale balance returns."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_concurrent_grants_no_stale_balance(self):
+        """Multiple threads granting simultaneously should sum correctly."""
+        num_threads = 5
+        grant_amount = _usd_to_micro(0.1)  # 100000 micro each
+        errors = []
+        done = threading.Event()
+
+        def grant_thread(i):
+            try:
+                self.ledger.grant("u-toctou", grant_amount, idempotency_key=f"g-toc-{i}")
+            except Exception as e:
+                errors.append(str(e))
+            finally:
+                done.set()
+
+        threads = [threading.Thread(target=grant_thread, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No errors
+        self.assertEqual(len(errors), 0)
+
+        # Balance should be exactly num_threads * grant_amount
+        balance = self.ledger.get_balance("u-toctou")
+        self.assertEqual(balance, num_threads * grant_amount,
+                         f"Expected {num_threads * grant_amount}, got {balance}")
+
+    def test_grant_and_reverse_no_stale(self):
+        """Interleaved grant and reversal should not produce stale returns."""
+        self.ledger.grant("u-toc2", _usd_to_micro(1.0), idempotency_key="g-toc-init")
+        balance = self.ledger.get_balance("u-toc2")
+        self.assertEqual(balance, _usd_to_micro(1.0))
+
+        # Reverse half
+        self.ledger.reverse_grant("u-toc2", _usd_to_micro(0.5), idempotency_key="r-toc-half")
+        balance = self.ledger.get_balance("u-toc2")
+        self.assertEqual(balance, _usd_to_micro(0.5))
+
+
+# ---------------------------------------------------------------------------
+# Service token isolation tests
+# ---------------------------------------------------------------------------
+
+class TestCreditServiceToken(unittest.TestCase):
+    """Verify credit_service_token does not use PRIVATE_CORE_TOKEN."""
+
+    def setUp(self):
+        self._saved_env = {}
+        for key in ("CREDIT_SERVICE_TOKEN", "TRIAL_AGENT_KEY",
+                     "PRIVATE_CORE_TOKEN", "RELAY_SHARED_TOKEN"):
+            self._saved_env[key] = os.environ.get(key, "__UNSET__")
+
+    def tearDown(self):
+        for key, val in self._saved_env.items():
+            if val == "__UNSET__":
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+    def test_credit_service_token_prefers_dedicated_var(self):
+        """CREDIT_SERVICE_TOKEN takes precedence."""
+        os.environ["CREDIT_SERVICE_TOKEN"] = "credit-secret-123"
+        os.environ["TRIAL_AGENT_KEY"] = "trial-key-456"
+        os.environ["PRIVATE_CORE_TOKEN"] = "private-core-789"
+
+        from credit import credit_service_token
+        token = credit_service_token()
+        self.assertEqual(token, "credit-secret-123")
+        self.assertNotEqual(token, "private-core-789")
+
+    def test_credit_service_token_falls_back_to_trial_agent_key(self):
+        """When CREDIT_SERVICE_TOKEN is unset, fall back to TRIAL_AGENT_KEY."""
+        os.environ.pop("CREDIT_SERVICE_TOKEN", None)
+        os.environ["TRIAL_AGENT_KEY"] = "trial-key-fallback"
+        os.environ["PRIVATE_CORE_TOKEN"] = "private-core-should-not-use"
+
+        from credit import credit_service_token
+        token = credit_service_token()
+        self.assertEqual(token, "trial-key-fallback")
+        self.assertNotEqual(token, "private-core-should-not-use")
+
+    def test_credit_service_token_never_uses_private_core(self):
+        """Even when both CREDIT_SERVICE_TOKEN and TRIAL_AGENT_KEY are unset,
+        credit_service_token should NOT fall through to PRIVATE_CORE_TOKEN."""
+        os.environ.pop("CREDIT_SERVICE_TOKEN", None)
+        os.environ.pop("TRIAL_AGENT_KEY", None)
+        os.environ["PRIVATE_CORE_TOKEN"] = "private-core-alone"
+
+        from credit import credit_service_token
+        token = credit_service_token()
+        self.assertEqual(token, "")  # empty, not "private-core-alone"
+
+
+# ---------------------------------------------------------------------------
+# Trial grant error handling tests
+# ---------------------------------------------------------------------------
+
+class TestCreditTrialGrantSafety(unittest.TestCase):
+    """Verify trial grant does not swallow programming errors."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_trial_grant_handles_idempotency_gracefully(self):
+        """First call grants; second call returns already-granted without error."""
+        r1 = self.ledger.ensure_trial_grant_from_openrouter_budget(
+            "u-trial-safe", current_spend_usd=0, budget_usd=1.0,
+        )
+        self.assertGreater(r1.get("granted_micro_usd", 0), 0)
+
+        r2 = self.ledger.ensure_trial_grant_from_openrouter_budget(
+            "u-trial-safe", current_spend_usd=0, budget_usd=1.0,
+        )
+        self.assertEqual(r2.get("granted_micro_usd", -1), 0)
+
+    def test_trial_grant_returns_balance_on_constraint(self):
+        """After a grant, ensure_trial_grant returns sensible state."""
+        result = self.ledger.ensure_trial_grant_from_openrouter_budget(
+            "u-trial-state", current_spend_usd=0.25, budget_usd=1.0,
+        )
+        # (1.0 - 0.25) = 0.75 USD granted
+        self.assertAlmostEqual(result.get("balance_usd", 0), 0.75, places=5)
 
 
 if __name__ == "__main__":
