@@ -974,6 +974,17 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("https://unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertNotIn("https://api.unchainedsky.com/install.sh", templates.MCP_PAGE_HTML)
         self.assertIn("API key handling", templates.SETUP_HTML)
+        self.assertIn(
+            "A provider API key lets Unchained use the selected AI provider. "
+            "Website sign-ins are separate: browser tasks use the local Chrome "
+            "workspace, where you sign in to the site the task needs.",
+            templates.SETUP_HTML,
+        )
+        self.assertIn(
+            "holds a captured key pending confirmation. After you choose Store Key, "
+            "it is stored encrypted on the server.",
+            templates.SETUP_HTML,
+        )
         self.assertIn("Your Chrome profile stays on your machine", templates.INSTALL_ONBOARD_HTML)
         self.assertIn("Claude CLI, Codex CLI, or OpenCode CLI", templates.CLAUDE_CHAT_HTML)
         self.assertIn("savedOpenCode || providerDefault", templates.CLAUDE_CHAT_HTML)

@@ -24050,7 +24050,7 @@ body{
       <div id="relay-mode-hint" style="display:none;color:var(--muted);font-size:13px;margin-bottom:10px">
         Prefer full control? Access this page from your computer at <code style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">localhost:8080/setup</code> to use visible Chrome mode.
       </div>
-      <div class="trust-note"><strong>API key handling</strong>Auto-provision opens the provider page in Chrome and stores the captured key encrypted on the server. You can use manual paste instead and revoke stored keys from this page.</div>
+      <div class="trust-note"><strong>API key handling</strong> A provider API key lets Unchained use the selected AI provider. Website sign-ins are separate: browser tasks use the local Chrome workspace, where you sign in to the site the task needs. Auto-provision opens the provider page in Chrome and holds a captured key pending confirmation. After you choose Store Key, it is stored encrypted on the server. You can use manual paste instead and revoke stored keys from this page.</div>
       <button class="provision-btn" id="provision-btn" onclick="startProvision()" disabled>
         Provision Gemini API Key
       </button>
