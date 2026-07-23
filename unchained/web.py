@@ -1680,13 +1680,8 @@ async def handle_google_verification(request: web.Request) -> web.Response:
     """GET /google83c650022d8db556.html — Google Search Console verification."""
     del request
     return web.Response(
-        text=(
-            "<!DOCTYPE html><html><head>"
-            '<meta name="google-site-verification"'
-            ' content="google83c650022d8db556" />'
-            "</head><body></body></html>"
-        ),
-        content_type="text/html",
+        text="google-site-verification: google83c650022d8db556.html",
+        content_type="text/plain",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
