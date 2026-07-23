@@ -3152,21 +3152,42 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "Archive not found"}, status=404
             )
-        # Archive current slot state before restoring.
+        # Archive the currently-occupied target slot exactly once before
+        # restoring, then delete the old session file so it doesn't leave
+        # an unbounded orphan.  Do NOT delete the source archive file.
         if requested_slot:
             slot_state = _hosted_repo().get_slot_state(user_id)
             current_sid = slot_state["slots"].get(str(requested_slot), "")
             if current_sid:
                 try:
-                    _hosted_repo().archive_session(
+                    archived = _hosted_repo().archive_session(
                         user_id, current_sid, slot=requested_slot
                     )
                 except Exception:
                     log.exception(
                         "[chat] failed to archive current session before restore"
                     )
+                    archived = None
+                # Remove the now-archived active session file.  The archive
+                # snapshot is already durable; the active file is no longer
+                # needed and keeping it would leave an unbounded orphan.
+                if archived:
+                    try:
+                        os.remove(
+                            _hosted_repo().session_path(
+                                current_sid,
+                                sessions_dir=_HOSTED_SESSIONS_DIR,
+                            )
+                        )
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        log.exception(
+                            "[chat] failed to remove orphan session file %s",
+                            current_sid,
+                        )
         new_sid, slot, msgs = _hosted_repo().restore_archive(
-            user_id, archive_id, target_slot=requested_slot
+            user_id, archive_id, target_slot=requested_slot, agent_id=agent_id
         )
         if new_sid is None:
             return web.json_response(

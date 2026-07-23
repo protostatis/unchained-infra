@@ -152,12 +152,15 @@ class TestHostedConversationRepo(unittest.TestCase):
         )
         self.assertIsNotNone(archive_id)
 
+        # Restore with a specific agent_id so the new session is scoped
+        # to the authenticated account (not the shared trial-agent lane).
         new_sid, slot, msgs = self.repo.restore_archive(
             "u-restore", archive_id, target_slot=3,
             sessions_dir=str(self.session_dir),
+            agent_id="claude-testhash",
         )
         self.assertIsNotNone(new_sid)
-        self.assertTrue(new_sid.startswith("s-trial-agent-"))
+        self.assertTrue(new_sid.startswith("s-claude-testhash-"))
         self.assertEqual(slot, 3)
         self.assertEqual(len(msgs), 2)
         self.assertEqual(msgs[0]["content"], "Research Python")
@@ -179,6 +182,7 @@ class TestHostedConversationRepo(unittest.TestCase):
         archive_id = self.repo.archive_session(
             "u-noslot", sid, slot=2, sessions_dir=str(self.session_dir),
         )
+        # Default agent_id="trial-agent" — test the legacy shared lane path.
         _, slot, _ = self.repo.restore_archive(
             "u-noslot", archive_id, sessions_dir=str(self.session_dir),
         )
@@ -262,10 +266,43 @@ class TestHostedConversationRepo(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.repo._archive_path("u-test", "valid/../../etc")
 
-    def test_session_path_sanitizes_dangerous_chars(self):
-        path = self.repo.session_path("s-agent/../etc/passwd")
-        self.assertNotIn("..", path)
-        self.assertNotIn("/etc", path)
+    def test_session_path_rejects_traversal(self):
+        """Path traversal session IDs are rejected, not silently stripped."""
+        with self.assertRaises(ValueError) as ctx:
+            self.repo.session_path("s-agent/../etc/passwd")
+        self.assertIn("path traversal", str(ctx.exception).lower())
+
+        with self.assertRaises(ValueError) as ctx:
+            self.repo.session_path("/etc/passwd")
+        self.assertIn("separator", str(ctx.exception).lower())
+
+    def test_session_path_rejects_null_byte(self):
+        with self.assertRaises(ValueError):
+            self.repo.session_path("s-agent\0test")
+
+    def test_session_path_accepts_valid_ids(self):
+        """Well-formed session IDs construct the expected file path."""
+        path = self.repo.session_path("s-trial-agent-abc123def456")
+        self.assertIn("s-trial-agent-abc123def456.json", os.path.basename(path))
+
+    def test_legacy_path_still_sanitizes_for_dual_read(self):
+        """make_session_path_legacy preserves old sanitization for reading
+        historically-stored files that were written before validation."""
+        path = HostedConversationRepo.make_session_path_legacy(
+            "s-agent/../etc/passwd", sessions_dir=str(self.session_dir)
+        )
+        self.assertNotIn("..", os.path.basename(path))
+        self.assertNotIn("/", os.path.basename(path))
+        read_path = os.path.join(os.path.dirname(path), os.path.basename(path))
+        # The historic sanitized file can still be read via read_session_messages
+        os.makedirs(os.path.dirname(read_path), exist_ok=True)
+        with open(read_path, "w") as f:
+            json.dump({"messages": [{"role": "user", "content": "legacy"}]}, f)
+        msgs, found = self.repo.read_session_messages(
+            "s-agent/../etc/passwd", sessions_dir=str(self.session_dir)
+        )
+        self.assertTrue(found)
+        self.assertEqual(msgs[0]["content"], "legacy")
 
     def test_invalid_archive_id_raises(self):
         with self.assertRaises(ValueError):
@@ -916,22 +953,26 @@ class TestTrialDualReadCompat(unittest.TestCase):
             self.assertEqual(msgs[1]["role"], "user")
 
     def test_session_path_sanitization_matches_chat_agent(self):
-        """Session path sanitization matches chat_agent_openrouter.py logic."""
+        """Rejects dangerous chars; legacy path used for dual-read compat."""
         with tempfile.TemporaryDirectory() as td:
             repo = HostedConversationRepo(
                 data_dir=os.path.join(td, "hosted"),
                 sessions_dir=os.path.join(td, "sessions"),
             )
-            sid = "s-trial-agent/test..with spaces"
-            path = repo.session_path(sid)
-            self.assertNotIn("/", os.path.basename(path))
-            self.assertNotIn("..", os.path.basename(path))
-            self.assertNotIn(" ", os.path.basename(path))
-            path2 = HostedConversationRepo.make_session_path(
-                sid, sessions_dir=os.path.join(td, "sessions")
+            # Dangerous session IDs are rejected by validate_session_id.
+            with self.assertRaises(ValueError):
+                repo.session_path("s-trial-agent/test..with spaces")
+            # Clean IDs are accepted.
+            path = repo.session_path("s-trial-agent-test")
+            self.assertIn("s-trial-agent-test.json", os.path.basename(path))
+            # Legacy path still sanitizes for backward compat.
+            legacy = HostedConversationRepo.make_session_path_legacy(
+                "s-trial-agent/test..with spaces",
+                sessions_dir=os.path.join(td, "sessions"),
             )
-            self.assertNotIn("/", os.path.basename(path2))
-            self.assertNotIn("..", os.path.basename(path2))
+            self.assertNotIn("/", os.path.basename(legacy))
+            self.assertNotIn("..", os.path.basename(legacy))
+            self.assertNotIn(" ", os.path.basename(legacy))
 
 
 class TestSlotSessionIdField(unittest.TestCase):
@@ -1370,6 +1411,259 @@ class TestTrialNoGuestFallback(unittest.IsolatedAsyncioTestCase):
         data = json.loads(resp.body.decode())
         self.assertTrue(data["trial"])
         self.assertFalse(agent_rpc_called, "guest slots must not RPC trial agent")
+
+
+class TestRestoreSessionOwnedCompatibility(unittest.IsolatedAsyncioTestCase):
+    """Verify that a restored session passes _session_owned on the next send.
+
+    Regression: restore_archive() generated ``s-trial-agent-...`` regardless
+    of the authenticated user's agent_id, so handle_chat_msg's
+    ``_session_owned`` check rejected it and replaced the session.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.hosted_data_dir = Path(self.temp_dir.name) / "hosted-conversations"
+        self.hosted_data_dir.mkdir()
+        self.session_dir = Path(self.temp_dir.name) / "sessions"
+        self.session_dir.mkdir()
+
+        from web_app.handlers import chat_flow
+        self.original_data_dir = chat_flow._HOSTED_REPO_DATA_DIR
+        self.original_sessions_dir = chat_flow._HOSTED_SESSIONS_DIR
+        chat_flow._HOSTED_REPO_DATA_DIR = str(self.hosted_data_dir)
+        chat_flow._HOSTED_SESSIONS_DIR = str(self.session_dir)
+        chat_flow._HOSTED_REPO = None
+        self.repo = HostedConversationRepo(
+            data_dir=str(self.hosted_data_dir),
+            sessions_dir=str(self.session_dir),
+        )
+
+    def tearDown(self):
+        from web_app.handlers import chat_flow
+        chat_flow._HOSTED_REPO_DATA_DIR = self.original_data_dir
+        chat_flow._HOSTED_SESSIONS_DIR = self.original_sessions_dir
+        chat_flow._HOSTED_REPO = None
+        self.temp_dir.cleanup()
+
+    def _write_session(self, session_id: str, messages: list[dict]):
+        path = self.repo.session_path(session_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"messages": messages}, f)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_then_send_preserves_session(self, mock_core):
+        """After restore, the session_id is owned by the authenticated account.
+
+        An auto-registered user (agent_id=claude-<keyhash>) restores an
+        archive. The new session must use the correct agent_id prefix so
+        that handle_chat_msg's _session_owned() check passes and the
+        session is NOT replaced on the next send.
+        """
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-restore-owned"
+        key_hash = "abc12345"
+        agent_id = f"claude-{key_hash}"
+
+        # Create an archive owned by this user.
+        sid = "s-claude-abc12345-restore-src"
+        self._write_session(sid, [
+            {"role": "user", "content": "Restore me please"},
+            {"role": "assistant", "content": "Done"},
+        ])
+        archive_id = self.repo.archive_session(
+            user_id, sid, slot=1, preview="Restore me",
+            sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(archive_id)
+
+        # Wire up the mock core with auto-registered user identity.
+        core = SimpleNamespace(
+            _authenticate=lambda request: {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "key_hash": key_hash,
+                "key": "uc_live_test",
+                "email": "test@example.com",
+            },
+            _is_pending_user=lambda auth_info: False,
+            _is_openrouter_model=lambda model: True,
+            _resolve_chat_agent_id=lambda auth_info, model: agent_id,
+            time=SimpleNamespace(time=lambda: 1234.5),
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _pending_limited_response=lambda: SimpleNamespace(status=403),
+        )
+        mock_core.return_value = core
+
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["ok"])
+        restored_sid = data["session_id"]
+
+        # The restored session MUST be scoped to the authenticated agent.
+        self.assertTrue(
+            restored_sid.startswith(f"s-{agent_id}-"),
+            f"restored session {restored_sid!r} should start with s-{agent_id}-",
+        )
+
+        # Simulate handle_chat_msg's _session_owned check.
+        parts = restored_sid.split("-")
+        self.assertEqual(parts[0], "s")
+        self.assertEqual(parts[2], key_hash,
+                         f"_session_owned check: parts[2]={parts[2]!r} must == key_hash={key_hash!r}")
+
+        # Verify the restored session file actually exists and is readable.
+        msgs, found = self.repo.read_session_messages(restored_sid)
+        self.assertTrue(found)
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(msgs[0]["content"], "Restore me please")
+
+        # Slot state must point to the new session.
+        state = self.repo.get_slot_state(user_id)
+        self.assertEqual(state["slots"]["1"], restored_sid)
+        self.assertEqual(state["active_slot"], 1)
+
+
+class TestRestoreCleansOrphanSession(unittest.IsolatedAsyncioTestCase):
+    """On restore, the currently-occupied target slot session file is archived
+    exactly once, then removed so it doesn't leave an unbounded orphan."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.hosted_data_dir = Path(self.temp_dir.name) / "hosted-conversations"
+        self.hosted_data_dir.mkdir()
+        self.session_dir = Path(self.temp_dir.name) / "sessions"
+        self.session_dir.mkdir()
+
+        from web_app.handlers import chat_flow
+        self.original_data_dir = chat_flow._HOSTED_REPO_DATA_DIR
+        self.original_sessions_dir = chat_flow._HOSTED_SESSIONS_DIR
+        chat_flow._HOSTED_REPO_DATA_DIR = str(self.hosted_data_dir)
+        chat_flow._HOSTED_SESSIONS_DIR = str(self.session_dir)
+        chat_flow._HOSTED_REPO = None
+        self.repo = HostedConversationRepo(
+            data_dir=str(self.hosted_data_dir),
+            sessions_dir=str(self.session_dir),
+        )
+
+    def tearDown(self):
+        from web_app.handlers import chat_flow
+        chat_flow._HOSTED_REPO_DATA_DIR = self.original_data_dir
+        chat_flow._HOSTED_SESSIONS_DIR = self.original_sessions_dir
+        chat_flow._HOSTED_REPO = None
+        self.temp_dir.cleanup()
+
+    def _write_session(self, session_id: str, messages: list[dict]):
+        path = self.repo.session_path(session_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"messages": messages}, f)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_restore_cleans_orphan_active_file(self, mock_core):
+        """Active session file is removed after being archived; source archive stays."""
+        from web_app.handlers.chat_flow import handle_chat_restore_archive
+
+        user_id = "u-test-orphan"
+        agent_id = "claude-testhash"
+
+        # Create a source archive.
+        sid_src = "s-claude-testhash-src"
+        self._write_session(sid_src, [
+            {"role": "user", "content": "Restored content"},
+        ])
+        archive_id = self.repo.archive_session(
+            user_id, sid_src, slot=1, preview="Restored",
+            sessions_dir=str(self.session_dir),
+        )
+        self.assertIsNotNone(archive_id)
+
+        # Create an active session occupying slot 1 (the target).
+        sid_active = "s-claude-testhash-active"
+        self._write_session(sid_active, [
+            {"role": "user", "content": "Active content to be archived"},
+        ])
+        self.repo.get_slot_state(user_id)  # ensure user_dir exists
+        state = self.repo.get_slot_state(user_id)
+        state["slots"]["1"] = sid_active
+        state["active_slot"] = 1
+        self.repo.set_slot_state(user_id, state)
+
+        # Verify active session file exists.
+        active_path = self.repo.session_path(
+            sid_active, sessions_dir=str(self.session_dir)
+        )
+        self.assertTrue(os.path.isfile(active_path))
+
+        # Verify source archive exists.
+        archive_path = self.repo._archive_path(user_id, archive_id)
+        self.assertTrue(os.path.isfile(archive_path))
+
+        core = SimpleNamespace(
+            _authenticate=lambda request: {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "key_hash": "testhash",
+                "key": "uc_live_test",
+                "email": "test@example.com",
+            },
+            _is_pending_user=lambda auth_info: False,
+            _is_openrouter_model=lambda model: True,
+            _resolve_chat_agent_id=lambda auth_info, model: agent_id,
+            time=SimpleNamespace(time=lambda: 1234.5),
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _pending_limited_response=lambda: SimpleNamespace(status=403),
+        )
+        mock_core.return_value = core
+
+        request = SimpleNamespace(
+            json=AsyncMock(
+                return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "archive_id": archive_id,
+                    "slot": 1,
+                }
+            )
+        )
+        response = await handle_chat_restore_archive(request)
+        data = json.loads(response.body.decode())
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(data["ok"])
+
+        # The active session file must be removed (orphan cleaned).
+        self.assertFalse(
+            os.path.isfile(active_path),
+            "active session file should be removed after archive+restore",
+        )
+
+        # The source archive file must still exist (not deleted).
+        self.assertTrue(
+            os.path.isfile(archive_path),
+            "source archive must not be deleted",
+        )
+
+        # The active session must have been archived (appears in list).
+        archives = self.repo.list_archives(user_id)
+        previews = [a["preview"] for a in archives]
+        self.assertIn("Active content to be archived", previews)
+
+        # Slot must now point to the restored session.
+        state = self.repo.get_slot_state(user_id)
+        self.assertEqual(state["slots"]["1"], data["session_id"])
 
 
 if __name__ == "__main__":

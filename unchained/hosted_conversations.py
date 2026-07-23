@@ -86,11 +86,57 @@ class HostedConversationRepo:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def validate_session_id(session_id: str) -> None:
+        """Reject session IDs that contain path traversal or dangerous characters.
+
+        Must be called before any write path that accepts an externally-
+        supplied session_id. Generated IDs from new_session_id() are
+        always safe and skip this check.
+        """
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("session_id is required")
+        # Reject path traversal attempts — no silent stripping.
+        if ".." in session_id:
+            raise ValueError("session_id contains path traversal (..)")
+        if "/" in session_id or "\\" in session_id:
+            raise ValueError("session_id contains directory separator")
+        # Reject null bytes and control characters.
+        if "\0" in session_id:
+            raise ValueError("session_id contains null byte")
+        # Allow only printable ASCII-safe chars: alphanumeric, dashes, underscores,
+        # dots, colons, and a limited set of extras. No whitespace or shell-
+        # special characters.
+        if not re.fullmatch(r"[A-Za-z0-9._:\-]{1,200}", session_id):
+            raise ValueError("session_id contains disallowed characters")
+
+    @staticmethod
     def make_session_path(session_id: str, *, sessions_dir: str = "/data/sessions") -> str:
         """Build a session file path without needing an instance.
 
         Always requires *sessions_dir* for safety (no implicit defaults
         from the repo). Tests use this directly.
+
+        This method validates the session_id before constructing the path
+        so that path traversal attempts are rejected rather than silently
+        stripped. For reading historically stored files that were written
+        before validation was added, use :meth:`make_session_path_legacy`.
+        """
+        HostedConversationRepo.validate_session_id(session_id)
+        safe_id = session_id.replace(" ", "_")
+        return os.path.join(sessions_dir.rstrip("/\\"), f"{safe_id}.json")
+
+    @staticmethod
+    def make_session_path_legacy(
+        session_id: str, *, sessions_dir: str = "/data/sessions"
+    ) -> str:
+        """Build a session file path with pre-validation sanitization.
+
+        Use this ONLY for reading files that may have been written before
+        the validate-first policy was introduced. New code must use
+        :meth:`make_session_path` instead.
+
+        The sanitization mirrors the historical behavior: slashes and
+        ``..`` are replaced, not rejected.
         """
         safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
         return os.path.join(sessions_dir.rstrip("/\\"), f"{safe_id}.json")
@@ -108,26 +154,53 @@ class HostedConversationRepo:
     def read_session_messages(
         self, session_id: str, *, sessions_dir: str | None = None
     ) -> tuple[list[dict], bool]:
-        """Read active session messages. Returns (messages, found)."""
-        path = HostedConversationRepo.make_session_path(
-            session_id,
-            sessions_dir=sessions_dir or self._sessions_dir,
-        )
+        """Read active session messages. Returns (messages, found).
+
+        Dual-read: tries the validated path first, then falls back to
+        the legacy sanitized path so historically-stored files remain
+        readable.
+        """
+        sd = sessions_dir or self._sessions_dir
+        # Try validated path first; fall back to legacy for historic files.
         try:
-            with open(path) as f:
-                data = json.load(f)
-            return data.get("messages", []), True
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return [], False
+            path = HostedConversationRepo.make_session_path(session_id, sessions_dir=sd)
+        except ValueError:
+            path = None
+        legacy = HostedConversationRepo.make_session_path_legacy(
+            session_id, sessions_dir=sd
+        )
+        candidates = []
+        if path is not None:
+            candidates.append(path)
+        if legacy != path:
+            candidates.append(legacy)
+        for candidate in candidates:
+            try:
+                with open(candidate) as f:
+                    data = json.load(f)
+                msgs = data.get("messages")
+                if isinstance(msgs, list):
+                    return msgs, True
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                continue
+        return [], False
 
     def session_file_exists(
         self, session_id: str, *, sessions_dir: str | None = None
     ) -> bool:
-        path = HostedConversationRepo.make_session_path(
-            session_id,
-            sessions_dir=sessions_dir or self._sessions_dir,
+        sd = sessions_dir or self._sessions_dir
+        try:
+            path = HostedConversationRepo.make_session_path(session_id, sessions_dir=sd)
+        except ValueError:
+            path = None
+        if path and os.path.isfile(path):
+            return True
+        legacy = HostedConversationRepo.make_session_path_legacy(
+            session_id, sessions_dir=sd
         )
-        return os.path.isfile(path)
+        if legacy != path and os.path.isfile(legacy):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Slot state
@@ -300,8 +373,14 @@ class HostedConversationRepo:
         *,
         target_slot: int | None = None,
         sessions_dir: str | None = None,
+        agent_id: str = "trial-agent",
     ) -> tuple[str | None, int, list[dict]]:
         """Restore an archive into *target_slot* (or the slot stored in the archive).
+
+        *agent_id* determines the session-id prefix so the restored session is
+        owned by the correct authenticated identity.  Callers MUST pass the
+        authenticated account's agent_id from auth_info; the default
+        ``"trial-agent"`` is only appropriate for the legacy shared trial lane.
 
         Returns ``(new_session_id, slot, messages)``. The restored messages are
         written to a fresh session file. If the archive does not exist, returns
@@ -321,8 +400,9 @@ class HostedConversationRepo:
         if slot not in (1, 2, 3):
             slot = 1
         preview = str(data.get("preview", ""))[:200]
-        # Write restored messages to a fresh session file
-        new_sid = self.new_session_id(user_id, "trial-agent")
+        # Write restored messages to a fresh session file with an
+        # agent-scoped session_id so ownership checks pass.
+        new_sid = self.new_session_id(user_id, agent_id)
         sid_path = self.session_path(new_sid, sessions_dir=sessions_dir)
         tmp = f"{sid_path}.{uuid.uuid4().hex}.tmp"
         try:
@@ -337,7 +417,7 @@ class HostedConversationRepo:
                 os.remove(tmp)
             except FileNotFoundError:
                 pass
-        # Update slot state
+        # Update slot state to point to the new session.
         state = self.get_slot_state(user_id)
         state["slots"][str(slot)] = new_sid
         if preview:
