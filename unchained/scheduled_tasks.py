@@ -563,8 +563,9 @@ class ChatTriggerClient:
         timeout_seconds: int = 180,
     ) -> TriggerResult:
         body: dict[str, Any] = {"message": prompt, "allow_scheduler_trigger": False}
-        if model:
-            body["model"] = model
+        effective_model = model or os.environ.get("SCHEDULER_DEFAULT_MODEL", "")
+        if effective_model:
+            body["model"] = effective_model
         if session_id:
             body["session_id"] = session_id
         if headless:

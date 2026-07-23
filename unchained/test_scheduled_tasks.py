@@ -50,39 +50,70 @@ class _FakeTriggerClient(ChatTriggerClient):
         return self._results.pop(0)
 
 
+def _capture_trigger_body(*, model: str = "", scheduler_default: str = ""):
+    captured = {}
+
+    class Response:
+        def __init__(self):
+            self.lines = [b'data: {"type":"done"}\n', b""]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def readline(self):
+            return self.lines.pop(0)
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode())
+        captured["timeout"] = timeout
+        return Response()
+
+    client = ChatTriggerClient("https://example.test", "test-key")
+    with (
+        patch.dict(
+            os.environ,
+            {"SCHEDULER_DEFAULT_MODEL": scheduler_default},
+        ),
+        patch("scheduled_tasks.urllib.request.urlopen", side_effect=fake_urlopen),
+    ):
+        result = client.trigger(
+            prompt="run",
+            model=model,
+            session_id="s-claude-abc12345-stable",
+            profile_path="",
+        )
+    return captured, result
+
+
 class TestScheduledTasks(unittest.TestCase):
     def test_trigger_sends_explicit_default_profile_intent(self):
-        captured = {}
-
-        class Response:
-            def __init__(self):
-                self.lines = [b'data: {"type":"done"}\n', b""]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def readline(self):
-                return self.lines.pop(0)
-
-        def fake_urlopen(request, timeout):
-            captured["body"] = json.loads(request.data.decode())
-            captured["timeout"] = timeout
-            return Response()
-
-        client = ChatTriggerClient("https://example.test", "test-key")
-        with patch("scheduled_tasks.urllib.request.urlopen", side_effect=fake_urlopen):
-            result = client.trigger(
-                prompt="run",
-                session_id="s-claude-abc12345-stable",
-                profile_path="",
-            )
+        captured, result = _capture_trigger_body()
 
         self.assertTrue(result.ok)
         self.assertIn("profile_path", captured["body"])
         self.assertEqual(captured["body"]["profile_path"], "")
+
+    def test_trigger_uses_scheduler_default_model_when_omitted(self):
+        captured, result = _capture_trigger_body(
+            scheduler_default="google/gemini-3.1-flash-lite"
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            captured["body"]["model"], "google/gemini-3.1-flash-lite"
+        )
+
+    def test_trigger_explicit_model_overrides_scheduler_default(self):
+        captured, result = _capture_trigger_body(
+            model="openai/gpt-4.1-mini",
+            scheduler_default="google/gemini-3.1-flash-lite",
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(captured["body"]["model"], "openai/gpt-4.1-mini")
 
     def test_interval_and_daily_schedule_initialization(self):
         with tempfile.TemporaryDirectory() as td:

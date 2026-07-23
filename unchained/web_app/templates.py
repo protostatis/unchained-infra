@@ -8602,7 +8602,7 @@ TRIAL_CHAT_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Unchained Trial</title>
+<title>__HOSTED_PAGE_TITLE__</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -8662,6 +8662,17 @@ body{
   border:1px solid #555;padding:4px 10px;border-radius:6px;
 }
 #topbar .nav a:hover{border-color:var(--accent);color:var(--accent)}
+.credit-pill{
+  font-size:10px;padding:2px 8px;border-radius:999px;
+  font-family:var(--mono);white-space:nowrap;border:1px solid #444;
+  color:var(--muted);display:inline-flex;align-items:center;gap:4px;
+}
+.credit-pill.loading{opacity:0.5;animation:pulse 1.5s ease-in-out infinite}
+.credit-pill.low{color:#f0d58b;border-color:#7a6326}
+.credit-pill.exhausted{color:#ff9b9b;border-color:#8b4a2a}
+.credit-pill.error{color:#ff9b9b;border-color:#6b2a2a}
+.credit-pill.unavailable{display:none}
+@media (prefers-reduced-motion:reduce){.credit-pill.loading{animation:none;opacity:0.65}}
 
 /* === Chat === */
 #chat{
@@ -8823,11 +8834,20 @@ body{
 }
 #profilesel:focus{outline:none;border-color:var(--accent)}
 #model-notice{
-  display:none;margin:0 16px;padding:8px 10px;border-radius:8px;
+  display:none;align-items:center;gap:8px;flex-wrap:wrap;margin:0 16px;padding:8px 10px;border-radius:8px;
   border:1px solid #5a4a22;background:#2d2515;color:#dcc58a;
   font-size:12px;line-height:1.4;flex-shrink:0;
 }
 #model-notice strong{color:#f0d58b}
+#model-notice.funded{border-color:#315f4a;background:#12271f;color:#bde8d0}
+#model-notice.funded strong{color:#8de0b2}
+#model-notice .credit-pill{margin-left:auto;color:inherit;border-color:currentColor}
+#hosted-access-copy{min-width:180px;flex:1}
+.workspace-only[hidden]{display:none!important}
+#profile-note{
+  margin:4px 16px 0;color:var(--muted);font-size:11px;line-height:1.4;flex-shrink:0;
+}
+body.hosted-workspace #modelrow{flex-wrap:wrap}
 
 /* === Input === */
 #inputbar{
@@ -8989,6 +9009,7 @@ body{
   }
   #topbar .status.online,
   #topbar .status.warn{border-color:transparent}
+  .credit-pill{font-size:11px;padding:2px 6px;border:none}
 }
 
 /* Archive panel */
@@ -9103,6 +9124,7 @@ body{
       <a href="#" onclick="doNewChat();return false">New Chat</a>
       <a href="#" onclick="openArchives();return false">Archives</a>
       <a href="/scheduler">Scheduler</a>
+      <a href="/admin" id="hosted-admin-link" style="display:none">Admin</a>
       <a href="#" onclick="doDisconnect();return false">Logout</a>
     </div>
   </div>
@@ -9117,7 +9139,11 @@ body{
     </div>
   </div>
 
-  <div id="model-notice" aria-live="polite" style="display:block"><strong>Free tier</strong> &mdash; using lightweight models. Access your chosen Claude, Gemini, or Codex provider models using your own API key. <a href="/setup">Configure provider / API key &rarr;</a></div>
+  <div id="model-notice" aria-live="polite" style="display:flex">
+    <strong id="hosted-access-label">Checking hosted access</strong>
+    <span id="hosted-access-copy">Loading credit and model availability…</span>
+    <span class="credit-pill loading" id="creditpill">credit…</span>
+  </div>
   <div id="claude-request-banner">
     <span id="claude-request-text"></span>
     <button id="claude-request-btn" onclick="requestClaudeAccess()">Request Claude Access</button>
@@ -9138,7 +9164,7 @@ body{
 
   <div id="download-banner" class="guided" style="display:none">
     <div class="copy">
-      <span class="banner-kicker">Trial setup required</span>
+      <span class="banner-kicker">Browser setup required</span>
       <span id="banner-msg">Connect this computer to run browser tasks.</span>
       <span class="detail" id="banner-detail">The local connector starts the dedicated Chrome workspace; model status is tracked separately.</span>
     </div>
@@ -9157,7 +9183,7 @@ body{
       <button class="modal-close" onclick="closeInstallModal()">&times;</button>
       <h3 class="modal-title" id="install-modal-title">Connect this computer</h3>
       <p class="modal-desc" id="install-modal-desc">Pick one: installer or terminal command.</p>
-      <p class="modal-short" id="install-cli-requirement">No Claude, Codex, or OpenCode CLI is required for the guided trial. This starts the dedicated local Chrome workspace.</p>
+      <p class="modal-short" id="install-cli-requirement">No Claude, Codex, or OpenCode CLI is required. This starts the dedicated local Chrome workspace.</p>
       <div class="install-methods" aria-label="Install method choices">
         <div class="method-intro"><b>Choose one install method</b><span>Both options install the same guided connector. Do not run both.</span></div>
         <div class="method-grid">
@@ -9190,8 +9216,8 @@ body{
 
   <div id="chat">
       <div id="chat-hints">
-        <div class="hint-title">Unchained Chat</div>
-      <div class="hint-sub">Your AI-powered web assistant. Try a prompt below or type your own.</div>
+        <div class="hint-title" id="hosted-hint-title">Unchained Chat</div>
+      <div class="hint-sub" id="hosted-hint-sub">Your AI-powered web assistant. Try a prompt below or type your own.</div>
       <div class="hint-examples">
         <div class="hint-item" onclick="fillMsg('Go to Wikipedia and look up the Eiffel Tower')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>
         <div class="hint-item" onclick="fillMsg('Check the weather forecast on weather.gov for New York City')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>
@@ -9208,10 +9234,16 @@ body{
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
+      <option value="arcee-ai/trinity-large-preview:free">Trinity Large Preview &mdash; Free</option>
       <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
+    <label for="profilesel" id="profilelabel" class="workspace-only" hidden>Browser</label>
+    <select id="profilesel" class="workspace-only" hidden onchange="onProfileChange(this.value)" title="Choose a signed-in Chrome profile to copy into an isolated workspace">
+      <option value="">Dedicated workspace</option>
+    </select>
   </div>
+  <div id="profile-note" class="workspace-only" hidden aria-live="polite">Choose a local Chrome profile to launch a sandboxed copy. Your original profile stays untouched.</div>
   <div id="model-custom-row" style="display:none;padding:4px 16px 0">
     <input id="model-custom-input"
            type="text"
@@ -9220,7 +9252,7 @@ body{
            style="width:100%;height:28px;padding:0 8px;border:1px solid #444;border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;font-family:var(--mono)">
   </div>
   <div id="upgrade-banner">
-    Want better models? Claude, Gemini, and Codex are available with your own API key. <a href="/setup">Set up now &rarr;</a>
+    Want to use your own Claude, Gemini, Codex, or OpenCode provider? <a href="/local">Open local provider mode &rarr;</a>
     <button class="dismiss" onclick="dismissUpgrade()">&times;</button>
   </div>
   <div id="inputbar">
@@ -9241,15 +9273,33 @@ let _userId = '';
 let _userName = '';
 let _userPicture = '';
 let _openrouterUsage = null;
+let _creditState = null;
+let _creditRetryTimer = null;
+let selectedProfilePath = '';
+let profileSelectionReady = false;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
+let _hostedModelPolicy = null;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
+const _HOSTED_MODEL_LABELS = Object.freeze({
+  'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
+  'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'google/gemini-3-flash-preview': 'Gemini 3 Flash Preview',
+  'qwen/qwen3.6-plus': 'Qwen 3.6 Plus',
+  'qwen/qwen3.5-flash-02-23': 'Qwen 3.5 Flash',
+  'nvidia/nemotron-3-super-120b-a12b:free': 'NVIDIA Nemotron — Super 120B',
+  'arcee-ai/trinity-large-preview:free': 'Trinity Large Preview — Free',
+  'stepfun/step-3.5-flash:free': 'StepFun 3.5 Flash',
+});
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const _TRIAL_MODEL_STORAGE_PREFIX = 'unchained_trial_model:';
 const _TRIAL_ACTIVE_IDENTITY_KEY = 'unchained_trial_identity';
 const _LEGACY_MODEL_KEY = 'unchained_model';
 const _LEGACY_MODEL_OWNER_KEY = 'unchained_model_owner';
+const hostedWorkspaceMode = __HOSTED_WORKSPACE_MODE__;
 
 function _trialModelKey(userId) {
   return userId ? _TRIAL_MODEL_STORAGE_PREFIX + encodeURIComponent(userId) : '';
@@ -9277,6 +9327,8 @@ function _resetTrialModelUi() {
 function _syncTrialAdminUi() {
   const controlLink = document.getElementById('control-link');
   if (controlLink) controlLink.style.display = _isAdmin ? '' : 'none';
+  const adminLink = document.getElementById('hosted-admin-link');
+  if (adminLink) adminLink.style.display = _isAdmin ? '' : 'none';
 }
 
 function _setTrialIdentity(userId) {
@@ -9362,8 +9414,144 @@ function _applyAuthState(data) {
   _userName = data.name || '';
   _userPicture = data.picture || '';
   _openrouterUsage = data.openrouter_usage || null;
+  _creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;
   _accountStatus = data.status || (data.pending ? 'pending' : 'approved');
   _claudeAccessRequested = !!data.claude_access_requested;
+  if (data.hosted_model_policy) _applyHostedModelPolicy(data.hosted_model_policy);
+  _renderCreditPill();
+}
+
+function _hasReceivedHostedCredit() {
+  return !!(
+    _creditState &&
+    _creditState.available !== false &&
+    Number(_creditState.total_granted_micro_usd || 0) > 0
+  );
+}
+
+function _redirectForHostedAccess() {
+  if (!_creditState || _creditState.available === false) return false;
+  const funded = _hasReceivedHostedCredit();
+  if (!hostedWorkspaceMode && funded) {
+    window.location.replace('/workspace');
+    return true;
+  }
+  if (hostedWorkspaceMode && !funded) {
+    window.location.replace('/trial');
+    return true;
+  }
+  return false;
+}
+
+function _renderHostedAccessUi() {
+  const funded = _hasReceivedHostedCredit();
+  const notice = document.getElementById('model-notice');
+  const label = document.getElementById('hosted-access-label');
+  const copy = document.getElementById('hosted-access-copy');
+  const hintTitle = document.getElementById('hosted-hint-title');
+  const hintSub = document.getElementById('hosted-hint-sub');
+  document.body.classList.toggle('hosted-workspace', hostedWorkspaceMode);
+  for (const el of document.querySelectorAll('.workspace-only')) {
+    el.hidden = !hostedWorkspaceMode;
+  }
+  if (!notice || !label || !copy) return;
+  notice.style.display = 'flex';
+  notice.classList.toggle('funded', funded);
+  if (!_creditState || _creditState.available === false) {
+    label.textContent = 'Hosted access';
+    copy.textContent = 'Credit status is temporarily unavailable. Retrying automatically.';
+  } else if (funded) {
+    const available = Number(_creditState.available_usd) || 0;
+    label.textContent = 'Hosted workspace';
+    copy.textContent = available > 0
+      ? 'Hosted models draw from your account credit. No provider API key required.'
+      : 'Credit is exhausted. Free hosted models remain available.';
+  } else if (_openrouterUsage && _openrouterUsage.capped) {
+    label.textContent = 'Free trial limit reached';
+    copy.textContent = 'Free hosted models remain available, or switch to local provider mode.';
+  } else {
+    label.textContent = 'Free trial';
+    copy.textContent = 'Lightweight hosted models with a dedicated browser workspace. No provider API key required.';
+  }
+  if (hintTitle) hintTitle.textContent = hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat';
+  if (hintSub) {
+    hintSub.textContent = hostedWorkspaceMode
+      ? 'Choose a hosted model and browser profile, then give your agent a task.'
+      : 'Your AI-powered web assistant. Try a prompt below or type your own.';
+  }
+}
+
+function _renderCreditPill() {
+  const pill = document.getElementById('creditpill');
+  if (!pill) return;
+  _renderHostedAccessUi();
+  if (!_creditState) {
+    pill.className = 'credit-pill unavailable';
+    pill.textContent = '';
+    return;
+  }
+  if (_creditState.available === false) {
+    pill.className = 'credit-pill error';
+    pill.textContent = 'credit unavailable';
+    pill.setAttribute('aria-label', 'Hosted credit status unavailable');
+    pill.title = 'Credit status unavailable. Try again shortly.';
+    return;
+  }
+  const avail = Number(_creditState.available_usd) || 0;
+  const bal = Number(_creditState.balance_usd) || 0;
+  if (avail <= 0 && bal <= 0) {
+    pill.className = 'credit-pill exhausted';
+    pill.textContent = '$0.00 credit';
+    pill.setAttribute('aria-label', 'Hosted credit exhausted');
+    pill.title = 'Hosted credit exhausted. Free models remain available.';
+    return;
+  }
+  const display = avail > 0 ? avail : bal;
+  const label = '$' + display.toFixed(2);
+  if (display < 1.00) {
+    pill.className = 'credit-pill low';
+    pill.textContent = label + ' remaining';
+    pill.setAttribute('aria-label', label + ' hosted credit remaining');
+    pill.title = 'Low hosted credit';
+    return;
+  }
+  pill.className = 'credit-pill';
+  pill.textContent = label + ' available';
+  pill.setAttribute('aria-label', label + ' hosted credit available');
+  pill.title = 'Hosted inference credit';
+}
+
+async function refreshCreditState() {
+  try {
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    _creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;
+    _openrouterUsage = data.openrouter_usage || null;
+    if (data.hosted_model_policy) _applyHostedModelPolicy(data.hosted_model_policy);
+    _renderCreditPill();
+    if (_redirectForHostedAccess()) return;
+    _applyOpenRouterCapUi();
+    if (_creditRetryTimer) clearTimeout(_creditRetryTimer);
+    _creditRetryTimer = null;
+  } catch(e) {
+    const pill = document.getElementById('creditpill');
+    if (pill) {
+      pill.className = 'credit-pill error';
+      pill.textContent = 'credit unavailable';
+      pill.setAttribute('aria-label', 'Hosted credit status unavailable');
+      pill.title = 'Credit status unavailable. Retrying automatically.';
+    }
+    if (!_creditRetryTimer) {
+      _creditRetryTimer = setTimeout(function() {
+        _creditRetryTimer = null;
+        refreshCreditState();
+      }, 30000);
+    }
+  }
 }
 
 async function handleGoogleCredential(response) {
@@ -9469,6 +9657,10 @@ async function checkApproval() {
 
 async function doDisconnect() {
   await fetch('/auth/logout', {method: 'POST'});
+  if (hostedWorkspaceMode) {
+    window.location.replace('/trial');
+    return;
+  }
   _setTrialIdentity('');
   agentId = '';
   sessionId = '';
@@ -9561,10 +9753,156 @@ function currentModel() {
   return selected;
 }
 
+function _hostedProfileStoreKey() {
+  return _userId ? 'unchained_hosted_profile:' + encodeURIComponent(_userId) : '';
+}
+
+function onProfileChange(profilePath) {
+  selectedProfilePath = String(profilePath || '');
+  profileSelectionReady = true;
+  const key = _hostedProfileStoreKey();
+  try {
+    if (key) localStorage.setItem(key, selectedProfilePath);
+  } catch(e) {}
+  const note = document.getElementById('profile-note');
+  if (note) {
+    note.textContent = selectedProfilePath
+      ? 'A sandboxed copy of this Chrome profile will be used. Your original profile stays untouched.'
+      : 'The dedicated Unchained workspace will be used.';
+  }
+}
+
+function currentProfilePath() {
+  return selectedProfilePath || '';
+}
+
+async function loadHostedProfiles() {
+  const sel = document.getElementById('profilesel');
+  const note = document.getElementById('profile-note');
+  if (!hostedWorkspaceMode || !sel) {
+    profileSelectionReady = false;
+    selectedProfilePath = '';
+    return;
+  }
+  const key = _hostedProfileStoreKey();
+  let remembered = '';
+  try { remembered = key ? (localStorage.getItem(key) || '') : ''; } catch(e) {}
+  selectedProfilePath = '';
+  profileSelectionReady = false;
+  sel.disabled = true;
+  sel.innerHTML = '<option value="">Loading Chrome profiles…</option>';
+  let profiles = [];
+  let loadFailed = false;
+  try {
+    const r = await fetch('/web/provision/profiles', {cache: 'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    profiles = Array.isArray(data.profiles) ? data.profiles : [];
+  } catch(e) {
+    loadFailed = true;
+  }
+  sel.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Dedicated workspace';
+  sel.appendChild(defaultOpt);
+  const availablePaths = new Set();
+  for (const p of profiles) {
+    const path = String(p.profile_path || p.path || '').trim();
+    if (!path || availablePaths.has(path)) continue;
+    availablePaths.add(path);
+    const label = String(p.name || p.dir_name || 'Chrome profile').trim();
+    const email = String(p.email || '').trim();
+    const opt = document.createElement('option');
+    opt.value = path;
+    opt.textContent = email ? (label + ' (' + email + ')') : label;
+    sel.appendChild(opt);
+  }
+  if (remembered && availablePaths.has(remembered)) {
+    sel.value = remembered;
+    selectedProfilePath = remembered;
+  } else {
+    sel.value = '';
+    selectedProfilePath = '';
+    if (remembered && key) {
+      try { localStorage.removeItem(key); } catch(e) {}
+    }
+  }
+  sel.disabled = false;
+  profileSelectionReady = true;
+  if (note) {
+    if (loadFailed) {
+      note.textContent = 'Chrome profiles could not be loaded. Using the dedicated workspace.';
+    } else if (!availablePaths.size) {
+      note.textContent = 'No additional Chrome profiles were found. Using the dedicated workspace.';
+    } else if (selectedProfilePath) {
+      note.textContent = 'A sandboxed copy of this Chrome profile will be used. Your original profile stays untouched.';
+    } else {
+      note.textContent = 'Choose a profile for a sandboxed copy, or keep the dedicated workspace.';
+    }
+  }
+}
+
+function _hostedModelLabel(model) {
+  return _HOSTED_MODEL_LABELS[model] || model;
+}
+
+function _applyHostedModelPolicy(policy) {
+  if (!policy || !Array.isArray(policy.models)) return;
+  const models = [];
+  const seen = new Set();
+  for (const raw of policy.models) {
+    const model = String(raw || '').trim();
+    if (!_isOpenRouterModelId(model) || seen.has(model)) continue;
+    seen.add(model);
+    models.push(model);
+  }
+  if (!models.length) return;
+  const sel = document.getElementById('modelsel');
+  const customOption = document.getElementById('modelsel-custom-option');
+  const customInput = document.getElementById('model-custom-input');
+  if (!sel || !customOption) return;
+
+  const saved = _readTrialModelPreference();
+  const selected = sel.value === '__custom_openrouter__'
+    ? String(customInput?.value || '').trim()
+    : String(sel.value || '').trim();
+  _hostedModelPolicy = Object.assign({}, policy, {models});
+  if (Array.isArray(policy.post_cap_models) && policy.post_cap_models.length) {
+    _POST_CAP_ALLOWED_MODELS = policy.post_cap_models
+      .map(v => String(v || '').trim())
+      .filter(Boolean);
+  }
+
+  sel.replaceChildren();
+  for (const model of models) {
+    const opt = document.createElement('option');
+    opt.value = model;
+    opt.textContent = _hostedModelLabel(model) +
+      (model === policy.default_model ? ' — Default' : '');
+    sel.appendChild(opt);
+  }
+  sel.appendChild(customOption);
+
+  const desired = saved || selected;
+  if (_isAdmin && desired && _isOpenRouterModelId(desired) && !seen.has(desired)) {
+    sel.value = '__custom_openrouter__';
+    if (customInput) customInput.value = desired;
+  } else {
+    const next = seen.has(desired)
+      ? desired
+      : (seen.has(policy.default_model) ? policy.default_model : models[0]);
+    sel.value = next;
+    if (_userId) _persistTrialModel(next);
+  }
+  _applyOpenRouterCapUi();
+  _syncCustomModelUi();
+}
+
 function _defaultTrialModel() {
   const sel = document.getElementById('modelsel');
   if (!sel) return '';
-  if (_openrouterUsage && _openrouterUsage.capped) {
+  if (!_isAdmin && !_hasReceivedHostedCredit() && _openrouterUsage && _openrouterUsage.capped) {
     for (const model of _POST_CAP_ALLOWED_MODELS) {
       if (_modelOptionExists(model)) return model;
     }
@@ -9591,7 +9929,7 @@ function _applyOpenRouterCapUi() {
   const sel = document.getElementById('modelsel');
   if (!sel) return;
   const notice = document.getElementById('model-notice');
-  const capped = !!(_openrouterUsage && _openrouterUsage.capped);
+  const capped = !_isAdmin && !_hasReceivedHostedCredit() && !!(_openrouterUsage && _openrouterUsage.capped);
   for (const opt of Array.from(sel.options)) {
     const v = opt.value;
     if (v === '__custom_openrouter__') continue;
@@ -9613,12 +9951,8 @@ function _applyOpenRouterCapUi() {
         _persistTrialModel(forced);
       }
     }
-    if (notice) {
-      notice.innerHTML = '<strong>Trial budget reached</strong> &mdash; available models are Trinity and StepFun.';
-    }
-  } else if (notice) {
-    notice.innerHTML = '<strong>Free tier</strong> &mdash; using lightweight models. Access your chosen Claude, Gemini, or Codex provider models using your own API key. <a href="/setup">Configure provider / API key &rarr;</a>';
   }
+  if (notice) _renderHostedAccessUi();
 }
 
 function _syncCustomModelUi() {
@@ -9626,13 +9960,12 @@ function _syncCustomModelUi() {
   const customOption = document.getElementById('modelsel-custom-option');
   const customRow = document.getElementById('model-custom-row');
   if (!sel) return;
-  const capped = !!(_openrouterUsage && _openrouterUsage.capped);
-  if (customOption) customOption.style.display = (_isAdmin && !capped) ? '' : 'none';
-  if ((!_isAdmin || capped) && sel.value === '__custom_openrouter__') {
+  if (customOption) customOption.style.display = _isAdmin ? '' : 'none';
+  if (!_isAdmin && sel.value === '__custom_openrouter__') {
     sel.value = _defaultTrialModel();
   }
   if (customRow) {
-    customRow.style.display = (_isAdmin && !capped && sel.value === '__custom_openrouter__') ? 'block' : 'none';
+    customRow.style.display = (_isAdmin && sel.value === '__custom_openrouter__') ? 'block' : 'none';
   }
 }
 
@@ -10032,11 +10365,19 @@ async function switchSlot(n) {
   _persistSessionId(sessionId);
   _syncSlotButtons();
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  // Persist slot switch to server when using hosted OpenRouter models.
+  if (_isOpenRouterModelId(currentModel())) {
+    fetch('/web/chat/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: currentModel(), slot: activeSlot}),
+    }).catch(function(){});
+  }
   await loadHistory();
 }
 
 function onModelChange(model) {
-  if (_openrouterUsage && _openrouterUsage.capped && !_isPostCapAllowedModel(model)) {
+  if (!_isAdmin && !_hasReceivedHostedCredit() && _openrouterUsage && _openrouterUsage.capped && !_isPostCapAllowedModel(model)) {
     const forced = _defaultTrialModel();
     if (_modelOptionExists(forced)) {
       document.getElementById('modelsel').value = forced;
@@ -10085,7 +10426,7 @@ function trialInstallCommandLabel(reconnect) {
 
 function updateTrialInstallGuidance() {
   const req = document.getElementById('install-cli-requirement');
-  if (req) req.textContent = 'No Claude, Codex, or OpenCode CLI is required for the guided trial. This starts the dedicated local Chrome workspace.';
+  if (req) req.textContent = 'No Claude, Codex, or OpenCode CLI is required. This starts the dedicated local Chrome workspace.';
 }
 
 function updateSendAvailability(ready) {
@@ -10230,10 +10571,10 @@ function updateAgentStatusUI(data) {
     } else {
       if (chatConnected && !debouncedBridge && bannerMsg) {
         bannerMsg.textContent = 'Your local browser workspace is offline on this machine.';
-        if (bannerDetail) bannerDetail.textContent = 'The trial agent is reachable, but browser actions still need the local connector. Start it here and keep it open.';
+        if (bannerDetail) bannerDetail.textContent = 'The hosted agent is reachable, but browser actions still need the local connector. Start it here and keep it open.';
       } else if (mismatch && bannerMsg) {
         bannerMsg.textContent = 'A different local chat agent is connected for this account.';
-        if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should run the trial browser connector.';
+        if (bannerDetail) bannerDetail.textContent = 'Use the other machine, or reconnect this computer if it should run the browser connector.';
         if (bannerCurl) {
           bannerCurl.textContent = trialInstallCommandLabel(true);
           bannerCurl.dataset.reconnect = '1';
@@ -10248,14 +10589,53 @@ function updateAgentStatusUI(data) {
   maybeAutoOpenInstallModal(chatConnected, debouncedBridge, mismatch, wasSetupReady);
 }
 
+async function syncTrialSlotStateFromServer() {
+  try {
+    const r = await fetch('/web/chat/slots?model=' + encodeURIComponent(currentModel()));
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!data.trial || !data.slots) return null;
+    const local = _ensureSlotState();
+    let changed = false;
+    for (let i = 1; i <= 3; i++) {
+      const index = i - 1;
+      const sv = data.slots[index];
+      if (!sv) continue;
+      const sidKey = String(i);
+      const svSid = sv.session_id || '';
+      const svPreview = sv.preview || '';
+      // Server wins: override local slot session + preview when
+      // the server has a non-empty session for this lane or when
+      // the server's active_slot is authoritative.
+      if (svSid && local.slots[sidKey] !== svSid) {
+        local.slots[sidKey] = svSid;
+        changed = true;
+      }
+      if (svPreview && local.previews[sidKey] !== svPreview) {
+        local.previews[sidKey] = svPreview;
+        changed = true;
+      }
+    }
+    if (data.active_slot && local.active_slot !== data.active_slot) {
+      local.active_slot = data.active_slot;
+      changed = true;
+    }
+    if (changed) _saveSlotState(local);
+    return local;
+  } catch(e) { return null; }
+}
+
 function showMain() {
+  if (_redirectForHostedAccess()) return;
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
   document.getElementById('main').style.display = 'flex';
   renderClaudeRequestBanner();
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   _syncTrialAdminUi();
-  try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
+  _renderCreditPill();
+  _renderHostedAccessUi();
+  try { localStorage.setItem('unchained_last_route', hostedWorkspaceMode ? '/workspace' : '/trial'); } catch(e){}
   _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get('model') || '').trim();
@@ -10270,18 +10650,33 @@ function showMain() {
   }
   _applyOpenRouterCapUi();
   _syncCustomModelUi();
+  refreshCreditState();
   const slotState = _ensureSlotState();
   activeSlot = slotState.active_slot;
   sessionId = slotState.slots[String(activeSlot)] || _restoreSessionId() || _newSessionId();
   _persistSessionId(sessionId);
   _setActiveSlotSession(sessionId);
   _syncSlotButtons();
+  loadHostedProfiles();
   updateTrialInstallGuidance();
   updateSendAvailability(false);
   checkAgentStatus();
   setInterval(checkAgentStatus, 10000);
   loadHistory();
   recoverPendingNewChat();
+  // Sync authoritative server slot state after sign-in; server wins.
+  syncTrialSlotStateFromServer().then(function(synced) {
+    if (synced && synced.slots) {
+      var serverSid = synced.slots[String(activeSlot)];
+      if (serverSid && serverSid !== sessionId) {
+        sessionId = serverSid;
+        _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
+        _syncSlotButtons();
+        loadHistory();
+      }
+    }
+  });
 
 }
 
@@ -10353,8 +10748,8 @@ function showHintsIfEmpty() {
   if (document.getElementById('chat-hints')) return;
   document.getElementById('chat').innerHTML =
     '<div id="chat-hints">' +
-    '<div class="hint-title">Unchained Chat</div>' +
-    '<div class="hint-sub">Your AI-powered web assistant. Try a prompt below or type your own.</div>' +
+    '<div class="hint-title" id="hosted-hint-title">' + (hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat') + '</div>' +
+    '<div class="hint-sub" id="hosted-hint-sub">' + (hostedWorkspaceMode ? 'Choose a hosted model and browser profile, then give your agent a task.' : 'Your AI-powered web assistant. Try a prompt below or type your own.') + '</div>' +
     '<div class="hint-examples">' +
     '<div class="hint-item" onclick="fillMsg(\'Go to Wikipedia and look up the Eiffel Tower\')"><span class="hint-emoji">&#127758;</span> Look up the Eiffel Tower on Wikipedia</div>' +
     '<div class="hint-item" onclick="fillMsg(\'Check the weather forecast on weather.gov for New York City\')"><span class="hint-emoji">&#9925;</span> Check the NYC weather on weather.gov</div>' +
@@ -11015,16 +11410,19 @@ async function doSend() {
   _cancelCtrl = new AbortController();
 
   try {
+    const payload = {
+      message: msg,
+      agent_id: agentId,
+      session_id: sessionId,
+      model: model,
+      slot: activeSlot,
+    };
+    const profilePath = currentProfilePath();
+    if (hostedWorkspaceMode) payload.profile_path = profileSelectionReady ? profilePath : '';
     const r = await fetch('/web/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        agent_id: agentId,
-        session_id: sessionId,
-        model: model,
-        slot: activeSlot,
-      }),
+      body: JSON.stringify(payload),
       signal: _cancelCtrl.signal,
     });
 
@@ -11146,6 +11544,7 @@ async function doSend() {
     _navTrail = [];
     renderNavTrail();
     maybeShowUpgrade();
+    refreshCreditState();
   
   }
 }
@@ -11161,6 +11560,7 @@ function _incTrialMsgCount() {
   return n;
 }
 function maybeShowUpgrade() {
+  if (hostedWorkspaceMode || _hasReceivedHostedCredit()) return;
   if (_upgradeDismissed) return;
   if (_trialMsgCount() >= 5) {
     document.getElementById('upgrade-banner').style.display = 'block';
@@ -11190,8 +11590,8 @@ async function showTrialInstallCmd(reconnect) {
     ? (isWin ? 'Pick one: installer or PowerShell command to reconnect the local workspace.' : 'Pick one: installer or terminal command to reconnect the local workspace.')
     : (isWin ? 'Pick one: installer or PowerShell command.' : 'Pick one: installer or terminal command.');
   document.getElementById('install-modal-note').textContent = isWin
-    ? 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+.'
-    : 'The command is scoped to this signed-in trial account and expires in 15 minutes. Requires Python 3.8+ and curl.';
+    ? 'The command is scoped to this signed-in Unchained account and expires in 15 minutes. Requires Python 3.8+.'
+    : 'The command is scoped to this signed-in Unchained account and expires in 15 minutes. Requires Python 3.8+ and curl.';
   if (copyBtn) {
     copyBtn.disabled = false;
     copyBtn.textContent = 'Copy Command';
@@ -24168,6 +24568,7 @@ function declineConsent() {
 function showToast(msg, isErr) {
   const t = document.createElement('div');
   t.className = 'toast ' + (isErr ? 'err' : 'ok');
+  t.setAttribute('role', isErr ? 'alert' : 'status');
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
@@ -24914,7 +25315,21 @@ header .badge{background:#1a1a1a;border:1px solid var(--border);padding:3px 10px
 .count-badge{display:inline-block;background:#1e1e1e;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px;color:var(--muted)}
 .tab.active .count-badge{color:var(--accent)}
 .content{padding:16px 24px}
+.settings-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,520px);gap:24px;align-items:start;margin-bottom:20px;padding:18px;border:1px solid var(--border);border-radius:10px;background:linear-gradient(135deg,#111,#0d1118)}
+.settings-copy h2{font-size:14px;margin-bottom:7px;color:var(--text)}
+.settings-copy p{max-width:680px;color:#999;font-size:11px;line-height:1.6}
+.settings-copy .admin-model-note{margin-top:10px;color:#a7c7ff}
+.settings-editor label{display:block;margin-bottom:6px;color:var(--text);font-size:11px;font-weight:600}
+.settings-editor textarea{width:100%;min-height:174px;resize:vertical;padding:10px 12px;border:1px solid #303746;border-radius:7px;background:#080b10;color:var(--text);font:12px/1.55 var(--mono)}
+.settings-editor textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(96,165,250,.12)}
+.settings-help{margin-top:7px;color:var(--muted);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.settings-actions{display:flex;align-items:center;gap:10px;margin-top:10px}
+.settings-save{padding:7px 15px;border:1px solid #315b91;border-radius:5px;background:#14243a;color:#93c5fd;font:600 11px var(--mono);cursor:pointer}
+.settings-save:hover{background:#1a3150}.settings-save:disabled{opacity:.45;cursor:not-allowed}
+.settings-status{min-height:16px;color:var(--muted);font-size:10px}.settings-status.ok{color:var(--green)}.settings-status.err{color:var(--red)}
 table{width:100%;border-collapse:collapse;font-size:12px}
+.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+#users-table{min-width:1180px}
 thead th{text-align:left;padding:8px 12px;color:var(--muted);font-weight:500;border-bottom:1px solid var(--border);white-space:nowrap}
 tbody tr{border-bottom:1px solid #181818;transition:background 0.1s}
 tbody tr:hover{background:#111}
@@ -24943,6 +25358,32 @@ tbody td{padding:10px 12px;vertical-align:middle}
 .toast.err{background:#2d0d0d;color:var(--red);border:1px solid #4a1a1a}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 #error-msg{padding:40px;text-align:center;color:var(--red)}
+.credit-pill{font-size:11px;color:var(--muted);white-space:nowrap}
+.credit-pill .num{color:var(--text)}
+.credit-pill .low{color:var(--yellow)}
+.credit-pill .empty{color:var(--muted);font-style:italic}
+.btn-grant{background:#1a1a2d;color:#a78bfa;border-color:#2d2d4a}
+.btn-grant:hover{background:#24244a}
+.dialog-overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center}
+.dialog-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:90%;position:relative}
+.dialog-card h2{margin:0 0 16px;font-size:14px;font-weight:600;color:var(--text)}
+.dialog-label{display:block;font-size:11px;color:var(--muted);margin:0 0 4px}
+.dialog-input{width:100%;height:36px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:#0a0a0a;color:var(--text);font-size:13px;font-family:var(--mono);margin-bottom:12px}
+.dialog-input:focus{outline:none;border-color:var(--accent)}
+.dialog-input.error{border-color:var(--red)}
+.dialog-err{color:var(--red);font-size:11px;min-height:16px;margin-bottom:8px}
+.dialog-actions{display:flex;gap:8px;justify-content:flex-end}
+.dialog-btn{padding:6px 16px;border-radius:4px;font-size:12px;font-family:var(--mono);cursor:pointer;border:1px solid;font-weight:500}
+.dialog-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.dialog-btn.primary:hover{opacity:0.85}
+.dialog-btn.primary:disabled{opacity:0.3;cursor:not-allowed}
+.dialog-btn.cancel{background:transparent;color:var(--muted);border-color:var(--border)}
+.dialog-btn.cancel:hover{color:var(--text)}
+.dialog-success{color:var(--green);font-size:12px;margin-bottom:8px}
+.dialog-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.refresh-dot,.toast,.dialog-spinner{animation:none}}
+@media(max-width:820px){.settings-card{grid-template-columns:1fr}.content{padding:14px}.tabs{padding-left:14px;overflow-x:auto}header{padding:12px 14px}}
 </style>
 </head>
 <body>
@@ -24953,28 +25394,48 @@ tbody td{padding:10px 12px;vertical-align:middle}
   <span class="badge" id="admin-email">loading…</span>
 </header>
 <div class="tabs">
-  <button class="tab active" data-filter="all">All <span class="count-badge" id="cnt-all">0</span></button>
-  <button class="tab" data-filter="pending">Pending <span class="count-badge" id="cnt-pending">0</span></button>
-  <button class="tab" data-filter="approved">Approved <span class="count-badge" id="cnt-approved">0</span></button>
-  <button class="tab" data-filter="rejected">Rejected <span class="count-badge" id="cnt-rejected">0</span></button>
+  <button class="tab active" data-filter="all" aria-pressed="true">All <span class="count-badge" id="cnt-all">0</span></button>
+  <button class="tab" data-filter="pending" aria-pressed="false">Pending <span class="count-badge" id="cnt-pending">0</span></button>
+  <button class="tab" data-filter="approved" aria-pressed="false">Approved <span class="count-badge" id="cnt-approved">0</span></button>
+  <button class="tab" data-filter="rejected" aria-pressed="false">Rejected <span class="count-badge" id="cnt-rejected">0</span></button>
 </div>
 <div class="content">
+  <section class="settings-card" aria-labelledby="hosted-model-settings-title">
+    <div class="settings-copy">
+      <h2 id="hosted-model-settings-title">Hosted model access</h2>
+      <p>Choose the ordered OpenRouter model list shown to non-admin users in Trial and Workspace. The same list is enforced on the server, so removed models cannot be submitted directly. Models without catalog pricing use a conservative default credit hold; verify pricing before exposing expensive models.</p>
+      <p class="admin-model-note">Admin accounts can always choose “Custom OpenRouter” and enter any valid provider/model ID. Credit and safety holds still apply.</p>
+    </div>
+    <div class="settings-editor">
+      <label for="hosted-model-list">Non-admin models · one ID per line</label>
+      <textarea id="hosted-model-list" spellcheck="false" autocomplete="off" aria-describedby="hosted-model-help"></textarea>
+      <div class="settings-help" id="hosted-model-help">Required operational models cannot be removed: <span id="hosted-model-required">loading…</span></div>
+      <div class="settings-actions">
+        <button class="settings-save" id="hosted-model-save" type="button" onclick="saveHostedModelPolicy()">Save model list</button>
+        <span class="settings-status" id="hosted-model-status" role="status" aria-live="polite">Loading…</span>
+      </div>
+    </div>
+  </section>
   <div class="refresh"><span class="refresh-dot"></span><span id="refresh-status">Loading…</span></div>
   <div id="error-msg" style="display:none"></div>
+  <div class="table-scroll" role="region" aria-label="User accounts" tabindex="0">
   <table id="users-table" style="display:none">
     <thead><tr>
-      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>OR Spend</th><th>OR Remaining</th><th>Actions</th>
+      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>OR Spend</th><th>OR Remaining</th><th>Credit</th><th>Actions</th>
     </tr></thead>
     <tbody id="users-body"></tbody>
   </table>
+  </div>
   <div id="empty-msg" class="empty" style="display:none">No users in this view.</div>
 </div>
 <script>
 let _allUsers = [];
 let _filter = 'all';
 let _adminEmail = '';
+let _hostedModelPolicy = null;
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
 function fmtTs(ts) {
   if (!ts) return '—';
@@ -25049,6 +25510,17 @@ function renderTable() {
     const remainingLabel = budgetUsd > 0
       ? ('$' + remainingUsd.toFixed(4))
       : '—';
+    const credit = u.credit && typeof u.credit === 'object' ? u.credit : {};
+    const availUsd = Number(credit.available_usd) || 0;
+    const balUsd = Number(credit.balance_usd) || 0;
+    const creditDisplay = availUsd > 0 ? availUsd : balUsd;
+    let creditHtml;
+    if (creditDisplay > 0) {
+      const lowCls = creditDisplay < 1.00 ? ' low' : '';
+      creditHtml = '<span class="credit-pill"><span class="num' + lowCls + '">$' + creditDisplay.toFixed(2) + '</span></span>';
+    } else {
+      creditHtml = '<span class="credit-pill"><span class="empty">$0.00</span></span>';
+    }
     const canApprove = u.status !== 'approved';
     const canReject = u.status !== 'rejected';
     const approveBtn = canApprove
@@ -25057,6 +25529,8 @@ function renderTable() {
     const rejectBtn = canReject
       ? '<button class="btn btn-reject" onclick="doAction(\'' + esc(u.email) + '\',\'reject\')">Reject</button>'
       : '<button class="btn btn-reject" disabled>Reject</button>';
+    const userId = String(u.user_id || '').trim();
+    const grantBtn = '<button class="btn btn-grant js-grant-credit" data-user-id="' + escAttr(userId) + '" data-user-label="' + escAttr(u.email) + '">Grant Credit</button>';
     return '<tr>' +
       '<td>' + avatarHtml + '</td>' +
       '<td class="email">' + esc(u.email) + '</td>' +
@@ -25067,9 +25541,15 @@ function renderTable() {
       '<td class="ts">' + fmtTs(u.last_login_at) + '</td>' +
       '<td class="ts">' + spendLabel + '</td>' +
       '<td class="ts">' + remainingLabel + '</td>' +
-      '<td><div class="actions">' + approveBtn + rejectBtn + '</div></td>' +
+      '<td class="ts">' + creditHtml + '</td>' +
+      '<td><div class="actions">' + approveBtn + rejectBtn + grantBtn + '</div></td>' +
       '</tr>';
   }).join('');
+  tbody.querySelectorAll('.js-grant-credit').forEach(function(button) {
+    button.addEventListener('click', function() {
+      openGrantDialog(button.dataset.userId || '', button.dataset.userLabel || '');
+    });
+  });
 }
 
 async function loadUsers() {
@@ -25101,11 +25581,73 @@ async function loadAdminEmail() {
   } catch(e) {}
 }
 
+function renderHostedModelPolicy(policy) {
+  _hostedModelPolicy = policy && typeof policy === 'object' ? policy : null;
+  const textarea = document.getElementById('hosted-model-list');
+  const required = document.getElementById('hosted-model-required');
+  const status = document.getElementById('hosted-model-status');
+  if (!_hostedModelPolicy || !Array.isArray(_hostedModelPolicy.models)) {
+    status.className = 'settings-status err';
+    status.textContent = 'Model policy unavailable';
+    return;
+  }
+  textarea.value = _hostedModelPolicy.models.join('\n');
+  required.textContent = Array.isArray(_hostedModelPolicy.required_models)
+    ? _hostedModelPolicy.required_models.join(', ')
+    : 'default and fallback models';
+  status.className = 'settings-status';
+  status.textContent = _hostedModelPolicy.configured ? 'Saved policy loaded' : 'Using built-in defaults';
+}
+
+async function loadHostedModelPolicy() {
+  const status = document.getElementById('hosted-model-status');
+  try {
+    const r = await fetch('/admin/settings/hosted-models', {cache:'no-store'});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not load model policy');
+    renderHostedModelPolicy(data.policy);
+  } catch(e) {
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'Could not load model policy';
+  }
+}
+
+async function saveHostedModelPolicy() {
+  const textarea = document.getElementById('hosted-model-list');
+  const status = document.getElementById('hosted-model-status');
+  const button = document.getElementById('hosted-model-save');
+  const models = textarea.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+  button.disabled = true;
+  status.className = 'settings-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/admin/settings/hosted-models', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({models}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not save model policy');
+    renderHostedModelPolicy(data.policy);
+    status.className = 'settings-status ok';
+    status.textContent = 'Saved';
+  } catch(e) {
+    status.className = 'settings-status err';
+    status.textContent = e.message || 'Could not save model policy';
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed', 'false');
+    });
     tab.classList.add('active');
+    tab.setAttribute('aria-pressed', 'true');
     _filter = tab.dataset.filter;
     renderTable();
   });
@@ -25113,8 +25655,195 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 // Auto-refresh every 30s
 loadAdminEmail();
+loadHostedModelPolicy();
 loadUsers();
 setInterval(loadUsers, 30000);
+</script>
+
+<!-- Grant credit dialog -->
+<div class="dialog-overlay" id="grant-dialog" onclick="if(event.target===this)closeGrantDialog()">
+  <form class="dialog-card" id="grant-form" role="dialog" aria-modal="true" aria-labelledby="grant-dialog-title" aria-describedby="grant-user-label" onsubmit="event.preventDefault();submitGrant()">
+    <h2 id="grant-dialog-title">Grant Credit</h2>
+    <div id="grant-user-label" class="dialog-label"></div>
+    <label class="dialog-label" for="grant-amount">Amount (USD)</label>
+    <input class="dialog-input" id="grant-amount" type="text" inputmode="decimal" placeholder="5.00" maxlength="20" autocomplete="off">
+    <label class="dialog-label" for="grant-reason">Reason</label>
+    <input class="dialog-input" id="grant-reason" type="text" placeholder="admin_grant" maxlength="500" autocomplete="off">
+    <div id="grant-err" class="dialog-err" role="alert"></div>
+    <div id="grant-success" class="dialog-success" role="status" aria-live="polite" style="display:none"></div>
+    <div class="dialog-actions">
+      <button type="button" class="dialog-btn cancel" id="grant-cancel-btn" onclick="closeGrantDialog()">Cancel</button>
+      <button type="submit" class="dialog-btn primary" id="grant-submit-btn">Grant</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let _grantUserId = '';
+let _grantOperationId = '';
+let _grantBusy = false;
+
+function openGrantDialog(userId, userName) {
+  _grantUserId = userId;
+  _grantOperationId = '';
+  _grantBusy = false;
+  document.getElementById('grant-user-label').textContent = 'User: ' + esc(userName || userId);
+  document.getElementById('grant-amount').value = '';
+  document.getElementById('grant-reason').value = 'admin_grant';
+  document.getElementById('grant-err').textContent = '';
+  document.getElementById('grant-success').style.display = 'none';
+  document.getElementById('grant-success').textContent = '';
+  document.getElementById('grant-submit-btn').disabled = false;
+  document.getElementById('grant-submit-btn').dataset.complete = '';
+  document.getElementById('grant-submit-btn').textContent = 'Grant';
+  document.getElementById('grant-cancel-btn').disabled = false;
+  document.getElementById('grant-amount').className = 'dialog-input';
+  const dialog = document.getElementById('grant-dialog');
+  dialog.style.display = 'flex';
+  setTimeout(function() { document.getElementById('grant-amount').focus(); }, 50);
+  _grantReturnFocus = document.activeElement;
+}
+
+function closeGrantDialog() {
+  if (_grantBusy) return;
+  document.getElementById('grant-dialog').style.display = 'none';
+  _grantUserId = '';
+  _grantOperationId = '';
+  if (_grantReturnFocus && typeof _grantReturnFocus.focus === 'function') {
+    try { _grantReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  _grantReturnFocus = null;
+}
+
+function _generateOperationId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    var bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+  return '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+async function submitGrant() {
+  var errEl = document.getElementById('grant-err');
+  var successEl = document.getElementById('grant-success');
+  var submitBtn = document.getElementById('grant-submit-btn');
+  var amountInput = document.getElementById('grant-amount');
+  var cancelBtn = document.getElementById('grant-cancel-btn');
+
+  if (submitBtn.dataset.complete === '1') {
+    closeGrantDialog();
+    return;
+  }
+  if (_grantBusy) return;
+
+  errEl.textContent = '';
+  successEl.style.display = 'none';
+  successEl.textContent = '';
+  amountInput.className = 'dialog-input';
+
+  var raw = (amountInput.value || '').trim();
+  var validDecimal = /^(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(raw);
+  var amount = Number(raw);
+  if (!validDecimal || !Number.isFinite(amount) || amount <= 0) {
+    amountInput.className = 'dialog-input error';
+    errEl.textContent = 'Enter a positive USD amount with up to 6 decimal places.';
+    amountInput.focus();
+    return;
+  }
+  if (amount > 10000) {
+    amountInput.className = 'dialog-input error';
+    errEl.textContent = 'Amount must not exceed $10,000.';
+    amountInput.focus();
+    return;
+  }
+
+  if (!_grantOperationId) {
+    _grantOperationId = _generateOperationId();
+  }
+  var reason = (document.getElementById('grant-reason').value || 'admin_grant').trim();
+  if (!reason) reason = 'admin_grant';
+
+  submitBtn.disabled = true;
+  cancelBtn.disabled = true;
+  _grantBusy = true;
+  submitBtn.innerHTML = '<span class="dialog-spinner"></span>Granting...';
+
+  try {
+    var r = await fetch('/admin/credit/grant', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user_id: _grantUserId,
+        amount_usd: raw,
+        reason: reason,
+        operation_id: _grantOperationId,
+      }),
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      if (data.error) {
+        errEl.textContent = data.error;
+        if (r.status === 409) {
+          _grantOperationId = '';
+        }
+      } else {
+        errEl.textContent = 'Error: HTTP ' + r.status;
+      }
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      _grantBusy = false;
+      submitBtn.textContent = 'Grant';
+      return;
+    }
+    _grantOperationId = '';
+    var granted = data.granted_usd || 0;
+    var newBalance = data.new_balance_usd || 0;
+    successEl.style.display = 'block';
+    successEl.textContent = data.already_applied
+      ? '\u2713 This grant was already applied. Balance: $' + Number(newBalance).toFixed(2)
+      : '\u2713 Granted $' + Number(granted).toFixed(2) + '. New balance: $' + Number(newBalance).toFixed(2);
+    submitBtn.textContent = 'Done';
+    submitBtn.disabled = false;
+    submitBtn.dataset.complete = '1';
+    cancelBtn.disabled = false;
+    _grantBusy = false;
+    loadUsers();
+  } catch(e) {
+    errEl.textContent = 'Network error. Check the connection and retry.';
+    submitBtn.disabled = false;
+    cancelBtn.disabled = false;
+    _grantBusy = false;
+    submitBtn.textContent = 'Grant';
+  }
+}
+
+// Keyboard handling for grant dialog
+document.addEventListener('keydown', function(e) {
+  var dialog = document.getElementById('grant-dialog');
+  if (dialog.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeGrantDialog();
+    return;
+  }
+  if (e.key === 'Tab') {
+    var focusable = Array.from(dialog.querySelectorAll('input,button:not([disabled])'));
+    if (!focusable.length) return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+});
+
+var _grantReturnFocus = null;
 </script>
 </body>
 </html>"""

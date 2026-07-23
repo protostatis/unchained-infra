@@ -139,6 +139,9 @@ def _agent_id(prefix: str, key: str) -> str:
 
 
 TRIAL_AGENT_KEY = os.environ.get("TRIAL_AGENT_KEY", "").strip()
+# Mandatory, scoped service token for hosted-worker callbacks. It must remain
+# separate from the trial-agent WebSocket key.
+HOSTED_AGENT_SERVICE_TOKEN = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
 TRIAL_AGENT_ID = os.environ.get("TRIAL_AGENT_ID", "").strip()
 if not TRIAL_AGENT_ID and TRIAL_AGENT_KEY:
     TRIAL_AGENT_ID = _agent_id("trial", TRIAL_AGENT_KEY)
@@ -167,6 +170,10 @@ if not TRIAL_AGENT_KEY:
     log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
 if not TRIAL_AGENT_ID:
     log.warning("[chat] TRIAL_AGENT_ID unresolved; OpenRouter trial routing disabled.")
+if TRIAL_AGENT_ID and not HOSTED_AGENT_SERVICE_TOKEN:
+    log.warning(
+        "[chat] HOSTED_AGENT_SERVICE_TOKEN unset; hosted inference callbacks fail closed."
+    )
 
 # Demo prompt quota — number of headless demo interactions before requiring trial install
 _DEMO_PROMPT_LIMIT = 20
@@ -227,6 +234,11 @@ def _is_demo_unlimited(user: dict | None) -> bool:
 def _is_rate_limited_user(user: dict | None) -> bool:
     """Return True for free-tier demo/trial users (no approved API key)."""
     if not user:
+        return True
+    # Trial accounts remain rate-limited even though onboarding currently
+    # issues them an approved connector key. Approval controls connector
+    # access; it is not a paid-plan entitlement.
+    if user.get("user_type") == "trial":
         return True
     # Approved users with API keys bypass rate limiting
     if user.get("status") == "approved" and bool(user.get("api_key")):
@@ -295,6 +307,7 @@ _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/use/competitor-monitoring",
     "/use/price-tracking",
     "/trial",
+    "/workspace",
     "/local",
     "/setup",
     "/install",
@@ -1285,7 +1298,8 @@ def _resolve_trial_session_id(agent_id: str, requested: str) -> str:
 
 def _trial_session_path(session_id: str) -> str:
     safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
-    return os.path.join("/data/sessions", f"{safe_id}.json")
+    sessions_dir = os.environ.get("UNCHAINED_SESSIONS_DIR", "/data/sessions")
+    return os.path.join(sessions_dir, f"{safe_id}.json")
 
 
 def _looks_like_tool_payload(text: str) -> bool:
@@ -1434,8 +1448,19 @@ def _authenticate(request: web.Request) -> dict | None:
             sessions.append(session)
     sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
     for session in sessions:
-        user = _auth.find_user_by_email(session["email"])
+        # Validate by user_id (from JWT), not just by email — a recycled
+        # email or stale JWT must not bypass user status checks.
+        user = _auth.find_user_by_id(session["user_id"])
+        if user is None:
+            continue
+        # Ensure the email in the JWT matches the current user row
+        if user.get("email", "").lower() != session.get("email", "").lower():
+            continue
         if user and user.get("api_key"):
+            status = user.get("status", "approved")
+            # Rejected accounts cannot continue using existing sessions/keys
+            if status == "rejected":
+                continue
             api_key = user["api_key"]
             key_hash = _key_hash(api_key)
             agent_id = f"claude-{key_hash}"
@@ -1443,7 +1468,7 @@ def _authenticate(request: web.Request) -> dict | None:
                 "user_id": session["user_id"], "key": api_key,
                 "agent_id": agent_id, "key_hash": key_hash,
                 "email": session["email"],
-                "status": user.get("status", "approved"),
+                "status": status,
                 "user_type": user.get("user_type", "claude"),
             }
 
@@ -1455,8 +1480,25 @@ def _authenticate(request: web.Request) -> dict | None:
         if info:
             key_hash = _key_hash(key)
             agent_id = f"claude-{key_hash}"
-            return {"user_id": info["user_id"], "key": key,
-                    "agent_id": agent_id, "key_hash": key_hash}
+            result = {"user_id": info["user_id"], "key": key,
+                      "agent_id": agent_id, "key_hash": key_hash}
+            # Hydrate by validated user_id (NOT by api_key) so secondary
+            # keys cannot bypass rejected/pending status.
+            user = _auth.find_user_by_id(info["user_id"])
+            if user:
+                status = user.get("status", "approved")
+                if status == "rejected":
+                    return None
+                result["email"] = user.get("email", "") or ""
+                result["name"] = user.get("name", "") or ""
+                result["picture"] = user.get("picture", "") or ""
+                result["status"] = status
+                result["user_type"] = user.get("user_type", "claude")
+            else:
+                # Fallback: service accounts may have keys without a users row
+                result["status"] = "approved"
+                result["user_type"] = "claude"
+            return result
 
     return None
 
@@ -2354,6 +2396,27 @@ async def _on_startup(app_: web.Application):
     _stale_tab_task = _state.stale_tab_task
     _gemini_cleanup_task = _state.gemini_cleanup_task
     _headless_watchdog_task = _state.headless_watchdog_task
+    # Credit stale-run sweep finalizes unresolved reservations after crashes.
+    _state.credit_sweep_task = asyncio.create_task(_credit_stale_sweep_loop())
+
+
+async def _credit_stale_sweep_loop():
+    """Periodically finalize stale pre-submit and submitted reservations."""
+    import os as _os
+    interval = max(60, int(_os.environ.get("CREDIT_SWEEP_INTERVAL_SECONDS", "600")))
+    try:
+        from credit import CreditLedger
+        ledger = await asyncio.to_thread(CreditLedger, db_path=_auth.db_path)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                expired = await asyncio.to_thread(ledger.sweep_stale_runs)
+                if expired:
+                    log.info("[credit] sweep: expired %d stale run(s)", expired)
+            except Exception as e:
+                log.warning("[credit] sweep error: %s", e)
+    except asyncio.CancelledError:
+        pass
 
 
 async def _on_cleanup(app_: web.Application):
@@ -2365,9 +2428,12 @@ async def _on_cleanup(app_: web.Application):
         _state.gemini_cleanup_task.cancel()
     if _state.headless_watchdog_task:
         _state.headless_watchdog_task.cancel()
+    if getattr(_state, "credit_sweep_task", None):
+        _state.credit_sweep_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
     _state.headless_watchdog_task = None
+    _state.credit_sweep_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
     _headless_watchdog_task = None

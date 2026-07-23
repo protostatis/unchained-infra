@@ -660,7 +660,11 @@ class TestLoadChatProfilesOfflinePlaceholder(unittest.TestCase):
             src.count("if (profileSelectionReady) payload.profile_path = profilePath;"),
             2,
         )
-        self.assertEqual(src.count("profileSelectionReady = true;"), 4)
+        self.assertIn(
+            "if (hostedWorkspaceMode) payload.profile_path = profileSelectionReady ? profilePath : '';",
+            src,
+        )
+        self.assertEqual(src.count("profileSelectionReady = true;"), 6)
 
 
 class TestProfileSessionRoutingContract(unittest.TestCase):

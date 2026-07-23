@@ -82,8 +82,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/admin/pending", "web_app.handlers.auth_admin:handle_admin_pending"),
     ("POST", "/admin/approve", "web_app.handlers.auth_admin:handle_admin_approve"),
     ("POST", "/admin/reject", "web_app.handlers.auth_admin:handle_admin_reject"),
+    ("GET", "/admin/settings/hosted-models", "web_app.handlers.auth_admin:handle_admin_hosted_models"),
+    ("POST", "/admin/settings/hosted-models", "web_app.handlers.auth_admin:handle_admin_hosted_models_update"),
     ("GET", "/chat", "web_app.handlers.pages:handle_chat_redirect"),
     ("GET", "/trial", "web_app.handlers.pages:handle_trial_page"),
+    ("GET", "/workspace", "web_app.handlers.pages:handle_workspace_page"),
     ("GET", "/chat-gemini", "web_app.handlers.pages:handle_chat_gemini_page"),
     ("GET", "/chat-codex", "web_app.handlers.pages:handle_chat_codex_page"),
     ("GET", "/chat-claude", "web_app.handlers.pages:handle_chat_claude_page"),
@@ -158,6 +161,17 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/provision/confirm", "web_app.handlers.provision:handle_provision_confirm"),
     ("POST", "/web/provision/save-manual", "web_app.handlers.provision:handle_provision_save_manual"),
     ("POST", "/web/provision/revoke", "web_app.handlers.provision:handle_provision_revoke"),
+    # Hosted-worker accounting callbacks. Caddy denies /internal/* publicly;
+    # the trial-agent reaches these over the Docker-internal app network.
+    ("POST", "/internal/credit/reserve", "web_app.handlers.credit_internal:handle_credit_reserve"),
+    ("POST", "/internal/credit/submitted", "web_app.handlers.credit_internal:handle_credit_mark_submitted"),
+    ("POST", "/internal/credit/settle", "web_app.handlers.credit_internal:handle_credit_settle"),
+    ("POST", "/internal/credit/release", "web_app.handlers.credit_internal:handle_credit_release"),
+    # User-facing credit status
+    ("GET", "/web/credit/status", "web_app.handlers.auth_admin:handle_credit_status"),
+    ("GET", "/web/credit/status/history", "web_app.handlers.auth_admin:handle_credit_history"),
+    # Admin grant
+    ("POST", "/admin/credit/grant", "web_app.handlers.auth_admin:handle_admin_credit_grant"),
 )
 
 

@@ -36,6 +36,7 @@ import re
 import signal
 import sys
 import time
+import uuid as _uuid_module
 from dataclasses import dataclass, field
 
 import httpx
@@ -44,6 +45,14 @@ import websockets
 import cloud_tools
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
+from scheduler_agent import (
+    OPENAI_SCHEDULER_TOOLS,
+    SCHEDULER_TOOL_NAMES,
+    SCHEDULER_TOOL_PROMPT,
+    _api_url_from_server,
+    build_system_prompt as _build_scheduler_system_prompt,
+    execute_scheduler_tool,
+)
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -92,13 +101,19 @@ MAX_ABSOLUTE_TURNS = 200      # Hard ceiling (never exceed)
 # survives container restarts.
 SESSION_DIR = os.environ.get(
     "SESSION_DIR",
-    os.path.join(
-        os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
-        "sessions",
+    os.environ.get(
+        "UNCHAINED_SESSIONS_DIR",
+        os.path.join(
+            os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
+            "sessions",
+        ),
     ),
 )
 MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
+HOSTED_MAX_INPUT_CHARS = max(
+    10_000, int(os.environ.get("HOSTED_MAX_INPUT_CHARS", "200000"))
+)
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
@@ -115,6 +130,32 @@ _task_req_id: ContextVar[str] = ContextVar("chat_agent_openrouter_task_req_id", 
 LOCAL_SESSION_ID = "local-openrouter"
 LOCAL_TOOL_PREVIEW_CHARS = 240
 LOCAL_CONTEXT_KEEP_TAIL = 10
+
+
+def _uuid_hex() -> str:
+    """Return a random hex UUID string."""
+    return _uuid_module.uuid4().hex
+
+
+# ---------------------------------------------------------------------------
+# Per-task scheduler state — ContextVar avoids shared-instance races when
+# concurrent sessions or same-session replacement tasks run on one agent.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SchedulerTurnState:
+    """Immutable snapshot of the current task's scheduler armament."""
+    armed: bool = False
+    grant_id: str = ""
+    session_id: str = ""
+
+
+_scheduler_turn: ContextVar[SchedulerTurnState] = ContextVar(
+    "chat_agent_openrouter_scheduler_turn",
+    default=SchedulerTurnState(),
+)
+
 
 # ---------------------------------------------------------------------------
 # System prompt — built from CLAUDE.md + function-call tool reference
@@ -406,6 +447,13 @@ TOOLS = [
 ]
 
 
+def _build_scheduler_openai_tools(scheduler_armed: bool, scheduler_grant_id: str) -> list[dict]:
+    """Return the OpenAI-format tool list with scheduler tools included when armed."""
+    if not scheduler_armed or not scheduler_grant_id:
+        return list(TOOLS)
+    return list(TOOLS) + list(OPENAI_SCHEDULER_TOOLS)
+
+
 def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + "..."
 
@@ -545,6 +593,7 @@ def _extract_openrouter_usage(payload: dict) -> dict:
     )
 
     cost_usd = 0.0
+    cost_present = False
     for candidate in (
         usage.get("cost"),
         usage.get("cost_usd"),
@@ -555,10 +604,13 @@ def _extract_openrouter_usage(payload: dict) -> dict:
         payload.get("total_cost"),
         payload.get("total_cost_usd"),
     ):
-        value = _coerce_float(candidate, 0.0)
-        if value > 0:
-            cost_usd = value
-            break
+        if candidate is not None:
+            value = _coerce_float(candidate, 0.0)
+            cost_present = True
+            if value > 0:
+                cost_usd = value
+                break
+            # Even zero-cost presence marks the flag
 
     est_cost_per_1k = max(
         0.0,
@@ -575,6 +627,7 @@ def _extract_openrouter_usage(payload: dict) -> dict:
         "total_tokens": max(0, total_tokens),
         "cost_usd": round(max(0.0, cost_usd), 9),
         "estimated_cost_usd": round(max(0.0, estimated_cost_usd), 9),
+        "cost_present": cost_present,
     }
 
 
@@ -661,6 +714,160 @@ class TrialAgent:
         # session_id → active asyncio Task (for cancel support)
         self.active_tasks: dict[str, asyncio.Task] = {}
         self.active_req_ids: dict[str, str] = {}
+        # Per-session billing run IDs (set from ws_msg["billing_run_id"])
+        self._session_billing_runs: dict[str, str] = {}
+
+    @property
+    def _credit_base_url(self) -> str:
+        """Convert the WebSocket server URL to an HTTPS URL for credit API calls.
+
+        When UNCHAINED_SERVER is ``ws://web:8080`` (Docker internal network),
+        this becomes ``http://web:8080`` — the internal web service is always
+        reachable without TLS inside the Docker network.
+        """
+        base = self.server
+        if base.startswith("wss://"):
+            base = "https://" + base[6:]
+        elif base.startswith("ws://"):
+            base = "http://" + base[5:]
+        return base.rstrip("/")
+
+    def _hosted_service_token(self) -> str:
+        """Return the narrowly-scoped hosted-worker callback token.
+
+        This credential is mandatory and intentionally does not fall back to
+        the worker's WebSocket key or any other service credential.
+        """
+        return os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
+
+    def _credit_service_token(self) -> str:
+        return self._hosted_service_token()
+
+    async def _credit_reserve(
+        self,
+        client: httpx.AsyncClient,
+        run_id: str,
+        model: str,
+        idempotency_key: str,
+    ) -> dict | None:
+        """Call the credit reserve endpoint. Returns reservation dict or None.
+
+        A duplicate (already_reserved) response is treated as a success:
+        the existing ``call_id`` is still valid and usable.
+        """
+        token = self._credit_service_token()
+        if not token or not run_id:
+            return None
+        url = f"{self._credit_base_url}/internal/credit/reserve"
+        body = {
+            "run_id": run_id,
+            "model": model,
+            "idempotency_key": idempotency_key,
+        }
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                data = resp.json()
+                # A duplicate reservation is still a valid call_id holder
+                if isinstance(data, dict) and data.get("call_id"):
+                    return data
+                return None
+            if resp.status_code == 402:
+                # Specific credit-insufficient signal
+                print(f"[credit] Reserve 402: insufficient balance")
+            return None
+        except Exception:
+            return None
+
+    async def _credit_mark_submitted(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+    ) -> dict | None:
+        """Persist submission before crossing the OpenRouter boundary."""
+        token = self._credit_service_token()
+        if not token or not call_id:
+            return None
+        try:
+            resp = await client.post(
+                f"{self._credit_base_url}/internal/credit/submitted",
+                json={"call_id": call_id},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                data = resp.json()
+                return data if isinstance(data, dict) else None
+            return None
+        except Exception:
+            return None
+
+    async def _credit_settle(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+        actual_cost_micro_usd: int,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        cost_absent: bool = False,
+        provider_cost_micro_usd: int = 0,
+    ) -> dict | None:
+        """Call the credit settle endpoint. Returns settlement dict or None."""
+        token = self._credit_service_token()
+        if not token or not call_id:
+            return None
+        url = f"{self._credit_base_url}/internal/credit/settle"
+        body = {
+            "call_id": call_id,
+            "actual_cost_micro_usd": actual_cost_micro_usd,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cost_absent": cost_absent,
+            "provider_cost_micro_usd": provider_cost_micro_usd,
+        }
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                return resp.json()
+            return None
+        except Exception:
+            return None
+
+    async def _credit_release(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+    ) -> dict | None:
+        """Call the credit release endpoint. Returns release dict or None."""
+        token = self._credit_service_token()
+        if not token or not call_id:
+            return None
+        url = f"{self._credit_base_url}/internal/credit/release"
+        body = {"call_id": call_id}
+        try:
+            resp = await client.post(
+                url,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                return resp.json()
+            return None
+        except Exception:
+            return None
 
     def _session_path(self, session_id: str) -> str:
         os.makedirs(SESSION_DIR, exist_ok=True)
@@ -889,6 +1096,10 @@ class TrialAgent:
                         continue
                     if msg.get("type") == "user_message":
                         sid = msg.get("session_id", "")
+                        # Store billing run ID for credit accounting
+                        billing_rid = str(msg.get("billing_run_id", "")).strip()
+                        if billing_rid:
+                            self._session_billing_runs[sid] = billing_rid
                         req_id = ""
                         # Cancel any existing task for this session before starting a new one
                         if sid:
@@ -928,6 +1139,7 @@ class TrialAgent:
         """Clear correlation state only when this task still owns the session."""
         if self.active_tasks.get(session_id) is task:
             self.active_tasks.pop(session_id, None)
+            getattr(self, "_session_billing_runs", {}).pop(session_id, None)
             if self.active_req_ids.get(session_id) == req_id:
                 self.active_req_ids.pop(session_id, None)
 
@@ -968,6 +1180,17 @@ class TrialAgent:
         user_id = str(msg.get("user_id", "")).strip()
         user_text = msg["message"]
 
+        # Set per-task scheduler state via ContextVar so concurrent sessions
+        # and same-session replacement tasks cannot cross-contaminate grants.
+        scheduler_armed = bool(msg.get("scheduler_armed", False))
+        scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
+        turn_state = SchedulerTurnState(
+            armed=scheduler_armed,
+            grant_id=scheduler_grant_id,
+            session_id=session_id,
+        )
+        token = _scheduler_turn.set(turn_state)
+
         # Use model from message if provided (allows front-end model selector)
         model = msg.get("model") or self.model
 
@@ -977,6 +1200,16 @@ class TrialAgent:
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
         messages = self.sessions[session_id]
+        # Rebuild system prompt with scheduler instructions when armed
+        base_system = _build_system_prompt()
+        if turn_state.armed and turn_state.grant_id:
+            base_system = _build_scheduler_system_prompt(
+                base_system, scheduler_armed=True, scheduler_grant_id=turn_state.grant_id,
+            )
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": base_system}
+        elif not messages or messages[0].get("role") != "system":
+            messages.insert(0, {"role": "system", "content": base_system})
         # Sanitize malformed messages (e.g. content as dict/None instead of string)
         for msg in messages:
             c = msg.get("content")
@@ -1472,6 +1705,11 @@ class TrialAgent:
             await self._send(session_id, {"type": "error", "data": str(e) or type(e).__name__})
             self._save_session(session_id, messages)
             await self._send(session_id, {"type": "done"})
+        finally:
+            # Reset the per-task scheduler context so the next turn on this
+            # event-loop task slot starts from a clean slate.  ContextVar
+            # isolation means concurrent sessions never see each other's state.
+            _scheduler_turn.reset(token)
 
     async def _call_openrouter(
         self,
@@ -1483,8 +1721,9 @@ class TrialAgent:
         user_id: str = "",
         reasoning: bool = True,
     ) -> dict:
+        effective_model = model or self.model
         body: dict = {
-            "model": model or self.model,
+            "model": effective_model,
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.2,
@@ -1494,72 +1733,155 @@ class TrialAgent:
         if tool_choice == "none":
             body["tool_choice"] = "none"
         else:
-            body["tools"] = TOOLS
+            tools_list = list(TOOLS)
+            turn_state = _scheduler_turn.get()
+            if turn_state.armed and turn_state.grant_id:
+                tools_list = _build_scheduler_openai_tools(
+                    turn_state.armed, turn_state.grant_id,
+                )
+            body["tools"] = tools_list
             body["tool_choice"] = "auto"
-        headers = {
-            "Authorization": f"Bearer {self.openrouter_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://unchainedsky.com",
-            "X-Title": "Unchained Trial Agent",
-        }
-        resp = await client.post(
-            OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
-        )
-        # On 429, immediately switch to fallback model — don't waste time retrying
-        # the same rate-limited model.
-        _FALLBACK_MODEL = os.environ.get(
-            "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
-            self.model,
-        ).strip() or self.model
-        if resp.status_code == 429 and _FALLBACK_MODEL != body.get("model"):
-            print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
-            body["model"] = _FALLBACK_MODEL
-            resp = await client.post(
-                OPENROUTER_URL, json=body, headers=headers,
-                timeout=httpx.Timeout(10.0, read=300.0),
+
+        # --- Credit reserve before API call ---
+        billing_run_id = self._session_billing_runs.get(session_id, "")
+        token = self._credit_service_token()
+        credit_client: httpx.AsyncClient | None = None
+        reserved_call_id: str | None = None
+        credit_reservation: dict | None = None
+        provider_submitted = False
+        if billing_run_id:
+            if not token:
+                raise RuntimeError(
+                    "Hosted credit authorization is unavailable. Please try again later."
+                )
+            input_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
+            if input_chars > HOSTED_MAX_INPUT_CHARS:
+                raise RuntimeError(
+                    "Hosted conversation context is too large. Start a new chat or archive this thread."
+                )
+            credit_client = httpx.AsyncClient()
+            idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"
+            # Retry transient reserve failures up to two times. A 402 also
+            # remains fail-closed; the provider request is never sent.
+            for reserve_attempt in range(3):
+                credit_reservation = await self._credit_reserve(
+                    credit_client, billing_run_id,
+                    effective_model, idem_key,
+                )
+                if credit_reservation:
+                    reserved_call_id = credit_reservation.get("call_id", "")
+                    if reserved_call_id:
+                        break
+                if reserve_attempt < 2:
+                    print(f"[{session_id}] Credit reserve failed, "
+                          f"retry {reserve_attempt + 1}/2")
+                    await asyncio.sleep(1.0)
+
+            if not credit_reservation or not reserved_call_id:
+                # Fail closed: authenticated billing run exists but
+                # reserve failed/is insufficient — do NOT proceed.
+                if credit_client:
+                    try:
+                        await credit_client.aclose()
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    "Hosted credit authorization failed. Add credit or try a free model."
+                )
+
+        try:
+            if reserved_call_id and credit_client:
+                submitted = None
+                for submit_attempt in range(3):
+                    submitted = await self._credit_mark_submitted(
+                        credit_client, reserved_call_id
+                    )
+                    if submitted:
+                        break
+                    if submit_attempt < 2:
+                        await asyncio.sleep(0.5)
+                if not submitted:
+                    # No provider request has been sent. The shared exception
+                    # path below attempts one release; if the submission
+                    # callback committed but its response was lost, release is
+                    # rejected and the ambiguous hold is captured later.
+                    raise RuntimeError(
+                        "Hosted credit submission authorization failed. Please try again."
+                    )
+                provider_submitted = True
+
+            data = await self._do_openrouter_call(
+                client,
+                body,
+                effective_model,
+                session_id,
+                allow_unmetered_retries=not bool(billing_run_id),
             )
-        # Retry on 500/502/503 (transient server errors)
-        _RETRY_CODES = (500, 502, 503)
-        if resp.status_code in _RETRY_CODES:
-            for attempt in range(1, 4):
-                delay = 2 * attempt
-                print(f"[openrouter] {resp.status_code} — retry {attempt}/3 after {delay}s")
-                await asyncio.sleep(delay)
-                resp = await client.post(
-                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
-                )
-                if resp.status_code not in _RETRY_CODES:
-                    break
-        if not resp.is_success:
-            print(f"[openrouter] {resp.status_code} error: {resp.text[:400]}")
-            resp.raise_for_status()
-        data = resp.json()
-        # Provider error (200 but no "choices") — switch model immediately
-        if "choices" not in data:
-            err_msg = data.get("error", {})
-            if isinstance(err_msg, dict):
-                err_msg = err_msg.get("message", str(data)[:200])
-            if _FALLBACK_MODEL != body.get("model"):
-                print(f"[openrouter] Provider error → switching {body['model']} → {_FALLBACK_MODEL}: {str(err_msg)[:120]}")
-                body["model"] = _FALLBACK_MODEL
-                resp = await client.post(
-                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
-                )
-                if resp.is_success:
-                    data = resp.json()
-            else:
-                # Already on fallback, retry once after short delay
-                print(f"[openrouter] Provider error on fallback: {str(err_msg)[:120]} — retrying in 3s")
-                await asyncio.sleep(3)
-                resp = await client.post(
-                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
-                )
-                if resp.is_success:
-                    data = resp.json()
-                    if resp.is_success:
-                        data = resp.json()
-            if "choices" not in data:
-                raise RuntimeError(f"OpenRouter provider error: {err_msg}")
+            # --- Credit settle after success ---
+            if reserved_call_id and credit_client:
+                usage_data = _extract_openrouter_usage(data)
+                cost_usd = usage_data.get("cost_usd", 0)
+                cost_present = bool(usage_data.get("cost_present", False))
+                est_cost_usd = usage_data.get("estimated_cost_usd", 0)
+
+                # Determine actual settlement cost
+                if cost_present:
+                    actual_cost_micro = max(0, round(cost_usd * 1_000_000))
+                    cost_absent = False
+                elif est_cost_usd > 0:
+                    actual_cost_micro = max(1, round(est_cost_usd * 1_000_000))
+                    cost_absent = False
+                else:
+                    # No cost info at all — let settle_call handle the
+                    # conservative fallback (full reservation)
+                    actual_cost_micro = 0
+                    cost_absent = True
+
+                # Provider-reported cost for reconciliation (may exceed reserve)
+                provider_cost_micro = max(0, round(cost_usd * 1_000_000)) if cost_present else 0
+
+                # Retry transient settle failures
+                settlement = None
+                for settle_attempt in range(3):
+                    settlement = await self._credit_settle(
+                        credit_client,
+                        reserved_call_id,
+                        actual_cost_micro_usd=actual_cost_micro,
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get(
+                            "completion_tokens", 0,
+                        ),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                        cost_absent=cost_absent,
+                        provider_cost_micro_usd=provider_cost_micro,
+                    )
+                    if settlement:
+                        break
+                    if settle_attempt < 2:
+                        print(f"[{session_id}] Credit settle failed, "
+                              f"retry {settle_attempt + 1}/2")
+                        await asyncio.sleep(1.0)
+                if not settlement:
+                    # Leave the hold intact. The control plane captures any
+                    # unresolved completed-call hold conservatively at turn end.
+                    print(f"[{session_id}] Credit settlement unavailable; hold retained")
+        except Exception:
+            # A submitted request is never released: OpenRouter may have
+            # accepted/billed it before a timeout or cancellation. Only a
+            # definitely pre-submit reservation may be returned.
+            if reserved_call_id and credit_client and not provider_submitted:
+                try:
+                    await self._credit_release(credit_client, reserved_call_id)
+                except Exception:
+                    pass
+            raise
+        finally:
+            if credit_client:
+                try:
+                    await credit_client.aclose()
+                except Exception:
+                    pass
+
         usage = _extract_openrouter_usage(data)
         usage_log = (
             f"model={body.get('model', self.model)} "
@@ -1585,6 +1907,84 @@ class TrialAgent:
                 print(f"[{session_id}] Failed to emit OpenRouter usage event: {e}")
             else:
                 print(f"[openrouter] Failed to emit usage event: {e}")
+        return data
+
+    async def _do_openrouter_call(
+        self,
+        client: httpx.AsyncClient,
+        body: dict,
+        effective_model: str,
+        session_id: str = "",
+        *,
+        allow_unmetered_retries: bool = False,
+    ) -> dict:
+        _FALLBACK_MODEL = os.environ.get(
+            "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
+            self.model,
+        ).strip() or self.model
+        _RETRY_CODES = (500, 502, 503)
+
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://unchainedsky.com",
+            "X-Title": "Unchained Trial Agent",
+        }
+        resp = await client.post(
+            OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+        )
+        # Local/unbilled CLI requests retain historical retry behavior. Hosted
+        # requests never reuse one reservation for multiple provider attempts.
+        if (
+            allow_unmetered_retries
+            and resp.status_code == 429
+            and _FALLBACK_MODEL != body.get("model")
+        ):
+            print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
+            body["model"] = _FALLBACK_MODEL
+            resp = await client.post(
+                OPENROUTER_URL, json=body, headers=headers,
+                timeout=httpx.Timeout(10.0, read=300.0),
+            )
+        # Retry on 500/502/503 (transient server errors)
+        if allow_unmetered_retries and resp.status_code in _RETRY_CODES:
+            for attempt in range(1, 4):
+                delay = 2 * attempt
+                print(f"[openrouter] {resp.status_code} — retry {attempt}/3 after {delay}s")
+                await asyncio.sleep(delay)
+                resp = await client.post(
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                )
+                if resp.status_code not in _RETRY_CODES:
+                    break
+        if not resp.is_success:
+            print(f"[openrouter] {resp.status_code} error: {resp.text[:400]}")
+            resp.raise_for_status()
+        data = resp.json()
+        # Provider error (200 but no "choices") — switch model immediately
+        if "choices" not in data:
+            err_msg = data.get("error", {})
+            if isinstance(err_msg, dict):
+                err_msg = err_msg.get("message", str(data)[:200])
+            if allow_unmetered_retries and _FALLBACK_MODEL != body.get("model"):
+                print(f"[openrouter] Provider error → switching {body['model']} → {_FALLBACK_MODEL}: {str(err_msg)[:120]}")
+                body["model"] = _FALLBACK_MODEL
+                resp = await client.post(
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                )
+                if resp.is_success:
+                    data = resp.json()
+            elif allow_unmetered_retries:
+                # Already on fallback, retry once after short delay
+                print(f"[openrouter] Provider error on fallback: {str(err_msg)[:120]} — retrying in 3s")
+                await asyncio.sleep(3)
+                resp = await client.post(
+                    OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
+                )
+                if resp.is_success:
+                    data = resp.json()
+            if "choices" not in data:
+                raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         return data
 
     async def _execute_tool(self, agent_id: str, name: str, args: dict, tab_id: str | None = None) -> str:
@@ -1666,6 +2066,17 @@ class TrialAgent:
             elif name == "screenshot":
                 return await cloud_tools.screenshot(
                     agent_id, tab_id, RELAY_HOST, RELAY_PORT)
+
+            elif name in SCHEDULER_TOOL_NAMES:
+                turn_state = _scheduler_turn.get()
+                return await execute_scheduler_tool(
+                    server_url=self.server,
+                    api_key=self._hosted_service_token(),
+                    session_id=turn_state.session_id,
+                    scheduler_grant_id=turn_state.grant_id,
+                    tool_name=name,
+                    args=args,
+                )
 
             else:
                 return f"Unknown tool: {name}"

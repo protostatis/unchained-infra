@@ -16,8 +16,10 @@ from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, call, patch
 import os
+
+from aiohttp import web as aiohttp_web
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
@@ -88,8 +90,11 @@ class TestWebRouteContracts(unittest.TestCase):
             ("GET", "/admin/pending"),
             ("POST", "/admin/approve"),
             ("POST", "/admin/reject"),
+            ("GET", "/admin/settings/hosted-models"),
+            ("POST", "/admin/settings/hosted-models"),
             ("GET", "/chat"),
             ("GET", "/trial"),
+            ("GET", "/workspace"),
             ("GET", "/chat-gemini"),
             ("GET", "/first-look"),
             ("GET", "/first-look-preview"),
@@ -149,6 +154,179 @@ class TestWebRouteContracts(unittest.TestCase):
 
         for route in expected:
             self.assertIn(route, actual, f"missing runtime route: {route}")
+
+
+class TestHostedWorkspaceRouting(unittest.IsolatedAsyncioTestCase):
+    def _core(self, auth_info):
+        return SimpleNamespace(
+            _track_page_view=Mock(),
+            _track_redirect=Mock(),
+            _authenticate=Mock(return_value=auth_info),
+            _is_pending_user=lambda info: bool(info and info.get("pending")),
+            TRIAL_CHAT_HTML=(
+                "<!DOCTYPE html><title>__HOSTED_PAGE_TITLE__</title>"
+                "<script>const hostedWorkspaceMode = __HOSTED_WORKSPACE_MODE__;</script>"
+            ),
+            GOOGLE_CLIENT_ID="client-id",
+            inject_google_client_id=lambda html, _client_id: html,
+        )
+
+    async def test_funded_trial_request_redirects_to_workspace(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-funded", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            with self.assertRaises(aiohttp_web.HTTPFound) as raised:
+                await pages.handle_trial_page(SimpleNamespace())
+        self.assertEqual(raised.exception.headers["Location"], "/workspace")
+        core._track_redirect.assert_called_once()
+
+    async def test_unfunded_trial_renders_trial_mode(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-trial", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            response = await pages.handle_trial_page(SimpleNamespace())
+        body = response.text
+        self.assertIn("<title>Unchained Trial</title>", body)
+        self.assertIn("const hostedWorkspaceMode = false;", body)
+        self.assertNotIn("__HOSTED_", body)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    async def test_trial_returns_503_when_credit_lookup_fails(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-funded", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with self.assertRaises(aiohttp_web.HTTPServiceUnavailable) as raised:
+                await pages.handle_trial_page(SimpleNamespace())
+        self.assertEqual(
+            raised.exception.text,
+            "Hosted access is temporarily unavailable. Please retry shortly.",
+        )
+
+    async def test_workspace_requires_authentication(self):
+        from web_app.handlers import pages
+
+        core = self._core(None)
+        with patch.object(pages, "_core", return_value=core):
+            with self.assertRaises(aiohttp_web.HTTPFound) as raised:
+                await pages.handle_workspace_page(SimpleNamespace())
+        self.assertEqual(
+            raised.exception.headers["Location"], "/trial?next=/workspace"
+        )
+
+    async def test_workspace_rejects_pending_account(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-pending", "pending": True})
+        with patch.object(pages, "_core", return_value=core):
+            with self.assertRaises(aiohttp_web.HTTPFound) as raised:
+                await pages.handle_workspace_page(SimpleNamespace())
+        self.assertEqual(raised.exception.headers["Location"], "/trial")
+
+    async def test_funded_workspace_renders_workspace_mode(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-funded", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            response = await pages.handle_workspace_page(SimpleNamespace())
+        body = response.text
+        self.assertIn("<title>Unchained Workspace</title>", body)
+        self.assertIn("const hostedWorkspaceMode = true;", body)
+        self.assertNotIn("__HOSTED_", body)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    async def test_unfunded_workspace_returns_to_trial(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-trial", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            with self.assertRaises(aiohttp_web.HTTPFound) as raised:
+                await pages.handle_workspace_page(SimpleNamespace())
+        self.assertEqual(raised.exception.headers["Location"], "/trial")
+
+    async def test_workspace_returns_503_when_credit_lookup_fails(self):
+        from web_app.handlers import pages
+
+        core = self._core({"user_id": "u-funded", "pending": False})
+        with (
+            patch.object(pages, "_core", return_value=core),
+            patch.object(
+                pages,
+                "_has_received_hosted_credit",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with self.assertRaises(aiohttp_web.HTTPServiceUnavailable) as raised:
+                await pages.handle_workspace_page(SimpleNamespace())
+        self.assertEqual(
+            raised.exception.text,
+            "Hosted workspace is temporarily unavailable. Please retry shortly.",
+        )
+
+    async def test_workspace_eligibility_uses_total_granted_credit(self):
+        from web_app.handlers import pages
+
+        ledger = SimpleNamespace(
+            get_account=Mock(
+                side_effect=[
+                    {"total_granted_micro_usd": 1, "remaining_micro_usd": 0},
+                    {"total_granted_micro_usd": 0, "remaining_micro_usd": 999},
+                ]
+            )
+        )
+        core = SimpleNamespace(_auth=SimpleNamespace(db_path="/tmp/auth.db"))
+        with patch("credit.CreditLedger", return_value=ledger):
+            self.assertTrue(
+                await pages._has_received_hosted_credit(
+                    core, {"user_id": "u-funded"}
+                )
+            )
+            self.assertFalse(
+                await pages._has_received_hosted_credit(
+                    core, {"user_id": "u-unfunded"}
+                )
+            )
+        self.assertEqual(
+            ledger.get_account.call_args_list,
+            [call("u-funded"), call("u-unfunded")],
+        )
 
 
 class TestWebTemplateContracts(unittest.TestCase):
@@ -219,16 +397,36 @@ class TestWebTemplateContracts(unittest.TestCase):
         ).read_text()
         self.assertIn('"new_chat_error",', chat_stream_source)
 
-    def test_trial_upgrade_notice_describes_provider_api_key_setup(self):
-        copy = (
-            "Access your chosen Claude, Gemini, or Codex provider models using "
-            "your own API key. <a href=\"/setup\">Configure provider / API key "
-            "&rarr;</a>"
-        )
-
-        self.assertEqual(web.TRIAL_CHAT_HTML.count(copy), 2)
+    def test_hosted_access_notice_distinguishes_trial_and_workspace(self):
+        self.assertIn("const hostedWorkspaceMode = __HOSTED_WORKSPACE_MODE__;", web.TRIAL_CHAT_HTML)
+        self.assertIn("function _hasReceivedHostedCredit()", web.TRIAL_CHAT_HTML)
+        self.assertIn("window.location.replace('/workspace')", web.TRIAL_CHAT_HTML)
+        self.assertIn("Hosted models draw from your account credit", web.TRIAL_CHAT_HTML)
+        self.assertIn("No provider API key required", web.TRIAL_CHAT_HTML)
+        self.assertNotIn("Configure provider / API key", web.TRIAL_CHAT_HTML)
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
         self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
+
+    def test_hosted_model_policy_is_dynamic_and_enforced_at_both_boundaries(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn("function _applyHostedModelPolicy(policy)", trial)
+        self.assertIn("data.hosted_model_policy", trial)
+        self.assertIn("Custom OpenRouter (Admin)", trial)
+        self.assertIn('id="hosted-admin-link"', trial)
+        self.assertIn("if (!_isAdmin && !_hasReceivedHostedCredit()", trial)
+
+        admin = web.ADMIN_HTML
+        self.assertIn('id="hosted-model-list"', admin)
+        self.assertIn("saveHostedModelPolicy()", admin)
+        self.assertIn("/admin/settings/hosted-models", admin)
+        self.assertIn("one ID per line", admin)
+
+        handlers = Path(__file__).with_name("web_app") / "handlers"
+        chat_stream_source = handlers.joinpath("chat_stream.py").read_text()
+        credit_internal_source = handlers.joinpath("credit_internal.py").read_text()
+        self.assertIn("is_hosted_model_allowed_for_identity(", chat_stream_source)
+        self.assertIn("is_hosted_model_allowed_for_identity(", credit_internal_source)
+        self.assertIn("ledger.get_run, run_id", credit_internal_source)
 
     def test_scheduler_cards_only_render_privacy_safe_previews(self):
         html = web.SCHEDULER_HTML
@@ -703,6 +901,16 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_web_image_installs_unbrowser_binary_package(self):
         dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
         self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
+
+    def test_hosted_runtime_modules_are_packaged_for_deploy(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        dockerfile = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+        runtime_context = (
+            repo_root / "deploy" / "runtime_context_files.sh"
+        ).read_text(encoding="utf-8")
+        for module in ("credit.py", "hosted_conversations.py"):
+            self.assertIn(f"COPY unchained/{module} .", dockerfile)
+            self.assertIn(f'"{module}"', runtime_context)
 
     def test_unbrowser_live_demo_presets_have_dense_source_grids(self):
         from web_app.handlers.unbrowser_demo import SCENARIOS
@@ -1248,12 +1456,147 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn('<aside id="sidebar">', trial)
         self.assertNotIn('id="sidebar-toggle"', trial)
 
+    def test_trial_credit_indicator_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn(
+            '<span class="credit-pill loading" id="creditpill">',
+            trial,
+        )
+        self.assertIn('.credit-pill{', trial)
+        self.assertIn('.credit-pill.low{', trial)
+        self.assertIn('.credit-pill.exhausted{', trial)
+        self.assertIn('.credit-pill.error{', trial)
+        self.assertIn('.credit-pill.unavailable{', trial)
+        self.assertIn("_creditState = null;", trial)
+        self.assertIn("_creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;", trial)
+        self.assertIn("_renderCreditPill();", trial)
+        self.assertIn("function _renderCreditPill()", trial)
+        self.assertIn("function refreshCreditState()", trial)
+        self.assertIn("fetch('/auth/me'", trial)
+        self.assertIn("Credit status unavailable. Retrying automatically.", trial)
+        self.assertIn("prefers-reduced-motion:reduce", trial)
+        # Refresh called after completed/failed turns
+        self.assertIn("refreshCreditState();", trial)
+
+    def test_hosted_workspace_profile_selector_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn('id="profilesel" class="workspace-only" hidden', trial)
+        self.assertIn("function loadHostedProfiles()", trial)
+        self.assertIn("fetch('/web/provision/profiles'", trial)
+        self.assertIn("A sandboxed copy of this Chrome profile will be used", trial)
+        self.assertIn(
+            "if (hostedWorkspaceMode) payload.profile_path = profileSelectionReady ? profilePath : '';",
+            trial,
+        )
+        self.assertIn("loadHostedProfiles();", trial)
+
+    def test_rendered_hosted_chat_scripts_parse(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for hosted chat syntax tests")
+        for workspace in (False, True):
+            html = web.TRIAL_CHAT_HTML.replace(
+                "__HOSTED_PAGE_TITLE__",
+                "Unchained Workspace" if workspace else "Unchained Trial",
+            ).replace("__HOSTED_WORKSPACE_MODE__", str(workspace).lower())
+            scripts = [
+                body
+                for attrs, body in re.findall(
+                    r"<script([^>]*)>(.*?)</script>", html, flags=re.IGNORECASE | re.DOTALL
+                )
+                if "src=" not in attrs.lower()
+                and "application/ld+json" not in attrs.lower()
+            ]
+            self.assertTrue(scripts, "rendered hosted chat has no inline scripts")
+            for index, script in enumerate(scripts):
+                result = subprocess.run(
+                    [node, "--check"],
+                    input=script,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"hosted chat script {index} failed to parse "
+                    f"(workspace={workspace}):\n{result.stderr}",
+                )
+
+    def test_admin_credit_column_and_grant_dialog_contract(self):
+        admin = web.ADMIN_HTML
+        self.assertIn("<th>Credit</th>", admin)
+        self.assertIn("Grant Credit", admin)
+        self.assertIn('class="btn btn-grant js-grant-credit"', admin)
+        self.assertIn("function escAttr", admin)
+        self.assertIn('data-user-id="', admin)
+        self.assertIn("openGrantDialog", admin)
+        self.assertIn('id="grant-dialog"', admin)
+        self.assertIn('class="table-scroll"', admin)
+        self.assertIn('#users-table{min-width:', admin)
+        self.assertIn('id="grant-amount"', admin)
+        self.assertIn('id="grant-reason"', admin)
+        self.assertIn('id="grant-err"', admin)
+        self.assertIn('id="grant-submit-btn"', admin)
+        self.assertIn('id="grant-cancel-btn"', admin)
+        self.assertIn('/admin/credit/grant', admin)
+        self.assertIn("_generateOperationId", admin)
+        self.assertIn("_grantOperationId", admin)
+        self.assertIn("user_id: _grantUserId", admin)
+        self.assertIn("amount_usd: raw", admin)
+        self.assertIn("reason: reason", admin)
+        self.assertIn("operation_id: _grantOperationId", admin)
+        self.assertIn("globalThis.crypto.randomUUID", admin)
+        # Escape/Cancel keyboard handling
+        self.assertIn("e.key === 'Escape'", admin)
+        self.assertIn("closeGrantDialog()", admin)
+        # Focus restoration
+        self.assertIn("_grantReturnFocus", admin)
+        # Validation
+        self.assertIn("Number.isFinite(amount)", admin)
+        self.assertIn("up to 6 decimal places", admin)
+        self.assertIn("e.key === 'Tab'", admin)
+        self.assertIn("if (_grantBusy) return;", admin)
+        self.assertIn("cancelBtn.disabled = true", admin)
+        self.assertIn("submitBtn.dataset.complete === '1'", admin)
+        # Replay/retry — operation_id retained on error but cleared on 409
+        self.assertIn("r.status === 409", admin)
+        # Success reloads table
+        self.assertIn("loadUsers()", admin)
+
+    def test_admin_inline_scripts_parse(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for admin syntax tests")
+        scripts = [
+            body
+            for attrs, body in re.findall(
+                r"<script([^>]*)>(.*?)</script>",
+                web.ADMIN_HTML,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if "src=" not in attrs.lower()
+        ]
+        self.assertTrue(scripts, "admin page has no inline scripts")
+        for index, script in enumerate(scripts):
+            result = subprocess.run(
+                [node, "--check"],
+                input=script,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"admin script {index} failed to parse:\n{result.stderr}",
+            )
+
 
 class TestTrialModelStorageIsolation(unittest.TestCase):
     def _run_storage_runtime(self, assertions: str) -> None:
+        trial_html = web.TRIAL_CHAT_HTML.replace("__HOSTED_WORKSPACE_MODE__", "false")
         match = re.search(
             r"const _TRIAL_MODEL_STORAGE_PREFIX = .*?(?=\nfunction _nextAfterLogin\()",
-            web.TRIAL_CHAT_HTML,
+            trial_html,
             flags=re.DOTALL,
         )
         self.assertIsNotNone(match, "trial model storage runtime missing")
@@ -1271,6 +1614,7 @@ const elements = {
   modelsel: {value: 'google/gemini-3.1-flash-lite'},
   'model-custom-input': {value: ''},
   'control-link': {style: {display: 'none'}},
+  'hosted-admin-link': {style: {display: 'none'}},
 };
 const document = {getElementById: id => elements[id] || null};
 let _userId = '';
@@ -1322,12 +1666,16 @@ if (localStorage.getItem('unrelated') !== 'keep-me') throw new Error('logout cle
         self._run_storage_runtime(r"""
 _applyTrialIdentity({user_id: 'opaque-admin-a', is_admin: true});
 if (elements['control-link'].style.display !== '') throw new Error('admin account did not see control link');
+if (elements['hosted-admin-link'].style.display !== '') throw new Error('admin account did not see admin link');
 _setTrialIdentity('');
 if (elements['control-link'].style.display !== 'none') throw new Error('logout retained admin control link');
+if (elements['hosted-admin-link'].style.display !== 'none') throw new Error('logout retained admin link');
 _applyTrialIdentity({user_id: 'opaque-user-b', is_admin: false});
 if (elements['control-link'].style.display !== 'none') throw new Error('non-admin account inherited admin control link');
+if (elements['hosted-admin-link'].style.display !== 'none') throw new Error('non-admin account inherited admin link');
 _syncTrialAdminUi();
 if (elements['control-link'].style.display !== 'none') throw new Error('non-admin render revealed admin control link');
+if (elements['hosted-admin-link'].style.display !== 'none') throw new Error('non-admin render revealed admin link');
 """)
 
     def test_trial_template_has_no_unscoped_model_writes(self):
@@ -1374,6 +1722,12 @@ class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(response.body.decode())
         self.assertTrue(payload["authenticated"])
         self.assertEqual(payload["user_id"], "opaque-user-a")
+        self.assertIn("hosted_model_policy", payload)
+        self.assertIn(
+            "arcee-ai/trinity-large-preview:free",
+            payload["hosted_model_policy"]["models"],
+        )
+        self.assertNotIn("updated_by", payload["hosted_model_policy"])
 
 
 class TestWebCoreResolverContracts(unittest.TestCase):

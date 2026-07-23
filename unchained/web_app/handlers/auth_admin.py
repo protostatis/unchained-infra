@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from urllib.parse import urlencode, urlparse
@@ -70,6 +73,20 @@ def _normalized_email(value: object) -> str:
     if email in {"none", "null"}:
         return ""
     return email
+
+
+def _client_hosted_model_policy(core) -> dict:
+    """Return model policy fields safe and useful for authenticated clients."""
+    from credit import effective_hosted_model_policy
+
+    policy = effective_hosted_model_policy(core)
+    return {
+        "version": policy["version"],
+        "models": policy["models"],
+        "default_model": policy["default_model"],
+        "fallback_model": policy["fallback_model"],
+        "post_cap_models": policy["post_cap_models"],
+    }
 
 
 def _user_status(user: dict) -> str:
@@ -1691,6 +1708,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     core = _core()
     auth_info = core._authenticate(request)
     if auth_info is not None:
+        hosted_model_policy = _client_hosted_model_policy(core)
         email = auth_info.get("email", "")
         user = core._auth.find_user_by_email(email)
         status = (
@@ -1706,6 +1724,51 @@ async def handle_auth_me(request: web.Request) -> web.Response:
         openrouter_usage = {}
         if user and (user_type == "trial" or status == "pending"):
             openrouter_usage = core._openrouter_budget_state_for_user(user["user_id"])
+
+        # Credit state (backward-compatible, added for trial users)
+        credit_state = {"available": False}
+        if user:
+            try:
+                from credit import CreditLedger
+                ledger = await asyncio.to_thread(
+                    CreditLedger, db_path=core._auth.db_path
+                )
+                account = await asyncio.to_thread(
+                    ledger.ensure_account, user["user_id"]
+                )
+                # Grant initial trial credit from existing OpenRouter budget
+                if user_type == "trial" or status == "pending":
+                    budget_state = core._openrouter_budget_state_for_user(user["user_id"])
+                    await asyncio.to_thread(
+                        ledger.ensure_trial_grant_from_openrouter_budget,
+                        user["user_id"],
+                        current_spend_usd=budget_state.get("spent_usd", 0),
+                        budget_usd=budget_state.get("budget_usd", 0),
+                    )
+                    # Reload after the idempotent opening grant so a user's
+                    # first /auth/me response contains the funded balance.
+                    account = (
+                        await asyncio.to_thread(
+                            ledger.get_account, user["user_id"]
+                        )
+                    ) or account
+                held = await asyncio.to_thread(
+                    ledger.held_reservation_total, account["account_id"]
+                )
+                available = account["balance_micro_usd"] - held
+                credit_state = {
+                    "available": True,
+                    "balance_micro_usd": account["balance_micro_usd"],
+                    "balance_usd": account["balance_usd"],
+                    "held_micro_usd": held,
+                    "available_micro_usd": max(0, available),
+                    "available_usd": round(max(0, available) / 1_000_000, 6),
+                    "total_granted_micro_usd": account["total_granted_micro_usd"],
+                    "total_spent_micro_usd": account["total_spent_micro_usd"],
+                }
+            except Exception:
+                pass
+
         return web.json_response(
             {
                 "authenticated": True,
@@ -1720,6 +1783,8 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                 "demo_prompt_count": core._auth.get_demo_count(email) if email else 0,
                 "demo_unlimited": core._is_demo_unlimited(user) if user else False,
                 "openrouter_usage": openrouter_usage,
+                "credit": credit_state,
+                "hosted_model_policy": hosted_model_policy,
                 "is_admin": email.lower() in core.ADMIN_EMAILS,
                 "name": user.get("name", "") if user else "",
                 "picture": user.get("picture", "") if user else "",
@@ -1761,6 +1826,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                         "pending": False,
                         "review_pending": False,
                         "claude_access_requested": False,
+                        "hosted_model_policy": _client_hosted_model_policy(core),
                         "is_admin": session["email"].lower() in core.ADMIN_EMAILS,
                         "name": user.get("name", ""),
                         "picture": user.get("picture", ""),
@@ -1776,10 +1842,66 @@ def is_admin(request: web.Request) -> dict | None:
     auth_info = core._authenticate(request)
     if not auth_info:
         return None
-    email = auth_info.get("email", "")
+    email = str(auth_info.get("email", "") or "").strip().lower()
     if email not in core.ADMIN_EMAILS:
         return None
     return auth_info
+
+
+async def handle_admin_hosted_models(request: web.Request) -> web.Response:
+    """GET /admin/settings/hosted-models — return effective hosted model policy."""
+    core = _core()
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+    from credit import effective_hosted_model_policy
+
+    return web.json_response(
+        {"policy": effective_hosted_model_policy(core)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_admin_hosted_models_update(request: web.Request) -> web.Response:
+    """POST /admin/settings/hosted-models — replace the non-admin model list."""
+    core = _core()
+    auth_info = is_admin(request)
+    if not auth_info:
+        return web.json_response({"error": "Admin access required"}, status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "JSON body must be an object"}, status=400)
+
+    from credit import (
+        HOSTED_MODEL_POLICY_SETTING_KEY,
+        HOSTED_MODEL_POLICY_VERSION,
+        effective_hosted_model_policy,
+        normalize_hosted_model_ids,
+    )
+
+    current = effective_hosted_model_policy(core)
+    try:
+        models = normalize_hosted_model_ids(
+            body.get("models"),
+            required_models=current["required_models"],
+        )
+        core._auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {"version": HOSTED_MODEL_POLICY_VERSION, "models": list(models)},
+            updated_by=str(auth_info.get("email", "") or "").strip().lower(),
+        )
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception:
+        return web.json_response(
+            {"error": "Failed to save hosted model settings"}, status=500
+        )
+    return web.json_response(
+        {"ok": True, "policy": effective_hosted_model_policy(core)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def handle_admin_pending(request: web.Request) -> web.Response:
@@ -1832,6 +1954,47 @@ async def handle_admin_users(request: web.Request) -> web.Response:
     if not is_admin(request):
         return web.json_response({"error": "Admin access required"}, status=403)
     users = core._auth.list_all_users()
+
+    def attach_credit_state() -> list[dict]:
+        from credit import CreditLedger, _micro_to_usd
+
+        ledger = CreditLedger(db_path=core._auth.db_path)
+        enriched = []
+        for raw_user in users:
+            user = dict(raw_user)
+            account = ledger.get_account(str(user.get("user_id", "") or ""))
+            if account:
+                held = ledger.held_reservation_total(account["account_id"])
+                available = max(
+                    0, int(account.get("balance_micro_usd", 0)) - held
+                )
+                user["credit"] = {
+                    "balance_micro_usd": account["balance_micro_usd"],
+                    "balance_usd": account["balance_usd"],
+                    "held_micro_usd": held,
+                    "available_micro_usd": available,
+                    "available_usd": _micro_to_usd(available),
+                    "total_granted_micro_usd": account[
+                        "total_granted_micro_usd"
+                    ],
+                    "total_spent_micro_usd": account[
+                        "total_spent_micro_usd"
+                    ],
+                }
+            else:
+                user["credit"] = {
+                    "balance_micro_usd": 0,
+                    "balance_usd": 0.0,
+                    "held_micro_usd": 0,
+                    "available_micro_usd": 0,
+                    "available_usd": 0.0,
+                    "total_granted_micro_usd": 0,
+                    "total_spent_micro_usd": 0,
+                }
+            enriched.append(user)
+        return enriched
+
+    users = await asyncio.to_thread(attach_credit_state)
     return web.json_response({"users": users})
 
 
@@ -1873,6 +2036,93 @@ def _scheduler_api_auth(core, request: web.Request) -> tuple[dict | None, web.Re
     if core._is_pending_user(auth_info):
         return None, core._pending_limited_response()
     return auth_info, None
+
+
+def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict | None:
+    """Authenticate a hosted trial-agent scheduler call using the deployment service key.
+
+    The hosted worker never receives a raw user API key.  Instead it sends the
+    dedicated ``HOSTED_AGENT_SERVICE_TOKEN`` as a Bearer token together with a scoped scheduler
+    grant id and the chat session id.  The grant (minted by
+    :func:`_mint_scheduler_turn_grant`) binds the user id, chat session id,
+    and expiry.  Deriving the user from the validated grant ensures the
+    request body cannot spoof user ownership.
+
+    Both the ``session_id`` body field and the ``scheduler_grant_id`` body
+    field must match the grant's stored bindings — the session is validated
+    here so that downstream checks see a consistent set of claims.
+    """
+    headers = getattr(request, "headers", {}) or {}
+    auth_header = str(headers.get("Authorization", "") or "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header[len("bearer "):].strip()
+
+    service_token = str(
+        getattr(core, "HOSTED_AGENT_SERVICE_TOKEN", "") or ""
+    ).strip()
+    if not token or not service_token:
+        return None
+    if not hmac.compare_digest(token, service_token):
+        return None
+
+    grant_id = str(body.get("scheduler_grant_id", "") or "").strip()
+    if not grant_id:
+        return None
+
+    grants = getattr(core, "_scheduler_turn_grants", None)
+    if not isinstance(grants, dict):
+        return None
+    grant_meta = grants.get(grant_id)
+    if not isinstance(grant_meta, dict):
+        return None
+
+    now = time.time()
+    expires_at = 0.0
+    try:
+        expires_at = float(grant_meta.get("expires_at", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires_at <= now:
+        return None
+
+    user_id = str(grant_meta.get("user_id", "") or "").strip()
+    if not user_id:
+        return None
+
+    # Validate session_id binding in the service auth layer itself so a
+    # mismatched session_id is caught before any read/mutation occurs.
+    body_session_id = str(body.get("session_id", "") or "").strip()
+    grant_session_id = str(grant_meta.get("session_id", "") or "").strip()
+    if not body_session_id or not grant_session_id:
+        return None
+    if not hmac.compare_digest(body_session_id, grant_session_id):
+        return None
+
+    return {"user_id": user_id, "trial_agent_auth": True}
+
+
+async def _scheduler_auth_with_trial_agent_fallback(
+    core, request: web.Request
+) -> tuple[dict | None, web.Response | None, dict | None]:
+    """Authenticate scheduler agent endpoints with trial-agent fallback.
+
+    Returns ``(auth_info, error_response, body)``.  When the caller is the
+    hosted trial worker the *body* is parsed early so the grant id can be
+    extracted for service-level auth.
+    """
+    auth_info, error = _scheduler_api_auth(core, request)
+    if auth_info is not None:
+        return auth_info, None, None
+
+    # Normal auth failed — try trial-agent service auth with early body parse
+    body, _body_error = await _scheduler_json_body(request)
+    if body is not None:
+        trial_auth_info = _scheduler_trial_agent_auth(core, request, body)
+        if trial_auth_info is not None:
+            return trial_auth_info, None, body
+
+    return None, error, body
 
 
 async def _scheduler_json_body(request: web.Request) -> tuple[dict | None, web.Response | None]:
@@ -2126,12 +2376,13 @@ async def handle_scheduler_history(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_list(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/list — list scheduler jobs for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2142,12 +2393,13 @@ async def handle_scheduler_agent_list(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/preview — preview one candidate job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2173,12 +2425,13 @@ async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/upsert — create or replace one job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2210,12 +2463,13 @@ async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_delete(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/delete — delete one job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2239,3 +2493,219 @@ async def handle_scheduler_agent_delete(request: web.Request) -> web.Response:
         extra={"ok": True, "deleted_id": job_id},
     )
     return web.json_response(payload)
+
+
+# ---------------------------------------------------------------------------
+# User-facing credit status/history
+# ---------------------------------------------------------------------------
+
+
+async def handle_credit_status(request: web.Request) -> web.Response:
+    """GET /web/credit/status — return authenticated user's credit account state."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    user_id = auth_info.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "No user ID"}, status=400)
+
+    from credit import CreditLedger
+
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+    account = await asyncio.to_thread(ledger.ensure_account, user_id)
+    held = await asyncio.to_thread(
+        ledger.held_reservation_total, account["account_id"]
+    )
+    available = account["balance_micro_usd"] - held
+
+    return web.json_response({
+        "user_id": user_id,
+        "account_id": account["account_id"],
+        "balance_micro_usd": account["balance_micro_usd"],
+        "balance_usd": account["balance_usd"],
+        "held_micro_usd": held,
+        "held_usd": round(held / 1_000_000, 6),
+        "available_micro_usd": max(0, available),
+        "available_usd": round(max(0, available) / 1_000_000, 6),
+        "total_granted_micro_usd": account["total_granted_micro_usd"],
+        "total_granted_usd": account["total_granted_usd"],
+        "total_spent_micro_usd": account["total_spent_micro_usd"],
+        "total_spent_usd": account["total_spent_usd"],
+    })
+
+
+async def handle_credit_history(request: web.Request) -> web.Response:
+    """GET /web/credit/status/history?limit=50 — return authenticated user's ledger."""
+    core = _core()
+    auth_info = core._authenticate(request)
+    if auth_info is None:
+        return web.json_response({"error": "Not authenticated"}, status=401)
+
+    user_id = auth_info.get("user_id", "")
+    if not user_id:
+        return web.json_response({"error": "No user ID"}, status=400)
+
+    try:
+        limit = min(200, max(1, int(request.query.get("limit", "50"))))
+    except ValueError:
+        limit = 50
+
+    from credit import CreditLedger
+
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+    entries, runs = await asyncio.gather(
+        asyncio.to_thread(ledger.get_ledger_for_user, user_id, limit),
+        asyncio.to_thread(ledger.get_runs_for_user, user_id, limit),
+    )
+
+    return web.json_response({
+        "user_id": user_id,
+        "ledger_entries": entries,
+        "runs": runs,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Admin credit grant
+# ---------------------------------------------------------------------------
+
+
+async def handle_admin_credit_grant(request: web.Request) -> web.Response:
+    """POST /admin/credit/grant — admin grants credit to a user.
+
+    JSON body:
+        {"user_id": "u-...", "amount_usd": "1.00", "reason": "...",
+         "operation_id": "client-generated-unique-id"}
+
+    Validates decimal amount exactly, requires target user to exist, bounds
+    amount and reason length, and requires a caller-generated idempotency key
+    so intentional duplicate grants remain possible while network retries are safe.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    core = _core()
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "JSON body must be an object"}, status=400)
+
+    user_id = str(body.get("user_id", "")).strip()
+    if not user_id:
+        return web.json_response({"error": "user_id required"}, status=400)
+
+    # Validate user exists
+    if core._auth.find_user_by_id(user_id) is None:
+        return web.json_response(
+            {"error": f"User '{user_id}' not found"},
+            status=404,
+        )
+
+    # Parse decimal amount exactly (no float rounding)
+    amount_raw = body.get("amount_usd")
+    try:
+        amount_decimal = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return web.json_response(
+            {"error": "amount_usd must be a valid decimal number"},
+            status=400,
+        )
+    if not amount_decimal.is_finite():
+        return web.json_response(
+            {"error": "amount_usd must be a finite decimal number"}, status=400
+        )
+    if amount_decimal <= Decimal("0"):
+        return web.json_response(
+            {"error": "amount_usd must be positive"},
+            status=400,
+        )
+    if amount_decimal > Decimal("10000"):
+        return web.json_response(
+            {"error": "amount_usd must not exceed 10,000.00"},
+            status=400,
+        )
+    amount_micro_decimal = amount_decimal * Decimal("1000000")
+    if amount_micro_decimal != amount_micro_decimal.to_integral_value():
+        return web.json_response(
+            {"error": "amount_usd must have at most 6 decimal places"},
+            status=400,
+        )
+    amount_micro = int(amount_micro_decimal)
+    if amount_micro <= 0:
+        return web.json_response(
+            {"error": "amount_usd must be at least 0.000001"}, status=400
+        )
+
+    reason = str(body.get("reason", "admin_grant")).strip()
+    if not reason:
+        reason = "admin_grant"
+    if len(reason) > 500:
+        return web.json_response(
+            {"error": "reason must be 500 characters or fewer"},
+            status=400,
+        )
+
+    operation_id = str(body.get("operation_id", "") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", operation_id):
+        return web.json_response(
+            {
+                "error": (
+                    "operation_id must be 8-128 letters, numbers, '.', '_', ':', or '-'"
+                )
+            },
+            status=400,
+        )
+
+    from credit import CreditLedger
+
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+    amount_usd = float(amount_decimal)
+
+    admin_auth = core._authenticate(request)
+    admin_email = admin_auth.get("email", "") if admin_auth else ""
+    admin_fingerprint = hashlib.sha256(admin_email.encode()).hexdigest()[:12]
+    idem_key = f"admin-grant-{admin_fingerprint}-{operation_id}"
+
+    try:
+        result = await asyncio.to_thread(
+            ledger.grant,
+            user_id,
+            amount_micro,
+            idempotency_key=idem_key,
+            metadata={
+                "reason": reason,
+                "admin_email": admin_email,
+                "amount_usd_decimal": str(amount_decimal),
+            },
+        )
+        already_applied = bool(result.get("already_applied"))
+        existing_amount = int(
+            result.get("entry_amount_micro_usd", amount_micro) or 0
+        )
+        if already_applied and existing_amount != amount_micro:
+            return web.json_response(
+                {"error": "operation_id was already used for a different amount"},
+                status=409,
+            )
+        return web.json_response({
+            "ok": True,
+            "already_applied": already_applied,
+            "granted_micro_usd": 0 if already_applied else amount_micro,
+            "granted_usd": 0.0 if already_applied else amount_usd,
+            "new_balance_micro_usd": result.get("balance_micro_usd"),
+            "new_balance_usd": result.get("balance_usd"),
+            "idempotency_key": idem_key,
+        })
+    except (ValueError, ArithmeticError) as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        logger = getattr(core, "log", None)
+        if logger:
+            logger.exception("[credit] admin grant failed")
+        return web.json_response({"error": "Credit grant failed"}, status=500)

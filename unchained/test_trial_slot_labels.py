@@ -64,6 +64,9 @@ sending = false;
 loadHistory = async function() {
   _setSlotPreview(activeSlot, activeSlot === 2 ? 'Compare accessible hotels' : '');
 };
+function currentModel() { return 'google/gemini-3.1-flash-lite'; }
+function _isOpenRouterModelId(value) { return (value || '').includes('/'); }
+globalThis.fetch = function() { return Promise.resolve({ok: true, json: async () => ({})}); };
 function check(condition, message) { if (!condition) throw new Error(message); }
 
 const initialState = _ensureSlotState();
@@ -143,6 +146,7 @@ globalThis.localStorage = {
   setItem(key, value) { values.set(key, String(value)); },
 };
 globalThis.currentModel = () => 'test-model';
+globalThis._isOpenRouterModelId = value => (value || '').includes('/');
 globalThis.hideHints = () => {};
 globalThis.showHintsIfEmpty = () => { chat.rendered.push('empty'); };
 globalThis.addUserBubble = text => { chat.rendered.push(text); };
