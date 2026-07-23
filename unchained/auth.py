@@ -19,6 +19,7 @@ CLI:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -115,6 +116,14 @@ class Auth:
                 "CREATE INDEX IF NOT EXISTS idx_lifecycle_email_delivery_status "
                 "ON lifecycle_email_deliveries(campaign, status, created_at)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    updated_by TEXT NOT NULL DEFAULT ''
+                )
+            """)
             # Migration: add status column (existing users default to 'approved')
             try:
                 conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'approved'")
@@ -201,6 +210,74 @@ class Auth:
             raise
         finally:
             conn.close()
+
+    def get_app_setting_record(self, key: str) -> dict | None:
+        """Return one JSON-backed application setting with audit metadata."""
+        setting_key = str(key or "").strip()
+        if not setting_key:
+            raise ValueError("setting key required")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
+                (setting_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row[0])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid JSON for app setting {setting_key}") from exc
+        return {
+            "key": setting_key,
+            "value": value,
+            "updated_at": float(row[1]),
+            "updated_by": str(row[2] or ""),
+        }
+
+    def get_app_setting(self, key: str):
+        """Return a decoded application setting value, or ``None`` if absent."""
+        record = self.get_app_setting_record(key)
+        return record["value"] if record is not None else None
+
+    def set_app_setting(self, key: str, value, *, updated_by: str = "") -> dict:
+        """Atomically upsert one bounded JSON-backed application setting."""
+        setting_key = str(key or "").strip()
+        if not setting_key:
+            raise ValueError("setting key required")
+        if len(setting_key) > 128:
+            raise ValueError("setting key is too long")
+        try:
+            value_json = json.dumps(
+                value,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("setting value must be JSON serializable") from exc
+        if len(value_json.encode("utf-8")) > 65_536:
+            raise ValueError("setting value is too large")
+        actor = str(updated_by or "").strip()[:320]
+        updated_at = time.time()
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (setting_key, value_json, updated_at, actor),
+            )
+        return {
+            "key": setting_key,
+            "value": value,
+            "updated_at": updated_at,
+            "updated_by": actor,
+        }
 
     def validate_key(self, key: str) -> dict | None:
         """Validate an API key. Returns ``{user_id, key}`` or ``None``."""

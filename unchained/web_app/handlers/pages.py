@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from html import escape
 from urllib.parse import quote, urlencode
@@ -19,6 +21,9 @@ from web_app.templates import (
     FIRST_LOOK_PREVIEW_HTML,
     UNBROWSER_PAGE_HTML,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 _FIRST_LOOK_TASK_HANDOFFS = {
@@ -450,12 +455,93 @@ async def handle_tab_page(request: web.Request) -> web.Response:
     )
 
 
+async def _has_received_hosted_credit(core, auth_info: dict | None) -> bool | None:
+    """Return whether this account has ever received hosted inference credit.
+
+    ``None`` means the credit ledger could not be read. Hosted routes fail
+    closed in that case instead of presenting a funded account as trial.
+    """
+    user_id = str((auth_info or {}).get("user_id", "") or "").strip()
+    if not user_id:
+        return False
+    try:
+        from credit import CreditLedger
+
+        ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+        account = await asyncio.to_thread(ledger.get_account, user_id)
+    except Exception:
+        log.exception("[workspace] failed to read hosted credit for user %s", user_id)
+        return None
+    return bool(account and int(account.get("total_granted_micro_usd", 0) or 0) > 0)
+
+
+def _render_hosted_chat_page(core, *, workspace: bool) -> str:
+    title = "Unchained Workspace" if workspace else "Unchained Trial"
+    html = core.TRIAL_CHAT_HTML.replace("__HOSTED_PAGE_TITLE__", title)
+    html = html.replace("__HOSTED_WORKSPACE_MODE__", "true" if workspace else "false")
+    return core.inject_google_client_id(html, core.GOOGLE_CLIENT_ID)
+
+
 async def handle_trial_page(request: web.Request) -> web.Response:
-    """Serve the trial chat HTML page (OpenRouter models)."""
+    """Serve acquisition/trial chat, redirecting funded users to workspace."""
     core = _core()
     core._track_page_view(request)
-    html = core.inject_google_client_id(core.TRIAL_CHAT_HTML, core.GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    auth_info = core._authenticate(request)
+    if auth_info and not core._is_pending_user(auth_info):
+        funded = await _has_received_hosted_credit(core, auth_info)
+        if funded is None:
+            raise web.HTTPServiceUnavailable(
+                text="Hosted access is temporarily unavailable. Please retry shortly."
+            )
+        if funded:
+            core._track_redirect(
+                request,
+                "/workspace",
+                reason="hosted_credit_received",
+                auth_info=auth_info,
+            )
+            raise web.HTTPFound("/workspace")
+    return web.Response(
+        text=_render_hosted_chat_page(core, workspace=False),
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_workspace_page(request: web.Request) -> web.Response:
+    """Serve the funded hosted browser workspace outside the trial route."""
+    core = _core()
+    core._track_page_view(request)
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        core._track_redirect(request, "/trial", reason="workspace_requires_auth")
+        raise web.HTTPFound("/trial?next=%2Fworkspace")
+    if core._is_pending_user(auth_info):
+        core._track_redirect(
+            request,
+            "/trial",
+            reason="pending_user_gate",
+            auth_info=auth_info,
+        )
+        raise web.HTTPFound("/trial")
+    funded = await _has_received_hosted_credit(core, auth_info)
+    if funded is None:
+        raise web.HTTPServiceUnavailable(
+            text="Hosted workspace is temporarily unavailable. Please retry shortly."
+        )
+    if not funded:
+        core._track_redirect(
+            request,
+            "/trial",
+            reason="hosted_credit_required",
+            auth_info=auth_info,
+        )
+        raise web.HTTPFound("/trial")
+    return web.Response(
+        text=_render_hosted_chat_page(core, workspace=True),
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def handle_chat_gemini_page(request: web.Request) -> web.Response:

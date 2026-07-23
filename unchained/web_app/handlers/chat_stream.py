@@ -1629,13 +1629,22 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         user_id = auth_info.get("user_id", "")
         requested_model = (model or core._OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
         model = requested_model
-        # --- Model allowlist enforcement ---
-        from credit import is_hosted_model_allowed as _credit_is_hosted_model_allowed
-        if not _credit_is_hosted_model_allowed(model):
+        # --- Model policy enforcement (admins may use any valid OpenRouter ID) ---
+        from credit import is_hosted_model_allowed_for_identity
+        if not is_hosted_model_allowed_for_identity(
+            core,
+            model,
+            user_id=user_id,
+            email=auth_info.get("email", ""),
+        ):
             return reject_first_look(
                 web.json_response(
-                    {"error": f"Model '{model}' is not in the hosted trial allowlist. "
-                              "Please select an approved trial model."},
+                    {
+                        "error": (
+                            f"Model '{model}' is not available for this account. "
+                            "Please select a model from the hosted model list."
+                        )
+                    },
                     status=400,
                 ),
                 "model_not_allowed",

@@ -1523,11 +1523,11 @@ def test_trial_chat_has_guided_install_ux():
     assert "chat_connected" in TRIAL_CHAT_HTML, "trial status updater missing chat_connected handling"
     assert "bridge_connected" in TRIAL_CHAT_HTML, "trial status updater missing bridge_connected handling"
     assert "fetch('/web/chat/status?model='" in TRIAL_CHAT_HTML, "trial status polling endpoint missing"
-    assert "Trial setup required" in TRIAL_CHAT_HTML, "trial guided setup banner missing"
+    assert "Browser setup required" in TRIAL_CHAT_HTML, "hosted browser setup banner missing"
     assert "Choose one install method" in TRIAL_CHAT_HTML, "trial install method choice copy missing"
     assert "Do not run both" in TRIAL_CHAT_HTML, "trial either/or install guidance missing"
     assert (
-        "No Claude, Codex, or OpenCode CLI is required for the guided trial" in TRIAL_CHAT_HTML
+        "No Claude, Codex, or OpenCode CLI is required" in TRIAL_CHAT_HTML
     ), "trial prerequisite copy missing"
     assert "maybeAutoOpenInstallModal" in TRIAL_CHAT_HTML, "trial auto-open install behavior missing"
     assert "lastLocalSetupReady" in TRIAL_CHAT_HTML, "trial send readiness guard missing"

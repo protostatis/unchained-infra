@@ -43,6 +43,7 @@ _BOT_USER_AGENT_TOKENS = (
 
 LOGIN_ROUTES = (
     "/trial",
+    "/workspace",
     "/local",
     "/setup",
     "/install",

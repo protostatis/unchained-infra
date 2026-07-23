@@ -307,6 +307,7 @@ _ANALYTICS_PAGE_VIEW_ROUTES = {
     "/use/competitor-monitoring",
     "/use/price-tracking",
     "/trial",
+    "/workspace",
     "/local",
     "/setup",
     "/install",

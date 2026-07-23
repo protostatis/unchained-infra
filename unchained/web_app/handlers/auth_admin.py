@@ -75,6 +75,20 @@ def _normalized_email(value: object) -> str:
     return email
 
 
+def _client_hosted_model_policy(core) -> dict:
+    """Return model policy fields safe and useful for authenticated clients."""
+    from credit import effective_hosted_model_policy
+
+    policy = effective_hosted_model_policy(core)
+    return {
+        "version": policy["version"],
+        "models": policy["models"],
+        "default_model": policy["default_model"],
+        "fallback_model": policy["fallback_model"],
+        "post_cap_models": policy["post_cap_models"],
+    }
+
+
 def _user_status(user: dict) -> str:
     return user.get("status") or "approved"
 
@@ -1694,6 +1708,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
     core = _core()
     auth_info = core._authenticate(request)
     if auth_info is not None:
+        hosted_model_policy = _client_hosted_model_policy(core)
         email = auth_info.get("email", "")
         user = core._auth.find_user_by_email(email)
         status = (
@@ -1769,6 +1784,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                 "demo_unlimited": core._is_demo_unlimited(user) if user else False,
                 "openrouter_usage": openrouter_usage,
                 "credit": credit_state,
+                "hosted_model_policy": hosted_model_policy,
                 "is_admin": email.lower() in core.ADMIN_EMAILS,
                 "name": user.get("name", "") if user else "",
                 "picture": user.get("picture", "") if user else "",
@@ -1810,6 +1826,7 @@ async def handle_auth_me(request: web.Request) -> web.Response:
                         "pending": False,
                         "review_pending": False,
                         "claude_access_requested": False,
+                        "hosted_model_policy": _client_hosted_model_policy(core),
                         "is_admin": session["email"].lower() in core.ADMIN_EMAILS,
                         "name": user.get("name", ""),
                         "picture": user.get("picture", ""),
@@ -1825,10 +1842,66 @@ def is_admin(request: web.Request) -> dict | None:
     auth_info = core._authenticate(request)
     if not auth_info:
         return None
-    email = auth_info.get("email", "")
+    email = str(auth_info.get("email", "") or "").strip().lower()
     if email not in core.ADMIN_EMAILS:
         return None
     return auth_info
+
+
+async def handle_admin_hosted_models(request: web.Request) -> web.Response:
+    """GET /admin/settings/hosted-models — return effective hosted model policy."""
+    core = _core()
+    if not is_admin(request):
+        return web.json_response({"error": "Admin access required"}, status=403)
+    from credit import effective_hosted_model_policy
+
+    return web.json_response(
+        {"policy": effective_hosted_model_policy(core)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_admin_hosted_models_update(request: web.Request) -> web.Response:
+    """POST /admin/settings/hosted-models — replace the non-admin model list."""
+    core = _core()
+    auth_info = is_admin(request)
+    if not auth_info:
+        return web.json_response({"error": "Admin access required"}, status=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "JSON body must be an object"}, status=400)
+
+    from credit import (
+        HOSTED_MODEL_POLICY_SETTING_KEY,
+        HOSTED_MODEL_POLICY_VERSION,
+        effective_hosted_model_policy,
+        normalize_hosted_model_ids,
+    )
+
+    current = effective_hosted_model_policy(core)
+    try:
+        models = normalize_hosted_model_ids(
+            body.get("models"),
+            required_models=current["required_models"],
+        )
+        core._auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {"version": HOSTED_MODEL_POLICY_VERSION, "models": list(models)},
+            updated_by=str(auth_info.get("email", "") or "").strip().lower(),
+        )
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception:
+        return web.json_response(
+            {"error": "Failed to save hosted model settings"}, status=500
+        )
+    return web.json_response(
+        {"ok": True, "policy": effective_hosted_model_policy(core)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def handle_admin_pending(request: web.Request) -> web.Response:

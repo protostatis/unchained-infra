@@ -22,7 +22,7 @@ from credit import (
     RunNotActiveError,
     _default_reservation,
     credit_service_token,
-    is_hosted_model_allowed as _is_hosted_model_allowed,
+    is_hosted_model_allowed_for_identity,
 )
 
 from web_app.core import get_core as _core
@@ -98,13 +98,19 @@ async def handle_credit_reserve(request: web.Request) -> web.Response:
     if not idempotency_key:
         return _json_error(400, "idempotency_key required")
 
-    # Model allowlist check
-    if not _is_hosted_model_allowed(model):
-        return _json_error(400, f"Model '{model}' is not in the hosted allowlist")
+    core = _core()
+    ledger = _get_ledger()
+    run = await asyncio.to_thread(ledger.get_run, run_id)
+    run_user_id = str((run or {}).get("user_id", "") or "").strip()
+    if not is_hosted_model_allowed_for_identity(
+        core,
+        model,
+        user_id=run_user_id,
+    ):
+        return _json_error(400, f"Model '{model}' is not available for this account")
 
     reservation = _default_reservation(model)
 
-    ledger = _get_ledger()
     try:
         result = await asyncio.to_thread(
             ledger.reserve_call,

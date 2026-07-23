@@ -23,16 +23,24 @@ import threading
 import time
 import unittest
 from contextlib import closing
+from types import SimpleNamespace
 
+from auth import Auth
 from credit import (
     CreditLedger,
     HOSTED_MODEL_CATALOG,
+    HOSTED_MODEL_POLICY_SETTING_KEY,
+    HOSTED_MODEL_POLICY_VERSION,
     InsufficientBalanceError,
     RunNotActiveError,
     _default_reservation,
     _usd_to_micro,
     _micro_to_usd,
+    effective_hosted_model_policy,
     is_hosted_model_allowed,
+    is_hosted_model_allowed_for_identity,
+    is_openrouter_model_id,
+    normalize_hosted_model_ids,
 )
 
 
@@ -411,6 +419,112 @@ class TestCreditLedger(unittest.TestCase):
         self.assertTrue(is_hosted_model_allowed(
             "some/new-model", allow_slash_models=True,
         ))
+
+    def test_openrouter_model_id_validation_is_bounded(self):
+        self.assertTrue(is_openrouter_model_id("openai/gpt-5.2"))
+        self.assertTrue(is_openrouter_model_id("vendor/family/model:free"))
+        self.assertFalse(is_openrouter_model_id("missing-slash"))
+        self.assertFalse(is_openrouter_model_id("vendor/model with spaces"))
+        self.assertFalse(is_openrouter_model_id("vendor//model"))
+        self.assertFalse(is_openrouter_model_id("codex-cli:gpt/model"))
+
+    def test_hosted_model_policy_is_exact_for_users_and_open_for_admins(self):
+        auth = Auth(self._db_path)
+        core = SimpleNamespace(
+            _auth=auth,
+            ADMIN_EMAILS=["admin@example.com"],
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="arcee-ai/trinity-large-preview:free",
+            _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
+                "arcee-ai/trinity-large-preview:free",
+                "stepfun/step-3.5-flash:free",
+            ),
+        )
+        policy = effective_hosted_model_policy(core)
+        self.assertIn("arcee-ai/trinity-large-preview:free", policy["models"])
+        # Catalog membership alone no longer grants non-admin availability.
+        self.assertFalse(
+            is_hosted_model_allowed_for_identity(
+                core,
+                "google/gemini-2.5-pro",
+                email="person@example.com",
+            )
+        )
+        self.assertTrue(
+            is_hosted_model_allowed_for_identity(
+                core,
+                "openai/gpt-5.2",
+                email="ADMIN@example.com",
+            )
+        )
+        self.assertFalse(
+            is_hosted_model_allowed_for_identity(
+                core,
+                "invalid model/id",
+                email="admin@example.com",
+            )
+        )
+
+        configured = [
+            "google/gemini-3.1-flash-lite",
+            "arcee-ai/trinity-large-preview:free",
+            "stepfun/step-3.5-flash:free",
+            "openai/gpt-5.2",
+        ]
+        auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {"version": HOSTED_MODEL_POLICY_VERSION, "models": configured},
+            updated_by="admin@example.com",
+        )
+        self.assertTrue(
+            is_hosted_model_allowed_for_identity(
+                core,
+                "openai/gpt-5.2",
+                email="person@example.com",
+            )
+        )
+        self.assertEqual(effective_hosted_model_policy(core)["models"], configured)
+
+    def test_hosted_model_policy_requires_operational_models_and_no_duplicates(self):
+        required = (
+            "google/gemini-3.1-flash-lite",
+            "arcee-ai/trinity-large-preview:free",
+        )
+        with self.assertRaisesRegex(ValueError, "required models"):
+            normalize_hosted_model_ids(
+                ["google/gemini-3.1-flash-lite"],
+                required_models=required,
+            )
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            normalize_hosted_model_ids(
+                [
+                    "google/gemini-3.1-flash-lite",
+                    "google/gemini-3.1-flash-lite",
+                ]
+            )
+
+    def test_auth_app_setting_round_trip_preserves_audit_metadata(self):
+        auth = Auth(self._db_path)
+        first = auth.set_app_setting(
+            "test_setting",
+            {"version": 1, "values": ["a"]},
+            updated_by="admin@example.com",
+        )
+        self.assertEqual(auth.get_app_setting("test_setting")["values"], ["a"])
+        record = auth.get_app_setting_record("test_setting")
+        self.assertEqual(record["updated_by"], "admin@example.com")
+        self.assertEqual(record["updated_at"], first["updated_at"])
+
+        auth.set_app_setting(
+            "test_setting",
+            {"version": 1, "values": ["b"]},
+            updated_by="second@example.com",
+        )
+        self.assertEqual(auth.get_app_setting("test_setting")["values"], ["b"])
+        self.assertEqual(
+            auth.get_app_setting_record("test_setting")["updated_by"],
+            "second@example.com",
+        )
 
     # ---- Immutable ledger entries ----
 

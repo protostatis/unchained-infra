@@ -10,7 +10,11 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from credit import CreditLedger
+from credit import (
+    CreditLedger,
+    HOSTED_MODEL_POLICY_SETTING_KEY,
+    HOSTED_MODEL_POLICY_VERSION,
+)
 from web_app.handlers import auth_admin, credit_internal
 from web_app.routes import ROUTE_SPECS
 
@@ -38,21 +42,47 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.ledger = CreditLedger(self.db_path)
         self._saved_token = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN")
         os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "hosted-callback-test"
+        self.settings = {}
+        self.setting_records = {}
+
+        def set_app_setting(key, value, *, updated_by=""):
+            self.settings[key] = value
+            record = {
+                "key": key,
+                "value": value,
+                "updated_at": 1234.5,
+                "updated_by": updated_by,
+            }
+            self.setting_records[key] = record
+            return record
+
+        users = {
+            "u-target": {"user_id": "u-target", "email": "person@example.com"},
+            "u-admin-target": {
+                "user_id": "u-admin-target",
+                "email": "admin@example.com",
+            },
+        }
         self.auth = SimpleNamespace(
             db_path=self.db_path,
-            find_user_by_id=lambda user_id: (
-                {"user_id": user_id, "email": "person@example.com"}
-                if user_id == "u-target"
-                else None
-            ),
+            find_user_by_id=lambda user_id: users.get(user_id),
             list_all_users=lambda: [
                 {"user_id": "u-target", "email": "person@example.com"}
             ],
+            get_app_setting=lambda key: self.settings.get(key),
+            get_app_setting_record=lambda key: self.setting_records.get(key),
+            set_app_setting=set_app_setting,
         )
         self.core = SimpleNamespace(
             _auth=self.auth,
             _credit_ledger=self.ledger,
             ADMIN_EMAILS=["admin@example.com"],
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="arcee-ai/trinity-large-preview:free",
+            _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
+                "arcee-ai/trinity-large-preview:free",
+                "stepfun/step-3.5-flash:free",
+            ),
             _authenticate=lambda _request: {
                 "user_id": "u-admin",
                 "email": "admin@example.com",
@@ -121,6 +151,70 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(malformed.status, 400)
         self.assertIn("object", _payload(malformed)["error"])
 
+    async def test_internal_model_policy_rechecks_run_owner(self):
+        self.ledger.grant("u-target", 2_000_000, idempotency_key="user-model-seed")
+        user_run = self.ledger.create_run("u-target", idempotency_key="user-model-run")
+        self.ledger.grant(
+            "u-admin-target", 2_000_000, idempotency_key="admin-model-seed"
+        )
+        admin_run = self.ledger.create_run(
+            "u-admin-target", idempotency_key="admin-model-run"
+        )
+
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            non_admin = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": user_run["run_id"],
+                        "model": "google/gemini-2.5-pro",
+                        "idempotency_key": "user-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            admin = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": admin_run["run_id"],
+                        "model": "openai/gpt-5.2",
+                        "idempotency_key": "admin-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+
+        self.assertEqual(non_admin.status, 400)
+        self.assertEqual(admin.status, 200)
+        self.assertEqual(_payload(admin)["reserved_micro_usd"], 1_000_000)
+
+    async def test_configured_unknown_model_is_allowed_for_non_admin(self):
+        models = [
+            "google/gemini-3.1-flash-lite",
+            "arcee-ai/trinity-large-preview:free",
+            "stepfun/step-3.5-flash:free",
+            "openai/gpt-5.2",
+        ]
+        self.auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {"version": HOSTED_MODEL_POLICY_VERSION, "models": models},
+            updated_by="admin@example.com",
+        )
+        self.ledger.grant("u-target", 2_000_000, idempotency_key="configured-seed")
+        run = self.ledger.create_run("u-target", idempotency_key="configured-run")
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": run["run_id"],
+                        "model": "openai/gpt-5.2",
+                        "idempotency_key": "configured-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(_payload(response)["reserved_micro_usd"], 1_000_000)
+
     async def test_admin_grant_replay_and_intentional_duplicate(self):
         first_request = _Request({
             "user_id": "u-target",
@@ -175,10 +269,44 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         credit = _payload(response)["users"][0]["credit"]
         self.assertEqual(credit["available_micro_usd"], 750_000)
 
+    async def test_admin_can_read_and_replace_hosted_model_policy(self):
+        models = [
+            "google/gemini-3.1-flash-lite",
+            "arcee-ai/trinity-large-preview:free",
+            "stepfun/step-3.5-flash:free",
+            "openai/gpt-5.2",
+        ]
+        with patch.object(auth_admin, "_core", return_value=self.core):
+            initial = await auth_admin.handle_admin_hosted_models(_Request())
+            saved = await auth_admin.handle_admin_hosted_models_update(
+                _Request({"models": models})
+            )
+            reloaded = await auth_admin.handle_admin_hosted_models(_Request())
+            invalid = await auth_admin.handle_admin_hosted_models_update(
+                _Request({"models": ["openai/gpt-5.2"]})
+            )
+            self.core._authenticate = lambda _request: {
+                "user_id": "u-target",
+                "email": "person@example.com",
+            }
+            forbidden = await auth_admin.handle_admin_hosted_models_update(
+                _Request({"models": models})
+            )
+
+        self.assertEqual(initial.status, 200)
+        self.assertFalse(_payload(initial)["policy"]["configured"])
+        self.assertEqual(saved.status, 200)
+        self.assertEqual(_payload(saved)["policy"]["models"], models)
+        self.assertEqual(_payload(reloaded)["policy"]["updated_by"], "admin@example.com")
+        self.assertEqual(invalid.status, 400)
+        self.assertIn("required models", _payload(invalid)["error"])
+        self.assertEqual(forbidden.status, 403)
+
     def test_internal_routes_are_not_under_public_web_namespace(self):
         paths = {path for _method, path, _handler in ROUTE_SPECS}
         self.assertIn("/internal/credit/reserve", paths)
         self.assertIn("/internal/credit/submitted", paths)
+        self.assertIn("/admin/settings/hosted-models", paths)
         self.assertNotIn("/web/credit/reserve", paths)
         caddy = Path(__file__).resolve().parents[1].joinpath("Caddyfile").read_text()
         self.assertIn("handle /internal/*", caddy)

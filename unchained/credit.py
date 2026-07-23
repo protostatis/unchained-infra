@@ -116,6 +116,26 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "nvidia/nemotron-3-super-120b-a12b:free": 0,
 }
 
+HOSTED_MODEL_POLICY_SETTING_KEY = "hosted_openrouter_models"
+HOSTED_MODEL_POLICY_VERSION = 1
+HOSTED_MODEL_POLICY_MAX_MODELS = 64
+HOSTED_MODEL_POLICY_MAX_ID_LENGTH = 200
+HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
+    "google/gemini-3.1-flash-lite",
+    "qwen/qwen3.6-plus",
+    "qwen/qwen3.5-flash-02-23",
+    "google/gemini-3-flash-preview",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "stepfun/step-3.5-flash:free",
+)
+_MODEL_ID_EXTRA_CHARS = frozenset("._-/:+@")
+_NON_OPENROUTER_MODEL_PREFIXES = (
+    "claude-sdk:",
+    "codex-cli:",
+    "codex-sdk:",
+    "opencode-cli:",
+)
+
 _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD: int = max(
     1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "1000000"))
 )  # default $1.00 for explicitly allowlisted models without catalog pricing
@@ -136,6 +156,173 @@ def _default_reservation(model: str) -> int:
     return _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD
 
 
+def is_openrouter_model_id(model: str) -> bool:
+    """Return whether *model* is a bounded, syntactically safe OpenRouter ID."""
+    value = str(model or "").strip()
+    if (
+        not value
+        or not value.isascii()
+        or len(value) > HOSTED_MODEL_POLICY_MAX_ID_LENGTH
+    ):
+        return False
+    if value.startswith(_NON_OPENROUTER_MODEL_PREFIXES):
+        return False
+    parts = value.split("/")
+    if len(parts) < 2 or any(not part for part in parts):
+        return False
+    return all(ch.isalnum() or ch in _MODEL_ID_EXTRA_CHARS for ch in value)
+
+
+def normalize_hosted_model_ids(
+    models,
+    *,
+    required_models=(),
+    reject_duplicates: bool = True,
+) -> tuple[str, ...]:
+    """Validate and normalize an ordered hosted-model policy list."""
+    if not isinstance(models, (list, tuple)):
+        raise ValueError("models must be an array")
+    if not models:
+        raise ValueError("at least one model is required")
+    if len(models) > HOSTED_MODEL_POLICY_MAX_MODELS:
+        raise ValueError(
+            f"at most {HOSTED_MODEL_POLICY_MAX_MODELS} models are allowed"
+        )
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in models:
+        model = str(raw or "").strip()
+        if not is_openrouter_model_id(model):
+            raise ValueError(f"invalid OpenRouter model ID: {model or '<empty>'}")
+        if model in seen:
+            if reject_duplicates:
+                raise ValueError(f"duplicate model ID: {model}")
+            continue
+        seen.add(model)
+        normalized.append(model)
+
+    required = []
+    for raw in required_models:
+        model = str(raw or "").strip()
+        if model and model not in required:
+            required.append(model)
+    invalid_required = [model for model in required if not is_openrouter_model_id(model)]
+    if invalid_required:
+        raise ValueError(
+            "invalid required OpenRouter model ID: " + ", ".join(invalid_required)
+        )
+    missing = [model for model in required if model not in seen]
+    if missing:
+        raise ValueError("model list must include required models: " + ", ".join(missing))
+    return tuple(normalized)
+
+
+def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]:
+    post_cap = tuple(
+        str(model or "").strip()
+        for model in getattr(
+            core,
+            "_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS",
+            ("arcee-ai/trinity-large-preview:free", "stepfun/step-3.5-flash:free"),
+        )
+        if str(model or "").strip()
+    )
+    if not post_cap:
+        post_cap = (
+            "arcee-ai/trinity-large-preview:free",
+            "stepfun/step-3.5-flash:free",
+        )
+    default_model = str(
+        getattr(core, "_OPENROUTER_TRIAL_DEFAULT_MODEL", HOSTED_USER_MODEL_DEFAULTS[0])
+        or HOSTED_USER_MODEL_DEFAULTS[0]
+    ).strip()
+    fallback_model = str(
+        getattr(core, "_OPENROUTER_TRIAL_FALLBACK_MODEL", post_cap[0]) or post_cap[0]
+    ).strip()
+    return default_model, post_cap, fallback_model
+
+
+def effective_hosted_model_policy(core) -> dict:
+    """Load the ordered non-admin model policy, falling back safely on errors."""
+    default_model, post_cap, fallback_model = _runtime_hosted_model_requirements(core)
+    required = tuple(dict.fromkeys((default_model, fallback_model, *post_cap)))
+    built_in = tuple(dict.fromkeys((*HOSTED_USER_MODEL_DEFAULTS, *required)))
+    built_in = normalize_hosted_model_ids(
+        built_in,
+        required_models=required,
+        reject_duplicates=False,
+    )
+
+    configured = False
+    models = built_in
+    updated_at = None
+    updated_by = ""
+    auth_store = getattr(core, "_auth", None)
+    try:
+        record_getter = getattr(auth_store, "get_app_setting_record", None)
+        if callable(record_getter):
+            record = record_getter(HOSTED_MODEL_POLICY_SETTING_KEY)
+        else:
+            value_getter = getattr(auth_store, "get_app_setting", None)
+            value = value_getter(HOSTED_MODEL_POLICY_SETTING_KEY) if callable(value_getter) else None
+            record = {"value": value} if value is not None else None
+        if record is not None:
+            value = record.get("value")
+            if not isinstance(value, dict) or value.get("version") != HOSTED_MODEL_POLICY_VERSION:
+                raise ValueError("unsupported hosted model policy format")
+            models = normalize_hosted_model_ids(
+                value.get("models"),
+                required_models=required,
+            )
+            configured = True
+            updated_at = record.get("updated_at")
+            updated_by = str(record.get("updated_by", "") or "")
+    except Exception as exc:
+        log.error("Invalid hosted model policy; using built-in defaults: %s", exc)
+
+    return {
+        "version": HOSTED_MODEL_POLICY_VERSION,
+        "models": list(models),
+        "default_model": default_model,
+        "fallback_model": fallback_model,
+        "post_cap_models": list(post_cap),
+        "required_models": list(required),
+        "configured": configured,
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+    }
+
+
+def is_hosted_model_allowed_for_identity(
+    core,
+    model: str,
+    *,
+    user_id: str = "",
+    email: str = "",
+) -> bool:
+    """Apply current admin/non-admin hosted model availability policy."""
+    value = str(model or "").strip()
+    if not is_openrouter_model_id(value):
+        return False
+    resolved_email = str(email or "").strip().lower()
+    if not resolved_email and user_id:
+        finder = getattr(getattr(core, "_auth", None), "find_user_by_id", None)
+        if callable(finder):
+            user = finder(str(user_id).strip())
+            if user:
+                resolved_email = str(user.get("email", "") or "").strip().lower()
+    admin_emails = {
+        str(candidate or "").strip().lower()
+        for candidate in getattr(core, "ADMIN_EMAILS", ())
+        if str(candidate or "").strip()
+    }
+    if resolved_email and resolved_email in admin_emails:
+        return True
+    policy = effective_hosted_model_policy(core)
+    return value in set(policy["models"])
+
+
 def is_hosted_model_allowed(
     model: str,
     *,
@@ -154,7 +341,7 @@ def is_hosted_model_allowed(
     # production configuration cannot wildcard every provider/model. Unknown
     # hosted models must be named in CREDIT_ADMIN_ALLOWLIST and receive the
     # conservative $1 default hold.
-    if allow_slash_models is True and "/" in m:
+    if allow_slash_models is True and is_openrouter_model_id(m):
         return True
     return False
 
