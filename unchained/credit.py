@@ -9,8 +9,9 @@ Every mutation helper reads AND writes within the same BEGIN IMMEDIATE connectio
 to avoid TOCTOU (the old pattern called ``ensure_account`` or ``get_account``
 through a separate connection leak, creating a stale-read window).
 
-Stale-run sweep: ``sweep_stale_runs(ttl_seconds)`` releases held reservations
-and marks active runs as ``exhausted`` when they exceed the TTL.
+Stale-run sweep: ``sweep_stale_runs(ttl_seconds)`` releases reservations that
+were never submitted, conservatively captures submitted reservations, and
+marks active runs as ``exhausted`` when they exceed the TTL.
 
 Usage:
     from credit import CreditLedger
@@ -30,8 +31,10 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
 import time
 import uuid as _uuid_module
+from contextlib import contextmanager
 
 log = logging.getLogger(__name__)
 
@@ -63,10 +66,11 @@ def _uuid_hex() -> str:
 # SQL helpers
 # ---------------------------------------------------------------------------
 
-def _enable_wal(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    # Set the lock wait before any pragma that may need a database lock. WAL is
+    # enabled once during schema initialization rather than on every request.
     conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
 
 
 def _begin_immediate(conn: sqlite3.Connection) -> None:
@@ -80,18 +84,11 @@ def _begin_immediate(conn: sqlite3.Connection) -> None:
 def credit_service_token() -> str:
     """Narrowly-scoped token for credit internal endpoints.
 
-    Prefers HOSTED_AGENT_SERVICE_TOKEN, then CREDIT_SERVICE_TOKEN, then
-    TRIAL_AGENT_KEY.  Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
+    The hosted callback credential is intentionally mandatory and separate
+    from the trial-agent WebSocket key. Never reads PRIVATE_CORE_TOKEN,
+    RELAY_SHARED_TOKEN, CREDIT_SERVICE_TOKEN, or TRIAL_AGENT_KEY.
     """
-    for env_name in (
-        "HOSTED_AGENT_SERVICE_TOKEN",
-        "CREDIT_SERVICE_TOKEN",
-        "TRIAL_AGENT_KEY",
-    ):
-        token = os.environ.get(env_name, "").strip()
-        if token:
-            return token
-    return ""
+    return os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +96,15 @@ def credit_service_token() -> str:
 # ---------------------------------------------------------------------------
 
 HOSTED_MODEL_CATALOG: dict[str, int] = {
-    # Paid models — conservative reservations in micro-USD (cents level)
-    "google/gemini-3.1-flash-lite": 100_000,   # $0.01
+    # Paid models — conservative per-attempt holds for a request bounded to
+    # HOSTED_MAX_INPUT_CHARS and 4096 output tokens by the hosted worker.
+    "google/gemini-3.1-flash-lite": 100_000,   # $0.10
     "google/gemini-2.5-flash-lite": 100_000,
-    "google/gemini-2.5-flash": 200_000,
-    "google/gemini-2.5-pro": 500_000,
-    "google/gemini-3-flash-preview": 100_000,
-    "qwen/qwen3.6-plus": 200_000,
-    "qwen/qwen3.5-flash-02-23": 100_000,
+    "google/gemini-2.5-flash": 250_000,
+    "google/gemini-2.5-pro": 750_000,
+    "google/gemini-3-flash-preview": 250_000,
+    "qwen/qwen3.6-plus": 500_000,
+    "qwen/qwen3.5-flash-02-23": 250_000,
     # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,
     "arcee-ai/trinity-large-preview:free": 0,
@@ -119,8 +117,8 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
 }
 
 _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD: int = max(
-    1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "100000"))
-)  # default $0.01
+    1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "1000000"))
+)  # default $1.00 for explicitly allowlisted models without catalog pricing
 
 # Stale-run sweep TTL (seconds). Active runs older than this are expired.
 STALE_RUN_TTL_SECONDS: int = max(
@@ -142,16 +140,21 @@ def is_hosted_model_allowed(
     model: str,
     *,
     admin_allowlist: set[str] | None = None,
-    allow_slash_models: bool = False,
+    allow_slash_models: bool | None = None,
 ) -> bool:
     m = (model or "").strip()
     if not m:
         return False
     if m in HOSTED_MODEL_CATALOG:
         return True
-    if admin_allowlist and m in admin_allowlist:
+    effective_allowlist = _ADMIN_ALLOWLIST if admin_allowlist is None else admin_allowlist
+    if effective_allowlist and m in effective_allowlist:
         return True
-    if allow_slash_models and "/" in m:
+    # The argument remains available for explicit, in-process policy tests, but
+    # production configuration cannot wildcard every provider/model. Unknown
+    # hosted models must be named in CREDIT_ADMIN_ALLOWLIST and receive the
+    # conservative $1 default hold.
+    if allow_slash_models is True and "/" in m:
         return True
     return False
 
@@ -160,9 +163,6 @@ _ADMIN_ALLOWLIST_ENV = os.environ.get("CREDIT_ADMIN_ALLOWLIST", "").strip()
 _ADMIN_ALLOWLIST: set[str] = set(
     m.strip() for m in _ADMIN_ALLOWLIST_ENV.split(",") if m.strip()
 )
-_ALLOW_SLASH_MODELS = os.environ.get("CREDIT_ALLOW_SLASH_MODELS", "") == "1"
-
-
 # ---------------------------------------------------------------------------
 # Exceptions (defined before CreditLedger so class-level constants can
 # reference them)
@@ -199,23 +199,26 @@ class CreditLedger:
     """
 
     _instances: dict[str, CreditLedger] = {}
+    _instances_lock = threading.Lock()
 
     def __new__(cls, db_path: str):
-        if db_path in cls._instances:
-            return cls._instances[db_path]
-        instance = super().__new__(cls)
-        cls._instances[db_path] = instance
-        return instance
+        with cls._instances_lock:
+            if db_path in cls._instances:
+                return cls._instances[db_path]
+            instance = super().__new__(cls)
+            instance._init_lock = threading.Lock()
+            cls._instances[db_path] = instance
+            return instance
 
     def __init__(self, db_path: str):
         # __init__ may be called again on a cached instance — only
         # initialise schema if this path hasn't been seen before.
-        already_init = getattr(self, "_schema_initialised", False)
-        if already_init:
-            return
-        self.db_path = db_path
-        self._init_schema()
-        self._schema_initialised = True
+        with self._init_lock:
+            if getattr(self, "_schema_initialised", False):
+                return
+            self.db_path = db_path
+            self._init_schema()
+            self._schema_initialised = True
 
     def __enter__(self) -> CreditLedger:
         return self
@@ -226,13 +229,26 @@ class CreditLedger:
         # and callers can integrate with existing context-manager patterns.
         return
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        _enable_wal(conn)
-        return conn
+    @contextmanager
+    def _conn(self):
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        _configure_connection(conn)
+        try:
+            yield conn
+            if conn.in_transaction:
+                conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
         with self._conn() as conn:
+            # WAL persists in the database. Enabling it after busy_timeout is
+            # configured avoids immediate lock failures during process races.
+            conn.execute("PRAGMA journal_mode=WAL")
             _begin_immediate(conn)
 
             conn.execute("""
@@ -304,6 +320,7 @@ class CreditLedger:
                     settled_micro_usd INTEGER NOT NULL DEFAULT 0,
                     idempotency_key TEXT NOT NULL,
                     created_at REAL NOT NULL,
+                    submitted_at REAL,
                     settled_at REAL,
                     released_at REAL,
                     FOREIGN KEY (run_id) REFERENCES credit_runs(run_id),
@@ -311,6 +328,19 @@ class CreditLedger:
                     UNIQUE (run_id, idempotency_key)
                 )
             """)
+
+            # Forward-compatible migration for databases created before the
+            # persisted pre-submit/submitted distinction was introduced.
+            reservation_columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(credit_call_reservations)"
+                ).fetchall()
+            }
+            if "submitted_at" not in reservation_columns:
+                conn.execute(
+                    "ALTER TABLE credit_call_reservations ADD COLUMN submitted_at REAL"
+                )
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS credit_provider_usage (
@@ -682,7 +712,12 @@ class CreditLedger:
                 }
 
             if release_held:
-                self._release_held_calls_under_lock(conn, run_id, row[1], now)
+                # A submitted provider request may have been billed even when
+                # cancellation, timeout, or a lost callback prevents normal
+                # settlement. Capture those holds conservatively. Reservations
+                # that never crossed the provider boundary are safe to release.
+                self._capture_submitted_calls_under_lock(conn, run_id, row[1], now)
+                self._release_unsubmitted_calls_under_lock(conn, run_id, row[1], now)
 
             conn.execute(
                 "UPDATE credit_runs SET status = ?, finished_at = ? "
@@ -803,7 +838,8 @@ class CreditLedger:
                 )
 
             existing = conn.execute(
-                "SELECT call_id, status, reserved_micro_usd, settled_micro_usd "
+                "SELECT call_id, status, reserved_micro_usd, settled_micro_usd, "
+                "submitted_at "
                 "FROM credit_call_reservations "
                 "WHERE run_id = ? AND idempotency_key = ?",
                 (run_id, ikey),
@@ -814,8 +850,12 @@ class CreditLedger:
                     "call_id": existing[0],
                     "run_id": run_id,
                     "account_id": account_id,
-                    "status": existing[1],
+                    "status": (
+                        "submitted" if existing[1] == "held" and existing[4]
+                        else existing[1]
+                    ),
                     "reserved_micro_usd": int(existing[2]),
+                    "submitted_at": existing[4],
                     "already_reserved": True,
                 }
 
@@ -870,7 +910,46 @@ class CreditLedger:
                 "status": "held",
                 "reserved_micro_usd": reservation_micro_usd,
                 "reserved_usd": _micro_to_usd(reservation_micro_usd),
+                "submitted_at": None,
                 "already_reserved": False,
+            }
+
+    def mark_call_submitted(self, call_id: str) -> dict:
+        """Persist the provider-boundary transition before network I/O.
+
+        Once submitted, a reservation cannot be released. A terminal run or
+        stale sweep captures the hold if the normal usage callback is lost.
+        """
+        cid = str(call_id or "").strip()
+        if not cid:
+            raise ValueError("call_id required")
+        now = _now_ts()
+        with self._conn() as conn:
+            _begin_immediate(conn)
+            row = conn.execute(
+                "SELECT call_id, run_id, status, submitted_at "
+                "FROM credit_call_reservations WHERE call_id = ?",
+                (cid,),
+            ).fetchone()
+            if row is None:
+                conn.execute("ROLLBACK")
+                raise ValueError(f"Call not found: {cid}")
+            if row[2] != "held":
+                conn.execute("ROLLBACK")
+                raise ValueError(f"Cannot submit call in state: {row[2]}")
+            if row[3] is None:
+                conn.execute(
+                    "UPDATE credit_call_reservations SET submitted_at = ? "
+                    "WHERE call_id = ? AND status = 'held' AND submitted_at IS NULL",
+                    (now, cid),
+                )
+            conn.execute("COMMIT")
+            return {
+                "call_id": cid,
+                "run_id": row[1],
+                "status": "submitted",
+                "submitted_at": row[3] if row[3] is not None else now,
+                "already_submitted": row[3] is not None,
             }
 
     def settle_call(
@@ -891,11 +970,15 @@ class CreditLedger:
         field at all (distinct from a reported zero cost).  In that case
         the full reserved amount is settled (conservative accounting).
 
-        *provider_cost_micro_usd* records the actual provider-reported
-        cost for reconciliation.  When it exceeds *reserved_micro_usd*,
-        only the reserved amount is charged but the excess is logged in
-        ``provider_cost_micro_usd`` and metadata for audit.
+        *provider_cost_micro_usd* records the actual provider-reported cost for
+        reconciliation. A cost above the hold consumes additional unreserved
+        balance when available, without stealing funds held by concurrent
+        calls. Any amount that cannot be funded is recorded for audit.
         """
+        if cost_absent and int(actual_cost_micro_usd or 0) != 0:
+            raise ValueError(
+                "actual_cost_micro_usd must be zero when cost_absent is true"
+            )
         now = _now_ts()
 
         with self._conn() as conn:
@@ -926,22 +1009,35 @@ class CreditLedger:
             if cost_absent and actual_cost_micro_usd <= 0:
                 # Provider reported no cost — settle the full conservative
                 # reservation so the hold isn't silently released.
-                actual = reserved
+                requested_actual = reserved
             else:
-                actual = max(0, min(actual_cost_micro_usd, reserved))
-            released = reserved - actual
+                requested_actual = max(0, int(actual_cost_micro_usd or 0))
 
-            # Record discrepancy for reconciliation (never charge more than held)
+            # Record provider cost independently from the amount the account can
+            # fund. Exclude other active holds from this call's charge capacity.
             recorded_provider = max(0, int(provider_cost_micro_usd or 0))
             if recorded_provider <= 0 and not cost_absent:
-                recorded_provider = actual
-            discrepancy = max(0, recorded_provider - reserved)
+                recorded_provider = requested_actual
 
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
                 (account_id,),
             ).fetchone()
-            new_balance = max(0, int(acct_row[0]) - actual)
+            balance = max(0, int(acct_row[0]) if acct_row else 0)
+            other_holds_row = conn.execute(
+                "SELECT COALESCE(SUM(reserved_micro_usd - settled_micro_usd), 0) "
+                "FROM credit_call_reservations "
+                "WHERE account_id = ? AND status = 'held' AND call_id != ?",
+                (account_id, call_id),
+            ).fetchone()
+            other_holds = max(0, int(other_holds_row[0] or 0))
+            charge_capacity = max(0, balance - other_holds)
+            actual = min(requested_actual, charge_capacity)
+            released = max(0, reserved - actual)
+            overage = max(0, actual - reserved)
+            unfunded = max(0, requested_actual - actual)
+            discrepancy = max(unfunded, recorded_provider - actual)
+            new_balance = balance - actual
 
             conn.execute(
                 "UPDATE credit_accounts SET balance_micro_usd = ?, "
@@ -964,9 +1060,12 @@ class CreditLedger:
                  run_id, call_id, model_name,
                  _json_meta({
                      "type": "settlement",
-                     "reserved_micro_usd": reserved,
-                     "settled_micro_usd": actual,
-                     "released_micro_usd": released,
+                      "reserved_micro_usd": reserved,
+                      "requested_cost_micro_usd": requested_actual,
+                      "settled_micro_usd": actual,
+                      "released_micro_usd": released,
+                      "overage_micro_usd": overage,
+                      "unfunded_micro_usd": unfunded,
                      "cost_absent": cost_absent,
                      "provider_cost_micro_usd": recorded_provider,
                      "discrepancy_micro_usd": discrepancy,
@@ -1005,6 +1104,8 @@ class CreditLedger:
                 "reserved_micro_usd": reserved,
                 "settled_micro_usd": actual,
                 "released_micro_usd": released,
+                "overage_micro_usd": overage,
+                "unfunded_micro_usd": unfunded,
                 "balance_after_micro_usd": new_balance,
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
@@ -1023,7 +1124,7 @@ class CreditLedger:
 
             row = conn.execute(
                 "SELECT call_id, run_id, account_id, user_id, model, status, "
-                "reserved_micro_usd, settled_micro_usd "
+                "reserved_micro_usd, settled_micro_usd, submitted_at "
                 "FROM credit_call_reservations WHERE call_id = ?",
                 (call_id,),
             ).fetchone()
@@ -1036,6 +1137,9 @@ class CreditLedger:
             if row[5] != "held":
                 conn.execute("ROLLBACK")
                 raise ValueError(f"Cannot release call in state: {row[5]}")
+            if row[8] is not None:
+                conn.execute("ROLLBACK")
+                raise ValueError("Cannot release a submitted provider call")
 
             account_id = row[2]
             model_name = row[4]
@@ -1076,13 +1180,89 @@ class CreditLedger:
             }
 
     @staticmethod
-    def _release_held_calls_under_lock(
+    def _capture_submitted_calls_under_lock(
+        conn: sqlite3.Connection, run_id: str, account_id: str, now: float
+    ) -> None:
+        held_calls = conn.execute(
+            "SELECT call_id, reserved_micro_usd, model "
+            "FROM credit_call_reservations "
+            "WHERE run_id = ? AND status = 'held' AND submitted_at IS NOT NULL",
+            (run_id,),
+        ).fetchall()
+        for call_id, reserved_raw, model_name in held_calls:
+            reserved = max(0, int(reserved_raw or 0))
+            account_row = conn.execute(
+                "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+            balance = max(0, int(account_row[0] if account_row else 0))
+            charged = min(balance, reserved)
+            new_balance = balance - charged
+            conn.execute(
+                "UPDATE credit_accounts SET balance_micro_usd = ?, "
+                "total_spent_micro_usd = total_spent_micro_usd + ?, "
+                "updated_at = ? WHERE account_id = ?",
+                (new_balance, charged, now, account_id),
+            )
+            conn.execute(
+                "UPDATE credit_call_reservations SET status = 'settled', "
+                "settled_micro_usd = ?, settled_at = ? WHERE call_id = ?",
+                (charged, now, call_id),
+            )
+            conn.execute(
+                "INSERT INTO credit_ledger "
+                "(account_id, idempotency_key, entry_type, amount_micro_usd, "
+                "balance_after_micro_usd, run_id, call_id, model, "
+                "metadata_json, created_at) "
+                "VALUES (?, ?, 'settlement', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    account_id,
+                    f"settle-fallback-{call_id}",
+                    -charged,
+                    new_balance,
+                    run_id,
+                    call_id,
+                    model_name,
+                    _json_meta({
+                        "type": "settlement",
+                        "cost_absent": True,
+                        "settlement_callback_missing": True,
+                        "reserved_micro_usd": reserved,
+                        "settled_micro_usd": charged,
+                    }),
+                    now,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO credit_provider_usage "
+                "(call_id, run_id, account_id, model, provider_cost_micro_usd, "
+                "provider_response_json, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
+                (
+                    call_id,
+                    run_id,
+                    account_id,
+                    model_name,
+                    _json_meta({
+                        "cost_absent": True,
+                        "settlement_callback_missing": True,
+                    }),
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE credit_runs SET settled_micro_usd = settled_micro_usd + ? "
+                "WHERE run_id = ?",
+                (charged, run_id),
+            )
+
+    @staticmethod
+    def _release_unsubmitted_calls_under_lock(
         conn: sqlite3.Connection, run_id: str, account_id: str, now: float
     ) -> None:
         held_calls = conn.execute(
             "SELECT call_id, reserved_micro_usd, settled_micro_usd, model "
             "FROM credit_call_reservations "
-            "WHERE run_id = ? AND status = 'held'",
+            "WHERE run_id = ? AND status = 'held' AND submitted_at IS NULL",
             (run_id,),
         ).fetchall()
         for call in held_calls:
@@ -1090,36 +1270,38 @@ class CreditLedger:
             reserved = int(call[1])
             settled = int(call[2])
             model_name = call[3]
-            if reserved > settled:
-                conn.execute(
-                    "UPDATE credit_call_reservations SET status = 'released', "
-                    "released_at = ? WHERE call_id = ?",
-                    (now, call_id),
-                )
-                acct_row = conn.execute(
-                    "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
-                    (account_id,),
-                ).fetchone()
-                balance = int(acct_row[0]) if acct_row else 0
-                conn.execute(
-                    "INSERT INTO credit_ledger "
-                    "(account_id, idempotency_key, entry_type, amount_micro_usd, "
-                    "balance_after_micro_usd, run_id, call_id, model, "
-                    "metadata_json, created_at) "
-                    "VALUES (?, ?, 'release', ?, ?, ?, ?, ?, ?, ?)",
-                    (account_id, f"release-{call_id}-{now}", reserved, balance,
-                     run_id, call_id, model_name,
-                     _json_meta({"type": "release", "released_micro_usd": reserved}),
-                     now),
-                )
+            released = max(0, reserved - settled)
+            conn.execute(
+                "UPDATE credit_call_reservations SET status = 'released', "
+                "released_at = ? WHERE call_id = ?",
+                (now, call_id),
+            )
+            acct_row = conn.execute(
+                "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+            balance = int(acct_row[0]) if acct_row else 0
+            conn.execute(
+                "INSERT INTO credit_ledger "
+                "(account_id, idempotency_key, entry_type, amount_micro_usd, "
+                "balance_after_micro_usd, run_id, call_id, model, "
+                "metadata_json, created_at) "
+                "VALUES (?, ?, 'release', ?, ?, ?, ?, ?, ?, ?)",
+                (account_id, f"release-{call_id}-{now}", released, balance,
+                 run_id, call_id, model_name,
+                 _json_meta({"type": "release", "released_micro_usd": released}),
+                 now),
+            )
 
     # ------------------------------------------------------------------
     # Stale-run sweep — crash recovery
     # ------------------------------------------------------------------
 
     def sweep_stale_runs(self, ttl_seconds: int = 0) -> int:
-        """Release held reservations and mark active runs as *exhausted*
-        when their ``created_at`` exceeds *ttl_seconds*.
+        """Finalize unresolved reservations and mark stale runs *exhausted*.
+
+        Pre-submit holds are released; submitted holds are captured at their
+        conservative reservation amount.
 
         Returns the number of runs expired.  This is safe to call periodically
         (it is idempotent — already-finished runs are skipped).
@@ -1140,8 +1322,8 @@ class CreditLedger:
             ).fetchall()
 
             for run_id, account_id in stale:
-                # Release all held calls for this run
-                self._release_held_calls_under_lock(conn, run_id, account_id, now)
+                self._capture_submitted_calls_under_lock(conn, run_id, account_id, now)
+                self._release_unsubmitted_calls_under_lock(conn, run_id, account_id, now)
                 # Mark run as exhausted
                 conn.execute(
                     "UPDATE credit_runs SET status = 'exhausted', "

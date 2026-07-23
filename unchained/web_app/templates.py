@@ -8662,6 +8662,17 @@ body{
   border:1px solid #555;padding:4px 10px;border-radius:6px;
 }
 #topbar .nav a:hover{border-color:var(--accent);color:var(--accent)}
+#topbar .credit-pill{
+  font-size:10px;padding:2px 8px;border-radius:999px;
+  font-family:var(--mono);white-space:nowrap;border:1px solid #444;
+  color:var(--muted);display:inline-flex;align-items:center;gap:4px;
+}
+#topbar .credit-pill.loading{opacity:0.5;animation:pulse 1.5s ease-in-out infinite}
+#topbar .credit-pill.low{color:#f0d58b;border-color:#7a6326}
+#topbar .credit-pill.exhausted{color:#ff6b6b;border-color:#6b2a2a}
+#topbar .credit-pill.error{color:#ff9b9b;border-color:#6b2a2a}
+#topbar .credit-pill.unavailable{display:none}
+@media (prefers-reduced-motion:reduce){#topbar .credit-pill.loading{animation:none;opacity:0.65}}
 
 /* === Chat === */
 #chat{
@@ -8989,6 +9000,7 @@ body{
   }
   #topbar .status.online,
   #topbar .status.warn{border-color:transparent}
+  #topbar .credit-pill{font-size:11px;padding:2px 6px;border:none}
 }
 
 /* Archive panel */
@@ -9096,6 +9108,7 @@ body{
         <span class="status" id="agentstatus">agent offline</span>
         <span class="status" id="bridgestatus">bridge offline</span>
       </div>
+      <span class="credit-pill loading" id="creditpill" aria-live="polite">credit…</span>
     </div>
     <div class="nav">
       <a href="/">Home</a>
@@ -9241,6 +9254,8 @@ let _userId = '';
 let _userName = '';
 let _userPicture = '';
 let _openrouterUsage = null;
+let _creditState = null;
+let _creditRetryTimer = null;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
@@ -9362,8 +9377,79 @@ function _applyAuthState(data) {
   _userName = data.name || '';
   _userPicture = data.picture || '';
   _openrouterUsage = data.openrouter_usage || null;
+  _creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;
   _accountStatus = data.status || (data.pending ? 'pending' : 'approved');
   _claudeAccessRequested = !!data.claude_access_requested;
+  _renderCreditPill();
+}
+
+function _renderCreditPill() {
+  const pill = document.getElementById('creditpill');
+  if (!pill) return;
+  if (!_creditState) {
+    pill.className = 'credit-pill unavailable';
+    pill.textContent = '';
+    return;
+  }
+  if (_creditState.available === false) {
+    pill.className = 'credit-pill error';
+    pill.textContent = 'credit unavailable';
+    pill.setAttribute('aria-label', 'Hosted credit status unavailable');
+    pill.title = 'Credit status unavailable. Try again shortly.';
+    return;
+  }
+  const avail = Number(_creditState.available_usd) || 0;
+  const bal = Number(_creditState.balance_usd) || 0;
+  if (avail <= 0 && bal <= 0) {
+    pill.className = 'credit-pill exhausted';
+    pill.textContent = '$0.00 credit';
+    pill.setAttribute('aria-label', 'Hosted credit exhausted');
+    pill.title = 'Hosted credit exhausted. Free models remain available.';
+    return;
+  }
+  const display = avail > 0 ? avail : bal;
+  const label = '$' + display.toFixed(2);
+  if (display < 1.00) {
+    pill.className = 'credit-pill low';
+    pill.textContent = label + ' remaining';
+    pill.setAttribute('aria-label', label + ' hosted credit remaining');
+    pill.title = 'Low hosted credit';
+    return;
+  }
+  pill.className = 'credit-pill';
+  pill.textContent = label + ' available';
+  pill.setAttribute('aria-label', label + ' hosted credit available');
+  pill.title = 'Hosted inference credit';
+}
+
+async function refreshCreditState() {
+  try {
+    const r = await fetch('/auth/me', {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    _creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;
+    _openrouterUsage = data.openrouter_usage || null;
+    _renderCreditPill();
+    if (_creditRetryTimer) clearTimeout(_creditRetryTimer);
+    _creditRetryTimer = null;
+  } catch(e) {
+    const pill = document.getElementById('creditpill');
+    if (pill) {
+      pill.className = 'credit-pill error';
+      pill.textContent = 'credit unavailable';
+      pill.setAttribute('aria-label', 'Hosted credit status unavailable');
+      pill.title = 'Credit status unavailable. Retrying automatically.';
+    }
+    if (!_creditRetryTimer) {
+      _creditRetryTimer = setTimeout(function() {
+        _creditRetryTimer = null;
+        refreshCreditState();
+      }, 30000);
+    }
+  }
 }
 
 async function handleGoogleCredential(response) {
@@ -10299,6 +10385,7 @@ function showMain() {
   renderClaudeRequestBanner();
   document.getElementById('agentlabel').textContent = _userName || 'Unchained';
   _syncTrialAdminUi();
+  _renderCreditPill();
   try { localStorage.setItem('unchained_last_route', '/trial'); } catch(e){}
   _syncCustomModelUi();
   const params = new URLSearchParams(window.location.search);
@@ -11203,6 +11290,7 @@ async function doSend() {
     _navTrail = [];
     renderNavTrail();
     maybeShowUpgrade();
+    refreshCreditState();
   
   }
 }
@@ -24225,6 +24313,7 @@ function declineConsent() {
 function showToast(msg, isErr) {
   const t = document.createElement('div');
   t.className = 'toast ' + (isErr ? 'err' : 'ok');
+  t.setAttribute('role', isErr ? 'alert' : 'status');
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
@@ -24972,6 +25061,8 @@ header .badge{background:#1a1a1a;border:1px solid var(--border);padding:3px 10px
 .tab.active .count-badge{color:var(--accent)}
 .content{padding:16px 24px}
 table{width:100%;border-collapse:collapse;font-size:12px}
+.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+#users-table{min-width:1180px}
 thead th{text-align:left;padding:8px 12px;color:var(--muted);font-weight:500;border-bottom:1px solid var(--border);white-space:nowrap}
 tbody tr{border-bottom:1px solid #181818;transition:background 0.1s}
 tbody tr:hover{background:#111}
@@ -25000,6 +25091,31 @@ tbody td{padding:10px 12px;vertical-align:middle}
 .toast.err{background:#2d0d0d;color:var(--red);border:1px solid #4a1a1a}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 #error-msg{padding:40px;text-align:center;color:var(--red)}
+.credit-pill{font-size:11px;color:var(--muted);white-space:nowrap}
+.credit-pill .num{color:var(--text)}
+.credit-pill .low{color:var(--yellow)}
+.credit-pill .empty{color:var(--muted);font-style:italic}
+.btn-grant{background:#1a1a2d;color:#a78bfa;border-color:#2d2d4a}
+.btn-grant:hover{background:#24244a}
+.dialog-overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center}
+.dialog-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:90%;position:relative}
+.dialog-card h2{margin:0 0 16px;font-size:14px;font-weight:600;color:var(--text)}
+.dialog-label{display:block;font-size:11px;color:var(--muted);margin:0 0 4px}
+.dialog-input{width:100%;height:36px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:#0a0a0a;color:var(--text);font-size:13px;font-family:var(--mono);margin-bottom:12px}
+.dialog-input:focus{outline:none;border-color:var(--accent)}
+.dialog-input.error{border-color:var(--red)}
+.dialog-err{color:var(--red);font-size:11px;min-height:16px;margin-bottom:8px}
+.dialog-actions{display:flex;gap:8px;justify-content:flex-end}
+.dialog-btn{padding:6px 16px;border-radius:4px;font-size:12px;font-family:var(--mono);cursor:pointer;border:1px solid;font-weight:500}
+.dialog-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.dialog-btn.primary:hover{opacity:0.85}
+.dialog-btn.primary:disabled{opacity:0.3;cursor:not-allowed}
+.dialog-btn.cancel{background:transparent;color:var(--muted);border-color:var(--border)}
+.dialog-btn.cancel:hover{color:var(--text)}
+.dialog-success{color:var(--green);font-size:12px;margin-bottom:8px}
+.dialog-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.refresh-dot,.toast,.dialog-spinner{animation:none}}
 </style>
 </head>
 <body>
@@ -25010,20 +25126,22 @@ tbody td{padding:10px 12px;vertical-align:middle}
   <span class="badge" id="admin-email">loading…</span>
 </header>
 <div class="tabs">
-  <button class="tab active" data-filter="all">All <span class="count-badge" id="cnt-all">0</span></button>
-  <button class="tab" data-filter="pending">Pending <span class="count-badge" id="cnt-pending">0</span></button>
-  <button class="tab" data-filter="approved">Approved <span class="count-badge" id="cnt-approved">0</span></button>
-  <button class="tab" data-filter="rejected">Rejected <span class="count-badge" id="cnt-rejected">0</span></button>
+  <button class="tab active" data-filter="all" aria-pressed="true">All <span class="count-badge" id="cnt-all">0</span></button>
+  <button class="tab" data-filter="pending" aria-pressed="false">Pending <span class="count-badge" id="cnt-pending">0</span></button>
+  <button class="tab" data-filter="approved" aria-pressed="false">Approved <span class="count-badge" id="cnt-approved">0</span></button>
+  <button class="tab" data-filter="rejected" aria-pressed="false">Rejected <span class="count-badge" id="cnt-rejected">0</span></button>
 </div>
 <div class="content">
   <div class="refresh"><span class="refresh-dot"></span><span id="refresh-status">Loading…</span></div>
   <div id="error-msg" style="display:none"></div>
+  <div class="table-scroll" role="region" aria-label="User accounts" tabindex="0">
   <table id="users-table" style="display:none">
     <thead><tr>
-      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>OR Spend</th><th>OR Remaining</th><th>Actions</th>
+      <th></th><th>Email</th><th>Name</th><th>Type</th><th>Status</th><th>Signed Up</th><th>Last Login</th><th>OR Spend</th><th>OR Remaining</th><th>Credit</th><th>Actions</th>
     </tr></thead>
     <tbody id="users-body"></tbody>
   </table>
+  </div>
   <div id="empty-msg" class="empty" style="display:none">No users in this view.</div>
 </div>
 <script>
@@ -25032,6 +25150,7 @@ let _filter = 'all';
 let _adminEmail = '';
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
 function fmtTs(ts) {
   if (!ts) return '—';
@@ -25106,6 +25225,17 @@ function renderTable() {
     const remainingLabel = budgetUsd > 0
       ? ('$' + remainingUsd.toFixed(4))
       : '—';
+    const credit = u.credit && typeof u.credit === 'object' ? u.credit : {};
+    const availUsd = Number(credit.available_usd) || 0;
+    const balUsd = Number(credit.balance_usd) || 0;
+    const creditDisplay = availUsd > 0 ? availUsd : balUsd;
+    let creditHtml;
+    if (creditDisplay > 0) {
+      const lowCls = creditDisplay < 1.00 ? ' low' : '';
+      creditHtml = '<span class="credit-pill"><span class="num' + lowCls + '">$' + creditDisplay.toFixed(2) + '</span></span>';
+    } else {
+      creditHtml = '<span class="credit-pill"><span class="empty">$0.00</span></span>';
+    }
     const canApprove = u.status !== 'approved';
     const canReject = u.status !== 'rejected';
     const approveBtn = canApprove
@@ -25114,6 +25244,8 @@ function renderTable() {
     const rejectBtn = canReject
       ? '<button class="btn btn-reject" onclick="doAction(\'' + esc(u.email) + '\',\'reject\')">Reject</button>'
       : '<button class="btn btn-reject" disabled>Reject</button>';
+    const userId = String(u.user_id || '').trim();
+    const grantBtn = '<button class="btn btn-grant js-grant-credit" data-user-id="' + escAttr(userId) + '" data-user-label="' + escAttr(u.email) + '">Grant Credit</button>';
     return '<tr>' +
       '<td>' + avatarHtml + '</td>' +
       '<td class="email">' + esc(u.email) + '</td>' +
@@ -25124,9 +25256,15 @@ function renderTable() {
       '<td class="ts">' + fmtTs(u.last_login_at) + '</td>' +
       '<td class="ts">' + spendLabel + '</td>' +
       '<td class="ts">' + remainingLabel + '</td>' +
-      '<td><div class="actions">' + approveBtn + rejectBtn + '</div></td>' +
+      '<td class="ts">' + creditHtml + '</td>' +
+      '<td><div class="actions">' + approveBtn + rejectBtn + grantBtn + '</div></td>' +
       '</tr>';
   }).join('');
+  tbody.querySelectorAll('.js-grant-credit').forEach(function(button) {
+    button.addEventListener('click', function() {
+      openGrantDialog(button.dataset.userId || '', button.dataset.userLabel || '');
+    });
+  });
 }
 
 async function loadUsers() {
@@ -25161,8 +25299,12 @@ async function loadAdminEmail() {
 // Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed', 'false');
+    });
     tab.classList.add('active');
+    tab.setAttribute('aria-pressed', 'true');
     _filter = tab.dataset.filter;
     renderTable();
   });
@@ -25172,6 +25314,192 @@ document.querySelectorAll('.tab').forEach(tab => {
 loadAdminEmail();
 loadUsers();
 setInterval(loadUsers, 30000);
+</script>
+
+<!-- Grant credit dialog -->
+<div class="dialog-overlay" id="grant-dialog" onclick="if(event.target===this)closeGrantDialog()">
+  <form class="dialog-card" id="grant-form" role="dialog" aria-modal="true" aria-labelledby="grant-dialog-title" aria-describedby="grant-user-label" onsubmit="event.preventDefault();submitGrant()">
+    <h2 id="grant-dialog-title">Grant Credit</h2>
+    <div id="grant-user-label" class="dialog-label"></div>
+    <label class="dialog-label" for="grant-amount">Amount (USD)</label>
+    <input class="dialog-input" id="grant-amount" type="text" inputmode="decimal" placeholder="5.00" maxlength="20" autocomplete="off">
+    <label class="dialog-label" for="grant-reason">Reason</label>
+    <input class="dialog-input" id="grant-reason" type="text" placeholder="admin_grant" maxlength="500" autocomplete="off">
+    <div id="grant-err" class="dialog-err" role="alert"></div>
+    <div id="grant-success" class="dialog-success" role="status" aria-live="polite" style="display:none"></div>
+    <div class="dialog-actions">
+      <button type="button" class="dialog-btn cancel" id="grant-cancel-btn" onclick="closeGrantDialog()">Cancel</button>
+      <button type="submit" class="dialog-btn primary" id="grant-submit-btn">Grant</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let _grantUserId = '';
+let _grantOperationId = '';
+let _grantBusy = false;
+
+function openGrantDialog(userId, userName) {
+  _grantUserId = userId;
+  _grantOperationId = '';
+  _grantBusy = false;
+  document.getElementById('grant-user-label').textContent = 'User: ' + esc(userName || userId);
+  document.getElementById('grant-amount').value = '';
+  document.getElementById('grant-reason').value = 'admin_grant';
+  document.getElementById('grant-err').textContent = '';
+  document.getElementById('grant-success').style.display = 'none';
+  document.getElementById('grant-success').textContent = '';
+  document.getElementById('grant-submit-btn').disabled = false;
+  document.getElementById('grant-submit-btn').dataset.complete = '';
+  document.getElementById('grant-submit-btn').textContent = 'Grant';
+  document.getElementById('grant-cancel-btn').disabled = false;
+  document.getElementById('grant-amount').className = 'dialog-input';
+  const dialog = document.getElementById('grant-dialog');
+  dialog.style.display = 'flex';
+  setTimeout(function() { document.getElementById('grant-amount').focus(); }, 50);
+  _grantReturnFocus = document.activeElement;
+}
+
+function closeGrantDialog() {
+  if (_grantBusy) return;
+  document.getElementById('grant-dialog').style.display = 'none';
+  _grantUserId = '';
+  _grantOperationId = '';
+  if (_grantReturnFocus && typeof _grantReturnFocus.focus === 'function') {
+    try { _grantReturnFocus.focus({preventScroll:true}); } catch(e) {}
+  }
+  _grantReturnFocus = null;
+}
+
+function _generateOperationId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    var bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+  return '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+async function submitGrant() {
+  var errEl = document.getElementById('grant-err');
+  var successEl = document.getElementById('grant-success');
+  var submitBtn = document.getElementById('grant-submit-btn');
+  var amountInput = document.getElementById('grant-amount');
+  var cancelBtn = document.getElementById('grant-cancel-btn');
+
+  if (submitBtn.dataset.complete === '1') {
+    closeGrantDialog();
+    return;
+  }
+  if (_grantBusy) return;
+
+  errEl.textContent = '';
+  successEl.style.display = 'none';
+  successEl.textContent = '';
+  amountInput.className = 'dialog-input';
+
+  var raw = (amountInput.value || '').trim();
+  var validDecimal = /^(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(raw);
+  var amount = Number(raw);
+  if (!validDecimal || !Number.isFinite(amount) || amount <= 0) {
+    amountInput.className = 'dialog-input error';
+    errEl.textContent = 'Enter a positive USD amount with up to 6 decimal places.';
+    amountInput.focus();
+    return;
+  }
+  if (amount > 10000) {
+    amountInput.className = 'dialog-input error';
+    errEl.textContent = 'Amount must not exceed $10,000.';
+    amountInput.focus();
+    return;
+  }
+
+  if (!_grantOperationId) {
+    _grantOperationId = _generateOperationId();
+  }
+  var reason = (document.getElementById('grant-reason').value || 'admin_grant').trim();
+  if (!reason) reason = 'admin_grant';
+
+  submitBtn.disabled = true;
+  cancelBtn.disabled = true;
+  _grantBusy = true;
+  submitBtn.innerHTML = '<span class="dialog-spinner"></span>Granting...';
+
+  try {
+    var r = await fetch('/admin/credit/grant', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user_id: _grantUserId,
+        amount_usd: raw,
+        reason: reason,
+        operation_id: _grantOperationId,
+      }),
+    });
+    var data = await r.json();
+    if (!r.ok) {
+      if (data.error) {
+        errEl.textContent = data.error;
+        if (r.status === 409) {
+          _grantOperationId = '';
+        }
+      } else {
+        errEl.textContent = 'Error: HTTP ' + r.status;
+      }
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      _grantBusy = false;
+      submitBtn.textContent = 'Grant';
+      return;
+    }
+    _grantOperationId = '';
+    var granted = data.granted_usd || 0;
+    var newBalance = data.new_balance_usd || 0;
+    successEl.style.display = 'block';
+    successEl.textContent = data.already_applied
+      ? '\u2713 This grant was already applied. Balance: $' + Number(newBalance).toFixed(2)
+      : '\u2713 Granted $' + Number(granted).toFixed(2) + '. New balance: $' + Number(newBalance).toFixed(2);
+    submitBtn.textContent = 'Done';
+    submitBtn.disabled = false;
+    submitBtn.dataset.complete = '1';
+    cancelBtn.disabled = false;
+    _grantBusy = false;
+    loadUsers();
+  } catch(e) {
+    errEl.textContent = 'Network error. Check the connection and retry.';
+    submitBtn.disabled = false;
+    cancelBtn.disabled = false;
+    _grantBusy = false;
+    submitBtn.textContent = 'Grant';
+  }
+}
+
+// Keyboard handling for grant dialog
+document.addEventListener('keydown', function(e) {
+  var dialog = document.getElementById('grant-dialog');
+  if (dialog.style.display !== 'flex') return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeGrantDialog();
+    return;
+  }
+  if (e.key === 'Tab') {
+    var focusable = Array.from(dialog.querySelectorAll('input,button:not([disabled])'));
+    if (!focusable.length) return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+});
+
+var _grantReturnFocus = null;
 </script>
 </body>
 </html>"""

@@ -1248,6 +1248,69 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn('<aside id="sidebar">', trial)
         self.assertNotIn('id="sidebar-toggle"', trial)
 
+    def test_trial_credit_indicator_contract(self):
+        trial = web.TRIAL_CHAT_HTML
+        self.assertIn(
+            '<span class="credit-pill loading" id="creditpill" aria-live="polite">',
+            trial,
+        )
+        self.assertIn('#topbar .credit-pill{', trial)
+        self.assertIn('#topbar .credit-pill.low{', trial)
+        self.assertIn('#topbar .credit-pill.exhausted{', trial)
+        self.assertIn('#topbar .credit-pill.error{', trial)
+        self.assertIn('#topbar .credit-pill.unavailable{', trial)
+        self.assertIn("_creditState = null;", trial)
+        self.assertIn("_creditState = (data.credit && typeof data.credit === 'object') ? data.credit : null;", trial)
+        self.assertIn("_renderCreditPill();", trial)
+        self.assertIn("function _renderCreditPill()", trial)
+        self.assertIn("function refreshCreditState()", trial)
+        self.assertIn("fetch('/auth/me'", trial)
+        self.assertIn("Credit status unavailable. Retrying automatically.", trial)
+        self.assertIn("prefers-reduced-motion:reduce", trial)
+        # Refresh called after completed/failed turns
+        self.assertIn("refreshCreditState();", trial)
+
+    def test_admin_credit_column_and_grant_dialog_contract(self):
+        admin = web.ADMIN_HTML
+        self.assertIn("<th>Credit</th>", admin)
+        self.assertIn("Grant Credit", admin)
+        self.assertIn('class="btn btn-grant js-grant-credit"', admin)
+        self.assertIn("function escAttr", admin)
+        self.assertIn('data-user-id="', admin)
+        self.assertIn("openGrantDialog", admin)
+        self.assertIn('id="grant-dialog"', admin)
+        self.assertIn('class="table-scroll"', admin)
+        self.assertIn('#users-table{min-width:', admin)
+        self.assertIn('id="grant-amount"', admin)
+        self.assertIn('id="grant-reason"', admin)
+        self.assertIn('id="grant-err"', admin)
+        self.assertIn('id="grant-submit-btn"', admin)
+        self.assertIn('id="grant-cancel-btn"', admin)
+        self.assertIn('/admin/credit/grant', admin)
+        self.assertIn("_generateOperationId", admin)
+        self.assertIn("_grantOperationId", admin)
+        self.assertIn("user_id: _grantUserId", admin)
+        self.assertIn("amount_usd: raw", admin)
+        self.assertIn("reason: reason", admin)
+        self.assertIn("operation_id: _grantOperationId", admin)
+        self.assertIn("globalThis.crypto.randomUUID", admin)
+        # Escape/Cancel keyboard handling
+        self.assertIn("e.key === 'Escape'", admin)
+        self.assertIn("closeGrantDialog()", admin)
+        # Focus restoration
+        self.assertIn("_grantReturnFocus", admin)
+        # Validation
+        self.assertIn("Number.isFinite(amount)", admin)
+        self.assertIn("up to 6 decimal places", admin)
+        self.assertIn("e.key === 'Tab'", admin)
+        self.assertIn("if (_grantBusy) return;", admin)
+        self.assertIn("cancelBtn.disabled = true", admin)
+        self.assertIn("submitBtn.dataset.complete === '1'", admin)
+        # Replay/retry — operation_id retained on error but cleared on 409
+        self.assertIn("r.status === 409", admin)
+        # Success reloads table
+        self.assertIn("loadUsers()", admin)
+
 
 class TestTrialModelStorageIsolation(unittest.TestCase):
     def _run_storage_runtime(self, assertions: str) -> None:

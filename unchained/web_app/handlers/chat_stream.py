@@ -56,6 +56,15 @@ _SCHEDULER_TRIGGER_RE = re.compile(r"^/schedule(?:\s+|$)")
 _CODEX_CLI_SILENCE_TIMEOUT_S = 60
 _OPENCODE_CLI_SILENCE_TIMEOUT_S = 300
 _FIRST_LOOK_AGENT_SILENCE_TIMEOUT_S = 360
+_HOSTED_MAX_ACTIVE_TURNS = max(
+    1, int(os.environ.get("HOSTED_MAX_ACTIVE_TURNS", "16"))
+)
+_HOSTED_MAX_ACTIVE_TURNS_PER_USER = max(
+    1, int(os.environ.get("HOSTED_MAX_ACTIVE_TURNS_PER_USER", "3"))
+)
+_HOSTED_TURN_DEADLINE_S = max(
+    30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "300"))
+)
 
 _FIRST_LOOK_SEARCH_REF = "searchagentsky-result"
 _FIRST_LOOK_SEARCH_TASK = "search-result"
@@ -210,27 +219,37 @@ def _publish_turn_event(core, turn, event: dict) -> dict | None:
         return None
     _broadcast_overlay(turn.session_id, published)
     event_type = published.get("type", "")
-    if event_type in {"error", "cancelled"}:
-        # Existing consumers expect a final done marker after terminal errors
-        # and cancellations. Keep it in the canonical journal so every
-        # reconnecting subscriber sees the same end-of-turn sequence.
-        _publish_turn_event(
-            core,
-            turn,
-            {"type": "done", "session_id": turn.session_id, "req_id": turn.req_id},
-        )
     if event_type in {"done", "error", "cancelled"}:
         # Agent-terminal event — finish the billing run (once).
         # Browser disconnect alone does NOT reach this path.
         credit_status = "completed" if event_type == "done" else "cancelled"
         _finish_credit_run(core, turn.session_id, status=credit_status)
+        for task_attr in ("hosted_deadline_task", "silence_timeout_task"):
+            deadline_task = getattr(turn, task_attr, None)
+            if (
+                deadline_task is not None
+                and deadline_task is not asyncio.current_task()
+                and not deadline_task.done()
+            ):
+                deadline_task.cancel()
+            setattr(turn, task_attr, None)
+    if event_type in {"error", "cancelled"}:
+        # Existing consumers expect a final done marker after terminal errors
+        # and cancellations. Keep it in the canonical journal so every
+        # reconnecting subscriber sees the same end-of-turn sequence. Billing
+        # is finalized above first so the primary outcome cannot be overwritten
+        # by this compatibility marker.
+        _publish_turn_event(
+            core,
+            turn,
+            {"type": "done", "session_id": turn.session_id, "req_id": turn.req_id},
+        )
     _revoke_turn_grant(core, turn)
     return published
 
 
 def _publish_turn_failure(core, turn, message: str) -> None:
     """Finish a started turn that could not be dispatched to its agent."""
-    _finish_credit_run(core, turn.session_id, status="cancelled")
     _publish_turn_event(
         core,
         turn,
@@ -263,7 +282,83 @@ def _turn_timeout_task(core, turn, timeout_s: int) -> None:
             )
             return
 
-    asyncio.create_task(watch())
+    previous = getattr(turn, "silence_timeout_task", None)
+    if previous is not None and not previous.done():
+        previous.cancel()
+    turn.silence_timeout_task = asyncio.create_task(watch())
+
+
+def _hosted_turn_deadline_task(core, turn, timeout_s: int) -> None:
+    """Enforce an absolute hosted-turn deadline independent of SSE clients."""
+    if timeout_s <= 0:
+        return
+
+    async def watch() -> None:
+        await asyncio.sleep(timeout_s)
+        if getattr(turn, "stream_finished", True):
+            return
+        dispatch_ws = getattr(turn, "dispatch_ws", None)
+        if dispatch_ws is not None and not getattr(dispatch_ws, "closed", False):
+            try:
+                await dispatch_ws.send_json({
+                    "type": "cancel",
+                    "session_id": turn.session_id,
+                    "req_id": turn.req_id,
+                })
+            except Exception:
+                pass
+        _publish_turn_failure(
+            core,
+            turn,
+            "Hosted inference reached its time limit. Try a smaller task or continue in a new turn.",
+        )
+
+    previous = getattr(turn, "hosted_deadline_task", None)
+    if previous is not None and not previous.done():
+        previous.cancel()
+    turn.hosted_deadline_task = asyncio.create_task(watch())
+
+
+async def _start_registered_turn(
+    core,
+    registry,
+    candidate,
+    auth_info: dict,
+    *,
+    hosted: bool,
+):
+    """Start a turn with race-safe hosted global/per-user admission limits."""
+    if not hosted or not hasattr(registry, "active_for_agent"):
+        turn, created, conflict = await registry.start(candidate)
+        return turn, created, conflict, ""
+
+    lock = getattr(core, "_hosted_turn_admission_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        core._hosted_turn_admission_lock = lock
+
+    async with lock:
+        existing = _registry_turn(registry, candidate.session_id)
+        retrying_existing = bool(
+            existing
+            and getattr(existing, "status", "") in {"active", "cancelling"}
+            and getattr(existing, "req_id", "") == candidate.req_id
+            and _turn_owned_by(existing, auth_info)
+        )
+        active = list(registry.active_for_agent(core.TRIAL_AGENT_ID))
+        if retrying_existing:
+            active = [turn for turn in active if turn is not existing]
+        owner_user_id = str(auth_info.get("user_id", "") or "")
+        owner_active = [
+            turn for turn in active
+            if str(getattr(turn, "owner_user_id", "") or "") == owner_user_id
+        ]
+        if len(owner_active) >= _HOSTED_MAX_ACTIVE_TURNS_PER_USER:
+            return candidate, False, False, "user"
+        if len(active) >= _HOSTED_MAX_ACTIVE_TURNS:
+            return candidate, False, False, "global"
+        turn, created, conflict = await registry.start(candidate)
+        return turn, created, conflict, ""
 
 
 async def _write_turn_sse(response: web.StreamResponse, event: dict) -> None:
@@ -303,6 +398,9 @@ async def _stream_turn_journal(
     turn,
     *,
     after: int = 0,
+    prepare_response=None,
+    observe_event=None,
+    observe_disconnect=None,
 ) -> web.StreamResponse:
     """Replay a turn journal then wait for notifications without owning the turn."""
     response = web.StreamResponse(
@@ -313,6 +411,8 @@ async def _stream_turn_journal(
             "X-Accel-Buffering": "no",
         },
     )
+    if callable(prepare_response):
+        prepare_response(response)
     await response.prepare(request)
     signal = turn.subscribe()
     last_seq = max(0, after)
@@ -322,6 +422,8 @@ async def _stream_turn_journal(
             if events:
                 for event in events:
                     await _write_turn_sse(response, event)
+                    if callable(observe_event):
+                        observe_event(event)
                     last_seq = int(event.get("seq", last_seq) or last_seq)
                 if getattr(turn, "stream_finished", False) and last_seq >= turn.last_seq:
                     break
@@ -338,13 +440,17 @@ async def _stream_turn_journal(
             except asyncio.TimeoutError:
                 await response.write(b": keepalive\n\n")
     except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-        pass
+        if callable(observe_disconnect):
+            observe_disconnect()
     except asyncio.CancelledError:
+        if callable(observe_disconnect):
+            observe_disconnect()
         raise
     except Exception:
         # aiohttp may expose transport closure with a backend-specific error.
         # Detach only: state, scheduler grant, overlay, and browser tab survive.
-        pass
+        if callable(observe_disconnect):
+            observe_disconnect()
     finally:
         turn.unsubscribe(signal)
     return response
@@ -1223,6 +1329,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     slot = body.get("slot")
     if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
+    guest_requested_model = ""
+    if guest_mode:
+        guest_requested_model = str(model or "").strip()
     core._trace(
         "chat.msg.in",
         req_id=req_id,
@@ -1441,6 +1550,25 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 ),
                 "trial_agent_not_configured",
             )
+        if guest_mode:
+            # Anonymous First Look runs use the shared free-model lane only.
+            # They still receive a zero-dollar accounting run and global
+            # admission, but cannot consume paid credit by resetting cookies.
+            model = core._OPENROUTER_TRIAL_FALLBACK_MODEL
+            from credit import _default_reservation
+            if _default_reservation(model) != 0:
+                return reject_first_look(
+                    web.json_response(
+                        {"error": "guest_free_model_not_configured"}, status=503
+                    ),
+                    "guest_free_model_not_configured",
+                )
+            if guest_requested_model and guest_requested_model != model:
+                openrouter_forced_model = model
+                openrouter_forced_from_model = guest_requested_model
+                openrouter_forced_notice = (
+                    "First Look uses the shared free model. Sign in to use granted credit on paid models."
+                )
         user_id = auth_info.get("user_id", "")
         requested_model = (model or core._OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
         model = requested_model
@@ -1460,40 +1588,54 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             # --- Use credit balance as authority for paid model access ---
             # If the user has credit grants, they get paid models even when
             # the legacy openrouter_spend_usd counter is capped.
-            credit_allows_paid = False
+            credit_authority_ready = False
+            credit_allows_requested_model = False
             try:
-                from credit import CreditLedger
+                from credit import CreditLedger, _default_reservation
                 credit_ledger = getattr(core, "_credit_ledger", None)
                 if credit_ledger is None:
-                    credit_ledger = CreditLedger(db_path=core._auth.db_path)
+                    credit_ledger = await asyncio.to_thread(
+                        CreditLedger, db_path=core._auth.db_path
+                    )
                     core._credit_ledger = credit_ledger
                 # Ensure trial grant from legacy budget (one-time migration)
-                credit_ledger.ensure_trial_grant_from_openrouter_budget(
+                await asyncio.to_thread(
+                    credit_ledger.ensure_trial_grant_from_openrouter_budget,
                     user_id,
                     current_spend_usd=openrouter_budget_state.get("spent_usd", 0),
                     budget_usd=openrouter_budget_state.get("budget_usd", 0),
                 )
-                acct = credit_ledger.get_account(user_id)
-                if acct and acct.get("balance_micro_usd", 0) > 0:
-                    credit_allows_paid = True
+                acct = await asyncio.to_thread(credit_ledger.get_account, user_id)
+                if acct:
+                    credit_authority_ready = True
+                    held = await asyncio.to_thread(
+                        credit_ledger.held_reservation_total, acct["account_id"]
+                    )
+                    available = max(0, int(acct.get("balance_micro_usd", 0)) - held)
+                    credit_allows_requested_model = (
+                        available >= _default_reservation(requested_model)
+                    )
             except Exception:
                 pass
-            # Fall back to free model only if both credit is exhausted AND
-            # legacy budget is capped.  If credit grants exist, use them.
+            # Once migrated, credit availability is authoritative. Legacy
+            # float counters are retained only as a compatibility fallback if
+            # the credit account could not be read.
             if (
-                not credit_allows_paid
-                and openrouter_budget_state.get("capped")
+                (
+                    (credit_authority_ready and not credit_allows_requested_model)
+                    or (
+                        not credit_authority_ready
+                        and openrouter_budget_state.get("capped")
+                    )
+                )
                 and not core._is_openrouter_post_cap_allowed_model(requested_model)
             ):
                 model = core._OPENROUTER_TRIAL_FALLBACK_MODEL
                 openrouter_forced_model = model
                 openrouter_forced_from_model = requested_model
                 openrouter_forced_notice = (
-                    "Trial model budget reached "
-                    f"(${openrouter_budget_state.get('spent_usd', 0):.2f}/"
-                    f"${openrouter_budget_state.get('budget_usd', 0):.2f}). "
-                    "Switched to a free model for continued access. "
-                    "After the $1 cap, available models are Trinity and StepFun."
+                    "Available hosted credit is below this model's safety hold. "
+                    "Switched to a free model so you can continue."
                 )
 
         ws = core._chat_agents.get(core.TRIAL_AGENT_ID)
@@ -1567,24 +1709,54 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 return web.json_response(resp, status=429)
 
     turn = None
-    registry = None if guest_mode else _turn_registry(core)
+    registry = _turn_registry(core)
     q: asyncio.Queue | None = None
     if registry:
+        turn_auth_info = auth_info
+        if guest_mode:
+            turn_auth_info = {
+                **auth_info,
+                "user_id": f"guest:{guest_id}",
+            }
         candidate = ChatTurnState(
-            owner_user_id=str(auth_info.get("user_id", "") or ""),
+            owner_user_id=str(turn_auth_info.get("user_id", "") or ""),
             owner_key_hash=str(auth_info.get("key_hash", "") or ""),
             session_id=session_id,
             req_id=req_id,
             chat_agent_id=chat_agent_id,
             routing_agent_id=core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id,
         )
-        turn, turn_created, turn_conflict = await registry.start(candidate)
+        turn, turn_created, turn_conflict, admission_limit = await _start_registered_turn(
+            core,
+            registry,
+            candidate,
+            turn_auth_info,
+            hosted=bool(is_openrouter),
+        )
+        if admission_limit:
+            return web.json_response(
+                {
+                    "error": "hosted_turn_capacity",
+                    "scope": admission_limit,
+                    "message": (
+                        "Too many hosted turns are active for this account."
+                        if admission_limit == "user"
+                        else "Hosted inference is at capacity. Try again shortly."
+                    ),
+                },
+                status=429,
+                headers={"Retry-After": "5"},
+            )
         if turn_conflict:
             return web.json_response(
                 {
                     "error": "chat_turn_active",
                     "message": "A chat turn is already active for this session.",
-                    "req_id": getattr(turn, "req_id", "") if _turn_owned_by(turn, auth_info) else "",
+                    "req_id": (
+                        getattr(turn, "req_id", "")
+                        if _turn_owned_by(turn, turn_auth_info)
+                        else ""
+                    ),
                 },
                 status=409,
             )
@@ -1731,16 +1903,22 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
 
     # --- Credit run creation (at dispatch point, after all pre-flight checks) ---
-    if is_openrouter and auth_info.get("user_id") and not billing_run_id:
-        user_id = auth_info["user_id"]
+    billing_user_id = str(auth_info.get("user_id", "") or "")
+    if guest_mode:
+        billing_user_id = "system:first-look"
+    if is_openrouter and billing_user_id and not billing_run_id:
+        user_id = billing_user_id
         try:
             from credit import CreditLedger
             credit_ledger = getattr(core, "_credit_ledger", None)
             if credit_ledger is None:
-                credit_ledger = CreditLedger(db_path=core._auth.db_path)
+                credit_ledger = await asyncio.to_thread(
+                    CreditLedger, db_path=core._auth.db_path
+                )
                 core._credit_ledger = credit_ledger
-            billing_run = credit_ledger.create_run(
-                user_id=user_id,
+            billing_run = await asyncio.to_thread(
+                credit_ledger.create_run,
+                user_id,
                 model=model,
                 idempotency_key=f"chat-turn-{req_id}",
             )
@@ -1811,6 +1989,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         # disconnect can resolve this exact turn without a response queue.
         core._session_agents[session_id] = routing_agent_id
         await ws.send_json(ws_msg)
+        if turn and is_openrouter:
+            _hosted_turn_deadline_task(core, turn, _HOSTED_TURN_DEADLINE_S)
         if guest_mode:
             first_look_accepted = True
             first_look_accepted_at = time.monotonic()
@@ -1880,7 +2060,37 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             _turn_timeout_task(core, turn, _OPENCODE_CLI_SILENCE_TIMEOUT_S)
         elif is_codex_cli:
             _turn_timeout_task(core, turn, _CODEX_CLI_SILENCE_TIMEOUT_S)
-        return await _stream_turn_journal(request, turn)
+        stream_kwargs = {}
+        if guest_mode:
+            def prepare_guest_response(response):
+                core._attach_first_look_guest_cookies(
+                    response,
+                    request,
+                    guest_id,
+                    quota_count=(
+                        guest_quota_count if guest_quota_increment else None
+                    ),
+                )
+
+            def observe_guest_event(event):
+                outcome = _first_look_terminal_outcome(event, req_id)
+                if outcome:
+                    record_first_look_terminal(
+                        outcome,
+                        error_code="agent_error" if outcome == "error" else "",
+                    )
+
+            def observe_guest_disconnect():
+                record_first_look_terminal(
+                    "client_disconnected", error_code="client_disconnected"
+                )
+
+            stream_kwargs = {
+                "prepare_response": prepare_guest_response,
+                "observe_event": observe_guest_event,
+                "observe_disconnect": observe_guest_disconnect,
+            }
+        return await _stream_turn_journal(request, turn, **stream_kwargs)
 
     resp = web.StreamResponse(
         status=200,
@@ -2155,45 +2365,64 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
         core._attach_first_look_guest_cookies(denied, request, guest_id)
         return denied
 
-    if not guest_mode:
-        registry = _turn_registry(core)
-        turn = _registry_turn(registry, session_id)
-        if turn:
-            if not _turn_owned_by(turn, auth_info):
-                return web.json_response({"error": "session_id not owned by user"}, status=403)
-            requested_req_id = str(body.get("req_id", "") or "").strip()
-            if requested_req_id and requested_req_id != turn.req_id:
-                return web.json_response(
-                    {
-                        "error": "chat_turn_mismatch",
-                        "message": "The requested turn is not active for this session.",
-                        "req_id": turn.req_id,
-                    },
-                    status=409,
+    registry = _turn_registry(core)
+    turn = _registry_turn(registry, session_id)
+    if turn:
+        turn_auth_info = auth_info
+        if guest_mode:
+            turn_auth_info = {**auth_info, "user_id": f"guest:{guest_id}"}
+        if not _turn_owned_by(turn, turn_auth_info):
+            if guest_mode:
+                denied = web.json_response(
+                    {"error": "session_id not owned by guest"}, status=403
                 )
-            if getattr(turn, "stream_finished", False):
-                return web.json_response({"ok": True, "status": turn.status, "req_id": turn.req_id})
+                core._attach_first_look_guest_cookies(denied, request, guest_id)
+                return denied
+            else:
+                return web.json_response({"error": "session_id not owned by user"}, status=403)
+        requested_req_id = str(body.get("req_id", "") or "").strip()
+        if requested_req_id and requested_req_id != turn.req_id:
+            return web.json_response(
+                {
+                    "error": "chat_turn_mismatch",
+                    "message": "The requested turn is not active for this session.",
+                    "req_id": turn.req_id,
+                },
+                status=409,
+            )
+        if getattr(turn, "stream_finished", False):
+            response = web.json_response(
+                {"ok": True, "status": turn.status, "req_id": turn.req_id}
+            )
+            if guest_mode:
+                core._attach_first_look_guest_cookies(response, request, guest_id)
+            return response
 
-            turn.mark_cancelling()
-            routing_agent_id = turn.routing_agent_id or core._session_agents.get(
-                session_id, agent_id
-            )
-            ws = core._chat_agents.get(routing_agent_id)
-            if ws and not ws.closed:
-                try:
-                    await ws.send_json(
-                        {"type": "cancel", "session_id": session_id, "req_id": turn.req_id}
-                    )
-                except Exception:
-                    # The canonical cancellation below still releases the turn
-                    # for reconnecting tabs when an agent has just vanished.
-                    pass
-            _publish_turn_event(
-                core,
-                turn,
-                {"type": "cancelled", "session_id": session_id, "req_id": turn.req_id},
-            )
-            return web.json_response({"ok": True, "status": turn.status, "req_id": turn.req_id})
+        turn.mark_cancelling()
+        routing_agent_id = turn.routing_agent_id or core._session_agents.get(
+            session_id, agent_id
+        )
+        ws = core._chat_agents.get(routing_agent_id)
+        if ws and not ws.closed:
+            try:
+                await ws.send_json(
+                    {"type": "cancel", "session_id": session_id, "req_id": turn.req_id}
+                )
+            except Exception:
+                # The canonical cancellation below still releases the turn
+                # for reconnecting tabs when an agent has just vanished.
+                pass
+        _publish_turn_event(
+            core,
+            turn,
+            {"type": "cancelled", "session_id": session_id, "req_id": turn.req_id},
+        )
+        response = web.json_response(
+            {"ok": True, "status": turn.status, "req_id": turn.req_id}
+        )
+        if guest_mode:
+            core._attach_first_look_guest_cookies(response, request, guest_id)
+        return response
 
     default_agent = core.TRIAL_AGENT_ID if guest_mode else agent_id
     routing_agent_id = core._session_agents.get(session_id, default_agent)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from urllib.parse import urlencode, urlparse
@@ -1709,23 +1711,38 @@ async def handle_auth_me(request: web.Request) -> web.Response:
             openrouter_usage = core._openrouter_budget_state_for_user(user["user_id"])
 
         # Credit state (backward-compatible, added for trial users)
-        credit_state = {}
+        credit_state = {"available": False}
         if user:
             try:
                 from credit import CreditLedger
-                ledger = CreditLedger(db_path=core._auth.db_path)
-                account = ledger.ensure_account(user["user_id"])
+                ledger = await asyncio.to_thread(
+                    CreditLedger, db_path=core._auth.db_path
+                )
+                account = await asyncio.to_thread(
+                    ledger.ensure_account, user["user_id"]
+                )
                 # Grant initial trial credit from existing OpenRouter budget
                 if user_type == "trial" or status == "pending":
                     budget_state = core._openrouter_budget_state_for_user(user["user_id"])
-                    ledger.ensure_trial_grant_from_openrouter_budget(
+                    await asyncio.to_thread(
+                        ledger.ensure_trial_grant_from_openrouter_budget,
                         user["user_id"],
                         current_spend_usd=budget_state.get("spent_usd", 0),
                         budget_usd=budget_state.get("budget_usd", 0),
                     )
-                held = ledger.held_reservation_total(account["account_id"])
+                    # Reload after the idempotent opening grant so a user's
+                    # first /auth/me response contains the funded balance.
+                    account = (
+                        await asyncio.to_thread(
+                            ledger.get_account, user["user_id"]
+                        )
+                    ) or account
+                held = await asyncio.to_thread(
+                    ledger.held_reservation_total, account["account_id"]
+                )
                 available = account["balance_micro_usd"] - held
                 credit_state = {
+                    "available": True,
                     "balance_micro_usd": account["balance_micro_usd"],
                     "balance_usd": account["balance_usd"],
                     "held_micro_usd": held,
@@ -1864,6 +1881,47 @@ async def handle_admin_users(request: web.Request) -> web.Response:
     if not is_admin(request):
         return web.json_response({"error": "Admin access required"}, status=403)
     users = core._auth.list_all_users()
+
+    def attach_credit_state() -> list[dict]:
+        from credit import CreditLedger, _micro_to_usd
+
+        ledger = CreditLedger(db_path=core._auth.db_path)
+        enriched = []
+        for raw_user in users:
+            user = dict(raw_user)
+            account = ledger.get_account(str(user.get("user_id", "") or ""))
+            if account:
+                held = ledger.held_reservation_total(account["account_id"])
+                available = max(
+                    0, int(account.get("balance_micro_usd", 0)) - held
+                )
+                user["credit"] = {
+                    "balance_micro_usd": account["balance_micro_usd"],
+                    "balance_usd": account["balance_usd"],
+                    "held_micro_usd": held,
+                    "available_micro_usd": available,
+                    "available_usd": _micro_to_usd(available),
+                    "total_granted_micro_usd": account[
+                        "total_granted_micro_usd"
+                    ],
+                    "total_spent_micro_usd": account[
+                        "total_spent_micro_usd"
+                    ],
+                }
+            else:
+                user["credit"] = {
+                    "balance_micro_usd": 0,
+                    "balance_usd": 0.0,
+                    "held_micro_usd": 0,
+                    "available_micro_usd": 0,
+                    "available_usd": 0.0,
+                    "total_granted_micro_usd": 0,
+                    "total_spent_micro_usd": 0,
+                }
+            enriched.append(user)
+        return enriched
+
+    users = await asyncio.to_thread(attach_credit_state)
     return web.json_response({"users": users})
 
 
@@ -1911,8 +1969,7 @@ def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict 
     """Authenticate a hosted trial-agent scheduler call using the deployment service key.
 
     The hosted worker never receives a raw user API key.  Instead it sends the
-    shared service token (``HOSTED_AGENT_SERVICE_TOKEN`` or fallback
-    ``TRIAL_AGENT_KEY``) as a Bearer token together with a scoped scheduler
+    dedicated ``HOSTED_AGENT_SERVICE_TOKEN`` as a Bearer token together with a scoped scheduler
     grant id and the chat session id.  The grant (minted by
     :func:`_mint_scheduler_turn_grant`) binds the user id, chat session id,
     and expiry.  Deriving the user from the validated grant ensures the
@@ -1928,13 +1985,9 @@ def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict 
         return None
     token = auth_header[len("bearer "):].strip()
 
-    # Prefer HOSTED_AGENT_SERVICE_TOKEN (scoped, separate from TRIAL_AGENT_KEY)
-    # with a compatibility fallback so the credit-branch service-token change
-    # can consolidate on one name.
-    service_token = (
-        str(getattr(core, "HOSTED_AGENT_SERVICE_TOKEN", "") or "")
-        or str(getattr(core, "TRIAL_AGENT_KEY", "") or "")
-    )
+    service_token = str(
+        getattr(core, "HOSTED_AGENT_SERVICE_TOKEN", "") or ""
+    ).strip()
     if not token or not service_token:
         return None
     if not hmac.compare_digest(token, service_token):
@@ -1968,9 +2021,10 @@ def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict 
     # mismatched session_id is caught before any read/mutation occurs.
     body_session_id = str(body.get("session_id", "") or "").strip()
     grant_session_id = str(grant_meta.get("session_id", "") or "").strip()
-    if body_session_id and grant_session_id:
-        if not hmac.compare_digest(body_session_id, grant_session_id):
-            return None
+    if not body_session_id or not grant_session_id:
+        return None
+    if not hmac.compare_digest(body_session_id, grant_session_id):
+        return None
 
     return {"user_id": user_id, "trial_agent_auth": True}
 
@@ -2386,9 +2440,11 @@ async def handle_credit_status(request: web.Request) -> web.Response:
 
     from credit import CreditLedger
 
-    ledger = CreditLedger(db_path=core._auth.db_path)
-    account = ledger.ensure_account(user_id)
-    held = ledger.held_reservation_total(account["account_id"])
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+    account = await asyncio.to_thread(ledger.ensure_account, user_id)
+    held = await asyncio.to_thread(
+        ledger.held_reservation_total, account["account_id"]
+    )
     available = account["balance_micro_usd"] - held
 
     return web.json_response({
@@ -2425,9 +2481,11 @@ async def handle_credit_history(request: web.Request) -> web.Response:
 
     from credit import CreditLedger
 
-    ledger = CreditLedger(db_path=core._auth.db_path)
-    entries = ledger.get_ledger_for_user(user_id, limit=limit)
-    runs = ledger.get_runs_for_user(user_id, limit=limit)
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
+    entries, runs = await asyncio.gather(
+        asyncio.to_thread(ledger.get_ledger_for_user, user_id, limit),
+        asyncio.to_thread(ledger.get_runs_for_user, user_id, limit),
+    )
 
     return web.json_response({
         "user_id": user_id,
@@ -2445,11 +2503,12 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
     """POST /admin/credit/grant — admin grants credit to a user.
 
     JSON body:
-        {"user_id": "u-...", "amount_usd": "1.00", "reason": "..."}
+        {"user_id": "u-...", "amount_usd": "1.00", "reason": "...",
+         "operation_id": "client-generated-unique-id"}
 
     Validates decimal amount exactly, requires target user to exist, bounds
-    amount and reason length, and uses deterministic idempotency that
-    preserves audit metadata.
+    amount and reason length, and requires a caller-generated idempotency key
+    so intentional duplicate grants remain possible while network retries are safe.
     """
     from decimal import Decimal, InvalidOperation
 
@@ -2461,6 +2520,8 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "JSON body must be an object"}, status=400)
 
     user_id = str(body.get("user_id", "")).strip()
     if not user_id:
@@ -2482,6 +2543,10 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
             {"error": "amount_usd must be a valid decimal number"},
             status=400,
         )
+    if not amount_decimal.is_finite():
+        return web.json_response(
+            {"error": "amount_usd must be a finite decimal number"}, status=400
+        )
     if amount_decimal <= Decimal("0"):
         return web.json_response(
             {"error": "amount_usd must be positive"},
@@ -2491,6 +2556,17 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "amount_usd must not exceed 10,000.00"},
             status=400,
+        )
+    amount_micro_decimal = amount_decimal * Decimal("1000000")
+    if amount_micro_decimal != amount_micro_decimal.to_integral_value():
+        return web.json_response(
+            {"error": "amount_usd must have at most 6 decimal places"},
+            status=400,
+        )
+    amount_micro = int(amount_micro_decimal)
+    if amount_micro <= 0:
+        return web.json_response(
+            {"error": "amount_usd must be at least 0.000001"}, status=400
         )
 
     reason = str(body.get("reason", "admin_grant")).strip()
@@ -2502,28 +2578,32 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
             status=400,
         )
 
-    from credit import CreditLedger, _usd_to_micro
+    operation_id = str(body.get("operation_id", "") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", operation_id):
+        return web.json_response(
+            {
+                "error": (
+                    "operation_id must be 8-128 letters, numbers, '.', '_', ':', or '-'"
+                )
+            },
+            status=400,
+        )
 
-    ledger = CreditLedger(db_path=core._auth.db_path)
+    from credit import CreditLedger
+
+    ledger = await asyncio.to_thread(CreditLedger, db_path=core._auth.db_path)
     amount_usd = float(amount_decimal)
-    amount_micro = _usd_to_micro(amount_usd)
-
-    # Deterministic idempotency key preserves audit metadata — same
-    # admin + user + amount + reason is idempotent within a UTC day.
-    import uuid
-    today = time.strftime("%Y-%m-%d")
-    idem_key = (
-        f"admin-grant-{user_id}-{today}-"
-        f"{hashlib.sha256(f'{amount_decimal}:{reason}'.encode()).hexdigest()[:16]}"
-    )
 
     admin_auth = core._authenticate(request)
     admin_email = admin_auth.get("email", "") if admin_auth else ""
+    admin_fingerprint = hashlib.sha256(admin_email.encode()).hexdigest()[:12]
+    idem_key = f"admin-grant-{admin_fingerprint}-{operation_id}"
 
     try:
-        result = ledger.grant(
-            user_id=user_id,
-            amount_micro_usd=amount_micro,
+        result = await asyncio.to_thread(
+            ledger.grant,
+            user_id,
+            amount_micro,
             idempotency_key=idem_key,
             metadata={
                 "reason": reason,
@@ -2531,13 +2611,28 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
                 "amount_usd_decimal": str(amount_decimal),
             },
         )
+        already_applied = bool(result.get("already_applied"))
+        existing_amount = int(
+            result.get("entry_amount_micro_usd", amount_micro) or 0
+        )
+        if already_applied and existing_amount != amount_micro:
+            return web.json_response(
+                {"error": "operation_id was already used for a different amount"},
+                status=409,
+            )
         return web.json_response({
             "ok": True,
-            "granted_micro_usd": amount_micro,
-            "granted_usd": amount_usd,
+            "already_applied": already_applied,
+            "granted_micro_usd": 0 if already_applied else amount_micro,
+            "granted_usd": 0.0 if already_applied else amount_usd,
             "new_balance_micro_usd": result.get("balance_micro_usd"),
             "new_balance_usd": result.get("balance_usd"),
             "idempotency_key": idem_key,
         })
-    except Exception as e:
+    except (ValueError, ArithmeticError) as e:
         return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        logger = getattr(core, "log", None)
+        if logger:
+            logger.exception("[credit] admin grant failed")
+        return web.json_response({"error": "Credit grant failed"}, status=500)

@@ -460,7 +460,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
 
     def test_trial_agent_auth_rejects_missing_bearer(self):
         """Requests without Bearer auth should not succeed trial agent auth."""
-        core = SimpleNamespace(TRIAL_AGENT_KEY="sk-trial-test")
+        core = SimpleNamespace(HOSTED_AGENT_SERVICE_TOKEN="sk-hosted-test")
         request = SimpleNamespace(headers={})
         body = {"scheduler_grant_id": "sg-test"}
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
@@ -468,7 +468,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
 
     def test_trial_agent_auth_rejects_wrong_key(self):
         """Wrong trial agent key must not authenticate."""
-        core = SimpleNamespace(TRIAL_AGENT_KEY="sk-trial-real")
+        core = SimpleNamespace(HOSTED_AGENT_SERVICE_TOKEN="sk-hosted-real")
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-wrong"})
         body = {"scheduler_grant_id": "sg-test"}
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
@@ -484,7 +484,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-test": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
@@ -502,11 +502,11 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() - 1,  # already expired
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-expired": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
-        body = {"scheduler_grant_id": "sg-expired"}
+        body = {"session_id": "s-chat-1234", "scheduler_grant_id": "sg-expired"}
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
         self.assertIsNone(result)
 
@@ -520,18 +520,18 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() - 10,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-replayed": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
-        body = {"scheduler_grant_id": "sg-replayed"}
+        body = {"session_id": "s-chat-1234", "scheduler_grant_id": "sg-replayed"}
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
         self.assertIsNone(result)
 
     def test_trial_agent_auth_revoked_grant_fails(self):
         """A grant removed from the store must not authenticate."""
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={},  # empty store
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
@@ -549,11 +549,14 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
-        body = {"scheduler_grant_id": "sg-valid"}
+        body = {
+            "session_id": "s-chat-1234",
+            "scheduler_grant_id": "sg-valid",
+        }
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
         self.assertIsNotNone(result)
         self.assertEqual(result["user_id"], "u-hosted")
@@ -569,11 +572,14 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-wrong-user": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
-        body = {"scheduler_grant_id": "sg-wrong-user"}
+        body = {
+            "session_id": "s-chat-1234",
+            "scheduler_grant_id": "sg-wrong-user",
+        }
         result = auth_admin._scheduler_trial_agent_auth(core, request, body)
         # Grant exists and is valid, so auth should succeed with the grant's user
         self.assertIsNotNone(result)
@@ -589,7 +595,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
             _authenticate=lambda _req: None,  # normal auth fails
             _is_pending_user=lambda _auth: False,
@@ -625,7 +631,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
             _authenticate=lambda _req: None,
             _is_pending_user=lambda _auth: False,
@@ -667,7 +673,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
             _authenticate=lambda _req: None,
             _is_pending_user=lambda _auth: False,
@@ -706,7 +712,7 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
             _authenticate=lambda _req: None,
             _is_pending_user=lambda _auth: False,
@@ -921,7 +927,7 @@ class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-valid": grant},
         )
         # Wrong session_id in body
@@ -936,8 +942,13 @@ class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result2)
         self.assertEqual(result2["user_id"], "u-hosted")
 
-    def test_hosted_agent_service_token_with_fallback(self):
-        """HOSTED_AGENT_SERVICE_TOKEN takes precedence; TRIAL_AGENT_KEY is fallback."""
+        # Omitting session_id must fail rather than weakening the grant scope.
+        body_missing = {"scheduler_grant_id": "sg-valid"}
+        result3 = auth_admin._scheduler_trial_agent_auth(core, request, body_missing)
+        self.assertIsNone(result3)
+
+    def test_hosted_agent_service_token_has_no_trial_key_fallback(self):
+        """Only the dedicated hosted-worker token can authenticate."""
         import time as time_module
 
         grant = {
@@ -956,14 +967,14 @@ class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
         result = auth_admin._scheduler_trial_agent_auth(core_hosted, request_hosted, body)
         self.assertIsNotNone(result)
 
-        # TRIAL_AGENT_KEY fallback (no HOSTED_AGENT_SERVICE_TOKEN set)
+        # TRIAL_AGENT_KEY is deliberately not a fallback.
         core_trial = SimpleNamespace(
             TRIAL_AGENT_KEY="sk-trial-fallback",
             _scheduler_turn_grants={"sg-ok": grant},
         )
         request_trial = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-fallback"})
         result2 = auth_admin._scheduler_trial_agent_auth(core_trial, request_trial, body)
-        self.assertIsNotNone(result2)
+        self.assertIsNone(result2)
 
         # Wrong token rejected
         request_wrong = SimpleNamespace(headers={"Authorization": "Bearer wrong-key"})
@@ -980,7 +991,7 @@ class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-test",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-test",
             _scheduler_turn_grants={"sg-test": grant},
         )
         request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
@@ -998,7 +1009,7 @@ class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
             "expires_at": time_module.time() + 300,
         }
         core = SimpleNamespace(
-            TRIAL_AGENT_KEY="sk-trial-e2e",
+            HOSTED_AGENT_SERVICE_TOKEN="sk-trial-e2e",
             _scheduler_turn_grants={"sg-e2e": grant},
             _authenticate=lambda _req: None,
             _is_pending_user=lambda _auth: False,

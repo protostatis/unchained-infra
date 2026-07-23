@@ -139,10 +139,8 @@ def _agent_id(prefix: str, key: str) -> str:
 
 
 TRIAL_AGENT_KEY = os.environ.get("TRIAL_AGENT_KEY", "").strip()
-# Scoped service token for hosted agent callbacks (e.g. scheduler endpoints).
-# Falls back to TRIAL_AGENT_KEY when unset so existing deployments work without
-# change; the credit branch can consolidate on HOSTED_AGENT_SERVICE_TOKEN
-# separately without breaking this code.
+# Mandatory, scoped service token for hosted-worker callbacks. It must remain
+# separate from the trial-agent WebSocket key.
 HOSTED_AGENT_SERVICE_TOKEN = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
 TRIAL_AGENT_ID = os.environ.get("TRIAL_AGENT_ID", "").strip()
 if not TRIAL_AGENT_ID and TRIAL_AGENT_KEY:
@@ -172,6 +170,10 @@ if not TRIAL_AGENT_KEY:
     log.warning("[chat] TRIAL_AGENT_KEY unset; trial-agent auth bypass disabled.")
 if not TRIAL_AGENT_ID:
     log.warning("[chat] TRIAL_AGENT_ID unresolved; OpenRouter trial routing disabled.")
+if TRIAL_AGENT_ID and not HOSTED_AGENT_SERVICE_TOKEN:
+    log.warning(
+        "[chat] HOSTED_AGENT_SERVICE_TOKEN unset; hosted inference callbacks fail closed."
+    )
 
 # Demo prompt quota — number of headless demo interactions before requiring trial install
 _DEMO_PROMPT_LIMIT = 20
@@ -232,6 +234,11 @@ def _is_demo_unlimited(user: dict | None) -> bool:
 def _is_rate_limited_user(user: dict | None) -> bool:
     """Return True for free-tier demo/trial users (no approved API key)."""
     if not user:
+        return True
+    # Trial accounts remain rate-limited even though onboarding currently
+    # issues them an approved connector key. Approval controls connector
+    # access; it is not a paid-plan entitlement.
+    if user.get("user_type") == "trial":
         return True
     # Approved users with API keys bypass rate limiting
     if user.get("status") == "approved" and bool(user.get("api_key")):
@@ -1290,7 +1297,8 @@ def _resolve_trial_session_id(agent_id: str, requested: str) -> str:
 
 def _trial_session_path(session_id: str) -> str:
     safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
-    return os.path.join("/data/sessions", f"{safe_id}.json")
+    sessions_dir = os.environ.get("UNCHAINED_SESSIONS_DIR", "/data/sessions")
+    return os.path.join(sessions_dir, f"{safe_id}.json")
 
 
 def _looks_like_tool_payload(text: str) -> bool:
@@ -2387,21 +2395,21 @@ async def _on_startup(app_: web.Application):
     _stale_tab_task = _state.stale_tab_task
     _gemini_cleanup_task = _state.gemini_cleanup_task
     _headless_watchdog_task = _state.headless_watchdog_task
-    # Credit stale-run sweep — releases held reservations for abandoned runs
+    # Credit stale-run sweep finalizes unresolved reservations after crashes.
     _state.credit_sweep_task = asyncio.create_task(_credit_stale_sweep_loop())
 
 
 async def _credit_stale_sweep_loop():
-    """Periodically sweep stale credit runs, releasing held reservations."""
+    """Periodically finalize stale pre-submit and submitted reservations."""
     import os as _os
     interval = max(60, int(_os.environ.get("CREDIT_SWEEP_INTERVAL_SECONDS", "600")))
     try:
         from credit import CreditLedger
-        ledger = CreditLedger(db_path=_auth.db_path)
+        ledger = await asyncio.to_thread(CreditLedger, db_path=_auth.db_path)
         while True:
             await asyncio.sleep(interval)
             try:
-                expired = ledger.sweep_stale_runs()
+                expired = await asyncio.to_thread(ledger.sweep_stale_runs)
                 if expired:
                     log.info("[credit] sweep: expired %d stale run(s)", expired)
             except Exception as e:

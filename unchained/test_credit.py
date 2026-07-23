@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 
 from credit import (
     CreditLedger,
@@ -143,7 +144,7 @@ class TestCreditLedger(unittest.TestCase):
         result = self.ledger.finish_run(run_id)
         self.assertTrue(result.get("already_finished"))
 
-    def test_finish_run_releases_held(self):
+    def test_finish_run_releases_unsubmitted_hold(self):
         self.ledger.grant("u-test-12", _usd_to_micro(1.0), idempotency_key="g-release")
 
         run = self.ledger.create_run("u-test-12", idempotency_key="r-release")
@@ -160,13 +161,36 @@ class TestCreditLedger(unittest.TestCase):
         self.ledger.finish_run(run_id)
 
         # Verify reservation was released
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             row = conn.execute(
                 "SELECT status FROM credit_call_reservations WHERE call_id = ?",
                 (call["call_id"],),
             ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row[0], "released")
+
+    def test_finish_run_captures_submitted_hold(self):
+        self.ledger.grant("u-test-submitted", 1_000, idempotency_key="g-submitted")
+        run = self.ledger.create_run(
+            "u-test-submitted", idempotency_key="r-submitted"
+        )
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=400,
+            idempotency_key="c-submitted",
+        )
+        submitted = self.ledger.mark_call_submitted(call["call_id"])
+        self.assertEqual(submitted["status"], "submitted")
+
+        self.ledger.finish_run(run["run_id"], status="cancelled")
+
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            row = conn.execute(
+                "SELECT status, settled_micro_usd FROM credit_call_reservations "
+                "WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()
+        self.assertEqual(row, ("settled", 400))
+        self.assertEqual(self.ledger.get_balance("u-test-submitted"), 600)
 
     def test_get_runs_for_user(self):
         self.ledger.create_run("u-test-runs", idempotency_key="ra")
@@ -233,8 +257,8 @@ class TestCreditLedger(unittest.TestCase):
         result = self.ledger.settle_call(call["call_id"], actual_cost_micro_usd=50)
         self.assertTrue(result["already_settled"])
 
-    def test_settle_capped_at_reserved(self):
-        # Cost higher than reserved should be capped
+    def test_settle_overage_uses_unreserved_balance(self):
+        # A reported cost higher than the hold is charged when funds remain.
         self.ledger.grant("u-test-18", _usd_to_micro(1.0), idempotency_key="g-cap")
         run = self.ledger.create_run("u-test-18", idempotency_key="r-cap")
         call = self.ledger.reserve_call(
@@ -243,7 +267,8 @@ class TestCreditLedger(unittest.TestCase):
         result = self.ledger.settle_call(
             call["call_id"], actual_cost_micro_usd=999999,
         )
-        self.assertEqual(result["settled_micro_usd"], 100)  # capped at reserved
+        self.assertEqual(result["settled_micro_usd"], 999999)
+        self.assertEqual(result["overage_micro_usd"], 999899)
 
     def test_release_call(self):
         self.ledger.grant("u-test-19", _usd_to_micro(1.0), idempotency_key="g-rel")
@@ -263,6 +288,17 @@ class TestCreditLedger(unittest.TestCase):
         self.ledger.release_call(call["call_id"])
         result = self.ledger.release_call(call["call_id"])
         self.assertTrue(result["already_released"])
+
+    def test_release_rejects_submitted_call(self):
+        self.ledger.grant("u-sub-rel", 1_000, idempotency_key="g-sub-rel")
+        run = self.ledger.create_run("u-sub-rel", idempotency_key="r-sub-rel")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=100,
+            idempotency_key="c-sub-rel",
+        )
+        self.ledger.mark_call_submitted(call["call_id"])
+        with self.assertRaisesRegex(ValueError, "submitted provider call"):
+            self.ledger.release_call(call["call_id"])
 
     # ---- Insufficient balance under concurrent reservations ----
 
@@ -555,6 +591,64 @@ class TestCreditConcurrency(unittest.TestCase):
         self.assertLessEqual(len(successes), 1,
                              f"Expected ≤1 success, got {len(successes)}: {successes}; errors: {errors}")
 
+    def test_concurrent_settle_release_finish_has_one_terminal_charge(self):
+        run = self.ledger.create_run("u-conc", idempotency_key="r-terminal-race")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=100_000,
+            idempotency_key="c-terminal-race",
+        )
+        self.ledger.mark_call_submitted(call["call_id"])
+        barrier = threading.Barrier(3)
+        errors = []
+
+        def settle():
+            try:
+                barrier.wait()
+                self.ledger.settle_call(
+                    call["call_id"], actual_cost_micro_usd=50_000
+                )
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+
+        def release():
+            try:
+                barrier.wait()
+                self.ledger.release_call(call["call_id"])
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+
+        def finish():
+            try:
+                barrier.wait()
+                self.ledger.finish_run(run["run_id"], status="cancelled")
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+
+        threads = [
+            threading.Thread(target=settle),
+            threading.Thread(target=release),
+            threading.Thread(target=finish),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            call_row = conn.execute(
+                "SELECT status FROM credit_call_reservations WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()
+            settlement_count = conn.execute(
+                "SELECT COUNT(*) FROM credit_ledger "
+                "WHERE call_id = ? AND entry_type = 'settlement'",
+                (call["call_id"],),
+            ).fetchone()[0]
+        self.assertEqual(call_row[0], "settled")
+        self.assertEqual(settlement_count, 1)
+        self.assertIn(self.ledger.get_balance("u-conc"), (900_000, 950_000))
+        self.assertTrue(errors)  # losing terminal transitions fail safely
+
 
 class TestCreditModelAllowlist(unittest.TestCase):
     """Model allowlist enforcement tests."""
@@ -662,11 +756,12 @@ class TestCreditSweep(unittest.TestCase):
 
         # Sweep with a very short TTL (0 => use default, but we need immediate)
         # Manually set created_at to old via direct SQL to force sweep
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             conn.execute(
                 "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
                 (time.time() - 999999, run_id),
             )
+            conn.commit()
 
         # Now sweep — should expire it
         expired = self.ledger.sweep_stale_runs(ttl_seconds=1)
@@ -677,7 +772,7 @@ class TestCreditSweep(unittest.TestCase):
         self.assertEqual(run_info["status"], "exhausted")
 
         # Call should be released
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             row = conn.execute(
                 "SELECT status FROM credit_call_reservations WHERE call_id = ?",
                 (call["call_id"],),
@@ -691,24 +786,58 @@ class TestCreditSweep(unittest.TestCase):
         self.ledger.finish_run(run["run_id"], status="completed")
 
         # Make it look old
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             conn.execute(
                 "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
                 (time.time() - 999999, run["run_id"]),
             )
+            conn.commit()
 
         expired = self.ledger.sweep_stale_runs(ttl_seconds=1)
         self.assertEqual(expired, 0)  # Already finished, skipped
+
+    def test_sweep_captures_submitted_and_releases_unsubmitted(self):
+        self.ledger.grant("u-sweep-mixed", 1_000, idempotency_key="g-sweep-mixed")
+        run = self.ledger.create_run(
+            "u-sweep-mixed", idempotency_key="r-sweep-mixed"
+        )
+        submitted = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=300,
+            idempotency_key="c-sweep-submitted",
+        )
+        unsubmitted = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=200,
+            idempotency_key="c-sweep-unsubmitted",
+        )
+        self.ledger.mark_call_submitted(submitted["call_id"])
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            conn.execute(
+                "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
+                (time.time() - 999999, run["run_id"]),
+            )
+            conn.commit()
+
+        self.assertEqual(self.ledger.sweep_stale_runs(ttl_seconds=1), 1)
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            rows = dict(conn.execute(
+                "SELECT call_id, status FROM credit_call_reservations "
+                "WHERE run_id = ?",
+                (run["run_id"],),
+            ).fetchall())
+        self.assertEqual(rows[submitted["call_id"]], "settled")
+        self.assertEqual(rows[unsubmitted["call_id"]], "released")
+        self.assertEqual(self.ledger.get_balance("u-sweep-mixed"), 700)
 
     def test_sweep_idempotent(self):
         """Multiple sweeps should be safe (idempotent)."""
         self.ledger.grant("u-sweep3", _usd_to_micro(1.0), idempotency_key="g-sweep3")
         run = self.ledger.create_run("u-sweep3", idempotency_key="r-sweep3")
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             conn.execute(
                 "UPDATE credit_runs SET created_at = ? WHERE run_id = ?",
                 (time.time() - 999999, run["run_id"]),
             )
+            conn.commit()
 
         expired1 = self.ledger.sweep_stale_runs(ttl_seconds=1)
         expired2 = self.ledger.sweep_stale_runs(ttl_seconds=1)
@@ -746,7 +875,7 @@ class TestCreditTerminalFinish(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
 
         # Call released
-        with sqlite3.connect(self._db_path) as conn:
+        with closing(sqlite3.connect(self._db_path)) as conn:
             row = conn.execute(
                 "SELECT status FROM credit_call_reservations WHERE call_id = ?",
                 (call["call_id"],),
@@ -874,8 +1003,8 @@ class TestCreditServiceToken(unittest.TestCase):
         token = credit_service_token()
         self.assertEqual(token, "hosted-token-aaa")
 
-    def test_credit_service_token_falls_back_to_credit(self):
-        """CREDIT_SERVICE_TOKEN takes precedence over TRIAL_AGENT_KEY."""
+    def test_credit_service_token_does_not_fall_back_to_credit(self):
+        """Legacy CREDIT_SERVICE_TOKEN cannot authorize hosted callbacks."""
         os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         os.environ["CREDIT_SERVICE_TOKEN"] = "credit-secret-123"
         os.environ["TRIAL_AGENT_KEY"] = "trial-key-456"
@@ -883,12 +1012,11 @@ class TestCreditServiceToken(unittest.TestCase):
 
         from credit import credit_service_token
         token = credit_service_token()
-        self.assertEqual(token, "credit-secret-123")
+        self.assertEqual(token, "")
         self.assertNotEqual(token, "private-core-789")
 
-    def test_credit_service_token_falls_back_to_trial_agent_key(self):
-        """When HOSTED_AGENT_SERVICE_TOKEN and CREDIT_SERVICE_TOKEN are unset,
-        fall back to TRIAL_AGENT_KEY."""
+    def test_credit_service_token_does_not_fall_back_to_trial_agent_key(self):
+        """The trial-agent WebSocket key cannot authorize credit callbacks."""
         os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         os.environ.pop("CREDIT_SERVICE_TOKEN", None)
         os.environ["TRIAL_AGENT_KEY"] = "trial-key-fallback"
@@ -896,7 +1024,7 @@ class TestCreditServiceToken(unittest.TestCase):
 
         from credit import credit_service_token
         token = credit_service_token()
-        self.assertEqual(token, "trial-key-fallback")
+        self.assertEqual(token, "")
         self.assertNotEqual(token, "private-core-should-not-use")
 
     def test_credit_service_token_never_uses_private_core(self):
@@ -1118,8 +1246,23 @@ class TestCreditSettlementCost(unittest.TestCase):
         self.assertEqual(result["settled_micro_usd"], 0)
         self.assertEqual(result["released_micro_usd"], 10_000)
 
-    def test_discrepancy_recorded_not_charged(self):
-        """Provider cost exceeding reserve is recorded but not charged."""
+    def test_cost_absent_rejects_conflicting_actual_cost(self):
+        self.ledger.grant("u-cost-conflict", 20_000, idempotency_key="g-conflict")
+        run = self.ledger.create_run(
+            "u-cost-conflict", idempotency_key="r-conflict"
+        )
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=10_000,
+            idempotency_key="c-conflict",
+        )
+        with self.assertRaisesRegex(ValueError, "must be zero"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1,
+                cost_absent=True,
+            )
+
+    def test_provider_cost_over_hold_is_charged_when_funded(self):
+        """Provider cost exceeding the hold consumes available balance."""
         self.ledger.grant("u-disc", _usd_to_micro(0.02), idempotency_key="g-disc")
         run = self.ledger.create_run("u-disc", idempotency_key="r-disc")
         call = self.ledger.reserve_call(
@@ -1129,10 +1272,9 @@ class TestCreditSettlementCost(unittest.TestCase):
             call["call_id"], actual_cost_micro_usd=7_000,
             provider_cost_micro_usd=7_000,
         )
-        # Capped at reserved amount
-        self.assertEqual(result["settled_micro_usd"], 5_000)
-        # Discrepancy recorded
-        self.assertEqual(result["discrepancy_micro_usd"], 2_000)
+        self.assertEqual(result["settled_micro_usd"], 7_000)
+        self.assertEqual(result["overage_micro_usd"], 2_000)
+        self.assertEqual(result["discrepancy_micro_usd"], 0)
         # Provider cost in usage table is the actual reported value
         usage = self.ledger.get_usage_for_run(run["run_id"])
         self.assertEqual(usage[0]["provider_cost_micro_usd"], 7_000)
@@ -1230,6 +1372,42 @@ class TestCreditLedgerContextManager(unittest.TestCase):
         reconstructed = ledger.reconstruct_balance(acct["account_id"])
         self.assertEqual(reconstructed, 0)
 
+    def test_existing_reservation_table_migrates_submitted_at(self):
+        from credit import CreditLedger as CL
+
+        CL._instances.pop(self._db_path, None)
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE credit_call_reservations (
+                    call_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'held',
+                    reserved_micro_usd INTEGER NOT NULL,
+                    settled_micro_usd INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    settled_at REAL,
+                    released_at REAL
+                )
+            """)
+            conn.commit()
+
+        try:
+            CL(self._db_path)
+            with closing(sqlite3.connect(self._db_path)) as conn:
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        "PRAGMA table_info(credit_call_reservations)"
+                    ).fetchall()
+                }
+            self.assertIn("submitted_at", columns)
+        finally:
+            CL._instances.pop(self._db_path, None)
+
 
 # ---------------------------------------------------------------------------
 # Service token hierarchy tests
@@ -1237,7 +1415,7 @@ class TestCreditLedgerContextManager(unittest.TestCase):
 
 
 class TestCreditServiceTokenFull(unittest.TestCase):
-    """Full token hierarchy: HOSTED > CREDIT > TRIAL_AGENT_KEY."""
+    """Only HOSTED_AGENT_SERVICE_TOKEN is accepted."""
 
     def setUp(self):
         self._saved = {}

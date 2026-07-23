@@ -147,7 +147,7 @@ class TestLegalPageDeploymentConfig(unittest.TestCase):
             web_service,
         )
 
-    def test_compose_only_persists_trial_agent_session_directory(self):
+    def test_compose_shares_hosted_session_directory(self):
         compose_path = Path(__file__).resolve().parent.parent / "docker-compose.yml"
         compose = compose_path.read_text(encoding="utf-8")
         web_service = self._compose_service(compose, "web", "scheduler")
@@ -156,9 +156,15 @@ class TestLegalPageDeploymentConfig(unittest.TestCase):
         )[0]
 
         self.assertIn("- relay_data:/data", web_service)
-        self.assertNotIn("SESSION_DIR=", web_service)
+        self.assertIn(
+            "- UNCHAINED_SESSIONS_DIR=${UNCHAINED_SESSIONS_DIR:-/data/sessions}",
+            web_service,
+        )
         self.assertIn("- relay_data:/data", trial_service)
-        self.assertIn("- SESSION_DIR=/data/sessions", trial_service)
+        self.assertIn(
+            "- SESSION_DIR=${UNCHAINED_SESSIONS_DIR:-/data/sessions}",
+            trial_service,
+        )
 
 
 if __name__ == "__main__":

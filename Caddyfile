@@ -92,6 +92,12 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy relay:8765
 	}
 
+	# Hosted-worker callbacks are available only on the Docker-internal web
+	# listener. Never proxy this namespace from the public edge.
+	handle /internal/* {
+		respond "Not found" 404
+	}
+
 	# Web UI API
 	handle /web/* {
 		reverse_proxy web:8080

@@ -101,13 +101,19 @@ MAX_ABSOLUTE_TURNS = 200      # Hard ceiling (never exceed)
 # survives container restarts.
 SESSION_DIR = os.environ.get(
     "SESSION_DIR",
-    os.path.join(
-        os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
-        "sessions",
+    os.environ.get(
+        "UNCHAINED_SESSIONS_DIR",
+        os.path.join(
+            os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
+            "sessions",
+        ),
     ),
 )
 MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
+HOSTED_MAX_INPUT_CHARS = max(
+    10_000, int(os.environ.get("HOSTED_MAX_INPUT_CHARS", "200000"))
+)
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
@@ -726,23 +732,16 @@ class TrialAgent:
             base = "http://" + base[5:]
         return base.rstrip("/")
 
-    @staticmethod
-    def _credit_service_token() -> str:
-        """Narrowly-scoped credit service token.
+    def _hosted_service_token(self) -> str:
+        """Return the narrowly-scoped hosted-worker callback token.
 
-        Prefers HOSTED_AGENT_SERVICE_TOKEN, then CREDIT_SERVICE_TOKEN,
-        then TRIAL_AGENT_KEY.  Never reads PRIVATE_CORE_TOKEN or
-        RELAY_SHARED_TOKEN.
+        This credential is mandatory and intentionally does not fall back to
+        the worker's WebSocket key or any other service credential.
         """
-        for env_name in (
-            "HOSTED_AGENT_SERVICE_TOKEN",
-            "CREDIT_SERVICE_TOKEN",
-            "TRIAL_AGENT_KEY",
-        ):
-            token = os.environ.get(env_name, "").strip()
-            if token:
-                return token
-        return ""
+        return os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
+
+    def _credit_service_token(self) -> str:
+        return self._hosted_service_token()
 
     async def _credit_reserve(
         self,
@@ -759,7 +758,7 @@ class TrialAgent:
         token = self._credit_service_token()
         if not token or not run_id:
             return None
-        url = f"{self._credit_base_url}/web/credit/reserve"
+        url = f"{self._credit_base_url}/internal/credit/reserve"
         body = {
             "run_id": run_id,
             "model": model,
@@ -785,6 +784,29 @@ class TrialAgent:
         except Exception:
             return None
 
+    async def _credit_mark_submitted(
+        self,
+        client: httpx.AsyncClient,
+        call_id: str,
+    ) -> dict | None:
+        """Persist submission before crossing the OpenRouter boundary."""
+        token = self._credit_service_token()
+        if not token or not call_id:
+            return None
+        try:
+            resp = await client.post(
+                f"{self._credit_base_url}/internal/credit/submitted",
+                json={"call_id": call_id},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(5.0),
+            )
+            if resp.is_success:
+                data = resp.json()
+                return data if isinstance(data, dict) else None
+            return None
+        except Exception:
+            return None
+
     async def _credit_settle(
         self,
         client: httpx.AsyncClient,
@@ -800,7 +822,7 @@ class TrialAgent:
         token = self._credit_service_token()
         if not token or not call_id:
             return None
-        url = f"{self._credit_base_url}/web/credit/settle"
+        url = f"{self._credit_base_url}/internal/credit/settle"
         body = {
             "call_id": call_id,
             "actual_cost_micro_usd": actual_cost_micro_usd,
@@ -832,7 +854,7 @@ class TrialAgent:
         token = self._credit_service_token()
         if not token or not call_id:
             return None
-        url = f"{self._credit_base_url}/web/credit/release"
+        url = f"{self._credit_base_url}/internal/credit/release"
         body = {"call_id": call_id}
         try:
             resp = await client.post(
@@ -1117,6 +1139,7 @@ class TrialAgent:
         """Clear correlation state only when this task still owns the session."""
         if self.active_tasks.get(session_id) is task:
             self.active_tasks.pop(session_id, None)
+            getattr(self, "_session_billing_runs", {}).pop(session_id, None)
             if self.active_req_ids.get(session_id) == req_id:
                 self.active_req_ids.pop(session_id, None)
 
@@ -1725,28 +1748,36 @@ class TrialAgent:
         credit_client: httpx.AsyncClient | None = None
         reserved_call_id: str | None = None
         credit_reservation: dict | None = None
-        if billing_run_id and token:
+        provider_submitted = False
+        if billing_run_id:
+            if not token:
+                raise RuntimeError(
+                    "Hosted credit authorization is unavailable. Please try again later."
+                )
+            input_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
+            if input_chars > HOSTED_MAX_INPUT_CHARS:
+                raise RuntimeError(
+                    "Hosted conversation context is too large. Start a new chat or archive this thread."
+                )
             credit_client = httpx.AsyncClient()
             idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"
-            # Retry transient reserve failures up to 2 times
+            # Retry transient reserve failures up to two times. A 402 also
+            # remains fail-closed; the provider request is never sent.
             for reserve_attempt in range(3):
-                try:
-                    credit_reservation = await self._credit_reserve(
-                        credit_client, billing_run_id,
-                        effective_model, idem_key,
-                    )
-                    if credit_reservation:
-                        reserved_call_id = credit_reservation.get("call_id", "")
-                    break
-                except Exception:
-                    if reserve_attempt < 2:
-                        print(f"[{session_id}] Credit reserve transient failure, "
-                              f"retry {reserve_attempt + 1}/2")
-                        await asyncio.sleep(1.0)
-                    else:
-                        credit_reservation = None
+                credit_reservation = await self._credit_reserve(
+                    credit_client, billing_run_id,
+                    effective_model, idem_key,
+                )
+                if credit_reservation:
+                    reserved_call_id = credit_reservation.get("call_id", "")
+                    if reserved_call_id:
+                        break
+                if reserve_attempt < 2:
+                    print(f"[{session_id}] Credit reserve failed, "
+                          f"retry {reserve_attempt + 1}/2")
+                    await asyncio.sleep(1.0)
 
-            if not credit_reservation:
+            if not credit_reservation or not reserved_call_id:
                 # Fail closed: authenticated billing run exists but
                 # reserve failed/is insufficient — do NOT proceed.
                 if credit_client:
@@ -1754,17 +1785,38 @@ class TrialAgent:
                         await credit_client.aclose()
                     except Exception:
                         pass
-                # Emit a user-visible credit error via SSE
-                await self._send(session_id, {
-                    "type": "error",
-                    "data": "Credit hold failed — insufficient balance or service unavailable. "
-                            "Please try again later.",
-                })
-                await self._send(session_id, {"type": "done"})
-                return
+                raise RuntimeError(
+                    "Hosted credit authorization failed. Add credit or try a free model."
+                )
 
         try:
-            data = await self._do_openrouter_call(client, body, effective_model, session_id)
+            if reserved_call_id and credit_client:
+                submitted = None
+                for submit_attempt in range(3):
+                    submitted = await self._credit_mark_submitted(
+                        credit_client, reserved_call_id
+                    )
+                    if submitted:
+                        break
+                    if submit_attempt < 2:
+                        await asyncio.sleep(0.5)
+                if not submitted:
+                    # No provider request has been sent. The shared exception
+                    # path below attempts one release; if the submission
+                    # callback committed but its response was lost, release is
+                    # rejected and the ambiguous hold is captured later.
+                    raise RuntimeError(
+                        "Hosted credit submission authorization failed. Please try again."
+                    )
+                provider_submitted = True
+
+            data = await self._do_openrouter_call(
+                client,
+                body,
+                effective_model,
+                session_id,
+                allow_unmetered_retries=not bool(billing_run_id),
+            )
             # --- Credit settle after success ---
             if reserved_call_id and credit_client:
                 usage_data = _extract_openrouter_usage(data)
@@ -1773,8 +1825,8 @@ class TrialAgent:
                 est_cost_usd = usage_data.get("estimated_cost_usd", 0)
 
                 # Determine actual settlement cost
-                if cost_present and cost_usd > 0:
-                    actual_cost_micro = max(1, round(cost_usd * 1_000_000))
+                if cost_present:
+                    actual_cost_micro = max(0, round(cost_usd * 1_000_000))
                     cost_absent = False
                 elif est_cost_usd > 0:
                     actual_cost_micro = max(1, round(est_cost_usd * 1_000_000))
@@ -1786,34 +1838,38 @@ class TrialAgent:
                     cost_absent = True
 
                 # Provider-reported cost for reconciliation (may exceed reserve)
-                provider_cost_micro = max(1, round(cost_usd * 1_000_000)) if cost_present else 0
+                provider_cost_micro = max(0, round(cost_usd * 1_000_000)) if cost_present else 0
 
                 # Retry transient settle failures
+                settlement = None
                 for settle_attempt in range(3):
-                    try:
-                        await self._credit_settle(
-                            credit_client,
-                            reserved_call_id,
-                            actual_cost_micro_usd=actual_cost_micro,
-                            prompt_tokens=usage_data.get("prompt_tokens", 0),
-                            completion_tokens=usage_data.get(
-                                "completion_tokens", 0,
-                            ),
-                            total_tokens=usage_data.get("total_tokens", 0),
-                            cost_absent=cost_absent,
-                            provider_cost_micro_usd=provider_cost_micro,
-                        )
+                    settlement = await self._credit_settle(
+                        credit_client,
+                        reserved_call_id,
+                        actual_cost_micro_usd=actual_cost_micro,
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get(
+                            "completion_tokens", 0,
+                        ),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                        cost_absent=cost_absent,
+                        provider_cost_micro_usd=provider_cost_micro,
+                    )
+                    if settlement:
                         break
-                    except Exception:
-                        if settle_attempt < 2:
-                            print(f"[{session_id}] Credit settle transient failure, "
-                                  f"retry {settle_attempt + 1}/2")
-                            await asyncio.sleep(1.0)
-                        else:
-                            pass
+                    if settle_attempt < 2:
+                        print(f"[{session_id}] Credit settle failed, "
+                              f"retry {settle_attempt + 1}/2")
+                        await asyncio.sleep(1.0)
+                if not settlement:
+                    # Leave the hold intact. The control plane captures any
+                    # unresolved completed-call hold conservatively at turn end.
+                    print(f"[{session_id}] Credit settlement unavailable; hold retained")
         except Exception:
-            # --- Credit release on failure ---
-            if reserved_call_id and credit_client:
+            # A submitted request is never released: OpenRouter may have
+            # accepted/billed it before a timeout or cancellation. Only a
+            # definitely pre-submit reservation may be returned.
+            if reserved_call_id and credit_client and not provider_submitted:
                 try:
                     await self._credit_release(credit_client, reserved_call_id)
                 except Exception:
@@ -1859,6 +1915,8 @@ class TrialAgent:
         body: dict,
         effective_model: str,
         session_id: str = "",
+        *,
+        allow_unmetered_retries: bool = False,
     ) -> dict:
         _FALLBACK_MODEL = os.environ.get(
             "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
@@ -1875,8 +1933,13 @@ class TrialAgent:
         resp = await client.post(
             OPENROUTER_URL, json=body, headers=headers, timeout=httpx.Timeout(10.0, read=300.0),
         )
-        # On 429, immediately switch to fallback model
-        if resp.status_code == 429 and _FALLBACK_MODEL != body.get("model"):
+        # Local/unbilled CLI requests retain historical retry behavior. Hosted
+        # requests never reuse one reservation for multiple provider attempts.
+        if (
+            allow_unmetered_retries
+            and resp.status_code == 429
+            and _FALLBACK_MODEL != body.get("model")
+        ):
             print(f"[openrouter] 429 → switching {body['model']} → {_FALLBACK_MODEL}")
             body["model"] = _FALLBACK_MODEL
             resp = await client.post(
@@ -1884,7 +1947,7 @@ class TrialAgent:
                 timeout=httpx.Timeout(10.0, read=300.0),
             )
         # Retry on 500/502/503 (transient server errors)
-        if resp.status_code in _RETRY_CODES:
+        if allow_unmetered_retries and resp.status_code in _RETRY_CODES:
             for attempt in range(1, 4):
                 delay = 2 * attempt
                 print(f"[openrouter] {resp.status_code} — retry {attempt}/3 after {delay}s")
@@ -1903,7 +1966,7 @@ class TrialAgent:
             err_msg = data.get("error", {})
             if isinstance(err_msg, dict):
                 err_msg = err_msg.get("message", str(data)[:200])
-            if _FALLBACK_MODEL != body.get("model"):
+            if allow_unmetered_retries and _FALLBACK_MODEL != body.get("model"):
                 print(f"[openrouter] Provider error → switching {body['model']} → {_FALLBACK_MODEL}: {str(err_msg)[:120]}")
                 body["model"] = _FALLBACK_MODEL
                 resp = await client.post(
@@ -1911,7 +1974,7 @@ class TrialAgent:
                 )
                 if resp.is_success:
                     data = resp.json()
-            else:
+            elif allow_unmetered_retries:
                 # Already on fallback, retry once after short delay
                 print(f"[openrouter] Provider error on fallback: {str(err_msg)[:120]} — retrying in 3s")
                 await asyncio.sleep(3)
@@ -2008,7 +2071,7 @@ class TrialAgent:
                 turn_state = _scheduler_turn.get()
                 return await execute_scheduler_tool(
                     server_url=self.server,
-                    api_key=self.api_key,
+                    api_key=self._hosted_service_token(),
                     session_id=turn_state.session_id,
                     scheduler_grant_id=turn_state.grant_id,
                     tool_name=name,

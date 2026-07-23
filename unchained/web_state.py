@@ -143,7 +143,7 @@ def _chat_turn_replay_event(event: dict) -> dict:
 
 @dataclass
 class ChatTurnState:
-    """One signed-in turn retained while browser SSE subscribers change.
+    """One authenticated or server-identified turn retained across SSE changes.
 
     This process-local journal supports page refreshes, not web-server restart
     recovery. It deliberately excludes screenshot and oversized replay bodies.
@@ -159,6 +159,8 @@ class ChatTurnState:
     cdp_agent_id: str = ""
     tab_id: str = ""
     scheduler_grant_id: str = ""
+    hosted_deadline_task: object | None = field(default=None, repr=False)
+    silence_timeout_task: object | None = field(default=None, repr=False)
     status: str = "active"
     phase: str = "planning"
     current_action: dict = field(default_factory=lambda: {"type": "planning"})
@@ -338,7 +340,7 @@ class ChatTurnState:
 
 @dataclass
 class ChatTurnRegistry:
-    """Process-local signed-in turn registry with atomic per-session starts."""
+    """Process-local chat-turn registry with atomic per-session starts."""
 
     # ``turns`` is the current state per session for start/cancel/routing.
     # ``turns_by_request`` keeps terminal journals replayable by their exact
@@ -411,8 +413,8 @@ class ChatRuntimeState:
     chat_agents: dict[str, object] = field(default_factory=dict)
     response_queues: dict[str, asyncio.Queue] = field(default_factory=dict)
     response_req_ids: dict[str, str] = field(default_factory=dict)
-    # Signed-in browser turns use this journal registry. The response queues
-    # remain only for guest/legacy paths and lightweight test doubles.
+    # Browser turns use this journal registry. Response queues remain only for
+    # legacy paths and lightweight test doubles that omit a registry.
     chat_turns: ChatTurnRegistry = field(default_factory=ChatTurnRegistry)
     session_agents: dict[str, str] = field(default_factory=dict)
     agent_req_queues: dict[str, asyncio.Queue] = field(default_factory=dict)

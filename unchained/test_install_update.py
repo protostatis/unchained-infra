@@ -80,7 +80,7 @@ def test_build_agent_zip_contains_version_and_update():
         assert "/install/claim/" in start_sh
         assert "<key>KeepAlive</key>" in start_sh
         assert "<true/>" in start_sh
-        assert "<string>--daemon</string>" not in start_sh
+        assert "<string>--daemon</string>" in start_sh
         assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"' in start_sh
         assert 'command -v claude >/dev/null 2>&1' in start_sh
         assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
@@ -97,7 +97,8 @@ def test_build_agent_zip_contains_version_and_update():
         assert "GetFolderPath(\"Startup\")" in start_ps1
         assert "Autostart: enabled at Windows login" in start_ps1
         assert "Install-PythonRuntime" in start_ps1
-        assert "python.org/ftp/python/" in start_ps1
+        assert "https://astral.sh/uv/install.ps1" in start_ps1
+        assert "python install 3.13 --force" in start_ps1
         assert '$venvDir = Join-Path $PSScriptRoot ".venv"' in start_ps1
         assert '$pythonPrefixArgs += $pythonInfo.Prefix' in start_ps1
         # .env still there
@@ -744,7 +745,8 @@ def test_generate_windows_install_script():
     assert "Invoke-WebRequest" in script
     assert "start.ps1" in script
     assert "Install-PythonRuntime" in script
-    assert "python.org/ftp/python/" in script
+    assert "https://astral.sh/uv/install.ps1" in script
+    assert "python install 3.13 --force" in script
     assert '$venvDir = Join-Path $installDir ".venv"' in script
     assert '$pythonPrefixArgs += $pythonInfo.Prefix' in script
     print(f"  Windows install script: {len(script)} chars")

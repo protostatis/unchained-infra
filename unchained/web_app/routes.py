@@ -158,15 +158,12 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/web/provision/confirm", "web_app.handlers.provision:handle_provision_confirm"),
     ("POST", "/web/provision/save-manual", "web_app.handlers.provision:handle_provision_save_manual"),
     ("POST", "/web/provision/revoke", "web_app.handlers.provision:handle_provision_revoke"),
-    # Credit / inference accounting (service-authenticated internal)
-    ("GET", "/web/credit/balance", "web_app.handlers.credit_internal:handle_credit_balance"),
-    ("GET", "/web/credit/history", "web_app.handlers.credit_internal:handle_credit_history"),
-    ("POST", "/web/credit/reserve", "web_app.handlers.credit_internal:handle_credit_reserve"),
-    ("POST", "/web/credit/settle", "web_app.handlers.credit_internal:handle_credit_settle"),
-    ("POST", "/web/credit/release", "web_app.handlers.credit_internal:handle_credit_release"),
-    ("POST", "/web/credit/run/create", "web_app.handlers.credit_internal:handle_credit_create_run"),
-    ("POST", "/web/credit/run/finish", "web_app.handlers.credit_internal:handle_credit_finish_run"),
-    ("GET", "/web/credit/model-catalog", "web_app.handlers.credit_internal:handle_credit_model_catalog"),
+    # Hosted-worker accounting callbacks. Caddy denies /internal/* publicly;
+    # the trial-agent reaches these over the Docker-internal app network.
+    ("POST", "/internal/credit/reserve", "web_app.handlers.credit_internal:handle_credit_reserve"),
+    ("POST", "/internal/credit/submitted", "web_app.handlers.credit_internal:handle_credit_mark_submitted"),
+    ("POST", "/internal/credit/settle", "web_app.handlers.credit_internal:handle_credit_settle"),
+    ("POST", "/internal/credit/release", "web_app.handlers.credit_internal:handle_credit_release"),
     # User-facing credit status
     ("GET", "/web/credit/status", "web_app.handlers.auth_admin:handle_credit_status"),
     ("GET", "/web/credit/status/history", "web_app.handlers.auth_admin:handle_credit_history"),

@@ -24,6 +24,7 @@ import secrets
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 
 KEY_PREFIX = "uc_live_"
 KEY_RAND_BYTES = 12  # 24 hex chars
@@ -44,6 +45,9 @@ class Auth:
 
     def _init_db(self):
         with self._conn() as conn:
+            # WAL persists for the database; enable it once after busy_timeout
+            # is configured instead of taking this lock on every auth request.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS api_keys (
                     key TEXT PRIMARY KEY,
@@ -182,11 +186,21 @@ class Auth:
                 END
             """)
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
+    @contextmanager
+    def _conn(self):
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            yield conn
+            if conn.in_transaction:
+                conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def validate_key(self, key: str) -> dict | None:
         """Validate an API key. Returns ``{user_id, key}`` or ``None``."""

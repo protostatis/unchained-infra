@@ -30,6 +30,15 @@ jobs:
           python test_chat_event_transport.py
           python test_sse_write_guard.py
           python test_search_console_verification.py
+          python -m unittest \
+            test_credit \
+            test_credit_handlers \
+            test_hosted_billing \
+            test_hosted_admission \
+            test_scheduler_agent_access \
+            test_hosted_conversations \
+            test_trial_new_chat \
+            test_web_contracts
 
       - name: Run JS chat recovery test
         run: |

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -82,6 +84,13 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
     REQUEST_ID = "request-secret-id"
     SESSION_ID = "s-guest-abc12345-run00001"
     RESULT_ID = "ag0000000001"
+
+    def setUp(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._db_path = os.path.join(self._temp_dir.name, "auth.db")
+
+    def tearDown(self):
+        self._temp_dir.cleanup()
 
     def _body(self, **overrides) -> dict:
         body = {
@@ -168,6 +177,7 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
             _overlay_sessions={},
             _scheduler_turn_grants={},
             _chat_turns=None,
+            _auth=SimpleNamespace(db_path=self._db_path),
         )
         socket = _AgentSocket(
             core,
@@ -262,6 +272,12 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
         terminal = self._events(core, "first_look_run_terminal")
         self.assertEqual(len(accepted), 1)
         self.assertEqual(len(terminal), 1)
+        dispatched = core.socket.messages[-1]
+        self.assertTrue(dispatched.get("billing_run_id"))
+        from credit import CreditLedger
+        run = CreditLedger(self._db_path).get_run(dispatched["billing_run_id"])
+        self.assertEqual(run["user_id"], "system:first-look")
+        self.assertEqual(run["status"], "completed")
         self.assertEqual(terminal[0]["meta"]["outcome"], "completed")
         self.assertEqual(accepted[0]["meta"]["run_id"], terminal[0]["meta"]["run_id"])
         self.assertRegex(accepted[0]["meta"]["run_id"], re.compile(r"^[0-9a-f]{20}$"))

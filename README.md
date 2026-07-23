@@ -19,6 +19,9 @@ separate private repository.
 - `unchained/chrome_bridge.py`: local or headless bridge from Chrome CDP to relay
 - `unchained/chat_agent_cli.py`: local agent lanes for Claude CLI, Codex CLI,
   OpenCode CLI, and related model backends
+- `unchained/chat_agent_openrouter.py`: hosted OpenRouter inference worker for
+  the hybrid trial lane (the browser still runs through the user's connector)
+- `unchained/credit.py`: grant-based hosted-inference ledger and per-call holds
 - `unchained/agent_package.py`: downloadable agent bundle generator
 - `docker-compose.yml`: production deployment topology
 - `deploy.sh` and `deploy_headless.sh`: EC2 deployment entrypoints
@@ -57,7 +60,8 @@ Phone / browser
     v
 Caddy -> web -> private_core_client -> private core service
    |       |
-   |       +-> chat agent websocket
+   |       +-> local chat-agent websocket
+   |       +-> hosted trial-agent -> OpenRouter
    |
    +-> relay -> chrome_bridge -> user's Chrome DevTools endpoint
 ```
@@ -90,6 +94,10 @@ client and controlled Chrome without sending test traffic to production, follow
 [docs/local-agent-testing.md](./docs/local-agent-testing.md). The browser
 session, chat client, and Chrome bridge must use the same locally stored API
 key.
+
+The hosted trial worker is not started by `dev.sh`. Docker deployments that
+enable it must set a dedicated `HOSTED_AGENT_SERVICE_TOKEN`; it must not reuse
+`TRIAL_AGENT_KEY`, `PRIVATE_CORE_TOKEN`, or a user API key.
 
 ### Production deploy
 

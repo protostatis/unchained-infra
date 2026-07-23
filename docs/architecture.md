@@ -21,6 +21,7 @@
                           │   │  /mcp, /mcp/*            → mcp:8766      │             │
                           │   │  /unbrowser-mcp/*        → unbrowser-mcp │             │
                           │   │  /web/*, /chat, /*       → web:8080      │             │
+                          │   │  /internal/*             → denied        │             │
                           │   └──┬──────────┬─────────────┬───────────────┘             │
                           │      │          │             │                              │
                           │   ┌──▼──┐   ┌───▼──┐    ┌────▼───┐                          │
@@ -59,11 +60,13 @@
 | **Relay** | 8765 | WebSocket relay: agent tunnel (`/tunnel`), CDP proxy (`/cdp/*`), REST API (`/api/*`), health check |
 | **MCP** | 8766 | FastMCP server exposing DDM/intel tools for MCP-compatible clients |
 | **unbrowser MCP** | 8767 | Hosted `unbrowser --mcp` bridged to HTTP with `mcp-proxy`; routed under `/unbrowser-mcp` on isolated networks |
-| **Web** | 8080 | Chat UI, Google OAuth login, SSE bridge to agents, download endpoint for agent package |
+| **Web** | 8080 | Chat UI, OAuth, SSE bridge, hosted-credit authority, and agent-package downloads |
+| **Trial agent** | internal | Hosted OpenRouter tool-use worker; inference is server-side while browser actions route through the selected bridge |
 | **Private Core** | 8770 | Proprietary execution service for CDP/DDM/intel operations (`/core/execute`) |
 
-All services share a `relay_data` volume containing `auth.db` for auth/API-key
-state and `analytics.db` for web analytics and funnel data. Treat any
+Stateful services share a `relay_data` volume containing `auth.db` for auth,
+API-key, hosted-credit, and scheduler state, plus `analytics.db` for web
+analytics and funnel data. Treat any
 `analytics_*` tables still present in `auth.db` as deprecated legacy state.
 
 ## Data Flow: Chat Message Lifecycle
@@ -80,6 +83,42 @@ state and `analytics.db` for web analytics and funnel data. Treat any
 9. DDM/intel tools connect to relay, which tunnels CDP to chrome_bridge.py
 10. Results flow back: Chrome → bridge → relay → private_core_engine → cloud_tools → cdp_tool → local CLI → chat_agent → web.py → SSE → phone
 ```
+
+### Hybrid hosted trial lane
+
+The `/trial` lane moves model inference to the server without moving the user's
+browser session:
+
+```text
+Browser UI -> web:8080 -> trial-agent -> OpenRouter
+                    |          |
+                    |          +-> cloud_tools -> relay -> user's chrome_bridge
+                    +-> auth.db credit ledger
+```
+
+For each authenticated chat turn, `web` creates a server-owned inference run.
+Before every OpenRouter attempt, the worker obtains an atomic credit hold, then
+persists a `submitted` boundary before network I/O. Successful attempts settle
+provider-reported usage. A pre-submit failure releases its hold; a submitted
+request whose callback is lost, cancelled, timed out, or swept as stale is
+captured conservatively. Provider retries and model changes require a new hold.
+Amounts are stored as integer micro-USD.
+
+Credit is grant-based in this beta: there is no payment processor or checkout
+flow. Admins allocate credit from the admin UI. Existing trial budget state is
+migrated once into an opening grant. Anonymous First Look requests are forced to
+the configured free-model lane and use a shared system accounting principal.
+
+Hosted turns also pass race-safe global and per-account admission limits and an
+absolute deadline. The hosted `/schedule` tools use a short-lived grant bound to
+the authenticated user and chat session; the worker never receives the user's
+API key.
+
+The worker's reserve/submitted/settle/release callbacks live under
+`/internal/credit/*`. They require `HOSTED_AGENT_SERVICE_TOKEN`, are called over
+the Docker `app` network, and are explicitly rejected by Caddy at the public
+edge. Control-plane run creation, run completion, user balances, and admin
+grants are not exposed through the worker callback interface.
 
 ## Agent Authentication
 
@@ -163,6 +202,17 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `RELAY_INTERNAL_URL` | mcp, web | Internal WebSocket URL to relay |
 | `PRIVATE_CORE_URL` | relay, mcp, web, trial-agent | URL for private-core service |
 | `PRIVATE_CORE_TOKEN` | relay, mcp, web, trial-agent, private-core | Bearer token for public->private service auth |
+| `TRIAL_AGENT_KEY` | web, trial-agent | WebSocket identity for the hosted worker |
+| `HOSTED_AGENT_SERVICE_TOKEN` | web, trial-agent | Required dedicated bearer token for internal credit callbacks and scoped scheduler calls; generate independently from every other key |
+| `OPENROUTER_API_KEY` | trial-agent | Provider credential for hosted inference |
+| `HOSTED_MAX_ACTIVE_TURNS` | web | Optional global hosted-turn limit (default: `16`) |
+| `HOSTED_MAX_ACTIVE_TURNS_PER_USER` | web | Optional per-account hosted-turn limit (default: `3`) |
+| `HOSTED_TURN_DEADLINE_SECONDS` | web | Optional absolute hosted-turn deadline (default: `300`) |
+| `HOSTED_MAX_INPUT_CHARS` | trial-agent | Optional per-attempt serialized context bound (default: `200000`) |
+| `CREDIT_STALE_RUN_TTL_SECONDS` | web | Optional crash-recovery sweep age (default: `7200`) |
+| `CREDIT_ADMIN_ALLOWLIST` | web | Optional comma-separated additional hosted model IDs; unknown models use the conservative default hold |
+| `CREDIT_DEFAULT_RESERVATION_MICRO_USD` | web | Optional per-attempt hold for explicitly allowlisted models not in the built-in catalog (default: `1000000`, or $1) |
+| `UNCHAINED_SESSIONS_DIR` | web, trial-agent | Shared active hosted-conversation directory (default: `/data/sessions`) |
 
 ### Client-side (agent .env)
 | Variable | Purpose |
@@ -177,4 +227,8 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 - Agent ID is deterministic from API key (hash-based), so one key = one agent
 - Chrome bridge inherits user's browser session (cookies, IP, 2FA) — no credentials stored server-side
 - All external traffic encrypted via Caddy TLS
+- Hosted provider spend fails closed: paid attempts require an active grant,
+  an atomic hold, and a persisted submission transition
+- Hosted-worker callbacks are internal-network-only and use a dedicated token;
+  `TRIAL_AGENT_KEY` cannot authorize credit or scheduler callbacks
 - Proprietary tools (DDM, intel, CDP engine) run server-side only; agent package gets thin HTTP client (`cdp_tool.py`)
