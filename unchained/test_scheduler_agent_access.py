@@ -801,7 +801,8 @@ class TestHostedSchedulerTrialAgent(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 400)
         data = json.loads(response.body.decode())
-        self.assertIn("scheduler_trigger", data["error"])
+        self.assertEqual(data["error"], "scheduler_trigger_requires_authentication")
+        self.assertIn("sign in", data["message"])
 
     async def test_unarmed_turn_rejects_scheduler_mutation(self):
         """A turn without /schedule prefix must not have scheduler grant."""
@@ -850,5 +851,247 @@ class TestOpenRouterSchedulerToolIntegration(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestSchedulerContextVarIsolation(unittest.TestCase):
+    """ContextVar-based scheduler state must not leak between concurrent tasks."""
+
+    def test_separate_sessions_have_independent_turns(self):
+        """Two concurrent sessions must have independent scheduler states."""
+        from chat_agent_openrouter import _scheduler_turn, SchedulerTurnState
+
+        # Simulate session A arming
+        turn_a = SchedulerTurnState(armed=True, grant_id="sg-a", session_id="s-a")
+        token_a = _scheduler_turn.set(turn_a)
+        # Simulate session B staying unarmed
+        turn_b = SchedulerTurnState(armed=False, grant_id="", session_id="s-b")
+        token_b = _scheduler_turn.set(turn_b)
+
+        # Session A's state is still accessible via its token
+        state_a = _scheduler_turn.get()
+        self.assertEqual(state_a.session_id, "s-b")  # current = B
+
+        # Restore A and verify independence
+        _scheduler_turn.reset(token_b)
+        state_a_restored = _scheduler_turn.get()
+        self.assertEqual(state_a_restored.session_id, "s-a")
+        self.assertTrue(state_a_restored.armed)
+        self.assertEqual(state_a_restored.grant_id, "sg-a")
+
+        # Restore default
+        _scheduler_turn.reset(token_a)
+
+    def test_same_session_replacement_isolated(self):
+        """A new task for the same session must not inherit the old grant."""
+        from chat_agent_openrouter import _scheduler_turn, SchedulerTurnState
+
+        # First task: armed with grant
+        old_state = SchedulerTurnState(armed=True, grant_id="sg-old", session_id="s-shared")
+        token_old = _scheduler_turn.set(old_state)
+        _scheduler_turn.reset(token_old)
+
+        # Second task (same session, different grant): should start clean
+        new_state = SchedulerTurnState(armed=True, grant_id="sg-new", session_id="s-shared")
+        token_new = _scheduler_turn.set(new_state)
+
+        current = _scheduler_turn.get()
+        self.assertEqual(current.grant_id, "sg-new")
+        self.assertNotEqual(current.grant_id, "sg-old")
+
+        _scheduler_turn.reset(token_new)
+
+    def test_contextvar_default_is_unarmed(self):
+        """Default ContextVar value is unarmed and empty."""
+        from chat_agent_openrouter import _scheduler_turn
+
+        state = _scheduler_turn.get()
+        self.assertFalse(state.armed)
+        self.assertEqual(state.grant_id, "")
+        self.assertEqual(state.session_id, "")
+
+
+class TestSchedulerSecurityFixes(unittest.IsolatedAsyncioTestCase):
+    """Security review follow-up tests."""
+
+    def test_trial_agent_auth_validates_session_id_binding(self):
+        """Session_id in body must match the grant's session_id."""
+        import time as time_module
+
+        grant = {
+            "user_id": "u-hosted",
+            "session_id": "s-correct",
+            "expires_at": time_module.time() + 300,
+        }
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="sk-trial-test",
+            _scheduler_turn_grants={"sg-valid": grant},
+        )
+        # Wrong session_id in body
+        request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
+        body_wrong = {"session_id": "s-wrong", "scheduler_grant_id": "sg-valid"}
+        result = auth_admin._scheduler_trial_agent_auth(core, request, body_wrong)
+        self.assertIsNone(result)
+
+        # Correct session_id
+        body_correct = {"session_id": "s-correct", "scheduler_grant_id": "sg-valid"}
+        result2 = auth_admin._scheduler_trial_agent_auth(core, request, body_correct)
+        self.assertIsNotNone(result2)
+        self.assertEqual(result2["user_id"], "u-hosted")
+
+    def test_hosted_agent_service_token_with_fallback(self):
+        """HOSTED_AGENT_SERVICE_TOKEN takes precedence; TRIAL_AGENT_KEY is fallback."""
+        import time as time_module
+
+        grant = {
+            "user_id": "u-hosted",
+            "session_id": "s-chat",
+            "expires_at": time_module.time() + 300,
+        }
+        body = {"session_id": "s-chat", "scheduler_grant_id": "sg-ok"}
+
+        # HOSTED_AGENT_SERVICE_TOKEN only
+        core_hosted = SimpleNamespace(
+            HOSTED_AGENT_SERVICE_TOKEN="sk-hosted-token",
+            _scheduler_turn_grants={"sg-ok": grant},
+        )
+        request_hosted = SimpleNamespace(headers={"Authorization": "Bearer sk-hosted-token"})
+        result = auth_admin._scheduler_trial_agent_auth(core_hosted, request_hosted, body)
+        self.assertIsNotNone(result)
+
+        # TRIAL_AGENT_KEY fallback (no HOSTED_AGENT_SERVICE_TOKEN set)
+        core_trial = SimpleNamespace(
+            TRIAL_AGENT_KEY="sk-trial-fallback",
+            _scheduler_turn_grants={"sg-ok": grant},
+        )
+        request_trial = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-fallback"})
+        result2 = auth_admin._scheduler_trial_agent_auth(core_trial, request_trial, body)
+        self.assertIsNotNone(result2)
+
+        # Wrong token rejected
+        request_wrong = SimpleNamespace(headers={"Authorization": "Bearer wrong-key"})
+        result3 = auth_admin._scheduler_trial_agent_auth(core_trial, request_wrong, body)
+        self.assertIsNone(result3)
+
+    def test_trial_agent_auth_session_mismatch_rejected(self):
+        """If body.session_id != grant.session_id, auth must fail."""
+        import time as time_module
+
+        grant = {
+            "user_id": "u-hosted",
+            "session_id": "s-original",
+            "expires_at": time_module.time() + 300,
+        }
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="sk-trial-test",
+            _scheduler_turn_grants={"sg-test": grant},
+        )
+        request = SimpleNamespace(headers={"Authorization": "Bearer sk-trial-test"})
+        body = {"session_id": "s-other", "scheduler_grant_id": "sg-test"}
+        result = auth_admin._scheduler_trial_agent_auth(core, request, body)
+        self.assertIsNone(result)
+
+    async def test_end_to_end_mocked_scheduler_tool_call(self):
+        """End-to-end test: service Bearer token, session_id, grant_id, no user API key."""
+        import time as time_module
+
+        grant = {
+            "user_id": "u-e2e",
+            "session_id": "s-e2e-chat",
+            "expires_at": time_module.time() + 300,
+        }
+        core = SimpleNamespace(
+            TRIAL_AGENT_KEY="sk-trial-e2e",
+            _scheduler_turn_grants={"sg-e2e": grant},
+            _authenticate=lambda _req: None,
+            _is_pending_user=lambda _auth: False,
+            _validate_scheduler_turn_grant=lambda user_id, session_id, grant_id: True,
+            _scheduler_read_jobs_payload=lambda user_id: {"jobs": []},
+            _scheduler_preview_rows=lambda user_id, jobs: [],
+        )
+        request = SimpleNamespace(
+            can_read_body=True,
+            headers={"Authorization": "Bearer sk-trial-e2e"},
+            json=AsyncMock(return_value={
+                "session_id": "s-e2e-chat",
+                "scheduler_grant_id": "sg-e2e",
+            }),
+        )
+        with patch("web_app.handlers.auth_admin._core", return_value=core):
+            response = await auth_admin.handle_scheduler_agent_list(request)
+
+        self.assertEqual(response.status, 200)
+        data = json.loads(response.body.decode())
+        self.assertTrue(data["ok"])
+        # Verify no user API key was needed — auth was via service token + grant
+        self.assertNotIn("Authorization", request.headers.get("Authorization", "").lower())
+
+    async def test_cancel_revokes_grant_in_non_registry_path(self):
+        """Cancel in the non-registry (queue) path must revoke scheduler grants."""
+        import time as time_module
+        grant = {"user_id": "u-cancel", "session_id": "s-cancel-chat", "expires_at": time_module.time() + 300}
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-cancel", "agent_id": "a-cancel", "key_hash": "kh"},
+            _is_pending_user=lambda _auth: False,
+            _scheduler_turn_grants={"sg-cancel": grant},
+            _chat_agents={"a-cancel": AsyncMock()},
+            _session_agents={"s-cancel-chat": "a-cancel"},
+            _response_queues={},
+            _response_req_ids={},
+        )
+        # Mock the WS send_json to succeed
+        core._chat_agents["a-cancel"].send_json = AsyncMock()
+        core._chat_agents["a-cancel"].closed = False
+
+        request = SimpleNamespace(
+            can_read_body=True,
+            json=AsyncMock(return_value={"session_id": "s-cancel-chat"}),
+        )
+        with patch("web_app.handlers.chat_stream._core", return_value=core):
+            response = await chat_stream.handle_chat_cancel(request)
+
+        self.assertEqual(response.status, 200)
+        # Grant should have been revoked
+        self.assertNotIn("sg-cancel", core._scheduler_turn_grants)
+
+    async def test_cancel_revokes_grant_in_registry_path(self):
+        """Cancel in the registry path must revoke scheduler grants via terminal publish."""
+        import time as time_module
+        grant = {"user_id": "u-cancel2", "session_id": "s-cancel2", "expires_at": time_module.time() + 300}
+        core = SimpleNamespace(
+            _authenticate=lambda _req: {"user_id": "u-cancel2", "agent_id": "a-cancel2", "key_hash": "kh"},
+            _is_pending_user=lambda _auth: False,
+            _scheduler_turn_grants={"sg-cancel2": grant},
+            _chat_agents={"a-cancel2": AsyncMock()},
+            _session_agents={"s-cancel2": "a-cancel2"},
+            _overlay_sessions={},
+        )
+        core._chat_agents["a-cancel2"].send_json = AsyncMock()
+        core._chat_agents["a-cancel2"].closed = False
+
+        from web_state import ChatTurnState
+        turn = ChatTurnState(
+            owner_user_id="u-cancel2",
+            owner_key_hash="kh",
+            session_id="s-cancel2",
+            req_id="req-cancel2",
+            chat_agent_id="a-cancel2",
+            routing_agent_id="a-cancel2",
+        )
+        turn.status = "active"
+        turn.scheduler_grant_id = "sg-cancel2"
+        turn.dispatch_ws = core._chat_agents["a-cancel2"]
+
+        registry = SimpleNamespace()
+        registry.get = lambda sid, rid=None: turn if sid == "s-cancel2" else None
+        registry.start = AsyncMock(return_value=(turn, True, None))
+
+        core._chat_turns = registry
+
+        request = SimpleNamespace(
+            can_read_body=True,
+            json=AsyncMock(return_value={"session_id": "s-cancel2"}),
+        )
+        with patch("web_app.handlers.chat_stream._core", return_value=core):
+            response = await chat_stream.handle_chat_cancel(request)
+
+        self.assertEqual(response.status, 200)
+        # Grant should have been revoked via _revoke_turn_grant
+        self.assertNotIn("sg-cancel2", core._scheduler_turn_grants)

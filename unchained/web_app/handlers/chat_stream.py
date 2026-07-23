@@ -190,6 +190,16 @@ def _revoke_turn_grant(core, turn) -> None:
         getattr(core, "_scheduler_turn_grants", {}).pop(grant_id, None)
 
 
+def _revoke_session_scheduler_grants(core, session_id: str) -> None:
+    """Revoke all scheduler grants for *session_id* — used in non-registry paths."""
+    grants = getattr(core, "_scheduler_turn_grants", None)
+    if not isinstance(grants, dict):
+        return
+    for grant_id, meta in list(grants.items()):
+        if isinstance(meta, dict) and str(meta.get("session_id", "")) == str(session_id):
+            grants.pop(grant_id, None)
+
+
 def _publish_turn_event(core, turn, event: dict) -> dict | None:
     """Journal an event before one overlay fan-out; never await subscriber I/O."""
     published = turn.publish(event)
@@ -1253,8 +1263,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         return reject_first_look(
             web.json_response(
                 {
-                    "error": "scheduler_trigger_requires_local_bridge_lane",
-                    "message": "The /schedule trigger is supported only on bridge-backed local agent lanes, not the guest/trial OpenRouter lane.",
+                    "error": "scheduler_trigger_requires_authentication",
+                    "message": (
+                        "The /schedule trigger requires authentication. "
+                        "Signed-out guest/demo users cannot schedule tasks; "
+                        "sign in to use /schedule on any lane including the hosted OpenRouter trial."
+                    ),
                 },
                 status=400,
             ),
@@ -2176,10 +2190,13 @@ async def handle_chat_cancel(request: web.Request) -> web.Response:
             done_evt["req_id"] = cancel_rid
         await cancel_q.put(cancelled_evt)
         await cancel_q.put(done_evt)
-        ok = web.json_response({"ok": True})
-        if guest_mode:
-            core._attach_first_look_guest_cookies(ok, request, guest_id)
-        return ok
+    # Revoke scheduler grants regardless of queue state — cancel must
+    # always invalidate any active grant for this session.
+    _revoke_session_scheduler_grants(core, session_id)
+    ok = web.json_response({"ok": True})
+    if guest_mode:
+        core._attach_first_look_guest_cookies(ok, request, guest_id)
+    return ok
 
     if ws and not ws.closed:
         ok = web.json_response({"ok": True})

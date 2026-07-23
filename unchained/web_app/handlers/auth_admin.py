@@ -1910,20 +1910,33 @@ def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict 
     """Authenticate a hosted trial-agent scheduler call using the deployment service key.
 
     The hosted worker never receives a raw user API key.  Instead it sends the
-    shared ``TRIAL_AGENT_KEY`` as a Bearer token together with a scoped
-    scheduler grant id.  The grant (minted by :func:`_mint_scheduler_turn_grant`)
-    binds the user id, chat session id, and an expiry.  Deriving the user from
-    the validated grant ensures the request body cannot spoof user ownership.
+    shared service token (``HOSTED_AGENT_SERVICE_TOKEN`` or fallback
+    ``TRIAL_AGENT_KEY``) as a Bearer token together with a scoped scheduler
+    grant id and the chat session id.  The grant (minted by
+    :func:`_mint_scheduler_turn_grant`) binds the user id, chat session id,
+    and expiry.  Deriving the user from the validated grant ensures the
+    request body cannot spoof user ownership.
+
+    Both the ``session_id`` body field and the ``scheduler_grant_id`` body
+    field must match the grant's stored bindings — the session is validated
+    here so that downstream checks see a consistent set of claims.
     """
     headers = getattr(request, "headers", {}) or {}
     auth_header = str(headers.get("Authorization", "") or "").strip()
     if not auth_header.lower().startswith("bearer "):
         return None
     token = auth_header[len("bearer "):].strip()
-    trial_key = str(getattr(core, "TRIAL_AGENT_KEY", "") or "")
-    if not token or not trial_key:
+
+    # Prefer HOSTED_AGENT_SERVICE_TOKEN (scoped, separate from TRIAL_AGENT_KEY)
+    # with a compatibility fallback so the credit-branch service-token change
+    # can consolidate on one name.
+    service_token = (
+        str(getattr(core, "HOSTED_AGENT_SERVICE_TOKEN", "") or "")
+        or str(getattr(core, "TRIAL_AGENT_KEY", "") or "")
+    )
+    if not token or not service_token:
         return None
-    if not hmac.compare_digest(token, trial_key):
+    if not hmac.compare_digest(token, service_token):
         return None
 
     grant_id = str(body.get("scheduler_grant_id", "") or "").strip()
@@ -1949,6 +1962,14 @@ def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict 
     user_id = str(grant_meta.get("user_id", "") or "").strip()
     if not user_id:
         return None
+
+    # Validate session_id binding in the service auth layer itself so a
+    # mismatched session_id is caught before any read/mutation occurs.
+    body_session_id = str(body.get("session_id", "") or "").strip()
+    grant_session_id = str(grant_meta.get("session_id", "") or "").strip()
+    if body_session_id and grant_session_id:
+        if not hmac.compare_digest(body_session_id, grant_session_id):
+            return None
 
     return {"user_id": user_id, "trial_agent_auth": True}
 

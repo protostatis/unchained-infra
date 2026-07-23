@@ -139,6 +139,11 @@ def _agent_id(prefix: str, key: str) -> str:
 
 
 TRIAL_AGENT_KEY = os.environ.get("TRIAL_AGENT_KEY", "").strip()
+# Scoped service token for hosted agent callbacks (e.g. scheduler endpoints).
+# Falls back to TRIAL_AGENT_KEY when unset so existing deployments work without
+# change; the credit branch can consolidate on HOSTED_AGENT_SERVICE_TOKEN
+# separately without breaking this code.
+HOSTED_AGENT_SERVICE_TOKEN = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN", "").strip()
 TRIAL_AGENT_ID = os.environ.get("TRIAL_AGENT_ID", "").strip()
 if not TRIAL_AGENT_ID and TRIAL_AGENT_KEY:
     TRIAL_AGENT_ID = _agent_id("trial", TRIAL_AGENT_KEY)
