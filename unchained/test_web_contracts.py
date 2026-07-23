@@ -328,6 +328,32 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn('<meta name="description"', html)
         self.assertIn('<meta property="og:title"', html)
 
+    def test_high_intent_entry_pages_have_exact_static_metadata(self):
+        expected = (
+            (
+                web.FIRST_LOOK_PREVIEW_HTML,
+                "https://unchainedsky.com/first-look",
+                "Try a shared browser demo on selected public sites. Give Unchained a task and watch a live browser run before connecting your own profile.",
+            ),
+            (
+                web.MCP_PAGE_HTML,
+                "https://unchainedsky.com/mcp",
+                "Connect Unchained to your existing Chrome from an MCP client. Use your local browser through an authenticated tunnel, without Playwright or headless mode.",
+            ),
+            (
+                web.CASE_STUDY_ZILLOW_HTML,
+                "https://unchainedsky.com/case-study/zillow-rental",
+                "See a rental relisting workflow: Unchained researches Zillow comps, reviews lease details, schedules tours, and verifies a published listing.",
+            ),
+        )
+
+        for html, url, description in expected:
+            with self.subTest(url=url):
+                canonical = f'<link rel="canonical" href="{url}">'
+                metadata = f'<meta name="description" content="{description}">'
+                self.assertEqual(html.count(canonical), 1)
+                self.assertEqual(html.count(metadata), 1)
+
     def test_chrome_tax_is_answer_first_playwright_mcp_alternative(self):
         html = CHROME_TAX_HTML
         canonical = re.search(r'<link rel="canonical" href="([^"]+)">', html)
@@ -903,6 +929,21 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("new WebSocket(url)", html)
         self.assertIn("first_look_guest: true", html)
         self.assertIn("headless: true", html)
+
+    def test_first_look_rendered_preview_keeps_static_metadata(self):
+        from web_app.handlers.pages import _build_first_look_preview_html
+
+        html = web.inject_google_client_id(
+            _build_first_look_preview_html(prompt_limit=5, remaining=3),
+            web.GOOGLE_CLIENT_ID,
+        )
+        canonical = '<link rel="canonical" href="https://unchainedsky.com/first-look">'
+        description = (
+            '<meta name="description" content="Try a shared browser demo on selected public sites. '
+            'Give Unchained a task and watch a live browser run before connecting your own profile.">'
+        )
+        self.assertEqual(html.count(canonical), 1)
+        self.assertEqual(html.count(description), 1)
 
     def test_first_look_examples_are_explicit_one_click_runs(self):
         from web_app.handlers.pages import _build_first_look_preview_html
