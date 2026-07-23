@@ -37,6 +37,8 @@ from credit import (
     _usd_to_micro,
     _micro_to_usd,
     effective_hosted_model_policy,
+    hosted_model_credit_allows,
+    hosted_model_reservation_policy,
     is_hosted_model_allowed,
     is_hosted_model_allowed_for_identity,
     is_openrouter_model_id,
@@ -401,7 +403,12 @@ class TestCreditLedger(unittest.TestCase):
 
     def test_model_allowlist_accepts_catalog(self):
         self.assertTrue(is_hosted_model_allowed("google/gemini-3.1-flash-lite"))
-        self.assertTrue(is_hosted_model_allowed("arcee-ai/trinity-large-preview:free"))
+        self.assertTrue(
+            is_hosted_model_allowed("nvidia/nemotron-3-super-120b-a12b:free")
+        )
+        self.assertFalse(
+            is_hosted_model_allowed("arcee-ai/trinity-large-preview:free")
+        )
 
     def test_model_allowlist_admin_override(self):
         # Not in default catalog but admin allows via explicit allowlist
@@ -602,6 +609,66 @@ class TestCreditLedger(unittest.TestCase):
         res = _default_reservation("google/gemma-3-27b-it:free")
         self.assertEqual(res, 0)  # free models have zero reservation
 
+    def test_admin_custom_reservation_policy_caps_only_unknown_admin_models(self):
+        core = SimpleNamespace(
+            _auth=SimpleNamespace(find_user_by_id=lambda _user_id: None),
+            ADMIN_EMAILS=["admin@example.com"],
+        )
+        admin_custom = hosted_model_reservation_policy(
+            core,
+            "openai/future-model",
+            email="ADMIN@example.com",
+        )
+        non_admin_custom = hosted_model_reservation_policy(
+            core,
+            "openai/future-model",
+            email="person@example.com",
+        )
+        known_admin_model = hosted_model_reservation_policy(
+            core,
+            "google/gemini-3.5-flash-lite",
+            email="admin@example.com",
+        )
+
+        self.assertEqual(admin_custom["reservation_micro_usd"], 1_000_000)
+        self.assertTrue(admin_custom["cap_to_available"])
+        self.assertTrue(hosted_model_credit_allows(admin_custom, 939_400))
+        self.assertFalse(non_admin_custom["cap_to_available"])
+        self.assertFalse(hosted_model_credit_allows(non_admin_custom, 939_400))
+        self.assertEqual(known_admin_model["reservation_micro_usd"], 100_000)
+        self.assertFalse(known_admin_model["cap_to_available"])
+
+    def test_admin_custom_reservation_atomically_uses_remaining_balance(self):
+        self.ledger.grant("u-admin-cap", 939_400, idempotency_key="g-admin-cap")
+        run = self.ledger.create_run("u-admin-cap", idempotency_key="r-admin-cap")
+        call = self.ledger.reserve_call(
+            run["run_id"],
+            model="openai/future-model",
+            reservation_micro_usd=1_000_000,
+            idempotency_key="c-admin-cap",
+            cap_reservation_to_available=True,
+        )
+
+        self.assertEqual(call["reserved_micro_usd"], 939_400)
+        self.assertEqual(call["nominal_reservation_micro_usd"], 1_000_000)
+        self.assertTrue(call["reservation_capped"])
+        replay = self.ledger.reserve_call(
+            run["run_id"],
+            model="openai/future-model",
+            reservation_micro_usd=1_000_000,
+            idempotency_key="c-admin-cap",
+            cap_reservation_to_available=True,
+        )
+        self.assertEqual(replay["reserved_micro_usd"], 939_400)
+        with self.assertRaises(InsufficientBalanceError):
+            self.ledger.reserve_call(
+                run["run_id"],
+                model="openai/future-model",
+                reservation_micro_usd=1_000_000,
+                idempotency_key="c-admin-cap-concurrent",
+                cap_reservation_to_available=True,
+            )
+
     # ---- Run not active ----
 
     def test_reserve_against_finished_run(self):
@@ -779,8 +846,9 @@ class TestCreditModelAllowlist(unittest.TestCase):
             "google/gemma-3-27b-it:free",
             "meta-llama/llama-3.3-70b-instruct:free",
             "deepseek/deepseek-chat-v3-0324:free",
-            "arcee-ai/trinity-large-preview:free",
-            "stepfun/step-3.5-flash:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
+            "poolside/laguna-xs-2.1:free",
         ]:
             self.assertIn(free_model, HOSTED_MODEL_CATALOG,
                           f"Free model {free_model} should be in catalog")
@@ -788,6 +856,7 @@ class TestCreditModelAllowlist(unittest.TestCase):
     def test_paid_models_in_catalog(self):
         """Paid trial models should be in the catalog."""
         self.assertIn("google/gemini-3.1-flash-lite", HOSTED_MODEL_CATALOG)
+        self.assertIn("google/gemini-3.5-flash-lite", HOSTED_MODEL_CATALOG)
         self.assertIn("google/gemini-2.5-pro", HOSTED_MODEL_CATALOG)
 
 

@@ -20,8 +20,8 @@ from credit import (
     CreditLedger,
     InsufficientBalanceError,
     RunNotActiveError,
-    _default_reservation,
     credit_service_token,
+    hosted_model_reservation_policy,
     is_hosted_model_allowed_for_identity,
 )
 
@@ -109,15 +109,20 @@ async def handle_credit_reserve(request: web.Request) -> web.Response:
     ):
         return _json_error(400, f"Model '{model}' is not available for this account")
 
-    reservation = _default_reservation(model)
+    reservation_policy = hosted_model_reservation_policy(
+        core,
+        model,
+        user_id=run_user_id,
+    )
 
     try:
         result = await asyncio.to_thread(
             ledger.reserve_call,
             run_id,
             model=model,
-            reservation_micro_usd=reservation,
+            reservation_micro_usd=reservation_policy["reservation_micro_usd"],
             idempotency_key=idempotency_key,
+            cap_reservation_to_available=reservation_policy["cap_to_available"],
         )
         return web.json_response(result)
     except InsufficientBalanceError as e:

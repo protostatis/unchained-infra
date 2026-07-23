@@ -21,7 +21,9 @@ Usage (EC2 / Docker):
     docker compose up -d trial-agent
 
 Model options (free tier):
-    arcee-ai/trinity-large-preview:free   (default — supports tool calling)
+    nvidia/nemotron-3-super-120b-a12b:free
+    nvidia/nemotron-3-nano-30b-a3b:free
+    poolside/laguna-xs-2.1:free
     meta-llama/llama-3.3-70b-instruct:free
     google/gemma-3-27b-it:free
     deepseek/deepseek-chat-v3-0324:free
@@ -87,6 +89,8 @@ from reflex import ReflexState, REFLEX_ENABLED
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
+_REASONING_REQUIRED_MODELS = frozenset({"google/gemini-3.5-flash-lite"})
+_DEFINITIVE_UNBILLED_HTTP_STATUSES = frozenset({400, 404})
 
 # When running inside Docker, override these via env vars:
 #   RELAY_HOST=relay  RELAY_PORT=8765
@@ -135,6 +139,36 @@ LOCAL_CONTEXT_KEEP_TAIL = 10
 def _uuid_hex() -> str:
     """Return a random hex UUID string."""
     return _uuid_module.uuid4().hex
+
+
+def _openrouter_error_message(response: httpx.Response | None) -> str:
+    """Extract a bounded provider message without leaking a raw request URL."""
+    if response is None:
+        return "OpenRouter rejected the request."
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        message = str(error.get("message", "") or "").strip()
+    else:
+        message = str(error or "").strip()
+    if not message:
+        message = str(getattr(response, "text", "") or "").strip()
+    return message[:400] or "OpenRouter rejected the request."
+
+
+def _openrouter_user_error(exc: httpx.HTTPStatusError, model: str) -> str:
+    """Return a useful user-facing provider rejection without httpx boilerplate."""
+    status = int(getattr(exc.response, "status_code", 0) or 0)
+    message = _openrouter_error_message(exc.response)
+    if status == 404:
+        return f"OpenRouter model {model} is currently unavailable: {message}"
+    if status == 400:
+        return f"OpenRouter rejected model {model}: {message}"
+    status_label = str(status) if status else "provider error"
+    return f"OpenRouter request failed ({status_label}): {message}"
 
 
 # ---------------------------------------------------------------------------
@@ -1334,19 +1368,48 @@ class TrialAgent:
                             user_id=user_id,
                         )
                     except httpx.HTTPStatusError as e:
-                        if e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
+                        provider_message = _openrouter_error_message(e.response)
+                        if (
+                            e.response.status_code == 400
+                            and first_turn_fast
+                            and "reasoning is mandatory" in provider_message.lower()
+                        ):
+                            print(
+                                f"[{session_id}] Provider requires reasoning; "
+                                "retrying with model defaults"
+                            )
+                            try:
+                                response = await self._call_openrouter(
+                                    client,
+                                    messages,
+                                    model,
+                                    tool_choice=next_tool_choice,
+                                    session_id=session_id,
+                                    user_id=user_id,
+                                    reasoning=True,
+                                )
+                            except httpx.HTTPStatusError as retry_error:
+                                raise RuntimeError(
+                                    _openrouter_user_error(retry_error, model)
+                                ) from retry_error
+                        elif e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
                             messages = emergency_trim(messages, fmt="openai", keep_tail=TRIM_ON_ERROR)
                             self.sessions[session_id] = messages
                             print(f"[{session_id}] 400 on turn {turn} — emergency trim to {len(messages)} msgs, retrying")
-                            response = await self._call_openrouter(
-                                client,
-                                messages,
-                                model,
-                                session_id=session_id,
-                                user_id=user_id,
-                            )
+                            try:
+                                response = await self._call_openrouter(
+                                    client,
+                                    messages,
+                                    model,
+                                    session_id=session_id,
+                                    user_id=user_id,
+                                )
+                            except httpx.HTTPStatusError as retry_error:
+                                raise RuntimeError(
+                                    _openrouter_user_error(retry_error, model)
+                                ) from retry_error
                         else:
-                            raise
+                            raise RuntimeError(_openrouter_user_error(e, model)) from e
                     choice = response["choices"][0]
                     message = choice["message"]
                     finish_reason = choice.get("finish_reason", "")
@@ -1728,7 +1791,7 @@ class TrialAgent:
             "max_tokens": 4096,
             "temperature": 0.2,
         }
-        if not reasoning:
+        if not reasoning and effective_model not in _REASONING_REQUIRED_MODELS:
             body["reasoning"] = {"enabled": False}
         if tool_choice == "none":
             body["tool_choice"] = "none"
@@ -1810,13 +1873,46 @@ class TrialAgent:
                     )
                 provider_submitted = True
 
-            data = await self._do_openrouter_call(
-                client,
-                body,
-                effective_model,
-                session_id,
-                allow_unmetered_retries=not bool(billing_run_id),
-            )
+            try:
+                data = await self._do_openrouter_call(
+                    client,
+                    body,
+                    effective_model,
+                    session_id,
+                    allow_unmetered_retries=not bool(billing_run_id),
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = int(getattr(exc.response, "status_code", 0) or 0)
+                if (
+                    status_code in _DEFINITIVE_UNBILLED_HTTP_STATUSES
+                    and reserved_call_id
+                    and credit_client
+                ):
+                    # OpenRouter definitively rejected the request. Preserve the
+                    # submitted-call audit trail, but settle at a reported zero
+                    # instead of capturing the full safety hold.
+                    rejection_settlement = None
+                    for settle_attempt in range(3):
+                        rejection_settlement = await self._credit_settle(
+                            credit_client,
+                            reserved_call_id,
+                            actual_cost_micro_usd=0,
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            cost_absent=False,
+                            provider_cost_micro_usd=0,
+                        )
+                        if rejection_settlement:
+                            break
+                        if settle_attempt < 2:
+                            await asyncio.sleep(0.5)
+                    if not rejection_settlement:
+                        print(
+                            f"[{session_id}] Definitive provider rejection "
+                            "could not be zero-settled; hold retained"
+                        )
+                raise
             # --- Credit settle after success ---
             if reserved_call_id and credit_client:
                 usage_data = _extract_openrouter_usage(data)

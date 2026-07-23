@@ -384,6 +384,9 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("localStorage.setItem(_newChatStateKey()", trial)
         self.assertIn("Another tab is finishing New Chat", trial)
         self.assertIn("localStorage.setItem(_sessionStoreKey(), sid)", trial)
+        self.assertIn("feedback._dismissTimer = setTimeout", trial)
+        self.assertIn("feedback.className === 'success'", trial)
+        self.assertIn("}, 10000);", trial)
 
         guest = web.FIRST_LOOK_PREVIEW_HTML
         self.assertIn('id="new-chat-feedback" role="status" aria-live="polite"', guest)
@@ -425,8 +428,18 @@ class TestWebTemplateContracts(unittest.TestCase):
         chat_stream_source = handlers.joinpath("chat_stream.py").read_text()
         credit_internal_source = handlers.joinpath("credit_internal.py").read_text()
         self.assertIn("is_hosted_model_allowed_for_identity(", chat_stream_source)
+        self.assertIn("hosted_model_reservation_policy(", chat_stream_source)
+        self.assertIn("hosted_model_credit_allows(", chat_stream_source)
+        self.assertIn('reservation_policy["admin_custom"]', chat_stream_source)
         self.assertIn("is_hosted_model_allowed_for_identity(", credit_internal_source)
+        self.assertIn("hosted_model_reservation_policy(", credit_internal_source)
+        self.assertIn("cap_reservation_to_available=", credit_internal_source)
         self.assertIn("ledger.get_run, run_id", credit_internal_source)
+
+        self.assertIn("nvidia/nemotron-3-super-120b-a12b:free", trial)
+        self.assertIn("nvidia/nemotron-3-nano-30b-a3b:free", trial)
+        self.assertIn("poolside/laguna-xs-2.1:free", trial)
+        self.assertNotIn("arcee-ai/trinity-large-preview:free", trial)
 
     def test_scheduler_cards_only_render_privacy_safe_previews(self):
         html = web.SCHEDULER_HTML
@@ -1724,7 +1737,7 @@ class TestAuthenticatedIdentityContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["user_id"], "opaque-user-a")
         self.assertIn("hosted_model_policy", payload)
         self.assertIn(
-            "arcee-ai/trinity-large-preview:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
             payload["hosted_model_policy"]["models"],
         )
         self.assertNotIn("updated_by", payload["hosted_model_policy"])

@@ -205,14 +205,19 @@ _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()
     for m in os.environ.get(
         "OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS",
-        "arcee-ai/trinity-large-preview:free,stepfun/step-3.5-flash:free",
+        (
+            "nvidia/nemotron-3-super-120b-a12b:free,"
+            "nvidia/nemotron-3-nano-30b-a3b:free,"
+            "poolside/laguna-xs-2.1:free"
+        ),
     ).split(",")
     if m.strip()
 )
 if not _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS:
     _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = (
-        "arcee-ai/trinity-large-preview:free",
-        "stepfun/step-3.5-flash:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "poolside/laguna-xs-2.1:free",
     )
 _OPENROUTER_TRIAL_FALLBACK_MODEL = (
     os.environ.get("OPENROUTER_TRIAL_FALLBACK_MODEL", _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS[0]).strip()

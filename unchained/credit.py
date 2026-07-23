@@ -99,6 +99,10 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     # Paid models — conservative per-attempt holds for a request bounded to
     # HOSTED_MAX_INPUT_CHARS and 4096 output tokens by the hosted worker.
     "google/gemini-3.1-flash-lite": 100_000,   # $0.10
+    # OpenRouter pricing snapshot: $0.30/M input + $2.50/M output. The hosted
+    # request bounds keep a $0.10 hold conservative without treating it as an
+    # unknown $1.00 model.
+    "google/gemini-3.5-flash-lite": 100_000,
     "google/gemini-2.5-flash-lite": 100_000,
     "google/gemini-2.5-flash": 250_000,
     "google/gemini-2.5-pro": 750_000,
@@ -107,8 +111,8 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "qwen/qwen3.5-flash-02-23": 250_000,
     # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,
-    "arcee-ai/trinity-large-preview:free": 0,
-    "stepfun/step-3.5-flash:free": 0,
+    "nvidia/nemotron-3-nano-30b-a3b:free": 0,
+    "poolside/laguna-xs-2.1:free": 0,
     "meta-llama/llama-3.3-70b-instruct:free": 0,
     "deepseek/deepseek-chat-v3-0324:free": 0,
     "deepseek/deepseek-chat:free": 0,
@@ -120,13 +124,17 @@ HOSTED_MODEL_POLICY_SETTING_KEY = "hosted_openrouter_models"
 HOSTED_MODEL_POLICY_VERSION = 1
 HOSTED_MODEL_POLICY_MAX_MODELS = 64
 HOSTED_MODEL_POLICY_MAX_ID_LENGTH = 200
+HOSTED_FREE_MODEL_DEFAULTS: tuple[str, ...] = (
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "poolside/laguna-xs-2.1:free",
+)
 HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
     "google/gemini-3.1-flash-lite",
     "qwen/qwen3.6-plus",
     "qwen/qwen3.5-flash-02-23",
     "google/gemini-3-flash-preview",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "stepfun/step-3.5-flash:free",
+    *HOSTED_FREE_MODEL_DEFAULTS,
 )
 _MODEL_ID_EXTRA_CHARS = frozenset("._-/:+@")
 _NON_OPENROUTER_MODEL_PREFIXES = (
@@ -224,15 +232,12 @@ def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]
         for model in getattr(
             core,
             "_OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS",
-            ("arcee-ai/trinity-large-preview:free", "stepfun/step-3.5-flash:free"),
+            HOSTED_FREE_MODEL_DEFAULTS,
         )
         if str(model or "").strip()
     )
     if not post_cap:
-        post_cap = (
-            "arcee-ai/trinity-large-preview:free",
-            "stepfun/step-3.5-flash:free",
-        )
+        post_cap = HOSTED_FREE_MODEL_DEFAULTS
     default_model = str(
         getattr(core, "_OPENROUTER_TRIAL_DEFAULT_MODEL", HOSTED_USER_MODEL_DEFAULTS[0])
         or HOSTED_USER_MODEL_DEFAULTS[0]
@@ -294,17 +299,13 @@ def effective_hosted_model_policy(core) -> dict:
     }
 
 
-def is_hosted_model_allowed_for_identity(
+def is_hosted_admin_identity(
     core,
-    model: str,
     *,
     user_id: str = "",
     email: str = "",
 ) -> bool:
-    """Apply current admin/non-admin hosted model availability policy."""
-    value = str(model or "").strip()
-    if not is_openrouter_model_id(value):
-        return False
+    """Resolve hosted admin status from trusted server-side identity data."""
     resolved_email = str(email or "").strip().lower()
     if not resolved_email and user_id:
         finder = getattr(getattr(core, "_auth", None), "find_user_by_id", None)
@@ -317,7 +318,60 @@ def is_hosted_model_allowed_for_identity(
         for candidate in getattr(core, "ADMIN_EMAILS", ())
         if str(candidate or "").strip()
     }
-    if resolved_email and resolved_email in admin_emails:
+    return bool(resolved_email and resolved_email in admin_emails)
+
+
+def hosted_model_reservation_policy(
+    core,
+    model: str,
+    *,
+    user_id: str = "",
+    email: str = "",
+) -> dict:
+    """Return the nominal hold and whether it may use all remaining admin credit.
+
+    Unknown models keep the conservative default hold for non-admin users. For
+    a trusted admin identity, the authoritative ledger may atomically cap that
+    nominal hold to the account's available balance. This avoids silently
+    replacing an explicitly selected custom model when slightly less than the
+    conservative hold remains, while still preventing concurrent overspend.
+    """
+    value = str(model or "").strip()
+    nominal = _default_reservation(value)
+    admin_custom = bool(
+        value
+        and value not in HOSTED_MODEL_CATALOG
+        and is_hosted_admin_identity(core, user_id=user_id, email=email)
+    )
+    return {
+        "reservation_micro_usd": nominal,
+        "cap_to_available": admin_custom,
+        "admin_custom": admin_custom,
+    }
+
+
+def hosted_model_credit_allows(reservation_policy: dict, available_micro_usd: int) -> bool:
+    """Apply the same preflight rule used by the authoritative reservation."""
+    available = max(0, int(available_micro_usd or 0))
+    if reservation_policy.get("cap_to_available"):
+        return available > 0
+    return available >= max(
+        0, int(reservation_policy.get("reservation_micro_usd", 0) or 0)
+    )
+
+
+def is_hosted_model_allowed_for_identity(
+    core,
+    model: str,
+    *,
+    user_id: str = "",
+    email: str = "",
+) -> bool:
+    """Apply current admin/non-admin hosted model availability policy."""
+    value = str(model or "").strip()
+    if not is_openrouter_model_id(value):
+        return False
+    if is_hosted_admin_identity(core, user_id=user_id, email=email):
         return True
     policy = effective_hosted_model_policy(core)
     return value in set(policy["models"])
@@ -986,11 +1040,13 @@ class CreditLedger:
         reservation_micro_usd: int = 0,
         idempotency_key: str = "",
         user_id: str = "",
+        cap_reservation_to_available: bool = False,
     ) -> dict:
         if reservation_micro_usd < 0:
             reservation_micro_usd = 0
         if reservation_micro_usd == 0:
             reservation_micro_usd = _default_reservation(model)
+        nominal_reservation_micro_usd = reservation_micro_usd
 
         ikey = str(idempotency_key or "").strip()
         if not ikey:
@@ -1042,6 +1098,10 @@ class CreditLedger:
                         else existing[1]
                     ),
                     "reserved_micro_usd": int(existing[2]),
+                    "nominal_reservation_micro_usd": nominal_reservation_micro_usd,
+                    "reservation_capped": (
+                        int(existing[2]) < nominal_reservation_micro_usd
+                    ),
                     "submitted_at": existing[4],
                     "already_reserved": True,
                 }
@@ -1053,6 +1113,20 @@ class CreditLedger:
             balance = int(acct_row[0]) if acct_row else 0
             held = self._held_reservation_total_under_lock(conn, account_id)
             available = balance - held
+
+            if (
+                cap_reservation_to_available
+                and nominal_reservation_micro_usd > 0
+                and reservation_micro_usd > available
+            ):
+                reservation_micro_usd = max(0, available)
+
+            if nominal_reservation_micro_usd > 0 and reservation_micro_usd <= 0:
+                conn.execute("ROLLBACK")
+                raise InsufficientBalanceError(
+                    f"Available balance {_micro_to_usd(available):.6f} USD "
+                    f"(held={_micro_to_usd(held):.6f}) is exhausted"
+                )
 
             if available < reservation_micro_usd:
                 conn.execute("ROLLBACK")
@@ -1077,9 +1151,23 @@ class CreditLedger:
                 "balance_after_micro_usd, run_id, call_id, model, "
                 "metadata_json, created_at) "
                 "VALUES (?, ?, 'reservation', ?, ?, ?, ?, ?, ?, ?)",
-                (account_id, f"reserve-{ikey}", -reservation_micro_usd, balance,
-                 run_id, call_id, model_name,
-                 _json_meta({"type": "reservation"}), now),
+                (
+                    account_id,
+                    f"reserve-{ikey}",
+                    -reservation_micro_usd,
+                    balance,
+                    run_id,
+                    call_id,
+                    model_name,
+                    _json_meta({
+                        "type": "reservation",
+                        "nominal_reservation_micro_usd": nominal_reservation_micro_usd,
+                        "reservation_capped": (
+                            reservation_micro_usd < nominal_reservation_micro_usd
+                        ),
+                    }),
+                    now,
+                ),
             )
             conn.execute(
                 "UPDATE credit_runs SET reserved_micro_usd = reserved_micro_usd + ?, "
@@ -1096,6 +1184,10 @@ class CreditLedger:
                 "model": model_name,
                 "status": "held",
                 "reserved_micro_usd": reservation_micro_usd,
+                "nominal_reservation_micro_usd": nominal_reservation_micro_usd,
+                "reservation_capped": (
+                    reservation_micro_usd < nominal_reservation_micro_usd
+                ),
                 "reserved_usd": _micro_to_usd(reservation_micro_usd),
                 "submitted_at": None,
                 "already_reserved": False,

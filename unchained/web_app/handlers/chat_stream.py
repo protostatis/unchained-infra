@@ -1630,7 +1630,11 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         requested_model = (model or core._OPENROUTER_TRIAL_DEFAULT_MODEL).strip()
         model = requested_model
         # --- Model policy enforcement (admins may use any valid OpenRouter ID) ---
-        from credit import is_hosted_model_allowed_for_identity
+        from credit import (
+            hosted_model_credit_allows,
+            hosted_model_reservation_policy,
+            is_hosted_model_allowed_for_identity,
+        )
         if not is_hosted_model_allowed_for_identity(
             core,
             model,
@@ -1649,6 +1653,12 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 ),
                 "model_not_allowed",
             )
+        reservation_policy = hosted_model_reservation_policy(
+            core,
+            requested_model,
+            user_id=user_id,
+            email=auth_info.get("email", ""),
+        )
         if user_id:
             openrouter_budget_state = core._openrouter_budget_state_for_user(user_id)
             # --- Use credit balance as authority for paid model access ---
@@ -1657,7 +1667,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             credit_authority_ready = False
             credit_allows_requested_model = False
             try:
-                from credit import CreditLedger, _default_reservation
+                from credit import CreditLedger
                 credit_ledger = getattr(core, "_credit_ledger", None)
                 if credit_ledger is None:
                     credit_ledger = await asyncio.to_thread(
@@ -1678,15 +1688,16 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         credit_ledger.held_reservation_total, acct["account_id"]
                     )
                     available = max(0, int(acct.get("balance_micro_usd", 0)) - held)
-                    credit_allows_requested_model = (
-                        available >= _default_reservation(requested_model)
+                    credit_allows_requested_model = hosted_model_credit_allows(
+                        reservation_policy,
+                        available,
                     )
             except Exception:
                 pass
             # Once migrated, credit availability is authoritative. Legacy
             # float counters are retained only as a compatibility fallback if
             # the credit account could not be read.
-            if (
+            should_force_free_model = (
                 (
                     (credit_authority_ready and not credit_allows_requested_model)
                     or (
@@ -1695,7 +1706,27 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     )
                 )
                 and not core._is_openrouter_post_cap_allowed_model(requested_model)
-            ):
+            )
+            if should_force_free_model and reservation_policy["admin_custom"]:
+                if credit_authority_ready:
+                    return web.json_response(
+                        {
+                            "error": (
+                                "No hosted credit remains for this custom model. "
+                                "Add credit or select a free model."
+                            ),
+                            "code": "insufficient_hosted_credit",
+                        },
+                        status=402,
+                    )
+                return web.json_response(
+                    {
+                        "error": "Hosted credit is temporarily unavailable. Please retry shortly.",
+                        "code": "hosted_credit_unavailable",
+                    },
+                    status=503,
+                )
+            if should_force_free_model:
                 model = core._OPENROUTER_TRIAL_FALLBACK_MODEL
                 openrouter_forced_model = model
                 openrouter_forced_from_model = requested_model

@@ -133,9 +133,9 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
             TRIAL_AGENT_ID="trial-agent",
             _FIRST_LOOK_GUEST_PROMPT_LIMIT=20,
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
-            _OPENROUTER_TRIAL_FALLBACK_MODEL="arcee-ai/trinity-large-preview:free",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
             _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
-                "arcee-ai/trinity-large-preview:free",
+                "nvidia/nemotron-3-super-120b-a12b:free",
             ),
             _authenticate=lambda _request: None,
             _first_look_guest_auth=lambda _request: (

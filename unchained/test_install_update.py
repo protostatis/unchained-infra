@@ -1791,12 +1791,12 @@ def test_trial_chat_handles_model_forced_event():
 
 
 def test_trial_and_demo_openrouter_default_models_and_cap_options():
-    """Verify trial/demo/first-look default to Gemini and cap keeps Trinity/StepFun."""
+    """Verify trial/demo defaults and current free post-cap models."""
     from web import TRIAL_CHAT_HTML, HEADLESS_DEMO_HTML, FIRST_LOOK_PREVIEW_HTML
     assert 'value="google/gemini-3.1-flash-lite"' in TRIAL_CHAT_HTML, \
         "trial model selector should default to Gemini 3.1 Flash Lite"
-    assert "_POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free']" in TRIAL_CHAT_HTML, \
-        "trial cap model allowlist should be Trinity + StepFun"
+    assert "_POST_CAP_ALLOWED_MODELS = ['nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-nano-30b-a3b:free', 'poolside/laguna-xs-2.1:free']" in TRIAL_CHAT_HTML, \
+        "trial cap model allowlist should use current tool-capable free models"
     assert "'google/gemini-3.1-flash-lite'" in HEADLESS_DEMO_HTML, \
         "demo currentModel should default to Gemini 3.1 Flash Lite"
     assert "'google/gemini-3.1-flash-lite'" in FIRST_LOOK_PREVIEW_HTML, \

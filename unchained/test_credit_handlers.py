@@ -215,6 +215,71 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(_payload(response)["reserved_micro_usd"], 1_000_000)
 
+    async def test_admin_custom_hold_caps_to_remaining_credit_but_non_admin_stays_strict(self):
+        custom_model = "openai/future-model"
+        self.ledger.grant(
+            "u-admin-target", 939_400, idempotency_key="admin-custom-cap-seed"
+        )
+        admin_run = self.ledger.create_run(
+            "u-admin-target", idempotency_key="admin-custom-cap-run"
+        )
+
+        configured_models = [
+            "google/gemini-3.1-flash-lite",
+            "arcee-ai/trinity-large-preview:free",
+            "stepfun/step-3.5-flash:free",
+            custom_model,
+        ]
+        self.auth.set_app_setting(
+            HOSTED_MODEL_POLICY_SETTING_KEY,
+            {"version": HOSTED_MODEL_POLICY_VERSION, "models": configured_models},
+            updated_by="admin@example.com",
+        )
+        self.ledger.grant(
+            "u-target", 939_400, idempotency_key="user-custom-strict-seed"
+        )
+        user_run = self.ledger.create_run(
+            "u-target", idempotency_key="user-custom-strict-run"
+        )
+
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            admin_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": admin_run["run_id"],
+                        "model": custom_model,
+                        "idempotency_key": "admin-custom-cap-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            admin_second_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": admin_run["run_id"],
+                        "model": custom_model,
+                        "idempotency_key": "admin-custom-cap-second-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            user_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": user_run["run_id"],
+                        "model": custom_model,
+                        "idempotency_key": "user-custom-strict-attempt",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+
+        self.assertEqual(admin_response.status, 200)
+        self.assertEqual(_payload(admin_response)["reserved_micro_usd"], 939_400)
+        self.assertTrue(_payload(admin_response)["reservation_capped"])
+        self.assertEqual(admin_second_response.status, 402)
+        self.assertEqual(user_response.status, 402)
+
     async def test_admin_grant_replay_and_intentional_duplicate(self):
         first_request = _Request({
             "user_id": "u-target",
