@@ -587,6 +587,7 @@ def _extract_openrouter_usage(payload: dict) -> dict:
     )
 
     cost_usd = 0.0
+    cost_present = False
     for candidate in (
         usage.get("cost"),
         usage.get("cost_usd"),
@@ -597,10 +598,13 @@ def _extract_openrouter_usage(payload: dict) -> dict:
         payload.get("total_cost"),
         payload.get("total_cost_usd"),
     ):
-        value = _coerce_float(candidate, 0.0)
-        if value > 0:
-            cost_usd = value
-            break
+        if candidate is not None:
+            value = _coerce_float(candidate, 0.0)
+            cost_present = True
+            if value > 0:
+                cost_usd = value
+                break
+            # Even zero-cost presence marks the flag
 
     est_cost_per_1k = max(
         0.0,
@@ -617,6 +621,7 @@ def _extract_openrouter_usage(payload: dict) -> dict:
         "total_tokens": max(0, total_tokens),
         "cost_usd": round(max(0.0, cost_usd), 9),
         "estimated_cost_usd": round(max(0.0, estimated_cost_usd), 9),
+        "cost_present": cost_present,
     }
 
 
@@ -725,13 +730,19 @@ class TrialAgent:
     def _credit_service_token() -> str:
         """Narrowly-scoped credit service token.
 
-        Uses CREDIT_SERVICE_TOKEN env var. Falls back to TRIAL_AGENT_KEY.
-        Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
+        Prefers HOSTED_AGENT_SERVICE_TOKEN, then CREDIT_SERVICE_TOKEN,
+        then TRIAL_AGENT_KEY.  Never reads PRIVATE_CORE_TOKEN or
+        RELAY_SHARED_TOKEN.
         """
-        token = os.environ.get("CREDIT_SERVICE_TOKEN", "").strip()
-        if token:
-            return token
-        return os.environ.get("TRIAL_AGENT_KEY", "").strip()
+        for env_name in (
+            "HOSTED_AGENT_SERVICE_TOKEN",
+            "CREDIT_SERVICE_TOKEN",
+            "TRIAL_AGENT_KEY",
+        ):
+            token = os.environ.get(env_name, "").strip()
+            if token:
+                return token
+        return ""
 
     async def _credit_reserve(
         self,
@@ -740,7 +751,11 @@ class TrialAgent:
         model: str,
         idempotency_key: str,
     ) -> dict | None:
-        """Call the credit reserve endpoint. Returns reservation dict or None."""
+        """Call the credit reserve endpoint. Returns reservation dict or None.
+
+        A duplicate (already_reserved) response is treated as a success:
+        the existing ``call_id`` is still valid and usable.
+        """
         token = self._credit_service_token()
         if not token or not run_id:
             return None
@@ -758,7 +773,14 @@ class TrialAgent:
                 timeout=httpx.Timeout(5.0),
             )
             if resp.is_success:
-                return resp.json()
+                data = resp.json()
+                # A duplicate reservation is still a valid call_id holder
+                if isinstance(data, dict) and data.get("call_id"):
+                    return data
+                return None
+            if resp.status_code == 402:
+                # Specific credit-insufficient signal
+                print(f"[credit] Reserve 402: insufficient balance")
             return None
         except Exception:
             return None
@@ -771,6 +793,8 @@ class TrialAgent:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         total_tokens: int = 0,
+        cost_absent: bool = False,
+        provider_cost_micro_usd: int = 0,
     ) -> dict | None:
         """Call the credit settle endpoint. Returns settlement dict or None."""
         token = self._credit_service_token()
@@ -783,6 +807,8 @@ class TrialAgent:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "cost_absent": cost_absent,
+            "provider_cost_micro_usd": provider_cost_micro_usd,
         }
         try:
             resp = await client.post(
@@ -1698,17 +1724,44 @@ class TrialAgent:
         token = self._credit_service_token()
         credit_client: httpx.AsyncClient | None = None
         reserved_call_id: str | None = None
+        credit_reservation: dict | None = None
         if billing_run_id and token:
             credit_client = httpx.AsyncClient()
             idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"
-            try:
-                reservation = await self._credit_reserve(
-                    credit_client, billing_run_id, effective_model, idem_key
-                )
-                if reservation and not reservation.get("already_reserved"):
-                    reserved_call_id = reservation.get("call_id", "")
-            except Exception:
-                reserved_call_id = None
+            # Retry transient reserve failures up to 2 times
+            for reserve_attempt in range(3):
+                try:
+                    credit_reservation = await self._credit_reserve(
+                        credit_client, billing_run_id,
+                        effective_model, idem_key,
+                    )
+                    if credit_reservation:
+                        reserved_call_id = credit_reservation.get("call_id", "")
+                    break
+                except Exception:
+                    if reserve_attempt < 2:
+                        print(f"[{session_id}] Credit reserve transient failure, "
+                              f"retry {reserve_attempt + 1}/2")
+                        await asyncio.sleep(1.0)
+                    else:
+                        credit_reservation = None
+
+            if not credit_reservation:
+                # Fail closed: authenticated billing run exists but
+                # reserve failed/is insufficient — do NOT proceed.
+                if credit_client:
+                    try:
+                        await credit_client.aclose()
+                    except Exception:
+                        pass
+                # Emit a user-visible credit error via SSE
+                await self._send(session_id, {
+                    "type": "error",
+                    "data": "Credit hold failed — insufficient balance or service unavailable. "
+                            "Please try again later.",
+                })
+                await self._send(session_id, {"type": "done"})
+                return
 
         try:
             data = await self._do_openrouter_call(client, body, effective_model, session_id)
@@ -1716,18 +1769,48 @@ class TrialAgent:
             if reserved_call_id and credit_client:
                 usage_data = _extract_openrouter_usage(data)
                 cost_usd = usage_data.get("cost_usd", 0)
-                actual_cost_micro = max(1, round(cost_usd * 1_000_000)) if cost_usd > 0 else 1
-                try:
-                    await self._credit_settle(
-                        credit_client,
-                        reserved_call_id,
-                        actual_cost_micro_usd=actual_cost_micro,
-                        prompt_tokens=usage_data.get("prompt_tokens", 0),
-                        completion_tokens=usage_data.get("completion_tokens", 0),
-                        total_tokens=usage_data.get("total_tokens", 0),
-                    )
-                except Exception:
-                    pass
+                cost_present = bool(usage_data.get("cost_present", False))
+                est_cost_usd = usage_data.get("estimated_cost_usd", 0)
+
+                # Determine actual settlement cost
+                if cost_present and cost_usd > 0:
+                    actual_cost_micro = max(1, round(cost_usd * 1_000_000))
+                    cost_absent = False
+                elif est_cost_usd > 0:
+                    actual_cost_micro = max(1, round(est_cost_usd * 1_000_000))
+                    cost_absent = False
+                else:
+                    # No cost info at all — let settle_call handle the
+                    # conservative fallback (full reservation)
+                    actual_cost_micro = 0
+                    cost_absent = True
+
+                # Provider-reported cost for reconciliation (may exceed reserve)
+                provider_cost_micro = max(1, round(cost_usd * 1_000_000)) if cost_present else 0
+
+                # Retry transient settle failures
+                for settle_attempt in range(3):
+                    try:
+                        await self._credit_settle(
+                            credit_client,
+                            reserved_call_id,
+                            actual_cost_micro_usd=actual_cost_micro,
+                            prompt_tokens=usage_data.get("prompt_tokens", 0),
+                            completion_tokens=usage_data.get(
+                                "completion_tokens", 0,
+                            ),
+                            total_tokens=usage_data.get("total_tokens", 0),
+                            cost_absent=cost_absent,
+                            provider_cost_micro_usd=provider_cost_micro,
+                        )
+                        break
+                    except Exception:
+                        if settle_attempt < 2:
+                            print(f"[{session_id}] Credit settle transient failure, "
+                                  f"retry {settle_attempt + 1}/2")
+                            await asyncio.sleep(1.0)
+                        else:
+                            pass
         except Exception:
             # --- Credit release on failure ---
             if reserved_call_id and credit_client:

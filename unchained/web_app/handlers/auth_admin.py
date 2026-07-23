@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import secrets
@@ -2444,8 +2445,14 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
     """POST /admin/credit/grant — admin grants credit to a user.
 
     JSON body:
-        {"user_id": "u-...", "amount_usd": 1.0, "reason": "..."}
+        {"user_id": "u-...", "amount_usd": "1.00", "reason": "..."}
+
+    Validates decimal amount exactly, requires target user to exist, bounds
+    amount and reason length, and uses deterministic idempotency that
+    preserves audit metadata.
     """
+    from decimal import Decimal, InvalidOperation
+
     core = _core()
     if not is_admin(request):
         return web.json_response({"error": "Admin access required"}, status=403)
@@ -2456,25 +2463,59 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     user_id = str(body.get("user_id", "")).strip()
-    try:
-        amount_usd = float(body.get("amount_usd", 0))
-    except (TypeError, ValueError):
-        return web.json_response({"error": "amount_usd must be a number"}, status=400)
-
-    reason = str(body.get("reason", "admin_grant")).strip()
-
     if not user_id:
         return web.json_response({"error": "user_id required"}, status=400)
-    if amount_usd <= 0:
-        return web.json_response({"error": "amount_usd must be positive"}, status=400)
+
+    # Validate user exists
+    if core._auth.find_user_by_id(user_id) is None:
+        return web.json_response(
+            {"error": f"User '{user_id}' not found"},
+            status=404,
+        )
+
+    # Parse decimal amount exactly (no float rounding)
+    amount_raw = body.get("amount_usd")
+    try:
+        amount_decimal = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return web.json_response(
+            {"error": "amount_usd must be a valid decimal number"},
+            status=400,
+        )
+    if amount_decimal <= Decimal("0"):
+        return web.json_response(
+            {"error": "amount_usd must be positive"},
+            status=400,
+        )
+    if amount_decimal > Decimal("10000"):
+        return web.json_response(
+            {"error": "amount_usd must not exceed 10,000.00"},
+            status=400,
+        )
+
+    reason = str(body.get("reason", "admin_grant")).strip()
+    if not reason:
+        reason = "admin_grant"
+    if len(reason) > 500:
+        return web.json_response(
+            {"error": "reason must be 500 characters or fewer"},
+            status=400,
+        )
 
     from credit import CreditLedger, _usd_to_micro
 
     ledger = CreditLedger(db_path=core._auth.db_path)
+    amount_usd = float(amount_decimal)
     amount_micro = _usd_to_micro(amount_usd)
 
+    # Deterministic idempotency key preserves audit metadata — same
+    # admin + user + amount + reason is idempotent within a UTC day.
     import uuid
-    idem_key = f"admin-grant-{user_id}-{uuid.uuid4().hex[:12]}"
+    today = time.strftime("%Y-%m-%d")
+    idem_key = (
+        f"admin-grant-{user_id}-{today}-"
+        f"{hashlib.sha256(f'{amount_decimal}:{reason}'.encode()).hexdigest()[:16]}"
+    )
 
     admin_auth = core._authenticate(request)
     admin_email = admin_auth.get("email", "") if admin_auth else ""
@@ -2484,7 +2525,11 @@ async def handle_admin_credit_grant(request: web.Request) -> web.Response:
             user_id=user_id,
             amount_micro_usd=amount_micro,
             idempotency_key=idem_key,
-            metadata={"reason": reason, "admin_email": admin_email},
+            metadata={
+                "reason": reason,
+                "admin_email": admin_email,
+                "amount_usd_decimal": str(amount_decimal),
+            },
         )
         return web.json_response({
             "ok": True,

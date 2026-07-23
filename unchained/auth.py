@@ -538,6 +538,24 @@ class Auth:
 
     # --- User management (Google sign-in) ---
 
+    def find_user_by_id(self, user_id: str) -> dict | None:
+        """Find user by user_id. Returns {user_id, email, name, picture, api_key, status, user_type} or None."""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT user_id, email, name, picture, api_key, status, user_type FROM users WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "user_id": row[0], "email": row[1], "name": row[2],
+                "picture": row[3], "api_key": row[4], "status": row[5] or "approved",
+                "user_type": row[6] or "claude",
+            }
+
     def find_user_by_email(self, email: str) -> dict | None:
         """Find user by email. Returns {user_id, email, name, picture, api_key, status, user_type} or None."""
         with self._conn() as conn:

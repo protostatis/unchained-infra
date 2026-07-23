@@ -1439,7 +1439,14 @@ def _authenticate(request: web.Request) -> dict | None:
             sessions.append(session)
     sessions.sort(key=lambda s: int(s.get("iat", 0)), reverse=True)
     for session in sessions:
-        user = _auth.find_user_by_email(session["email"])
+        # Validate by user_id (from JWT), not just by email — a recycled
+        # email or stale JWT must not bypass user status checks.
+        user = _auth.find_user_by_id(session["user_id"])
+        if user is None:
+            continue
+        # Ensure the email in the JWT matches the current user row
+        if user.get("email", "").lower() != session.get("email", "").lower():
+            continue
         if user and user.get("api_key"):
             status = user.get("status", "approved")
             # Rejected accounts cannot continue using existing sessions/keys
@@ -1466,22 +1473,18 @@ def _authenticate(request: web.Request) -> dict | None:
             agent_id = f"claude-{key_hash}"
             result = {"user_id": info["user_id"], "key": key,
                       "agent_id": agent_id, "key_hash": key_hash}
-            # Hydrate email/status/user_type from the users table
-            with _auth._conn() as conn:
-                user_row = conn.execute(
-                    "SELECT email, name, picture, status, user_type FROM users WHERE api_key = ?",
-                    (key,),
-                ).fetchone()
-            if user_row:
-                status = user_row[3] or "approved"
-                # Rejected accounts cannot continue using existing keys
+            # Hydrate by validated user_id (NOT by api_key) so secondary
+            # keys cannot bypass rejected/pending status.
+            user = _auth.find_user_by_id(info["user_id"])
+            if user:
+                status = user.get("status", "approved")
                 if status == "rejected":
                     return None
-                result["email"] = user_row[0] or ""
-                result["name"] = user_row[1] or ""
-                result["picture"] = user_row[2] or ""
+                result["email"] = user.get("email", "") or ""
+                result["name"] = user.get("name", "") or ""
+                result["picture"] = user.get("picture", "") or ""
                 result["status"] = status
-                result["user_type"] = user_row[4] or "claude"
+                result["user_type"] = user.get("user_type", "claude")
             else:
                 # Fallback: service accounts may have keys without a users row
                 result["status"] = "approved"

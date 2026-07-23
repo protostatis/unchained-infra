@@ -45,10 +45,14 @@ def _json_error(status: int, message: str) -> web.Response:
 
 
 def _get_ledger() -> CreditLedger:
+    """Return the process-level cached ledger (avoids re-running DDL)."""
     core = _core()
-    # Reuse the same db_path as the auth system
     db_path = core._auth.db_path
-    return CreditLedger(db_path=db_path)
+    ledger = getattr(core, "_credit_ledger", None)
+    if ledger is None or getattr(ledger, "db_path", "") != db_path:
+        ledger = CreditLedger(db_path=db_path)
+        core._credit_ledger = ledger
+    return ledger
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +200,8 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
     prompt_tokens = max(0, int(body.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(body.get("completion_tokens", 0) or 0))
     total_tokens = max(0, int(body.get("total_tokens", 0) or 0))
+    cost_absent = bool(body.get("cost_absent", False))
+    provider_cost_micro_usd = max(0, int(body.get("provider_cost_micro_usd", 0) or 0))
 
     ledger = _get_ledger()
     try:
@@ -205,6 +211,8 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            cost_absent=cost_absent,
+            provider_cost_micro_usd=provider_cost_micro_usd,
         )
         return web.json_response(result)
     except ValueError as e:

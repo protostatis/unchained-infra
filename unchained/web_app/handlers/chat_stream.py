@@ -6,10 +6,13 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
 import uuid
+
+log = logging.getLogger(__name__)
 
 from aiohttp import web
 
@@ -1454,8 +1457,33 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             )
         if user_id:
             openrouter_budget_state = core._openrouter_budget_state_for_user(user_id)
-            if openrouter_budget_state.get("capped") and not core._is_openrouter_post_cap_allowed_model(
-                requested_model
+            # --- Use credit balance as authority for paid model access ---
+            # If the user has credit grants, they get paid models even when
+            # the legacy openrouter_spend_usd counter is capped.
+            credit_allows_paid = False
+            try:
+                from credit import CreditLedger
+                credit_ledger = getattr(core, "_credit_ledger", None)
+                if credit_ledger is None:
+                    credit_ledger = CreditLedger(db_path=core._auth.db_path)
+                    core._credit_ledger = credit_ledger
+                # Ensure trial grant from legacy budget (one-time migration)
+                credit_ledger.ensure_trial_grant_from_openrouter_budget(
+                    user_id,
+                    current_spend_usd=openrouter_budget_state.get("spent_usd", 0),
+                    budget_usd=openrouter_budget_state.get("budget_usd", 0),
+                )
+                acct = credit_ledger.get_account(user_id)
+                if acct and acct.get("balance_micro_usd", 0) > 0:
+                    credit_allows_paid = True
+            except Exception:
+                pass
+            # Fall back to free model only if both credit is exhausted AND
+            # legacy budget is capped.  If credit grants exist, use them.
+            if (
+                not credit_allows_paid
+                and openrouter_budget_state.get("capped")
+                and not core._is_openrouter_post_cap_allowed_model(requested_model)
             ):
                 model = core._OPENROUTER_TRIAL_FALLBACK_MODEL
                 openrouter_forced_model = model
@@ -1467,43 +1495,6 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     "Switched to a free model for continued access. "
                     "After the $1 cap, available models are Trinity and StepFun."
                 )
-
-            # --- Credit run creation for billing ---
-            try:
-                from credit import CreditLedger
-                credit_ledger = CreditLedger(db_path=core._auth.db_path)
-                if not getattr(core, "_credit_ledger", None):
-                    core._credit_ledger = credit_ledger
-            except Exception:
-                credit_ledger = None
-
-            if credit_ledger:
-                # Ensure trial grant from existing OpenRouter budget
-                budget_state = core._openrouter_budget_state_for_user(user_id)
-                credit_ledger.ensure_trial_grant_from_openrouter_budget(
-                    user_id,
-                    current_spend_usd=budget_state.get("spent_usd", 0),
-                    budget_usd=budget_state.get("budget_usd", 0),
-                )
-                # Create a billing run for this chat turn
-                try:
-                    billing_run = credit_ledger.create_run(
-                        user_id=user_id,
-                        model=model,
-                        idempotency_key=f"chat-turn-{req_id}",
-                    )
-                    billing_run_id = billing_run.get("run_id", "")
-                    if billing_run_id:
-                        billing_runs = getattr(core, "_session_billing_runs", None)
-                        if billing_runs is None:
-                            billing_runs = {}
-                            core._session_billing_runs = billing_runs
-                        # Store early so terminal events can find it
-                        billing_runs[session_id] = billing_run_id
-                except Exception:
-                    billing_run_id = ""
-            else:
-                billing_run_id = ""
 
         ws = core._chat_agents.get(core.TRIAL_AGENT_ID)
         if ws is None or ws.closed:
@@ -1738,6 +1729,40 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         )
 
     routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
+
+    # --- Credit run creation (at dispatch point, after all pre-flight checks) ---
+    if is_openrouter and auth_info.get("user_id") and not billing_run_id:
+        user_id = auth_info["user_id"]
+        try:
+            from credit import CreditLedger
+            credit_ledger = getattr(core, "_credit_ledger", None)
+            if credit_ledger is None:
+                credit_ledger = CreditLedger(db_path=core._auth.db_path)
+                core._credit_ledger = credit_ledger
+            billing_run = credit_ledger.create_run(
+                user_id=user_id,
+                model=model,
+                idempotency_key=f"chat-turn-{req_id}",
+            )
+            billing_run_id = billing_run.get("run_id", "")
+            if billing_run_id:
+                billing_runs = getattr(core, "_session_billing_runs", None)
+                if billing_runs is None:
+                    billing_runs = {}
+                    core._session_billing_runs = billing_runs
+                billing_runs[session_id] = billing_run_id
+        except Exception as e:
+            # Ledger/grant failure for authenticated user is terminal —
+            # do not silently dispatch without a billing run.
+            log.warning("[chat] credit run creation failed for user %s: %s", user_id, e)
+            if turn:
+                _publish_turn_failure(core, turn, "Credit system unavailable")
+            _discard_response_registration(core, session_id)
+            return web.json_response(
+                {"error": "Credit system unavailable. Please try again shortly."},
+                status=503,
+            )
+
     try:
         ws_msg = {
             "type": "user_message",

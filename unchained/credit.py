@@ -80,13 +80,18 @@ def _begin_immediate(conn: sqlite3.Connection) -> None:
 def credit_service_token() -> str:
     """Narrowly-scoped token for credit internal endpoints.
 
-    Uses CREDIT_SERVICE_TOKEN env var. Falls back to TRIAL_AGENT_KEY if unset.
-    Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
+    Prefers HOSTED_AGENT_SERVICE_TOKEN, then CREDIT_SERVICE_TOKEN, then
+    TRIAL_AGENT_KEY.  Never reads PRIVATE_CORE_TOKEN or RELAY_SHARED_TOKEN.
     """
-    token = os.environ.get("CREDIT_SERVICE_TOKEN", "").strip()
-    if token:
-        return token
-    return os.environ.get("TRIAL_AGENT_KEY", "").strip()
+    for env_name in (
+        "HOSTED_AGENT_SERVICE_TOKEN",
+        "CREDIT_SERVICE_TOKEN",
+        "TRIAL_AGENT_KEY",
+    ):
+        token = os.environ.get(env_name, "").strip()
+        if token:
+            return token
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +99,15 @@ def credit_service_token() -> str:
 # ---------------------------------------------------------------------------
 
 HOSTED_MODEL_CATALOG: dict[str, int] = {
-    "google/gemini-3.1-flash-lite": 5,
-    "google/gemini-2.5-flash-lite": 5,
-    "google/gemini-2.5-flash": 10,
-    "google/gemini-2.5-pro": 50,
+    # Paid models — conservative reservations in micro-USD (cents level)
+    "google/gemini-3.1-flash-lite": 100_000,   # $0.01
+    "google/gemini-2.5-flash-lite": 100_000,
+    "google/gemini-2.5-flash": 200_000,
+    "google/gemini-2.5-pro": 500_000,
+    "google/gemini-3-flash-preview": 100_000,
+    "qwen/qwen3.6-plus": 200_000,
+    "qwen/qwen3.5-flash-02-23": 100_000,
+    # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,
     "arcee-ai/trinity-large-preview:free": 0,
     "stepfun/step-3.5-flash:free": 0,
@@ -105,11 +115,12 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "deepseek/deepseek-chat-v3-0324:free": 0,
     "deepseek/deepseek-chat:free": 0,
     "deepseek/deepseek-r1:free": 0,
+    "nvidia/nemotron-3-super-120b-a12b:free": 0,
 }
 
 _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD: int = max(
-    1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "100"))
-)
+    1, int(os.environ.get("CREDIT_DEFAULT_RESERVATION_MICRO_USD", "100000"))
+)  # default $0.01
 
 # Stale-run sweep TTL (seconds). Active runs older than this are expired.
 STALE_RUN_TTL_SECONDS: int = max(
@@ -123,7 +134,7 @@ def _default_reservation(model: str) -> int:
         return _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD
     catalog_val = HOSTED_MODEL_CATALOG.get(m)
     if catalog_val is not None:
-        return max(1, catalog_val) if catalog_val > 0 else 1
+        return catalog_val  # 0 for :free models, cents for paid
     return _DEFAULT_CONSERVATIVE_RESERVATION_MICRO_USD
 
 
@@ -172,11 +183,48 @@ class RunNotActiveError(Exception):
 # ---------------------------------------------------------------------------
 
 class CreditLedger:
-    """Atomic credit accounting backed by SQLite."""
+    """Atomic credit accounting backed by SQLite.
+
+    **Ledger invariant:** The cached ``balance_micro_usd`` in
+    ``credit_accounts`` equals the sum of ``amount_micro_usd`` for all
+    monetary ledger entries (``grant``, ``reversal``, ``settlement``,
+    and ``fee``).  ``reservation`` and ``release`` entries record holds
+    without changing the cached balance — the hold against available
+    funds is computed from ``credit_call_reservations.status='held'``.
+
+    ``CreditLedger`` implements the context-manager protocol
+    (``__enter__`` / ``__exit__``) so callers can integrate with ``with``
+    blocks.  A process-level instance cache lets callers reuse one
+    ledger without re-running DDL for every internal provider call.
+    """
+
+    _instances: dict[str, CreditLedger] = {}
+
+    def __new__(cls, db_path: str):
+        if db_path in cls._instances:
+            return cls._instances[db_path]
+        instance = super().__new__(cls)
+        cls._instances[db_path] = instance
+        return instance
 
     def __init__(self, db_path: str):
+        # __init__ may be called again on a cached instance — only
+        # initialise schema if this path hasn't been seen before.
+        already_init = getattr(self, "_schema_initialised", False)
+        if already_init:
+            return
         self.db_path = db_path
         self._init_schema()
+        self._schema_initialised = True
+
+    def __enter__(self) -> CreditLedger:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        # Connections are short-lived (per-op); nothing to close here.
+        # The context manager exists so tests can use ``with`` blocks
+        # and callers can integrate with existing context-manager patterns.
+        return
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -834,7 +882,20 @@ class CreditLedger:
         completion_tokens: int = 0,
         total_tokens: int = 0,
         provider_response: dict | None = None,
+        cost_absent: bool = False,
+        provider_cost_micro_usd: int = 0,
     ) -> dict:
+        """Settle a reserved call.
+
+        When *cost_absent* is True the provider did not report any cost
+        field at all (distinct from a reported zero cost).  In that case
+        the full reserved amount is settled (conservative accounting).
+
+        *provider_cost_micro_usd* records the actual provider-reported
+        cost for reconciliation.  When it exceeds *reserved_micro_usd*,
+        only the reserved amount is charged but the excess is logged in
+        ``provider_cost_micro_usd`` and metadata for audit.
+        """
         now = _now_ts()
 
         with self._conn() as conn:
@@ -862,8 +923,19 @@ class CreditLedger:
             model_name = row[4]
             reserved = int(row[6])
 
-            actual = max(0, min(actual_cost_micro_usd, reserved))
+            if cost_absent and actual_cost_micro_usd <= 0:
+                # Provider reported no cost — settle the full conservative
+                # reservation so the hold isn't silently released.
+                actual = reserved
+            else:
+                actual = max(0, min(actual_cost_micro_usd, reserved))
             released = reserved - actual
+
+            # Record discrepancy for reconciliation (never charge more than held)
+            recorded_provider = max(0, int(provider_cost_micro_usd or 0))
+            if recorded_provider <= 0 and not cost_absent:
+                recorded_provider = actual
+            discrepancy = max(0, recorded_provider - reserved)
 
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
@@ -895,6 +967,9 @@ class CreditLedger:
                      "reserved_micro_usd": reserved,
                      "settled_micro_usd": actual,
                      "released_micro_usd": released,
+                     "cost_absent": cost_absent,
+                     "provider_cost_micro_usd": recorded_provider,
+                     "discrepancy_micro_usd": discrepancy,
                  }), now),
             )
 
@@ -910,7 +985,7 @@ class CreditLedger:
                 "provider_response_json, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (call_id, run_id, account_id, model_name,
-                 pt, ct, tt, actual,
+                 pt, ct, tt, recorded_provider,
                  _json_meta(provider_response or {}), now),
             )
             conn.execute(
@@ -934,6 +1009,9 @@ class CreditLedger:
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "total_tokens": tt,
+                "provider_cost_micro_usd": recorded_provider,
+                "discrepancy_micro_usd": discrepancy,
+                "cost_absent": cost_absent,
                 "already_settled": False,
             }
 
@@ -1142,6 +1220,28 @@ class CreditLedger:
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Ledger invariant verification
+    # ------------------------------------------------------------------
+
+    _MONETARY_ENTRY_TYPES = frozenset({"grant", "reversal", "settlement", "fee"})
+
+    def reconstruct_balance(self, account_id: str) -> int:
+        """Sum monetary ledger entries for one account.
+
+        Returns the balance that the append-only ledger would compute for
+        *account_id* from grant, reversal, settlement, and fee entries
+        alone (reservations/releases are holds, not monetary debits).
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(amount_micro_usd), 0) "
+                "FROM credit_ledger WHERE account_id = ? "
+                "AND entry_type IN ('grant', 'reversal', 'settlement', 'fee')",
+                (account_id,),
+            ).fetchone()
+        return int(row[0] or 0)
 
     # ------------------------------------------------------------------
     # Trial grant initialisation (without swallowing programming errors)

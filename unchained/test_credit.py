@@ -190,12 +190,12 @@ class TestCreditLedger(unittest.TestCase):
         self.ledger.grant("u-test-14", _usd_to_micro(1.0), idempotency_key="g-def")
         run = self.ledger.create_run("u-test-14", idempotency_key="r-def")
         call = self.ledger.reserve_call(
-            run["run_id"], model="google/gemini-flash-lite",
+            run["run_id"], model="google/gemini-3.1-flash-lite",
             idempotency_key="c-def",
         )
-        # Default for this model should match catalog
-        expected = HOSTED_MODEL_CATALOG.get("google/gemini-flash-lite", 100)
-        self.assertEqual(call["reserved_micro_usd"], max(expected, 1))
+        # Default for this model should match catalog (100000 micro-USD)
+        expected = HOSTED_MODEL_CATALOG.get("google/gemini-3.1-flash-lite", 100000)
+        self.assertEqual(call["reserved_micro_usd"], expected)
 
     def test_reserve_idempotent(self):
         self.ledger.grant("u-test-15", _usd_to_micro(1.0), idempotency_key="g-idem")
@@ -310,24 +310,22 @@ class TestCreditLedger(unittest.TestCase):
     # ---- Missing-cost capture ----
 
     def test_missing_cost_uses_conservative_reservation(self):
-        """When actual cost is zero, settlement uses the conservative reservation."""
-        self.ledger.grant("u-test-23", _usd_to_micro(0.01), idempotency_key="g-missing")
+        """When actual cost is zero but cost is not absent, reservation released."""
+        self.ledger.grant("u-test-23", _usd_to_micro(0.20), idempotency_key="g-missing")
         run = self.ledger.create_run("u-test-23", idempotency_key="r-missing")
         call = self.ledger.reserve_call(
-            run["run_id"], model="google/gemini-flash-lite",
+            run["run_id"], model="google/gemini-3.1-flash-lite",
             idempotency_key="c-missing",
         )
-        # Settle with zero cost
+        # Settle with zero cost (not cost_absent — genuinely zero)
         result = self.ledger.settle_call(
             call["call_id"], actual_cost_micro_usd=0,
         )
-        # Still records usage — settled_micro_usd should be 0 (capped at reserved)
+        # Still records usage — settled_micro_usd should be 0
         self.assertIsNotNone(result)
+        self.assertEqual(result["settled_micro_usd"], 0)
 
-        # Balance after
-        bal_after = self.ledger.get_balance("u-test-23")
-        # 10000 - 0 = 10000 balance (cost is 0, but reservation was 5 from catalog)
-        # Actually settle with 0 actual cost means settled=0, released=reservation amount
+        # Balance after — the 100000 reservation was released
         total_spent = self.ledger.get_account("u-test-23")["total_spent_micro_usd"]
         self.assertEqual(total_spent, 0)  # 0 actual cost
 
@@ -452,7 +450,7 @@ class TestCreditLedger(unittest.TestCase):
 
     def test_default_reservation_for_free_model(self):
         res = _default_reservation("google/gemma-3-27b-it:free")
-        self.assertEqual(res, 1)  # free model, non-zero tracking
+        self.assertEqual(res, 0)  # free models have zero reservation
 
     # ---- Run not active ----
 
@@ -853,7 +851,8 @@ class TestCreditServiceToken(unittest.TestCase):
 
     def setUp(self):
         self._saved_env = {}
-        for key in ("CREDIT_SERVICE_TOKEN", "TRIAL_AGENT_KEY",
+        for key in ("HOSTED_AGENT_SERVICE_TOKEN", "CREDIT_SERVICE_TOKEN",
+                     "TRIAL_AGENT_KEY",
                      "PRIVATE_CORE_TOKEN", "RELAY_SHARED_TOKEN"):
             self._saved_env[key] = os.environ.get(key, "__UNSET__")
 
@@ -864,8 +863,20 @@ class TestCreditServiceToken(unittest.TestCase):
             else:
                 os.environ[key] = val
 
-    def test_credit_service_token_prefers_dedicated_var(self):
-        """CREDIT_SERVICE_TOKEN takes precedence."""
+    def test_credit_service_token_prefers_hosted(self):
+        """HOSTED_AGENT_SERVICE_TOKEN takes top precedence."""
+        os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "hosted-token-aaa"
+        os.environ["CREDIT_SERVICE_TOKEN"] = "credit-secret-123"
+        os.environ["TRIAL_AGENT_KEY"] = "trial-key-456"
+        os.environ["PRIVATE_CORE_TOKEN"] = "private-core-789"
+
+        from credit import credit_service_token
+        token = credit_service_token()
+        self.assertEqual(token, "hosted-token-aaa")
+
+    def test_credit_service_token_falls_back_to_credit(self):
+        """CREDIT_SERVICE_TOKEN takes precedence over TRIAL_AGENT_KEY."""
+        os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         os.environ["CREDIT_SERVICE_TOKEN"] = "credit-secret-123"
         os.environ["TRIAL_AGENT_KEY"] = "trial-key-456"
         os.environ["PRIVATE_CORE_TOKEN"] = "private-core-789"
@@ -876,7 +887,9 @@ class TestCreditServiceToken(unittest.TestCase):
         self.assertNotEqual(token, "private-core-789")
 
     def test_credit_service_token_falls_back_to_trial_agent_key(self):
-        """When CREDIT_SERVICE_TOKEN is unset, fall back to TRIAL_AGENT_KEY."""
+        """When HOSTED_AGENT_SERVICE_TOKEN and CREDIT_SERVICE_TOKEN are unset,
+        fall back to TRIAL_AGENT_KEY."""
+        os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         os.environ.pop("CREDIT_SERVICE_TOKEN", None)
         os.environ["TRIAL_AGENT_KEY"] = "trial-key-fallback"
         os.environ["PRIVATE_CORE_TOKEN"] = "private-core-should-not-use"
@@ -887,8 +900,9 @@ class TestCreditServiceToken(unittest.TestCase):
         self.assertNotEqual(token, "private-core-should-not-use")
 
     def test_credit_service_token_never_uses_private_core(self):
-        """Even when both CREDIT_SERVICE_TOKEN and TRIAL_AGENT_KEY are unset,
-        credit_service_token should NOT fall through to PRIVATE_CORE_TOKEN."""
+        """Even when all service tokens are unset, never fall through to
+        PRIVATE_CORE_TOKEN."""
+        os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         os.environ.pop("CREDIT_SERVICE_TOKEN", None)
         os.environ.pop("TRIAL_AGENT_KEY", None)
         os.environ["PRIVATE_CORE_TOKEN"] = "private-core-alone"
@@ -937,5 +951,328 @@ class TestCreditTrialGrantSafety(unittest.TestCase):
         self.assertAlmostEqual(result.get("balance_usd", 0), 0.75, places=5)
 
 
-if __name__ == "__main__":
-    unittest.main()
+# ---------------------------------------------------------------------------
+# Ledger invariant tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditLedgerInvariant(unittest.TestCase):
+    """Verify the append-only ledger reconstructs balance correctly."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_reconstruct_balance_from_ledger(self):
+        """sum(grant + reversal + settlement + fee) == cached balance."""
+        self.ledger.grant("u-inv", _usd_to_micro(2.0), idempotency_key="g-inv1")
+        run = self.ledger.create_run("u-inv", idempotency_key="r-inv1")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=100_000, idempotency_key="c-inv1",
+        )
+        self.ledger.settle_call(call["call_id"], actual_cost_micro_usd=50_000)
+        self.ledger.reverse_grant("u-inv", _usd_to_micro(0.5), idempotency_key="rev-inv1")
+
+        acct = self.ledger.get_account("u-inv")
+        reconstructed = self.ledger.reconstruct_balance(acct["account_id"])
+        self.assertEqual(reconstructed, acct["balance_micro_usd"],
+                         f"ledger reconstruction {reconstructed} != cached {acct['balance_micro_usd']}")
+
+    def test_reservation_release_ignored_by_reconstruction(self):
+        """Reservations and releases are holds, not monetary events."""
+        self.ledger.grant("u-inv2", _usd_to_micro(1.0), idempotency_key="g-inv2")
+        run = self.ledger.create_run("u-inv2", idempotency_key="r-inv2")
+
+        # Reserve then release — neither should change the reconstructed balance
+        acct_before = self.ledger.get_account("u-inv2")
+        bal_before = acct_before["balance_micro_usd"]
+
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=50_000, idempotency_key="c-inv2",
+        )
+        # Balance unchanged (reservation is a hold)
+        acct_after_reserve = self.ledger.get_account("u-inv2")
+        self.assertEqual(acct_after_reserve["balance_micro_usd"], bal_before)
+
+        self.ledger.release_call(call["call_id"])
+        # Balance still unchanged after release
+        acct_after_release = self.ledger.get_account("u-inv2")
+        self.assertEqual(acct_after_release["balance_micro_usd"], bal_before)
+
+        # Ledger reconstruction matches
+        reconstructed = self.ledger.reconstruct_balance(acct_after_release["account_id"])
+        self.assertEqual(reconstructed, bal_before)
+
+    def test_reserve_settle_reconstruct(self):
+        """Full reserve→settle cycle: reconstruction equals balance."""
+        self.ledger.grant("u-inv3", _usd_to_micro(1.0), idempotency_key="g-inv3")
+        run = self.ledger.create_run("u-inv3", idempotency_key="r-inv3")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=300_000, idempotency_key="c-inv3",
+        )
+        self.ledger.settle_call(call["call_id"], actual_cost_micro_usd=150_000)
+
+        acct = self.ledger.get_account("u-inv3")
+        reconstructed = self.ledger.reconstruct_balance(acct["account_id"])
+        # 1,000,000 - 150,000 = 850,000
+        expected = _usd_to_micro(0.85)
+        self.assertEqual(reconstructed, expected)
+        self.assertEqual(reconstructed, acct["balance_micro_usd"])
+
+
+# ---------------------------------------------------------------------------
+# Free-model zero reservation tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditFreeModels(unittest.TestCase):
+    """Free-tier models reserve and settle zero."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_free_model_default_reservation_zero(self):
+        """':free' models get zero hold from catalog."""
+        from credit import _default_reservation
+        for free_model in (
+            "google/gemma-3-27b-it:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "deepseek/deepseek-chat:free",
+        ):
+            with self.subTest(model=free_model):
+                self.assertEqual(_default_reservation(free_model), 0,
+                                 f"Free model {free_model} should have zero reservation")
+
+    def test_free_model_reserve_and_settle_zero(self):
+        """Reserving a free model reserves and settles at zero."""
+        self.ledger.grant("u-free", _usd_to_micro(0.01), idempotency_key="g-free")
+        run = self.ledger.create_run("u-free", idempotency_key="r-free")
+        call = self.ledger.reserve_call(
+            run["run_id"], model="google/gemma-3-27b-it:free",
+            reservation_micro_usd=0, idempotency_key="c-free",
+        )
+        self.assertEqual(call["reserved_micro_usd"], 0)
+        result = self.ledger.settle_call(call["call_id"], actual_cost_micro_usd=0)
+        self.assertEqual(result["settled_micro_usd"], 0)
+
+
+# ---------------------------------------------------------------------------
+# Settlement missing-cost tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditSettlementCost(unittest.TestCase):
+    """Settle a call with missing vs. zero cost."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.ledger = CreditLedger(db_path=self._db_path)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_cost_absent_settles_full_reservation(self):
+        """When cost is absent, the full reservation is settled."""
+        self.ledger.grant("u-costabs", _usd_to_micro(0.02), idempotency_key="g-ca")
+        run = self.ledger.create_run("u-costabs", idempotency_key="r-ca")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=10_000, idempotency_key="c-ca",
+        )
+        result = self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=0, cost_absent=True,
+        )
+        # Full 10_000 micro settled
+        self.assertEqual(result["settled_micro_usd"], 10_000)
+        self.assertEqual(result["released_micro_usd"], 0)
+        self.assertTrue(result.get("cost_absent"))
+
+    def test_cost_present_zero_settles_zero(self):
+        """Reported zero cost genuinely settles zero (not absent)."""
+        self.ledger.grant("u-costzero", _usd_to_micro(0.02), idempotency_key="g-cz")
+        run = self.ledger.create_run("u-costzero", idempotency_key="r-cz")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=10_000, idempotency_key="c-cz",
+        )
+        result = self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=0, cost_absent=False,
+        )
+        self.assertEqual(result["settled_micro_usd"], 0)
+        self.assertEqual(result["released_micro_usd"], 10_000)
+
+    def test_discrepancy_recorded_not_charged(self):
+        """Provider cost exceeding reserve is recorded but not charged."""
+        self.ledger.grant("u-disc", _usd_to_micro(0.02), idempotency_key="g-disc")
+        run = self.ledger.create_run("u-disc", idempotency_key="r-disc")
+        call = self.ledger.reserve_call(
+            run["run_id"], reservation_micro_usd=5_000, idempotency_key="c-disc",
+        )
+        result = self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=7_000,
+            provider_cost_micro_usd=7_000,
+        )
+        # Capped at reserved amount
+        self.assertEqual(result["settled_micro_usd"], 5_000)
+        # Discrepancy recorded
+        self.assertEqual(result["discrepancy_micro_usd"], 2_000)
+        # Provider cost in usage table is the actual reported value
+        usage = self.ledger.get_usage_for_run(run["run_id"])
+        self.assertEqual(usage[0]["provider_cost_micro_usd"], 7_000)
+
+
+# ---------------------------------------------------------------------------
+# Conservative reservation tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditConservativeReservations(unittest.TestCase):
+    """Verify catalog entries are meaningfully conservative."""
+
+    def test_paid_models_minimum_cents(self):
+        """Paid models have reservation >= $0.01 (10,000 micro-USD)."""
+        from credit import HOSTED_MODEL_CATALOG as cat
+        for model, res in cat.items():
+            if model.endswith(":free"):
+                continue
+            self.assertGreaterEqual(
+                res, 10_000,
+                f"Paid model {model} has reservation {res} < 10k micro-USD ($0.01)",
+            )
+
+    def test_free_models_zero(self):
+        """Free models have exactly zero reservation."""
+        from credit import HOSTED_MODEL_CATALOG as cat
+        for model, res in cat.items():
+            if model.endswith(":free"):
+                self.assertEqual(res, 0,
+                                 f"Free model {model} has non-zero reservation {res}")
+
+    def test_catalog_includes_all_ui_models(self):
+        """All models exposed by /trial are in the catalog."""
+        from credit import HOSTED_MODEL_CATALOG as cat
+        expected_models = {
+            "google/gemini-3.1-flash-lite",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
+            "google/gemini-3-flash-preview",
+            "qwen/qwen3.6-plus",
+            "qwen/qwen3.5-flash-02-23",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+        }
+        for m in expected_models:
+            self.assertIn(m, cat, f"Model {m} missing from HOSTED_MODEL_CATALOG")
+
+
+# ---------------------------------------------------------------------------
+# CreditLedger context manager tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditLedgerContextManager(unittest.TestCase):
+    """CreditLedger implements the context manager protocol."""
+
+    def setUp(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+
+    def tearDown(self):
+        try:
+            os.unlink(self._db_path)
+        except OSError:
+            pass
+
+    def test_context_manager_works(self):
+        """with CreditLedger(...) as ledger: ... works."""
+        from credit import CreditLedger as CL
+        # Clear the process-level cache for this test
+        CL._instances.pop(self._db_path, None)
+        try:
+            with CL(db_path=self._db_path) as ledger:
+                acct = ledger.ensure_account("u-ctxmgr")
+                self.assertEqual(acct["user_id"], "u-ctxmgr")
+        finally:
+            CL._instances.pop(self._db_path, None)
+
+    def test_cached_instance_reuses_schema(self):
+        """Calling CreditLedger twice with same path returns same instance."""
+        from credit import CreditLedger as CL
+        CL._instances.pop(self._db_path, None)
+        try:
+            l1 = CL(db_path=self._db_path)
+            l2 = CL(db_path=self._db_path)
+            self.assertIs(l1, l2, "Same db_path should return cached instance")
+        finally:
+            CL._instances.pop(self._db_path, None)
+
+    def test_reconstruct_balance_empty_account(self):
+        """Empty account with no ledger entries reconstructs to zero."""
+        ledger = CreditLedger(db_path=self._db_path)
+        acct = ledger.ensure_account("u-empty")
+        reconstructed = ledger.reconstruct_balance(acct["account_id"])
+        self.assertEqual(reconstructed, 0)
+
+
+# ---------------------------------------------------------------------------
+# Service token hierarchy tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreditServiceTokenFull(unittest.TestCase):
+    """Full token hierarchy: HOSTED > CREDIT > TRIAL_AGENT_KEY."""
+
+    def setUp(self):
+        self._saved = {}
+        for k in ("HOSTED_AGENT_SERVICE_TOKEN", "CREDIT_SERVICE_TOKEN",
+                   "TRIAL_AGENT_KEY", "PRIVATE_CORE_TOKEN"):
+            self._saved[k] = os.environ.get(k, "__UNSET__")
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v == "__UNSET__":
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_empty_when_all_unset(self):
+        """No token is set → return empty string."""
+        for k in ("HOSTED_AGENT_SERVICE_TOKEN", "CREDIT_SERVICE_TOKEN",
+                   "TRIAL_AGENT_KEY"):
+            os.environ.pop(k, None)
+        from credit import credit_service_token
+        self.assertEqual(credit_service_token(), "")
+
+    def test_fallback_from_trial_to_empty(self):
+        """CREDIT_SERVICE_TOKEN fallback; TRIAL fallback; no PRIVATE_CORE."""
+        os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
+        os.environ.pop("CREDIT_SERVICE_TOKEN", None)
+        os.environ.pop("TRIAL_AGENT_KEY", None)
+        os.environ["PRIVATE_CORE_TOKEN"] = "pct"
+        from credit import credit_service_token
+        self.assertEqual(credit_service_token(), "")
+
+    def test_hierarchy_all_set(self):
+        """When all are set, HOSTED wins."""
+        os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "h"
+        os.environ["CREDIT_SERVICE_TOKEN"] = "c"
+        os.environ["TRIAL_AGENT_KEY"] = "t"
+        from credit import credit_service_token
+        self.assertEqual(credit_service_token(), "h")
