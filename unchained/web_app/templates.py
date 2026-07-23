@@ -10032,6 +10032,12 @@ async function switchSlot(n) {
   _persistSessionId(sessionId);
   _syncSlotButtons();
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
+  // Persist slot switch to server.
+  fetch('/web/chat/switch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({model: currentModel(), slot: activeSlot}),
+  }).catch(function(){});
   await loadHistory();
 }
 
@@ -10248,6 +10254,42 @@ function updateAgentStatusUI(data) {
   maybeAutoOpenInstallModal(chatConnected, debouncedBridge, mismatch, wasSetupReady);
 }
 
+async function syncTrialSlotStateFromServer() {
+  try {
+    const r = await fetch('/web/chat/slots?model=' + encodeURIComponent(currentModel()));
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!data.trial || !data.slots) return null;
+    const local = _ensureSlotState();
+    let changed = false;
+    for (let i = 1; i <= 3; i++) {
+      const index = i - 1;
+      const sv = data.slots[index];
+      if (!sv) continue;
+      const sidKey = String(i);
+      const svSid = sv.session_id || '';
+      const svPreview = sv.preview || '';
+      // Server wins: override local slot session + preview when
+      // the server has a non-empty session for this lane or when
+      // the server's active_slot is authoritative.
+      if (svSid && local.slots[sidKey] !== svSid) {
+        local.slots[sidKey] = svSid;
+        changed = true;
+      }
+      if (svPreview && local.previews[sidKey] !== svPreview) {
+        local.previews[sidKey] = svPreview;
+        changed = true;
+      }
+    }
+    if (data.active_slot && local.active_slot !== data.active_slot) {
+      local.active_slot = data.active_slot;
+      changed = true;
+    }
+    if (changed) _saveSlotState(local);
+    return local;
+  } catch(e) { return null; }
+}
+
 function showMain() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('pending').style.display = 'none';
@@ -10282,6 +10324,19 @@ function showMain() {
   setInterval(checkAgentStatus, 10000);
   loadHistory();
   recoverPendingNewChat();
+  // Sync authoritative server slot state after sign-in; server wins.
+  syncTrialSlotStateFromServer().then(function(synced) {
+    if (synced && synced.slots) {
+      var serverSid = synced.slots[String(activeSlot)];
+      if (serverSid && serverSid !== sessionId) {
+        sessionId = serverSid;
+        _persistSessionId(sessionId);
+        _setActiveSlotSession(sessionId);
+        _syncSlotButtons();
+        loadHistory();
+      }
+    }
+  });
 
 }
 

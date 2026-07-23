@@ -64,6 +64,8 @@ sending = false;
 loadHistory = async function() {
   _setSlotPreview(activeSlot, activeSlot === 2 ? 'Compare accessible hotels' : '');
 };
+function currentModel() { return 'google/gemini-3.1-flash-lite'; }
+globalThis.fetch = function() { return Promise.resolve({ok: true, json: async () => ({})}); };
 function check(condition, message) { if (!condition) throw new Error(message); }
 
 const initialState = _ensureSlotState();

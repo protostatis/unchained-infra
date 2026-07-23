@@ -23,9 +23,38 @@ from challenge_detection import detect_challenge
 from domain_policy import execution_policy_for_url
 from rate_limit import SlidingWindowRateLimiter
 
+from hosted_conversations import HostedConversationRepo
 from web_app.core import get_core as _core
 
 log = logging.getLogger(__name__)
+
+_HOSTED_REPO: HostedConversationRepo | None = None
+_HOSTED_REPO_DATA_DIR = os.environ.get(
+    "UNCHAINED_HOSTED_DATA_DIR",
+    os.path.join(
+        os.environ.get("UNCHAINED_DATA_DIR", os.path.expanduser("~/.unchained")),
+        "hosted-conversations",
+    ),
+)
+_HOSTED_SESSIONS_DIR = os.environ.get(
+    "UNCHAINED_SESSIONS_DIR",
+    os.path.join(
+        os.environ.get("UNCHAINED_DATA_DIR",
+                       os.path.expanduser("~/.unchained")),
+        "sessions",
+    ) if os.environ.get("UNCHAINED_DATA_DIR") else "/data/sessions",
+)
+
+
+def _hosted_repo() -> HostedConversationRepo:
+    global _HOSTED_REPO
+    if _HOSTED_REPO is None:
+        _HOSTED_REPO = HostedConversationRepo(
+            data_dir=_HOSTED_REPO_DATA_DIR,
+            sessions_dir=_HOSTED_SESSIONS_DIR,
+        )
+    return _HOSTED_REPO
+
 
 _TRIAL_NEW_CHAT_REQUEST_RE = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
 _TRIAL_NEW_CHAT_TOKEN_RE = re.compile(
@@ -249,7 +278,9 @@ async def trial_new_chat_status_cleanup_context(app: web.Application):
             pass
 
 
-def _commit_trial_new_chat_transition(core, record: dict) -> None:
+def _commit_trial_new_chat_transition(
+    core, record: dict, *, user_id: str = ""
+) -> None:
     previous_session_id = record["previous_session_id"]
     session_id = record["session_id"]
     session_tabs = getattr(core, "_session_tabs", {})
@@ -271,8 +302,40 @@ def _commit_trial_new_chat_transition(core, record: dict) -> None:
             value = mapping.pop(previous_session_id, None)
             if value is not None:
                 mapping.setdefault(session_id, value)
+    # Archive old session before deleting it, preserving history.
+    if user_id:
+        try:
+            _hosted_repo().archive_session(
+                user_id,
+                previous_session_id,
+                slot=record.get("slot"),
+                preview=_first_user_message_preview(previous_session_id),
+            )
+        except Exception:
+            log.exception(
+                "[chat] failed to archive session %s for user %s",
+                previous_session_id,
+                user_id,
+            )
     core._delete_trial_session(previous_session_id)
     record["acknowledged"] = True
+
+
+def _first_user_message_preview(session_id: str) -> str:
+    """Extract a short preview label from the first user message in a session."""
+    try:
+        repo = _hosted_repo()
+        msgs, found = repo.read_session_messages(session_id)
+        if not found:
+            return ""
+        for m in msgs:
+            if m.get("role") == "user":
+                content = str(m.get("content", "")).strip()
+                content = re.sub(r"\s+", " ", content)
+                return content[:80]
+        return ""
+    except Exception:
+        return ""
 
 
 def _drop_trial_new_chat_commit(record: dict) -> None:
@@ -2466,6 +2529,7 @@ async def handle_chat_history(request: web.Request) -> web.Response:
         if not auth_info:
             return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
+    user_id = auth_info.get("user_id", "")
     model = request.query.get("model", "")
     if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
@@ -2478,7 +2542,21 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
 
     if core._is_openrouter_model(model):
-        session_id = core._resolve_trial_session_id(agent_id, requested_session_id)
+        # Use slot state from hosted repo when available.
+        if not guest_mode and user_id:
+            slot = requested_slot or 1
+            state = _hosted_repo().get_slot_state(user_id)
+            sid_from_state = state["slots"].get(str(slot), "")
+            if sid_from_state:
+                session_id = sid_from_state
+            else:
+                session_id = core._resolve_trial_session_id(
+                    agent_id, requested_session_id
+                )
+        else:
+            session_id = core._resolve_trial_session_id(
+                agent_id, requested_session_id
+            )
         msgs, found = core._read_trial_history(session_id)
         payload = {"messages": msgs, "trial": True, "session_id": session_id}
         if not found:
@@ -2735,6 +2813,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
         return web.json_response({"error": "Acknowledgment is only supported for trial chats"}, status=400)
 
     agent_id = auth_info.get("agent_id", "")
+    user_id = auth_info.get("user_id", "")
     request_id = str(body.get("request_id", "") or "").strip()
     if not _TRIAL_NEW_CHAT_REQUEST_RE.fullmatch(request_id):
         return web.json_response({"error": "Invalid new-chat request ID"}, status=400)
@@ -2828,7 +2907,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
             durable_status = _write_trial_new_chat_status(record, "rolled_back", now)
             status = durable_status["status"]
         elif status == "committing":
-            _commit_trial_new_chat_transition(core, record)
+            _commit_trial_new_chat_transition(core, record, user_id=user_id)
             durable_status = _write_trial_new_chat_status(record, "acknowledged", now)
             status = durable_status["status"]
         recovery_decision = (
@@ -2854,7 +2933,7 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
     if status != "acknowledged":
         if status == "pending":
             _write_trial_new_chat_status(record, "committing", now)
-        _commit_trial_new_chat_transition(core, record)
+        _commit_trial_new_chat_transition(core, record, user_id=user_id)
         _write_trial_new_chat_status(record, "acknowledged", now)
     else:
         record["acknowledged"] = True
@@ -2871,12 +2950,13 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
 
 
 async def handle_chat_slots(request: web.Request) -> web.Response:
-    """GET /web/chat/slots — get slot info from agent."""
+    """GET /web/chat/slots — get authoritative slot state."""
     core = _core()
     auth_info = core._authenticate(request)
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
+    user_id = auth_info.get("user_id", "")
 
     model = request.query.get("model", "")
     if core._is_pending_user(auth_info) and not model:
@@ -2885,24 +2965,29 @@ async def handle_chat_slots(request: web.Request) -> web.Response:
         return core._pending_limited_response()
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
-    if core._is_openrouter_model(model):
-        session_id = core._resolve_trial_session_id(agent_id, requested_session_id)
-        msgs, _ = core._read_trial_history(session_id)
-        preview = ""
-        for m in msgs:
-            if m.get("role") == "user":
-                preview = m.get("content", "")[:40]
-                break
+    if core._is_openrouter_model(model) and user_id:
+        state = _hosted_repo().get_slot_state(user_id)
+        slots = []
+        for n in (1, 2, 3):
+            sid = state["slots"].get(str(n), "")
+            preview = state["previews"].get(str(n), "")
+            empty = True
+            if sid:
+                msgs, found = _hosted_repo().read_session_messages(sid)
+                if found and msgs:
+                    empty = False
+                    if not preview:
+                        for m in msgs:
+                            if m.get("role") == "user":
+                                preview = str(m.get("content", "")).strip()[:40]
+                                preview = re.sub(r"\s+", " ", preview)
+                                break
+            slots.append({"slot": n, "empty": empty, "preview": preview})
         return web.json_response(
             {
-                "active_slot": 1,
-                "slots": [
-                    {"slot": 1, "empty": len(msgs) == 0, "preview": preview},
-                    {"slot": 2, "empty": True, "preview": ""},
-                    {"slot": 3, "empty": True, "preview": ""},
-                ],
+                "active_slot": state.get("active_slot", 1),
+                "slots": slots,
                 "trial": True,
-                "session_id": session_id,
             }
         )
 
@@ -2939,6 +3024,7 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
         body = {}
     slot = _normalize_chat_slot(body.get("slot")) or 1
     agent_id = auth_info.get("agent_id", "")
+    user_id = auth_info.get("user_id", "")
     model = body.get("model", "")
     if core._is_pending_user(auth_info) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
@@ -2946,7 +3032,12 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
         return core._pending_limited_response()
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
     if core._is_openrouter_model(model):
-        return web.json_response({"ok": True, "active_slot": 1, "trial": True})
+        # Persist slot switch server-side.
+        if user_id:
+            state = _hosted_repo().get_slot_state(user_id)
+            state["active_slot"] = slot
+            _hosted_repo().set_slot_state(user_id, state)
+        return web.json_response({"ok": True, "active_slot": slot, "trial": True})
     resp = await core._agent_request(chat_agent_id, {"type": "switch_slot", "slot": slot})
     if resp is None:
         return web.json_response({"error": "Agent not connected"}, status=503)
@@ -2954,13 +3045,24 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
 
 
 async def handle_chat_archives(request: web.Request) -> web.Response:
-    """GET /web/chat/archives — list archived conversations from agent."""
+    """GET /web/chat/archives — list archived conversations."""
     core = _core()
     auth_info = core._authenticate(request)
     if not auth_info:
         return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
     model = request.query.get("model", "")
+    user_id = auth_info.get("user_id", "")
+
+    # OpenRouter/hosted lanes use the server-owned repository.
+    if core._is_openrouter_model(model) and user_id:
+        try:
+            archives = _hosted_repo().list_archives(user_id)
+        except Exception:
+            log.exception("[chat] failed to list archives for user %s", user_id)
+            archives = []
+        return web.json_response({"archives": archives, "trial": True})
+
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
     resp = await agent_request(chat_agent_id, {"type": "get_archives"})
     if resp is None:
@@ -2984,6 +3086,41 @@ async def handle_chat_restore_archive(request: web.Request) -> web.Response:
         return web.json_response({"error": "archive_id required"}, status=400)
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
+    user_id = auth_info.get("user_id", "")
+
+    # OpenRouter/hosted lanes use the server-owned repository.
+    if core._is_openrouter_model(model) and user_id:
+        if not _hosted_repo().archive_owned_by(user_id, archive_id):
+            return web.json_response(
+                {"error": "Archive not found"}, status=404
+            )
+        # Archive current slot state before restoring.
+        if requested_slot:
+            slot_state = _hosted_repo().get_slot_state(user_id)
+            current_sid = slot_state["slots"].get(str(requested_slot), "")
+            if current_sid:
+                try:
+                    _hosted_repo().archive_session(
+                        user_id, current_sid, slot=requested_slot
+                    )
+                except Exception:
+                    log.exception(
+                        "[chat] failed to archive current session before restore"
+                    )
+        new_sid, slot, msgs = _hosted_repo().restore_archive(
+            user_id, archive_id, target_slot=requested_slot
+        )
+        if new_sid is None:
+            return web.json_response(
+                {"error": "Archive not found or could not be restored"}, status=404
+            )
+        return web.json_response({
+            "ok": True,
+            "trial": True,
+            "active_slot": slot,
+            "session_id": new_sid,
+        })
+
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
     restore_msg = {"type": "restore_archive", "archive_id": archive_id}
     if requested_slot is not None:
@@ -3017,6 +3154,17 @@ async def handle_chat_delete_archive(request: web.Request) -> web.Response:
         return web.json_response({"error": "archive_id required"}, status=400)
     agent_id = auth_info.get("agent_id", "")
     model = body.get("model", "")
+    user_id = auth_info.get("user_id", "")
+
+    # OpenRouter/hosted lanes use the server-owned repository.
+    if core._is_openrouter_model(model) and user_id:
+        removed = _hosted_repo().delete_archive(user_id, archive_id)
+        if not removed:
+            return web.json_response(
+                {"error": "Archive not found"}, status=404
+            )
+        return web.json_response({"ok": True, "trial": True})
+
     chat_agent_id = resolve_chat_agent_id(auth_info, model) if model else agent_id
     resp = await agent_request(chat_agent_id, {"type": "delete_archive", "archive_id": archive_id})
     if resp is None:
