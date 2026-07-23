@@ -9234,8 +9234,8 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
-      <option value="arcee-ai/trinity-large-preview:free">Trinity Large Preview &mdash; Free</option>
-      <option value="stepfun/step-3.5-flash:free">StepFun 3.5 Flash</option>
+      <option value="nvidia/nemotron-3-nano-30b-a3b:free">NVIDIA Nemotron Nano &mdash; Free</option>
+      <option value="poolside/laguna-xs-2.1:free">Poolside Laguna XS &mdash; Free</option>
       <option value="__custom_openrouter__" id="modelsel-custom-option" style="display:none">Custom OpenRouter (Admin)</option>
     </select>
     <label for="profilesel" id="profilelabel" class="workspace-only" hidden>Browser</label>
@@ -9280,7 +9280,7 @@ let profileSelectionReady = false;
 let _accountStatus = 'approved';
 let _claudeAccessRequested = false;
 let _hostedModelPolicy = null;
-let _POST_CAP_ALLOWED_MODELS = ['arcee-ai/trinity-large-preview:free', 'stepfun/step-3.5-flash:free'];
+let _POST_CAP_ALLOWED_MODELS = ['nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-nano-30b-a3b:free', 'poolside/laguna-xs-2.1:free'];
 const _HOSTED_MODEL_LABELS = Object.freeze({
   'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
   'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
@@ -9290,8 +9290,8 @@ const _HOSTED_MODEL_LABELS = Object.freeze({
   'qwen/qwen3.6-plus': 'Qwen 3.6 Plus',
   'qwen/qwen3.5-flash-02-23': 'Qwen 3.5 Flash',
   'nvidia/nemotron-3-super-120b-a12b:free': 'NVIDIA Nemotron — Super 120B',
-  'arcee-ai/trinity-large-preview:free': 'Trinity Large Preview — Free',
-  'stepfun/step-3.5-flash:free': 'StepFun 3.5 Flash',
+  'nvidia/nemotron-3-nano-30b-a3b:free': 'NVIDIA Nemotron Nano — Free',
+  'poolside/laguna-xs-2.1:free': 'Poolside Laguna XS — Free',
 });
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
@@ -10760,9 +10760,24 @@ function showHintsIfEmpty() {
 function setNewChatFeedback(message, state) {
   const feedback = document.getElementById('new-chat-feedback');
   if (!feedback) return;
+  if (feedback._dismissTimer) {
+    clearTimeout(feedback._dismissTimer);
+    feedback._dismissTimer = null;
+  }
   feedback.textContent = message || '';
   feedback.className = message ? state : '';
   feedback.setAttribute('role', state === 'error' ? 'alert' : 'status');
+  if (message && state === 'success') {
+    const expectedMessage = message;
+    feedback._dismissTimer = setTimeout(function() {
+      feedback._dismissTimer = null;
+      if (feedback.className === 'success' && feedback.textContent === expectedMessage) {
+        feedback.textContent = '';
+        feedback.className = '';
+        feedback.setAttribute('role', 'status');
+      }
+    }, 10000);
+  }
 }
 
 function resetNewChatUi() {
@@ -26089,8 +26104,8 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-          <option value="arcee-ai/trinity-large-preview:free">OpenRouter: Trinity Fast</option>
-          <option value="stepfun/step-3.5-flash:free">OpenRouter: StepFun 3.5 Flash</option>
+          <option value="nvidia/nemotron-3-nano-30b-a3b:free">OpenRouter: NVIDIA Nemotron Nano</option>
+          <option value="poolside/laguna-xs-2.1:free">OpenRouter: Poolside Laguna XS</option>
           <option value="google/gemini-3.1-flash-lite">OpenRouter: Gemini 3.1 Flash Lite</option>
           <option value="qwen/qwen3.6-plus">OpenRouter: Qwen 3.6 Plus</option>
           <option value="nvidia/nemotron-3-super-120b-a12b:free">OpenRouter: NVIDIA Nemotron</option>
@@ -26249,8 +26264,8 @@ function formatSchedulerModel(model){
     'codex-cli:gpt-5.4-mini':'Codex CLI: GPT-5.4 Mini (fast)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
-    'arcee-ai/trinity-large-preview:free':'OpenRouter: Trinity Fast',
-    'stepfun/step-3.5-flash:free':'OpenRouter: StepFun 3.5 Flash',
+    'nvidia/nemotron-3-nano-30b-a3b:free':'OpenRouter: NVIDIA Nemotron Nano',
+    'poolside/laguna-xs-2.1:free':'OpenRouter: Poolside Laguna XS',
     'google/gemini-3.1-flash-lite':'OpenRouter: Gemini 3.1 Flash Lite',
     'qwen/qwen3.6-plus':'OpenRouter: Qwen 3.6 Plus',
     'nvidia/nemotron-3-super-120b-a12b:free':'OpenRouter: NVIDIA Nemotron',
