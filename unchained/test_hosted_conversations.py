@@ -934,5 +934,443 @@ class TestTrialDualReadCompat(unittest.TestCase):
             self.assertNotIn("..", os.path.basename(path2))
 
 
+class TestSlotSessionIdField(unittest.TestCase):
+    """Verify that handle_chat_slots returns session_id per slot and
+    at top level so JS sync can consume it authoritatively."""
+
+    def test_slot_object_contains_session_id(self):
+        """Each slot dict MUST carry its session_id for client-side sync."""
+        from web_app.templates import TRIAL_CHAT_HTML
+
+        # The JS function syncTrialSlotStateFromServer reads sv.session_id
+        self.assertIn("sv.session_id", TRIAL_CHAT_HTML)
+        self.assertIn("data.active_slot", TRIAL_CHAT_HTML)
+        # Also check that top-level session_id is used
+        self.assertIn("data.session_id", TRIAL_CHAT_HTML)
+
+
+class TestTrialNewChatSlotUpdate(unittest.IsolatedAsyncioTestCase):
+    """After ACK, the server slot mapping must point to the new session."""
+
+    def setUp(self):
+        from web_app.handlers import chat_flow
+
+        chat_flow._trial_new_chat_requests.clear()
+        chat_flow._trial_new_chat_sources.clear()
+        chat_flow._guest_new_chat_requests.clear()
+        chat_flow._guest_new_chat_sources.clear()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_status_dir = chat_flow._TRIAL_NEW_CHAT_STATUS_DIR
+        chat_flow._TRIAL_NEW_CHAT_STATUS_DIR = os.path.join(
+            self.temp_dir.name, "transition-status"
+        )
+        self.session_dir = Path(self.temp_dir.name) / "sessions"
+        self.session_dir.mkdir()
+        self.hosted_data_dir = Path(self.temp_dir.name) / "hosted-conversations"
+        self.hosted_data_dir.mkdir()
+        self.original_data_dir = chat_flow._HOSTED_REPO_DATA_DIR
+        self.original_sessions_dir = chat_flow._HOSTED_SESSIONS_DIR
+        chat_flow._HOSTED_REPO_DATA_DIR = str(self.hosted_data_dir)
+        chat_flow._HOSTED_SESSIONS_DIR = str(self.session_dir)
+        chat_flow._HOSTED_REPO = None
+
+    def tearDown(self):
+        from web_app.handlers import chat_flow
+
+        chat_flow._TRIAL_NEW_CHAT_STATUS_DIR = self.original_status_dir
+        chat_flow._HOSTED_REPO_DATA_DIR = self.original_data_dir
+        chat_flow._HOSTED_SESSIONS_DIR = self.original_sessions_dir
+        chat_flow._HOSTED_REPO = None
+        self.temp_dir.cleanup()
+
+    def _write_session(self, session_id: str, messages: list[dict]):
+        path = HostedConversationRepo.make_session_path(
+            session_id, sessions_dir=str(self.session_dir)
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"messages": messages}, f)
+
+    def _make_read_trial_history(self):
+        """Return a _read_trial_history that actually reads from the test sessions dir."""
+        sessions_dir = str(self.session_dir)
+
+        def reader(session_id):
+            path = HostedConversationRepo.make_session_path(
+                session_id, sessions_dir=sessions_dir
+            )
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                return data.get("messages", []), True
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                return [], False
+        return reader
+
+    def _core(self, user_id: str = "u-test-slot-update"):
+        sessions_dir = str(self.session_dir)
+
+        def read_history(session_id):
+            path = HostedConversationRepo.make_session_path(
+                session_id, sessions_dir=sessions_dir
+            )
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                return data.get("messages", []), True
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                return [], False
+
+        def delete_session(session_id):
+            path = HostedConversationRepo.make_session_path(
+                session_id, sessions_dir=sessions_dir
+            )
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+        def session_path(session_id):
+            return HostedConversationRepo.make_session_path(
+                session_id, sessions_dir=sessions_dir
+            )
+
+        return SimpleNamespace(
+            _authenticate=lambda request: {
+                "user_id": user_id,
+                "agent_id": "trial-agent",
+                "key_hash": "abc12345",
+                "key": "uc_live_test",
+                "email": "test@example.com",
+            },
+            _is_pending_user=lambda auth_info: False,
+            _is_openrouter_model=lambda model: True,
+            _resolve_chat_agent_id=lambda auth_info, model: "trial-agent",
+            _resolve_trial_session_id=lambda agent_id, requested: requested
+            if requested and requested.startswith(f"s-{agent_id}")
+            else f"s-{agent_id}",
+            _read_trial_history=read_history,
+            _delete_trial_session=delete_session,
+            _trial_session_path=session_path,
+            _session_tabs={},
+            _session_agent_map={},
+            _session_allowed_tabs={},
+            _session_profile_paths={},
+            _session_last_active={},
+            _chat_preview_generations={},
+            time=SimpleNamespace(time=lambda: 1234.5),
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            JWT_SECRET="test-jwt-secret",
+            _attach_first_look_guest_cookies=Mock(),
+        )
+
+    def _repo(self):
+        from web_app.handlers.chat_flow import _hosted_repo
+        return _hosted_repo()
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_slot_maps_to_new_session_after_ack(self, mock_core):
+        """Slot state must point to the new session_id after ACK arrives."""
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        old_session = "s-trial-agent-old-slot1"
+        user_id = "u-test-slot-ack"
+        core = self._core(user_id)
+        # Pre-seed slot state so old_session occupies slot 1.
+        state = self._repo().get_slot_state(user_id)
+        state["slots"]["1"] = old_session
+        state["active_slot"] = 1
+        self._repo().set_slot_state(user_id, state)
+        mock_core.return_value = core
+        self._write_session(old_session, [
+            {"role": "user", "content": "Old slot chat"},
+        ])
+
+        request_id = "request-0000000000000B01"
+        reservation = await handle_chat_new(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "session_id": old_session,
+                    "slot": 1,
+                })
+            )
+        )
+        data = json.loads(reservation.body.decode())
+        new_session = data["session_id"]
+        self.assertNotEqual(new_session, old_session)
+
+        await handle_chat_new_ack(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "commit_token": data["commit_token"],
+                    "previous_session_id": old_session,
+                    "session_id": new_session,
+                    "slot": 1,
+                })
+            )
+        )
+
+        # Slot 1 must now point to the new session.
+        updated = self._repo().get_slot_state(user_id)
+        self.assertEqual(updated["slots"]["1"], new_session)
+
+        # History by slot 1 should find the new session (empty, new chat).
+        self.assertFalse(
+            os.path.isfile(
+                HostedConversationRepo.make_session_path(
+                    old_session, sessions_dir=str(self.session_dir)
+                )
+            )
+        )
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_slot_idempotent_recovery_preserves_mapping(self, mock_core):
+        """Double-ack must leave the correct slot mapping intact."""
+        from web_app.handlers.chat_flow import handle_chat_new, handle_chat_new_ack
+
+        old_session = "s-trial-agent-slot-idem"
+        user_id = "u-test-slot-idem"
+        core = self._core(user_id)
+        state = self._repo().get_slot_state(user_id)
+        state["slots"]["2"] = old_session
+        state["active_slot"] = 2
+        self._repo().set_slot_state(user_id, state)
+        mock_core.return_value = core
+        self._write_session(old_session, [
+            {"role": "user", "content": "Slot 2 chat"},
+        ])
+
+        request_id = "request-0000000000000B02"
+        reservation = await handle_chat_new(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "session_id": old_session,
+                    "slot": 2,
+                })
+            )
+        )
+        data = json.loads(reservation.body.decode())
+        new_session = data["session_id"]
+
+        ack_body = {
+            "model": "google/gemini-3.1-flash-lite",
+            "request_id": request_id,
+            "commit_token": data["commit_token"],
+            "previous_session_id": old_session,
+            "session_id": new_session,
+            "slot": 2,
+        }
+        first = await handle_chat_new_ack(
+            SimpleNamespace(json=AsyncMock(return_value=ack_body))
+        )
+        self.assertEqual(first.status, 200)
+
+        second = await handle_chat_new_ack(
+            SimpleNamespace(json=AsyncMock(return_value=ack_body))
+        )
+        self.assertEqual(second.status, 200)
+
+        updated = self._repo().get_slot_state(user_id)
+        self.assertEqual(updated["slots"]["2"], new_session)
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_cross_browser_sync_slots_after_ack(self, mock_core):
+        """A second browser calling slots after an ACK sees the new session."""
+        from web_app.handlers.chat_flow import (
+            handle_chat_new, handle_chat_new_ack, handle_chat_slots,
+        )
+
+        old_session = "s-trial-agent-cross-sync"
+        user_id = "u-test-cross-sync"
+        core = self._core(user_id)
+        state = self._repo().get_slot_state(user_id)
+        state["slots"]["1"] = old_session
+        state["active_slot"] = 1
+        self._repo().set_slot_state(user_id, state)
+        mock_core.return_value = core
+        self._write_session(old_session, [
+            {"role": "user", "content": "Cross-browser chat"},
+        ])
+
+        request_id = "request-0000000000000B03"
+        reservation = await handle_chat_new(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "session_id": old_session,
+                    "slot": 1,
+                })
+            )
+        )
+        data = json.loads(reservation.body.decode())
+        new_session = data["session_id"]
+
+        await handle_chat_new_ack(
+            SimpleNamespace(
+                json=AsyncMock(return_value={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "request_id": request_id,
+                    "commit_token": data["commit_token"],
+                    "previous_session_id": old_session,
+                    "session_id": new_session,
+                    "slot": 1,
+                })
+            )
+        )
+
+        # Simulate a second browser calling slots.
+        slots_resp = await handle_chat_slots(
+            SimpleNamespace(query={"model": "google/gemini-3.1-flash-lite"})
+        )
+        slots_data = json.loads(slots_resp.body.decode())
+        self.assertEqual(slots_data["active_slot"], 1)
+        self.assertEqual(slots_data["session_id"], new_session)
+        slot1 = next(s for s in slots_data["slots"] if s["slot"] == 1)
+        self.assertEqual(slot1["session_id"], new_session)
+        self.assertTrue(slot1["empty"])  # new chat = empty
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_history_defaults_to_hosted_active_slot(self, mock_core):
+        """When no slot is requested, history uses the hosted active_slot."""
+        from web_app.handlers.chat_flow import handle_chat_history
+
+        user_id = "u-test-hist-default"
+        sid2 = self._repo().new_session_id(user_id, "trial-agent")
+        self._write_session(sid2, [
+            {"role": "user", "content": "Active slot 2 chat"},
+        ])
+        state = self._repo().get_slot_state(user_id)
+        state["slots"]["2"] = sid2
+        state["active_slot"] = 2
+        self._repo().set_slot_state(user_id, state)
+
+        core = self._core(user_id)
+        mock_core.return_value = core
+
+        # Request history without specifying a slot.
+        resp = await handle_chat_history(
+            SimpleNamespace(query={"model": "google/gemini-3.1-flash-lite"})
+        )
+        data = json.loads(resp.body.decode())
+        self.assertEqual(data["session_id"], sid2)
+        self.assertEqual(data["messages"][0]["content"], "Active slot 2 chat")
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_guest_slots_fallback_has_session_id(self, mock_core):
+        """Guest slots must still include session_id per slot + top-level."""
+        from web_app.handlers.chat_flow import handle_chat_slots
+
+        core = SimpleNamespace(
+            _authenticate=lambda request: None,  # unauthenticated
+            _first_look_guest_auth=lambda request: (
+                {"agent_id": "guest-abcd"}, "gid", 0,
+            ),
+            _is_pending_user=lambda auth_info: False,
+            _is_openrouter_model=lambda model: True,
+            _resolve_chat_agent_id=lambda auth_info, model: "trial-agent",
+            _resolve_trial_session_id=lambda agent_id, requested: requested
+            if requested else f"s-{agent_id}",
+            _read_trial_history=lambda session_id: ([], False),
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _pending_limited_response=lambda: SimpleNamespace(status=403),
+            _agent_request=AsyncMock(),
+            time=SimpleNamespace(time=lambda: 1234.5),
+            _attach_first_look_guest_cookies=Mock(),
+        )
+        mock_core.return_value = core
+
+        resp = await handle_chat_slots(
+            SimpleNamespace(
+                query={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "first_look_guest": "1",
+                }
+            )
+        )
+        data = json.loads(resp.body.decode())
+        # Top-level session_id must be present.
+        self.assertIn("session_id", data)
+        self.assertTrue(data["session_id"].startswith("s-guest-abcd"))
+        # Each slot must have session_id.
+        for s in data["slots"]:
+            self.assertIn("session_id", s)
+        self.assertTrue(data["trial"])
+
+
+class TestTrialNoGuestFallback(unittest.IsolatedAsyncioTestCase):
+    """OpenRouter guest path must not RPC TrialAgent for get_slots."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.hosted_data_dir = Path(self.temp_dir.name) / "hosted-conversations"
+        self.hosted_data_dir.mkdir()
+        self.session_dir = Path(self.temp_dir.name) / "sessions"
+        self.session_dir.mkdir()
+
+        from web_app.handlers import chat_flow
+        self.original_data_dir = chat_flow._HOSTED_REPO_DATA_DIR
+        self.original_sessions_dir = chat_flow._HOSTED_SESSIONS_DIR
+        chat_flow._HOSTED_REPO_DATA_DIR = str(self.hosted_data_dir)
+        chat_flow._HOSTED_SESSIONS_DIR = str(self.session_dir)
+        chat_flow._HOSTED_REPO = None
+
+    def tearDown(self):
+        from web_app.handlers import chat_flow
+        chat_flow._HOSTED_REPO_DATA_DIR = self.original_data_dir
+        chat_flow._HOSTED_SESSIONS_DIR = self.original_sessions_dir
+        chat_flow._HOSTED_REPO = None
+        self.temp_dir.cleanup()
+
+    @patch("web_app.handlers.chat_flow._core")
+    async def test_guest_get_slots_never_contacts_trial_agent(self, mock_core):
+        from web_app.handlers.chat_flow import handle_chat_slots
+
+        agent_rpc_called = []
+
+        async def agent_rpc(*args, **kwargs):
+            agent_rpc_called.append(True)
+            return {"active_slot": 1, "slots": []}
+
+        core = SimpleNamespace(
+            _authenticate=lambda request: None,
+            _first_look_guest_auth=lambda request: (
+                {"agent_id": "guest-xyz"}, "gid", 0,
+            ),
+            _is_pending_user=lambda auth_info: False,
+            _is_openrouter_model=lambda model: True,
+            _resolve_chat_agent_id=lambda auth_info, model: "trial-agent",
+            _resolve_trial_session_id=lambda agent_id, requested: requested
+            if requested else f"s-{agent_id}",
+            _read_trial_history=lambda session_id: (
+                [{"role": "user", "content": "guest task"}], True
+            ),
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _pending_limited_response=lambda: SimpleNamespace(status=403),
+            _agent_request=agent_rpc,
+            _attach_first_look_guest_cookies=Mock(),
+            time=SimpleNamespace(time=lambda: 1234.5),
+        )
+        mock_core.return_value = core
+
+        resp = await handle_chat_slots(
+            SimpleNamespace(
+                query={
+                    "model": "google/gemini-3.1-flash-lite",
+                    "first_look_guest": "1",
+                }
+            )
+        )
+        data = json.loads(resp.body.decode())
+        self.assertTrue(data["trial"])
+        self.assertFalse(agent_rpc_called, "guest slots must not RPC trial agent")
+
+
 if __name__ == "__main__":
     unittest.main()

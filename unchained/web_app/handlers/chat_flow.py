@@ -303,13 +303,16 @@ def _commit_trial_new_chat_transition(
             if value is not None:
                 mapping.setdefault(session_id, value)
     # Archive old session before deleting it, preserving history.
+    # archive_session() auto-extracts the preview from the first user
+    # message, so we avoid a redundant session-file read here.
     if user_id:
+        repo = _hosted_repo()
+        slot = record.get("slot", 1)
         try:
-            _hosted_repo().archive_session(
+            repo.archive_session(
                 user_id,
                 previous_session_id,
-                slot=record.get("slot"),
-                preview=_first_user_message_preview(previous_session_id),
+                slot=slot,
             )
         except Exception:
             log.exception(
@@ -318,6 +321,23 @@ def _commit_trial_new_chat_transition(
                 user_id,
             )
     core._delete_trial_session(previous_session_id)
+    # Atomically update the server slot state so the new session is
+    # immediately discoverable — no stale/deleted slot mapping.
+    if user_id:
+        try:
+            state = repo.get_slot_state(user_id)
+            slot_key = str(slot)
+            if state["slots"].get(slot_key) == previous_session_id:
+                state["slots"][slot_key] = session_id
+                state["previews"][slot_key] = ""  # new chat = empty preview
+                repo.set_slot_state(user_id, state)
+        except Exception:
+            log.exception(
+                "[chat] failed to update slot state after new-chat commit "
+                "for user %s slot %s",
+                user_id,
+                slot,
+            )
     record["acknowledged"] = True
 
 
@@ -2544,8 +2564,8 @@ async def handle_chat_history(request: web.Request) -> web.Response:
     if core._is_openrouter_model(model):
         # Use slot state from hosted repo when available.
         if not guest_mode and user_id:
-            slot = requested_slot or 1
             state = _hosted_repo().get_slot_state(user_id)
+            slot = requested_slot or state.get("active_slot", 1)
             sid_from_state = state["slots"].get(str(slot), "")
             if sid_from_state:
                 session_id = sid_from_state
@@ -2952,41 +2972,79 @@ async def handle_chat_new_ack(request: web.Request) -> web.Response:
 async def handle_chat_slots(request: web.Request) -> web.Response:
     """GET /web/chat/slots — get authoritative slot state."""
     core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return web.json_response({"error": "Not authenticated"}, status=401)
+    guest_mode = False
+    guest_id = ""
+    if request.query.get("first_look_guest") == "1":
+        auth_info, guest_id, _ = core._first_look_guest_auth(request)
+        guest_mode = True
+    else:
+        auth_info = core._authenticate(request)
+        if not auth_info:
+            return web.json_response({"error": "Not authenticated"}, status=401)
     agent_id = auth_info.get("agent_id", "")
     user_id = auth_info.get("user_id", "")
 
     model = request.query.get("model", "")
-    if core._is_pending_user(auth_info) and not model:
+    if (guest_mode or core._is_pending_user(auth_info)) and not model:
         model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     if core._is_pending_user(auth_info) and not core._is_openrouter_model(model):
         return core._pending_limited_response()
+    if guest_mode and not core._is_openrouter_model(model):
+        model = core._OPENROUTER_TRIAL_DEFAULT_MODEL
     requested_session_id = request.query.get("session_id", "")
     chat_agent_id = core._resolve_chat_agent_id(auth_info, model)
-    if core._is_openrouter_model(model) and user_id:
-        state = _hosted_repo().get_slot_state(user_id)
-        slots = []
-        for n in (1, 2, 3):
-            sid = state["slots"].get(str(n), "")
-            preview = state["previews"].get(str(n), "")
-            empty = True
-            if sid:
-                msgs, found = _hosted_repo().read_session_messages(sid)
-                if found and msgs:
-                    empty = False
-                    if not preview:
-                        for m in msgs:
-                            if m.get("role") == "user":
-                                preview = str(m.get("content", "")).strip()[:40]
-                                preview = re.sub(r"\s+", " ", preview)
-                                break
-            slots.append({"slot": n, "empty": empty, "preview": preview})
+    if core._is_openrouter_model(model):
+        # Server-authoritative slot state when user_id is available.
+        if not guest_mode and user_id:
+            state = _hosted_repo().get_slot_state(user_id)
+            active_slot = state.get("active_slot", 1)
+            active_sid = state["slots"].get(str(active_slot), "")
+            slots = []
+            for n in (1, 2, 3):
+                sid = state["slots"].get(str(n), "")
+                preview = state["previews"].get(str(n), "")
+                empty = True
+                if sid:
+                    msgs, found = _hosted_repo().read_session_messages(sid)
+                    if found and msgs:
+                        empty = False
+                        if not preview:
+                            for m in msgs:
+                                if m.get("role") == "user":
+                                    preview = str(m.get("content", "")).strip()[:40]
+                                    preview = re.sub(r"\s+", " ", preview)
+                                    break
+                slots.append({
+                    "slot": n, "session_id": sid, "empty": empty, "preview": preview,
+                })
+            return web.json_response(
+                {
+                    "active_slot": active_slot,
+                    "session_id": active_sid,
+                    "slots": slots,
+                    "trial": True,
+                }
+            )
+        # Guest / no-user_id fallback: maintain prior single-slot default.
+        session_id = core._resolve_trial_session_id(agent_id, requested_session_id)
+        msgs, _ = core._read_trial_history(session_id)
+        preview = ""
+        for m in msgs:
+            if m.get("role") == "user":
+                preview = m.get("content", "")[:40]
+                break
         return web.json_response(
             {
-                "active_slot": state.get("active_slot", 1),
-                "slots": slots,
+                "active_slot": 1,
+                "session_id": session_id,
+                "slots": [
+                    {"slot": 1, "session_id": session_id,
+                     "empty": len(msgs) == 0, "preview": preview},
+                    {"slot": 2, "session_id": "",
+                     "empty": True, "preview": ""},
+                    {"slot": 3, "session_id": "",
+                     "empty": True, "preview": ""},
+                ],
                 "trial": True,
             }
         )

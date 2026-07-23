@@ -10032,12 +10032,14 @@ async function switchSlot(n) {
   _persistSessionId(sessionId);
   _syncSlotButtons();
   document.getElementById('chat').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div>';
-  // Persist slot switch to server.
-  fetch('/web/chat/switch', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({model: currentModel(), slot: activeSlot}),
-  }).catch(function(){});
+  // Persist slot switch to server when using hosted OpenRouter models.
+  if (_isOpenRouterModelId(currentModel())) {
+    fetch('/web/chat/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: currentModel(), slot: activeSlot}),
+    }).catch(function(){});
+  }
   await loadHistory();
 }
 
