@@ -1906,6 +1906,76 @@ def _scheduler_api_auth(core, request: web.Request) -> tuple[dict | None, web.Re
     return auth_info, None
 
 
+def _scheduler_trial_agent_auth(core, request: web.Request, body: dict) -> dict | None:
+    """Authenticate a hosted trial-agent scheduler call using the deployment service key.
+
+    The hosted worker never receives a raw user API key.  Instead it sends the
+    shared ``TRIAL_AGENT_KEY`` as a Bearer token together with a scoped
+    scheduler grant id.  The grant (minted by :func:`_mint_scheduler_turn_grant`)
+    binds the user id, chat session id, and an expiry.  Deriving the user from
+    the validated grant ensures the request body cannot spoof user ownership.
+    """
+    headers = getattr(request, "headers", {}) or {}
+    auth_header = str(headers.get("Authorization", "") or "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header[len("bearer "):].strip()
+    trial_key = str(getattr(core, "TRIAL_AGENT_KEY", "") or "")
+    if not token or not trial_key:
+        return None
+    if not hmac.compare_digest(token, trial_key):
+        return None
+
+    grant_id = str(body.get("scheduler_grant_id", "") or "").strip()
+    if not grant_id:
+        return None
+
+    grants = getattr(core, "_scheduler_turn_grants", None)
+    if not isinstance(grants, dict):
+        return None
+    grant_meta = grants.get(grant_id)
+    if not isinstance(grant_meta, dict):
+        return None
+
+    now = time.time()
+    expires_at = 0.0
+    try:
+        expires_at = float(grant_meta.get("expires_at", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires_at <= now:
+        return None
+
+    user_id = str(grant_meta.get("user_id", "") or "").strip()
+    if not user_id:
+        return None
+
+    return {"user_id": user_id, "trial_agent_auth": True}
+
+
+async def _scheduler_auth_with_trial_agent_fallback(
+    core, request: web.Request
+) -> tuple[dict | None, web.Response | None, dict | None]:
+    """Authenticate scheduler agent endpoints with trial-agent fallback.
+
+    Returns ``(auth_info, error_response, body)``.  When the caller is the
+    hosted trial worker the *body* is parsed early so the grant id can be
+    extracted for service-level auth.
+    """
+    auth_info, error = _scheduler_api_auth(core, request)
+    if auth_info is not None:
+        return auth_info, None, None
+
+    # Normal auth failed — try trial-agent service auth with early body parse
+    body, _body_error = await _scheduler_json_body(request)
+    if body is not None:
+        trial_auth_info = _scheduler_trial_agent_auth(core, request, body)
+        if trial_auth_info is not None:
+            return trial_auth_info, None, body
+
+    return None, error, body
+
+
 async def _scheduler_json_body(request: web.Request) -> tuple[dict | None, web.Response | None]:
     can_read = getattr(request, "can_read_body", True)
     try:
@@ -2157,12 +2227,13 @@ async def handle_scheduler_history(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_list(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/list — list scheduler jobs for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2173,12 +2244,13 @@ async def handle_scheduler_agent_list(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/preview — preview one candidate job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2204,12 +2276,13 @@ async def handle_scheduler_agent_preview(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/upsert — create or replace one job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error
@@ -2241,12 +2314,13 @@ async def handle_scheduler_agent_upsert(request: web.Request) -> web.Response:
 async def handle_scheduler_agent_delete(request: web.Request) -> web.Response:
     """POST /web/scheduler/agent/delete — delete one job for the armed turn."""
     core = _core()
-    auth_info, error = _scheduler_api_auth(core, request)
+    auth_info, error, body = await _scheduler_auth_with_trial_agent_fallback(core, request)
     if error is not None:
         return error
-    body, error = await _scheduler_json_body(request)
-    if error is not None:
-        return error
+    if body is None:
+        body, error = await _scheduler_json_body(request)
+        if error is not None:
+            return error
     error = _scheduler_require_turn_grant(core, auth_info, body)
     if error is not None:
         return error

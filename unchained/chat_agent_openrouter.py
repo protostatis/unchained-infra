@@ -45,6 +45,14 @@ import websockets
 import cloud_tools
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
+from scheduler_agent import (
+    OPENAI_SCHEDULER_TOOLS,
+    SCHEDULER_TOOL_NAMES,
+    SCHEDULER_TOOL_PROMPT,
+    _api_url_from_server,
+    build_system_prompt as _build_scheduler_system_prompt,
+    execute_scheduler_tool,
+)
 from nudge import (
     NudgeState,
     _is_base64_png_blob,
@@ -411,6 +419,13 @@ TOOLS = [
         },
     },
 ]
+
+
+def _build_scheduler_openai_tools(scheduler_armed: bool, scheduler_grant_id: str) -> list[dict]:
+    """Return the OpenAI-format tool list with scheduler tools included when armed."""
+    if not scheduler_armed or not scheduler_grant_id:
+        return list(TOOLS)
+    return list(TOOLS) + list(OPENAI_SCHEDULER_TOOLS)
 
 
 def _truncate(s: str, n: int) -> str:
@@ -785,11 +800,19 @@ class TrialAgent:
             return None
         except Exception:
             return None
+        # Per-message scheduler state (set in _handle_message, cleared after turn)
+        self.current_scheduler_grant_id: str = ""
+        self.current_scheduler_armed: bool = False
+        self._current_scheduler_session_id: str = ""
 
     def _session_path(self, session_id: str) -> str:
         os.makedirs(SESSION_DIR, exist_ok=True)
         safe_id = session_id.replace("/", "_").replace("..", "").replace(" ", "_")
         return os.path.join(SESSION_DIR, f"{safe_id}.json")
+
+    def _current_session_id_for_scheduler(self) -> str:
+        """Return the session id for the currently-active scheduler turn."""
+        return self._current_scheduler_session_id or ""
 
     def _load_session(self, session_id: str) -> list:
         """Load session from disk, prepend current system prompt. Returns messages list."""
@@ -1096,6 +1119,11 @@ class TrialAgent:
         user_id = str(msg.get("user_id", "")).strip()
         user_text = msg["message"]
 
+        # Extract scheduler state from the message (arms the turn for /schedule)
+        self.current_scheduler_armed = bool(msg.get("scheduler_armed", False))
+        self.current_scheduler_grant_id = str(msg.get("scheduler_grant_id", "") or "").strip()
+        self._current_scheduler_session_id = session_id
+
         # Use model from message if provided (allows front-end model selector)
         model = msg.get("model") or self.model
 
@@ -1105,6 +1133,14 @@ class TrialAgent:
         if session_id not in self.sessions:
             self.sessions[session_id] = self._load_session(session_id)
         messages = self.sessions[session_id]
+        # Rebuild system prompt with scheduler instructions when armed
+        base_system = _build_system_prompt()
+        if self.current_scheduler_armed and self.current_scheduler_grant_id:
+            base_system = _build_scheduler_system_prompt(base_system, scheduler_armed=True, scheduler_grant_id=self.current_scheduler_grant_id)
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": base_system}
+        elif not messages or messages[0].get("role") != "system":
+            messages.insert(0, {"role": "system", "content": base_system})
         # Sanitize malformed messages (e.g. content as dict/None instead of string)
         for msg in messages:
             c = msg.get("content")
@@ -1600,6 +1636,13 @@ class TrialAgent:
             await self._send(session_id, {"type": "error", "data": str(e) or type(e).__name__})
             self._save_session(session_id, messages)
             await self._send(session_id, {"type": "done"})
+        finally:
+            # Clear per-message scheduler state so a subsequent unarmed turn
+            # does not accidentally retain scheduler tools or grant access.
+            if self._current_scheduler_session_id == session_id:
+                self.current_scheduler_armed = False
+                self.current_scheduler_grant_id = ""
+                self._current_scheduler_session_id = ""
 
     async def _call_openrouter(
         self,
@@ -1623,7 +1666,10 @@ class TrialAgent:
         if tool_choice == "none":
             body["tool_choice"] = "none"
         else:
-            body["tools"] = TOOLS
+            tools_list = list(TOOLS)
+            if self.current_scheduler_armed and self.current_scheduler_grant_id:
+                tools_list = _build_scheduler_openai_tools(getattr(self, "current_scheduler_armed", False), self.current_scheduler_grant_id)
+            body["tools"] = tools_list
             body["tool_choice"] = "auto"
 
         # --- Credit reserve before API call ---
@@ -1853,6 +1899,16 @@ class TrialAgent:
             elif name == "screenshot":
                 return await cloud_tools.screenshot(
                     agent_id, tab_id, RELAY_HOST, RELAY_PORT)
+
+            elif name in SCHEDULER_TOOL_NAMES:
+                return await execute_scheduler_tool(
+                    server_url=self.server,
+                    api_key=self.api_key,
+                    session_id=self._current_session_id_for_scheduler(),
+                    scheduler_grant_id=self.current_scheduler_grant_id,
+                    tool_name=name,
+                    args=args,
+                )
 
             else:
                 return f"Unknown tool: {name}"

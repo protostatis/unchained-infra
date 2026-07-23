@@ -559,7 +559,17 @@ def _extract_scheduler_turn(message: str, *, allow_trigger: bool = True) -> tupl
 
 
 def _scheduler_trigger_supported(*, guest_mode: bool, is_openrouter: bool) -> bool:
-    return not guest_mode and not is_openrouter
+    """Scheduler trigger is supported for authenticated users including hosted openrouter.
+
+    Guest (anonymous) users and non-openrouter paths that don't match a
+    user account are still rejected.  Authenticated hosted-openrouter
+    turns receive a short-lived scoped grant that lets the shared trial
+    worker call back into scheduler endpoints without raw user keys.
+    """
+    if guest_mode:
+        return False
+    # Authenticated users on any lane (including hosted openrouter) are allowed
+    return True
 
 
 async def _allowed_profile_paths(core, agent_id: str) -> set[str]:
