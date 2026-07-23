@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
+import queue
 import shutil
 import tempfile
 import unittest
@@ -19,6 +21,33 @@ from hosted_conversations import HostedConversationRepo
 def _json_file(path: str) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def _hold_slot_state_lock(
+    data_dir: str,
+    sessions_dir: str,
+    user_id: str,
+    acquired,
+    release,
+) -> None:
+    repo = HostedConversationRepo(data_dir=data_dir, sessions_dir=sessions_dir)
+    with repo._slot_state_lock(user_id):
+        acquired.set()
+        if not release.wait(10):
+            raise RuntimeError("timed out waiting to release slot-state lock")
+
+
+def _bind_slot_in_process(
+    data_dir: str,
+    sessions_dir: str,
+    user_id: str,
+    session_id: str,
+    started,
+    results,
+) -> None:
+    repo = HostedConversationRepo(data_dir=data_dir, sessions_dir=sessions_dir)
+    started.set()
+    results.put((session_id, repo.bind_initial_session(user_id, session_id, slot=1)))
 
 
 class TestHostedConversationRepo(unittest.TestCase):
@@ -320,6 +349,64 @@ class TestHostedConversationRepo(unittest.TestCase):
         self.assertEqual(len(tmp_files), 0)
         reloaded = self.repo.get_slot_state("u-atomic")
         self.assertEqual(reloaded["slots"]["3"], "s-final")
+
+    @unittest.skipUnless(os.name == "posix", "advisory slot locks require POSIX")
+    def test_initial_slot_binding_serializes_across_processes(self):
+        ctx = multiprocessing.get_context("spawn")
+        acquired = ctx.Event()
+        release = ctx.Event()
+        started_a = ctx.Event()
+        started_b = ctx.Event()
+        results = ctx.Queue()
+        user_id = "u-cross-process"
+        holder = ctx.Process(
+            target=_hold_slot_state_lock,
+            args=(self.temp.name, str(self.session_dir), user_id, acquired, release),
+        )
+        binders = [
+            ctx.Process(
+                target=_bind_slot_in_process,
+                args=(
+                    self.temp.name,
+                    str(self.session_dir),
+                    user_id,
+                    session_id,
+                    started,
+                    results,
+                ),
+            )
+            for session_id, started in (
+                ("s-process-a", started_a),
+                ("s-process-b", started_b),
+            )
+        ]
+        try:
+            holder.start()
+            self.assertTrue(acquired.wait(10), "holder did not acquire file lock")
+            for process in binders:
+                process.start()
+            self.assertTrue(started_a.wait(10), "first binder did not start")
+            self.assertTrue(started_b.wait(10), "second binder did not start")
+            with self.assertRaises(queue.Empty):
+                results.get(timeout=0.25)
+
+            release.set()
+            outcomes = [results.get(timeout=10), results.get(timeout=10)]
+            self.assertEqual(sum(1 for _, won in outcomes if won), 1)
+            winner = next(session_id for session_id, won in outcomes if won)
+            self.assertEqual(
+                self.repo.get_slot_state(user_id)["slots"]["1"], winner
+            )
+        finally:
+            release.set()
+            for process in (holder, *binders):
+                if process.pid is not None:
+                    process.join(timeout=10)
+                    if process.is_alive():
+                        process.terminate()
+                        process.join(timeout=5)
+            results.close()
+            results.join_thread()
 
     def test_archive_atomic_write(self):
         sid = "s-trial-agent-atomic"

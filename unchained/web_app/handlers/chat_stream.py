@@ -23,6 +23,7 @@ from chat_event_transport import (
 )
 
 from web_app.core import get_core as _core
+from web_app.handlers.chat_flow import _hosted_repo
 from web_state import ChatTurnState, profile_session_caller_tag, profile_session_guard
 
 
@@ -1405,6 +1406,62 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     scheduler_grant_id = ""
     if scheduler_armed and guest_mode:
         scheduler_grant_id = core._mint_scheduler_turn_grant(auth_info.get("user_id", ""), session_id)
+    # Browser-hosted turns carry an explicit slot. Background scheduler/API
+    # turns intentionally omit it and must not claim or conflict with a UI
+    # conversation slot.
+    if (
+        is_openrouter
+        and not guest_mode
+        and auth_info.get("user_id")
+        and body.get("slot") is not None
+    ):
+        try:
+            repo = _hosted_repo()
+            requested_slot_raw = body.get("slot")
+            requested_slot = None
+            if requested_slot_raw is not None:
+                try:
+                    candidate = int(requested_slot_raw)
+                except (TypeError, ValueError):
+                    return web.json_response(
+                        {"error": "slot must be an integer from 1 to 3"},
+                        status=400,
+                    )
+                if candidate not in (1, 2, 3):
+                    return web.json_response(
+                        {"error": "slot must be an integer from 1 to 3"},
+                        status=400,
+                    )
+                requested_slot = candidate
+            bound = repo.bind_initial_session(
+                auth_info["user_id"],
+                session_id,
+                slot=requested_slot,
+            )
+            if not bound:
+                return web.json_response(
+                    {
+                        "error": "hosted_slot_conflict",
+                        "message": (
+                            "This conversation slot changed on another client. "
+                            "Reload the trial page and try again."
+                        ),
+                    },
+                    status=409,
+                )
+        except (OSError, ValueError) as exc:
+            log.exception(
+                "[chat] initial slot bind failed for user %s: %s",
+                auth_info.get("user_id", ""),
+                exc,
+            )
+            return web.json_response(
+                {
+                    "error": "hosted_slot_unavailable",
+                    "message": "Hosted conversation state is temporarily unavailable.",
+                },
+                status=503,
+            )
     if not guest_mode:
         # Fast-path a refresh/retry before quota and provider checks. The
         # locked start below remains the race-safe authority for two genuinely

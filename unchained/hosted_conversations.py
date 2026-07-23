@@ -22,8 +22,15 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import uuid
+from contextlib import contextmanager
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - production and CI are POSIX
+    _fcntl = None
 
 _ARCHIVE_DIR_NAME = "archives"
 _SLOT_STATE_FILE = "slot-state.json"
@@ -46,6 +53,11 @@ _SLOT_COUNT = 3
 
 class HostedConversationRepo:
     """Persistent, server-authoritative trial conversation slot + archive store."""
+
+    # A fixed set of process-local locks prevents same-process races without
+    # retaining one lock forever for every user. A per-user advisory file lock
+    # below extends the critical section across web processes on POSIX hosts.
+    _slot_thread_locks = tuple(threading.RLock() for _ in range(64))
 
     def __init__(
         self,
@@ -80,6 +92,26 @@ class HostedConversationRepo:
     def _ensure_user_dirs(self, user_id: str) -> None:
         os.makedirs(self._user_dir(user_id), exist_ok=True)
         os.makedirs(self._archives_dir(user_id), exist_ok=True)
+
+    @contextmanager
+    def _slot_state_lock(self, user_id: str):
+        """Serialize slot-state read/modify/write operations for one user."""
+        self._ensure_user_dirs(user_id)
+        user_key = self._safe_user_key(user_id)
+        thread_lock = self._slot_thread_locks[
+            int(user_key[:8], 16) % len(self._slot_thread_locks)
+        ]
+        lock_path = os.path.join(self._user_dir(user_id), ".slot-state.lock")
+        with thread_lock:
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            with os.fdopen(lock_fd, "a+") as lock_file:
+                if _fcntl is not None:
+                    _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    if _fcntl is not None:
+                        _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_UN)
 
     # ------------------------------------------------------------------
     # Session ID helpers (pass-through to existing /data/sessions format)
@@ -230,8 +262,8 @@ class HostedConversationRepo:
         state.setdefault("active_slot", 1)
         return state
 
-    def set_slot_state(self, user_id: str, state: dict) -> None:
-        """Persist slot state atomically via temp-file + rename."""
+    def _write_slot_state_unlocked(self, user_id: str, state: dict) -> None:
+        """Persist slot state atomically; caller must hold _slot_state_lock."""
         self._ensure_user_dirs(user_id)
         if not isinstance(state, dict):
             raise ValueError("state must be a dict")
@@ -253,6 +285,118 @@ class HostedConversationRepo:
                 os.remove(tmp)
             except FileNotFoundError:
                 pass
+
+    def set_slot_state(self, user_id: str, state: dict) -> None:
+        """Persist slot state atomically under the per-user mutation lock."""
+        with self._slot_state_lock(user_id):
+            self._write_slot_state_unlocked(user_id, state)
+
+    # ------------------------------------------------------------------
+    # Initial session binding (first-turn slot assignment)
+    # ------------------------------------------------------------------
+
+    def bind_initial_session(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        slot: int | None = None,
+    ) -> bool:
+        """Atomically bind *session_id* to the first empty slot for *user_id*.
+
+        If *slot* is given (1-3), attempts to bind that specific slot.
+        Otherwise uses the current ``active_slot``.
+        Does NOT overwrite a slot that already holds a different session.
+        A slot that already points to the same *session_id* is considered
+        already bound and returns ``True``.
+
+        Returns ``True`` if the session was bound (or already bound).
+        Returns ``False`` if the target slot is occupied by another session.
+
+        Uses a per-user process + advisory file lock so concurrent requests,
+        including requests handled by different web processes, serialize and
+        exactly one wins the slot.
+
+        Raises ``ValueError`` for invalid slot or missing user_id.
+        Raises ``OSError`` only for filesystem-level failures the caller
+        must handle (disk full, permission denied).
+        """
+        self._safe_user_key(user_id)
+        self.validate_session_id(session_id)
+        target = slot
+        if target is not None and target not in (1, 2, 3):
+            raise ValueError(f"slot must be 1-3, got {target}")
+
+        with self._slot_state_lock(user_id):
+            state = self.get_slot_state(user_id)
+            slots = state["slots"]
+
+            # A session is authoritative in at most one slot. Replays without
+            # an explicit slot follow the existing binding instead of copying
+            # the same conversation into whichever slot is currently active.
+            existing_slot = next(
+                (
+                    int(slot_key)
+                    for slot_key, bound_session in slots.items()
+                    if bound_session == session_id and slot_key in {"1", "2", "3"}
+                ),
+                None,
+            )
+            if existing_slot is not None:
+                if target is not None and target != existing_slot:
+                    return False
+                if state.get("active_slot") != existing_slot:
+                    state["active_slot"] = existing_slot
+                    self._write_slot_state_unlocked(user_id, state)
+                return True
+
+            if target is None:
+                target = state.get("active_slot", 1)
+            if target not in (1, 2, 3):
+                target = 1
+            slot_key = str(target)
+            existing = slots.get(slot_key, "")
+            if existing:
+                # Slot is occupied by a different session — do not overwrite.
+                return False
+            # Bind the new session.
+            slots[slot_key] = session_id
+            state["active_slot"] = target
+            self._write_slot_state_unlocked(user_id, state)
+            return True
+
+    def set_active_slot(self, user_id: str, slot: int) -> None:
+        """Set the active slot without losing concurrent slot assignments."""
+        if slot not in (1, 2, 3):
+            raise ValueError(f"slot must be 1-3, got {slot}")
+        with self._slot_state_lock(user_id):
+            state = self.get_slot_state(user_id)
+            state["active_slot"] = slot
+            self._write_slot_state_unlocked(user_id, state)
+
+    def replace_slot_session(
+        self,
+        user_id: str,
+        slot: int,
+        expected_session_id: str,
+        new_session_id: str,
+        *,
+        preview: str = "",
+    ) -> bool:
+        """Compare-and-set a slot session while preserving concurrent updates."""
+        if slot not in (1, 2, 3):
+            raise ValueError(f"slot must be 1-3, got {slot}")
+        self.validate_session_id(expected_session_id)
+        self.validate_session_id(new_session_id)
+        with self._slot_state_lock(user_id):
+            state = self.get_slot_state(user_id)
+            slot_key = str(slot)
+            if state["slots"].get(slot_key, "") != expected_session_id:
+                return False
+            state["slots"][slot_key] = new_session_id
+            state["previews"][slot_key] = str(preview)[:200]
+            self._write_slot_state_unlocked(user_id, state)
+            return True
 
     # ------------------------------------------------------------------
     # Session ID generation (derived, opaque, replay-stable)
@@ -400,30 +544,31 @@ class HostedConversationRepo:
         if slot not in (1, 2, 3):
             slot = 1
         preview = str(data.get("preview", ""))[:200]
-        # Write restored messages to a fresh session file with an
-        # agent-scoped session_id so ownership checks pass.
-        new_sid = self.new_session_id(user_id, agent_id)
-        sid_path = self.session_path(new_sid, sessions_dir=sessions_dir)
-        tmp = f"{sid_path}.{uuid.uuid4().hex}.tmp"
-        try:
-            os.makedirs(os.path.dirname(sid_path), exist_ok=True)
-            with open(tmp, "w") as f:
-                json.dump({"messages": msgs}, f, separators=(",", ":"), sort_keys=True)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, sid_path)
-        finally:
+        with self._slot_state_lock(user_id):
+            # Write restored messages to a fresh session file with an
+            # agent-scoped session_id so ownership checks pass.
+            new_sid = self.new_session_id(user_id, agent_id)
+            sid_path = self.session_path(new_sid, sessions_dir=sessions_dir)
+            tmp = f"{sid_path}.{uuid.uuid4().hex}.tmp"
             try:
-                os.remove(tmp)
-            except FileNotFoundError:
-                pass
-        # Update slot state to point to the new session.
-        state = self.get_slot_state(user_id)
-        state["slots"][str(slot)] = new_sid
-        if preview:
-            state["previews"][str(slot)] = preview
-        state["active_slot"] = slot
-        self.set_slot_state(user_id, state)
+                os.makedirs(os.path.dirname(sid_path), exist_ok=True)
+                with open(tmp, "w") as f:
+                    json.dump({"messages": msgs}, f, separators=(",", ":"), sort_keys=True)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, sid_path)
+            finally:
+                try:
+                    os.remove(tmp)
+                except FileNotFoundError:
+                    pass
+            # Update slot state to point to the new session.
+            state = self.get_slot_state(user_id)
+            state["slots"][str(slot)] = new_sid
+            if preview:
+                state["previews"][str(slot)] = preview
+            state["active_slot"] = slot
+            self._write_slot_state_unlocked(user_id, state)
         return new_sid, slot, msgs
 
     def delete_archive(self, user_id: str, archive_id: str) -> bool:

@@ -21,6 +21,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ./unchained
 
+      - name: Validate dev launcher syntax
+        run: bash -n dev.sh
+
       - name: Run public-safe tests
         run: |
           cd unchained
@@ -36,7 +39,9 @@ jobs:
             test_hosted_billing \
             test_hosted_admission \
             test_scheduler_agent_access \
+            test_scheduled_tasks \
             test_hosted_conversations \
+            test_dev_script \
             test_trial_new_chat \
             test_web_contracts
 

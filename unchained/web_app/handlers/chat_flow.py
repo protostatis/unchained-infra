@@ -325,12 +325,20 @@ def _commit_trial_new_chat_transition(
     # immediately discoverable — no stale/deleted slot mapping.
     if user_id:
         try:
-            state = repo.get_slot_state(user_id)
-            slot_key = str(slot)
-            if state["slots"].get(slot_key) == previous_session_id:
-                state["slots"][slot_key] = session_id
-                state["previews"][slot_key] = ""  # new chat = empty preview
-                repo.set_slot_state(user_id, state)
+            updated = repo.replace_slot_session(
+                user_id,
+                slot,
+                previous_session_id,
+                session_id,
+                preview="",
+            )
+            if not updated:
+                log.info(
+                    "[chat] slot state changed before new-chat commit for "
+                    "user %s slot %s",
+                    user_id,
+                    slot,
+                )
         except Exception:
             log.exception(
                 "[chat] failed to update slot state after new-chat commit "
@@ -2243,6 +2251,47 @@ async def handle_chat_status(request: web.Request) -> web.Response:
     model_hint = request.query.get("model", "")
     if core._is_pending_user(auth_info) and model_hint and not core._is_openrouter_model(model_hint):
         return core._pending_limited_response()
+
+    # --- OpenRouter (hosted trial) status ---
+    # When the model hint is an OpenRouter model, report the hosted trial
+    # worker and bridge independently.  The local chat agent is irrelevant.
+    if core._is_openrouter_model(model_hint):
+        or_ws = core._chat_agents.get(core.TRIAL_AGENT_ID) if core.TRIAL_AGENT_ID else None
+        or_chat_connected = or_ws is not None and not or_ws.closed
+        local_client_agent_id = auth_info.get("agent_id", "")
+        local_client_ws = (
+            core._chat_agents.get(local_client_agent_id)
+            if local_client_agent_id
+            else None
+        )
+        local_client_connected = (
+            local_client_ws is not None and not local_client_ws.closed
+        )
+        response = {
+            "connected": or_chat_connected and bridge_connected,
+            "agent_id": core.TRIAL_AGENT_ID or "",
+            "chat_connected": or_chat_connected,
+            "chat_agent_id": core.TRIAL_AGENT_ID or "",
+            "bridge_connected": bridge_connected,
+            "bridge_agent_id": bridge_agent_id,
+            "active_bridge_agent_id": bridge_info.get("active_bridge_agent_id", bridge_agent_id),
+            "bridge_profile": bridge_info.get("bridge_profile", "default"),
+            "active_bridge_profile": bridge_info.get("active_bridge_profile", "default"),
+            "available_bridge_profiles": bridge_info.get("available_bridge_profiles", []),
+            "bridge_selection_required": bool(bridge_info.get("bridge_selection_required")),
+            "bridge_status_reason": bridge_info.get("bridge_status_reason", "offline"),
+            "bridge_configured": bool(bridge_info.get("bridge_configured")),
+            "client_agent_id": local_client_agent_id,
+            "client_connected": local_client_connected,
+            "trial": True,
+        }
+        response.update(
+            _client_version_status(
+                core._chat_agent_caps.get(local_client_agent_id, {})
+            )
+        )
+        return web.json_response(response)
+
     wants_gemini = request.query.get("gemini") == "1"
     wants_codex = (
         request.query.get("codex") == "1"
@@ -3092,9 +3141,7 @@ async def handle_chat_switch(request: web.Request) -> web.Response:
     if core._is_openrouter_model(model):
         # Persist slot switch server-side.
         if user_id:
-            state = _hosted_repo().get_slot_state(user_id)
-            state["active_slot"] = slot
-            _hosted_repo().set_slot_state(user_id, state)
+            _hosted_repo().set_active_slot(user_id, slot)
         return web.json_response({"ok": True, "active_slot": slot, "trial": True})
     resp = await core._agent_request(chat_agent_id, {"type": "switch_slot", "slot": slot})
     if resp is None:
