@@ -7147,6 +7147,8 @@ CASE_STUDY_ZILLOW_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Case Study: Rental Relisting on Zillow &mdash; Unchained</title>
+<link rel="canonical" href="https://unchainedsky.com/case-study/zillow-rental">
+<meta name="description" content="See a rental relisting workflow: Unchained researches Zillow comps, reviews lease details, schedules tours, and verifies a published listing.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -18346,6 +18348,8 @@ FIRST_LOOK_PREVIEW_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Unchained First Look Preview</title>
+<link rel="canonical" href="https://unchainedsky.com/first-look">
+<meta name="description" content="Try a shared browser demo on selected public sites. Give Unchained a task and watch a live browser run before connecting your own profile.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26619,6 +26623,8 @@ MCP_PAGE_HTML = r"""<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MCP Setup | Unchained</title>
+  <link rel="canonical" href="https://unchainedsky.com/mcp">
+  <meta name="description" content="Connect Unchained to your existing Chrome from an MCP client. Use your local browser through an authenticated tunnel, without Playwright or headless mode.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
