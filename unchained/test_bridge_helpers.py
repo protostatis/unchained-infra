@@ -3,6 +3,7 @@ _parse_port_from_cmdline, _check_port_conflict."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -360,6 +361,7 @@ class TestEnsureChrome(unittest.TestCase):
                 9222,
                 "default",
                 False,
+                False,
                 "",
                 "ws://127.0.0.1:8765/tunnel",
             )
@@ -403,6 +405,7 @@ class TestEnsureChrome(unittest.TestCase):
                 9222,
                 "default",
                 False,
+                False,
                 "",
                 "ws://127.0.0.1:8765/tunnel",
             )
@@ -440,6 +443,7 @@ class TestEnsureChrome(unittest.TestCase):
             "127.0.0.1",
             9222,
             "default",
+            False,
             False,
             "",
             cb.DEFAULT_RELAY_URL,
@@ -691,6 +695,115 @@ class TestFirstPageTab(unittest.TestCase):
 
         mock_warning.assert_called_once()
 
+
+class _ProbeWebSocket:
+    def __init__(self, responses: list[dict]):
+        self.responses = list(responses)
+        self.sent: list[dict] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def send(self, raw):
+        self.sent.append(json.loads(raw))
+
+    async def recv(self):
+        return json.dumps(self.responses.pop(0))
+
+
+class TestHeadlessCdpLiveness(unittest.TestCase):
+    def test_page_probe_requires_page_enable_response(self):
+        ws = _ProbeWebSocket([{"id": 1, "result": {}}])
+        with (
+            mock.patch.object(cb, "_first_page_debugger_url", return_value="ws://chrome/page/1"),
+            mock.patch.object(cb.websockets, "connect", return_value=ws) as connect,
+        ):
+            asyncio.run(cb._probe_cdp_page("127.0.0.1", 9222, timeout_s=1))
+
+        self.assertEqual(ws.sent, [{"id": 1, "method": "Page.enable"}])
+        connect.assert_called_once()
+
+    def test_page_probe_rejects_cdp_error(self):
+        ws = _ProbeWebSocket([{"id": 1, "error": {"message": "hung"}}])
+        with (
+            mock.patch.object(cb, "_first_page_debugger_url", return_value="ws://chrome/page/1"),
+            mock.patch.object(cb.websockets, "connect", return_value=ws),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Page.enable failed"):
+                asyncio.run(cb._probe_cdp_page("127.0.0.1", 9222, timeout_s=1))
+
+    def test_repeated_probe_failures_request_container_recovery(self):
+        async def no_wait(_seconds):
+            return None
+
+        agent = cb.Agent(
+            relay_url="ws://127.0.0.1:8765/tunnel",
+            headless=True,
+        )
+        agent.running = True
+        agent.ws = mock.AsyncMock()
+        with (
+            mock.patch.object(cb.asyncio, "sleep", side_effect=no_wait),
+            mock.patch.object(
+                cb,
+                "_probe_cdp_page",
+                new=mock.AsyncMock(side_effect=[asyncio.TimeoutError(), asyncio.TimeoutError()]),
+            ),
+            mock.patch.object(cb, "_read_headless_liveness_recovery_time", return_value=0),
+            mock.patch.object(cb, "_record_headless_liveness_recovery_time") as record_recovery,
+        ):
+            asyncio.run(agent._cdp_liveness_watchdog())
+
+        self.assertFalse(agent.running)
+        self.assertTrue(agent._cdp_liveness_restart_requested)
+        record_recovery.assert_called_once()
+        agent.ws.close.assert_awaited_once()
+
+    def test_recovery_cooldown_prevents_restart_loop(self):
+        async def no_wait(_seconds):
+            return None
+
+        attempts = 0
+        agent = cb.Agent(
+            relay_url="ws://127.0.0.1:8765/tunnel",
+            headless=True,
+        )
+        agent.running = True
+        agent.ws = mock.AsyncMock()
+
+        async def probe_then_stop(*_args):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise asyncio.TimeoutError()
+            agent.running = False
+
+        with (
+            mock.patch.object(cb.asyncio, "sleep", side_effect=no_wait),
+            mock.patch.object(cb, "CDP_LIVENESS_FAILURE_THRESHOLD", 1),
+            mock.patch.object(cb, "_probe_cdp_page", side_effect=probe_then_stop),
+            mock.patch.object(cb, "_read_headless_liveness_recovery_time", return_value=time.time()),
+            mock.patch.object(cb, "_record_headless_liveness_recovery_time") as record_recovery,
+        ):
+            asyncio.run(agent._cdp_liveness_watchdog())
+
+        self.assertFalse(agent._cdp_liveness_restart_requested)
+        record_recovery.assert_not_called()
+        agent.ws.close.assert_not_awaited()
+
+    def test_recovery_timestamp_round_trips(self):
+        path = cb._headless_liveness_recovery_path()
+        try:
+            cb._record_headless_liveness_recovery_time(123.25)
+            self.assertEqual(cb._read_headless_liveness_recovery_time(), 123.25)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 if __name__ == "__main__":
     unittest.main()

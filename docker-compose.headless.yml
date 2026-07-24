@@ -21,14 +21,19 @@ services:
       - CDP_PROFILE=${CDP_PROFILE:-ec2-headless}
       - UNCHAINED_CHROME_HEADLESS=1
       - UNCHAINED_CHROME_ARGS=${UNCHAINED_CHROME_ARGS:-}
+      # /json/version can stay responsive while page CDP commands are hung.
+      # The bridge performs bounded recovery after two failed Page.enable probes.
+      - UNCHAINED_CDP_LIVENESS_WATCHDOG=1
       - NOPECHA_EXT_DIR=${NOPECHA_EXT_DIR:-/opt/nopecha}
       - TZ=America/New_York
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=2)"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-      start_period: 35s
+      test: ["CMD", "python", "chrome_bridge.py", "probe"]
+      interval: 30s
+      # The probe allows independent HTTP, WebSocket-connect, and CDP-response
+      # phases, so its Docker timeout must cover the full bounded sequence.
+      timeout: 30s
+      retries: 3
+      start_period: 45s
     restart: unless-stopped
 
 volumes:

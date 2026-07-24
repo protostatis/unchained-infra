@@ -92,6 +92,10 @@ DEPLOY_ROLLBACK_ON_FAILURE="${DEPLOY_ROLLBACK_ON_FAILURE:-1}"
 DEPLOY_REVISION="${DEPLOY_REVISION:-$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12))')}"
 REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
+REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
+COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
+ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent"
+ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
 DEPLOY_HEALTH_HOST="${DEPLOY_HEALTH_HOST:-$DEFAULT_DEPLOY_HEALTH_HOST}"
@@ -237,6 +241,127 @@ EOF
     DEPLOY_BACKUP_READY=true
 }
 
+upload_deploy_helpers() {
+    if [[ ! -f "$COMPOSE_DIFF_TOOL" ]]; then
+        echo "ERROR: missing Compose diff helper: $COMPOSE_DIFF_TOOL" >&2
+        return 1
+    fi
+    remote_bash "$REMOTE_DEPLOY_TOOLS_DIR" <<'EOF'
+set -euo pipefail
+mkdir -p "$1"
+EOF
+    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/compose_service_diff.py"
+}
+
+compare_compose_services() {
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" \
+        "$REMOTE_DEPLOY_TOOLS_DIR/compose_service_diff.py" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+backup_dir="$2"
+diff_tool="$3"
+test -f "$backup_dir/docker-compose.yml"
+test -f "$diff_tool"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+# Resolve both files with the live project directory so interpolation uses the
+# same .env values. --no-path-resolution avoids false differences caused by
+# the backup file living under .deploy-backups rather than the release root.
+docker compose --project-directory "$remote_dir" -f "$backup_dir/docker-compose.yml" \
+    config --format json --no-path-resolution > "$tmp_dir/old.json"
+docker compose --project-directory "$remote_dir" -f "$remote_dir/docker-compose.yml" \
+    config --format json --no-path-resolution > "$tmp_dir/new.json"
+python3 "$diff_tool" "$tmp_dir/old.json" "$tmp_dir/new.json"
+EOF
+}
+
+add_services() {
+    local services="$1"
+    local service
+    for service in $services; do
+        case "$service" in
+            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web|scheduler|trial-agent)
+                ;;
+            "")
+                continue
+                ;;
+            *)
+                echo "ERROR: unrecognized service from deploy classifier: $service" >&2
+                return 1
+                ;;
+        esac
+        if [[ " $SERVICES_TO_REBUILD " != *" $service "* ]]; then
+            SERVICES_TO_REBUILD="${SERVICES_TO_REBUILD:+$SERVICES_TO_REBUILD }$service"
+        fi
+    done
+}
+
+restart_services_serially() {
+    local services="$1"
+    remote_bash "$REMOTE_DIR" "$services" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+services="$2"
+cd "$remote_dir"
+
+selected() {
+    [[ " $services " == *" $1 "* ]]
+}
+
+container_state() {
+    local service="$1" container
+    container="$(docker compose ps -q "$service")"
+    [[ -n "$container" ]] || return 1
+    docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container"
+}
+
+wait_for_state() {
+    local service="$1" expected="$2" attempt state
+    for attempt in $(seq 1 24); do
+        state="$(container_state "$service" 2>/dev/null || true)"
+        if [[ "$state" == "$expected" ]]; then
+            return 0
+        fi
+        if [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]]; then
+            docker compose logs --tail 40 "$service" >&2 || true
+            return 1
+        fi
+        sleep 2
+    done
+    echo "Timed out waiting for $service to become $expected (last state: ${state:-missing})" >&2
+    docker compose logs --tail 40 "$service" >&2 || true
+    return 1
+}
+
+expected_state() {
+    case "$1" in
+        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web)
+            printf '%s\n' healthy
+            ;;
+        scheduler|trial-agent)
+            printf '%s\n' running
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Keep upstream dependencies available before restarting their consumers.
+# --no-deps prevents Compose from expanding this into a broad restart.
+for service in relay private-core unbrowser-egress web mcp unbrowser-mcp scheduler trial-agent; do
+    if ! selected "$service"; then
+        continue
+    fi
+    echo "    Restarting $service..."
+    docker compose up -d --no-deps --no-build "$service"
+    wait_for_state "$service" "$(expected_state "$service")"
+done
+EOF
+}
+
 rollback_remote_release() {
     if [[ "$DEPLOY_BACKUP_READY" != "true" || "$DEPLOY_ROLLBACK_ATTEMPTED" == "true" ]]; then
         return
@@ -254,13 +379,39 @@ rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cd "$remote_dir"
 docker compose build relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent
-docker compose up -d --no-build relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent
-if ! docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
-    docker compose up -d --no-deps --no-build caddy
-fi
 EOF
     then
         echo "ERROR: automatic rollback failed; inspect $REMOTE_BACKUP_DIR on the host." >&2
+        return 1
+    fi
+    if ! restart_services_serially "$ALL_RUNTIME_SERVICES"; then
+        echo "ERROR: rollback restored source but could not restart all services serially." >&2
+        return 1
+    fi
+    if ! remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+if ! docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+    docker compose up -d --no-deps --no-build caddy
+fi
+for attempt in $(seq 1 24); do
+    container="$(docker compose ps -q caddy)"
+    state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
+    if [[ "$state" == "running" || "$state" == "healthy" ]]; then
+        exit 0
+    fi
+    if [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]]; then
+        docker compose logs --tail 40 caddy >&2 || true
+        exit 1
+    fi
+    sleep 2
+done
+echo "Timed out waiting for caddy to become running during rollback" >&2
+docker compose logs --tail 40 caddy >&2 || true
+exit 1
+EOF
+    then
+        echo "ERROR: rollback restarted services but could not restore Caddy." >&2
         return 1
     fi
     echo "    Previous source release restored; verify services before retrying." >&2
@@ -528,6 +679,9 @@ DEPLOY_MUTATED=true
     "${TOP_LEVEL_CONTEXT_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
 
+echo "==> Uploading deploy helpers..."
+upload_deploy_helpers
+
 # Upload Python modules
 echo "==> Uploading Python modules..."
 remote_bash "$REMOTE_DIR" <<'EOF'
@@ -679,7 +833,7 @@ EOF
 SERVICES_TO_REBUILD=""
 CADDY_RECREATE_REQUIRED=false
 if $FORCE_FULL_DEPLOY; then
-    SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+    SERVICES_TO_REBUILD="$ALL_SERVICES"
     # --full skips file-level classification, so compose/network changes can't
     # be ruled out. Reload first later, then recreate if needed.
     CADDY_RECREATE_REQUIRED=true
@@ -707,28 +861,64 @@ else
                 echo "      ... and $((CHANGED_COUNT - 10)) more"
             fi
 
-            # Run the classifier
-            CLASSIFIER_OUTPUT=$(echo "$CHANGED_FILES" \
-                | python3 "$SCRIPT_DIR/deploy/classify_changes.py" 2>&1)
-
-            if echo "$CLASSIFIER_OUTPUT" | grep -qx ALL; then
-                echo "    Classifier: ALL services need rebuild"
-                SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
-                if echo "$CHANGED_FILES" | grep -qx 'docker-compose.yml'; then
-                    CADDY_RECREATE_REQUIRED=true
-                fi
+            # Run the static ownership classifier first. Compose changes are
+            # resolved separately against the pre-upload Compose snapshot.
+            CLASSIFIER_OUTPUT=""
+            if ! CLASSIFIER_OUTPUT=$(printf '%s\n' "$CHANGED_FILES" \
+                | python3 "$SCRIPT_DIR/deploy/classify_changes.py"); then
+                echo "    (classifier failed — falling back to full deploy)" >&2
+                SERVICES_TO_REBUILD="$ALL_SERVICES"
+                CADDY_RECREATE_REQUIRED=true
+            elif echo "$CLASSIFIER_OUTPUT" | grep -qx ALL; then
+                # Caddy uses a public image, so a Dockerfile/dependency change
+                # needs every application service rebuilt but not Caddy itself.
+                # A separately changed Caddyfile is added below for reload.
+                echo "    Classifier: all application services need rebuild"
+                SERVICES_TO_REBUILD="$ALL_RUNTIME_SERVICES"
             else
-                SERVICES_TO_REBUILD=$(echo "$CLASSIFIER_OUTPUT" | tr '\n' ' ' | sed 's/ *$//')
-                if [[ -z "$SERVICES_TO_REBUILD" ]]; then
-                    echo "    Classifier: no services need rebuild (docs/test changes only)"
-                else
-                    echo "    Classifier: rebuilding [$SERVICES_TO_REBUILD]"
+                CLASSIFIER_SERVICES=$(printf '%s\n' "$CLASSIFIER_OUTPUT" \
+                    | grep -Ev '^(COMPOSE|ALL)?$' || true)
+                if [[ -n "$CLASSIFIER_SERVICES" ]]; then
+                    add_services "$CLASSIFIER_SERVICES"
                 fi
+            fi
+
+            # Caddyfile is mounted live. Reload it only when it actually
+            # changed, even if another file forced a broad app rebuild.
+            if printf '%s\n' "$CHANGED_FILES" | grep -qx 'Caddyfile'; then
+                add_services caddy
+            fi
+
+            if printf '%s\n' "$CHANGED_FILES" | grep -qx 'docker-compose.yml'; then
+                echo "    Comparing resolved Compose service config..."
+                if ! COMPOSE_DIFF_OUTPUT=$(compare_compose_services); then
+                    echo "    (Compose comparison failed — falling back to full deploy)" >&2
+                    SERVICES_TO_REBUILD="$ALL_SERVICES"
+                    CADDY_RECREATE_REQUIRED=true
+                elif echo "$COMPOSE_DIFF_OUTPUT" | grep -qx ALL; then
+                    echo "    Compose topology changed: full deploy required"
+                    SERVICES_TO_REBUILD="$ALL_SERVICES"
+                    CADDY_RECREATE_REQUIRED=true
+                elif [[ -n "$COMPOSE_DIFF_OUTPUT" ]]; then
+                    echo "    Compose changed services: $(echo "$COMPOSE_DIFF_OUTPUT" | tr '\n' ' ' | sed 's/ *$//')"
+                    add_services "$COMPOSE_DIFF_OUTPUT"
+                    if echo "$COMPOSE_DIFF_OUTPUT" | grep -qx caddy; then
+                        CADDY_RECREATE_REQUIRED=true
+                    fi
+                else
+                    echo "    Compose change has no effective service runtime impact."
+                fi
+            fi
+
+            if [[ -z "$SERVICES_TO_REBUILD" ]]; then
+                echo "    Classifier: no services need rebuild (docs/test changes only)"
+            else
+                echo "    Classifier: rebuilding [$SERVICES_TO_REBUILD]"
             fi
         fi
     else
         echo "    (local checksum failed — falling back to full deploy)"
-        SERVICES_TO_REBUILD="caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web"
+        SERVICES_TO_REBUILD="$ALL_SERVICES"
         # Unknown change set: be conservative after attempting graceful reload.
         CADDY_RECREATE_REQUIRED=true
     fi
@@ -761,31 +951,21 @@ else
     echo "==> No images to build."
 fi
 
-# Recreate affected service containers. We use --no-deps --no-build so:
-#   --no-deps: dependent services (e.g. scheduler depends on web) are NOT
-#              recreated unless they're in our affected list. Their existing
-#              connections survive and they'll auto-reconnect if needed.
-#   --no-build: skip the build step we already did above.
-#
-# Each service recreate is a ~3-5s window for that service only; other
-# services keep serving the entire time.
+# Recreate one service at a time in dependency order. Each service reaches its
+# expected Docker health state before a consumer is restarted, so a Compose
+# change cannot briefly take every Caddy upstream down at once.
 RESTART_SERVICES=$(echo "$SERVICES_TO_REBUILD" | tr ' ' '\n' | grep -v '^$' | grep -v '^caddy$' | tr '\n' ' ' | sed 's/ *$//' || true)
 
 if [[ -n "$RESTART_SERVICES" ]]; then
-    echo "==> Recreating containers: $RESTART_SERVICES"
-    remote_bash "$REMOTE_DIR" "$RESTART_SERVICES" <<'EOF'
-set -euo pipefail
-cd "$1"
-read -r -a restart_services <<< "$2"
-docker compose up -d --no-deps --no-build "${restart_services[@]}"
-EOF
+    echo "==> Recreating containers serially: $RESTART_SERVICES"
+    restart_services_serially "$RESTART_SERVICES"
 else
     echo "==> No service containers to recreate."
 fi
 
 # Caddy: prefer graceful reload over restart. caddy reload re-reads the
 # Caddyfile and updates upstream resolutions in-place with zero downtime.
-# Recreate only if reload fails or compose/network changes may need to apply.
+# This block runs only for an effective Caddy runtime change or Caddyfile edit.
 if echo " $SERVICES_TO_REBUILD " | grep -q ' caddy '; then
     echo "==> Reloading Caddy (graceful when possible)..."
     remote_bash "$REMOTE_DIR" "$CADDY_RECREATE_REQUIRED" <<'EOF'
@@ -801,6 +981,22 @@ else
     echo "    Caddy reload failed; recreating container..."
 fi
 docker compose up -d --no-deps --no-build caddy
+
+for attempt in $(seq 1 24); do
+    container="$(docker compose ps -q caddy)"
+    state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
+    if [[ "$state" == "running" || "$state" == "healthy" ]]; then
+        exit 0
+    fi
+    if [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]]; then
+        docker compose logs --tail 40 caddy >&2 || true
+        exit 1
+    fi
+    sleep 2
+done
+echo "Timed out waiting for caddy to become running" >&2
+docker compose logs --tail 40 caddy >&2 || true
+exit 1
 EOF
 fi
 

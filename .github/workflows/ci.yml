@@ -37,6 +37,7 @@ jobs:
         run: |
           bash -n dev.sh
           bash -n deploy.sh
+          python deploy/test_compose_service_diff.py
 
       - name: Run public-safe tests
         run: |
@@ -47,6 +48,7 @@ jobs:
           python test_chat_event_transport.py
           python test_sse_write_guard.py
           python test_search_console_verification.py
+          python test_bridge_helpers.py
           python -m unittest \
             test_credit \
             test_credit_handlers \

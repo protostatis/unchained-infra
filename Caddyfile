@@ -71,7 +71,13 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		path /mcp
 	}
 	handle @mcp_page {
-		reverse_proxy web:8080
+		reverse_proxy web:8080 {
+			# Hold requests briefly while the single web container is being
+			# recreated. Caddy only retries non-idempotent requests after a
+			# failed connection, so a request already accepted by web is not
+			# replayed.
+			lb_try_duration 5s
+		}
 	}
 
 	# MCP server — POST /mcp and /mcp/* route to MCP transport
@@ -100,11 +106,15 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 
 	# Web UI API
 	handle /web/* {
-		reverse_proxy web:8080
+		reverse_proxy web:8080 {
+			lb_try_duration 5s
+		}
 	}
 
 	# Web UI — catch-all serves mobile control panel
 	handle {
-		reverse_proxy web:8080
+		reverse_proxy web:8080 {
+			lb_try_duration 5s
+		}
 	}
 }

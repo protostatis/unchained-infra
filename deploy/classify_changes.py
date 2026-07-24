@@ -5,8 +5,9 @@ Reads a list of file paths from stdin (one per line, relative to repo root)
 and prints affected service names, one per line, sorted.
 
 Special outputs:
-  ALL    — full rebuild required (Dockerfile, compose, deps, or unknown file)
-  caddy  — only caddy config changed (graceful reload)
+  ALL      — full rebuild required (Dockerfile, deps, or unknown file)
+  COMPOSE  — compare resolved old/new Compose service configs on the deploy host
+  caddy    — only caddy config changed (graceful reload)
   (empty stdout) — no service rebuild required (docs-only changes)
 
 Used by deploy.sh to skip rebuilding/restarting services that aren't affected
@@ -36,9 +37,16 @@ SERVICES = {
 # Docker build context files that affect every service's image hash.
 FULL_REBUILD_FILES = {
     "Dockerfile",
-    "docker-compose.yml",
     "unchained/pyproject.toml",
     "unchained/uv.lock",
+}
+
+# Compose changes are resolved on the deploy host against the pre-upload
+# snapshot. A Compose edit does not inherently require every container to be
+# recreated; deploy.sh compares the effective per-service config and falls
+# back to ALL if that comparison cannot be completed safely.
+COMPOSE_FILES = {
+    "docker-compose.yml",
 }
 
 # Caddy-only changes — graceful reload, no other service touched.
@@ -150,12 +158,14 @@ def classify_path(path: str) -> set[str]:
     """Return set of services affected by a change to `path`.
 
     Returns {"ALL"} when the change requires rebuilding every service
-    (Dockerfile/compose/deps changed, or the path is unknown).
+    (Dockerfile/deps changed, or the path is unknown).
     Returns an empty set when the change doesn't require any rebuild
     (docs, testdata, dev scripts).
     """
     if path in FULL_REBUILD_FILES:
         return {"ALL"}
+    if path in COMPOSE_FILES:
+        return {"COMPOSE"}
     if path in CADDY_FILES:
         return {"caddy"}
     if path in TOP_LEVEL_OWNERSHIP:

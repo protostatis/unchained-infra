@@ -1,0 +1,78 @@
+"""Unit tests for resolved Docker Compose service change detection."""
+from __future__ import annotations
+
+import copy
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from classify_changes import classify_path
+from compose_service_diff import changed_services
+
+
+def _config() -> dict:
+    return {
+        "name": "unchained",
+        "networks": {"app": {"internal": True}},
+        "services": {
+            "caddy": {
+                "image": "caddy:2",
+                "depends_on": {"web": {"condition": "service_healthy"}},
+                "networks": {"app": None},
+            },
+            "relay": {"image": "unchained", "networks": {"app": None}},
+            "web": {"image": "unchained", "networks": {"app": None}},
+        },
+    }
+
+
+class TestChangedServices(unittest.TestCase):
+    def test_compose_file_uses_resolved_service_comparison(self):
+        self.assertEqual(classify_path("docker-compose.yml"), {"COMPOSE"})
+
+    def test_reports_only_the_service_with_an_effective_change(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["services"]["web"]["environment"] = {"FEATURE_FLAG": "on"}
+
+        self.assertEqual(changed_services(old, new), ["web"])
+
+    def test_ignores_caddy_depends_on_only_change(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["services"]["caddy"]["depends_on"] = {
+            "web": {"condition": "service_started"},
+            "relay": {"condition": "service_healthy"},
+        }
+
+        self.assertEqual(changed_services(old, new), [])
+
+    def test_caddy_runtime_change_is_reported(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["services"]["caddy"]["ports"] = ["443:443"]
+
+        self.assertEqual(changed_services(old, new), ["caddy"])
+
+    def test_shared_topology_change_fails_closed(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["networks"]["app"]["internal"] = False
+
+        self.assertIsNone(changed_services(old, new))
+
+    def test_service_topology_change_fails_closed(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["services"].pop("relay")
+
+        self.assertIsNone(changed_services(old, new))
+
+    def test_empty_service_config_fails_closed(self):
+        self.assertIsNone(changed_services({"services": {}}, {"services": {}}))
+
+
+if __name__ == "__main__":
+    unittest.main()
