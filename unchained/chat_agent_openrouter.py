@@ -594,6 +594,76 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return max(1, total_chars // 4)
 
 
+def _serialized_context_chars(messages: list[dict]) -> int:
+    return len(json.dumps(messages, ensure_ascii=False, default=str))
+
+
+def _cap_openai_history(messages: list[dict], max_non_system: int) -> list[dict]:
+    """Return a boundary-safe system + tail copy capped by message count."""
+    cap = max(1, int(max_non_system or 1))
+    has_system = bool(messages and messages[0].get("role") == "system")
+    body = messages[1:] if has_system else messages
+    if len(body) <= cap:
+        return list(messages)
+
+    if has_system:
+        return emergency_trim(messages, fmt="openai", keep_tail=cap)
+
+    tail = list(body[-cap:])
+    while tail and tail[0].get("role") == "tool":
+        tail.pop(0)
+    return tail
+
+
+def _prepare_hosted_context(
+    messages: list[dict],
+    *,
+    max_messages: int = MAX_SESSION_MESSAGES,
+    max_chars: int = HOSTED_MAX_INPUT_CHARS,
+    emergency_keep: int = TRIM_ON_ERROR,
+) -> dict:
+    """Bound and compact one hosted context before its first provider call.
+
+    The current user message must already be the final message. Mutating the
+    list in place also updates ``TrialAgent.sessions`` so the live cache cannot
+    keep growing beyond the disk persistence policy.
+    """
+    before_messages = len(messages)
+    before_chars = _serialized_context_chars(messages)
+
+    bounded = _cap_openai_history(messages, max_messages)
+    messages[:] = bounded
+    messages, compact_stats = compact_messages(messages, fmt="openai")
+
+    after_chars = _serialized_context_chars(messages)
+    emergency_trimmed = False
+    if after_chars > max_chars and len(messages) > 1:
+        max_tail = min(max(1, int(emergency_keep or 1)), len(messages) - 1)
+        for keep_tail in range(max_tail, 0, -1):
+            candidate = emergency_trim(
+                messages,
+                fmt="openai",
+                keep_tail=keep_tail,
+            )
+            candidate_chars = _serialized_context_chars(candidate)
+            if len(candidate) < len(messages):
+                messages[:] = candidate
+                emergency_trimmed = True
+                after_chars = candidate_chars
+            if candidate_chars <= max_chars:
+                break
+
+    return {
+        "messages_before": before_messages,
+        "messages_after": len(messages),
+        "chars_before": before_chars,
+        "chars_after": _serialized_context_chars(messages),
+        "message_trimmed": max(0, before_messages - len(messages)),
+        "tool_results_compacted": int(compact_stats.get("compacted", 0) or 0),
+        "emergency_trimmed": emergency_trimmed,
+    }
+
+
 def _coerce_float(value, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -926,10 +996,9 @@ class TrialAgent:
     def _save_session(self, session_id: str, messages: list, max_messages: int | None = None):
         """Persist session messages to disk (system prompt excluded, capped)."""
         path = self._session_path(session_id)
-        non_system = [m for m in messages if m.get("role") != "system"]
         cap = max_messages if isinstance(max_messages, int) and max_messages > 0 else MAX_SESSION_MESSAGES
-        if len(non_system) > cap:
-            non_system = non_system[-cap:]
+        bounded = _cap_openai_history(messages, cap)
+        non_system = [m for m in bounded if m.get("role") != "system"]
         try:
             with open(path, "w") as f:
                 json.dump({"messages": non_system}, f)
@@ -1256,6 +1325,20 @@ class TrialAgent:
             for key in ("refusal", "reasoning"):
                 msg.pop(key, None)
         messages.append({"role": "user", "content": user_text})
+        context_stats = _prepare_hosted_context(messages)
+        self.sessions[session_id] = messages
+        if (
+            context_stats["message_trimmed"]
+            or context_stats["tool_results_compacted"]
+            or context_stats["emergency_trimmed"]
+        ):
+            print(
+                f"[{session_id}] Prepared hosted context: "
+                f"messages {context_stats['messages_before']}→{context_stats['messages_after']}, "
+                f"chars {context_stats['chars_before']}→{context_stats['chars_after']}, "
+                f"tool_results_compacted={context_stats['tool_results_compacted']}, "
+                f"emergency_trimmed={context_stats['emergency_trimmed']}"
+            )
 
         ns = NudgeState()
         reflex = ReflexState()
