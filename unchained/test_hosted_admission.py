@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+
+import web
 from web_app.handlers import chat_stream
 from web_state import ChatTurnRegistry, ChatTurnState
 
@@ -23,6 +27,13 @@ def _turn(session_id: str, req_id: str, user_id: str) -> ChatTurnState:
 
 
 class HostedAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    def test_scheduler_grant_outlives_hosted_turn_deadline(self):
+        self.assertEqual(web._HOSTED_TURN_DEADLINE_S, chat_stream._HOSTED_TURN_DEADLINE_S)
+        self.assertGreaterEqual(
+            web._SCHEDULER_TURN_GRANT_TTL,
+            chat_stream._HOSTED_TURN_DEADLINE_S + 60,
+        )
+
     async def test_per_user_and_global_limits_are_race_safe(self):
         registry = ChatTurnRegistry()
         core = SimpleNamespace(TRIAL_AGENT_ID="trial-agent")

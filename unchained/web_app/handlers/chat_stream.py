@@ -69,7 +69,7 @@ _HOSTED_MAX_ACTIVE_TURNS_PER_USER = max(
     1, int(os.environ.get("HOSTED_MAX_ACTIVE_TURNS_PER_USER", "3"))
 )
 _HOSTED_TURN_DEADLINE_S = max(
-    30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "300"))
+    30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "600"))
 )
 
 _FIRST_LOOK_SEARCH_REF = "searchagentsky-result"

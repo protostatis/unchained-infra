@@ -817,7 +817,16 @@ _GEMINI_IDLE_TIMEOUT = 600
 _gemini_cleanup_task: asyncio.Task | None = None
 _headless_watchdog_task: asyncio.Task | None = None
 _scheduler_turn_grants = _state.scheduler_turn_grants  # grant_id -> {user_id, session_id, expires_at}
-_SCHEDULER_TURN_GRANT_TTL = 5 * 60
+# Keep /schedule authorization valid through a hosted turn's absolute deadline.
+# Terminal turns revoke their grant sooner; the extra minute covers setup and
+# dispatch time before the deadline watchdog starts.
+_HOSTED_TURN_DEADLINE_S = max(
+    30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "600"))
+)
+_SCHEDULER_TURN_GRANT_TTL = max(
+    5 * 60,
+    _HOSTED_TURN_DEADLINE_S + 60,
+)
 
 # Overlay copilot v2 — single state object per session
 _overlay_sessions = _state.overlay_sessions  # session_id -> OverlaySessionState
