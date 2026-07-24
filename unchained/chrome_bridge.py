@@ -402,6 +402,10 @@ DEFAULT_WEB_PORT = 8080
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10   # seconds
 MAX_BACKOFF = 60          # seconds
+CDP_LIVENESS_INTERVAL = 60  # seconds
+CDP_LIVENESS_PROBE_TIMEOUT = 8  # seconds
+CDP_LIVENESS_FAILURE_THRESHOLD = 2
+CDP_LIVENESS_RECOVERY_COOLDOWN = 300  # seconds; persisted across container restarts
 PROVISION_LAUNCH_READY_TIMEOUT = 15  # seconds
 PROVISION_RECONCILE_DEBOUNCE = 0.5   # seconds
 PROVISION_STARTUP_STALE_TTL = PROVISION_LAUNCH_READY_TIMEOUT + 15  # seconds
@@ -582,6 +586,84 @@ def _first_page_tab(host: str, port: int, startup_url: str) -> dict:
         if retry_page_tabs:
             return retry_page_tabs[0]
         raise RuntimeError("Chrome created a startup tab but it could not be discovered") from e
+
+
+def _first_page_debugger_url(host: str, port: int, timeout_s: float) -> str:
+    """Return a page-level CDP WebSocket URL without mutating Chrome state."""
+    request_host = _format_url_host(host)
+    tabs_url = f"http://{request_host}:{port}/json"
+    with urllib.request.urlopen(tabs_url, timeout=timeout_s) as resp:
+        tabs = json.loads(resp.read())
+    for tab in tabs:
+        if tab.get("type") != "page":
+            continue
+        ws_url = tab.get("webSocketDebuggerUrl")
+        if isinstance(ws_url, str) and ws_url:
+            return ws_url
+    raise RuntimeError("Chrome has no debuggable page target")
+
+
+async def _probe_cdp_page(host: str, port: int, timeout_s: float = CDP_LIVENESS_PROBE_TIMEOUT):
+    """Verify a page target can answer a real CDP ``Page.enable`` command.
+
+    ``/json/version`` only proves Chrome's HTTP endpoint is listening. A
+    separate page-level WebSocket command catches the hung-CDP failure mode
+    that can otherwise leave a headless worker marked healthy indefinitely.
+    """
+    ws_url = await asyncio.wait_for(
+        asyncio.to_thread(_first_page_debugger_url, host, port, timeout_s),
+        timeout=timeout_s + 1,
+    )
+    request_id = 1
+    async with websockets.connect(
+        ws_url,
+        open_timeout=timeout_s,
+        close_timeout=1,
+        ping_interval=None,
+    ) as ws:
+        await ws.send(json.dumps({"id": request_id, "method": "Page.enable"}))
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("timed out waiting for Page.enable")
+            response = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+            if response.get("id") != request_id:
+                continue
+            if "error" in response:
+                raise RuntimeError(f"Page.enable failed: {response['error']}")
+            return
+
+
+def _headless_liveness_recovery_path() -> str:
+    return os.path.join(DATA_DIR, ".headless_cdp_liveness_recovery")
+
+
+def _read_headless_liveness_recovery_time() -> float:
+    try:
+        with open(_headless_liveness_recovery_path()) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _record_headless_liveness_recovery_time(value: float) -> None:
+    """Persist recovery timing so Docker restarts cannot create a restart loop."""
+    path = _headless_liveness_recovery_path()
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, "w") as f:
+            f.write(f"{value:.6f}\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _env_is_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _wait_for_process_exit(proc, timeout_s: float) -> bool:
@@ -997,6 +1079,13 @@ class Agent:
         self.agent_id = None  # type: Optional[str]
         self._backoff = 1
         self._last_pong = 0.0
+        # Enabled only by the shared headless worker. Local headless agents
+        # retain their existing behavior unless they explicitly opt in.
+        self._cdp_liveness_enabled = (
+            headless and _env_is_enabled("UNCHAINED_CDP_LIVENESS_WATCHDOG")
+        )
+        self._cdp_liveness_failures = 0
+        self._cdp_liveness_restart_requested = False
         # Provision Chrome: temporary Chromes keyed by slot (4-char hex)
         self._prov_chromes: dict[str, dict] = {}  # slot → {port, process, pid, temp_dir, profile_dir_name}
         # Tab leasing: prevent multiple channels from auto-resolving to the same tab.
@@ -1150,22 +1239,39 @@ class Agent:
     async def start(self):
         """Connect to relay and relay messages. Reconnects on failure."""
         self.running = True
+        self._cdp_liveness_restart_requested = False
         print(f"[agent] connecting to {self.relay_url}")
         print(f"[agent] Chrome CDP at {self.cdp_host}:{self.cdp_port}")
-        while self.running:
-            try:
-                await self._connect_and_run()
-            # asyncio.TimeoutError is not consistently an OSError across Python versions.
-            except (ConnectionError, OSError, asyncio.TimeoutError,
-                    websockets.exceptions.ConnectionClosed,
-                    websockets.exceptions.InvalidURI,
-                    websockets.exceptions.InvalidHandshake) as e:
-                if not self.running:
+        liveness_task = None
+        if self._cdp_liveness_enabled:
+            print(
+                "[agent] headless CDP liveness watchdog enabled "
+                f"({CDP_LIVENESS_FAILURE_THRESHOLD} failures, "
+                f"{CDP_LIVENESS_RECOVERY_COOLDOWN}s restart cooldown)"
+            )
+            liveness_task = asyncio.create_task(self._cdp_liveness_watchdog())
+        try:
+            while self.running:
+                try:
+                    await self._connect_and_run()
+                # asyncio.TimeoutError is not consistently an OSError across Python versions.
+                except (ConnectionError, OSError, asyncio.TimeoutError,
+                        websockets.exceptions.ConnectionClosed,
+                        websockets.exceptions.InvalidURI,
+                        websockets.exceptions.InvalidHandshake) as e:
+                    if not self.running:
+                        break
+                    print(f"[agent] connection lost: {e}")
+                    await self._reconnect_with_backoff()
+                except asyncio.CancelledError:
                     break
-                print(f"[agent] connection lost: {e}")
-                await self._reconnect_with_backoff()
-            except asyncio.CancelledError:
-                break
+        finally:
+            if liveness_task:
+                liveness_task.cancel()
+                try:
+                    await liveness_task
+                except asyncio.CancelledError:
+                    pass
 
     async def _connect_and_run(self):
         """Single connection lifecycle: connect → auth → message loop."""
@@ -2331,6 +2437,72 @@ class Agent:
                 await self.ws.close()
                 break
 
+    async def _cdp_liveness_watchdog(self):
+        """Restart the headless worker after repeated real-CDP probe failures."""
+        while self.running:
+            await asyncio.sleep(CDP_LIVENESS_INTERVAL)
+            if not self.running:
+                return
+            try:
+                await _probe_cdp_page(
+                    self.cdp_host,
+                    self.cdp_port,
+                    CDP_LIVENESS_PROBE_TIMEOUT,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._cdp_liveness_failures += 1
+                detail = str(exc) or type(exc).__name__
+                print(
+                    "[agent] headless CDP liveness probe failed "
+                    f"({self._cdp_liveness_failures}/{CDP_LIVENESS_FAILURE_THRESHOLD}): {detail}"
+                )
+                if self._cdp_liveness_failures < CDP_LIVENESS_FAILURE_THRESHOLD:
+                    continue
+
+                now = time.time()
+                last_recovery = _read_headless_liveness_recovery_time()
+                elapsed = now - last_recovery
+                if last_recovery and elapsed < CDP_LIVENESS_RECOVERY_COOLDOWN:
+                    remaining = max(0, int(CDP_LIVENESS_RECOVERY_COOLDOWN - elapsed))
+                    print(
+                        "[agent] headless CDP remains unhealthy; "
+                        f"restart cooldown active for {remaining}s"
+                    )
+                    # Count a new consecutive pair after the cooldown check so
+                    # the log and recovery attempt remain bounded while Chrome
+                    # stays hung.
+                    self._cdp_liveness_failures = 0
+                    continue
+
+                try:
+                    _record_headless_liveness_recovery_time(now)
+                except OSError as record_error:
+                    # Recovery is still preferable to leaving a dead worker
+                    # online. The warning makes a broken /data volume visible.
+                    print(
+                        "[agent] warning: could not persist headless CDP "
+                        f"recovery cooldown: {record_error}"
+                    )
+
+                print(
+                    "[agent] repeated headless CDP failures; exiting for "
+                    "the container restart policy to replace Chrome"
+                )
+                self._cdp_liveness_restart_requested = True
+                self.running = False
+                if self.ws:
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+                return
+            else:
+                if self._cdp_liveness_failures:
+                    print("[agent] headless CDP liveness probe recovered")
+                self._cdp_liveness_failures = 0
+
     # --- Reconnection ---
 
     async def _reconnect_with_backoff(self):
@@ -2986,10 +3158,21 @@ def cmd_stop(config: dict):
     _remove_pid(profile)
 
 
+def cmd_probe(config: dict) -> int:
+    """Run one real page-level CDP liveness probe for container healthchecks."""
+    try:
+        asyncio.run(_probe_cdp_page(config["cdp_host"], config["cdp_port"]))
+    except Exception as exc:
+        detail = str(exc) or type(exc).__name__
+        print(f"[agent] CDP probe failed: {detail}", file=sys.stderr)
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def main():
+def main() -> int:
     config = _load_config()
     args = sys.argv[1:]
     config = _parse_args(args, config)
@@ -3010,6 +3193,8 @@ def main():
         cmd_status(config)
     elif cmd == "stop":
         cmd_stop(config)
+    elif cmd == "probe":
+        return cmd_probe(config)
     else:
         print("""Usage: uv run chrome_bridge.py <command> [options]
 
@@ -3017,6 +3202,7 @@ Commands:
     start       Connect to relay and start tunneling
     status      Show agent connection state
     stop        Stop running agent
+    probe       Run a real page-level CDP health probe
 
 Options:
     --relay <url>       Relay WebSocket URL (default: ws://127.0.0.1:8765/tunnel)
@@ -3034,9 +3220,11 @@ with separate cookies, sessions, history, and extensions.
 
 Config file: ~/.unchained/agent.json
 Env vars: UNCHAINED_RELAY_URL, UNCHAINED_API_KEY, CDP_HOST, CDP_PORT, CDP_PROFILE,
-          UNCHAINED_CHROME_HEADLESS, UNCHAINED_CHROME_ARGS
+          UNCHAINED_CHROME_HEADLESS, UNCHAINED_CHROME_ARGS,
+          UNCHAINED_CDP_LIVENESS_WATCHDOG
 """)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
