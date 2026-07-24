@@ -59,6 +59,7 @@ class TestWebRouteContracts(unittest.TestCase):
         expected = {
             ("GET", "/favicon.svg"),
             ("GET", "/web/static/signed-chat-reconnect.js"),
+            ("GET", "/internal/health"),
             ("GET", "/"),
             ("GET", "/unbrowser"),
             ("GET", "/go/unbrowser-connect"),
@@ -154,6 +155,11 @@ class TestWebRouteContracts(unittest.TestCase):
 
         for route in expected:
             self.assertIn(route, actual, f"missing runtime route: {route}")
+
+    def test_internal_health_handler_is_unauthenticated_and_minimal(self):
+        response = asyncio.run(web.handle_internal_health(None))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.text), {"status": "ok"})
 
 
 class TestHostedWorkspaceRouting(unittest.IsolatedAsyncioTestCase):

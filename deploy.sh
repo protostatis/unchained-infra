@@ -29,6 +29,16 @@ SSH_OPTS=()
 if [[ -n "${KEY_PATH:-}" ]]; then
     SSH_OPTS+=(-i "$KEY_PATH")
 fi
+if [[ -n "${DEPLOY_SSH_KNOWN_HOSTS_FILE:-}" ]]; then
+    if [[ ! -s "$DEPLOY_SSH_KNOWN_HOSTS_FILE" ]]; then
+        echo "ERROR: DEPLOY_SSH_KNOWN_HOSTS_FILE is missing or empty" >&2
+        exit 1
+    fi
+    SSH_OPTS+=(
+        -o "UserKnownHostsFile=$DEPLOY_SSH_KNOWN_HOSTS_FILE"
+        -o StrictHostKeyChecking=yes
+    )
+fi
 # Note: accept the host key manually first time with: ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST"
 SSH_CMD=(ssh "${SSH_OPTS[@]}" "$EC2_USER@$EC2_HOST")
 SCP_CMD=(scp "${SSH_OPTS[@]}")
@@ -67,7 +77,313 @@ done
 REMOTE_CHECKSUMS_FILE="$(mktemp -t uc_remote_checksums.XXXXXX)"
 LOCAL_CHECKSUMS_FILE="$(mktemp -t uc_local_checksums.XXXXXX)"
 DEPLOYED_PATHS_FILE="$(mktemp -t uc_deployed_paths.XXXXXX)"
-trap 'rm -f "$REMOTE_CHECKSUMS_FILE" "$LOCAL_CHECKSUMS_FILE" "$DEPLOYED_PATHS_FILE"' EXIT
+DEPLOY_LOCK_WORK_DIR=""
+DEPLOY_LOCK_FIFO=""
+DEPLOY_LOCK_STATUS_FILE=""
+DEPLOY_LOCK_SSH_PID=""
+DEPLOY_LOCK_HELD=false
+DEPLOY_LOCK_TOKEN=""
+DEPLOY_BACKUP_READY=false
+DEPLOY_MUTATED=false
+DEPLOY_SUCCEEDED=false
+DEPLOY_ROLLBACK_ATTEMPTED=false
+DEPLOY_OVERLAY_APPLIED=false
+DEPLOY_ROLLBACK_ON_FAILURE="${DEPLOY_ROLLBACK_ON_FAILURE:-1}"
+DEPLOY_REVISION="${DEPLOY_REVISION:-$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
+DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12))')}"
+REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
+IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
+DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
+DEPLOY_HEALTH_HOST="${DEPLOY_HEALTH_HOST:-$DEFAULT_DEPLOY_HEALTH_HOST}"
+
+if [[ ! "$DEPLOY_HEALTH_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "ERROR: DEPLOY_HEALTH_HOST must be a hostname" >&2
+    exit 1
+fi
+
+restore_private_core_worktree() {
+    if [[ "$DEPLOY_OVERLAY_APPLIED" != "true" ]]; then
+        return
+    fi
+    if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" != "1" ]]; then
+        echo "==> Keeping overlaid private-core files (set DEPLOY_RESTORE_WORKTREE=1 to auto-restore)."
+        return
+    fi
+
+    rm -rf "$SCRIPT_DIR/rhythm"
+    echo "==> Restoring private-core overlay files..."
+    local overlay_files=(
+        "unchained/cdp.py"
+        "unchained/ddm.py"
+        "unchained/intel.py"
+        "unchained/editable_helpers.js"
+        "unchained/private_core_engine.py"
+        "unchained/private_core_server.py"
+        "unchained/private_core_contracts.py"
+        "unchained/challenge_detection.py"
+        "unchained/domain_policy.py"
+        "unchained/CLAUDE.md"
+        "unchained/LABEL_RESOLUTION.md"
+        "unchained/benchmark/progress_critic.py"
+        "unchained/benchmark/intermediate_goal.py"
+    )
+    if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local rel
+        for rel in "${overlay_files[@]}"; do
+            if git -C "$SCRIPT_DIR" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+                git -C "$SCRIPT_DIR" restore --source=HEAD -- "$rel" >/dev/null 2>&1 \
+                    || git -C "$SCRIPT_DIR" checkout -- "$rel" >/dev/null 2>&1 \
+                    || true
+            else
+                rm -f "$SCRIPT_DIR/$rel"
+            fi
+        done
+        echo "    Private-core overlay files restored."
+    else
+        echo "    (skipped — not in a git repo)"
+    fi
+}
+
+release_remote_deploy_lock() {
+    if [[ -n "$DEPLOY_LOCK_SSH_PID" ]]; then
+        exec 9>&- || true
+        wait "$DEPLOY_LOCK_SSH_PID" 2>/dev/null || true
+    fi
+    DEPLOY_LOCK_HELD=false
+    DEPLOY_LOCK_SSH_PID=""
+    if [[ -n "$DEPLOY_LOCK_WORK_DIR" ]]; then
+        rm -rf "$DEPLOY_LOCK_WORK_DIR"
+    fi
+    DEPLOY_LOCK_WORK_DIR=""
+    DEPLOY_LOCK_FIFO=""
+    DEPLOY_LOCK_STATUS_FILE=""
+}
+
+acquire_remote_deploy_lock() {
+    local remote_script quoted_script quoted_lock_file quoted_token
+    DEPLOY_LOCK_WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/uc-deploy-lock.XXXXXX")"
+    DEPLOY_LOCK_FIFO="$DEPLOY_LOCK_WORK_DIR/input"
+    DEPLOY_LOCK_STATUS_FILE="$DEPLOY_LOCK_WORK_DIR/status"
+    DEPLOY_LOCK_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    mkfifo "$DEPLOY_LOCK_FIFO"
+
+    remote_script='set -euo pipefail
+lock_file="$1"
+token="$2"
+mkdir -p "$(dirname "$lock_file")"
+exec 9>>"$lock_file"
+if ! flock -n 9; then
+  echo "deployment lock is already held" >&2
+  exit 75
+fi
+printf "%s\\n" "$token"
+cat >/dev/null'
+    printf -v quoted_script '%q' "$remote_script"
+    printf -v quoted_lock_file '%q' "$REMOTE_DIR/.deploy.lock"
+    printf -v quoted_token '%q' "$DEPLOY_LOCK_TOKEN"
+    "${SSH_CMD[@]}" "bash -c $quoted_script -- $quoted_lock_file $quoted_token" \
+        < "$DEPLOY_LOCK_FIFO" > "$DEPLOY_LOCK_STATUS_FILE" 2>&1 &
+    DEPLOY_LOCK_SSH_PID=$!
+    # Keep the remote stdin open. Its `flock` is released automatically if this
+    # process dies or this descriptor is closed in release_remote_deploy_lock.
+    exec 9>"$DEPLOY_LOCK_FIFO"
+
+    local attempt lock_status=""
+    for attempt in $(seq 1 100); do
+        if [[ -s "$DEPLOY_LOCK_STATUS_FILE" ]]; then
+            IFS= read -r lock_status < "$DEPLOY_LOCK_STATUS_FILE" || true
+            if [[ "$lock_status" == "$DEPLOY_LOCK_TOKEN" ]]; then
+                DEPLOY_LOCK_HELD=true
+                return 0
+            fi
+            echo "ERROR: could not acquire remote deployment lock: $lock_status" >&2
+            release_remote_deploy_lock
+            return 1
+        fi
+        if ! kill -0 "$DEPLOY_LOCK_SSH_PID" 2>/dev/null; then
+            echo "ERROR: remote deployment lock holder exited unexpectedly" >&2
+            release_remote_deploy_lock
+            return 1
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: timed out acquiring remote deployment lock" >&2
+    release_remote_deploy_lock
+    return 1
+}
+
+snapshot_remote_release() {
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+backup_dir="$2"
+mkdir -p "$(dirname "$backup_dir")"
+if [[ -e "$backup_dir" ]]; then
+    echo "rollback snapshot path already exists: $backup_dir" >&2
+    exit 1
+fi
+test -f "$remote_dir/docker-compose.yml"
+mkdir -p "$backup_dir"
+items=(Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml Caddyfile unchained research_desk_vendor rhythm)
+present=()
+for item in "${items[@]}"; do
+    if [[ -e "$remote_dir/$item" ]]; then
+        present+=("$item")
+    fi
+done
+printf '%s\n' "${present[@]}" > "$backup_dir/items"
+tar -C "$remote_dir" -czf "$backup_dir/source.tgz" "${present[@]}"
+EOF
+    DEPLOY_BACKUP_READY=true
+}
+
+rollback_remote_release() {
+    if [[ "$DEPLOY_BACKUP_READY" != "true" || "$DEPLOY_ROLLBACK_ATTEMPTED" == "true" ]]; then
+        return
+    fi
+    DEPLOY_ROLLBACK_ATTEMPTED=true
+    echo "==> Deployment failed; restoring the previous release..." >&2
+    if ! remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+backup_dir="$2"
+test -f "$backup_dir/source.tgz"
+rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
+rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
+      "$remote_dir/docker-compose.yml" "$remote_dir/Caddyfile"
+tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
+cd "$remote_dir"
+docker compose build relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent
+docker compose up -d --no-build relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent
+if ! docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+    docker compose up -d --no-deps --no-build caddy
+fi
+EOF
+    then
+        echo "ERROR: automatic rollback failed; inspect $REMOTE_BACKUP_DIR on the host." >&2
+        return 1
+    fi
+    echo "    Previous source release restored; verify services before retrying." >&2
+}
+
+verify_production_health() {
+    local services="$1"
+    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+services="$2"
+health_host="$3"
+cd "$remote_dir"
+
+selected() {
+    [[ " $services " == *" $1 "* ]]
+}
+
+container_state() {
+    local service="$1" container
+    container="$(docker compose ps -q "$service")"
+    [[ -n "$container" ]] || return 1
+    docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container"
+}
+
+wait_for_state() {
+    local service="$1" expected="$2" attempt state
+    for attempt in $(seq 1 24); do
+        state="$(container_state "$service" 2>/dev/null || true)"
+        if [[ "$state" == "$expected" ]]; then
+            return 0
+        fi
+        if [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]]; then
+            docker compose logs --tail 40 "$service" >&2 || true
+            return 1
+        fi
+        sleep 2
+    done
+    echo "Timed out waiting for $service to become $expected (last state: ${state:-missing})" >&2
+    docker compose logs --tail 40 "$service" >&2 || true
+    return 1
+}
+
+for service in relay private-core mcp unbrowser-egress unbrowser-mcp web; do
+    wait_for_state "$service" healthy
+done
+for service in caddy scheduler trial-agent; do
+    wait_for_state "$service" running
+done
+if selected trial-agent; then
+    for attempt in $(seq 1 30); do
+        if docker compose logs --since 2m trial-agent 2>&1 | grep -q 'Authenticated\. Model:'; then
+            break
+        fi
+        if [[ "$attempt" == "30" ]]; then
+            echo "trial-agent did not authenticate after restart" >&2
+            docker compose logs --tail 80 trial-agent >&2 || true
+            exit 1
+        fi
+        sleep 2
+    done
+fi
+
+for attempt in $(seq 1 20); do
+    if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+        --resolve "$health_host:443:127.0.0.1" \
+        "https://$health_host/health" >/dev/null \
+        && curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+        --resolve "$health_host:443:127.0.0.1" \
+        "https://$health_host/" >/dev/null; then
+        exit 0
+    fi
+    sleep 2
+done
+echo "public Caddy health checks failed" >&2
+docker compose logs --tail 80 caddy >&2 || true
+exit 1
+EOF
+}
+
+write_deploy_metadata() {
+    remote_bash "$REMOTE_DIR" "$DEPLOY_REVISION" "$DEPLOY_ID" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+revision="$2"
+deploy_id="$3"
+tmp="$remote_dir/.deploy-current.tmp"
+printf 'revision=%s\ndeploy_id=%s\ndeployed_at=%s\n' \
+    "$revision" "$deploy_id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+mv "$tmp" "$remote_dir/.deploy-current"
+EOF
+}
+
+prune_remote_deploy_backups() {
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+current_backup="$2"
+backup_root="$remote_dir/.deploy-backups"
+[[ -d "$backup_root" ]] || exit 0
+# Keep recent snapshots for diagnosis and manual recovery, but prevent source
+# archives from consuming the small production root disk indefinitely.
+find "$backup_root" -mindepth 1 -maxdepth 1 -type d \
+    ! -path "$current_backup" -mtime +14 -exec rm -rf {} +
+EOF
+}
+
+cleanup_deploy() {
+    local status="${1:-0}"
+    trap - EXIT
+    set +e
+    if [[ "$status" -ne 0 && "$DEPLOY_SUCCEEDED" != "true" && "$DEPLOY_MUTATED" == "true" && "$DEPLOY_BACKUP_READY" == "true" && "$DEPLOY_ROLLBACK_ON_FAILURE" == "1" ]]; then
+        rollback_remote_release
+    fi
+    restore_private_core_worktree
+    release_remote_deploy_lock
+    rm -f "$REMOTE_CHECKSUMS_FILE" "$LOCAL_CHECKSUMS_FILE" "$DEPLOYED_PATHS_FILE"
+    return "$status"
+}
+
+trap 'cleanup_deploy $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Pick the local SHA-256 tool. macOS without GNU coreutils has `shasum`
 # but not `sha256sum`; Linux has `sha256sum`. Both produce the same
@@ -121,6 +437,7 @@ fi
 # Auto-install private core overlay when available.
 if [[ -x "$INSTALL_PRIVATE_CORE_SCRIPT" && -d "$PRIVATE_CORE_SRC" ]]; then
     echo "==> Installing private core overlay..."
+    DEPLOY_OVERLAY_APPLIED=true
     "$INSTALL_PRIVATE_CORE_SCRIPT" "$PRIVATE_CORE_SRC" "$PRIVATE_CORE_DST"
 else
     echo "==> Private core auto-install skipped (set PRIVATE_CORE_SRC if needed)."
@@ -176,6 +493,12 @@ done
 emit_deployed_paths | sort -u > "$DEPLOYED_PATHS_FILE"
 DEPLOYED_PATHS_COUNT=$(wc -l < "$DEPLOYED_PATHS_FILE" | awk '{print $1}')
 
+echo "==> Acquiring exclusive deployment lock..."
+acquire_remote_deploy_lock
+echo "    Lock acquired."
+echo "==> Snapshotting current release for automatic rollback..."
+snapshot_remote_release
+
 # Snapshot remote file checksums BEFORE upload so we can later detect
 # what this deploy actually changed. Files in the deployed list that
 # don't exist on the remote (new files) are silently skipped — they'll
@@ -200,6 +523,7 @@ set -euo pipefail
 remote_dir="$1"
 mkdir -p "$remote_dir"
 EOF
+DEPLOY_MUTATED=true
 "${SCP_CMD[@]}" \
     "${TOP_LEVEL_CONTEXT_FILES[@]}" \
     "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
@@ -480,10 +804,17 @@ docker compose up -d --no-deps --no-build caddy
 EOF
 fi
 
+echo "==> Verifying production health..."
+verify_production_health "$SERVICES_TO_REBUILD"
+write_deploy_metadata
+prune_remote_deploy_backups || echo "    (backup retention cleanup failed, ignoring)"
+DEPLOY_SUCCEEDED=true
+echo "    Health checks passed."
+
 # Show status
 echo ""
 echo "==> Container status:"
-remote_bash "$REMOTE_DIR" <<'EOF'
+remote_bash "$REMOTE_DIR" <<'EOF' || echo "    (container status unavailable after successful health verification)"
 set -euo pipefail
 remote_dir="$1"
 docker compose -f "$remote_dir/docker-compose.yml" ps
@@ -491,50 +822,11 @@ EOF
 
 echo ""
 echo "==> Relay logs (last 5):"
-remote_bash "$REMOTE_DIR" <<'EOF'
+remote_bash "$REMOTE_DIR" <<'EOF' || echo "    (relay logs unavailable after successful health verification)"
 set -euo pipefail
 remote_dir="$1"
 docker compose -f "$remote_dir/docker-compose.yml" logs relay --tail 5
 EOF
-
-# Restore overlaid private-core files back to committed/public state.
-echo ""
-if [[ "${DEPLOY_RESTORE_WORKTREE:-1}" == "1" ]]; then
-    # Clean up rhythm build context copy
-    rm -rf "$SCRIPT_DIR/rhythm"
-    echo "==> Restoring private-core overlay files..."
-    OVERLAY_FILES=(
-        "unchained/cdp.py"
-        "unchained/ddm.py"
-        "unchained/intel.py"
-        "unchained/editable_helpers.js"
-        "unchained/private_core_engine.py"
-        "unchained/private_core_server.py"
-        "unchained/private_core_contracts.py"
-        "unchained/CLAUDE.md"
-        "unchained/LABEL_RESOLUTION.md"
-        "unchained/benchmark/progress_critic.py"
-        "unchained/benchmark/intermediate_goal.py"
-    )
-    if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        for rel in "${OVERLAY_FILES[@]}"; do
-            if git -C "$SCRIPT_DIR" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
-                git -C "$SCRIPT_DIR" restore --source=HEAD -- "$rel" >/dev/null 2>&1 \
-                    || git -C "$SCRIPT_DIR" checkout -- "$rel" >/dev/null 2>&1 \
-                    || true
-            else
-                rm -f "$SCRIPT_DIR/$rel"
-            fi
-        done
-        echo "    Private-core overlay files restored."
-    else
-        echo "    (skipped — not in a git repo)"
-    fi
-else
-    echo "==> Keeping overlaid private-core files (set DEPLOY_RESTORE_WORKTREE=1 to auto-restore)."
-fi
-
-echo ""
 
 # Prune stale docker images and build cache on the remote to prevent the
 # 10GB root partition from filling up between deploys. Images older than
