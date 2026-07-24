@@ -201,6 +201,86 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         provider.assert_not_awaited()
         release.assert_awaited_once()
 
+    async def test_only_first_navigate_in_hosted_task_focuses_client_browser(self):
+        self.agent.sessions["s-focus"] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "nav-1",
+                            "function": {
+                                "name": "navigate",
+                                "arguments": '{"url":"https://example.com/one"}',
+                            },
+                        },
+                        {
+                            "id": "nav-2",
+                            "function": {
+                                "name": "navigate",
+                                "arguments": '{"url":"https://example.com/two"}',
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        execute_tool = AsyncMock(side_effect=["Navigated one", "Navigated two"])
+
+        with (
+            patch.object(
+                self.agent,
+                "_call_openrouter",
+                new=AsyncMock(side_effect=[tool_response, final_response]),
+            ),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(self.agent, "_emit_live_preview", new=AsyncMock()),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": "s-focus",
+                "agent_id": "client-browser",
+                "tab_id": "tab-1",
+                "user_id": "u-focus",
+                "message": "visit both pages",
+            })
+
+        self.assertEqual(execute_tool.await_count, 2)
+        first, second = execute_tool.await_args_list
+        self.assertTrue(first.kwargs["bring_to_front"])
+        self.assertFalse(second.kwargs["bring_to_front"])
+
+    async def test_background_navigation_policy_reaches_cloud_tools(self):
+        with patch(
+            "chat_agent_openrouter.cloud_tools.navigate",
+            new=AsyncMock(return_value="Navigated"),
+        ) as navigate:
+            result = await self.agent._dispatch_tool(
+                "client-browser",
+                "tab-1",
+                "navigate",
+                {"url": "https://example.com"},
+                bring_to_front=False,
+            )
+
+        self.assertEqual(result, "Navigated")
+        self.assertFalse(navigate.await_args.kwargs["bring_to_front"])
+
     async def test_hosted_provider_error_is_one_attempt(self):
         class ErrorResponse:
             status_code = 503

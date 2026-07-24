@@ -8843,6 +8843,7 @@ body{
 #model-notice.funded strong{color:#8de0b2}
 #model-notice .credit-pill{margin-left:auto;color:inherit;border-color:currentColor}
 #hosted-access-copy{min-width:180px;flex:1}
+#hosted-access-copy[hidden]{display:none}
 .workspace-only[hidden]{display:none!important}
 #profile-note{
   margin:4px 16px 0;color:var(--muted);font-size:11px;line-height:1.4;flex-shrink:0;
@@ -9331,6 +9332,14 @@ function _syncTrialAdminUi() {
   if (adminLink) adminLink.style.display = _isAdmin ? '' : 'none';
 }
 
+function _resetHostedAccessCopyDismissal() {
+  const copy = document.getElementById('hosted-access-copy');
+  if (!copy) return;
+  if (copy._dismissTimer) clearTimeout(copy._dismissTimer);
+  copy._dismissTimer = null;
+  copy.hidden = false;
+}
+
 function _setTrialIdentity(userId) {
   const next = (userId || '').trim();
   let previous = _userId;
@@ -9350,6 +9359,7 @@ function _setTrialIdentity(userId) {
     _isAdmin = false;
     _syncTrialAdminUi();
     _resetTrialModelUi();
+    _resetHostedAccessCopyDismissal();
   }
 }
 
@@ -9443,6 +9453,30 @@ function _redirectForHostedAccess() {
   return false;
 }
 
+function _setHostedAccessCopy(copy, message, autoDismiss) {
+  const nextMessage = message || '';
+  const changed = copy.textContent !== nextMessage;
+  if (changed) {
+    if (copy._dismissTimer) clearTimeout(copy._dismissTimer);
+    copy._dismissTimer = null;
+    copy.textContent = nextMessage;
+    copy.hidden = false;
+  }
+  if (!autoDismiss) {
+    if (copy._dismissTimer) clearTimeout(copy._dismissTimer);
+    copy._dismissTimer = null;
+    copy.hidden = false;
+    return;
+  }
+  // Re-renders from credit refreshes must not restart or undo dismissal.
+  if (copy.hidden || copy._dismissTimer) return;
+  const expectedMessage = nextMessage;
+  copy._dismissTimer = setTimeout(function() {
+    copy._dismissTimer = null;
+    if (copy.textContent === expectedMessage) copy.hidden = true;
+  }, 30000);
+}
+
 function _renderHostedAccessUi() {
   const funded = _hasReceivedHostedCredit();
   const notice = document.getElementById('model-notice');
@@ -9457,22 +9491,26 @@ function _renderHostedAccessUi() {
   if (!notice || !label || !copy) return;
   notice.style.display = 'flex';
   notice.classList.toggle('funded', funded);
+  let copyText = '';
+  let autoDismissCopy = false;
   if (!_creditState || _creditState.available === false) {
     label.textContent = 'Hosted access';
-    copy.textContent = 'Credit status is temporarily unavailable. Retrying automatically.';
+    copyText = 'Credit status is temporarily unavailable. Retrying automatically.';
   } else if (funded) {
     const available = Number(_creditState.available_usd) || 0;
     label.textContent = 'Hosted workspace';
-    copy.textContent = available > 0
+    copyText = available > 0
       ? 'Hosted models draw from your account credit. No provider API key required.'
       : 'Credit is exhausted. Free hosted models remain available.';
+    autoDismissCopy = available > 0;
   } else if (_openrouterUsage && _openrouterUsage.capped) {
     label.textContent = 'Free trial limit reached';
-    copy.textContent = 'Free hosted models remain available, or switch to local provider mode.';
+    copyText = 'Free hosted models remain available, or switch to local provider mode.';
   } else {
     label.textContent = 'Free trial';
-    copy.textContent = 'Lightweight hosted models with a dedicated browser workspace. No provider API key required.';
+    copyText = 'Lightweight hosted models with a dedicated browser workspace. No provider API key required.';
   }
+  _setHostedAccessCopy(copy, copyText, autoDismissCopy);
   if (hintTitle) hintTitle.textContent = hostedWorkspaceMode ? 'Unchained Workspace' : 'Unchained Chat';
   if (hintSub) {
     hintSub.textContent = hostedWorkspaceMode

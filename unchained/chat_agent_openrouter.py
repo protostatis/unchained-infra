@@ -1262,6 +1262,9 @@ class TrialAgent:
         reflex.set_user_goal(user_text)
 
         js_eval_cache: dict[tuple[str, str], dict] = {}
+        # Surface Chrome once when a hosted task starts browsing. Later
+        # navigations stay behind the chat window instead of stealing focus.
+        focus_next_navigation = True
 
         def _invalidate_js_eval_cache(tab_id: str):
             """Clear cached js_eval outputs after actions that may change page state."""
@@ -1580,8 +1583,18 @@ class TrialAgent:
                         if not cache_hit:
                             tool_t0 = time.monotonic()
                             try:
+                                execute_kwargs = {}
+                                if name == "navigate":
+                                    execute_kwargs["bring_to_front"] = focus_next_navigation
+                                    focus_next_navigation = False
                                 result = await asyncio.wait_for(
-                                    self._execute_tool(agent_id, name, args, tab_id=session_tab_id),
+                                    self._execute_tool(
+                                        agent_id,
+                                        name,
+                                        args,
+                                        tab_id=session_tab_id,
+                                        **execute_kwargs,
+                                    ),
                                     timeout=TOOL_EXEC_TIMEOUT,
                                 )
                             except asyncio.TimeoutError:
@@ -2083,7 +2096,15 @@ class TrialAgent:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
         return data
 
-    async def _execute_tool(self, agent_id: str, name: str, args: dict, tab_id: str | None = None) -> str:
+    async def _execute_tool(
+        self,
+        agent_id: str,
+        name: str,
+        args: dict,
+        tab_id: str | None = None,
+        *,
+        bring_to_front: bool = True,
+    ) -> str:
         # Model can override session tab by explicitly providing a non-default tab_id
         # Reject URLs/paths that models sometimes hallucinate as tab IDs
         args_tab = args.get("tab_id", "")
@@ -2099,15 +2120,35 @@ class TrialAgent:
         if name == "ddm" and any(f in flags_str for f in ("--new", "--tabs", "--close")):
             effective_tab = "auto"
 
-        result = await self._dispatch_tool(agent_id, effective_tab, name, args)
+        result = await self._dispatch_tool(
+            agent_id,
+            effective_tab,
+            name,
+            args,
+            bring_to_front=bring_to_front,
+        )
 
         # If session tab appears dead, retry on 'auto' (first alive tab)
         if effective_tab != "auto" and ("BROWSER_UNAVAILABLE" in result or "4000" in result):
-            result = await self._dispatch_tool(agent_id, "auto", name, args)
+            result = await self._dispatch_tool(
+                agent_id,
+                "auto",
+                name,
+                args,
+                bring_to_front=bring_to_front,
+            )
 
         return result
 
-    async def _dispatch_tool(self, agent_id: str, tab_id: str, name: str, args: dict) -> str:
+    async def _dispatch_tool(
+        self,
+        agent_id: str,
+        tab_id: str,
+        name: str,
+        args: dict,
+        *,
+        bring_to_front: bool = True,
+    ) -> str:
         try:
             if name == "ddm":
                 flags = args.get("flags", "--llm-2pass --cols 60").split()
@@ -2137,7 +2178,13 @@ class TrialAgent:
 
             elif name == "navigate":
                 return await cloud_tools.navigate(
-                    agent_id, tab_id, args["url"], RELAY_HOST, RELAY_PORT)
+                    agent_id,
+                    tab_id,
+                    args["url"],
+                    RELAY_HOST,
+                    RELAY_PORT,
+                    bring_to_front=bring_to_front,
+                )
 
             elif name == "click":
                 return await cloud_tools.click(
