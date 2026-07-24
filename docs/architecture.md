@@ -218,7 +218,7 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `OPENROUTER_API_KEY` | trial-agent | Provider credential for hosted inference |
 | `HOSTED_MAX_ACTIVE_TURNS` | web | Optional global hosted-turn limit (default: `16`) |
 | `HOSTED_MAX_ACTIVE_TURNS_PER_USER` | web | Optional per-account hosted-turn limit (default: `3`) |
-| `HOSTED_TURN_DEADLINE_SECONDS` | web | Optional absolute hosted-turn deadline (default: `300`) |
+| `HOSTED_TURN_DEADLINE_SECONDS` | web | Optional absolute hosted-turn deadline (default: `600`); `/schedule` grants remain valid for the deadline plus a one-minute setup margin |
 | `HOSTED_MAX_INPUT_CHARS` | trial-agent | Optional per-attempt serialized context bound (default: `200000`) |
 | `CREDIT_STALE_RUN_TTL_SECONDS` | web | Optional crash-recovery sweep age (default: `7200`) |
 | `CREDIT_ADMIN_ALLOWLIST` | web | Optional comma-separated additional hosted model IDs; unknown models use the conservative default hold |
