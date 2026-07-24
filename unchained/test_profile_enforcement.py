@@ -135,6 +135,75 @@ class TestEnsureProfileTabPendingClose(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(core._session_last_active[sid], time.time() - 2)
         mock_status.assert_awaited_once()
 
+    async def test_owned_workspace_adopts_active_tab_even_when_cached_tab_is_live(self):
+        """The first active tab in an exactly owned profile slot becomes authoritative."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+
+        core = _FakeCore()
+        sid = "s-test-active-tab"
+        profile = "/chrome/Profile 3"
+        cached_tab = "prov-ab12-OLD"
+        active_tab = "prov-ab12-NEW"
+        core._session_tabs[sid] = cached_tab
+        core._session_allowed_tabs[sid] = {cached_tab}
+        core._session_profile_paths[sid] = profile
+
+        status = {
+            "slots": {"ab12": {
+                "profile": "Profile 3",
+                "caller_tag": profile_session_caller_tag(sid),
+                "tabs": [
+                    {"tab_id": active_tab},
+                    {"tab_id": cached_tab},
+                ],
+            }}
+        }
+        mock_launch = AsyncMock()
+        with (
+            patch("cloud_tools.provision_status", AsyncMock(return_value=status)),
+            patch("cloud_tools.provision_launch", mock_launch),
+        ):
+            tab_id = await _ensure_profile_tab(core, sid, "claude-test", profile)
+
+        self.assertEqual(tab_id, active_tab)
+        self.assertEqual(core._session_tabs[sid], active_tab)
+        self.assertEqual(core._session_allowed_tabs[sid], {active_tab})
+        mock_launch.assert_not_awaited()
+
+    async def test_legacy_untagged_workspace_does_not_adopt_another_live_tab(self):
+        """Legacy slots may retain their exact tab but cannot follow another one."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+
+        core = _FakeCore()
+        sid = "s-test-legacy-active-tab"
+        profile = "/chrome/Profile 3"
+        cached_tab = "prov-ab12-OLD"
+        other_tab = "prov-ab12-NEW"
+        core._session_tabs[sid] = cached_tab
+        core._session_allowed_tabs[sid] = {cached_tab}
+        core._session_profile_paths[sid] = profile
+
+        status = {
+            "slots": {"ab12": {
+                "profile": "Profile 3",
+                "caller_tag": "",
+                "tabs": [
+                    {"tab_id": other_tab},
+                    {"tab_id": cached_tab},
+                ],
+            }}
+        }
+        with (
+            patch("cloud_tools.provision_status", AsyncMock(return_value=status)),
+            patch("cloud_tools.provision_launch", AsyncMock()) as mock_launch,
+        ):
+            tab_id = await _ensure_profile_tab(core, sid, "claude-test", profile)
+
+        self.assertEqual(tab_id, cached_tab)
+        self.assertEqual(core._session_tabs[sid], cached_tab)
+        self.assertEqual(core._session_allowed_tabs[sid], {cached_tab})
+        mock_launch.assert_not_awaited()
+
     async def test_different_profile_triggers_reprovision(self):
         """Changing profile always re-provisions regardless of pending state."""
         from web_app.handlers.chat_stream import _ensure_profile_tab
