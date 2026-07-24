@@ -25,6 +25,7 @@ from rate_limit import SlidingWindowRateLimiter
 
 from hosted_conversations import HostedConversationRepo
 from web_app.core import get_core as _core
+from web_state import profile_session_guard, select_profile_slot_active_tab
 
 log = logging.getLogger(__name__)
 
@@ -938,6 +939,152 @@ async def handle_first_look_signal(request: web.Request) -> web.Response:
 #   elsewhere are unaffected.
 
 
+_PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = 0.75
+_PROFILE_ACTIVE_TAB_POLL_MAX_BACKOFF_S = 8.0
+
+
+def _profile_tab_monitor_subscribers(core) -> dict[str, dict[str, set[str]]]:
+    subscribers = getattr(core, "_profile_tab_monitor_subscribers", None)
+    if not isinstance(subscribers, dict):
+        subscribers = {}
+        core._profile_tab_monitor_subscribers = subscribers
+    return subscribers
+
+
+def _profile_tab_monitor_tasks(core) -> dict[str, asyncio.Task]:
+    tasks = getattr(core, "_profile_tab_monitor_tasks", None)
+    if not isinstance(tasks, dict):
+        tasks = {}
+        core._profile_tab_monitor_tasks = tasks
+    return tasks
+
+
+def _profile_tab_monitor_has_subscribers(core, agent_id: str, session_id: str) -> bool:
+    return bool(
+        _profile_tab_monitor_subscribers(core)
+        .get(agent_id, {})
+        .get(session_id, set())
+    )
+
+
+async def _run_profile_tab_monitor(core, agent_id: str) -> None:
+    """Share one active-workspace-tab poller across an agent's preview clients."""
+    import cloud_tools
+
+    relay_host, relay_port = core._parse_relay()
+    backoff = _PROFILE_ACTIVE_TAB_POLL_INTERVAL_S
+    current_task = asyncio.current_task()
+    try:
+        while True:
+            agent_subscribers = _profile_tab_monitor_subscribers(core).get(agent_id, {})
+            if not agent_subscribers:
+                return
+
+            snapshots: dict[str, tuple[str, str]] = {}
+            for session_id in list(agent_subscribers):
+                tab_id = str(core._session_tabs.get(session_id, "") or "")
+                profile_path = str(core._session_profile_paths.get(session_id, "") or "")
+                mapped_agent = str(core._session_agent_map.get(session_id, "") or "")
+                if tab_id.startswith("prov-") and profile_path and mapped_agent == agent_id:
+                    snapshots[session_id] = (tab_id, profile_path)
+
+            if not snapshots:
+                await asyncio.sleep(_PROFILE_ACTIVE_TAB_POLL_INTERVAL_S)
+                continue
+
+            try:
+                status = await cloud_tools.provision_status(
+                    agent_id,
+                    relay_host,
+                    relay_port,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("profile tab monitor status failed for %s: %r", agent_id, exc)
+                await asyncio.sleep(backoff)
+                backoff = min(_PROFILE_ACTIVE_TAB_POLL_MAX_BACKOFF_S, backoff * 2)
+                continue
+
+            backoff = _PROFILE_ACTIVE_TAB_POLL_INTERVAL_S
+            for session_id, (expected_tab, expected_profile) in snapshots.items():
+                if not _profile_tab_monitor_has_subscribers(core, agent_id, session_id):
+                    continue
+                try:
+                    active_tab, _may_cleanup = select_profile_slot_active_tab(
+                        status,
+                        session_id=session_id,
+                        profile_path=expected_profile,
+                        current_tab=expected_tab,
+                    )
+                except RuntimeError as exc:
+                    log.debug("profile tab monitor ignored invalid status for %s: %r", session_id, exc)
+                    continue
+                if not active_tab or active_tab == expected_tab:
+                    continue
+
+                async with profile_session_guard(core, session_id):
+                    if not _profile_tab_monitor_has_subscribers(core, agent_id, session_id):
+                        continue
+                    if (
+                        str(core._session_tabs.get(session_id, "") or "") != expected_tab
+                        or str(core._session_profile_paths.get(session_id, "") or "")
+                        != expected_profile
+                        or str(core._session_agent_map.get(session_id, "") or "") != agent_id
+                    ):
+                        continue
+                    core._session_tabs[session_id] = active_tab
+                    core._session_allowed_tabs[session_id] = {active_tab}
+                    core._session_last_active[session_id] = time.time()
+                    print(
+                        f"[preview-fsm] sid={session_id} workspace active tab changed "
+                        f"from={expected_tab[:18]} to={active_tab[:18]}",
+                        flush=True,
+                    )
+
+            await asyncio.sleep(_PROFILE_ACTIVE_TAB_POLL_INTERVAL_S)
+    finally:
+        tasks = _profile_tab_monitor_tasks(core)
+        if tasks.get(agent_id) is current_task:
+            tasks.pop(agent_id, None)
+
+
+def _register_profile_tab_monitor(core, agent_id: str, session_id: str) -> str:
+    token = uuid.uuid4().hex
+    subscribers = _profile_tab_monitor_subscribers(core)
+    subscribers.setdefault(agent_id, {}).setdefault(session_id, set()).add(token)
+    tasks = _profile_tab_monitor_tasks(core)
+    task = tasks.get(agent_id)
+    if task is None or task.done():
+        tasks[agent_id] = asyncio.create_task(_run_profile_tab_monitor(core, agent_id))
+    return token
+
+
+def _unregister_profile_tab_monitor(
+    core,
+    agent_id: str,
+    session_id: str,
+    token: str,
+) -> None:
+    if not token:
+        return
+    subscribers = _profile_tab_monitor_subscribers(core)
+    agent_subscribers = subscribers.get(agent_id)
+    if not isinstance(agent_subscribers, dict):
+        return
+    tokens = agent_subscribers.get(session_id)
+    if isinstance(tokens, set):
+        tokens.discard(token)
+        if not tokens:
+            agent_subscribers.pop(session_id, None)
+    if agent_subscribers:
+        return
+    subscribers.pop(agent_id, None)
+    task = _profile_tab_monitor_tasks(core).pop(agent_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 async def _dispose_source_mirror(
     agent_id: str,
     tab_id: str,
@@ -1192,6 +1339,28 @@ async def _handle_preview_ws(
             sid_param,
         )
         return ws
+    profile_monitor_token = ""
+    if (
+        authenticated_chat
+        and tab_id.startswith("prov-")
+        and core._session_profile_paths.get(sid_param)
+        and core._session_agent_map.get(sid_param) == agent_id
+    ):
+        profile_monitor_token = _register_profile_tab_monitor(
+            core,
+            agent_id,
+            sid_param,
+        )
+        request_task = asyncio.current_task()
+        if request_task is not None:
+            request_task.add_done_callback(
+                lambda _task, token=profile_monitor_token: _unregister_profile_tab_monitor(
+                    core,
+                    agent_id,
+                    sid_param,
+                    token,
+                )
+            )
     client_closed = asyncio.Event()
     send_lock = asyncio.Lock()
     action_queue: asyncio.Queue[dict] | None = (
@@ -1653,12 +1822,24 @@ async def _handle_preview_ws(
                 f"[preview-fsm] sid={sid_param} semantic disconnected events={semantic_seq}",
                 flush=True,
             )
+            _unregister_profile_tab_monitor(
+                core,
+                agent_id,
+                sid_param,
+                profile_monitor_token,
+            )
             return ws
         except asyncio.CancelledError:
             await stop_action_worker()
             await stop_client_watch()
             await _dispose_source_mirror(
                 agent_id, tab_id, mirror_key, relay_host, relay_port, source_lock
+            )
+            _unregister_profile_tab_monitor(
+                core,
+                agent_id,
+                sid_param,
+                profile_monitor_token,
             )
             raise
         except Exception as exc:
@@ -1909,6 +2090,12 @@ async def _handle_preview_ws(
             await ws.close()
         await stop_action_worker()
         await stop_client_watch()
+        _unregister_profile_tab_monitor(
+            core,
+            agent_id,
+            sid_param,
+            profile_monitor_token,
+        )
         print(
             f"[preview-fsm] sid={sid_param} disconnected frames={frame_seq}",
             flush=True,

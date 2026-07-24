@@ -44,6 +44,9 @@ class _AuthenticatedFakeCore(_FakeCore):
         self._session_tabs = {"s-claude-abc12345-demo": "TAB" * 10 + "AA"}
         self._session_allowed_tabs = {"s-claude-abc12345-demo": {"TAB" * 10 + "AA"}}
         self._session_agent_map = {"s-claude-abc12345-demo": "claude-abc12345"}
+        self._session_last_active = {}
+        self._session_profile_paths = {}
+        self._session_profile_locks = {}
         self.authenticated = True
 
     def _authenticate(self, _request):
@@ -330,6 +333,8 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self._original_core = chat_flow._core
         self._original_stream = cloud_tools.stream_screencast
         self._original_cdp = cloud_tools.run_cdp_command
+        self._original_provision_status = cloud_tools.provision_status
+        self._original_profile_poll_interval = chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S
         self.fake_core = _AuthenticatedFakeCore()
         chat_flow._core = lambda: self.fake_core
 
@@ -343,9 +348,18 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         return app
 
     async def asyncTearDown(self):
+        monitor_tasks = list(
+            getattr(self.fake_core, "_profile_tab_monitor_tasks", {}).values()
+        )
+        for task in monitor_tasks:
+            task.cancel()
+        if monitor_tasks:
+            await asyncio.gather(*monitor_tasks, return_exceptions=True)
         chat_flow._core = self._original_core
         cloud_tools.stream_screencast = self._original_stream
         cloud_tools.run_cdp_command = self._original_cdp
+        cloud_tools.provision_status = self._original_provision_status
+        chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = self._original_profile_poll_interval
         await super().asyncTearDown()
 
     async def test_streams_the_exact_tab_bound_to_the_authenticated_chat_session(self):
@@ -425,6 +439,195 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.assertTrue(ended["retriable"])
         self.assertEqual(ended["from_tab_id"], "TAB" * 10 + "AA")
         self.assertEqual(ended["to_tab_id"], "NEW" * 10 + "BB")
+
+    async def test_owned_profile_workspace_follows_manually_activated_tab(self):
+        from web_app import semantic_mirror
+        from web_state import profile_session_caller_tag
+
+        sid = "s-claude-abc12345-demo"
+        old_tab = "prov-ab12-" + ("A" * 32)
+        active_tab = "prov-ab12-" + ("B" * 32)
+        profile = "/chrome/Profile 3"
+        self.fake_core._session_tabs[sid] = old_tab
+        self.fake_core._session_allowed_tabs[sid] = {old_tab}
+        self.fake_core._session_profile_paths[sid] = profile
+        chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = 0.01
+
+        async def fake_status(*_args, **_kwargs):
+            return {
+                "slots": {"ab12": {
+                    "profile": "Profile 3",
+                    "caller_tag": profile_session_caller_tag(sid),
+                    "tabs": [
+                        {"tab_id": active_tab},
+                        {"tab_id": old_tab},
+                    ],
+                }}
+            }
+
+        original_semantic_stream = semantic_mirror.stream_semantic_mirror
+
+        async def fake_semantic_stream(_agent_id, tab_id, **kwargs):
+            self.assertEqual(tab_id, old_tab)
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "captureEpoch": "epoch-profile-tab",
+                    "url": "https://old.example",
+                    "body": '<main data-ucm-id="ucm-1">Old tab</main>',
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+            while not kwargs["stop_requested"]():
+                await asyncio.sleep(0.005)
+
+        cloud_tools.provision_status = fake_status
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        try:
+            ws = await self.client.ws_connect(f"/ws?session_id={sid}")
+            attached = await ws.receive_json()
+            snapshot = await ws.receive_json()
+            ended = await asyncio.wait_for(ws.receive_json(), timeout=1)
+            await ws.close()
+        finally:
+            semantic_mirror.stream_semantic_mirror = original_semantic_stream
+
+        self.assertEqual(attached["tab_id"], old_tab)
+        self.assertEqual(snapshot["type"], "preview.semantic.snapshot")
+        self.assertEqual(ended["type"], "preview.ended")
+        self.assertEqual(ended["reason"], "tab_changed")
+        self.assertEqual(ended["to_tab_id"], active_tab)
+        self.assertEqual(self.fake_core._session_tabs[sid], active_tab)
+        self.assertEqual(self.fake_core._session_allowed_tabs[sid], {active_tab})
+
+    async def test_concurrent_profile_previews_share_one_active_tab_monitor(self):
+        from web_app import semantic_mirror
+        from web_state import profile_session_caller_tag
+
+        sid = "s-claude-abc12345-demo"
+        tab = "prov-ab12-" + ("A" * 32)
+        profile = "/chrome/Profile 3"
+        self.fake_core._session_tabs[sid] = tab
+        self.fake_core._session_allowed_tabs[sid] = {tab}
+        self.fake_core._session_profile_paths[sid] = profile
+        chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = 0.01
+        status_calls = 0
+
+        async def fake_status(*_args, **_kwargs):
+            nonlocal status_calls
+            status_calls += 1
+            return {
+                "slots": {"ab12": {
+                    "profile": "Profile 3",
+                    "caller_tag": profile_session_caller_tag(sid),
+                    "tabs": [{"tab_id": tab}],
+                }}
+            }
+
+        original_semantic_stream = semantic_mirror.stream_semantic_mirror
+
+        async def fake_semantic_stream(_agent_id, _tab_id, **kwargs):
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "captureEpoch": "epoch-shared-monitor",
+                    "url": "https://example.test",
+                    "body": '<main data-ucm-id="ucm-1">Shared</main>',
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+            while not kwargs["stop_requested"]():
+                await asyncio.sleep(0.005)
+
+        cloud_tools.provision_status = fake_status
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        try:
+            ws1 = await self.client.ws_connect(f"/ws?session_id={sid}")
+            await ws1.receive_json()
+            await ws1.receive_json()
+            ws2 = await self.client.ws_connect(f"/ws?session_id={sid}")
+            await ws2.receive_json()
+            await ws2.receive_json()
+            await asyncio.sleep(0.03)
+
+            tasks = self.fake_core._profile_tab_monitor_tasks
+            subscribers = self.fake_core._profile_tab_monitor_subscribers
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(len(subscribers["claude-abc12345"][sid]), 2)
+            self.assertGreater(status_calls, 0)
+
+            await ws1.close()
+            await asyncio.sleep(0.03)
+            self.assertEqual(
+                len(self.fake_core._profile_tab_monitor_subscribers["claude-abc12345"][sid]),
+                1,
+            )
+            self.assertEqual(len(self.fake_core._profile_tab_monitor_tasks), 1)
+
+            await ws2.close()
+            await asyncio.sleep(0.03)
+            self.assertFalse(self.fake_core._profile_tab_monitor_subscribers)
+            self.assertFalse(self.fake_core._profile_tab_monitor_tasks)
+        finally:
+            semantic_mirror.stream_semantic_mirror = original_semantic_stream
+
+    async def test_delayed_active_tab_poll_cannot_overwrite_newer_command_target(self):
+        from web_state import profile_session_caller_tag
+
+        sid = "s-claude-abc12345-demo"
+        old_tab = "prov-ab12-" + ("A" * 32)
+        polled_tab = "prov-ab12-" + ("B" * 32)
+        command_tab = "prov-ab12-" + ("C" * 32)
+        profile = "/chrome/Profile 3"
+        self.fake_core._session_tabs[sid] = old_tab
+        self.fake_core._session_allowed_tabs[sid] = {old_tab}
+        self.fake_core._session_profile_paths[sid] = profile
+        chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = 0.01
+        first_poll_started = asyncio.Event()
+        release_first_poll = asyncio.Event()
+        calls = 0
+
+        def status_for(active_tab):
+            return {
+                "slots": {"ab12": {
+                    "profile": "Profile 3",
+                    "caller_tag": profile_session_caller_tag(sid),
+                    "tabs": [{"tab_id": active_tab}],
+                }}
+            }
+
+        async def fake_status(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_poll_started.set()
+                await release_first_poll.wait()
+                return status_for(polled_tab)
+            return status_for(command_tab)
+
+        cloud_tools.provision_status = fake_status
+        token = chat_flow._register_profile_tab_monitor(
+            self.fake_core,
+            "claude-abc12345",
+            sid,
+        )
+        await asyncio.wait_for(first_poll_started.wait(), timeout=1)
+        self.fake_core._session_tabs[sid] = command_tab
+        self.fake_core._session_allowed_tabs[sid] = {command_tab}
+        release_first_poll.set()
+        await asyncio.sleep(0.05)
+
+        self.assertEqual(self.fake_core._session_tabs[sid], command_tab)
+        self.assertEqual(self.fake_core._session_allowed_tabs[sid], {command_tab})
+        chat_flow._unregister_profile_tab_monitor(
+            self.fake_core,
+            "claude-abc12345",
+            sid,
+            token,
+        )
+        await asyncio.sleep(0)
 
     async def test_concurrent_connections_coexist_without_generation_war(self):
         """Two Agent View clients on the same session must coexist.

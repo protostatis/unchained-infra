@@ -24,7 +24,12 @@ from chat_event_transport import (
 
 from web_app.core import get_core as _core
 from web_app.handlers.chat_flow import _hosted_repo
-from web_state import ChatTurnState, profile_session_caller_tag, profile_session_guard
+from web_state import (
+    ChatTurnState,
+    profile_session_caller_tag,
+    profile_session_guard,
+    select_profile_slot_active_tab,
+)
 
 
 def _finish_credit_run(core, session_id: str, status: str = "completed") -> None:
@@ -739,45 +744,16 @@ async def _live_profile_tab(
     current_tab: str,
 ) -> tuple[str, bool]:
     """Return ``(live_tab, may_cleanup_slot)`` for the pinned provision."""
-    from chrome_bridge import _extract_prov_slot
     import cloud_tools
 
-    slot = _extract_prov_slot(current_tab)
-    if not slot:
-        return "", False
     relay_host, relay_port = core._parse_relay()
     status = await cloud_tools.provision_status(cdp_agent_id, relay_host, relay_port)
-    slots = status.get("slots") if isinstance(status, dict) else None
-    if not isinstance(slots, dict):
-        raise RuntimeError("Profile browser returned invalid status")
-    slot_state = slots.get(slot)
-    if not isinstance(slot_state, dict):
-        return "", True
-    expected_profile = os.path.basename(profile_path)
-    actual_profile = str(slot_state.get("profile") or "")
-    caller_tag = str(slot_state.get("caller_tag") or "")
-    expected_caller_tag = profile_session_caller_tag(session_id)
-    if actual_profile != expected_profile:
-        return "", False
-    if caller_tag and caller_tag != expected_caller_tag:
-        return "", False
-    tab_entries = slot_state.get("tabs", [])
-    if not isinstance(tab_entries, list):
-        raise RuntimeError("Profile browser returned invalid tab status")
-    if any(isinstance(tab, dict) and tab.get("error") for tab in tab_entries):
-        raise RuntimeError("Profile browser tab status is unavailable")
-    live_tabs = [
-        str(tab.get("tab_id") or "").strip()
-        for tab in tab_entries
-        if isinstance(tab, dict) and tab.get("tab_id")
-    ]
-    if current_tab in live_tabs:
-        return current_tab, True
-    if not caller_tag:
-        # Legacy untagged slots are safe to keep only when the exact target is
-        # still present. Never clean or adopt another unowned legacy target.
-        return "", False
-    return (live_tabs[0] if live_tabs else ""), True
+    return select_profile_slot_active_tab(
+        status,
+        session_id=session_id,
+        profile_path=profile_path,
+        current_tab=current_tab,
+    )
 
 
 def _detach_profile_target(

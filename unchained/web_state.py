@@ -11,6 +11,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 import hashlib
 import json
+import os
 import subprocess
 import threading
 import time
@@ -49,6 +50,64 @@ def profile_session_caller_tag(session_id: str) -> str:
     """Return a stable bounded owner tag safe for bridge query strings."""
     digest = hashlib.sha256(str(session_id).encode()).hexdigest()[:24]
     return f"chat-{digest}"
+
+
+def select_profile_slot_active_tab(
+    status: dict,
+    *,
+    session_id: str,
+    profile_path: str,
+    current_tab: str,
+) -> tuple[str, bool]:
+    """Return ``(active_tab, may_cleanup_slot)`` for one profile session.
+
+    Chrome's local ``/json`` endpoint lists the active/recent target first.
+    That ordering is a heuristic, so it is used only inside an exactly owned,
+    dedicated provision slot. Legacy untagged slots keep their exact current
+    target and never adopt a different tab.
+    """
+    current = str(current_tab or "").strip()
+    parts = current.split("-", 2)
+    if len(parts) != 3 or parts[0] != "prov" or not parts[1] or not parts[2]:
+        return "", False
+    slot = parts[1]
+
+    slots = status.get("slots") if isinstance(status, dict) else None
+    if not isinstance(slots, dict):
+        raise RuntimeError("Profile browser returned invalid status")
+    slot_state = slots.get(slot)
+    if not isinstance(slot_state, dict):
+        return "", True
+
+    expected_profile = os.path.basename(profile_path)
+    actual_profile = str(slot_state.get("profile") or "")
+    if actual_profile != expected_profile:
+        return "", False
+
+    caller_tag = str(slot_state.get("caller_tag") or "")
+    expected_caller_tag = profile_session_caller_tag(session_id)
+    if caller_tag and caller_tag != expected_caller_tag:
+        return "", False
+
+    tab_entries = slot_state.get("tabs", [])
+    if not isinstance(tab_entries, list):
+        raise RuntimeError("Profile browser returned invalid tab status")
+    if any(isinstance(tab, dict) and tab.get("error") for tab in tab_entries):
+        raise RuntimeError("Profile browser tab status is unavailable")
+
+    prefix = f"prov-{slot}-"
+    live_tabs = [
+        str(tab.get("tab_id") or "").strip()
+        for tab in tab_entries
+        if isinstance(tab, dict)
+        and str(tab.get("tab_id") or "").startswith(prefix)
+        and len(str(tab.get("tab_id") or "")) > len(prefix)
+    ]
+    if caller_tag == expected_caller_tag:
+        return (live_tabs[0] if live_tabs else ""), True
+    if current in live_tabs:
+        return current, True
+    return "", False
 
 
 @asynccontextmanager
