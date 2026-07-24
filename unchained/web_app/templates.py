@@ -21392,6 +21392,8 @@ let agentViewLastSeq = 0;
 let agentViewDocumentSeq = 0;
 let agentViewSnapshot = null;
 let agentViewRetryAllowed = true;
+let agentViewTransportRetryAttempts = 0;
+const AGENT_VIEW_MAX_TRANSPORT_RETRIES = 5;
 let agentViewMirrorId = '';
 let agentViewCaptureEpoch = '';
 let agentViewBoundSessionId = '';
@@ -21532,11 +21534,16 @@ function initializeAgentShellExperiment() {
 
 function maybeInitializeAgentShell(data) {
   if (!agentShellTaskEnabled || !data || typeof data !== 'object') return;
+  const wasBrowserAvailable = agentShellBrowserReady && agentShellChatReady;
   agentShellBrowserReady = !!data.bridge_connected;
   agentShellChatReady = !!data.chat_connected;
   const browserAvailable = agentShellBrowserReady && agentShellChatReady;
+  const viewWasOpen = document.body.classList.contains('agent-view-open');
   setAgentShellConnectionLayout(browserAvailable);
   openAgentView({system:true});
+  if (viewWasOpen && browserAvailable && !wasBrowserAvailable && !agentViewSocket) {
+    refreshAgentView({resetRetry:true});
+  }
   if (browserAvailable) {
     setAgentShellPhase('ready', 'Browser and agent ready');
   } else {
@@ -22605,8 +22612,22 @@ function _agentViewFallbackScheduleRaf() {
 
 function scheduleAgentViewRetry(generation) {
   if (!agentViewRetryAllowed || !document.body.classList.contains('agent-view-open') || generation !== agentViewGeneration) return;
+  if (agentViewRetryTimer) return;
+  if (agentViewTransportRetryAttempts >= AGENT_VIEW_MAX_TRANSPORT_RETRIES) {
+    agentViewRetryAllowed = false;
+    setAgentViewState('Preview paused · browser target unavailable', false);
+    return;
+  }
+  const delay = Math.min(30000, 1600 * Math.pow(2, agentViewTransportRetryAttempts));
+  agentViewTransportRetryAttempts += 1;
+  agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, delay);
+}
+
+function resetAgentViewTransportRecovery() {
+  agentViewTransportRetryAttempts = 0;
+  agentViewRetryAllowed = true;
   if (agentViewRetryTimer) clearTimeout(agentViewRetryTimer);
-  agentViewRetryTimer = setTimeout(function() { agentViewRetryTimer = null; startAgentViewSocket(); }, 1600);
+  agentViewRetryTimer = null;
 }
 
 function resetAgentViewSemanticRecovery() {
@@ -22634,7 +22655,6 @@ function startAgentViewSocket() {
   agentViewSemanticRecoveryTimer = null;
   stopAgentViewSocket();
   agentViewBoundSessionId = sessionId;
-  agentViewRetryAllowed = true;
   agentViewLastSeq = 0;
   agentViewDocumentSeq = 0;
   const generation = agentViewGeneration;
@@ -22647,6 +22667,7 @@ function startAgentViewSocket() {
     try { event = JSON.parse(message.data); } catch (_err) { return; }
     if (event.type === 'preview.attached') { setAgentViewState(event.mode === 'semantic' ? 'Preparing interactive preview' : 'Attached in observer mode', false); return; }
     if (event.type === 'preview.semantic.snapshot' && event.snapshot) {
+      resetAgentViewTransportRecovery();
       resetAgentViewSemanticRecovery();
       renderAgentViewSemanticSnapshot(event.snapshot, event.seq, event.mirror_id, event.capture_epoch, event.document_seq, !!event.resync);
       return;
@@ -22726,6 +22747,7 @@ function startAgentViewSocket() {
       return;
     }
     if (event.type === 'preview.frame' && event.data) {
+      resetAgentViewTransportRecovery();
       agentViewMirrorId = '';
       agentViewCaptureEpoch = '';
       const seq = Number(event.seq || 0);
@@ -22761,7 +22783,10 @@ function startAgentViewSocket() {
 function openAgentView(options) {
   options = options || {};
   const alreadyOpen = document.body.classList.contains('agent-view-open');
-  if (!alreadyOpen) resetAgentViewSemanticRecovery();
+  if (!alreadyOpen) {
+    resetAgentViewSemanticRecovery();
+    resetAgentViewTransportRecovery();
+  }
   arrangeAgentChatToolbar();
   if (!alreadyOpen && !options.system) agentViewReturnFocus = document.activeElement || null;
   document.body.classList.add('agent-view-open');
@@ -22779,7 +22804,7 @@ function openAgentView(options) {
   if (!alreadyOpen && !options.system && panel && typeof panel.focus === 'function') {
     requestAnimationFrame(function() { panel.focus({preventScroll:true}); });
   }
-  if ((!agentShellTaskEnabled || !document.body.classList.contains('agent-shell-chat-only')) && (!alreadyOpen || !agentViewSocket)) requestAnimationFrame(startAgentViewSocket);
+  if ((!agentShellTaskEnabled || !document.body.classList.contains('agent-shell-chat-only')) && (!alreadyOpen || (!agentViewSocket && agentViewRetryAllowed))) requestAnimationFrame(startAgentViewSocket);
 }
 
 function toggleAgentViewChat(forceOpen) {
@@ -22941,8 +22966,10 @@ function closeAgentView(options) {
   agentViewReturnFocus = null;
 }
 
-function refreshAgentView() {
+function refreshAgentView(options) {
+  options = options || {};
   if (!document.body.classList.contains('agent-view-open')) return;
+  if (options.resetRetry) resetAgentViewTransportRecovery();
   if (agentViewSemanticRecoveryTimer) clearTimeout(agentViewSemanticRecoveryTimer);
   agentViewSemanticRecoveryTimer = null;
   if (agentViewRefreshPending) return;
@@ -22963,6 +22990,7 @@ function ensureAgentViewForBrowserActivity(toolName) {
     agentShellBrowserReady = true;
     document.body.classList.remove('agent-shell-chat-only');
     if (!document.body.classList.contains('agent-view-open')) openAgentView({system:true});
+    else if (!agentViewSocket) refreshAgentView({resetRetry:true});
     const shouldShowBrowser = toolName === 'navigate' && (
       agentViewChatMode === 'fullscreen' || (_agentViewIsMobile() && agentViewChatSurface === 'chat')
     );
@@ -23013,7 +23041,7 @@ globalThis._setActiveSlotSession = function(sid) {
   _agentViewSetActiveSlotSession(sid);
   if (changed && document.body.classList.contains('agent-view-open')) {
     agentViewBoundSessionId = sid;
-    setTimeout(refreshAgentView, 0);
+    setTimeout(function() { refreshAgentView({resetRetry:true}); }, 0);
   }
   setTimeout(syncAgentLanePicker, 0);
 };

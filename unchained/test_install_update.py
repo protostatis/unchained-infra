@@ -1323,9 +1323,15 @@ def test_chat_html_has_opencode_cockpit_handoff():
         flags=re.DOTALL,
     )
     assert needs_send, "scroll flow-control predicate missing"
+    retry_start = runtime_scripts[0].index("function scheduleAgentViewRetry")
+    retry_end = runtime_scripts[0].index(
+        "function resetAgentViewSemanticRecovery",
+        retry_start,
+    )
+    retry_functions = runtime_scripts[0][retry_start:retry_end]
     node = shutil.which("node")
     if node:
-        check = classifier.group(0) + "\n" + needs_send.group(0) + """
+        check = classifier.group(0) + "\n" + needs_send.group(0) + "\n" + retry_functions + """
 const state = {inFlightActionId: 'latest'};
 if (agentViewClassifyScrollAck(state, 'older', true) !== 'stale') throw new Error('older ack was accepted');
 if (agentViewClassifyScrollAck(state, 'latest', true) !== 'buffer') throw new Error('active ack was not buffered');
@@ -1333,6 +1339,35 @@ if (agentViewClassifyScrollAck(state, 'latest', false) !== 'reconcile') throw ne
 if (agentViewNeedsScrollSend({context:{}, inFlightActionId:'a', desiredY:0, latestSentY:500})) throw new Error('sent a second request while one was in flight');
 if (!agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, latestSentY:500})) throw new Error('did not send trailing final position');
 if (agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, latestSentY:0})) throw new Error('resent already acknowledged position');
+
+let agentViewRetryAllowed = true;
+let agentViewRetryTimer = null;
+let agentViewTransportRetryAttempts = 0;
+let agentViewGeneration = 7;
+const AGENT_VIEW_MAX_TRANSPORT_RETRIES = 5;
+const retryDelays = [];
+const retryStates = [];
+const document = {body:{classList:{contains:() => true}}};
+function setAgentViewState(text) { retryStates.push(text); }
+function startAgentViewSocket() {}
+function setTimeout(callback, delay) {
+  const timer = {callback, delay};
+  retryDelays.push(delay);
+  return timer;
+}
+function clearTimeout() {}
+for (let attempt = 0; attempt < 5; attempt += 1) {
+  scheduleAgentViewRetry(7);
+  const timer = agentViewRetryTimer;
+  if (!timer) throw new Error('retry timer was not scheduled');
+  timer.callback();
+}
+scheduleAgentViewRetry(7);
+if (agentViewRetryAllowed) throw new Error('retry loop did not stop at its cap');
+if (retryStates.at(-1) !== 'Preview paused · browser target unavailable') throw new Error('retry cap did not surface a stable state');
+if (retryDelays.join(',') !== '1600,3200,6400,12800,25600') throw new Error('retry backoff was not exponential: ' + retryDelays.join(','));
+resetAgentViewTransportRecovery();
+if (!agentViewRetryAllowed || agentViewTransportRetryAttempts !== 0 || agentViewRetryTimer !== null) throw new Error('retry recovery did not reset');
 """
         result = subprocess.run([node, "-e", check], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -1340,6 +1375,12 @@ if (agentViewNeedsScrollSend({context:{}, latestSentActionId:'a', desiredY:0, la
     assert "window.visualViewport.addEventListener('resize', handleAgentViewViewportResize)" in runtime_scripts[0]
     assert "agentViewRetryAllowed = !!event.retriable" in runtime_scripts[0]
     assert "if (!agentViewRetryAllowed) return;" in runtime_scripts[0]
+    assert "AGENT_VIEW_MAX_TRANSPORT_RETRIES = 5" in runtime_scripts[0]
+    assert "agentViewTransportRetryAttempts >= AGENT_VIEW_MAX_TRANSPORT_RETRIES" in runtime_scripts[0]
+    assert "1600 * Math.pow(2, agentViewTransportRetryAttempts)" in runtime_scripts[0]
+    assert "Preview paused · browser target unavailable" in runtime_scripts[0]
+    assert "refreshAgentView({resetRetry:true})" in runtime_scripts[0]
+    assert "viewWasOpen && browserAvailable && !wasBrowserAvailable && !agentViewSocket" in runtime_scripts[0]
     assert "Browser Preview" in CHAT_HTML, "browser preview should use a user-facing label"
     assert "Same conversation" in CHAT_HTML, "chat rail should explain that it controls the preview"
     assert "ensureAgentViewForBrowserActivity(name)" in CHAT_HTML, "browser activity should identify the active tool"

@@ -60,6 +60,7 @@ class ProvRoundtripTests(unittest.TestCase):
             "UNCHAINED_DATA_DIR": self.tmpdir,
             "CDP_TAB_ID": "prov-2ddd-AABBCCDDEEFF112233",
             "CDP_AGENT_ID": "claude-test",
+            "UNCHAINED_CHAT_SESSION_ID": None,
         }
 
     def tearDown(self):
@@ -184,6 +185,53 @@ class ProvRoundtripTests(unittest.TestCase):
 
         self.assertEqual(captured["kwargs"]["tab_id"],
                          "prov-2ddd-AABBCCDDEEFF")
+
+    def test_chat_session_defaults_to_server_authoritative_tab(self):
+        env = dict(self.env)
+        env["UNCHAINED_CHAT_SESSION_ID"] = "s-claude-test-session"
+        ct = _reload_with_env(env)
+        captured = {}
+
+        def fake_cmd(action, **kwargs):
+            captured["action"] = action
+            captured["kwargs"] = kwargs
+            return {"data": ""}
+
+        with (
+            patch.object(ct, "cmd", side_effect=fake_cmd),
+            patch.object(ct, "_provision_slot_status", return_value=self._active_slot()),
+            patch.object(sys, "argv", ["cdp_tool.py", "ddm", "--text"]),
+        ):
+            ct.main()
+
+        self.assertEqual(captured["action"], "ddm")
+        self.assertEqual(captured["kwargs"]["tab_id"], "auto")
+
+    def test_chat_session_explicit_tab_remains_in_provision_slot(self):
+        env = dict(self.env)
+        env["UNCHAINED_CHAT_SESSION_ID"] = "s-claude-test-session"
+        ct = _reload_with_env(env)
+        captured = {}
+
+        def fake_cmd(_action, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"data": ""}
+
+        with (
+            patch.object(ct, "cmd", side_effect=fake_cmd),
+            patch.object(ct, "_provision_slot_status", return_value=self._active_slot()),
+            patch.object(
+                sys,
+                "argv",
+                ["cdp_tool.py", "ddm", "--tab", "AABBCCDDEEFF", "--text"],
+            ),
+        ):
+            ct.main()
+
+        self.assertEqual(
+            captured["kwargs"]["tab_id"],
+            "prov-2ddd-AABBCCDDEEFF",
+        )
 
     def test_stale_env_prov_tab_fails_closed(self):
         ct = _reload_with_env(self.env)

@@ -304,11 +304,13 @@ def main():
 
     # Parse --tab <id> from args (works on any command)
     tab_id = TAB_ID
+    explicit_tab = False
     filtered = []
     i = 0
     while i < len(args):
         if args[i] == "--tab" and i + 1 < len(args):
             tab_id = args[i + 1]
+            explicit_tab = True
             i += 2
         else:
             filtered.append(args[i])
@@ -344,6 +346,14 @@ def main():
     if prov_slot and tab_id and not tab_id.startswith("prov-"):
         tab_id = f"prov-{prov_slot}-{tab_id}"
     cdp_port = int(prov_state.get("port", CDP_PORT)) if prov_state else CDP_PORT
+
+    # A chat session's active tab is server-owned and can change after
+    # ``new-tab`` / ``ddm --new``. CDP_TAB_ID is only the tab inherited when
+    # the long-lived CLI process started; reusing it from every short-lived
+    # cdp_tool invocation would immediately re-pin Agent View to the old tab.
+    # Explicit ``--tab`` remains available for deliberate multi-tab control.
+    if CHAT_SESSION_ID and not explicit_tab:
+        tab_id = "auto"
 
     try:
         # --- Tab management ---
