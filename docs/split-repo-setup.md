@@ -9,8 +9,6 @@ Private intelligence code lives in:
 
 - Public CI workflow:
   - https://github.com/protostatis/unchained-infra/actions/workflows/ci.yml
-- Public deploy workflow:
-  - https://github.com/protostatis/unchained-infra/actions/workflows/deploy.yml
 - Private core smoke workflow:
   - https://github.com/protostatis/unchained-core-private/actions/workflows/private-core-smoke.yml
 
@@ -20,19 +18,32 @@ Private intelligence code lives in:
 - Fine-grained PAT with read access to `protostatis/unchained-core-private`.
 - Used by Actions checkout to pull private core files.
 
-2. Deploy secrets
+2. Production Environment secrets
 - `EC2_SSH_KEY`
 - `EC2_HOST`
+- `SSH_KNOWN_HOSTS` — verified `known_hosts` entry for the deployment host.
+
+The GitHub `production` Environment must allow only protected branches and
+require an explicit deployment approval. Do not use runtime `ssh-keyscan` in
+CI; update `SSH_KNOWN_HOSTS` deliberately after independently verifying a host
+key rotation.
 
 ## How it Works
 
-1. Public CI runs public-safe checks by default.
-2. If `PRIVATE_CORE_REPO_PAT` is present, CI also runs private-integrated tests:
+1. Pull requests run public-safe checks without access to private-core
+   credentials.
+2. Protected `main` runs also require `PRIVATE_CORE_REPO_PAT` and run
+   private-integrated tests:
 - checks out private repo into `private-core/`
 - overlays proprietary files into `unchained/` via `tools/install_private_core.sh`
 - runs integrated tests
 
-3. Deploy workflow uses the same overlay step before shipping code to EC2.
+3. A passing `main` revision enters the `production` Environment gate. Once
+   approved, the same CI workflow checks that the candidate is still current
+   `main`, overlays private core, and invokes `./deploy.sh`.
+4. `deploy.sh` holds a remote deployment lock, snapshots the previous release,
+   validates container and public HTTP health, and rolls back source plus
+   containers if the health gate fails.
 
 ## Local Remotes (from monorepo)
 

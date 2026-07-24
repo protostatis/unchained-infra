@@ -14,7 +14,7 @@ services:
       mcp:
         condition: service_healthy
       web:
-        condition: service_started
+        condition: service_healthy
     networks:
       - edge
       - app
@@ -221,6 +221,12 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8080,timeout=2); c.request('GET','/internal/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   scheduler:
     build:

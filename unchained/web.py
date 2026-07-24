@@ -1790,6 +1790,12 @@ async def handle_test(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
+async def handle_internal_health(request: web.Request) -> web.Response:
+    """Return a minimal readiness response for Docker-internal health checks."""
+    del request
+    return web.json_response({"status": "ok"})
+
+
 async def handle_agent_version(request: web.Request) -> web.Response:
     """GET /web/agent/version — return current agent version info."""
     auth_info = _authenticate(request)

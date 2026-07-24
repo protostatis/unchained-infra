@@ -482,12 +482,40 @@ def test_deploy_script_uploads_research_desk_vendor_tree():
     assert 'RESEARCH_DESK_VENDOR_FILES=(research_desk_vendor/unchained_pyreplab/*.py)' in deploy_script
 
 
-def test_github_deploy_workflow_uploads_web_app_package():
+def test_deploy_script_has_serialized_health_gated_rollback():
     repo_root = Path(__file__).resolve().parent.parent
-    workflow = (repo_root / ".github" / "workflows" / "deploy.yml").read_text()
-    assert "Keep the modular web_app package in sync with web.py imports" in workflow
-    assert "rm -rf $REMOTE_DIR/unchained/web_app" in workflow
-    assert "$SCP_CMD -r unchained/web_app $EC2_USER@$EC2_HOST:$REMOTE_DIR/unchained/" in workflow
+    deploy_script = (repo_root / "deploy.sh").read_text()
+    assert "acquire_remote_deploy_lock()" in deploy_script
+    assert 'flock -n 9' in deploy_script
+    assert "snapshot_remote_release()" in deploy_script
+    assert "rollback_remote_release()" in deploy_script
+    assert "prune_remote_deploy_backups()" in deploy_script
+    assert "verify_production_health()" in deploy_script
+    assert 'DEPLOY_SSH_KNOWN_HOSTS_FILE' in deploy_script
+    assert 'StrictHostKeyChecking=yes' in deploy_script
+    assert "trap 'exit 143' TERM" in deploy_script
+
+
+def test_ci_workflow_uses_a_gated_transactional_production_deploy():
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text()
+    legacy_workflow = repo_root / ".github" / "workflows" / "deploy.yml"
+    checkout_sha = "11d5960a326750d5838078e36cf38b85af677262"
+    setup_python_sha = "a26af69be951a213d495a4c3e4e4022e16d87065"
+    assert not legacy_workflow.exists()
+    assert f"actions/checkout@{checkout_sha}" in workflow
+    assert f"actions/setup-python@{setup_python_sha}" in workflow
+    assert "private-integrated-tests:" in workflow
+    assert "github.event_name != 'pull_request'" in workflow
+    assert "deploy-production:" in workflow
+    assert "needs: [public-tests, private-integrated-tests]" in workflow
+    assert "group: production-deploy" in workflow
+    assert "name: production" in workflow
+    assert "Skip an obsolete queued deployment" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert "SSH_KNOWN_HOSTS" in workflow
+    assert "ssh-keyscan" not in workflow
+    assert "run: ./deploy.sh" in workflow
 
 
 def test_research_desk_package_image_smoke_script_checks_built_image():

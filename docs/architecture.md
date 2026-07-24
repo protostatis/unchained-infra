@@ -163,9 +163,16 @@ grants are not exposed through the worker callback interface.
 ## Deployment
 
 ### Production (GitHub Actions)
-- Push to `main` triggers `.github/workflows/deploy.yml`
-- SCP uploads source files to EC2
-- SSH runs `docker compose up -d --build` on the instance
+- Pull requests run public-safe CI without private-core credentials.
+- A protected `main` push runs public and private-integrated checks. A passing
+  revision then waits for the GitHub `production` Environment approval before
+  deployment.
+- The CI workflow invokes `./deploy.sh` as the sole deployment implementation.
+  It serializes remote deploys, snapshots the prior source release, validates
+  service and public HTTP health, and restores the snapshot if a deployment
+  fails before its health gate.
+- Deployment SSH uses a preconfigured known-host entry; CI does not trust a
+  host key discovered at deploy time.
 - Caddy auto-provisions TLS certs via Let's Encrypt
 - Domain: `api.unchainedsky.com`
 
@@ -174,6 +181,10 @@ grants are not exposed through the worker callback interface.
 ./deploy.sh              # Deploy with defaults
 ./deploy.sh --build      # Force rebuild (no cache)
 ```
+
+Manual deploys use the same remote lock, health gate, and rollback behavior as
+CI deploys. Provide `DEPLOY_SSH_KNOWN_HOSTS_FILE` to require a pinned SSH host
+key for a manual deployment.
 
 ### Dedicated Headless Trial Worker (separate EC2)
 
