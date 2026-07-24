@@ -81,7 +81,7 @@ def test_build_agent_zip_contains_version_and_update():
         assert "<key>KeepAlive</key>" in start_sh
         assert "<true/>" in start_sh
         assert "<string>--daemon</string>" in start_sh
-        assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"' in start_sh
+        assert 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.opencode/bin:$HOME/.local/bin"' in start_sh
         assert 'command -v claude >/dev/null 2>&1' in start_sh
         assert 'export CLAUDE_BIN="$(command -v claude)"' in start_sh
         assert 'command -v opencode >/dev/null 2>&1' in start_sh
@@ -674,6 +674,33 @@ def test_cli_binary_resolution_prefers_homebrew_before_local_bin():
                     ):
                         resolved = namespace["_resolve_local_cli_binary"]("CLAUDE_BIN", "claude")
     assert resolved == "/opt/homebrew/bin/claude"
+
+
+def test_cli_binary_resolution_finds_official_opencode_install():
+    official_bin = "/Users/test/.opencode/bin/opencode"
+    source_path = Path(__file__).resolve().parent / "chat_agent_cli.py"
+    module_ast = ast.parse(source_path.read_text())
+    resolver_node = next(
+        node for node in module_ast.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_local_cli_binary"
+    )
+    resolver_module = ast.Module(body=[resolver_node], type_ignores=[])
+    namespace = {"os": os, "shutil": shutil, "sys": types.SimpleNamespace(platform="darwin")}
+    exec(compile(resolver_module, str(source_path), "exec"), namespace)
+
+    def expand_user(path: str) -> str:
+        return path.replace("~", "/Users/test", 1)
+
+    with mock.patch.dict(os.environ, {"OPENCODE_BIN": ""}, clear=False):
+        with mock.patch.object(shutil, "which", return_value=None):
+            with mock.patch.object(os.path, "expanduser", side_effect=expand_user):
+                with mock.patch.object(os.path, "isfile", side_effect=lambda path: path == official_bin):
+                    with mock.patch.object(os, "access", side_effect=lambda path, mode: path == official_bin):
+                        resolved = namespace["_resolve_local_cli_binary"](
+                            "OPENCODE_BIN", "opencode"
+                        )
+
+    assert resolved == official_bin
 
 
 def test_generate_public_install_script():

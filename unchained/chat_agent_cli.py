@@ -160,6 +160,10 @@ def _resolve_local_cli_binary(env_var: str, default_name: str) -> str:
     if sys.platform == "darwin":
         # launchd often starts the agent with a stripped PATH on macOS.
         fallback_dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"])
+    if default_name == "opencode":
+        # The official OpenCode installer uses ~/.opencode/bin, which is not
+        # present in the minimal PATH inherited by launchd services.
+        fallback_dirs.append(os.path.expanduser("~/.opencode/bin"))
     fallback_dirs.append(os.path.expanduser("~/.local/bin"))
     for fallback_dir in fallback_dirs:
         fallback = os.path.join(fallback_dir, default_name)

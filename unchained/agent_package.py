@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.121"  # add JSON-backed application settings support
+VERSION = "0.3.122"  # detect official ~/.opencode/bin installs under launchd
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the
@@ -294,8 +294,8 @@ PY
 fi
 
 # launchd starts with a minimal PATH; add common CLI locations before any checks.
-# Homebrew/system installs are placed ahead of ~/.local/bin so stale local shims do not win.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.local/bin"
+# Homebrew/system installs are placed ahead of user-local shims so stale local shims do not win.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH:$HOME/.opencode/bin:$HOME/.local/bin"
 
 # Ensure uv is available (handles python resolution across all platforms)
 if ! command -v uv >/dev/null 2>&1; then
