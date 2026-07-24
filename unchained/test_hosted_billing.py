@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 import unittest
@@ -9,7 +10,13 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from chat_agent_openrouter import TrialAgent, _openrouter_user_error
+from chat_agent_openrouter import (
+    HOSTED_MAX_INPUT_CHARS,
+    MAX_SESSION_MESSAGES,
+    TrialAgent,
+    _openrouter_user_error,
+    _prepare_hosted_context,
+)
 
 
 class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
@@ -264,6 +271,89 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         first, second = execute_tool.await_args_list
         self.assertTrue(first.kwargs["bring_to_front"])
         self.assertFalse(second.kwargs["bring_to_front"])
+
+    def test_prepare_hosted_context_bounds_messages_and_chars_in_place(self):
+        messages = [{"role": "system", "content": "system" * 100}]
+        for index in range(20):
+            messages.extend(
+                [
+                    {"role": "user", "content": f"request {index}"},
+                    {"role": "assistant", "content": "click" * 5000},
+                ]
+            )
+        messages.append({"role": "user", "content": "current request"})
+
+        stats = _prepare_hosted_context(
+            messages,
+            max_messages=30,
+            max_chars=25_000,
+            emergency_keep=10,
+        )
+
+        self.assertLessEqual(
+            len(json.dumps(messages, ensure_ascii=False, default=str)),
+            25_000,
+        )
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[-1], {"role": "user", "content": "current request"})
+        self.assertGreater(stats["message_trimmed"], 0)
+        self.assertTrue(stats["emergency_trimmed"])
+
+    async def test_handle_message_bounds_oversized_live_session_before_provider(self):
+        sid = "s-context-bound"
+        cached = [{"role": "system", "content": "old system"}]
+        for index in range(22):
+            cached.extend(
+                [
+                    {"role": "user", "content": f"old request {index}"},
+                    {"role": "assistant", "content": "click" * 5000},
+                ]
+            )
+        self.agent.sessions[sid] = cached
+        captured = []
+
+        async def provider(_client, messages, *_args, **_kwargs):
+            captured.append(json.loads(json.dumps(messages)))
+            return {
+                "choices": [{
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }],
+            }
+
+        with (
+            patch.object(self.agent, "_call_openrouter", side_effect=provider),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+        ):
+            await self.agent._handle_message(
+                {
+                    "session_id": sid,
+                    "agent_id": "client-browser",
+                    "user_id": "u-context",
+                    "message": "current request",
+                }
+            )
+
+        self.assertEqual(len(captured), 1)
+        provider_messages = captured[0]
+        self.assertLessEqual(
+            len(json.dumps(provider_messages, ensure_ascii=False, default=str)),
+            HOSTED_MAX_INPUT_CHARS,
+        )
+        self.assertEqual(
+            provider_messages[-1],
+            {"role": "user", "content": "current request"},
+        )
+        self.assertLessEqual(
+            sum(1 for message in provider_messages if message.get("role") != "system"),
+            MAX_SESSION_MESSAGES,
+        )
 
     async def test_background_navigation_policy_reaches_cloud_tools(self):
         with patch(
