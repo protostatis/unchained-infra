@@ -410,6 +410,23 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertNotIn("10x better results", web.TRIAL_CHAT_HTML)
         self.assertNotIn("stronger model reasoning", web.TRIAL_CHAT_HTML)
 
+    def test_hosted_credit_explainer_auto_dismisses_after_thirty_seconds(self):
+        trial = web.TRIAL_CHAT_HTML
+
+        self.assertIn("#hosted-access-copy[hidden]{display:none}", trial)
+        self.assertIn("function _setHostedAccessCopy(copy, message, autoDismiss)", trial)
+        self.assertIn("autoDismissCopy = available > 0;", trial)
+        self.assertIn("if (copy.hidden || copy._dismissTimer) return;", trial)
+        self.assertIn("_setHostedAccessCopy(copy, copyText, autoDismissCopy);", trial)
+        self.assertRegex(
+            trial,
+            re.compile(
+                r"copy\._dismissTimer = setTimeout\(function\(\) \{.*?"
+                r"copy\.hidden = true;.*?\}, 30000\);",
+                re.DOTALL,
+            ),
+        )
+
     def test_hosted_model_policy_is_dynamic_and_enforced_at_both_boundaries(self):
         trial = web.TRIAL_CHAT_HTML
         self.assertIn("function _applyHostedModelPolicy(policy)", trial)
