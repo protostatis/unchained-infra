@@ -521,7 +521,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_landing_explains_when_the_connector_is_worth_installing(self):
         self.assertIn("Unchained drives. You navigate.", web.LANDING_HTML)
         self.assertIn(
-            "Your AI gets a <em>local browser.</em> You keep control of every action.",
+            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
             web.LANDING_HTML,
         )
         self.assertIn("you review the result and keep the final send, buy, or submit", web.LANDING_HTML)
@@ -532,7 +532,7 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("when the task needs <em>a signed-in browser and actions.</em>", web.LANDING_HTML)
         self.assertIn("No Claude, Codex, or OpenCode CLI required for the guided trial", web.LANDING_HTML)
         self.assertIn("it does not attach to the Chrome profile you are currently browsing in", web.LANDING_HTML)
-        self.assertIn("dedicated Unchained Chrome workspace whose files stay on this computer", web.LANDING_HTML)
+        self.assertIn("dedicated Unchained Chrome workspace whose files stay on your computer", web.LANDING_HTML)
         self.assertIn("may be sent to Unchained and the selected AI provider", web.LANDING_HTML)
         self.assertIn("Quit the local agent to stop browser automation", web.LANDING_HTML)
         self.assertIn("Start read-only", web.LANDING_HTML)
@@ -765,7 +765,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Your AI gets a <em>local browser.</em> You keep control of every action.",
+            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
             response.text,
         )
         self.assertIn("ui", response.cookies)
@@ -780,7 +780,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Your AI gets a <em>local browser.</em> You keep control of every action.",
+            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
             default_response.text,
         )
         self.assertIn("ui", default_response.cookies)
@@ -795,7 +795,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Your AI gets a <em>local browser.</em> You keep control of every action.",
+            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
             stale_cookie_response.text,
         )
         self.assertIn("ui", stale_cookie_response.cookies)
@@ -810,7 +810,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Your AI gets a <em>local browser.</em> You keep control of every action.",
+            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
             unknown_query_response.text,
         )
         self.assertNotIn("ui", unknown_query_response.cookies)
