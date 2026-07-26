@@ -521,7 +521,7 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_landing_explains_when_the_connector_is_worth_installing(self):
         self.assertIn("Unchained drives. You navigate.", web.LANDING_HTML)
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             web.LANDING_HTML,
         )
         self.assertIn("you review the result and keep the final send, buy, or submit", web.LANDING_HTML)
@@ -765,7 +765,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             response.text,
         )
         self.assertIn("ui", response.cookies)
@@ -780,7 +780,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             default_response.text,
         )
         self.assertIn("ui", default_response.cookies)
@@ -795,7 +795,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             stale_cookie_response.text,
         )
         self.assertIn("ui", stale_cookie_response.cookies)
@@ -810,7 +810,7 @@ class TestWebTemplateContracts(unittest.TestCase):
             )
         )
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             unknown_query_response.text,
         )
         self.assertNotIn("ui", unknown_query_response.cookies)

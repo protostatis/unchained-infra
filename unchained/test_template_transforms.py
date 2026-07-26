@@ -904,7 +904,7 @@ if (!select.options.some(option => option.value === select.value)) {
 
         self.assertIn("Unchained drives. You navigate.", templates.LANDING_HTML)
         self.assertIn(
-            "Give your AI a browser on your computer. Keep <em>the final say.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             templates.LANDING_HTML,
         )
         self.assertIn("you review the result and keep the final send, buy, or submit", templates.LANDING_HTML)
