@@ -412,7 +412,7 @@ class TestDevServerSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["email"], "dev@localhost")
 
         expected_pages = {
-            "/": "Search the open web.",
+            "/": "You keep control of every action.",
             "/tab": "Ready for navigation",
             "/local": "client-update-btn",
             "/local?provider=codex-cli": "client-update-btn",

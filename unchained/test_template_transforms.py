@@ -904,10 +904,10 @@ if (!select.options.some(option => option.value === select.value)) {
 
         self.assertIn("Unchained drives. You navigate.", templates.LANDING_HTML)
         self.assertIn(
-            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            "Your AI gets a <em>local browser.</em> You keep control of every action.",
             templates.LANDING_HTML,
         )
-        self.assertIn("give Unchained the outcome&mdash;not every click", templates.LANDING_HTML)
+        self.assertIn("you review the result and keep the final send, buy, or submit", templates.LANDING_HTML)
         self.assertIn("One system, two jobs", templates.LANDING_HTML)
         self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", templates.LANDING_HTML)
         self.assertIn("UNCHAINED DRIVES. YOU NAVIGATE.", templates.LANDING_HTML)
@@ -931,7 +931,7 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("Open a local browser workspace", templates.LANDING_HTML)
         self.assertIn("When your task needs it", templates.LANDING_HTML)
         self.assertIn("A local browser workspace for a <em>supported AI path.</em>", templates.LANDING_HTML)
-        self.assertIn("Search public sources &mdash; no install", templates.LANDING_HTML)
+        self.assertIn("Try SearchAgentSky &mdash; same family, no install", templates.LANDING_HTML)
         self.assertIn(
             'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
             templates.LANDING_HTML,
