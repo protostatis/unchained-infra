@@ -7066,7 +7066,7 @@ LANDING_V4_HTML = r"""<!DOCTYPE html>
 <section class="hero">
   <div class="hero-tag">Unchained drives. You navigate.</div>
   <h1>You command. <em>Your AI runs the browser.</em></h1>
-  <p class="hero-sub">Unchained runs multi-step browser tasks in a dedicated Chrome workspace on your computer &mdash; you review the result and keep the final send, buy, or submit. For public-web research with no install, use SearchAgentSky: same family, lighter touch.</p>
+  <p class="hero-sub">Unchained runs multi-step browser tasks in a dedicated Chrome workspace on your computer &mdash; you review the result and keep the final send, buy, or submit. For public-web research with no install, use SearchAgentSky &mdash; same family, lighter touch.</p>
   <div class="hero-console" id="hero-console">
     <div class="console-bar"><span class="led"></span><span class="console-title">task &middot; workspace://local</span><span class="console-status" id="console-status">ready</span></div>
     <div class="console-line"><span class="prompt">&#9656;</span><span class="console-type" id="console-type"></span><span class="caret" id="console-caret"></span></div>
