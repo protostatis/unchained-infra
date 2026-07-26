@@ -904,10 +904,10 @@ if (!select.options.some(option => option.value === select.value)) {
 
         self.assertIn("Unchained drives. You navigate.", templates.LANDING_HTML)
         self.assertIn(
-            "Search the open web. <em>Give your AI a local browser when the job needs one.</em>",
+            "You command. <em>Your AI runs the browser.</em>",
             templates.LANDING_HTML,
         )
-        self.assertIn("give Unchained the outcome&mdash;not every click", templates.LANDING_HTML)
+        self.assertIn("you review the result and keep the final send, buy, or submit", templates.LANDING_HTML)
         self.assertIn("One system, two jobs", templates.LANDING_HTML)
         self.assertIn("You call the shots. <em>Unchained runs the steps.</em>", templates.LANDING_HTML)
         self.assertIn("UNCHAINED DRIVES. YOU NAVIGATE.", templates.LANDING_HTML)
@@ -915,7 +915,7 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertNotIn("Instrument Serif", templates.LANDING_HTML)
         self.assertIn("dedicated Chrome workspace", templates.LANDING_HTML)
         self.assertIn("When Unchained earns the connector", templates.LANDING_HTML)
-        self.assertIn('aria-live="polite"', templates.LANDING_HTML)
+        self.assertIn("Example browser task console: Unchained types a task", templates.LANDING_HTML)
         self.assertIn("prefers-reduced-motion:reduce", templates.LANDING_HTML)
         self.assertIn(
             "Use it when the task needs <em>a signed-in browser and actions.</em>",
