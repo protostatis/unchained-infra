@@ -931,7 +931,7 @@ if (!select.options.some(option => option.value === select.value)) {
         self.assertIn("Open a local browser workspace", templates.LANDING_HTML)
         self.assertIn("When your task needs it", templates.LANDING_HTML)
         self.assertIn("A local browser workspace for a <em>supported AI path.</em>", templates.LANDING_HTML)
-        self.assertIn("Try SearchAgentSky &mdash; same family, no install", templates.LANDING_HTML)
+        self.assertIn("Search public sources &mdash; no install", templates.LANDING_HTML)
         self.assertIn(
             'data-analytics-cta="landing_connect_chrome_nav">Open local workspace</a>',
             templates.LANDING_HTML,
