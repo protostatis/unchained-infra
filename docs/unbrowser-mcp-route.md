@@ -28,11 +28,16 @@ mcp-proxy --host 0.0.0.0 --port 8767 --pass-environment -- unbrowser --mcp
 
 Current pins:
 
-- `pyunbrowser==0.0.14`
+- `pyunbrowser==0.0.18`
 - `mcp-proxy==0.12.0`
 
 Update `Dockerfile.unbrowser-mcp` when publishing a new hosted unbrowser MCP
 release.
+
+This dedicated hosted MCP pin is independent from the `pyunbrowser` pin in the
+root `Dockerfile`, which powers the main web image and its live demo. Update the
+root image, demo runtime metadata, and matching contract test together during a
+separate full-stack deployment.
 
 ## Network Isolation
 
