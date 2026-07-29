@@ -681,7 +681,7 @@ def _runtime_payload() -> dict[str, Any]:
         "unbrowserAvailable": bool(shutil.which(_UNBROWSER_COMMAND)),
         "command": _UNBROWSER_COMMAND,
         "source": "PATH",
-        "installPackage": "pyunbrowser==0.0.14",
+        "installPackage": "pyunbrowser==0.0.18",
     }
 
 

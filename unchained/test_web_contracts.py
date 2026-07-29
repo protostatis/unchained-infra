@@ -936,7 +936,7 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_web_image_installs_unbrowser_binary_package(self):
         dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
-        self.assertIn("pyunbrowser==0.0.14", dockerfile.read_text(encoding="utf-8"))
+        self.assertIn("pyunbrowser==0.0.18", dockerfile.read_text(encoding="utf-8"))
 
     def test_hosted_runtime_modules_are_packaged_for_deploy(self):
         repo_root = Path(__file__).resolve().parents[1]
