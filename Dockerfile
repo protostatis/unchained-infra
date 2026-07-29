@@ -71,7 +71,7 @@ RUN pip install --no-cache-dir \
     PyJWT>=2.0 \
     cryptography>=42.0 \
     pypdf>=4.0 \
-    pyunbrowser==0.0.14
+    pyunbrowser==0.0.18
 
 # Rhythm — event-driven SPA automation (copied by deploy.sh when available)
 COPY --chown=unchained:unchained rhythm/ rhythm/
