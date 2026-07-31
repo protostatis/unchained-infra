@@ -29,6 +29,11 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ),
     # Docker-internal readiness endpoint. Caddy denies /internal/* publicly.
     ("GET", "/internal/health", "handle_internal_health"),
+    (
+        "GET",
+        "/internal/fin-terminal/auth",
+        "web_app.handlers.fin_terminal:handle_fin_terminal_auth",
+    ),
     ("GET", "/", "handle_index"),
     ("GET", "/unbrowser", "web_app.handlers.pages:handle_unbrowser_page"),
     ("GET", "/go/unbrowser-connect", "web_app.handlers.pages:handle_unbrowser_outbound"),

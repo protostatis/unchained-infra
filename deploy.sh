@@ -94,7 +94,7 @@ DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12
 REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
 REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
-ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent"
+ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
@@ -282,7 +282,7 @@ add_services() {
     local service
     for service in $services; do
         case "$service" in
-            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web|scheduler|trial-agent)
+            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web|scheduler|trial-agent)
                 ;;
             "")
                 continue
@@ -337,7 +337,7 @@ wait_for_state() {
 
 expected_state() {
     case "$1" in
-        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|web)
+        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web)
             printf '%s\n' healthy
             ;;
         scheduler|trial-agent)
@@ -351,7 +351,7 @@ expected_state() {
 
 # Keep upstream dependencies available before restarting their consumers.
 # --no-deps prevents Compose from expanding this into a broad restart.
-for service in relay private-core unbrowser-egress web mcp unbrowser-mcp scheduler trial-agent; do
+for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal scheduler trial-agent; do
     if ! selected "$service"; then
         continue
     fi
@@ -378,22 +378,33 @@ rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
       "$remote_dir/docker-compose.yml" "$remote_dir/Caddyfile"
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cd "$remote_dir"
-docker compose build relay private-core mcp unbrowser-egress unbrowser-mcp web scheduler trial-agent
+mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
+[[ "${#runtime_services[@]}" -gt 0 ]]
+docker compose build "${runtime_services[@]}"
 EOF
     then
         echo "ERROR: automatic rollback failed; inspect $REMOTE_BACKUP_DIR on the host." >&2
         return 1
     fi
-    if ! restart_services_serially "$ALL_RUNTIME_SERVICES"; then
+    local rollback_runtime_services
+    rollback_runtime_services="$(remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose config --services | grep -v '^caddy$' | tr '\n' ' '
+EOF
+)"
+    if [[ -z "$rollback_runtime_services" ]] \
+        || ! restart_services_serially "$rollback_runtime_services"; then
         echo "ERROR: rollback restored source but could not restart all services serially." >&2
         return 1
     fi
     if ! remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
-if ! docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
-    docker compose up -d --no-deps --no-build caddy
-fi
+# Recreate Caddy from the restored Compose definition so rolled-back
+# environment values and network attachments cannot linger. Also remove any
+# service introduced only by the failed release.
+docker compose up -d --no-deps --no-build --force-recreate --remove-orphans caddy
 for attempt in $(seq 1 24); do
     container="$(docker compose ps -q caddy)"
     state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
@@ -455,7 +466,7 @@ wait_for_state() {
     return 1
 }
 
-for service in relay private-core mcp unbrowser-egress unbrowser-mcp web; do
+for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web; do
     wait_for_state "$service" healthy
 done
 for service in caddy scheduler trial-agent; do
@@ -819,7 +830,7 @@ remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
+expected=$(printf '%s\n' caddy fin-terminal mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
     echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2

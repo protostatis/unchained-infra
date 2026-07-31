@@ -28,6 +28,7 @@ SERVICES = {
     "mcp",
     "unbrowser-egress",
     "unbrowser-mcp",
+    "fin-terminal",
     "web",
     "scheduler",
     "trial-agent",

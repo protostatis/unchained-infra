@@ -34,6 +34,8 @@ live at the repo root.
   plan for a public `/mcp` onboarding route
 - [unbrowser-mcp-route.md](./unbrowser-mcp-route.md): hosted unbrowser MCP
   route and deployment notes
+- [fin-terminal-route.md](./fin-terminal-route.md): authenticated singleton
+  financial terminal deployment and security boundaries
 - [../unchained/benchmark/README.md](../unchained/benchmark/README.md): local
   benchmark runner and safety procedure
 - [../unchained/README.md](../unchained/README.md): package-level tool and agent notes

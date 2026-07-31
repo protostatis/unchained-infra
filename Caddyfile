@@ -19,7 +19,7 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		format json
 		sampling {
 			first 100
-			interval 1000
+			interval 1s
 		}
 	}
 
@@ -53,6 +53,26 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	}
 	handle_path /unbrowser-mcp/* {
 		reverse_proxy unbrowser-mcp:8767
+	}
+
+	# Authenticated singleton financial terminal. The exact path redirects to
+	# the build-time base path; handle_path strips that prefix upstream.
+	handle /unbrowser/fin-terminal {
+		redir /unbrowser/fin-terminal/ 308
+	}
+	handle_path /unbrowser/fin-terminal/* {
+		route {
+			# Never trust identity or service-auth headers supplied by a client.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			forward_auth web:8080 {
+				uri /internal/fin-terminal/auth
+				copy_headers X-Fin-Terminal-User
+			}
+			reverse_proxy fin-terminal:8787 {
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+			}
+		}
 	}
 
 	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server

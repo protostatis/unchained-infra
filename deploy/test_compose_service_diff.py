@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from classify_changes import classify_path
+from classify_changes import SERVICES, classify_path
 from compose_service_diff import changed_services
 
 
@@ -31,6 +31,9 @@ def _config() -> dict:
 class TestChangedServices(unittest.TestCase):
     def test_compose_file_uses_resolved_service_comparison(self):
         self.assertEqual(classify_path("docker-compose.yml"), {"COMPOSE"})
+
+    def test_classifier_knows_fin_terminal_service(self):
+        self.assertIn("fin-terminal", SERVICES)
 
     def test_reports_only_the_service_with_an_effective_change(self):
         old = _config()

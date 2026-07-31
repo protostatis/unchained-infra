@@ -58,6 +58,7 @@ jobs:
             test_scheduled_tasks \
             test_hosted_conversations \
             test_dev_script \
+            test_fin_terminal \
             test_trial_new_chat \
             test_web_contracts
 
