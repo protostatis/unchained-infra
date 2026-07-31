@@ -486,6 +486,10 @@ wait_for_state() {
     return 1
 }
 
+# These lists are intentionally explicit because health-checked services must
+# reach "healthy", while process-only services below must reach "running".
+# The Compose service-list contract above fails deployment when either policy
+# needs to be updated for a newly added service.
 for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web; do
     wait_for_state "$service" healthy
 done

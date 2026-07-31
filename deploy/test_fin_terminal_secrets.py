@@ -58,7 +58,10 @@ class FinTerminalSecretsTests(unittest.TestCase):
         self.assertNotEqual(proxy_token, openrouter_key)
 
     def test_replaces_short_proxy_token(self):
-        self._write("OPENROUTER_API_KEY=provider-secret\nFIN_TERMINAL_PROXY_TOKEN=short\n")
+        self._write(
+            "OPENROUTER_API_KEY=provider-secret\n"
+            f"FIN_TERMINAL_PROXY_TOKEN={'a' * 63}\n"
+        )
 
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
         self.assertRegex(self._values()[1], r"^[0-9a-f]{64}$")

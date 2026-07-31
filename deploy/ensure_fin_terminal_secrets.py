@@ -35,7 +35,7 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
 
     proxy_token = _env_value(lines, "FIN_TERMINAL_PROXY_TOKEN")
     if (
-        len(proxy_token) >= 32
+        len(proxy_token) >= 64
         and proxy_token != openrouter_key
     ):
         os.chmod(env_path, 0o600)
