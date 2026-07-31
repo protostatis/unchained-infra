@@ -31,7 +31,7 @@ state. A second principal is rejected until the terminal process restarts.
 Optional settings:
 
 ```dotenv
-FIN_TERMINAL_OPENROUTER_MODEL=deepseek/deepseek-v4-flash
+FIN_TERMINAL_OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 FIN_TERMINAL_MAX_OUTPUT_TOKENS=4096
 ```
 

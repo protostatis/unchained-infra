@@ -143,7 +143,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#0a8df13e785114f284078d4097d571078e3d5e70"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#2757c4bd65cccb7d1d2dbddbc49f537c180b2142"
       args:
         PUBLIC_BASE_PATH: /unbrowser/fin-terminal/
     expose:
@@ -161,7 +161,7 @@ services:
       - UNBROWSER_MCP_URL=http://unbrowser-mcp:8767/mcp
       - UNBROWSER_MCP_REQUIRED=1
       - OPENROUTER_API_KEY=${FIN_TERMINAL_OPENROUTER_API_KEY:?FIN_TERMINAL_OPENROUTER_API_KEY_required}
-      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash}
+      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
       - ALLOWED_ORIGINS=https://unchainedsky.com,https://www.unchainedsky.com,https://api.unchainedsky.com

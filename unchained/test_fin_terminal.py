@@ -19,7 +19,7 @@ class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
     def _core(self, auth_info):
         return SimpleNamespace(
             _authenticate=lambda _request: auth_info,
-            FIN_TERMINAL_ALLOWED_EMAILS={"admin@example.com", "operator@example.com"},
+            FIN_TERMINAL_ALLOWED_EMAILS={"Admin@Example.com", "OPERATOR@example.com"},
         )
 
     async def test_authentication_is_required(self):
@@ -108,9 +108,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "0a8df13e785114f284078d4097d571078e3d5e70",
+            "2757c4bd65cccb7d1d2dbddbc49f537c180b2142",
             service,
         )
+        self.assertIn("deepseek/deepseek-v4-flash-0731", service)
         self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal/", service)
         self.assertIn("read_only: true", service)
         self.assertIn("no-new-privileges:true", service)
