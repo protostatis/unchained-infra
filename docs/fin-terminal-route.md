@@ -13,20 +13,23 @@ and Caddy strips `/unbrowser/fin-terminal` before proxying to port `8787`.
 Set these values in the deployment host's `.env`; never commit them:
 
 ```dotenv
-FIN_TERMINAL_OPENROUTER_API_KEY=<dedicated OpenRouter key>
-FIN_TERMINAL_PROXY_TOKEN=<independent random token>
-FIN_TERMINAL_ALLOWED_EMAILS=operator@example.com
+OPENROUTER_API_KEY=<existing hosted inference key>
+# Optional additional approved operators:
+FIN_TERMINAL_ALLOWED_EMAILS=
 ```
 
-Generate the proxy token independently from every other service credential, for
-example with `openssl rand -hex 32`. The OpenRouter key must also be dedicated to
-this service rather than reusing the hosted trial worker's key. Apply a
-provider-side spend limit appropriate for this single-operator deployment.
+This deployment intentionally reuses the hosted trial worker's OpenRouter key
+for inference. Apply a provider-side spend limit that accounts for both services.
+`deploy.sh` creates `FIN_TERMINAL_PROXY_TOKEN` directly in the host `.env` when
+it is absent. If it ever matches `OPENROUTER_API_KEY`, deployment replaces it
+with an independent 256-bit token rather than sending a billing credential in
+an internal HTTP header.
 
-`FIN_TERMINAL_ALLOWED_EMAILS` adds approved accounts to `ADMIN_EMAILS`. Because
-this deployment has one shared archive and one active WebSocket owner, configure
-one operator email unless all listed administrators intentionally share its
-state. A second principal is rejected until the terminal process restarts.
+Every approved account in `ADMIN_EMAILS` can access the terminal.
+`FIN_TERMINAL_ALLOWED_EMAILS` optionally adds other approved accounts. This
+deployment has one shared archive and one active WebSocket owner, so all listed
+administrators must intentionally share its state. A second principal is
+rejected until the terminal process restarts.
 
 Optional settings:
 

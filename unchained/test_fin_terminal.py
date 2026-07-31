@@ -73,6 +73,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.compose = cls.repo_root.joinpath("docker-compose.yml").read_text()
         cls.caddy = cls.repo_root.joinpath("Caddyfile").read_text()
         cls.deploy = cls.repo_root.joinpath("deploy.sh").read_text()
+        cls.secrets_helper = cls.repo_root.joinpath(
+            "deploy", "ensure_fin_terminal_secrets.py"
+        ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
         self.assertIn(
@@ -112,6 +115,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
+        self.assertIn(
+            "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
+            service,
+        )
+        self.assertNotIn("FIN_TERMINAL_OPENROUTER_API_KEY", service)
         self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal/", service)
         self.assertIn("read_only: true", service)
         self.assertIn("no-new-privileges:true", service)
@@ -131,6 +139,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn("caddy fin-terminal mcp private-core", self.deploy)
+        self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
+        self.assertIn("secrets.token_hex(32)", self.secrets_helper)
+        self.assertIn("proxy_token != openrouter_key", self.secrets_helper)
 
 
 if __name__ == "__main__":

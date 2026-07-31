@@ -94,6 +94,7 @@ DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12
 REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
 REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
+FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
 ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
@@ -241,17 +242,36 @@ EOF
     DEPLOY_BACKUP_READY=true
 }
 
+ensure_remote_fin_terminal_secrets() {
+    remote_bash "$REMOTE_DIR" \
+        "$REMOTE_DEPLOY_TOOLS_DIR/ensure_fin_terminal_secrets.py" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+secrets_tool="$2"
+env_file="$remote_dir/.env"
+test -f "$env_file" || {
+    echo "ERROR: production .env is missing" >&2
+    exit 1
+}
+test -f "$secrets_tool"
+python3 "$secrets_tool" "$env_file"
+EOF
+}
+
 upload_deploy_helpers() {
-    if [[ ! -f "$COMPOSE_DIFF_TOOL" ]]; then
-        echo "ERROR: missing Compose diff helper: $COMPOSE_DIFF_TOOL" >&2
-        return 1
-    fi
+    local helper
+    for helper in "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL"; do
+        if [[ ! -f "$helper" ]]; then
+            echo "ERROR: missing deploy helper: $helper" >&2
+            return 1
+        fi
+    done
     remote_bash "$REMOTE_DEPLOY_TOOLS_DIR" <<'EOF'
 set -euo pipefail
 mkdir -p "$1"
 EOF
-    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" \
-        "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/compose_service_diff.py"
+    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/"
 }
 
 compare_compose_services() {
@@ -692,6 +712,9 @@ DEPLOY_MUTATED=true
 
 echo "==> Uploading deploy helpers..."
 upload_deploy_helpers
+
+echo "==> Validating fin-terminal production secrets..."
+ensure_remote_fin_terminal_secrets
 
 # Upload Python modules
 echo "==> Uploading Python modules..."
