@@ -158,6 +158,12 @@ ADMIN_EMAILS = [
     for e in os.environ.get("ADMIN_EMAILS", "").split(",")
     if e.strip()
 ]
+FIN_TERMINAL_ALLOWED_EMAILS = set(ADMIN_EMAILS)
+FIN_TERMINAL_ALLOWED_EMAILS.update(
+    e.strip().lower()
+    for e in os.environ.get("FIN_TERMINAL_ALLOWED_EMAILS", "").split(",")
+    if e.strip()
+)
 
 
 def _resolve_contact_email() -> str:

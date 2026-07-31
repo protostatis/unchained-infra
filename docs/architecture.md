@@ -60,6 +60,7 @@
 | **Relay** | 8765 | WebSocket relay: agent tunnel (`/tunnel`), CDP proxy (`/cdp/*`), REST API (`/api/*`), health check |
 | **MCP** | 8766 | FastMCP server exposing DDM/intel tools for MCP-compatible clients |
 | **unbrowser MCP** | 8767 | Hosted `unbrowser --mcp` bridged to HTTP with `mcp-proxy`; routed under `/unbrowser-mcp` on isolated networks |
+| **Financial terminal** | 8787 | Authenticated singleton market-research UI; uses OpenRouter and the internal unbrowser MCP service |
 | **Web** | 8080 | Chat UI, OAuth, SSE bridge, hosted-credit authority, and agent-package downloads |
 | **Trial agent** | internal | Hosted OpenRouter tool-use worker; inference is server-side while browser actions route through the selected bridge |
 | **Private Core** | 8770 | Proprietary execution service for CDP/DDM/intel operations (`/core/execute`) |
@@ -215,7 +216,9 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `PRIVATE_CORE_TOKEN` | relay, mcp, web, trial-agent, private-core | Bearer token for public->private service auth |
 | `TRIAL_AGENT_KEY` | web, trial-agent | WebSocket identity for the hosted worker |
 | `HOSTED_AGENT_SERVICE_TOKEN` | web, trial-agent | Required dedicated bearer token for internal credit callbacks and scoped scheduler calls; generate independently from every other key |
-| `OPENROUTER_API_KEY` | trial-agent | Provider credential for hosted inference |
+| `OPENROUTER_API_KEY` | trial-agent, fin-terminal | Shared provider credential for hosted inference and terminal research |
+| `FIN_TERMINAL_PROXY_TOKEN` | caddy, fin-terminal | Required independent token authenticating edge-to-terminal requests |
+| `FIN_TERMINAL_ALLOWED_EMAILS` | web | Optional approved operator emails added to the admin allowlist |
 | `HOSTED_MAX_ACTIVE_TURNS` | web | Optional global hosted-turn limit (default: `16`) |
 | `HOSTED_MAX_ACTIVE_TURNS_PER_USER` | web | Optional per-account hosted-turn limit (default: `3`) |
 | `HOSTED_TURN_DEADLINE_SECONDS` | web | Optional absolute hosted-turn deadline (default: `600`); `/schedule` grants remain valid for the deadline plus a one-minute setup margin |
@@ -242,4 +245,6 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
   an atomic hold, and a persisted submission transition
 - Hosted-worker callbacks are internal-network-only and use a dedicated token;
   `TRIAL_AGENT_KEY` cannot authorize credit or scheduler callbacks
+- The financial terminal requires both web-session authorization at Caddy and a
+  deployment-only proxy token; client-provided identity headers are discarded
 - Proprietary tools (DDM, intel, CDP engine) run server-side only; agent package gets thin HTTP client (`cdp_tool.py`)

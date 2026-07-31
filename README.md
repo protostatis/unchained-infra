@@ -155,6 +155,8 @@ unchained-infra/
   a public `/mcp` onboarding route and positioning copy
 - [docs/unbrowser-mcp-route.md](./docs/unbrowser-mcp-route.md): hosted
   unbrowser MCP route and deployment notes
+- [docs/fin-terminal-route.md](./docs/fin-terminal-route.md): authenticated
+  financial terminal route and deployment notes
 - [docs/you-navigate-demo.md](./docs/you-navigate-demo.md): local setup and
   reward-critic framing for the "Unchained drives. You navigate." demo
 - [docs/split-repo-setup.md](./docs/split-repo-setup.md): CI and private-core overlay

@@ -15,10 +15,13 @@ services:
         condition: service_healthy
       web:
         condition: service_healthy
+    environment:
+      - FIN_TERMINAL_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
     networks:
       - edge
       - app
       - unbrowser_mcp
+      - fin_terminal
     restart: unless-stopped
     logging:
       driver: json-file
@@ -138,6 +141,63 @@ services:
       retries: 3
       start_period: 5s
 
+  fin-terminal:
+    build:
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#2757c4bd65cccb7d1d2dbddbc49f537c180b2142"
+      args:
+        PUBLIC_BASE_PATH: /unbrowser/fin-terminal/
+    expose:
+      - "8787"
+    volumes:
+      - fin_terminal_data:/data
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8787
+      - PUBLIC_BASE_PATH=/unbrowser/fin-terminal/
+      - MARKET_ROOT=/app
+      - MARKET_DATA_DIR=/data/market-terminal
+      - PI_CODING_AGENT_DIR=/data/pi-agent
+      - UNBROWSER_MCP_URL=http://unbrowser-mcp:8767/mcp
+      - UNBROWSER_MCP_REQUIRED=1
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}
+      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
+      - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
+      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
+      - ALLOWED_ORIGINS=https://unchainedsky.com,https://www.unchainedsky.com,https://api.unchainedsky.com
+    depends_on:
+      unbrowser-mcp:
+        condition: service_healthy
+    networks:
+      - fin_terminal
+      - fin_terminal_egress
+      - unbrowser_mcp
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 256m
+    stop_grace_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
   unbrowser-egress:
     build:
       context: .
@@ -186,6 +246,7 @@ services:
       - SMTP_PASS=${SMTP_PASS}
       - FROM_EMAIL=${FROM_EMAIL:-noreply@unchainedsky.com}
       - ADMIN_EMAILS=${ADMIN_EMAILS}
+      - FIN_TERMINAL_ALLOWED_EMAILS=${FIN_TERMINAL_ALLOWED_EMAILS:-}
       - CONTACT_EMAIL=${CONTACT_EMAIL:-hello@unchainedsky.com}
       - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
       - TRIAL_AGENT_ID=${TRIAL_AGENT_ID:-}
@@ -290,6 +351,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  fin_terminal_data:
   relay_data:
 
 networks:
@@ -299,5 +361,9 @@ networks:
     internal: true
   unbrowser_egress_proxy:
     internal: true
+  fin_terminal:
+    internal: true
+  # Deliberately non-internal: only the terminal joins this network, for OpenRouter.
+  fin_terminal_egress:
   app:
     internal: true
