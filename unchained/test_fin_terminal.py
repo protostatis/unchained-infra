@@ -128,7 +128,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "97e1a22e1c753caf243efb56acc585a342aef6a1",
+            "7903486467cde93a34f4a99cdf5ad1f36b5f0b39",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -146,16 +146,58 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- unbrowser_mcp", service)
         self.assertNotIn("- app", service)
 
+    def test_demo_service_is_a_self_resetting_public_kiosk(self):
+        service = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
+            "\n  unbrowser-egress:\n", 1
+        )[0]
+
+        self.assertIn(
+            "7903486467cde93a34f4a99cdf5ad1f36b5f0b39",
+            service,
+        )
+        self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/", service)
+        self.assertIn("PUBLIC_DEMO=1", service)
+        self.assertIn("DEMO_IDLE_SECONDS=300", service)
+        self.assertIn("read_only: true", service)
+        self.assertIn("no-new-privileges:true", service)
+        self.assertIn("- fin_terminal_egress", service)
+        self.assertNotIn("volumes:", service)
+
+    def test_demo_caddy_route_injects_guest_without_auth(self):
+        route = self.caddy.split(
+            "handle_path /unbrowser/fin-terminal-demo/*", 1
+        )[1].split("handle_path /unbrowser/fin-terminal/*", 1)[0]
+
+        self.assertIn("request_header -X-Fin-Terminal-User", route)
+        self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
+        self.assertIn("request_header -X-Real-IP", route)
+        self.assertNotIn("forward_auth", route)
+        self.assertNotIn("rate_limit", route)
+        self.assertIn("header_up X-Fin-Terminal-User guest", route)
+        self.assertIn(
+            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
+            route,
+        )
+        self.assertIn("header_up X-Real-IP {http.request.remote.host}", route)
+
+    def test_deploy_tracks_the_demo_service_and_route(self):
+        self.assertIn("fin-terminal-demo", self.deploy)
+        self.assertIn(
+            "unbrowser/fin-terminal-demo/",
+            self.deploy,
+        )
+        self.assertIn("grep -qx fin-terminal-demo", self.deploy)
+
     def test_deploy_lifecycle_tracks_the_terminal(self):
         self.assertIn(
-            "unbrowser-mcp fin-terminal web scheduler trial-agent",
+            "unbrowser-mcp fin-terminal fin-terminal-demo web",
             self.deploy,
         )
         self.assertIn(
-            "unbrowser-mcp fin-terminal scheduler trial-agent",
+            "unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent",
             self.deploy,
         )
-        self.assertIn("caddy fin-terminal mcp private-core", self.deploy)
+        self.assertIn("caddy fin-terminal fin-terminal-demo mcp private-core", self.deploy)
         self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
         self.assertIn("proxy_token != openrouter_key", self.secrets_helper)

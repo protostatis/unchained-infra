@@ -95,7 +95,7 @@ REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
 REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
 FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
-ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web scheduler trial-agent"
+ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal fin-terminal-demo web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
@@ -306,7 +306,7 @@ add_services() {
     local service
     for service in $services; do
         case "$service" in
-            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web|scheduler|trial-agent)
+            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|fin-terminal-demo|web|scheduler|trial-agent)
                 ;;
             "")
                 continue
@@ -361,7 +361,7 @@ wait_for_state() {
 
 expected_state() {
     case "$1" in
-        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web)
+        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|fin-terminal-demo|web)
             printf '%s\n' healthy
             ;;
         scheduler|trial-agent)
@@ -377,7 +377,7 @@ expected_state() {
 # --no-deps prevents Compose from expanding this into a broad restart, while
 # --force-recreate guarantees restart-dependent readiness checks observe a new
 # container even when its rendered Compose configuration is unchanged.
-for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal scheduler trial-agent; do
+for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent; do
     if ! selected "$service"; then
         continue
     fi
@@ -496,7 +496,10 @@ wait_for_state() {
 # reach "healthy", while process-only services below must reach "running".
 # The Compose service-list contract above fails deployment when either policy
 # needs to be updated for a newly added service.
-for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web; do
+for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal fin-terminal-demo web; do
+    if ! selected "$service"; then
+        continue
+    fi
     wait_for_state "$service" healthy
 done
 for service in caddy scheduler trial-agent; do
@@ -543,13 +546,38 @@ for attempt in $(seq 1 20); do
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/unbrowser/fin-terminal/" || true)"
     if [[ "$terminal_status" == "401" ]]; then
-        exit 0
+        break
     fi
     sleep 2
 done
-echo "authenticated fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
-docker compose logs --tail 80 caddy web fin-terminal >&2 || true
-exit 1
+if [[ "$terminal_status" != "401" ]]; then
+    echo "authenticated fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+    docker compose logs --tail 80 caddy web fin-terminal >&2 || true
+    exit 1
+fi
+
+# The public demo route must serve 200 with no session, proving both Caddy
+# route blocks are live after reload. Gated on the service existing so an
+# automatic rollback to a release predating the demo still passes.
+if docker compose config --services | grep -qx fin-terminal-demo; then
+    for attempt in $(seq 1 20); do
+        demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+            --output /dev/null --write-out '%{http_code}' \
+            --resolve "$health_host:443:127.0.0.1" \
+            "https://$health_host/unbrowser/fin-terminal-demo/" || true)"
+        if [[ "$demo_status" == "200" ]]; then
+            break
+        fi
+        sleep 2
+    done
+    if [[ "$demo_status" != "200" ]]; then
+        echo "public demo fin-terminal route health check failed (status: ${demo_status:-request-failed})" >&2
+        docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
+        exit 1
+    fi
+fi
+
+exit 0
 EOF
 }
 
@@ -883,7 +911,7 @@ remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy fin-terminal mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
+expected=$(printf '%s\n' caddy fin-terminal fin-terminal-demo mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
     echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2

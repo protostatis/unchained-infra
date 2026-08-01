@@ -145,7 +145,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#97e1a22e1c753caf243efb56acc585a342aef6a1"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7903486467cde93a34f4a99cdf5ad1f36b5f0b39"
       args:
         PUBLIC_BASE_PATH: /unbrowser/fin-terminal/
     expose:
@@ -195,6 +195,68 @@ services:
         max-file: "3"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  fin-terminal-demo:
+    # Public interactive demo of the financial terminal. Anonymous visitors are
+    # given a fixed guest principal by Caddy; the process resets itself after
+    # DEMO_IDLE_SECONDS of inactivity so the singleton seat frees for the next
+    # visitor. No persistent volume: every reset starts pristine.
+    build:
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7903486467cde93a34f4a99cdf5ad1f36b5f0b39"
+      args:
+        PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/
+    expose:
+      - "8788"
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8788
+      - PUBLIC_BASE_PATH=/unbrowser/fin-terminal-demo/
+      - MARKET_ROOT=/app
+      - MARKET_DATA_DIR=/data/market-terminal
+      - PI_CODING_AGENT_DIR=/data/pi-agent
+      - UNBROWSER_MCP_URL=http://unbrowser-mcp:8767/mcp
+      - UNBROWSER_MCP_REQUIRED=1
+      - OPENROUTER_API_KEY=${FIN_TERMINAL_DEMO_OPENROUTER_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}}
+      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
+      - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
+      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
+      - ALLOWED_ORIGINS=https://unchainedsky.com,https://www.unchainedsky.com,https://api.unchainedsky.com
+      - PUBLIC_DEMO=1
+      - DEMO_IDLE_SECONDS=300
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+      - /data:rw,nosuid,nodev,size=134217728,mode=0755,uid=1000,gid=1000
+    depends_on:
+      unbrowser-mcp:
+        condition: service_healthy
+    networks:
+      - fin_terminal
+      - fin_terminal_egress
+      - unbrowser_mcp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 64
+    cpus: 0.5
+    mem_limit: 768m
+    mem_reservation: 128m
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 3

@@ -51,6 +51,28 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy unbrowser-mcp:8767
 	}
 
+	# Public interactive demo of the financial terminal. No authentication: the
+	# terminal gets a fixed guest principal. The process self-resets after
+	# inactivity and enforces its own per-IP rate limits, so the shared seat
+	# stays usable without custom Caddy modules.
+	handle /unbrowser/fin-terminal-demo {
+		redir /unbrowser/fin-terminal-demo/ 308
+	}
+	handle_path /unbrowser/fin-terminal-demo/* {
+		route {
+			# Never trust identity, service-auth, or client-IP headers supplied
+			# by a client; inject the real visitor IP for app rate limiting.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Real-IP
+			reverse_proxy fin-terminal-demo:8788 {
+				header_up X-Fin-Terminal-User guest
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+				header_up X-Real-IP {http.request.remote.host}
+			}
+		}
+	}
+
 	# Authenticated singleton financial terminal. The exact path redirects to
 	# the build-time base path; handle_path strips that prefix upstream.
 	handle /unbrowser/fin-terminal {
