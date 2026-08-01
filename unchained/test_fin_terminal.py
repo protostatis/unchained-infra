@@ -112,6 +112,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.compose,
         )
         self.assertIn("--force-recreate caddy", self.deploy)
+        self.assertIn("caddy reload \\\n        --config /etc/caddy/Caddyfile </dev/null", self.deploy)
+        self.assertIn('new_container" == "$old_container', self.deploy)
+        self.assertIn('"$actual_image_id" != "$desired_image_id"', self.deploy)
+        self.assertIn(
+            'cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"',
+            self.deploy,
+        )
         self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 

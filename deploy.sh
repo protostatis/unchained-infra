@@ -229,6 +229,10 @@ if [[ -e "$backup_dir" ]]; then
 fi
 test -f "$remote_dir/docker-compose.yml"
 mkdir -p "$backup_dir"
+# Keep the previous Compose file addressable outside the source archive so the
+# post-upload runtime comparison can render both revisions with the live .env.
+cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
+test -s "$backup_dir/docker-compose.yml"
 items=(Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml Caddyfile unchained research_desk_vendor rhythm)
 present=()
 for item in "${items[@]}"; do
@@ -1032,21 +1036,69 @@ if echo " $SERVICES_TO_REBUILD " | grep -q ' caddy '; then
 set -euo pipefail
 cd "$1"
 recreate_required="$2"
-if docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+old_container="$(docker compose ps -q caddy 2>/dev/null || true)"
+old_state=""
+if [[ -n "$old_container" ]]; then
+    old_state="$(docker inspect --format '{{.State.Status}}' "$old_container" 2>/dev/null || true)"
+fi
+if [[ "$old_state" != "running" ]]; then
+    recreate_required=true
+fi
+
+if [[ "$recreate_required" == "true" ]]; then
+    desired_ref="$(docker compose config --format json \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["caddy"]["image"])')"
+    [[ -n "$desired_ref" ]]
+    echo "    Pulling and validating desired Caddy image: $desired_ref"
+    docker compose pull caddy </dev/null
+    desired_image_id="$(docker image inspect --format '{{.Id}}' "$desired_ref")"
+    [[ -n "$desired_image_id" ]]
+    docker compose run --rm --no-deps --entrypoint caddy caddy \
+        validate --config /etc/caddy/Caddyfile </dev/null
+fi
+
+if [[ "$old_state" == "running" ]]; then
+    # compose exec is interactive even with -T and otherwise consumes the
+    # unread remainder of this `bash -s` script from SSH stdin.
+    if ! docker compose exec -T caddy caddy reload \
+        --config /etc/caddy/Caddyfile </dev/null; then
+        echo "ERROR: Caddy rejected the candidate config; keeping the running edge container." >&2
+        exit 1
+    fi
     if [[ "$recreate_required" != "true" ]]; then
         exit 0
     fi
     echo "    Caddy reload succeeded; recreating to apply compose/network changes..."
 else
-    echo "    Caddy reload failed; recreating container..."
+    echo "    Caddy is not running; recreating container..."
 fi
-docker compose up -d --no-deps --no-build --force-recreate caddy
+docker compose up -d --no-deps --no-build --pull never --force-recreate caddy </dev/null
 
+new_container="$(docker compose ps -q caddy)"
+if [[ -z "$new_container" || "$new_container" == "$old_container" ]]; then
+    echo "ERROR: Caddy force-recreate did not produce a new container." >&2
+    exit 1
+fi
+if [[ -n "${desired_image_id:-}" ]]; then
+    actual_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+    if [[ "$actual_image_id" != "$desired_image_id" ]]; then
+        echo "ERROR: recreated Caddy container does not use the desired image." >&2
+        exit 1
+    fi
+    echo "    Caddy recreate verified: ${old_container:-missing} -> $new_container ($desired_ref)"
+fi
+
+stable_checks=0
 for attempt in $(seq 1 24); do
     container="$(docker compose ps -q caddy)"
     state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
     if [[ "$state" == "running" || "$state" == "healthy" ]]; then
-        exit 0
+        stable_checks=$((stable_checks + 1))
+        if [[ "$stable_checks" -ge 3 ]]; then
+            exit 0
+        fi
+    else
+        stable_checks=0
     fi
     if [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]]; then
         docker compose logs --tail 40 caddy >&2 || true

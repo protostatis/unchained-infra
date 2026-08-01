@@ -55,6 +55,17 @@ CADDY_FILES = {
     "Caddyfile",
 }
 
+# Deployment tooling runs on the CI runner or host and is not baked into a
+# service image. Changes here can alter orchestration without requiring an
+# otherwise unrelated application rebuild.
+DEPLOYMENT_ONLY_FILES = {
+    "deploy.sh",
+}
+
+DEPLOYMENT_ONLY_PREFIXES = (
+    "deploy/",
+)
+
 TOP_LEVEL_OWNERSHIP: dict[str, set[str]] = {
     "Dockerfile.unbrowser-mcp": {"unbrowser-egress", "unbrowser-mcp"},
 }
@@ -169,6 +180,8 @@ def classify_path(path: str) -> set[str]:
         return {"COMPOSE"}
     if path in CADDY_FILES:
         return {"caddy"}
+    if path in DEPLOYMENT_ONLY_FILES or path.startswith(DEPLOYMENT_ONLY_PREFIXES):
+        return set()
     if path in TOP_LEVEL_OWNERSHIP:
         return TOP_LEVEL_OWNERSHIP[path]
     if path in UNCHAINED_OWNERSHIP:
