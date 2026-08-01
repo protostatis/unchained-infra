@@ -152,6 +152,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
         self.assertIn("proxy_token != openrouter_key", self.secrets_helper)
+        self.assertIn(
+            'docker compose up -d --no-deps --no-build --force-recreate "$service"',
+            self.deploy,
+        )
 
 
 if __name__ == "__main__":

@@ -370,13 +370,15 @@ expected_state() {
 }
 
 # Keep upstream dependencies available before restarting their consumers.
-# --no-deps prevents Compose from expanding this into a broad restart.
+# --no-deps prevents Compose from expanding this into a broad restart, while
+# --force-recreate guarantees restart-dependent readiness checks observe a new
+# container even when its rendered Compose configuration is unchanged.
 for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal scheduler trial-agent; do
     if ! selected "$service"; then
         continue
     fi
     echo "    Restarting $service..."
-    docker compose up -d --no-deps --no-build "$service"
+    docker compose up -d --no-deps --no-build --force-recreate "$service"
     wait_for_state "$service" "$(expected_state "$service")"
 done
 EOF
