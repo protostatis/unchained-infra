@@ -543,21 +543,21 @@ if [[ "${public_site_ready:-false}" != "true" ]]; then
     exit 1
 fi
 
-# A logged-out terminal request must reach forward_auth and return 401. This
-# catches a healthy but stale Caddy process that is still serving the fallback
-# web route (404) after a failed reload.
+# The legacy authenticated-terminal URL must redirect to the canonical
+# subdomain route. This catches a healthy but stale Caddy process that is still
+# serving the previous route after a failed reload.
 for attempt in $(seq 1 20); do
-    terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code}' \
+    legacy_terminal_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/unbrowser/fin-terminal/" || true)"
-    if [[ "$terminal_status" == "401" ]]; then
+    if [[ "$legacy_terminal_check" == "308 https://$demo_host/fin-terminal/" ]]; then
         break
     fi
     sleep 2
 done
-if [[ "$terminal_status" != "401" ]]; then
-    echo "authenticated fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+if [[ "$legacy_terminal_check" != "308 https://$demo_host/fin-terminal/" ]]; then
+    echo "legacy authenticated fin-terminal redirect health check failed (result: ${legacy_terminal_check:-request-failed})" >&2
     docker compose logs --tail 80 caddy web fin-terminal >&2 || true
     exit 1
 fi
@@ -583,38 +583,45 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
         exit 1
     fi
 
+    # A logged-out request to the persistent terminal must reach forward_auth;
+    # it must never silently become the anonymous kiosk session.
     for attempt in $(seq 1 20); do
-        demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
             --output /dev/null --write-out '%{http_code}' \
             --resolve "$demo_host:443:127.0.0.1" \
-            "https://$demo_host/fin-terminal/demo/" || true)"
-        if [[ "$demo_status" == "200" ]]; then
+            "https://$demo_host/fin-terminal/" || true)"
+        if [[ "$terminal_status" == "401" ]]; then
             break
         fi
         sleep 2
     done
-    if [[ "$demo_status" != "200" ]]; then
-        echo "public demo fin-terminal route health check failed (status: ${demo_status:-request-failed})" >&2
+    if [[ "$terminal_status" != "401" ]]; then
+        echo "authenticated subdomain fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+        docker compose logs --tail 80 caddy web fin-terminal >&2 || true
+        exit 1
+    fi
+
+    for attempt in $(seq 1 20); do
+        demo_html="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+            --resolve "$demo_host:443:127.0.0.1" \
+            "https://$demo_host/fin-terminal-demo/" || true)"
+        if grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html"; then
+            break
+        fi
+        sleep 2
+    done
+    if ! grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html"; then
+        echo "public demo fin-terminal route health check failed (missing canonical asset path)" >&2
         docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
         exit 1
     fi
 
-    terminal_base_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code}' \
-        --resolve "$demo_host:443:127.0.0.1" \
-        "https://$demo_host/fin-terminal/" || true)"
-    if [[ "$terminal_base_status" != "308" ]]; then
-        echo "public terminal base redirect health check failed (status: ${terminal_base_status:-request-failed})" >&2
-        docker compose logs --tail 80 caddy >&2 || true
-        exit 1
-    fi
-
-    legacy_demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code}' \
+    legacy_demo_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/unbrowser/fin-terminal-demo/" || true)"
-    if [[ "$legacy_demo_status" != "308" ]]; then
-        echo "legacy public demo redirect health check failed (status: ${legacy_demo_status:-request-failed})" >&2
+    if [[ "$legacy_demo_check" != "308 https://$demo_host/fin-terminal-demo/" ]]; then
+        echo "legacy public demo redirect health check failed (result: ${legacy_demo_check:-request-failed})" >&2
         docker compose logs --tail 80 caddy >&2 || true
         exit 1
     fi

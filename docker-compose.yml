@@ -19,11 +19,13 @@ services:
         condition: service_healthy
     environment:
       - FIN_TERMINAL_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
+      - FIN_TERMINAL_DEMO_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}
     networks:
       - edge
       - app
       - unbrowser_mcp
       - fin_terminal
+      - fin_terminal_demo
     restart: unless-stopped
     logging:
       driver: json-file
@@ -129,6 +131,7 @@ services:
         condition: service_healthy
     networks:
       - unbrowser_mcp
+      - unbrowser_mcp_demo
       - unbrowser_egress_proxy
     restart: unless-stopped
     logging:
@@ -147,7 +150,7 @@ services:
     build:
       context: "https://github.com/protostatis/unbrowser-fin-terminal.git#781a656391cca0b783111568a84c64307c20382b"
       args:
-        PUBLIC_BASE_PATH: /unbrowser/fin-terminal/
+        PUBLIC_BASE_PATH: /fin-terminal/
     expose:
       - "8787"
     volumes:
@@ -156,7 +159,7 @@ services:
       - NODE_ENV=production
       - HOST=0.0.0.0
       - PORT=8787
-      - PUBLIC_BASE_PATH=/unbrowser/fin-terminal/
+      - PUBLIC_BASE_PATH=/fin-terminal/
       - MARKET_ROOT=/app
       - MARKET_DATA_DIR=/data/market-terminal
       - PI_CODING_AGENT_DIR=/data/pi-agent
@@ -166,7 +169,7 @@ services:
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
-      - ALLOWED_ORIGINS=https://unchainedsky.com,https://www.unchainedsky.com,https://api.unchainedsky.com
+      - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
     depends_on:
       unbrowser-mcp:
         condition: service_healthy
@@ -208,14 +211,14 @@ services:
     build:
       context: "https://github.com/protostatis/unbrowser-fin-terminal.git#781a656391cca0b783111568a84c64307c20382b"
       args:
-        PUBLIC_BASE_PATH: /fin-terminal/demo/
+        PUBLIC_BASE_PATH: /fin-terminal-demo/
     expose:
       - "8788"
     environment:
       - NODE_ENV=production
       - HOST=0.0.0.0
       - PORT=8788
-      - PUBLIC_BASE_PATH=/fin-terminal/demo/
+      - PUBLIC_BASE_PATH=/fin-terminal-demo/
       - MARKET_ROOT=/app
       - MARKET_DATA_DIR=/data/market-terminal
       - PI_CODING_AGENT_DIR=/data/pi-agent
@@ -224,8 +227,8 @@ services:
       - OPENROUTER_API_KEY=${FIN_TERMINAL_DEMO_OPENROUTER_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}}
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
-      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
-      - ALLOWED_ORIGINS=https://unchainedsky.com,https://www.unchainedsky.com,https://api.unchainedsky.com,https://unbrowser.unchainedsky.com
+      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}
+      - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
       - PUBLIC_DEMO=1
       - DEMO_IDLE_SECONDS=300
     tmpfs:
@@ -235,9 +238,9 @@ services:
       unbrowser-mcp:
         condition: service_healthy
     networks:
-      - fin_terminal
-      - fin_terminal_egress
-      - unbrowser_mcp
+      - fin_terminal_demo
+      - fin_terminal_demo_egress
+      - unbrowser_mcp_demo
     read_only: true
     cap_drop:
       - ALL
@@ -423,11 +426,18 @@ networks:
   egress:
   unbrowser_mcp:
     internal: true
+  unbrowser_mcp_demo:
+    internal: true
   unbrowser_egress_proxy:
     internal: true
   fin_terminal:
     internal: true
   # Deliberately non-internal: only the terminal joins this network, for OpenRouter.
   fin_terminal_egress:
+  fin_terminal_demo:
+    internal: true
+  # The anonymous kiosk needs outbound model access but is isolated from the
+  # persistent terminal's internal and egress networks.
+  fin_terminal_demo_egress:
   app:
     internal: true

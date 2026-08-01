@@ -90,9 +90,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('respond "Not found" 404', self.caddy)
 
     def test_caddy_strips_client_headers_then_runs_forward_auth(self):
-        route = self.caddy.split(
-            "handle_path /unbrowser/fin-terminal/*", 1
-        )[1].split("# MCP SSE stream", 1)[0]
+        subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        route = subdomain.split("handle_path /fin-terminal/*", 1)[1].split(
+            "# Public kiosk demo.", 1
+        )[0]
         strip_user = route.index("request_header -X-Fin-Terminal-User")
         forward_auth = route.index("forward_auth web:8080")
 
@@ -100,6 +101,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
         self.assertIn("uri /internal/fin-terminal/auth", route)
         self.assertIn("copy_headers X-Fin-Terminal-User", route)
+        for header in ("Cookie", "Authorization", "Proxy-Authorization"):
+            self.assertGreater(
+                route.index(f"request_header -{header}"), forward_auth
+            )
         self.assertIn(
             "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
             route,
@@ -120,11 +125,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
+        self.assertIn('[[ "$legacy_terminal_check" == "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 
     def test_compose_pins_and_hardens_the_terminal(self):
         service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
-            "\n  unbrowser-egress:\n", 1
+            "\n  fin-terminal-demo:\n", 1
         )[0]
 
         self.assertIn(
@@ -137,13 +144,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             service,
         )
         self.assertNotIn("FIN_TERMINAL_OPENROUTER_API_KEY", service)
-        self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal/", service)
+        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal/", service)
+        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal/", service)
+        self.assertIn("ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com", service)
+        self.assertNotIn("https://unchainedsky.com", service)
         self.assertIn("read_only: true", service)
         self.assertIn("no-new-privileges:true", service)
         self.assertIn("pids_limit: 128", service)
         self.assertIn("mem_limit: 1g", service)
         self.assertIn("- fin_terminal_egress", service)
         self.assertIn("- unbrowser_mcp", service)
+        self.assertNotIn("- fin_terminal_demo", service)
         self.assertNotIn("- app", service)
 
     def test_demo_service_is_a_self_resetting_public_kiosk(self):
@@ -155,31 +166,45 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "781a656391cca0b783111568a84c64307c20382b",
             service,
         )
-        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal/demo/", service)
-        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal/demo/", service)
-        self.assertIn("https://unbrowser.unchainedsky.com", service)
+        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal-demo/", service)
+        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal-demo/", service)
+        self.assertIn("ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com", service)
+        self.assertNotIn("https://unchainedsky.com", service)
         self.assertIn("PUBLIC_DEMO=1", service)
         self.assertIn("DEMO_IDLE_SECONDS=300", service)
         self.assertIn("read_only: true", service)
         self.assertIn("no-new-privileges:true", service)
-        self.assertIn("- fin_terminal_egress", service)
+        self.assertIn(
+            "MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}",
+            service,
+        )
+        self.assertIn("- fin_terminal_demo_egress", service)
+        self.assertIn("- unbrowser_mcp_demo", service)
+        self.assertNotIn("- fin_terminal_egress", service)
+        self.assertNotIn("- unbrowser_mcp\n", service)
         self.assertNotIn("volumes:", service)
 
     def test_demo_caddy_site_injects_guest_without_auth(self):
-        route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        route = subdomain.split("handle_path /fin-terminal-demo/*", 1)[1].split(
+            "# The root reuses", 1
+        )[0]
 
         self.assertIn("request_header -X-Fin-Terminal-User", route)
         self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
         self.assertIn("request_header -X-Real-IP", route)
+        self.assertIn("request_header -Cookie", route)
+        self.assertIn("request_header -Authorization", route)
+        self.assertIn("request_header -Proxy-Authorization", route)
         self.assertNotIn("forward_auth", route)
         self.assertNotIn("rate_limit", route)
         self.assertIn("header_up X-Fin-Terminal-User guest", route)
         self.assertIn(
-            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
+            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}",
             route,
         )
         self.assertIn("header_up X-Real-IP {http.request.remote.host}", route)
-        self.assertIn("handle_path /fin-terminal/demo/*", route)
+        self.assertIn("header_up X-Fin-Terminal-User guest", route)
         self.assertNotIn("relay:8765", route)
         self.assertNotIn("mcp:8766", route)
 
@@ -191,35 +216,73 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
             route,
         )
-        self.assertIn("@terminal_demo_base path /fin-terminal /fin-terminal/", route)
-        self.assertIn(
-            "redir @terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal/demo/{?query} 308",
-            route,
-        )
+        self.assertIn("handle_path /fin-terminal/*", route)
+        self.assertIn("forward_auth web:8080", route)
+        self.assertIn("handle_path /fin-terminal-demo/*", route)
+        self.assertIn("redir /fin-terminal/{?query} 308", route)
+        self.assertIn("redir /fin-terminal-demo/{?query} 308", route)
         self.assertIn("@unbrowser_outbound path /go/unbrowser-connect", route)
         self.assertIn("handle /web/unbrowser/*", route)
         self.assertIn("handle /web/analytics/*", route)
         self.assertIn("handle /favicon.svg", route)
         self.assertIn('respond "Not found" 404', route)
 
-    def test_legacy_demo_routes_redirect_before_authenticated_terminal(self):
-        canonical = "https://unbrowser.unchainedsky.com/fin-terminal/demo/"
+    def test_demo_is_isolated_from_persistent_terminal_networks(self):
+        caddy = self.compose.split("\n  caddy:\n", 1)[1].split("\n  relay:\n", 1)[0]
+        mcp = self.compose.split("\n  unbrowser-mcp:\n", 1)[1].split(
+            "\n  fin-terminal:\n", 1
+        )[0]
+        demo = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
+            "\n  unbrowser-egress:\n", 1
+        )[0]
+
+        self.assertIn("- fin_terminal", caddy)
+        self.assertIn("- fin_terminal_demo", caddy)
+        self.assertIn("- unbrowser_mcp", mcp)
+        self.assertIn("- unbrowser_mcp_demo", mcp)
+        self.assertIn("- fin_terminal_demo", demo)
+        self.assertIn("- fin_terminal_demo_egress", demo)
+        self.assertIn("- unbrowser_mcp_demo", demo)
+        self.assertNotIn("- fin_terminal\n", demo)
+        self.assertNotIn("- fin_terminal_egress", demo)
+        self.assertNotIn("- unbrowser_mcp\n", demo)
+
+    def test_legacy_terminal_routes_redirect_to_separate_canonical_paths(self):
+        canonical_demo = "https://unbrowser.unchainedsky.com/fin-terminal-demo/"
+        canonical_terminal = "https://unbrowser.unchainedsky.com/fin-terminal/"
         legacy_demo = "@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo"
         legacy_alias = "@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias"
 
         self.assertIn(legacy_demo, self.caddy)
         self.assertIn(legacy_alias, self.caddy)
         self.assertIn(
-            f"redir @legacy_fin_terminal_demo {canonical}{{re.legacy_fin_terminal_demo.1}}{{?query}} 308",
+            "^/unbrowser/fin-terminal-demo(?:/(.*))?$",
             self.caddy,
         )
         self.assertIn(
-            f"redir @legacy_fin_terminal_demo_alias {canonical}{{re.legacy_fin_terminal_demo_alias.1}}{{?query}} 308",
+            "^/unbrowser/fin-terminal/demo(?:/(.*))?$",
             self.caddy,
         )
-        self.assertLess(
-            self.caddy.index(legacy_alias),
-            self.caddy.index("handle_path /unbrowser/fin-terminal/*"),
+        self.assertIn(
+            "^/unbrowser/fin-terminal(?:/(.*))?$",
+            self.caddy,
+        )
+        self.assertIn(
+            f"redir @legacy_fin_terminal_demo {canonical_demo}{{re.legacy_fin_terminal_demo.1}}{{?query}} 308",
+            self.caddy,
+        )
+        self.assertIn(
+            f"redir @legacy_fin_terminal_demo_alias {canonical_demo}{{re.legacy_fin_terminal_demo_alias.1}}{{?query}} 308",
+            self.caddy,
+        )
+        self.assertIn("@legacy_fin_terminal {", self.caddy)
+        self.assertIn(
+            "not path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*",
+            self.caddy,
+        )
+        self.assertIn(
+            f"redir @legacy_fin_terminal {canonical_terminal}{{re.legacy_fin_terminal.1}}{{?query}} 308",
+            self.caddy,
         )
         self.assertIn("@legacy_unbrowser_page path /unbrowser /unbrowser/", self.caddy)
         self.assertIn(
@@ -234,10 +297,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn('"https://$demo_host/"', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal/demo/"', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal-demo/"', self.deploy)
         self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
+        self.assertIn("/fin-terminal-demo/assets/", self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
         self.assertIn('"https://$health_host/unbrowser/fin-terminal-demo/"', self.deploy)
+        self.assertIn('[[ "$legacy_demo_check" != "308 https://$demo_host/fin-terminal-demo/" ]]', self.deploy)
         self.assertIn("grep -qx fin-terminal-demo", self.deploy)
 
     def test_deploy_lifecycle_tracks_the_terminal(self):
@@ -252,7 +317,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("caddy fin-terminal fin-terminal-demo mcp private-core", self.deploy)
         self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
-        self.assertIn("proxy_token != openrouter_key", self.secrets_helper)
+        self.assertIn("terminal_token == openrouter_key", self.secrets_helper)
+        self.assertIn("demo_token == terminal_token", self.secrets_helper)
+        self.assertIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
         self.assertIn(
             'docker compose up -d --no-deps --no-build --force-recreate "$service"',
             self.deploy,

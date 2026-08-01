@@ -2,11 +2,12 @@
 
 The singleton financial terminal is served at:
 
-- `https://unchainedsky.com/unbrowser/fin-terminal/`
+- `https://unbrowser.unchainedsky.com/fin-terminal/`
 
 The Compose build is pinned to the full commit SHA from
 `protostatis/unbrowser-fin-terminal`. `PUBLIC_BASE_PATH` is fixed at build time,
-and Caddy strips `/unbrowser/fin-terminal` before proxying to port `8787`.
+and Caddy strips `/fin-terminal` before proxying to port `8787`. The former
+`https://unchainedsky.com/unbrowser/fin-terminal/` route redirects here.
 
 ## Required production configuration
 
@@ -20,10 +21,11 @@ FIN_TERMINAL_ALLOWED_EMAILS=
 
 This deployment intentionally reuses the hosted trial worker's OpenRouter key
 for inference. Apply a provider-side spend limit that accounts for both services.
-`deploy.sh` creates `FIN_TERMINAL_PROXY_TOKEN` directly in the host `.env` when
-it is absent. If it ever matches `OPENROUTER_API_KEY`, deployment replaces it
-with an independent 256-bit token rather than sending a billing credential in
-an internal HTTP header.
+`deploy.sh` creates `FIN_TERMINAL_PROXY_TOKEN` and
+`FIN_TERMINAL_DEMO_PROXY_TOKEN` directly in the host `.env` when either is
+absent. They are independent 256-bit tokens; deployment replaces a token that
+matches `OPENROUTER_API_KEY` or the other terminal token rather than sending a
+billing credential or public-demo credential to the persistent terminal.
 
 Every approved account in `ADMIN_EMAILS` can access the terminal.
 `FIN_TERMINAL_ALLOWED_EMAILS` optionally adds other approved accounts. This
@@ -45,8 +47,9 @@ FIN_TERMINAL_MAX_OUTPUT_TOKENS=4096
    session cookie.
 3. `web` requires an approved admin/allowlisted email and returns a hashed,
    opaque principal.
-4. Caddy injects the deployment-only proxy token before forwarding HTTP or the
-   WebSocket upgrade to the terminal.
+4. Caddy removes browser session/API credentials, then injects the
+   deployment-only persistent-terminal token before forwarding HTTP or the
+   WebSocket upgrade.
 5. The terminal accepts only the first authenticated principal for its process
    lifetime.
 
@@ -66,14 +69,13 @@ The Unbrowser product landing page is served at:
 
 Its public financial-terminal demo is served at:
 
-- `https://unbrowser.unchainedsky.com/fin-terminal/demo/`
+- `https://unbrowser.unchainedsky.com/fin-terminal-demo/`
 
-`https://unbrowser.unchainedsky.com/fin-terminal/` redirects to that canonical
-demo URL.
-
-Caddy does not call `forward_auth` for this host. It injects a fixed
-`guest` principal instead, strips any client-supplied identity headers, and
-proxies to the separate `fin-terminal-demo` service on port `8788`. The
+Caddy does not call `forward_auth` for the public demo path. It removes browser
+credentials and client-supplied identity headers, then injects a fixed `guest`
+principal plus the separate demo-only proxy token before proxying to
+`fin-terminal-demo` on port `8788`. The demo has isolated Caddy, MCP, and
+OpenRouter egress networks, so it cannot reach the persistent terminal. The
 terminal enforces its own per-IP rate limits (connections and inputs) in demo
 mode, so the pinned Caddy image needs no custom modules.
 
@@ -107,12 +109,14 @@ docker compose exec -T fin-terminal \
 ```
 
 From a logged-out browser or client, both the Unbrowser root and
-`https://unbrowser.unchainedsky.com/fin-terminal/demo/` must return `200`,
-while the terminal base plus the old apex landing and demo URLs must return
-`308`. The authenticated `/unbrowser/fin-terminal/` route must return `401`.
-From an approved allowlisted session, the page and `/unbrowser/fin-terminal/ws`
-WebSocket should load through Caddy. Direct container-network requests without
-`X-Fin-Terminal-Proxy-Token` must return `403`.
+`https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`.
+The authenticated `/fin-terminal/` route must return `401` when logged out;
+the former apex terminal must redirect to `/fin-terminal/`, and its landing and
+demo URLs must redirect to their canonical paths. The demo HTML must reference
+`/fin-terminal-demo/assets/`. From an approved allowlisted session, the page
+and `/fin-terminal/ws` WebSocket should load through Caddy. Direct
+container-network requests without `X-Fin-Terminal-Proxy-Token` must return
+`403`.
 
 When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
