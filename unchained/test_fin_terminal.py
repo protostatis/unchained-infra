@@ -427,34 +427,35 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("- fin_terminal_demo", service)
         self.assertNotIn("- app", service)
 
-    def test_demo_service_is_a_self_resetting_public_kiosk(self):
+    def test_demo_service_is_a_static_replay_with_no_agent_dependencies(self):
         service = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
             "\n  unbrowser-egress:\n", 1
         )[0]
 
         self.assertIn(
-            "781a656391cca0b783111568a84c64307c20382b",
+            "ef1c6b12832b79364d4f0abd67bfa5114822fa94",
             service,
         )
         self.assertIn("PUBLIC_BASE_PATH: /fin-terminal-demo/", service)
         self.assertIn("PUBLIC_BASE_PATH=/fin-terminal-demo/", service)
-        self.assertIn("ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com", service)
         self.assertNotIn("https://unchainedsky.com", service)
         self.assertIn("PUBLIC_DEMO=1", service)
-        self.assertIn("DEMO_IDLE_SECONDS=300", service)
         self.assertIn("read_only: true", service)
         self.assertIn("no-new-privileges:true", service)
         self.assertIn(
             "MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}",
             service,
         )
-        self.assertIn("- fin_terminal_demo_egress", service)
-        self.assertIn("- unbrowser_mcp_demo", service)
+        self.assertNotIn("OPENROUTER_API_KEY", service)
+        self.assertNotIn("UNBROWSER_MCP_URL", service)
+        self.assertNotIn("PI_CODING_AGENT_DIR", service)
+        self.assertNotIn("DEMO_IDLE_SECONDS", service)
+        self.assertNotIn("depends_on:", service)
         self.assertNotIn("- fin_terminal_egress", service)
         self.assertNotIn("- unbrowser_mcp\n", service)
         self.assertNotIn("volumes:", service)
 
-    def test_demo_caddy_site_injects_guest_without_auth(self):
+    def test_demo_caddy_site_proxies_static_replay_without_auth_or_identity(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split("handle_path /fin-terminal-demo/*", 1)[1].split(
             "# The root reuses", 1
@@ -462,19 +463,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
         self.assertIn("request_header -X-Fin-Terminal-User", route)
         self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
-        self.assertIn("request_header -X-Real-IP", route)
         self.assertIn("request_header -Cookie", route)
         self.assertIn("request_header -Authorization", route)
         self.assertIn("request_header -Proxy-Authorization", route)
         self.assertNotIn("forward_auth", route)
         self.assertNotIn("rate_limit", route)
-        self.assertIn("header_up X-Fin-Terminal-User guest", route)
         self.assertIn(
             "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}",
             route,
         )
-        self.assertIn("header_up X-Real-IP {http.request.remote.host}", route)
-        self.assertIn("header_up X-Fin-Terminal-User guest", route)
+        self.assertNotIn("header_up X-Fin-Terminal-User", route)
+        self.assertNotIn("header_up X-Real-IP", route)
         self.assertNotIn("relay:8765", route)
         self.assertNotIn("mcp:8766", route)
 
@@ -517,10 +516,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- fin_terminal", caddy)
         self.assertIn("- fin_terminal_demo", caddy)
         self.assertIn("- unbrowser_mcp", mcp)
-        self.assertIn("- unbrowser_mcp_demo", mcp)
+        self.assertNotIn("- unbrowser_mcp_demo", mcp)
         self.assertIn("- fin_terminal_demo", demo)
-        self.assertIn("- fin_terminal_demo_egress", demo)
-        self.assertIn("- unbrowser_mcp_demo", demo)
+        self.assertNotIn("- fin_terminal_demo_egress", demo)
+        self.assertNotIn("- unbrowser_mcp_demo", demo)
         self.assertNotIn("- fin_terminal\n", demo)
         self.assertNotIn("- fin_terminal_egress", demo)
         self.assertNotIn("- unbrowser_mcp\n", demo)
@@ -578,6 +577,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"https://$demo_host/fin-terminal-demo/"', self.deploy)
         self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
         self.assertIn("/fin-terminal-demo/assets/", self.deploy)
+        self.assertIn('name="x-build-mode" content="replay"', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal-demo/ws"', self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
         self.assertIn('"https://$demo_host/fin-terminal"', self.deploy)
         self.assertIn('[[ "$terminal_base_check" != "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
