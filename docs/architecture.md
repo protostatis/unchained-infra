@@ -216,8 +216,7 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `PRIVATE_CORE_TOKEN` | relay, mcp, web, trial-agent, private-core | Bearer token for public->private service auth |
 | `TRIAL_AGENT_KEY` | web, trial-agent | WebSocket identity for the hosted worker |
 | `HOSTED_AGENT_SERVICE_TOKEN` | web, trial-agent | Required dedicated bearer token for internal credit callbacks and scoped scheduler calls; generate independently from every other key |
-| `OPENROUTER_API_KEY` | trial-agent, fin-terminal, fin-terminal-demo fallback | Shared provider credential for hosted inference and terminal research |
-| `FIN_TERMINAL_DEMO_OPENROUTER_KEY` | fin-terminal-demo | Optional provider-capped override for public-demo inference |
+| `OPENROUTER_API_KEY` | trial-agent, fin-terminal | Shared provider credential for hosted inference and private terminal research |
 | `FIN_TERMINAL_PROXY_TOKEN` | caddy, fin-terminal | Required independent token authenticating edge-to-persistent-terminal requests |
 | `FIN_TERMINAL_DEMO_PROXY_TOKEN` | caddy, fin-terminal-demo | Required independent token authenticating edge-to-public-demo requests |
 | `FIN_TERMINAL_ALLOWED_EMAILS` | web | Optional approved operator emails added to the admin allowlist |

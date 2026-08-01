@@ -131,7 +131,6 @@ services:
         condition: service_healthy
     networks:
       - unbrowser_mcp
-      - unbrowser_mcp_demo
       - unbrowser_egress_proxy
     restart: unless-stopped
     logging:
@@ -204,12 +203,10 @@ services:
       start_period: 30s
 
   fin-terminal-demo:
-    # Public interactive demo of the financial terminal. Anonymous visitors are
-    # given a fixed guest principal by Caddy; the process resets itself after
-    # DEMO_IDLE_SECONDS of inactivity so the singleton seat frees for the next
-    # visitor. No persistent volume: every reset starts pristine.
+    # Public static replay of the financial terminal. It has no agent, model,
+    # source retrieval, persistence, or outbound dependency.
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#781a656391cca0b783111568a84c64307c20382b"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#ef1c6b12832b79364d4f0abd67bfa5114822fa94"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-demo/
     expose:
@@ -220,27 +217,13 @@ services:
       - PORT=8788
       - PUBLIC_BASE_PATH=/fin-terminal-demo/
       - MARKET_ROOT=/app
-      - MARKET_DATA_DIR=/data/market-terminal
-      - PI_CODING_AGENT_DIR=/data/pi-agent
-      - UNBROWSER_MCP_URL=http://unbrowser-mcp:8767/mcp
-      - UNBROWSER_MCP_REQUIRED=1
-      - OPENROUTER_API_KEY=${FIN_TERMINAL_DEMO_OPENROUTER_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}}
-      - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
-      - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}
-      - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
       - PUBLIC_DEMO=1
-      - DEMO_IDLE_SECONDS=300
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
       - /data:rw,nosuid,nodev,size=134217728,mode=0755,uid=1000,gid=1000
-    depends_on:
-      unbrowser-mcp:
-        condition: service_healthy
     networks:
       - fin_terminal_demo
-      - fin_terminal_demo_egress
-      - unbrowser_mcp_demo
     read_only: true
     cap_drop:
       - ALL
@@ -426,8 +409,6 @@ networks:
   egress:
   unbrowser_mcp:
     internal: true
-  unbrowser_mcp_demo:
-    internal: true
   unbrowser_egress_proxy:
     internal: true
   fin_terminal:
@@ -436,8 +417,5 @@ networks:
   fin_terminal_egress:
   fin_terminal_demo:
     internal: true
-  # The anonymous kiosk needs outbound model access but is isolated from the
-  # persistent terminal's internal and egress networks.
-  fin_terminal_demo_egress:
   app:
     internal: true

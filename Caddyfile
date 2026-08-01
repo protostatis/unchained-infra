@@ -181,14 +181,13 @@ unbrowser.unchainedsky.com {
 		}
 	}
 
-	# Public kiosk demo. Its path deliberately retains the fin-terminal-demo
-	# build marker, which enables the frontend banner and waiting room.
+	# Public static replay demo. Its path deliberately retains the
+	# fin-terminal-demo build marker, which selects the replay-only frontend.
 	@fin_terminal_demo_base path /fin-terminal-demo
 	redir @fin_terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal-demo/{?query} 308
 	handle_path /fin-terminal-demo/* {
 		route {
-			# Never trust identity, service-auth, or client-IP headers supplied
-			# by a client; inject the real visitor IP for app rate limiting.
+			# Never trust identity or service-auth headers supplied by a client.
 			request_header -X-Fin-Terminal-User
 			request_header -X-Fin-Terminal-Proxy-Token
 			request_header -X-Real-IP
@@ -197,9 +196,7 @@ unbrowser.unchainedsky.com {
 			request_header -Authorization
 			request_header -Proxy-Authorization
 			reverse_proxy fin-terminal-demo:8788 {
-				header_up X-Fin-Terminal-User guest
 				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}
-				header_up X-Real-IP {http.request.remote.host}
 			}
 		}
 	}

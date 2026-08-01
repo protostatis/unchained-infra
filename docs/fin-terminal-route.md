@@ -72,27 +72,22 @@ Its public financial-terminal demo is served at:
 - `https://unbrowser.unchainedsky.com/fin-terminal-demo/`
 
 Caddy does not call `forward_auth` for the public demo path. It removes browser
-credentials and client-supplied identity headers, then injects a fixed `guest`
-principal plus the separate demo-only proxy token before proxying to
-`fin-terminal-demo` on port `8788`. The demo has isolated Caddy, MCP, and
-OpenRouter egress networks, so it cannot reach the persistent terminal. The
-terminal enforces its own per-IP rate limits (connections and inputs) in demo
-mode, so the pinned Caddy image needs no custom modules.
+credentials and client-supplied identity headers, then injects only the separate
+demo-only proxy token before proxying to `fin-terminal-demo` on port `8788`.
+The demo is attached only to its Caddy network, so it cannot reach the
+persistent terminal, MCP service, or an outbound network.
 
 `https://unchainedsky.com/unbrowser/fin-terminal-demo/` and the earlier
 `/unbrowser/fin-terminal/demo` spelling permanently redirect to the canonical
 demo path while preserving a path suffix and query string. The former
 `https://unchainedsky.com/unbrowser` landing page redirects to the new root.
 
-The demo service runs the same image with `PUBLIC_DEMO=1`: the UI shows a
-PUBLIC DEMO banner and a waiting room when the singleton seat is taken (a new
-visitor is rejected, never evicting the current one), the process exits after
-`DEMO_IDLE_SECONDS` (300) without validated activity or after
-`DEMO_MAX_SESSION_SECONDS` (1800), and the container restart policy hands the
-seat to the next visitor. It has no persistent volume — every reset starts
-pristine. Research remains enabled; set `FIN_TERMINAL_DEMO_OPENROUTER_KEY` in
-the host `.env` to give the demo build its own provider-capped key instead of
-sharing the production key.
+The demo service runs the same image with `PUBLIC_DEMO=1` and serves an
+immutable synthetic replay fixture. It starts no agent session and performs no
+WebSocket, model, source-retrieval, authentication, entitlement, workspace, or
+persistence work. It has no provider credential, MCP dependency, persistent
+volume, or outbound network. Its informational pilot controls do not create an
+account, activation, workspace, saved item, or follow.
 
 The demo host and authenticated route are independent deployments of the same
 singleton product, so an active demo visitor never disturbs the authenticated
@@ -115,7 +110,8 @@ their trailing-slash canonical URLs. The authenticated `/fin-terminal/` route
 must return `401` when logged out;
 the former apex terminal must redirect to `/fin-terminal/`, and its landing and
 demo URLs must redirect to their canonical paths. The demo HTML must reference
-`/fin-terminal-demo/assets/`. From an approved allowlisted session, the page
+`/fin-terminal-demo/assets/` and an `x-build-mode` marker of `replay`. The demo
+`/ws` endpoint must return `403`, never a WebSocket `101` response. From an approved allowlisted session, the page
 and `/fin-terminal/ws` WebSocket should load through Caddy. Direct
 container-network requests without `X-Fin-Terminal-Proxy-Token` must return
 `403`.

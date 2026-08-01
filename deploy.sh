@@ -728,13 +728,25 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
         demo_html="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
             --resolve "$demo_host:443:127.0.0.1" \
             "https://$demo_host/fin-terminal-demo/" || true)"
-        if grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html"; then
+        if grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html" \
+            && grep -Fq 'name="x-build-mode" content="replay"' <<<"$demo_html"; then
             break
         fi
         sleep 2
     done
-    if ! grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html"; then
-        echo "public demo fin-terminal route health check failed (missing canonical asset path)" >&2
+    if ! grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html" \
+        || ! grep -Fq 'name="x-build-mode" content="replay"' <<<"$demo_html"; then
+        echo "public replay demo health check failed (missing canonical asset path or replay build marker)" >&2
+        docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
+        exit 1
+    fi
+
+    demo_ws_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$demo_host:443:127.0.0.1" \
+        "https://$demo_host/fin-terminal-demo/ws" || true)"
+    if [[ "$demo_ws_status" != "403" ]]; then
+        echo "public replay demo WebSocket refusal check failed (status: ${demo_ws_status:-request-failed})" >&2
         docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
         exit 1
     fi
