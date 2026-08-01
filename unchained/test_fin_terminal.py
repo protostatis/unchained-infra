@@ -155,7 +155,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "781a656391cca0b783111568a84c64307c20382b",
             service,
         )
-        self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/", service)
+        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal/demo/", service)
+        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal/demo/", service)
+        self.assertIn("https://unbrowser.unchainedsky.com", service)
         self.assertIn("PUBLIC_DEMO=1", service)
         self.assertIn("DEMO_IDLE_SECONDS=300", service)
         self.assertIn("read_only: true", service)
@@ -163,10 +165,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- fin_terminal_egress", service)
         self.assertNotIn("volumes:", service)
 
-    def test_demo_caddy_route_injects_guest_without_auth(self):
-        route = self.caddy.split(
-            "handle_path /unbrowser/fin-terminal-demo/*", 1
-        )[1].split("handle_path /unbrowser/fin-terminal/*", 1)[0]
+    def test_demo_caddy_site_injects_guest_without_auth(self):
+        route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
 
         self.assertIn("request_header -X-Fin-Terminal-User", route)
         self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
@@ -179,13 +179,59 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             route,
         )
         self.assertIn("header_up X-Real-IP {http.request.remote.host}", route)
+        self.assertIn("handle_path /fin-terminal/demo/*", route)
+        self.assertNotIn("relay:8765", route)
+        self.assertNotIn("mcp:8766", route)
+
+    def test_demo_site_serves_unbrowser_page_at_root(self):
+        route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+
+        self.assertIn("rewrite * /unbrowser", route)
+        self.assertIn(
+            "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
+            route,
+        )
+        self.assertIn("@unbrowser_outbound path /go/unbrowser-connect", route)
+        self.assertIn("handle /web/unbrowser/*", route)
+        self.assertIn("handle /web/analytics/*", route)
+        self.assertIn("handle /favicon.svg", route)
+        self.assertIn('respond "Not found" 404', route)
+
+    def test_legacy_demo_routes_redirect_before_authenticated_terminal(self):
+        canonical = "https://unbrowser.unchainedsky.com/fin-terminal/demo/"
+        legacy_demo = "@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo"
+        legacy_alias = "@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias"
+
+        self.assertIn(legacy_demo, self.caddy)
+        self.assertIn(legacy_alias, self.caddy)
+        self.assertIn(
+            f"redir @legacy_fin_terminal_demo {canonical}{{re.legacy_fin_terminal_demo.1}}{{?query}} 308",
+            self.caddy,
+        )
+        self.assertIn(
+            f"redir @legacy_fin_terminal_demo_alias {canonical}{{re.legacy_fin_terminal_demo_alias.1}}{{?query}} 308",
+            self.caddy,
+        )
+        self.assertLess(
+            self.caddy.index(legacy_alias),
+            self.caddy.index("handle_path /unbrowser/fin-terminal/*"),
+        )
+        self.assertIn("@legacy_unbrowser_page path /unbrowser /unbrowser/", self.caddy)
+        self.assertIn(
+            "redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308",
+            self.caddy,
+        )
 
     def test_deploy_tracks_the_demo_service_and_route(self):
         self.assertIn("fin-terminal-demo", self.deploy)
         self.assertIn(
-            "unbrowser/fin-terminal-demo/",
+            "FIN_TERMINAL_DEMO_HOST",
             self.deploy,
         )
+        self.assertIn('"https://$demo_host/"', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal/demo/"', self.deploy)
+        self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
+        self.assertIn('"https://$health_host/unbrowser/fin-terminal-demo/"', self.deploy)
         self.assertIn("grep -qx fin-terminal-demo", self.deploy)
 
     def test_deploy_lifecycle_tracks_the_terminal(self):

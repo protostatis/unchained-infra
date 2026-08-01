@@ -100,9 +100,14 @@ ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
 DEPLOY_HEALTH_HOST="${DEPLOY_HEALTH_HOST:-$DEFAULT_DEPLOY_HEALTH_HOST}"
+FIN_TERMINAL_DEMO_HOST="${FIN_TERMINAL_DEMO_HOST:-unbrowser.unchainedsky.com}"
 
 if [[ ! "$DEPLOY_HEALTH_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
     echo "ERROR: DEPLOY_HEALTH_HOST must be a hostname" >&2
+    exit 1
+fi
+if [[ ! "$FIN_TERMINAL_DEMO_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "ERROR: FIN_TERMINAL_DEMO_HOST must be a hostname" >&2
     exit 1
 fi
 
@@ -456,11 +461,12 @@ EOF
 
 verify_production_health() {
     local services="$1"
-    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" <<'EOF'
+    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" "$FIN_TERMINAL_DEMO_HOST" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
 services="$2"
 health_host="$3"
+demo_host="$4"
 cd "$remote_dir"
 
 selected() {
@@ -556,15 +562,32 @@ if [[ "$terminal_status" != "401" ]]; then
     exit 1
 fi
 
-# The public demo route must serve 200 with no session, proving both Caddy
-# route blocks are live after reload. Gated on the service existing so an
-# automatic rollback to a release predating the demo still passes.
+# The public Unbrowser host must serve its landing page and terminal demo with
+# no session, proving its dedicated Caddy site and TLS certificate are live
+# after reload. Gated on the service existing so an automatic rollback to a
+# release predating the demo still passes.
 if docker compose config --services | grep -qx fin-terminal-demo; then
+    for attempt in $(seq 1 20); do
+        if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+            --resolve "$demo_host:443:127.0.0.1" \
+            "https://$demo_host/" \
+            | grep -Fq "unbrowser by Unchained - MCP Browser for LLM Agents"; then
+            unbrowser_page_ready=true
+            break
+        fi
+        sleep 2
+    done
+    if [[ "${unbrowser_page_ready:-false}" != "true" ]]; then
+        echo "public Unbrowser landing-page health check failed" >&2
+        docker compose logs --tail 80 caddy web >&2 || true
+        exit 1
+    fi
+
     for attempt in $(seq 1 20); do
         demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
             --output /dev/null --write-out '%{http_code}' \
-            --resolve "$health_host:443:127.0.0.1" \
-            "https://$health_host/unbrowser/fin-terminal-demo/" || true)"
+            --resolve "$demo_host:443:127.0.0.1" \
+            "https://$demo_host/fin-terminal/demo/" || true)"
         if [[ "$demo_status" == "200" ]]; then
             break
         fi
@@ -573,6 +596,16 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
     if [[ "$demo_status" != "200" ]]; then
         echo "public demo fin-terminal route health check failed (status: ${demo_status:-request-failed})" >&2
         docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
+        exit 1
+    fi
+
+    legacy_demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$health_host:443:127.0.0.1" \
+        "https://$health_host/unbrowser/fin-terminal-demo/" || true)"
+    if [[ "$legacy_demo_status" != "308" ]]; then
+        echo "legacy public demo redirect health check failed (status: ${legacy_demo_status:-request-failed})" >&2
+        docker compose logs --tail 80 caddy >&2 || true
         exit 1
     fi
 fi

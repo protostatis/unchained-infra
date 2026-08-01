@@ -869,6 +869,14 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_unbrowser_page_links_public_directories(self):
         self.assertIn(
+            '<meta property="og:url" content="https://unbrowser.unchainedsky.com/">',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            '<link rel="canonical" href="https://unbrowser.unchainedsky.com/">',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
             '<link rel="me" href="https://smithery.ai/servers/protostatis-dev/unbrowser">',
             web.UNBROWSER_PAGE_HTML,
         )
