@@ -146,6 +146,46 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- unbrowser_mcp", service)
         self.assertNotIn("- app", service)
 
+    def test_demo_service_is_a_self_resetting_public_kiosk(self):
+        service = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
+            "\n  unbrowser-egress:\n", 1
+        )[0]
+
+        self.assertIn(
+            "97e1a22e1c753caf243efb56acc585a342aef6a1",
+            service,
+        )
+        self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/", service)
+        self.assertIn("PUBLIC_DEMO=1", service)
+        self.assertIn("DEMO_IDLE_SECONDS=300", service)
+        self.assertIn("read_only: true", service)
+        self.assertIn("no-new-privileges:true", service)
+        self.assertIn("- fin_terminal_egress", service)
+        self.assertNotIn("volumes:", service)
+
+    def test_demo_caddy_route_injects_guest_without_auth(self):
+        route = self.caddy.split(
+            "handle_path /unbrowser/fin-terminal-demo/*", 1
+        )[1].split("handle_path /unbrowser/fin-terminal/*", 1)[0]
+
+        self.assertIn("request_header -X-Fin-Terminal-User", route)
+        self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
+        self.assertNotIn("forward_auth", route)
+        self.assertIn("header_up X-Fin-Terminal-User guest", route)
+        self.assertIn(
+            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
+            route,
+        )
+        self.assertIn("rate_limit {", route)
+
+    def test_deploy_tracks_the_demo_service_and_route(self):
+        self.assertIn("fin-terminal-demo", self.deploy)
+        self.assertIn(
+            "unbrowser/fin-terminal-demo/",
+            self.deploy,
+        )
+        self.assertIn("grep -qx fin-terminal-demo", self.deploy)
+
     def test_deploy_lifecycle_tracks_the_terminal(self):
         self.assertIn(
             "unbrowser-mcp fin-terminal web scheduler trial-agent",

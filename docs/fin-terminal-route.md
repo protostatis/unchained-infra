@@ -58,6 +58,28 @@ state is limited to `fin_terminal_data` mounted at `/data`.
 The archive currently has no automatic retention limit. Treat the volume as
 operator-visible shared state and remove old archives manually when required.
 
+## Public demo route
+
+The same terminal is also served to anonymous visitors at:
+
+- `https://unchainedsky.com/unbrowser/fin-terminal-demo/`
+
+Caddy does not call `forward_auth` for this route. It injects a fixed
+`guest` principal instead, strips any client-supplied identity headers, applies
+per-IP rate limits (WebSocket and HTTP zones), and proxies to the separate
+`fin-terminal-demo` service on port `8788`.
+
+The demo service runs the same image with `PUBLIC_DEMO=1`: the UI shows a
+PUBLIC DEMO banner and a waiting room when the singleton seat is taken, and the
+process exits after `DEMO_IDLE_SECONDS` (300) without WebSocket activity so the
+container restart policy hands the seat to the next visitor. It has no
+persistent volume — every reset starts pristine. Research remains enabled; give
+the demo build its own provider-capped OpenRouter key if public spend matters.
+
+The demo and authenticated routes are independent deployments of the same
+singleton product, so an active demo visitor never disturbs the authenticated
+terminal and vice versa.
+
 ## Verification
 
 After deployment:
