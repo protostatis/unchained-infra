@@ -65,16 +65,20 @@ The same terminal is also served to anonymous visitors at:
 - `https://unchainedsky.com/unbrowser/fin-terminal-demo/`
 
 Caddy does not call `forward_auth` for this route. It injects a fixed
-`guest` principal instead, strips any client-supplied identity headers, applies
-per-IP rate limits (WebSocket and HTTP zones), and proxies to the separate
-`fin-terminal-demo` service on port `8788`.
+`guest` principal instead, strips any client-supplied identity headers, and
+proxies to the separate `fin-terminal-demo` service on port `8788`. The
+terminal enforces its own per-IP rate limits (connections and inputs) in demo
+mode, so the pinned Caddy image needs no custom modules.
 
 The demo service runs the same image with `PUBLIC_DEMO=1`: the UI shows a
-PUBLIC DEMO banner and a waiting room when the singleton seat is taken, and the
-process exits after `DEMO_IDLE_SECONDS` (300) without WebSocket activity so the
-container restart policy hands the seat to the next visitor. It has no
-persistent volume — every reset starts pristine. Research remains enabled; give
-the demo build its own provider-capped OpenRouter key if public spend matters.
+PUBLIC DEMO banner and a waiting room when the singleton seat is taken (a new
+visitor is rejected, never evicting the current one), the process exits after
+`DEMO_IDLE_SECONDS` (300) without validated activity or after
+`DEMO_MAX_SESSION_SECONDS` (1800), and the container restart policy hands the
+seat to the next visitor. It has no persistent volume — every reset starts
+pristine. Research remains enabled; set `FIN_TERMINAL_DEMO_OPENROUTER_KEY` in
+the host `.env` to give the demo build its own provider-capped key instead of
+sharing the production key.
 
 The demo and authenticated routes are independent deployments of the same
 singleton product, so an active demo visitor never disturbs the authenticated

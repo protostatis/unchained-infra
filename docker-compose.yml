@@ -221,7 +221,7 @@ services:
       - PI_CODING_AGENT_DIR=/data/pi-agent
       - UNBROWSER_MCP_URL=http://unbrowser-mcp:8767/mcp
       - UNBROWSER_MCP_REQUIRED=1
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}
+      - OPENROUTER_API_KEY=${FIN_TERMINAL_DEMO_OPENROUTER_KEY:-${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}}
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
@@ -246,7 +246,7 @@ services:
     init: true
     pids_limit: 64
     cpus: 0.5
-    mem_limit: 512m
+    mem_limit: 768m
     mem_reservation: 128m
     stop_grace_period: 30s
     restart: unless-stopped
