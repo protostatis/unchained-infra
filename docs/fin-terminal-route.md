@@ -68,6 +68,9 @@ Its public financial-terminal demo is served at:
 
 - `https://unbrowser.unchainedsky.com/fin-terminal/demo/`
 
+`https://unbrowser.unchainedsky.com/fin-terminal/` redirects to that canonical
+demo URL.
+
 Caddy does not call `forward_auth` for this host. It injects a fixed
 `guest` principal instead, strips any client-supplied identity headers, and
 proxies to the separate `fin-terminal-demo` service on port `8788`. The
@@ -105,11 +108,11 @@ docker compose exec -T fin-terminal \
 
 From a logged-out browser or client, both the Unbrowser root and
 `https://unbrowser.unchainedsky.com/fin-terminal/demo/` must return `200`,
-while the old apex landing and demo URLs must return `308`. The authenticated
-`/unbrowser/fin-terminal/` route must return `401`. From an approved allowlisted
-session, the page and `/unbrowser/fin-terminal/ws` WebSocket should load through
-Caddy. Direct container-network requests without `X-Fin-Terminal-Proxy-Token`
-must return `403`.
+while the terminal base plus the old apex landing and demo URLs must return
+`308`. The authenticated `/unbrowser/fin-terminal/` route must return `401`.
+From an approved allowlisted session, the page and `/unbrowser/fin-terminal/ws`
+WebSocket should load through Caddy. Direct container-network requests without
+`X-Fin-Terminal-Proxy-Token` must return `403`.
 
 When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
