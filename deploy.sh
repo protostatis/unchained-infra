@@ -817,6 +817,18 @@ upload_deploy_helpers
 echo "==> Validating fin-terminal production secrets..."
 ensure_remote_fin_terminal_secrets
 
+# Validate the uploaded Caddyfile with the exact Compose service image before
+# any application build, restart, Caddy reload, or Caddy recreation. A failed
+# reload followed by recreation would otherwise replace a healthy proxy with
+# a crash-looping container that reads the same invalid file.
+echo "==> Validating uploaded Caddyfile..."
+remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+docker compose run --rm --no-deps caddy \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+EOF
+
 # Upload Python modules
 echo "==> Uploading Python modules..."
 remote_bash "$REMOTE_DIR" <<'EOF'

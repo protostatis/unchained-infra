@@ -122,6 +122,18 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 
+    def test_uploaded_caddyfile_is_validated_before_runtime_mutation(self):
+        validation = (
+            "docker compose run --rm --no-deps caddy \\\n"
+            "    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"
+        )
+        self.assertIn(validation, self.deploy)
+        validate_index = self.deploy.index("==> Validating uploaded Caddyfile...")
+        rebuild_index = self.deploy.index("# Build affected services.")
+        reload_index = self.deploy.index("==> Reloading Caddy")
+        self.assertLess(validate_index, rebuild_index)
+        self.assertLess(validate_index, reload_index)
+
     def test_compose_pins_and_hardens_the_terminal(self):
         service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
             "\n  unbrowser-egress:\n", 1
