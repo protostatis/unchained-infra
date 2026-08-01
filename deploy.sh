@@ -714,6 +714,16 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
         exit 1
     fi
 
+    terminal_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+        --resolve "$demo_host:443:127.0.0.1" \
+        "https://$demo_host/fin-terminal" || true)"
+    if [[ "$terminal_base_check" != "308 https://$demo_host/fin-terminal/" ]]; then
+        echo "authenticated terminal base redirect health check failed (result: ${terminal_base_check:-request-failed})" >&2
+        docker compose logs --tail 80 caddy >&2 || true
+        exit 1
+    fi
+
     for attempt in $(seq 1 20); do
         demo_html="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
             --resolve "$demo_host:443:127.0.0.1" \
@@ -726,6 +736,16 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
     if ! grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html"; then
         echo "public demo fin-terminal route health check failed (missing canonical asset path)" >&2
         docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
+        exit 1
+    fi
+
+    demo_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+        --resolve "$demo_host:443:127.0.0.1" \
+        "https://$demo_host/fin-terminal-demo" || true)"
+    if [[ "$demo_base_check" != "308 https://$demo_host/fin-terminal-demo/" ]]; then
+        echo "public demo base redirect health check failed (result: ${demo_base_check:-request-failed})" >&2
+        docker compose logs --tail 80 caddy >&2 || true
         exit 1
     fi
 
