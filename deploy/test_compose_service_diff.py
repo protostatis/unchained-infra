@@ -35,6 +35,10 @@ class TestChangedServices(unittest.TestCase):
     def test_classifier_knows_fin_terminal_service(self):
         self.assertIn("fin-terminal", SERVICES)
 
+    def test_deployment_tooling_does_not_rebuild_runtime_services(self):
+        self.assertEqual(classify_path("deploy.sh"), set())
+        self.assertEqual(classify_path("deploy/compose_service_diff.py"), set())
+
     def test_reports_only_the_service_with_an_effective_change(self):
         old = _config()
         new = copy.deepcopy(old)
@@ -56,6 +60,15 @@ class TestChangedServices(unittest.TestCase):
         old = _config()
         new = copy.deepcopy(old)
         new["services"]["caddy"]["ports"] = ["443:443"]
+
+        self.assertEqual(changed_services(old, new), ["caddy"])
+
+    def test_caddy_label_change_is_reported(self):
+        old = _config()
+        new = copy.deepcopy(old)
+        new["services"]["caddy"]["labels"] = {
+            "com.unchainedsky.caddy.version": "2.11.4"
+        }
 
         self.assertEqual(changed_services(old, new), ["caddy"])
 
