@@ -104,6 +104,16 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
             route,
         )
+        self.assertNotIn("sampling {", self.caddy)
+
+    def test_caddy_runtime_is_pinned_and_force_recreated(self):
+        self.assertIn(
+            "caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9",
+            self.compose,
+        )
+        self.assertIn("--force-recreate caddy", self.deploy)
+        self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
+        self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 
     def test_compose_pins_and_hardens_the_terminal(self):
         service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
