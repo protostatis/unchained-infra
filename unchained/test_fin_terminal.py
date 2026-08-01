@@ -405,7 +405,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "781a656391cca0b783111568a84c64307c20382b",
+            "ef1c6b12832b79364d4f0abd67bfa5114822fa94",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -416,6 +416,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("FIN_TERMINAL_OPENROUTER_API_KEY", service)
         self.assertIn("PUBLIC_BASE_PATH: /fin-terminal/", service)
         self.assertIn("PUBLIC_BASE_PATH=/fin-terminal/", service)
+        self.assertIn("PUBLIC_DEMO=0", service)
         self.assertIn("ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com", service)
         self.assertNotIn("https://unchainedsky.com", service)
         self.assertIn("read_only: true", service)
