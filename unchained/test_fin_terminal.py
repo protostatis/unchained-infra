@@ -197,7 +197,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent",
             self.deploy,
         )
-        self.assertIn("caddy fin-terminal mcp private-core", self.deploy)
+        self.assertIn("caddy fin-terminal fin-terminal-demo mcp private-core", self.deploy)
         self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
         self.assertIn("proxy_token != openrouter_key", self.secrets_helper)
