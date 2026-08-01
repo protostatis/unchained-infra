@@ -489,8 +489,16 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("handle_path /fin-terminal/*", route)
         self.assertIn("forward_auth web:8080", route)
         self.assertIn("handle_path /fin-terminal-demo/*", route)
-        self.assertIn("redir /fin-terminal/{?query} 308", route)
-        self.assertIn("redir /fin-terminal-demo/{?query} 308", route)
+        self.assertIn("@fin_terminal_base path /fin-terminal", route)
+        self.assertIn(
+            "redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308",
+            route,
+        )
+        self.assertIn("@fin_terminal_demo_base path /fin-terminal-demo", route)
+        self.assertIn(
+            "redir @fin_terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal-demo/{?query} 308",
+            route,
+        )
         self.assertIn("@unbrowser_outbound path /go/unbrowser-connect", route)
         self.assertIn("handle /web/unbrowser/*", route)
         self.assertIn("handle /web/analytics/*", route)
@@ -571,6 +579,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
         self.assertIn("/fin-terminal-demo/assets/", self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal"', self.deploy)
+        self.assertIn('[[ "$terminal_base_check" != "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal-demo"', self.deploy)
+        self.assertIn('[[ "$demo_base_check" != "308 https://$demo_host/fin-terminal-demo/" ]]', self.deploy)
         self.assertIn('"https://$health_host/unbrowser/fin-terminal-demo/"', self.deploy)
         self.assertIn('[[ "$legacy_demo_check" != "308 https://$demo_host/fin-terminal-demo/" ]]', self.deploy)
         self.assertIn("grep -qx fin-terminal-demo", self.deploy)

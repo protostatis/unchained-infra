@@ -110,7 +110,9 @@ docker compose exec -T fin-terminal \
 
 From a logged-out browser or client, both the Unbrowser root and
 `https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`.
-The authenticated `/fin-terminal/` route must return `401` when logged out;
+The bare `/fin-terminal` and `/fin-terminal-demo` paths must return `308` to
+their trailing-slash canonical URLs. The authenticated `/fin-terminal/` route
+must return `401` when logged out;
 the former apex terminal must redirect to `/fin-terminal/`, and its landing and
 demo URLs must redirect to their canonical paths. The demo HTML must reference
 `/fin-terminal-demo/assets/`. From an approved allowlisted session, the page
