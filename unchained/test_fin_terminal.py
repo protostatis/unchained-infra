@@ -170,6 +170,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
         self.assertIn("request_header -X-Fin-Terminal-User", route)
         self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
+        self.assertIn("request_header -X-Real-IP", route)
         self.assertNotIn("forward_auth", route)
         self.assertNotIn("rate_limit", route)
         self.assertIn("header_up X-Fin-Terminal-User guest", route)
@@ -177,6 +178,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}",
             route,
         )
+        self.assertIn("header_up X-Real-IP {http.request.remote.host}", route)
 
     def test_deploy_tracks_the_demo_service_and_route(self):
         self.assertIn("fin-terminal-demo", self.deploy)

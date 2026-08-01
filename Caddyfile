@@ -60,12 +60,15 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	}
 	handle_path /unbrowser/fin-terminal-demo/* {
 		route {
-			# Never trust identity or service-auth headers supplied by a client.
+			# Never trust identity, service-auth, or client-IP headers supplied
+			# by a client; inject the real visitor IP for app rate limiting.
 			request_header -X-Fin-Terminal-User
 			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Real-IP
 			reverse_proxy fin-terminal-demo:8788 {
 				header_up X-Fin-Terminal-User guest
 				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+				header_up X-Real-IP {http.request.remote.host}
 			}
 		}
 	}
