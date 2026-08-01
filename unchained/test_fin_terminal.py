@@ -191,6 +191,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
             route,
         )
+        self.assertIn("@terminal_demo_base path /fin-terminal /fin-terminal/", route)
+        self.assertIn(
+            "redir @terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal/demo/{?query} 308",
+            route,
+        )
         self.assertIn("@unbrowser_outbound path /go/unbrowser-connect", route)
         self.assertIn("handle /web/unbrowser/*", route)
         self.assertIn("handle /web/analytics/*", route)
@@ -230,6 +235,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn('"https://$demo_host/"', self.deploy)
         self.assertIn('"https://$demo_host/fin-terminal/demo/"', self.deploy)
+        self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
         self.assertIn('"https://$health_host/unbrowser/fin-terminal-demo/"', self.deploy)
         self.assertIn("grep -qx fin-terminal-demo", self.deploy)

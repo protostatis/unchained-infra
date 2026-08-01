@@ -599,6 +599,16 @@ if docker compose config --services | grep -qx fin-terminal-demo; then
         exit 1
     fi
 
+    terminal_base_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$demo_host:443:127.0.0.1" \
+        "https://$demo_host/fin-terminal/" || true)"
+    if [[ "$terminal_base_status" != "308" ]]; then
+        echo "public terminal base redirect health check failed (status: ${terminal_base_status:-request-failed})" >&2
+        docker compose logs --tail 80 caddy >&2 || true
+        exit 1
+    fi
+
     legacy_demo_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
         --output /dev/null --write-out '%{http_code}' \
         --resolve "$health_host:443:127.0.0.1" \

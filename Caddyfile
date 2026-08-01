@@ -172,6 +172,8 @@ unbrowser.unchainedsky.com {
 	redir @primary_site_paths https://unchainedsky.com{uri} 308
 	@unbrowser_subpath path /unbrowser /unbrowser/
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
+	@terminal_demo_base path /fin-terminal /fin-terminal/
+	redir @terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal/demo/{?query} 308
 
 	# The terminal is an explicit sub-path of the Unbrowser product site.
 	handle /fin-terminal/demo {
