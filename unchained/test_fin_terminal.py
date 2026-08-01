@@ -128,7 +128,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "7903486467cde93a34f4a99cdf5ad1f36b5f0b39",
+            "781a656391cca0b783111568a84c64307c20382b",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -152,7 +152,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "7903486467cde93a34f4a99cdf5ad1f36b5f0b39",
+            "781a656391cca0b783111568a84c64307c20382b",
             service,
         )
         self.assertIn("PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/", service)

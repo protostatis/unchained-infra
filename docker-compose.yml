@@ -145,7 +145,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7903486467cde93a34f4a99cdf5ad1f36b5f0b39"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#781a656391cca0b783111568a84c64307c20382b"
       args:
         PUBLIC_BASE_PATH: /unbrowser/fin-terminal/
     expose:
@@ -206,7 +206,7 @@ services:
     # DEMO_IDLE_SECONDS of inactivity so the singleton seat frees for the next
     # visitor. No persistent volume: every reset starts pristine.
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7903486467cde93a34f4a99cdf5ad1f36b5f0b39"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#781a656391cca0b783111568a84c64307c20382b"
       args:
         PUBLIC_BASE_PATH: /unbrowser/fin-terminal-demo/
     expose:
