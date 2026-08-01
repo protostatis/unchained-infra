@@ -91,10 +91,18 @@ DEPLOY_OVERLAY_APPLIED=false
 DEPLOY_ROLLBACK_ON_FAILURE="${DEPLOY_ROLLBACK_ON_FAILURE:-1}"
 DEPLOY_REVISION="${DEPLOY_REVISION:-$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12))')}"
+if [[ ! "$DEPLOY_ID" =~ ^[0-9a-f]{24}$ ]]; then
+    echo "ERROR: DEPLOY_ID must be a 24-character lowercase hexadecimal value" >&2
+    exit 1
+fi
 REMOTE_BACKUP_DIR="$REMOTE_DIR/.deploy-backups/$DEPLOY_ID"
 REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
 FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
+CADDY_CONFIG_PREFLIGHT_TOOL="$SCRIPT_DIR/deploy/caddy_config_preflight.sh"
+REMOTE_CONFIG_STAGE="$REMOTE_DIR/.deploy-staging/$DEPLOY_ID"
+REMOTE_CONFIG_STAGE_ACTIVE=false
+FIN_TERMINAL_SECRETS_CHANGED=false
 ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal fin-terminal-demo web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
@@ -233,7 +241,13 @@ if [[ -e "$backup_dir" ]]; then
     exit 1
 fi
 test -f "$remote_dir/docker-compose.yml"
-mkdir -p "$backup_dir"
+test -f "$remote_dir/.env"
+test ! -L "$remote_dir/.env"
+mkdir -m 700 "$backup_dir"
+# The staged preflight may generate a proxy token. Preserve the previous
+# environment separately because it is intentionally excluded from source.tgz.
+cp -p -- "$remote_dir/.env" "$backup_dir/.env"
+chmod 600 "$backup_dir/.env"
 # Keep the previous Compose file addressable outside the source archive so the
 # post-upload runtime comparison can render both revisions with the live .env.
 cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
@@ -251,20 +265,116 @@ EOF
     DEPLOY_BACKUP_READY=true
 }
 
-ensure_remote_fin_terminal_secrets() {
-    remote_bash "$REMOTE_DIR" \
-        "$REMOTE_DEPLOY_TOOLS_DIR/ensure_fin_terminal_secrets.py" <<'EOF'
+create_remote_config_stage() {
+    local helper
+    for helper in "$CADDY_CONFIG_PREFLIGHT_TOOL" "$FIN_TERMINAL_SECRETS_TOOL"; do
+        if [[ ! -f "$helper" ]]; then
+            echo "ERROR: missing Caddy preflight helper: $helper" >&2
+            return 1
+        fi
+    done
+    remote_bash "$REMOTE_DIR" "$REMOTE_CONFIG_STAGE" "$DEPLOY_ID" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
-secrets_tool="$2"
-env_file="$remote_dir/.env"
-test -f "$env_file" || {
+stage_dir="$2"
+deploy_id="$3"
+[[ "$deploy_id" =~ ^[0-9a-f]{24}$ ]]
+[[ "$stage_dir" == "$remote_dir/.deploy-staging/$deploy_id" ]]
+test -f "$remote_dir/.env" || {
     echo "ERROR: production .env is missing" >&2
     exit 1
 }
-test -f "$secrets_tool"
-python3 "$secrets_tool" "$env_file"
+test ! -L "$remote_dir/.env" || {
+    echo "ERROR: refusing symlinked production .env" >&2
+    exit 1
+}
+mkdir -p "$remote_dir/.deploy-staging"
+if [[ -e "$stage_dir" ]]; then
+    echo "ERROR: Caddy preflight stage already exists" >&2
+    exit 1
+fi
+umask 077
+mkdir -m 700 "$stage_dir"
+cleanup_stage_on_error() {
+    local status=$?
+    trap - EXIT
+    if [[ "$status" -ne 0 ]]; then
+        rm -rf -- "$stage_dir"
+    fi
+    exit "$status"
+}
+trap cleanup_stage_on_error EXIT
+cp -p -- "$remote_dir/.env" "$stage_dir/.env"
+chmod 600 "$stage_dir/.env"
+trap - EXIT
 EOF
+    REMOTE_CONFIG_STAGE_ACTIVE=true
+    "${SCP_CMD[@]}" \
+        "${TOP_LEVEL_CONTEXT_FILES[@]}" \
+        "$CADDY_CONFIG_PREFLIGHT_TOOL" \
+        "$FIN_TERMINAL_SECRETS_TOOL" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_CONFIG_STAGE/"
+}
+
+ensure_staged_fin_terminal_secrets() {
+    remote_bash "$REMOTE_CONFIG_STAGE" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+test -f "$stage_dir/ensure_fin_terminal_secrets.py"
+python3 "$stage_dir/ensure_fin_terminal_secrets.py" "$stage_dir/.env"
+EOF
+}
+
+validate_staged_caddy_config() {
+    remote_bash "$REMOTE_CONFIG_STAGE" "$REMOTE_DIR" "$DEPLOY_ID" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+remote_dir="$2"
+deploy_id="$3"
+exec bash "$stage_dir/caddy_config_preflight.sh" \
+    validate "$stage_dir" "$remote_dir" "$deploy_id"
+EOF
+}
+
+promote_staged_config() {
+    local result
+    result="$(remote_bash "$REMOTE_CONFIG_STAGE" "$REMOTE_DIR" "$DEPLOY_ID" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+remote_dir="$2"
+deploy_id="$3"
+exec bash "$stage_dir/caddy_config_preflight.sh" \
+    promote "$stage_dir" "$remote_dir" "$deploy_id"
+EOF
+)"
+    case "$result" in
+        fin_terminal_secrets_changed=true)
+            FIN_TERMINAL_SECRETS_CHANGED=true
+            ;;
+        fin_terminal_secrets_changed=false)
+            ;;
+        *)
+            echo "ERROR: unexpected Caddy preflight promotion result: $result" >&2
+            return 1
+            ;;
+    esac
+}
+
+cleanup_remote_config_stage() {
+    if [[ "$REMOTE_CONFIG_STAGE_ACTIVE" != "true" ]]; then
+        return
+    fi
+    remote_bash "$REMOTE_DIR" "$REMOTE_CONFIG_STAGE" "$DEPLOY_ID" <<'EOF'
+set -euo pipefail
+remote_dir="$1"
+stage_dir="$2"
+deploy_id="$3"
+[[ "$deploy_id" =~ ^[0-9a-f]{24}$ ]]
+[[ "$stage_dir" == "$remote_dir/.deploy-staging/$deploy_id" ]]
+rm -rf -- "$stage_dir"
+rmdir "$remote_dir/.deploy-staging" 2>/dev/null || true
+EOF
+    REMOTE_CONFIG_STAGE_ACTIVE=false
 }
 
 upload_deploy_helpers() {
@@ -404,10 +514,13 @@ set -euo pipefail
 remote_dir="$1"
 backup_dir="$2"
 test -f "$backup_dir/source.tgz"
+test -f "$backup_dir/.env"
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
-      "$remote_dir/docker-compose.yml" "$remote_dir/Caddyfile"
+      "$remote_dir/docker-compose.yml" "$remote_dir/Caddyfile" "$remote_dir/.env"
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
+cp -p -- "$backup_dir/.env" "$remote_dir/.env"
+chmod 600 "$remote_dir/.env"
 cd "$remote_dir"
 mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
 [[ "${#runtime_services[@]}" -gt 0 ]]
@@ -662,6 +775,7 @@ cleanup_deploy() {
     local status="${1:-0}"
     trap - EXIT
     set +e
+    cleanup_remote_config_stage || echo "ERROR: could not remove staged Caddy preflight files." >&2
     if [[ "$status" -ne 0 && "$DEPLOY_SUCCEEDED" != "true" && "$DEPLOY_MUTATED" == "true" && "$DEPLOY_BACKUP_READY" == "true" && "$DEPLOY_ROLLBACK_ON_FAILURE" == "1" ]]; then
         rollback_remote_release
     fi
@@ -806,23 +920,24 @@ if ! $FORCE_FULL_DEPLOY; then
     fi
 fi
 
-# Upload top-level files
-echo "==> Uploading config files..."
-remote_bash "$REMOTE_DIR" <<'EOF'
-set -euo pipefail
-remote_dir="$1"
-mkdir -p "$remote_dir"
-EOF
+# Stage the prospective top-level release before mutating the live source
+# directory. The staged .env receives any generated terminal token, allowing
+# the Caddy candidate to be validated with the exact future Compose image and
+# environment while a malformed file cannot trigger rollback/recreation.
+echo "==> Staging prospective configuration..."
+create_remote_config_stage
+echo "==> Validating staged fin-terminal production secrets..."
+ensure_staged_fin_terminal_secrets
+echo "==> Validating staged Caddyfile..."
+validate_staged_caddy_config
+
+echo "==> Promoting validated configuration..."
 DEPLOY_MUTATED=true
-"${SCP_CMD[@]}" \
-    "${TOP_LEVEL_CONTEXT_FILES[@]}" \
-    "$EC2_USER@$EC2_HOST:$REMOTE_DIR/"
+promote_staged_config
+cleanup_remote_config_stage
 
 echo "==> Uploading deploy helpers..."
 upload_deploy_helpers
-
-echo "==> Validating fin-terminal production secrets..."
-ensure_remote_fin_terminal_secrets
 
 # Upload Python modules
 echo "==> Uploading Python modules..."
@@ -974,6 +1089,14 @@ EOF
 # whose hash differs from the snapshot is something this deploy changed.
 SERVICES_TO_REBUILD=""
 CADDY_RECREATE_REQUIRED=false
+if $FIN_TERMINAL_SECRETS_CHANGED; then
+    # Existing Caddy and terminal containers retain their old environment.
+    # Recreate both so a generated proxy token reaches both sides of the
+    # authenticated terminal proxy.
+    echo "==> Fin-terminal proxy token changed; recreating Caddy and fin-terminal."
+    add_services "caddy fin-terminal"
+    CADDY_RECREATE_REQUIRED=true
+fi
 if $FORCE_FULL_DEPLOY; then
     SERVICES_TO_REBUILD="$ALL_SERVICES"
     # --full skips file-level classification, so compose/network changes can't

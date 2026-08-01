@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,6 +69,250 @@ class FinTerminalAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(auth_info["email"].lower(), principal)
 
 
+class CaddyConfigPreflightTests(unittest.TestCase):
+    deployment_id = "a" * 24
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo_root = Path(__file__).resolve().parents[1]
+        cls.helper = cls.repo_root / "deploy" / "caddy_config_preflight.sh"
+
+    def _layout(self, root: Path) -> tuple[Path, Path]:
+        remote_dir = root / "remote"
+        stage_dir = remote_dir / ".deploy-staging" / self.deployment_id
+        stage_dir.mkdir(parents=True)
+        remote_dir.joinpath("Caddyfile").write_text("old live config\n")
+        remote_dir.joinpath(".env").write_text(
+            "FIN_TERMINAL_PROXY_TOKEN=old-token\n"
+        )
+        remote_dir.joinpath("Dockerfile").write_text("FROM old\n")
+        remote_dir.joinpath("Dockerfile.unbrowser-mcp").write_text("FROM old\n")
+        remote_dir.joinpath("docker-compose.yml").write_text("services: {}\n")
+        stage_dir.joinpath("Caddyfile").write_text("candidate config\n")
+        stage_dir.joinpath(".env").write_text(
+            "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n"
+        )
+        stage_dir.joinpath("Dockerfile").write_text("FROM candidate\n")
+        stage_dir.joinpath("Dockerfile.unbrowser-mcp").write_text(
+            "FROM candidate-mcp\n"
+        )
+        stage_dir.joinpath("docker-compose.yml").write_text("services: {}\n")
+        return remote_dir, stage_dir
+
+    def _fake_docker(self, root: Path) -> tuple[Path, Path, Path]:
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        log_path = root / "docker.log"
+        token_path = root / "docker-token"
+        docker_path = fake_bin / "docker"
+        docker_path.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+log_path="${FAKE_DOCKER_LOG:?}"
+token_path="${FAKE_DOCKER_TOKEN:?}"
+printf '%q ' "$@" >> "$log_path"
+printf '\\n' >> "$log_path"
+
+read_token() {
+    local env_file="$1" line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            FIN_TERMINAL_PROXY_TOKEN=*)
+                printf '%s' "${line#*=}"
+                return 0
+                ;;
+        esac
+    done < "$env_file"
+}
+
+env_file_arg() {
+    local index next
+    for ((index = 1; index <= $#; index++)); do
+        if [[ "${!index}" == "--env-file" ]]; then
+            next=$((index + 1))
+            printf '%s' "${!next}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+case "$1" in
+    compose)
+        env_file="$(env_file_arg "$@")"
+        token="$(read_token "$env_file")"
+        printf '{"services":{"caddy":{"image":"example.test/caddy@sha256:expected","environment":{"FIN_TERMINAL_PROXY_TOKEN":"%s"}}}}\\n' "$token"
+        ;;
+    image)
+        [[ "$2" == "pull" ]] || exit 2
+        ;;
+    run)
+        env_file="$(env_file_arg "$@")"
+        read_token "$env_file" > "$token_path"
+        [[ "${FAKE_DOCKER_VALIDATE_FAIL:-0}" != "1" ]] || exit 42
+        ;;
+    rm)
+        ;;
+    *)
+        echo "unexpected docker command: $*" >&2
+        exit 2
+        ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        docker_path.chmod(0o755)
+        return fake_bin, log_path, token_path
+
+    def _run_helper(
+        self,
+        fake_bin: Path,
+        log_path: Path,
+        token_path: Path,
+        action: str,
+        stage_dir: Path,
+        remote_dir: Path,
+        *,
+        validate_fail: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+        env["FAKE_DOCKER_LOG"] = str(log_path)
+        env["FAKE_DOCKER_TOKEN"] = str(token_path)
+        if validate_fail:
+            env["FAKE_DOCKER_VALIDATE_FAIL"] = "1"
+        return subprocess.run(
+            [
+                "bash",
+                str(self.helper),
+                action,
+                str(stage_dir),
+                str(remote_dir),
+                self.deployment_id,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+    def test_invalid_candidate_leaves_live_files_and_runtime_untouched(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            remote_dir, stage_dir = self._layout(Path(tmpdir))
+            fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
+            live_caddy = remote_dir / "Caddyfile"
+            live_env = remote_dir / ".env"
+            caddy_inode = live_caddy.stat().st_ino
+            caddy_bytes = live_caddy.read_bytes()
+            env_bytes = live_env.read_bytes()
+
+            result = self._run_helper(
+                fake_bin,
+                log_path,
+                token_path,
+                "validate",
+                stage_dir,
+                remote_dir,
+                validate_fail=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(live_caddy.stat().st_ino, caddy_inode)
+            self.assertEqual(live_caddy.read_bytes(), caddy_bytes)
+            self.assertEqual(live_env.read_bytes(), env_bytes)
+            self.assertFalse((stage_dir / ".caddy-preflight").exists())
+
+            docker_log = log_path.read_text(encoding="utf-8")
+            self.assertIn("image pull", docker_log)
+            self.assertIn("run ", docker_log)
+            self.assertIn("rm -f", docker_log)
+            for forbidden in (" build ", " up ", " exec ", " reload "):
+                self.assertNotIn(forbidden, f" {docker_log} ")
+
+    def test_validation_uses_rendered_image_environment_and_isolated_container(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            remote_dir, stage_dir = self._layout(Path(tmpdir))
+            fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
+            live_caddy = remote_dir / "Caddyfile"
+            before = live_caddy.read_bytes()
+
+            result = self._run_helper(
+                fake_bin,
+                log_path,
+                token_path,
+                "validate",
+                stage_dir,
+                remote_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(token_path.read_text(encoding="utf-8"), "candidate-token")
+            self.assertEqual(live_caddy.read_bytes(), before)
+            self.assertFalse((stage_dir / ".caddy-preflight").exists())
+
+            run_line = next(
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("run ")
+            )
+            self.assertIn("--network none", run_line)
+            self.assertIn("--read-only", run_line)
+            self.assertIn("--entrypoint caddy", run_line)
+            self.assertIn("example.test/caddy@sha256:expected", run_line)
+            self.assertIn("validate", run_line)
+            self.assertIn(f"src={stage_dir / 'Caddyfile'}", run_line)
+
+    def test_promotion_preserves_live_caddyfile_inode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            remote_dir, stage_dir = self._layout(Path(tmpdir))
+            fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
+            live_caddy = remote_dir / "Caddyfile"
+            before_inode = live_caddy.stat().st_ino
+
+            result = self._run_helper(
+                fake_bin,
+                log_path,
+                token_path,
+                "promote",
+                stage_dir,
+                remote_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "fin_terminal_secrets_changed=true")
+            self.assertEqual(live_caddy.stat().st_ino, before_inode)
+            self.assertEqual(live_caddy.read_text(), "candidate config\n")
+            self.assertEqual((remote_dir / ".env").read_text(), "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n")
+            self.assertEqual((remote_dir / "Dockerfile").read_text(), "FROM candidate\n")
+            self.assertEqual(
+                (remote_dir / "Dockerfile.unbrowser-mcp").read_text(),
+                "FROM candidate-mcp\n",
+            )
+
+    def test_promotion_hardens_an_unchanged_secret_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            remote_dir, stage_dir = self._layout(Path(tmpdir))
+            fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
+            live_env = remote_dir / ".env"
+            stage_dir.joinpath(".env").write_text(
+                "FIN_TERMINAL_PROXY_TOKEN=old-token\n"
+            )
+            live_env.chmod(0o644)
+
+            result = self._run_helper(
+                fake_bin,
+                log_path,
+                token_path,
+                "promote",
+                stage_dir,
+                remote_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "fin_terminal_secrets_changed=false")
+            self.assertEqual(live_env.stat().st_mode & 0o777, 0o600)
+
+
 class FinTerminalDeploymentContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -75,6 +322,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.deploy = cls.repo_root.joinpath("deploy.sh").read_text()
         cls.secrets_helper = cls.repo_root.joinpath(
             "deploy", "ensure_fin_terminal_secrets.py"
+        ).read_text()
+        cls.caddy_preflight = cls.repo_root.joinpath(
+            "deploy", "caddy_config_preflight.sh"
         ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
@@ -128,6 +378,26 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('[[ "$legacy_terminal_check" == "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
         self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
+
+    def test_caddyfile_is_staged_and_validated_before_live_mutation(self):
+        stage_index = self.deploy.index('echo "==> Staging prospective configuration..."')
+        validate_index = self.deploy.index('echo "==> Validating staged Caddyfile..."')
+        mutation_index = self.deploy.index("DEPLOY_MUTATED=true", validate_index)
+        promote_index = self.deploy.index("promote_staged_config", mutation_index)
+        rebuild_index = self.deploy.index("# Build affected services.")
+        reload_index = self.deploy.index("==> Reloading Caddy")
+
+        self.assertIn("REMOTE_CONFIG_STAGE=", self.deploy)
+        self.assertIn("cleanup_remote_config_stage ||", self.deploy)
+        self.assertIn("docker image pull", self.caddy_preflight)
+        self.assertIn("docker run --rm", self.caddy_preflight)
+        self.assertIn("--network none", self.caddy_preflight)
+        self.assertNotIn("docker compose run --rm --no-deps caddy", self.deploy)
+        self.assertLess(stage_index, validate_index)
+        self.assertLess(validate_index, mutation_index)
+        self.assertLess(mutation_index, promote_index)
+        self.assertLess(validate_index, rebuild_index)
+        self.assertLess(validate_index, reload_index)
 
     def test_compose_pins_and_hardens_the_terminal(self):
         service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
@@ -315,7 +585,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn("caddy fin-terminal fin-terminal-demo mcp private-core", self.deploy)
-        self.assertIn("ensure_remote_fin_terminal_secrets", self.deploy)
+        self.assertIn("ensure_staged_fin_terminal_secrets", self.deploy)
+        self.assertIn("FIN_TERMINAL_SECRETS_CHANGED", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
         self.assertIn("terminal_token == openrouter_key", self.secrets_helper)
         self.assertIn("demo_token == terminal_token", self.secrets_helper)
