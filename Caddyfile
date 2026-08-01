@@ -51,27 +51,15 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy unbrowser-mcp:8767
 	}
 
-	# Public interactive demo of the financial terminal. No authentication: the
-	# terminal gets a fixed guest principal. The process self-resets after
-	# inactivity and enforces its own per-IP rate limits, so the shared seat
-	# stays usable without custom Caddy modules.
-	handle /unbrowser/fin-terminal-demo {
-		redir /unbrowser/fin-terminal-demo/ 308
-	}
-	handle_path /unbrowser/fin-terminal-demo/* {
-		route {
-			# Never trust identity, service-auth, or client-IP headers supplied
-			# by a client; inject the real visitor IP for app rate limiting.
-			request_header -X-Fin-Terminal-User
-			request_header -X-Fin-Terminal-Proxy-Token
-			request_header -X-Real-IP
-			reverse_proxy fin-terminal-demo:8788 {
-				header_up X-Fin-Terminal-User guest
-				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
-				header_up X-Real-IP {http.request.remote.host}
-			}
-		}
-	}
+	# The public terminal demo is canonical at the dedicated Unbrowser host.
+	# Preserve full paths and query strings for old shared links, including the
+	# earlier nested alias.
+	@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo ^/unbrowser/fin-terminal-demo/?(.*)$
+	redir @legacy_fin_terminal_demo https://unbrowser.unchainedsky.com/fin-terminal/demo/{re.legacy_fin_terminal_demo.1}{?query} 308
+	@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias ^/unbrowser/fin-terminal/demo/?(.*)$
+	redir @legacy_fin_terminal_demo_alias https://unbrowser.unchainedsky.com/fin-terminal/demo/{re.legacy_fin_terminal_demo_alias.1}{?query} 308
+	@legacy_unbrowser_page path /unbrowser /unbrowser/
+	redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308
 
 	# Authenticated singleton financial terminal. The exact path redirects to
 	# the build-time base path; handle_path strips that prefix upstream.
@@ -154,5 +142,76 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy web:8080 {
 			lb_try_duration 5s
 		}
+	}
+}
+
+# Dedicated public Unbrowser site. Keep this separate from the primary site so
+# the subdomain exposes only its landing page, supporting endpoints, and the
+# public terminal demo—not the API, tunnel, or MCP routes.
+unbrowser.unchainedsky.com {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	log {
+		output stderr
+		format json
+	}
+
+	request_body {
+		max_size 10MB
+	}
+
+	# Keep primary-product destinations on their existing canonical host.
+	@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*
+	redir @primary_site_paths https://unchainedsky.com{uri} 308
+	@unbrowser_subpath path /unbrowser /unbrowser/
+	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
+
+	# The terminal is an explicit sub-path of the Unbrowser product site.
+	handle /fin-terminal/demo {
+		redir /fin-terminal/demo/ 308
+	}
+	handle_path /fin-terminal/demo/* {
+		route {
+			# Never trust identity, service-auth, or client-IP headers supplied
+			# by a client; inject the real visitor IP for app rate limiting.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Real-IP
+			reverse_proxy fin-terminal-demo:8788 {
+				header_up X-Fin-Terminal-User guest
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+				header_up X-Real-IP {http.request.remote.host}
+			}
+		}
+	}
+
+	# The root reuses the existing public landing-page handler. Only its fixed
+	# supporting endpoints are exposed on this host.
+	@unbrowser_outbound path /go/unbrowser-connect /go/unbrowser-github /go/unbrowser-smithery
+	handle @unbrowser_outbound {
+		reverse_proxy web:8080
+	}
+	handle /web/unbrowser/* {
+		reverse_proxy web:8080
+	}
+	handle /web/analytics/* {
+		reverse_proxy web:8080
+	}
+	handle /favicon.svg {
+		reverse_proxy web:8080
+	}
+	handle / {
+		rewrite * /unbrowser
+		reverse_proxy web:8080
+	}
+	handle {
+		respond "Not found" 404
 	}
 }

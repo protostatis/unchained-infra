@@ -60,15 +60,24 @@ operator-visible shared state and remove old archives manually when required.
 
 ## Public demo route
 
-The same terminal is also served to anonymous visitors at:
+The Unbrowser product landing page is served at:
 
-- `https://unchainedsky.com/unbrowser/fin-terminal-demo/`
+- `https://unbrowser.unchainedsky.com/`
 
-Caddy does not call `forward_auth` for this route. It injects a fixed
+Its public financial-terminal demo is served at:
+
+- `https://unbrowser.unchainedsky.com/fin-terminal/demo/`
+
+Caddy does not call `forward_auth` for this host. It injects a fixed
 `guest` principal instead, strips any client-supplied identity headers, and
 proxies to the separate `fin-terminal-demo` service on port `8788`. The
 terminal enforces its own per-IP rate limits (connections and inputs) in demo
 mode, so the pinned Caddy image needs no custom modules.
+
+`https://unchainedsky.com/unbrowser/fin-terminal-demo/` and the earlier
+`/unbrowser/fin-terminal/demo` spelling permanently redirect to the canonical
+demo path while preserving a path suffix and query string. The former
+`https://unchainedsky.com/unbrowser` landing page redirects to the new root.
 
 The demo service runs the same image with `PUBLIC_DEMO=1`: the UI shows a
 PUBLIC DEMO banner and a waiting room when the singleton seat is taken (a new
@@ -80,7 +89,7 @@ pristine. Research remains enabled; set `FIN_TERMINAL_DEMO_OPENROUTER_KEY` in
 the host `.env` to give the demo build its own provider-capped key instead of
 sharing the production key.
 
-The demo and authenticated routes are independent deployments of the same
+The demo host and authenticated route are independent deployments of the same
 singleton product, so an active demo visitor never disturbs the authenticated
 terminal and vice versa.
 
@@ -94,10 +103,13 @@ docker compose exec -T fin-terminal \
   node -e "fetch('http://127.0.0.1:8787/api/ready').then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1) })"
 ```
 
-From a logged-out browser or client, the public route must return `401`. From an
-approved allowlisted session, the page and `/unbrowser/fin-terminal/ws`
-WebSocket should load through Caddy. Direct container-network requests without
-`X-Fin-Terminal-Proxy-Token` must return `403`.
+From a logged-out browser or client, both the Unbrowser root and
+`https://unbrowser.unchainedsky.com/fin-terminal/demo/` must return `200`,
+while the old apex landing and demo URLs must return `308`. The authenticated
+`/unbrowser/fin-terminal/` route must return `401`. From an approved allowlisted
+session, the page and `/unbrowser/fin-terminal/ws` WebSocket should load through
+Caddy. Direct container-network requests without `X-Fin-Terminal-Proxy-Token`
+must return `403`.
 
 When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in

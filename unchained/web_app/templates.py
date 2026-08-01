@@ -1099,12 +1099,12 @@ UNBROWSER_PAGE_HTML = r"""<!DOCTYPE html>
 <meta name="description" content="unbrowser is a lightweight MCP browser for LLM agents: one native binary, no Chrome, low-token BlockMaps, stateful sessions, forms, cookies, and hosted public smoke tests.">
 <meta property="og:title" content="unbrowser by Unchained">
 <meta property="og:description" content="Web access for LLM agents. One native binary. No Chrome.">
-<meta property="og:url" content="https://unchainedsky.com/unbrowser">
+<meta property="og:url" content="https://unbrowser.unchainedsky.com/">
 <meta property="og:type" content="website">
 <meta property="og:image" content="https://unchainedsky.com/og-image.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="smithery:server" content="protostatis-dev/unbrowser">
-<link rel="canonical" href="https://unchainedsky.com/unbrowser">
+<link rel="canonical" href="https://unbrowser.unchainedsky.com/">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="me" href="https://smithery.ai/servers/protostatis-dev/unbrowser">
 <style>
