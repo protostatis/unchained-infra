@@ -517,12 +517,32 @@ for attempt in $(seq 1 20); do
         && curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/" >/dev/null; then
+        public_site_ready=true
+        break
+    fi
+    sleep 2
+done
+if [[ "${public_site_ready:-false}" != "true" ]]; then
+    echo "public Caddy health checks failed" >&2
+    docker compose logs --tail 80 caddy >&2 || true
+    exit 1
+fi
+
+# A logged-out terminal request must reach forward_auth and return 401. This
+# catches a healthy but stale Caddy process that is still serving the fallback
+# web route (404) after a failed reload.
+for attempt in $(seq 1 20); do
+    terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$health_host:443:127.0.0.1" \
+        "https://$health_host/unbrowser/fin-terminal/" || true)"
+    if [[ "$terminal_status" == "401" ]]; then
         exit 0
     fi
     sleep 2
 done
-echo "public Caddy health checks failed" >&2
-docker compose logs --tail 80 caddy >&2 || true
+echo "authenticated fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+docker compose logs --tail 80 caddy web fin-terminal >&2 || true
 exit 1
 EOF
 }
@@ -1018,7 +1038,7 @@ if docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
 else
     echo "    Caddy reload failed; recreating container..."
 fi
-docker compose up -d --no-deps --no-build caddy
+docker compose up -d --no-deps --no-build --force-recreate caddy
 
 for attempt in $(seq 1 24); do
     container="$(docker compose ps -q caddy)"
