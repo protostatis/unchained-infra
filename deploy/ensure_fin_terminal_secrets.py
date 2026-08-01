@@ -21,8 +21,15 @@ def _env_value(lines: list[str], name: str) -> str:
     return value
 
 
+def _new_token(*, excluding: set[str]) -> str:
+    while True:
+        token = secrets.token_hex(32)
+        if token not in excluding:
+            return token
+
+
 def ensure_fin_terminal_secrets(env_path: Path) -> bool:
-    """Return True when a proxy token was generated or replaced."""
+    """Return True when either terminal proxy token was generated or replaced."""
     if env_path.is_symlink():
         raise ValueError("refusing symlinked production .env")
     if not env_path.is_file():
@@ -33,22 +40,34 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     if not openrouter_key:
         raise ValueError("OPENROUTER_API_KEY is missing from production .env")
 
-    proxy_token = _env_value(lines, "FIN_TERMINAL_PROXY_TOKEN")
-    if (
-        len(proxy_token) >= 64
-        and proxy_token != openrouter_key
-    ):
-        os.chmod(env_path, 0o600)
-        return False
+    terminal_token = _env_value(lines, "FIN_TERMINAL_PROXY_TOKEN")
+    demo_token = _env_value(lines, "FIN_TERMINAL_DEMO_PROXY_TOKEN")
+    changed = False
 
-    # Generate on the deployment host so the token never passes through CI
-    # logs or shell arguments and can never reuse the provider billing key.
-    token = secrets.token_hex(32)
+    # Generate on the deployment host so tokens never pass through CI logs or
+    # shell arguments and can never reuse provider billing credentials. The
+    # public kiosk receives a different token from the persistent terminal.
+    if len(terminal_token) < 64 or terminal_token == openrouter_key:
+        terminal_token = _new_token(excluding={openrouter_key, demo_token})
+        changed = True
+    if (
+        len(demo_token) < 64
+        or demo_token == openrouter_key
+        or demo_token == terminal_token
+    ):
+        demo_token = _new_token(excluding={openrouter_key, terminal_token})
+        changed = True
+
     updated = [
         line for line in lines
-        if not line.startswith("FIN_TERMINAL_PROXY_TOKEN=")
+        if not line.startswith(("FIN_TERMINAL_PROXY_TOKEN=", "FIN_TERMINAL_DEMO_PROXY_TOKEN="))
     ]
-    updated.append(f"FIN_TERMINAL_PROXY_TOKEN={token}")
+    updated.extend(
+        (
+            f"FIN_TERMINAL_PROXY_TOKEN={terminal_token}",
+            f"FIN_TERMINAL_DEMO_PROXY_TOKEN={demo_token}",
+        )
+    )
     content = "\n".join(updated) + "\n"
     fd, tmp_name = tempfile.mkstemp(prefix=".env.fin-terminal.", dir=env_path.parent)
     try:
@@ -61,7 +80,7 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     finally:
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
-    return True
+    return changed
 
 
 def main(argv: list[str]) -> int:
@@ -74,9 +93,9 @@ def main(argv: list[str]) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     if generated:
-        print("    Generated an independent fin-terminal proxy token on the host.")
+        print("    Generated independent fin-terminal proxy token(s) on the host.")
     else:
-        print("    Existing independent fin-terminal proxy token retained.")
+        print("    Existing independent fin-terminal proxy tokens retained.")
     return 0
 
 

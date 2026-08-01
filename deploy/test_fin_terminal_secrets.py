@@ -21,11 +21,12 @@ class FinTerminalSecretsTests(unittest.TestCase):
     def _write(self, content: str) -> None:
         self.env_path.write_text(content, encoding="utf-8")
 
-    def _values(self) -> tuple[str, str]:
+    def _values(self) -> tuple[str, str, str]:
         lines = self.env_path.read_text(encoding="utf-8").splitlines()
         return (
             _env_value(lines, "OPENROUTER_API_KEY"),
             _env_value(lines, "FIN_TERMINAL_PROXY_TOKEN"),
+            _env_value(lines, "FIN_TERMINAL_DEMO_PROXY_TOKEN"),
         )
 
     def test_requires_existing_openrouter_key(self):
@@ -34,15 +35,18 @@ class FinTerminalSecretsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "OPENROUTER_API_KEY"):
             ensure_fin_terminal_secrets(self.env_path)
 
-    def test_generates_independent_256_bit_proxy_token(self):
+    def test_generates_independent_256_bit_proxy_tokens(self):
         self._write("OPENROUTER_API_KEY=provider-secret\nADMIN_EMAILS=admin@example.com\n")
 
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
-        openrouter_key, proxy_token = self._values()
+        openrouter_key, terminal_token, demo_token = self._values()
 
         self.assertEqual(openrouter_key, "provider-secret")
-        self.assertRegex(proxy_token, r"^[0-9a-f]{64}$")
-        self.assertNotEqual(proxy_token, openrouter_key)
+        self.assertRegex(terminal_token, r"^[0-9a-f]{64}$")
+        self.assertRegex(demo_token, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(terminal_token, openrouter_key)
+        self.assertNotEqual(demo_token, openrouter_key)
+        self.assertNotEqual(terminal_token, demo_token)
         self.assertEqual(stat.S_IMODE(self.env_path.stat().st_mode), 0o600)
 
     def test_replaces_provider_key_reused_as_proxy_token(self):
@@ -52,10 +56,12 @@ class FinTerminalSecretsTests(unittest.TestCase):
         )
 
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
-        openrouter_key, proxy_token = self._values()
+        openrouter_key, terminal_token, demo_token = self._values()
 
         self.assertEqual(openrouter_key, "shared-secret-value-that-is-long-enough")
-        self.assertNotEqual(proxy_token, openrouter_key)
+        self.assertNotEqual(terminal_token, openrouter_key)
+        self.assertNotEqual(demo_token, openrouter_key)
+        self.assertNotEqual(terminal_token, demo_token)
 
     def test_replaces_short_proxy_token(self):
         self._write(
@@ -66,15 +72,32 @@ class FinTerminalSecretsTests(unittest.TestCase):
         self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
         self.assertRegex(self._values()[1], r"^[0-9a-f]{64}$")
 
-    def test_retains_existing_independent_proxy_token(self):
+    def test_replaces_demo_token_reused_from_persistent_terminal(self):
         existing = "a" * 64
         self._write(
             "OPENROUTER_API_KEY=provider-secret\n"
             f"FIN_TERMINAL_PROXY_TOKEN={existing}\n"
+            f"FIN_TERMINAL_DEMO_PROXY_TOKEN={existing}\n"
+        )
+
+        self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
+        _, terminal_token, demo_token = self._values()
+
+        self.assertEqual(terminal_token, existing)
+        self.assertRegex(demo_token, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(demo_token, terminal_token)
+
+    def test_retains_existing_independent_proxy_tokens(self):
+        terminal_token = "a" * 64
+        demo_token = "b" * 64
+        self._write(
+            "OPENROUTER_API_KEY=provider-secret\n"
+            f"FIN_TERMINAL_PROXY_TOKEN={terminal_token}\n"
+            f"FIN_TERMINAL_DEMO_PROXY_TOKEN={demo_token}\n"
         )
 
         self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
-        self.assertEqual(self._values()[1], existing)
+        self.assertEqual(self._values()[1:], (terminal_token, demo_token))
         self.assertEqual(stat.S_IMODE(self.env_path.stat().st_mode), 0o600)
 
 

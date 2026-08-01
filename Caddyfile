@@ -51,35 +51,20 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy unbrowser-mcp:8767
 	}
 
-	# The public terminal demo is canonical at the dedicated Unbrowser host.
-	# Preserve full paths and query strings for old shared links, including the
-	# earlier nested alias.
-	@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo ^/unbrowser/fin-terminal-demo/?(.*)$
-	redir @legacy_fin_terminal_demo https://unbrowser.unchainedsky.com/fin-terminal/demo/{re.legacy_fin_terminal_demo.1}{?query} 308
-	@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias ^/unbrowser/fin-terminal/demo/?(.*)$
-	redir @legacy_fin_terminal_demo_alias https://unbrowser.unchainedsky.com/fin-terminal/demo/{re.legacy_fin_terminal_demo_alias.1}{?query} 308
+	# The authenticated terminal and public demo are separate interactive
+	# applications at the dedicated Unbrowser host. Preserve full paths and
+	# query strings for old shared links, including the earlier nested alias.
+	@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo ^/unbrowser/fin-terminal-demo(?:/(.*))?$
+	redir @legacy_fin_terminal_demo https://unbrowser.unchainedsky.com/fin-terminal-demo/{re.legacy_fin_terminal_demo.1}{?query} 308
+	@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias ^/unbrowser/fin-terminal/demo(?:/(.*))?$
+	redir @legacy_fin_terminal_demo_alias https://unbrowser.unchainedsky.com/fin-terminal-demo/{re.legacy_fin_terminal_demo_alias.1}{?query} 308
+	@legacy_fin_terminal {
+		path_regexp legacy_fin_terminal ^/unbrowser/fin-terminal(?:/(.*))?$
+		not path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*
+	}
+	redir @legacy_fin_terminal https://unbrowser.unchainedsky.com/fin-terminal/{re.legacy_fin_terminal.1}{?query} 308
 	@legacy_unbrowser_page path /unbrowser /unbrowser/
 	redir @legacy_unbrowser_page https://unbrowser.unchainedsky.com/{?query} 308
-
-	# Authenticated singleton financial terminal. The exact path redirects to
-	# the build-time base path; handle_path strips that prefix upstream.
-	handle /unbrowser/fin-terminal {
-		redir /unbrowser/fin-terminal/ 308
-	}
-	handle_path /unbrowser/fin-terminal/* {
-		route {
-			# Never trust identity or service-auth headers supplied by a client.
-			request_header -X-Fin-Terminal-User
-			request_header -X-Fin-Terminal-Proxy-Token
-			forward_auth web:8080 {
-				uri /internal/fin-terminal/auth
-				copy_headers X-Fin-Terminal-User
-			}
-			reverse_proxy fin-terminal:8787 {
-				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
-			}
-		}
-	}
 
 	# MCP SSE stream — GET /mcp with Accept: text/event-stream → MCP server
 	@mcp_sse {
@@ -146,8 +131,8 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 }
 
 # Dedicated public Unbrowser site. Keep this separate from the primary site so
-# the subdomain exposes only its landing page, supporting endpoints, and the
-# public terminal demo—not the API, tunnel, or MCP routes.
+# the subdomain exposes only its landing page, supporting endpoints, authenticated
+# terminal, and public terminal demo—not the API, tunnel, or MCP routes.
 unbrowser.unchainedsky.com {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -172,23 +157,50 @@ unbrowser.unchainedsky.com {
 	redir @primary_site_paths https://unchainedsky.com{uri} 308
 	@unbrowser_subpath path /unbrowser /unbrowser/
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
-	@terminal_demo_base path /fin-terminal /fin-terminal/
-	redir @terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal/demo/{?query} 308
-
-	# The terminal is an explicit sub-path of the Unbrowser product site.
-	handle /fin-terminal/demo {
-		redir /fin-terminal/demo/ 308
+	# Authenticated persistent terminal. The path prefix is stripped upstream so
+	# the Vite-built client and its WebSocket both resolve beneath /fin-terminal/.
+	handle /fin-terminal {
+		redir /fin-terminal/{?query} 308
 	}
-	handle_path /fin-terminal/demo/* {
+	handle_path /fin-terminal/* {
+		route {
+			# Never trust identity or service-auth headers supplied by a client.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			forward_auth web:8080 {
+				uri /internal/fin-terminal/auth
+				copy_headers X-Fin-Terminal-User
+			}
+			# Browser credentials are only for forward_auth. The terminal trusts the
+			# opaque principal above and must never receive a session or API token.
+			request_header -Cookie
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			reverse_proxy fin-terminal:8787 {
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+			}
+		}
+	}
+
+	# Public kiosk demo. Its path deliberately retains the fin-terminal-demo
+	# build marker, which enables the frontend banner and waiting room.
+	handle /fin-terminal-demo {
+		redir /fin-terminal-demo/{?query} 308
+	}
+	handle_path /fin-terminal-demo/* {
 		route {
 			# Never trust identity, service-auth, or client-IP headers supplied
 			# by a client; inject the real visitor IP for app rate limiting.
 			request_header -X-Fin-Terminal-User
 			request_header -X-Fin-Terminal-Proxy-Token
 			request_header -X-Real-IP
+			# A public kiosk must not receive a visitor's browser credentials.
+			request_header -Cookie
+			request_header -Authorization
+			request_header -Proxy-Authorization
 			reverse_proxy fin-terminal-demo:8788 {
 				header_up X-Fin-Terminal-User guest
-				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_PROXY_TOKEN}
+				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}
 				header_up X-Real-IP {http.request.remote.host}
 			}
 		}
