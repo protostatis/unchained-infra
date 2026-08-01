@@ -190,11 +190,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_deploy_lifecycle_tracks_the_terminal(self):
         self.assertIn(
-            "unbrowser-mcp fin-terminal web scheduler trial-agent",
+            "unbrowser-mcp fin-terminal fin-terminal-demo web",
             self.deploy,
         )
         self.assertIn(
-            "unbrowser-mcp fin-terminal scheduler trial-agent",
+            "unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent",
             self.deploy,
         )
         self.assertIn("caddy fin-terminal mcp private-core", self.deploy)
