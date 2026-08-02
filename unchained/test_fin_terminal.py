@@ -434,7 +434,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "ef1c6b12832b79364d4f0abd67bfa5114822fa94",
+            "4c587fe7d7713304b26b226433cb2282b25faea6",
             service,
         )
         self.assertIn("PUBLIC_BASE_PATH: /fin-terminal-demo/", service)
