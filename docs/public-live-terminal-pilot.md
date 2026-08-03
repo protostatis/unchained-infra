@@ -24,6 +24,9 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
   Docker network with one another. Idle, absolute-duration, and
   disconnect-grace expiry stop the process; Compose restarts a clean generation
   before reuse.
+- The 18 per-seat gateway/MCP/egress bridges use explicit, non-overlapping `/29`
+  subnets from `10.253.0.0/24`. This avoids exhausting Docker's much larger
+  default bridge pools while retaining per-seat isolation.
 - Public research uses a dedicated MCP process but intentionally receives the
   same `OPENROUTER_API_KEY` as the trial agent. Provider quota, billing, and
   outage blast radius are shared.
@@ -177,16 +180,18 @@ Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
 2. proves all retired replay URLs are 404 and the old demo container is absent;
 3. validates credentials against a protected temporary copy without rotating
    or printing them;
-4. renders the exact nine-service overlay, verifies six seats and six unique
-   worker endpoints, rejects published ports, host networking, unsafe
-   privileges, devices, and bind mounts, and checks host capacity;
-5. builds the pinned images, starts Redis, snapshots its exact admission state,
+4. renders the exact nine-service overlay, verifies six seats, six unique worker
+   endpoints, and 18 exact compact bridge subnets, rejects published ports,
+   host networking, unsafe privileges, devices, and bind mounts, and checks
+   host capacity;
+5. removes only unused, exact-label-matched per-seat/legacy pilot networks,
+   builds the pinned images, starts Redis, snapshots its exact admission state,
    transitions only the persisted worker set from one to six while preserving
    the daily reservation counter and ending stale tickets, then starts the
    shared dedicated MCP service, seats 01–06, and the public gateway; it
-   verifies health, six unique worker generations, exact per-seat runtime isolation,
-   negative cross-seat/state connectivity, no host port bindings, and retained
-   memory headroom;
+   verifies health, six unique worker generations, exact per-seat runtime
+   network/subnet isolation, negative cross-seat/state connectivity, no host
+   port bindings, and retained memory headroom;
 6. completes a real stateful MCP initialize/list/navigate/private-target
    rejection/delete sequence and the gateway's internal readiness check;
 7. validates a staged Caddy configuration, atomically enables the host flag,
@@ -197,9 +202,9 @@ Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
 
 Any activation failure after services start restores the exact pre-activation
 `.env` and exact pre-activation Redis state, recreates Caddy in the disabled
-state, proves the route is 404, and removes the nine named containers in reverse
-dependency order. If the disabled edge cannot be proved, the script stops Caddy
-rather than leave the pilot reachable.
+state, proves the route is 404, and removes the nine named containers and unused
+per-seat networks in reverse dependency order. If the disabled edge cannot be
+proved, the script stops Caddy rather than leave the pilot reachable.
 
 After workflow success, complete a real browser Turnstile and terminal-session
 test immediately. Verify the Turnstile action `public_terminal_admission`, the
@@ -234,8 +239,9 @@ the public route is 404, then stops and removes only the nine reviewed services
 in reverse dependency order. After stopping the gateway writer and before
 stopping Redis, it transitions the persisted worker set back to the one-seat
 shape expected by the previous production revision while preserving accounting
-and ended ticket history. It also rechecks the primary health route, public
-landing page, signed terminal, and replay tombstones. The Redis volume is
+and ended ticket history. It then removes only unused, exact-label-matched
+per-seat and legacy pilot networks. It also rechecks the primary health route,
+public landing page, signed terminal, and replay tombstones. The Redis volume is
 retained for diagnosis unless data removal is separately approved. Never run
 `docker compose down` with this overlay: the merged project also contains the
 default production services.

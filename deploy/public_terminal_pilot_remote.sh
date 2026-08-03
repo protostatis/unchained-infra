@@ -64,6 +64,31 @@ readonly PILOT_SERVICES=(
 )
 readonly PILOT_SEAT_COUNT="${#PILOT_SEATS[@]}"
 readonly PILOT_SERVICE_COUNT="${#PILOT_SERVICES[@]}"
+# Docker's default address pools allocate a large subnet per bridge and are
+# finite. Keep the 18 per-seat bridges in one reviewed /24 using explicit /29s.
+readonly PILOT_EPHEMERAL_NETWORK_SPECS=(
+    fin_terminal_public_mcp_01=10.253.0.0/29
+    fin_terminal_public_mcp_02=10.253.0.8/29
+    fin_terminal_public_mcp_03=10.253.0.16/29
+    fin_terminal_public_mcp_04=10.253.0.24/29
+    fin_terminal_public_mcp_05=10.253.0.32/29
+    fin_terminal_public_mcp_06=10.253.0.40/29
+    fin_terminal_public_egress_01=10.253.0.48/29
+    fin_terminal_public_egress_02=10.253.0.56/29
+    fin_terminal_public_egress_03=10.253.0.64/29
+    fin_terminal_public_egress_04=10.253.0.72/29
+    fin_terminal_public_egress_05=10.253.0.80/29
+    fin_terminal_public_egress_06=10.253.0.88/29
+    fin_terminal_public_seat_01=10.253.0.96/29
+    fin_terminal_public_seat_02=10.253.0.104/29
+    fin_terminal_public_seat_03=10.253.0.112/29
+    fin_terminal_public_seat_04=10.253.0.120/29
+    fin_terminal_public_seat_05=10.253.0.128/29
+    fin_terminal_public_seat_06=10.253.0.136/29
+)
+# The one-seat overlay used one shared MCP bridge. It is no longer referenced,
+# but a disabled older revision may have left the empty Compose-owned network.
+readonly PILOT_LEGACY_NETWORK_KEYS=(fin_terminal_public_mcp)
 # Stop/remove order (reverse dependency: gateway → seats → MCP → redis).
 readonly PILOT_STOP_ORDER=(
     fin-terminal-public-gateway
@@ -950,6 +975,11 @@ activate_rollback_handler() {
         secure_workdir_cleanup
         exit 1
     fi
+    if ! remove_unused_pilot_networks; then
+        echo "FATAL: unused pilot networks remain after rollback" >&2
+        secure_workdir_cleanup
+        exit 1
+    fi
 
     # Clean up secure temp.
     secure_workdir_cleanup
@@ -1090,6 +1120,7 @@ import json, sys
 
 cfg = json.load(sys.stdin)
 services = cfg.get('services', {})
+network_config = cfg.get('networks', {})
 seat_numbers = [f'{value:02d}' for value in range(1, 7)]
 seat_services = [f'fin-terminal-public-seat-{value}' for value in seat_numbers]
 gateway = services.get('fin-terminal-public-gateway', {})
@@ -1130,6 +1161,17 @@ for value, name in zip(seat_numbers, seat_services):
         f'fin_terminal_public_mcp_{value}',
     }
     if networks(services.get(name, {})) != expected:
+        raise SystemExit(1)
+
+expected_subnets = {}
+for index, value in enumerate(seat_numbers):
+    expected_subnets[f'fin_terminal_public_mcp_{value}'] = f'10.253.0.{index * 8}/29'
+    expected_subnets[f'fin_terminal_public_egress_{value}'] = f'10.253.0.{48 + index * 8}/29'
+    expected_subnets[f'fin_terminal_public_seat_{value}'] = f'10.253.0.{96 + index * 8}/29'
+for name, expected_subnet in expected_subnets.items():
+    configs = network_config.get(name, {}).get('ipam', {}).get('config', [])
+    actual_subnets = [str(config.get('subnet', '')) for config in configs]
+    if actual_subnets != [expected_subnet]:
         raise SystemExit(1)
 print('SIX_SEAT_CONTRACT_OK')
 " 2>/dev/null)"; then
@@ -1219,6 +1261,42 @@ check_post_start_capacity() {
 # ---------------------------------------------------------------------------
 # Clean partial/leftover pilot containers (ps -aq)
 # ---------------------------------------------------------------------------
+remove_unused_pilot_networks() {
+    local keys=() spec key network_name metadata
+    local project_label network_label container_count
+    for spec in "${PILOT_EPHEMERAL_NETWORK_SPECS[@]}"; do
+        keys+=("${spec%%=*}")
+    done
+    keys+=("${PILOT_LEGACY_NETWORK_KEYS[@]}")
+
+    local removed=0
+    for key in "${keys[@]}"; do
+        network_name="${COMPOSE_PROJECT}_${key}"
+        if ! docker network inspect "$network_name" >/dev/null 2>&1; then
+            continue
+        fi
+        metadata="$(docker network inspect --format \
+            '{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.network"}}|{{len .Containers}}' \
+            "$network_name" 2>/dev/null || true)"
+        IFS='|' read -r project_label network_label container_count <<<"$metadata"
+        if [[ "$project_label" != "$COMPOSE_PROJECT" || "$network_label" != "$key" ]]; then
+            echo "ERROR: refusing to remove network without exact Compose ownership labels: $network_name" >&2
+            return 1
+        fi
+        if [[ "$container_count" != "0" ]]; then
+            echo "ERROR: refusing to remove in-use pilot network: $network_name" >&2
+            return 1
+        fi
+        docker network rm "$network_name" >/dev/null || {
+            echo "ERROR: could not remove unused pilot network: $network_name" >&2
+            return 1
+        }
+        removed=$((removed + 1))
+    done
+    echo "    Unused per-seat/legacy pilot networks removed: $removed."
+    return 0
+}
+
 clean_partial_pilot() {
     local any=false svc
     for svc in "${PILOT_STOP_ORDER[@]}"; do
@@ -1236,6 +1314,7 @@ clean_partial_pilot() {
     else
         echo "    No partial pilot containers found."
     fi
+    remove_unused_pilot_networks || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -1442,6 +1521,23 @@ validate_runtime_pilot() {
         fi
     done
     echo "    Runtime service set and network isolation: verified."
+
+    # Existing empty Compose networks are not automatically recreated when a
+    # subnet declaration changes. Verify every live per-seat bridge uses the
+    # exact compact address allocation reviewed in the overlay.
+    local spec network_key expected_subnet network_name actual_subnet
+    for spec in "${PILOT_EPHEMERAL_NETWORK_SPECS[@]}"; do
+        network_key="${spec%%=*}"
+        expected_subnet="${spec#*=}"
+        network_name="${COMPOSE_PROJECT}_${network_key}"
+        actual_subnet="$(docker network inspect --format \
+            '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$network_name" 2>/dev/null || true)"
+        if [[ "$actual_subnet" != "$expected_subnet" ]]; then
+            echo "ERROR: $network_key runtime subnet differs from reviewed allocation" >&2
+            return 1
+        fi
+    done
+    echo "    Per-seat bridge subnets: exact compact allocation verified."
 
     # Defense in depth: each worker must be unable to resolve every other
     # worker or Redis. Exact network membership above is the primary contract;
@@ -2237,6 +2333,10 @@ cmd_disable() {
         echo "ERROR: pilot containers remain after disable" >&2
         exit 1
     fi
+    remove_unused_pilot_networks || {
+        echo "ERROR: unused pilot networks remain after disable" >&2
+        exit 1
+    }
 
     # Step 5: Verify normal routes.
     echo "==> Verifying normal routes..."

@@ -272,32 +272,86 @@ networks:
     internal: true
   fin_terminal_public_mcp_01:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.0/29
   fin_terminal_public_mcp_02:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.8/29
   fin_terminal_public_mcp_03:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.16/29
   fin_terminal_public_mcp_04:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.24/29
   fin_terminal_public_mcp_05:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.32/29
   fin_terminal_public_mcp_06:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.40/29
   fin_terminal_public_egress:
   fin_terminal_public_egress_01:
+    ipam:
+      config:
+        - subnet: 10.253.0.48/29
   fin_terminal_public_egress_02:
+    ipam:
+      config:
+        - subnet: 10.253.0.56/29
   fin_terminal_public_egress_03:
+    ipam:
+      config:
+        - subnet: 10.253.0.64/29
   fin_terminal_public_egress_04:
+    ipam:
+      config:
+        - subnet: 10.253.0.72/29
   fin_terminal_public_egress_05:
+    ipam:
+      config:
+        - subnet: 10.253.0.80/29
   fin_terminal_public_egress_06:
+    ipam:
+      config:
+        - subnet: 10.253.0.88/29
   fin_terminal_public_seat_01:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.96/29
   fin_terminal_public_seat_02:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.104/29
   fin_terminal_public_seat_03:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.112/29
   fin_terminal_public_seat_04:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.120/29
   fin_terminal_public_seat_05:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.128/29
   fin_terminal_public_seat_06:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.136/29

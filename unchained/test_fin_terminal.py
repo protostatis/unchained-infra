@@ -550,6 +550,18 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.assertIn(f"- fin_terminal_public_seat_{suffix}", self.public_compose)
             self.assertIn(f"- fin_terminal_public_mcp_{suffix}", self.public_compose)
             self.assertIn(f"- fin_terminal_public_egress_{suffix}", self.public_compose)
+            self.assertIn(
+                f"subnet: 10.253.0.{(value - 1) * 8}/29",
+                self.public_compose,
+            )
+            self.assertIn(
+                f"subnet: 10.253.0.{48 + (value - 1) * 8}/29",
+                self.public_compose,
+            )
+            self.assertIn(
+                f"subnet: 10.253.0.{96 + (value - 1) * 8}/29",
+                self.public_compose,
+            )
         self.assertNotIn("fin-terminal-public-seat-07", self.public_compose)
         self.assertIn("VITE_TERMINAL_BUILD_MODE: live", worker)
         self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
