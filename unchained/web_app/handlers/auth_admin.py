@@ -1575,16 +1575,33 @@ async function handleCredential(response) {
 """
 
 
-def _issue_auth_code(user: dict, redirect_uri: str, scope: str) -> str:
-    """Mint a single-use code bound to redirect_uri, persist it, and return it."""
+def _issue_auth_code(
+    user: dict,
+    redirect_uri: str,
+    scope: str,
+    *,
+    purpose: str = "",
+    audience: str = "",
+    claim_id: str = "",
+    state_binding: str = "",
+) -> str:
+    """Mint a single-use code bound to redirect_uri, persist it, and return it.
+
+    Optional purpose/audience/claim_id/state_binding bind the code to a
+    financial-workspace claim flow; ``handle_auth_token`` validates them at
+    exchange time. All bindings default to empty (legacy behavior).
+    """
     core = _core()
     code = secrets.token_hex(32)
     now = time.time()
     with core._auth._conn() as conn:
         conn.execute(
-            "INSERT INTO auth_codes (code, user_id, redirect_uri, scope, created_at, expires_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (code, user["user_id"], redirect_uri, scope, now, now + _AUTH_CODE_TTL),
+            "INSERT INTO auth_codes (code, user_id, redirect_uri, scope, created_at, "
+            "expires_at, purpose, audience, claim_id, state_binding)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (code, user["user_id"], redirect_uri, scope, now, now + _AUTH_CODE_TTL,
+             str(purpose or "")[:64], str(audience or "")[:32],
+             str(claim_id or "")[:64], str(state_binding or "")[:128]),
         )
     return code
 
@@ -1651,7 +1668,9 @@ async def handle_auth_token(request: web.Request) -> web.Response:
     now = time.time()
     with core._auth._conn() as conn:
         row = conn.execute(
-            "SELECT user_id, redirect_uri, scope, expires_at, used FROM auth_codes WHERE code = ?",
+            "SELECT user_id, redirect_uri, scope, expires_at, used, "
+            "purpose, audience, claim_id, state_binding "
+            "FROM auth_codes WHERE code = ?",
             (code,),
         ).fetchone()
 
@@ -1660,7 +1679,8 @@ async def handle_auth_token(request: web.Request) -> web.Response:
                 {"error": "invalid_grant", "error_description": "Code not found."}, status=400
             )
 
-        db_user_id, db_redirect_uri, db_scope, expires_at, used = row
+        (db_user_id, db_redirect_uri, db_scope, expires_at, used,
+         db_purpose, db_audience, db_claim_id, db_state_binding) = row
 
         if used:
             return web.json_response(
@@ -1673,6 +1693,29 @@ async def handle_auth_token(request: web.Request) -> web.Response:
         if redirect_uri != db_redirect_uri:
             return web.json_response(
                 {"error": "invalid_grant", "error_description": "redirect_uri mismatch."}, status=400
+            )
+
+        # Claim-flow bindings (purpose/audience/claim_id/state_binding) must be
+        # presented and match exactly when the code was issued with them.
+        requested_purpose = str(body.get("purpose", "") or "").strip()
+        requested_audience = str(body.get("audience", "") or "").strip()
+        requested_claim_id = str(body.get("claim_id", "") or "").strip()
+        requested_state = str(body.get("state_binding", "") or "").strip()
+        if db_purpose and requested_purpose != db_purpose:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "purpose mismatch."}, status=400
+            )
+        if db_audience and requested_audience.lower() != db_audience:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "audience mismatch."}, status=400
+            )
+        if db_claim_id and requested_claim_id != db_claim_id:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "claim_id mismatch."}, status=400
+            )
+        if db_state_binding and requested_state != db_state_binding:
+            return web.json_response(
+                {"error": "invalid_grant", "error_description": "state_binding mismatch."}, status=400
             )
 
         # Mark consumed before issuing token (prevent replay)

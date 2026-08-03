@@ -167,9 +167,36 @@ unbrowser.unchainedsky.com {
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
 	# Authenticated persistent terminal. The path prefix is stripped upstream so
 	# the Vite-built client and its WebSocket both resolve beneath /fin-terminal/.
-	@fin_terminal_base path /fin-terminal
+	# When the workspace canary is enabled, /fin-terminal/ routes to the
+	# workspace control plane instead; the singleton remains reachable only by
+	# rolling the workspace flag off (feature-flagged canary with rollback).
+	@fin_workspace_terminal {
+		path /fin-terminal /fin-terminal/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	handle @fin_workspace_terminal {
+		uri strip_prefix /fin-terminal
+		route {
+			# Never trust identity or service-auth headers supplied by a client.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			request_header -X-Management-Token
+			reverse_proxy fin-terminal-workspace-control:8790
+		}
+	}
+	@fin_terminal_base {
+		path /fin-terminal
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
 	redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308
-	handle_path /fin-terminal/* {
+	@fin_terminal_singleton {
+		path /fin-terminal/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	handle @fin_terminal_singleton {
+		uri strip_prefix /fin-terminal
 		route {
 			# Never trust identity or service-auth headers supplied by a client.
 			request_header -X-Fin-Terminal-User
@@ -241,7 +268,9 @@ unbrowser.unchainedsky.com {
 	# The separate Python workspace-control slice owns auth/S3/KMS logic.
 	# This infrastructure slice provides only the Compose/env/Caddy scaffolding.
 	# No wildcard: only exact internal/public auth callback routes are accepted.
-	@fin_workspace_enabled expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	# Browser cookies are preserved on the workspace surface (the control plane
+	# reads only its own claim/session cookies); caller-supplied identity and
+	# management headers are always stripped.
 	@fin_workspace_auth {
 		path /fin-terminal-workspace/auth /fin-terminal-workspace/auth/*
 		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
@@ -251,30 +280,57 @@ unbrowser.unchainedsky.com {
 		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
 	}
 	@fin_workspace_api {
-		path /fin-terminal-workspace/api/* /fin-terminal-live-pilot/api/workspace/*
+		path /fin-terminal-workspace/api /fin-terminal-workspace/api/*
 		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
 	}
-	# Workspace requests: strip browser cookies, never expose raw internal
-	# endpoints, block claim secrets from logs.
+	@fin_workspace_other {
+		path /fin-terminal-workspace /fin-terminal-workspace/*
+		not path /fin-terminal-workspace/auth/* /fin-terminal-workspace/callback/* /fin-terminal-workspace/api/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
 	handle @fin_workspace_auth {
 		uri strip_prefix /fin-terminal-workspace
 		log_skip
-		request_header -Cookie
 		request_header -Authorization
+		request_header -Proxy-Authorization
+		request_header -X-Management-Token
+		request_header -X-Fin-Terminal-User
+		request_header -X-Fin-Terminal-Proxy-Token
 		reverse_proxy fin-terminal-workspace-control:8790
 	}
 	handle @fin_workspace_callback {
 		uri strip_prefix /fin-terminal-workspace
 		log_skip
-		request_header -Cookie
 		request_header -Authorization
+		request_header -Proxy-Authorization
+		request_header -X-Management-Token
+		request_header -X-Fin-Terminal-User
+		request_header -X-Fin-Terminal-Proxy-Token
 		reverse_proxy fin-terminal-workspace-control:8790
 	}
 	handle @fin_workspace_api {
+		uri strip_prefix /fin-terminal-workspace
 		log_skip
-		request_header -Cookie
 		request_header -Authorization
+		request_header -Proxy-Authorization
+		request_header -X-Management-Token
+		request_header -X-Fin-Terminal-User
+		request_header -X-Fin-Terminal-Proxy-Token
 		reverse_proxy fin-terminal-workspace-control:8790
+	}
+	handle @fin_workspace_other {
+		uri strip_prefix /fin-terminal-workspace
+		log_skip
+		request_header -Authorization
+		request_header -Proxy-Authorization
+		request_header -X-Management-Token
+		request_header -X-Fin-Terminal-User
+		request_header -X-Fin-Terminal-Proxy-Token
+		reverse_proxy fin-terminal-workspace-control:8790
+	}
+	# Internal namespaces must never be reachable from the public edge.
+	handle /internal/* {
+		respond "Not found" 404
 	}
 
 	# The root reuses the existing public landing-page handler. Only its fixed

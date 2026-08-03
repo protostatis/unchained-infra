@@ -100,16 +100,63 @@ def is_fin_workspace_enabled() -> bool:
 
 
 def _resolve_control_token() -> str:
-    token = os.environ.get(_FIN_CONTROL_TOKEN_ENV, "").strip()
+    """Explicit control token only.
+
+    Never falls back to ``JWT_SECRET`` or any other secret: the workspace
+    control token is a distinct capability scoped to the S2S checkpoint API.
+    When the feature is enabled and no token is configured, startup fails
+    closed (see :func:`validate_fin_workspace_config`).
+    """
+    return os.environ.get(_FIN_CONTROL_TOKEN_ENV, "").strip()
+
+
+def validate_fin_workspace_config(env: dict | None = None) -> list[str]:
+    """Return configuration errors when the feature is enabled (empty if OK).
+
+    Fail-closed contract: enabling ``FIN_WORKSPACE_ENABLED`` without an
+    explicit control token, S3 bucket, region, KMS key, and storage
+    configuration is a startup error. The app must never fall back to
+    ``JWT_SECRET`` or local storage in production.
+    """
+    if env is None:
+        env = os.environ
+    if not is_fin_workspace_enabled():
+        return []
+
+    errors: list[str] = []
+    token = env.get(_FIN_CONTROL_TOKEN_ENV, "").strip()
     if not token:
-        token = os.environ.get("JWT_SECRET", "").strip()
-    return token
+        errors.append(
+            f"{_FIN_CONTROL_TOKEN_ENV} must be set when the financial "
+            "workspace is enabled (JWT_SECRET is never a fallback)"
+        )
+    elif len(token) < 32:
+        errors.append(f"{_FIN_CONTROL_TOKEN_ENV} must be >= 32 characters")
+
+    if not env.get("FIN_WORKSPACE_COOKIE_DOMAIN", "").strip():
+        errors.append(
+            "FIN_WORKSPACE_COOKIE_DOMAIN must be set when the financial "
+            "workspace is enabled (used for the parent-domain claim cookie)"
+        )
+
+    try:
+        from checkpoint_store import validate_s3_store_config
+        for missing in validate_s3_store_config(env):
+            errors.append(f"checkpoint storage: {missing} required")
+    except Exception as exc:  # pragma: no cover - import safety
+        errors.append(f"checkpoint storage validation error: {exc}")
+    return errors
 
 
 def _guard_key() -> bytes:
-    """Derive a guard key from the control token for HMAC-based claim binding."""
+    """Derive a guard key from the control token for HMAC-based claim binding.
+
+    The control token is validated before the feature can be enabled, so a
+    static fallback key is never used in production.
+    """
     token = _resolve_control_token()
     if not token:
+        # Feature-disabled path (tests / local): deterministic test key.
         return hashlib.sha256(b"fin-workspace-guard").digest()
     return hashlib.sha256(token.encode()).digest()
 
@@ -235,6 +282,8 @@ class FinancialWorkspace:
                     status TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'accepted', 'rejected', 'expired')),
                     auth_code_id TEXT,
+                    purpose TEXT NOT NULL DEFAULT 'fin-workspace-claim',
+                    audience TEXT NOT NULL DEFAULT '',
                     rejected_reason TEXT,
                     created_at REAL NOT NULL,
                     accepted_at REAL,
@@ -242,6 +291,25 @@ class FinancialWorkspace:
                     FOREIGN KEY (checkpoint_id) REFERENCES fin_terminal_checkpoints(checkpoint_id)
                 )
             """)
+
+            # Additive columns for pre-existing claim tables
+            try:
+                claim_columns = {
+                    str(row[1])
+                    for row in conn.execute(
+                        "PRAGMA table_info(fin_terminal_claims)"
+                    ).fetchall()
+                }
+                for col_name, col_def in (
+                    ("purpose", "TEXT NOT NULL DEFAULT 'fin-workspace-claim'"),
+                    ("audience", "TEXT NOT NULL DEFAULT ''"),
+                ):
+                    if col_name not in claim_columns:
+                        conn.execute(
+                            f"ALTER TABLE fin_terminal_claims ADD COLUMN {col_name} {col_def}"
+                        )
+            except sqlite3.OperationalError:
+                pass
 
             # ------------------------------------------------------------------
             # Workspaces
@@ -340,6 +408,24 @@ class FinancialWorkspace:
                 "CREATE INDEX IF NOT EXISTS idx_fin_eff_status "
                 "ON financial_workspace_effects(status, created_at ASC)"
             )
+
+            # ------------------------------------------------------------------
+            # Account-scoped runtime control (wake/sleep/status) — canary state
+            # ------------------------------------------------------------------
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS financial_workspace_runtimes (
+                    user_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    runtime_state TEXT NOT NULL DEFAULT 'asleep'
+                        CHECK (runtime_state IN ('awake', 'asleep', 'draining')),
+                    last_wake_at REAL,
+                    last_sleep_at REAL,
+                    wake_reason TEXT NOT NULL DEFAULT '',
+                    sleep_reason TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY (workspace_id) REFERENCES financial_workspaces(workspace_id)
+                )
+            """)
 
             # ------------------------------------------------------------------
             # Backward-compatible columns on auth_codes
@@ -621,6 +707,8 @@ class FinancialWorkspace:
         handoff_secret: str,
         *,
         browser_nonce: str,
+        audience: str = "",
+        purpose: str = "fin-workspace-claim",
     ) -> dict:
         """Validate handoff and create a one-time claim token.
 
@@ -628,7 +716,9 @@ class FinancialWorkspace:
         Secure SameSite=Lax cookie. The raw secret is never in the URL,
         log, referrer, or analytics.
 
-        Returns the claim_id and the auth_code redirect for OAuth.
+        ``audience`` is the exact OAuth provider (google|facebook|github)
+        and ``purpose`` the claim purpose; both are bound to the claim and
+        verified at accept time (exact callback allowlist).
         """
         h_id = str(handoff_id or "").strip()
         h_secret = str(handoff_secret or "").strip()
@@ -674,10 +764,11 @@ class FinancialWorkspace:
             conn.execute(
                 "INSERT INTO fin_terminal_claims "
                 "(claim_id, checkpoint_id, claim_secret_hash, claim_secret_expires_at, "
-                "browser_nonce_hash, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+                "browser_nonce_hash, purpose, audience, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (claim_id, checkpoint_id, claim_secret_hash, claim_expires,
-                 browser_nonce_hash, now),
+                 browser_nonce_hash, str(purpose or "").strip()[:64], 
+                 str(audience or "").strip().lower()[:32], now),
             )
             conn.execute(
                 "UPDATE fin_terminal_checkpoints SET claimed_at = ? WHERE checkpoint_id = ?",
@@ -690,6 +781,27 @@ class FinancialWorkspace:
             "checkpoint_id": checkpoint_id,
             "expires_at": claim_expires,
         }
+
+    def bind_oauth_state(self, claim_id: str, oauth_state: str, *,
+                         audience: str = "") -> bool:
+        """Bind the provider ``oauth_state`` (and audience) to a pending claim.
+
+        Called by the claim-aware OAuth start endpoint so the callback can
+        verify state binding exactly. Returns False if the claim is not
+        pending or not found.
+        """
+        cid = str(claim_id or "").strip()
+        state = str(oauth_state or "").strip()
+        if not cid or not state:
+            return False
+        state_hash = hashlib.sha256(state.encode()).hexdigest()
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE fin_terminal_claims SET oauth_state_hash = ?, audience = ? "
+                "WHERE claim_id = ? AND status = 'pending'",
+                (state_hash, str(audience or "").strip().lower()[:32], cid),
+            )
+            return cur.rowcount > 0
 
     def accept_claim(
         self,
@@ -726,7 +838,7 @@ class FinancialWorkspace:
             row = conn.execute(
                 "SELECT claim_id, checkpoint_id, claim_secret_hash, "
                 "claim_secret_expires_at, browser_nonce_hash, status, "
-                "final_account_user_id "
+                "final_account_user_id, oauth_state_hash, purpose, audience "
                 "FROM fin_terminal_claims WHERE claim_id = ?",
                 (cid,),
             ).fetchone()
@@ -735,7 +847,20 @@ class FinancialWorkspace:
 
             (db_claim_id, checkpoint_id, db_secret_hash,
              claim_expires, db_browser_nonce_hash, status,
-             existing_account_user_id) = row
+             existing_account_user_id, db_oauth_state_hash,
+             db_purpose, db_audience) = row
+
+            # Purpose/audience binding: the claim must be a fin-workspace claim
+            # bound to the exact audience (provider) before accept is allowed.
+            if db_purpose and db_purpose != "fin-workspace-claim":
+                raise ClaimRejectedError("claim purpose mismatch")
+            # OAuth callback must present the exact state bound at start. A
+            # claim that was bound to a state but receives no state (or a
+            # different one) is rejected.
+            if db_oauth_state_hash:
+                expected_state_hash = hashlib.sha256(ostate.encode()).hexdigest()
+                if not hmac.compare_digest(expected_state_hash, db_oauth_state_hash):
+                    raise ClaimRejectedError("oauth state binding mismatch")
 
             # Reject if already accepted
             if status == "accepted":
@@ -865,11 +990,17 @@ class FinancialWorkspace:
         }, now)
 
         if is_new_workspace:
-            self._enqueue_effect_under_lock(conn, "account_grant", {
-                "user_id": user_id,
-                "workspace_id": workspace_id,
-                "grant_micro_usd": _NEW_ACCOUNT_GRANT_MICRO_USD,
-            }, now)
+            # New-account-only idempotent $1 credit, transactionally tied to
+            # this claim-created workspace/account. Existing accounts (an
+            # existing credit_accounts row) receive no grant.
+            credit_account_exists = self._credit_account_exists(conn, user_id)
+            if not credit_account_exists:
+                self._enqueue_effect_under_lock(conn, "account_grant", {
+                    "user_id": user_id,
+                    "workspace_id": workspace_id,
+                    "grant_micro_usd": _NEW_ACCOUNT_GRANT_MICRO_USD,
+                    "account_was_new": True,
+                }, now)
 
         self._enqueue_effect_under_lock(conn, "snapshot_import", {
             "workspace_id": workspace_id,
@@ -933,6 +1064,23 @@ class FinancialWorkspace:
             (effect_id, effect_type, json.dumps(context, separators=(",", ":")), now),
         )
 
+    @staticmethod
+    def _credit_account_exists(conn: sqlite3.Connection, user_id: str) -> bool:
+        """True when a credit account already exists for the user.
+
+        The credit ledger is lazily initialized in production, so a missing
+        ``credit_accounts`` table is treated as "no account exists" (a new
+        account is eligible for the grant).
+        """
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM credit_accounts WHERE user_id = ? LIMIT 1",
+                (str(user_id or "").strip(),),
+            ).fetchone()
+            return row is not None
+        except sqlite3.OperationalError:
+            return False
+
     def get_claim(self, claim_id: str) -> dict | None:
         cid = str(claim_id or "").strip()
         if not cid:
@@ -940,7 +1088,8 @@ class FinancialWorkspace:
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT claim_id, checkpoint_id, status, final_account_user_id, "
-                "final_account_email, rejected_reason, created_at, accepted_at "
+                "final_account_email, rejected_reason, created_at, accepted_at, "
+                "purpose, audience, oauth_state_hash "
                 "FROM fin_terminal_claims WHERE claim_id = ?",
                 (cid,),
             ).fetchone()
@@ -955,6 +1104,39 @@ class FinancialWorkspace:
                 "rejected_reason": row[5],
                 "created_at": row[6],
                 "accepted_at": row[7],
+                "purpose": row[8],
+                "audience": row[9],
+                "oauth_state_hash": row[10] or "",
+            }
+
+    def get_claim_by_secret(self, claim_secret: str) -> dict | None:
+        """Return a claim owned by the presented claim secret (browser reads)."""
+        secret = str(claim_secret or "").strip()
+        if not secret:
+            return None
+        secret_hash = hashlib.sha256(secret.encode()).hexdigest()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT claim_id, checkpoint_id, status, final_account_user_id, "
+                "final_account_email, rejected_reason, created_at, accepted_at, "
+                "purpose, audience, oauth_state_hash "
+                "FROM fin_terminal_claims WHERE claim_secret_hash = ?",
+                (secret_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "claim_id": row[0],
+                "checkpoint_id": row[1],
+                "status": row[2],
+                "final_account_user_id": row[3],
+                "final_account_email": row[4],
+                "rejected_reason": row[5],
+                "created_at": row[6],
+                "accepted_at": row[7],
+                "purpose": row[8],
+                "audience": row[9],
+                "oauth_state_hash": row[10] or "",
             }
 
     # ==================================================================
@@ -1033,6 +1215,114 @@ class FinancialWorkspace:
             }
             for r in rows
         ]
+
+    # ==================================================================
+    # Account-scoped runtime control (wake/sleep/status) — canary scaffolding
+    # ==================================================================
+
+    def runtime_wake(self, user_id: str, *, reason: str = "") -> dict | None:
+        """Wake the account-scoped workspace runtime (idempotent).
+
+        Returns the runtime row, or None when the user has no workspace.
+        Used by the feature-flagged canary to warm a workspace before use.
+        """
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        ws = self.get_workspace_for_user(uid)
+        if ws is None:
+            return None
+        now = _now_ts()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT runtime_state, last_wake_at FROM financial_workspace_runtimes "
+                "WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO financial_workspace_runtimes "
+                    "(user_id, workspace_id, runtime_state, last_wake_at, "
+                    "wake_reason, updated_at) VALUES (?, ?, 'awake', ?, ?, ?)",
+                    (uid, ws["workspace_id"], now,
+                     str(reason or "")[:256], now),
+                )
+            else:
+                conn.execute(
+                    "UPDATE financial_workspace_runtimes SET runtime_state = 'awake', "
+                    "last_wake_at = ?, wake_reason = ?, sleep_reason = '', updated_at = ? "
+                    "WHERE user_id = ?",
+                    (now, str(reason or "")[:256], now, uid),
+                )
+        return self.runtime_status(uid)
+
+    def runtime_sleep(self, user_id: str, *, reason: str = "") -> dict | None:
+        """Put the account-scoped workspace runtime to sleep (idempotent)."""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        ws = self.get_workspace_for_user(uid)
+        if ws is None:
+            return None
+        now = _now_ts()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM financial_workspace_runtimes WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO financial_workspace_runtimes "
+                    "(user_id, workspace_id, runtime_state, last_sleep_at, "
+                    "sleep_reason, updated_at) VALUES (?, ?, 'asleep', ?, ?, ?)",
+                    (uid, ws["workspace_id"], now,
+                     str(reason or "")[:256], now),
+                )
+            else:
+                conn.execute(
+                    "UPDATE financial_workspace_runtimes SET runtime_state = 'asleep', "
+                    "last_sleep_at = ?, sleep_reason = ?, wake_reason = '', updated_at = ? "
+                    "WHERE user_id = ?",
+                    (now, str(reason or "")[:256], now, uid),
+                )
+        return self.runtime_status(uid)
+
+    def runtime_status(self, user_id: str) -> dict | None:
+        """Return the account-scoped runtime state for the user."""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        ws = self.get_workspace_for_user(uid)
+        if ws is None:
+            return None
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT runtime_state, last_wake_at, last_sleep_at, "
+                "wake_reason, sleep_reason, updated_at "
+                "FROM financial_workspace_runtimes WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "user_id": uid,
+                    "workspace_id": ws["workspace_id"],
+                    "runtime_state": "asleep",
+                    "last_wake_at": None,
+                    "last_sleep_at": None,
+                    "wake_reason": "",
+                    "sleep_reason": "never woken",
+                    "updated_at": None,
+                }
+            return {
+                "user_id": uid,
+                "workspace_id": ws["workspace_id"],
+                "runtime_state": row[0],
+                "last_wake_at": row[1],
+                "last_sleep_at": row[2],
+                "wake_reason": row[3],
+                "sleep_reason": row[4],
+                "updated_at": row[5],
+            }
 
     # ==================================================================
     # Sweep — delete expired checkpoints
@@ -1149,6 +1439,21 @@ class FinancialWorkspace:
         if not user_id:
             return {"granted": False, "reason": "no user_id"}
 
+        # Existing accounts receive none: the grant is only for accounts that
+        # did not exist when the claim-created workspace was recorded. The
+        # effect context carries the accept-time decision; re-check here for
+        # defense in depth against out-of-band account creation.
+        if context.get("account_was_new") is not True:
+            return {"granted": False, "reason": "account_was_new not set", "user_id": user_id}
+
+        if ledger.get_account(user_id) is not None:
+            return {
+                "granted": False,
+                "reason": "existing credit account",
+                "user_id": user_id,
+                "workspace_id": workspace_id,
+            }
+
         # Idempotency key: scoped to the workspace+user pair
         ikey = f"fin-workspace-grant-{user_id}"
         try:
@@ -1181,21 +1486,20 @@ class FinancialWorkspace:
     def _build_auth_url(self, handoff_id: str, handoff_secret: str) -> str:
         """Build the public auth URL for the claim flow.
 
-        The handoff_secret is included so the front-end can POST to the
-        claim endpoint. The raw secret MUST NOT appear in logs.
+        The URL carries only the opaque ``handoff_id`` — never the handoff
+        secret. The secret travels S2S in the create-checkpoint response and
+        then in the claim-initiation POST body; it never appears in a URL,
+        log, referrer, or analytics.
 
-        The contract with the public app: the app opens this URL in a
-        new or same tab, the page reads the handoff from the URL
-        fragment or server-rendered state, then initiates OAuth.
+        The path is the exact Caddy workspace auth route (no wildcard).
         """
         from urllib.parse import urlencode
-        base = os.environ.get("FIN_TERMINAL_BASE_URL", "https://terminal.unchainedsky.com")
-        params = urlencode({
-            "handoff_id": handoff_id,
-            "handoff_secret": handoff_secret,
-            "action": "claim",
-        })
-        return f"{base}/fin-terminal/claim?{params}"
+        base = os.environ.get(
+            "FIN_TERMINAL_BASE_URL",
+            "https://unbrowser.unchainedsky.com/fin-terminal-workspace",
+        ).strip().rstrip("/")
+        params = urlencode({"handoff_id": handoff_id, "action": "claim"})
+        return f"{base}/auth/claim?{params}"
 
     # ==================================================================
     # Delete / export metadata

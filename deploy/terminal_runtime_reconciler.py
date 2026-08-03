@@ -463,29 +463,33 @@ class GatewayManagementClient:
             raise RuntimeError(f"Gateway container {self._service!r} not found")
 
         payload_json = json.dumps(payload or {})
+        # Token and path are JSON-encoded so a token can never break out of the
+        # JS string literal regardless of its characters (no shell involved).
+        token_lit = json.dumps(self._token)
+        path_lit = json.dumps(url_path)
         script = (
-            f'const http = require("http");'
-            f'const opts = {{'
-            f'  hostname: "127.0.0.1", port: 8788,'
-            f'  path: "{url_path}", method: "POST",'
-            f'  headers: {{'
-            f'    "Content-Type": "application/json",'
-            f'    "X-Management-Token": "{self._token}",'
-            f'    "Content-Length": Buffer.byteLength(process.argv[1])'
-            f'  }},'
-            f'  timeout: {timeout * 1000}'
-            f'}};'
-            f'const req = http.request(opts, (res) => {{'
-            f'  let d = "";'
-            f'  res.on("data", (c) => d += c);'
-            f'  res.on("end", () => {{'
-            f'    try {{ console.log(d); process.exit(res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1); }}'
-            f'    catch {{ process.exit(1); }}'
-            f'  }});'
-            f'}});'
-            f'req.on("error", () => process.exit(1));'
-            f'req.write(process.argv[1]);'
-            f'req.end();'
+            "const http = require(\"http\");"
+            "const opts = {"
+            "  hostname: \"127.0.0.1\", port: 8788,"
+            f"  path: {path_lit}, method: \"POST\","
+            "  headers: {"
+            "    \"Content-Type\": \"application/json\","
+            f"    \"X-Management-Token\": {token_lit},"
+            "    \"Content-Length\": Buffer.byteLength(process.argv[1])"
+            "  },"
+            f"  timeout: {timeout * 1000}"
+            "};"
+            "const req = http.request(opts, (res) => {"
+            "  let d = \"\";"
+            "  res.on(\"data\", (c) => d += c);"
+            "  res.on(\"end\", () => {"
+            "    try { console.log(d); process.exit(res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1); }"
+            "    catch { process.exit(1); }"
+            "  });"
+            "});"
+            "req.on(\"error\", () => process.exit(1));"
+            "req.write(process.argv[1]);"
+            "req.end();"
         )
         # Use a separate script file to avoid shell metacharacter issues
         import tempfile

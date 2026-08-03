@@ -79,6 +79,31 @@ To disable the reconciler and return to static six-seat mode:
 The rollback path has been tested: `rollback_start_all` starts only absent
 seats, skips already-healthy ones, and never touches Redis/MCP/gateway.
 
+## Pilot workflow integration
+
+`deploy/public_terminal_pilot_remote.sh` (activate/disable/status/**rollback**)
+is dynamic-mode aware:
+
+- **Dynamic mode** (`TERMINAL_RUNTIME_FEATURE_ENABLED=true`): the activate
+  gates allow stopped seats — the reconciler owns seat lifecycle. Runtime
+  verification accepts the exact nine-service set with seats absent, and the
+  gateway readiness check requires only the one-warm-spare pool (never six
+  stopped seats).
+- **Feature-disabled mode**: the legacy requirement of six ready unique
+  workers is unchanged.
+- **rollback action**: starts all six seats, atomically disables
+  `TERMINAL_RUNTIME_FEATURE_ENABLED`, stops the `terminal-runtime-reconciler`
+  systemd unit, re-enables the static pilot flag, and verifies the six-seat
+  pool — `rollback starts all six` is part of the deploy workflow, not just
+  the standalone reconciler.
+- **Companion Redis keys** (workspace DB 1) are backed up before any state
+  mutation, restored on rollback, and cleaned on disable.
+- **SQLite online backup** is performed before any additive schema migration
+  (activate gate) via the Python `sqlite3` online backup API; the snapshot is
+  stored in the secure workdir.
+- **status** reports `TERMINAL_RUNTIME_FEATURE_ENABLED` and the reconciler
+  systemd state alongside the service states.
+
 ## Gateway management API contract
 
 The gateway must expose a private management listener on port 8788 with:
@@ -91,7 +116,10 @@ The gateway must expose a private management listener on port 8788 with:
 | `/api/management/activate` | POST | `{seatName: string}` | `{accepted: bool}` |
 
 Authentication: `X-Management-Token` header must match
-`TERMINAL_RUNTIME_MANAGEMENT_TOKEN`.
+`TERMINAL_RUNTIME_MANAGEMENT_TOKEN`. The reconciler calls it via
+`docker exec` into the gateway container (host port never exposed, Caddy never
+proxies it), with the token JSON-escaped into the Node script so a token can
+never break out of the JS string literal.
 
 ## Configuration
 

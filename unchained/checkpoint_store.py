@@ -192,10 +192,10 @@ class LocalCheckpointStore(CheckpointStore):
 class S3CheckpointStore(CheckpointStore):
     """Production adapter: S3 storage + AWS KMS envelope encryption.
 
-    Requires environment:
+    Requires environment (validated by :func:`validate_s3_store_config`):
       FIN_WORKSPACE_S3_BUCKET
-      FIN_WORKSPACE_KMS_KEY_ID (ARN or alias)
-      AWS_REGION (defaults to us-east-1)
+      FIN_WORKSPACE_S3_REGION   (explicit — never derived from AWS_REGION)
+      FIN_WORKSPACE_KMS_KEY_ID  (ARN or alias)
       Optional: FIN_WORKSPACE_S3_PREFIX (default "checkpoints/")
     """
 
@@ -203,8 +203,13 @@ class S3CheckpointStore(CheckpointStore):
                  region: str | None = None, prefix: str = "checkpoints/"):
         self._bucket = bucket or os.environ.get("FIN_WORKSPACE_S3_BUCKET", "")
         self._key_id = key_id or os.environ.get("FIN_WORKSPACE_KMS_KEY_ID", "")
-        self._region = region or os.environ.get("AWS_REGION", "us-east-1")
+        self._region = region or os.environ.get("FIN_WORKSPACE_S3_REGION", "").strip()
         self._prefix = prefix.lstrip("/")
+        if not self._bucket or not self._key_id or not self._region:
+            raise CheckpointStoreConfigError(
+                "S3CheckpointStore requires FIN_WORKSPACE_S3_BUCKET, "
+                "FIN_WORKSPACE_S3_REGION and FIN_WORKSPACE_KMS_KEY_ID"
+            )
         self._s3 = None
         self._kms = None
 
@@ -342,9 +347,60 @@ class S3CheckpointStore(CheckpointStore):
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
-def create_checkpoint_store() -> CheckpointStore:
-    """Factory: returns S3CheckpointStore if configured, else LocalCheckpointStore."""
-    bucket = os.environ.get("FIN_WORKSPACE_S3_BUCKET", "").strip()
-    if bucket:
+class CheckpointStoreConfigError(RuntimeError):
+    """Raised when the production checkpoint store is enabled but misconfigured."""
+
+
+_REQUIRED_S3_ENV = (
+    "FIN_WORKSPACE_S3_BUCKET",
+    "FIN_WORKSPACE_S3_REGION",
+    "FIN_WORKSPACE_KMS_KEY_ID",
+)
+
+
+def _fin_workspace_enabled() -> bool:
+    return os.environ.get("FIN_WORKSPACE_ENABLED", "").strip().lower() in ("1", "true", "yes")
+
+
+def validate_s3_store_config(env: dict | None = None) -> list[str]:
+    """Return a list of missing/blank required S3+KMS config keys (empty if OK).
+
+    Deliberately never falls back to ``AWS_REGION`` or a default region: the
+    workspace feature must be configured explicitly before it is allowed to
+    run. Local in-memory storage is only for tests and is never selected by
+    this validator.
+    """
+    if env is None:
+        env = os.environ
+    missing: list[str] = []
+    for key in _REQUIRED_S3_ENV:
+        if not str(env.get(key, "") or "").strip():
+            missing.append(key)
+    return missing
+
+
+def create_checkpoint_store(*, require_s3: bool | None = None) -> CheckpointStore:
+    """Factory for the checkpoint store.
+
+    * ``require_s3=True``  — return ``S3CheckpointStore`` only; raise
+      ``CheckpointStoreConfigError`` when S3/KMS config is missing. Never
+      falls back to local storage. This is the production path.
+    * ``require_s3=False`` — explicit local (test/CI) store; never used by the
+      production startup path.
+    * ``require_s3=None`` (default) — derive from ``FIN_WORKSPACE_ENABLED``:
+      feature on ⇒ production S3 store (fail closed); feature off ⇒ local
+      store (unreachable because the feature is disabled).
+    """
+    if require_s3 is None:
+        require_s3 = _fin_workspace_enabled()
+
+    if require_s3:
+        missing = validate_s3_store_config()
+        if missing:
+            raise CheckpointStoreConfigError(
+                "financial workspace storage misconfigured: missing "
+                + ", ".join(missing)
+            )
         return S3CheckpointStore()
+
     return LocalCheckpointStore()

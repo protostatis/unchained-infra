@@ -1496,6 +1496,68 @@ class DynamicPilotScriptTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Dynamic-mode / workspace integration (source-level contract)
+# ---------------------------------------------------------------------------
+class DynamicModeIntegrationTests(unittest.TestCase):
+    """Source-level checks that the deploy workflow supports the dynamic
+    (reconciler) mode and the workspace companion state."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _script_path().read_text()
+
+    def test_rollback_action_accepted(self) -> None:
+        self.assertIn("activate|disable|status|rollback", self.source)
+        self.assertIn("rollback) cmd_rollback ;;", self.source)
+
+    def test_dynamic_mode_helper_present(self) -> None:
+        self.assertIn("read_dynamic_mode_enabled()", self.source)
+        self.assertIn("dynamic_mode_enabled()", self.source)
+        self.assertIn("TERMINAL_RUNTIME_FEATURE_ENABLED", self.source)
+
+    def test_sqlite_online_backup_before_migration(self) -> None:
+        self.assertIn("sqlite_online_backup()", self.source)
+        # Called from run_activate_gates before any schema migration.
+        self.assertIn("sqlite_online_backup; then", self.source)
+        self.assertIn("pre-migration SQLite online backup failed", self.source)
+
+    def test_companion_redis_backup_restore_clean(self) -> None:
+        self.assertIn("backup_workspace_redis()", self.source)
+        self.assertIn("restore_workspace_redis_backup()", self.source)
+        self.assertIn("cleanup_workspace_redis()", self.source)
+        # Wired: backup at state prepare, restore on rollback, clean on disable.
+        self.assertIn("backup_workspace_redis || return 1", self.source)
+        self.assertIn("restore_workspace_redis_backup; then", self.source)
+        self.assertIn("cleanup_workspace_redis", self.source)
+        # Companion keys live in Redis DB 1 (workspace namespace).
+        self.assertIn('redis-cli -n 1 --scan', self.source)
+
+    def test_rollback_starts_all_six_seats(self) -> None:
+        self.assertIn("start_all_seats_for_rollback()", self.source)
+        self.assertIn('for svc in "${PILOT_SEATS[@]}"', self.source)
+
+    def test_gateway_readiness_relaxed_in_dynamic_mode(self) -> None:
+        self.assertIn("const dynamic = process.argv[1] === \"true\";", self.source)
+        self.assertIn("if (dynamic) {", self.source)
+        self.assertIn("one-warm-spare", self.source)
+        # Feature-disabled mode still requires six unique workers.
+        self.assertIn("gateway.readyWorkers !== 6 || healthy.length !== 6", self.source)
+
+    def test_runtime_pilot_verification_allows_stopped_seats_in_dynamic_mode(self) -> None:
+        self.assertIn("Reconciler may have drained this seat", self.source)
+        self.assertIn("absent is valid in dynamic mode", self.source)
+
+    def test_status_reports_dynamic_mode(self) -> None:
+        self.assertIn("TERMINAL_RUNTIME_FEATURE_ENABLED: $dynamic", self.source)
+        self.assertIn("terminal-runtime-reconciler:", self.source)
+
+    def test_cmd_rollback_disables_reconciler_and_starts_six(self) -> None:
+        self.assertIn("cmd_rollback()", self.source)
+        self.assertIn("systemctl stop terminal-runtime-reconciler", self.source)
+        self.assertIn("static six-seat", self.source)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 

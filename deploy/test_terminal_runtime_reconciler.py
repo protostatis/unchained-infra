@@ -990,6 +990,28 @@ class GatewayAPIContractTests(unittest.TestCase):
             # Find the _exec call for this path
             self.assertIn("json.dumps", source, "Payload must be JSON-serialized")
 
+    def test_gateway_token_is_json_escaped_not_interpolated(self) -> None:
+        """The management token must never be f-string interpolated into the
+        docker-exec Node script (token with quotes would break out of the JS
+        string literal)."""
+        source = RECONCILER_PATH.read_text()
+        self.assertIn("json.dumps(self._token)", source)
+        self.assertNotIn('X-Management-Token": "', source)
+
+    def test_all_management_calls_are_posts_with_header(self) -> None:
+        source = RECONCILER_PATH.read_text()
+        # Every management call uses method "POST" (JS-escaped inside the
+        # Python string literal) and the X-Management-Token header.
+        self.assertEqual(source.count('method: \\"POST\\"'), 1)
+        self.assertIn("X-Management-Token", source)
+
+    def test_management_api_runs_inside_gateway_container_not_host(self) -> None:
+        source = RECONCILER_PATH.read_text()
+        # Never exposes the management listener on the host or through Caddy.
+        self.assertNotIn("0.0.0.0:8788", source)
+        self.assertIn("docker", source)
+        self.assertIn("exec", source)
+
 
 # ---------------------------------------------------------------------------
 # Run

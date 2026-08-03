@@ -271,20 +271,26 @@ services:
     profiles: ["fin-terminal-public-pilot"]
 
   # Financial workspace control — opt-in feature flag.
-  # The separate Python workspace-control slice owns auth/S3/KMS logic.
-  # This infrastructure slice provides only the Compose/env/Caddy scaffolding:
-  # S3/KMS config passed only to this control service, exact internal/public
-  # auth callback routes, no wildcard, claim secrets blocked from logs, no raw
-  # internal endpoint exposure. Always-on runtime state service on a dedicated
-  # network; generic /workspace unchanged.
+  # Real Python control plane (the same unchained web app as `web`, on its own
+  # port 8790). It owns auth/S3/KMS/checkpoint logic and serves:
+  #   - S2S internal API (Docker-internal only; Caddy denies /internal/*)
+  #   - browser handoff/auth/callback routes under /fin-terminal-workspace/*
+  # Fail-closed: when FIN_TERMINAL_WORKSPACE_ENABLED=true without the explicit
+  # control token / S3 bucket / region / KMS key / storage config, the app
+  # refuses to start (no JWT_SECRET fallback, no local storage).
   fin-terminal-workspace-control:
-    image: busybox:1.37.0-musl@sha256:2f855d0647270759b8270a8c98c76ab55389a76f336807e2479fa3ff65e1779f
-    command: ["sh", "-c", "echo 'workspace-control placeholder — Python slice handles auth/S3/KMS'; tail -f /dev/null"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "web", "--host", "0.0.0.0", "--port", "8790"]
     expose:
       - "8790"
+    volumes:
+      - relay_data:/data
     networks:
-      - fin_terminal_public  # accessible from Caddy
-      - fin_terminal_workspace_state
+      - fin_terminal_public          # accessible from Caddy
+      - fin_terminal_public_state    # Redis (fin-terminal-public-redis:6379)
+      - fin_terminal_workspace_egress  # AWS S3/KMS egress only
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=33554432,mode=1777
@@ -292,24 +298,48 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
-    cpus: 0.25
-    mem_limit: 256m
-    mem_reservation: 64m
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
     restart: unless-stopped
     profiles: ["fin-terminal-workspace"]
-    # Feature-gate: only starts when env flag is enabled
+    # Feature-gate: only starts when the workspace profile is explicitly enabled.
     environment:
+      - UNCHAINED_DB_PATH=/data/auth.db
       - FIN_TERMINAL_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
-      - WORKSPACE_S3_BUCKET=${WORKSPACE_S3_BUCKET:-}
-      - WORKSPACE_S3_REGION=${WORKSPACE_S3_REGION:-}
-      - WORKSPACE_KMS_KEY_ID=${WORKSPACE_KMS_KEY_ID:-}
+      - FIN_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FIN_WORKSPACE_CONTROL_TOKEN=${FIN_WORKSPACE_CONTROL_TOKEN:-}
+      - FIN_WORKSPACE_COOKIE_DOMAIN=${FIN_WORKSPACE_COOKIE_DOMAIN:-}
+      - FIN_WORKSPACE_S3_BUCKET=${FIN_WORKSPACE_S3_BUCKET:-}
+      - FIN_WORKSPACE_S3_REGION=${FIN_WORKSPACE_S3_REGION:-}
+      - FIN_WORKSPACE_KMS_KEY_ID=${FIN_WORKSPACE_KMS_KEY_ID:-}
       - WORKSPACE_REDIS_URL=redis://fin-terminal-public-redis:6379/1
+      - JWT_SECRET=${JWT_SECRET:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - FACEBOOK_APP_ID=${FACEBOOK_APP_ID:-}
+      - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET:-}
+      - FACEBOOK_OAUTH_DIALOG_URL=${FACEBOOK_OAUTH_DIALOG_URL:-}
+      - FACEBOOK_GRAPH_API_BASE=${FACEBOOK_GRAPH_API_BASE:-}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GITHUB_OAUTH_AUTHORIZE_URL=${GITHUB_OAUTH_AUTHORIZE_URL:-}
+      - GITHUB_OAUTH_TOKEN_URL=${GITHUB_OAUTH_TOKEN_URL:-}
+      - GITHUB_API_BASE=${GITHUB_API_BASE:-}
+      - FIN_TERMINAL_BASE_URL=${FIN_TERMINAL_BASE_URL:-https://unbrowser.unchainedsky.com/fin-terminal-workspace}
+      - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:-}
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8790,timeout=2); c.request('GET','/internal/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
 volumes:
   fin_terminal_public_redis:
@@ -402,8 +432,7 @@ networks:
     ipam:
       config:
         - subnet: 10.253.0.136/29
-  fin_terminal_workspace_state:
-    internal: true
-    ipam:
-      config:
-        - subnet: 10.253.0.144/29
+  # Deliberately non-internal: the workspace control plane needs S3/KMS egress
+  # for envelope-encrypted checkpoint storage. No other service joins this
+  # network; nothing on it is reachable from Caddy or the public edge.
+  fin_terminal_workspace_egress:

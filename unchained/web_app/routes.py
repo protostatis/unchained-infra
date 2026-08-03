@@ -199,6 +199,36 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
      "web_app.handlers.fin_workspace:handle_fin_workspace_process_effects"),
     ("POST", "/internal/financial-workspace/sweep",
      "web_app.handlers.fin_workspace:handle_fin_workspace_sweep"),
+    # Account-scoped runtime control (wake/sleep/status) — canary S2S API.
+    ("POST", "/internal/financial-workspace/runtime/wake",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_wake"),
+    ("POST", "/internal/financial-workspace/runtime/sleep",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_sleep"),
+    ("GET", "/internal/financial-workspace/runtime/status",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_status"),
+
+    # Browser handoff/auth/callback routes — proxied by Caddy under
+    # /fin-terminal-workspace (prefix stripped). Exact provider allowlist.
+    ("GET", "/auth/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_auth_claim_page"),
+    ("POST", "/api/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_claim"),
+    ("GET", "/api/claims/{claim_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_claim"),
+    ("GET", "/api/workspace",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_workspace"),
+    ("GET", "/api/snapshots",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_snapshots"),
+    ("GET", "/api/runtime/status",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_runtime_status"),
+    ("POST", "/api/google",
+     "web_app.handlers.fin_workspace_auth:handle_claim_google_token"),
+    ("GET", "/done",
+     "web_app.handlers.fin_workspace_auth:handle_claim_done"),
+    ("GET", "/auth/{provider}/start",
+     "web_app.handlers.fin_workspace_auth:handle_claim_oauth_start"),
+    ("GET", "/auth/{provider}/callback",
+     "web_app.handlers.fin_workspace_auth:handle_claim_oauth_callback"),
 )
 
 
