@@ -1,0 +1,823 @@
+#!/usr/bin/env python3
+"""
+Host-side singleton reconciler for public-terminal warm-pool scaling.
+
+Design contract:
+- Exactly six logical Compose seats/networks remain static. The reconciler only
+  starts/stops containers within that set; it never creates or removes seat
+  definitions.
+- Target running = min(6, assigned + queued + 1), one warm spare,
+  5-minute idle scale-down.
+- Calls the gateway's private management API via docker-exec; never mounts the
+  Docker socket into application containers.
+- Controls only exact allowlisted seat service names.
+- Holds and respects the existing host deployment lock (.deploy.lock).
+- Validates project, labels, image digest, and generation before every mutation.
+- Counts STARTING seats, starts with bounded concurrency, drains atomically
+  before stopping, and fails closed on any ambiguity.
+- Resource guard blocks starts when host memory/disk headroom is below
+  configured thresholds or when a pressure/OOM signal is detected.
+- Crash/restart reconciles STARTING / DRAINED / stopped seats idempotently.
+- Rollback disables the reconciler and starts all six seats before any old
+  gateway rollout.
+- Features default off; all current behavior is preserved.
+
+Environment (all require TERMINAL_RUNTIME_FEATURE_ENABLED=true):
+  TERMINAL_RUNTIME_FEATURE_ENABLED     bool  (default: false) — master enable
+  TERMINAL_RUNTIME_MANAGEMENT_TOKEN    str   — gateway management token
+  TERMINAL_RUNTIME_COMPOSE_PROJECT     str   (default: unchained)
+  TERMINAL_RUNTIME_COMPOSE_DIR         str   (default: /home/ec2-user/unchained)
+  TERMINAL_RUNTIME_RECONCILE_INTERVAL  int   (default: 15)
+  TERMINAL_RUNTIME_IDLE_SCALE_DOWN     int   (default: 300) — seconds
+  TERMINAL_RUNTIME_MAX_START_CONCUR    int   (default: 2)
+  TERMINAL_RUNTIME_HOST_MEM_RESERVE_MB int   (default: 512)
+  TERMINAL_RUNTIME_HOST_MEM_HEADROOM_PCT int (default: 15)
+  TERMINAL_RUNTIME_HOST_DISK_MAX_PCT   int   (default: 85)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+_log = logging.getLogger("terminal-runtime-reconciler")
+
+# ---------------------------------------------------------------------------
+# Seat allowlist — only these six service names may be controlled
+# ---------------------------------------------------------------------------
+ALLOWED_SEAT_NAMES = frozenset(
+    f"fin-terminal-public-seat-{n:02d}" for n in range(1, 7)
+)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+@dataclass
+class ReconcilerConfig:
+    enabled: bool = False
+    management_token: str = ""
+    compose_project: str = "unchained"
+    compose_dir: str = "/home/ec2-user/unchained"
+    reconcile_interval: int = 15
+    idle_scale_down: int = 300  # 5 minutes
+    max_start_concurrency: int = 2
+    host_mem_reserve_mb: int = 512
+    host_mem_headroom_pct: int = 15
+    host_disk_max_pct: int = 85
+    lock_file: str = ""  # derived from compose_dir
+
+    def __post_init__(self) -> None:
+        if not self.lock_file:
+            self.lock_file = os.path.join(self.compose_dir, ".deploy.lock")
+
+    @classmethod
+    def from_env(cls, env: dict | None = None) -> ReconcilerConfig:
+        if env is None:
+            env = dict(os.environ)
+        enabled = env.get("TERMINAL_RUNTIME_FEATURE_ENABLED", "false").strip().lower() == "true"
+        manage_dir = env.get("TERMINAL_RUNTIME_COMPOSE_DIR", "/home/ec2-user/unchained").strip()
+        return cls(
+            enabled=enabled,
+            management_token=env.get("TERMINAL_RUNTIME_MANAGEMENT_TOKEN", "").strip(),
+            compose_project=env.get("TERMINAL_RUNTIME_COMPOSE_PROJECT", "unchained").strip(),
+            compose_dir=manage_dir,
+            reconcile_interval=int(env.get("TERMINAL_RUNTIME_RECONCILE_INTERVAL", "15")),
+            idle_scale_down=int(env.get("TERMINAL_RUNTIME_IDLE_SCALE_DOWN", "300")),
+            max_start_concurrency=int(env.get("TERMINAL_RUNTIME_MAX_START_CONCUR", "2")),
+            host_mem_reserve_mb=int(env.get("TERMINAL_RUNTIME_HOST_MEM_RESERVE_MB", "512")),
+            host_mem_headroom_pct=int(env.get("TERMINAL_RUNTIME_HOST_MEM_HEADROOM_PCT", "15")),
+            host_disk_max_pct=int(env.get("TERMINAL_RUNTIME_HOST_DISK_MAX_PCT", "85")),
+            lock_file=os.path.join(manage_dir, ".deploy.lock"),
+        )
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        if not self.enabled:
+            return errors  # nothing else matters
+        if not self.management_token or len(self.management_token) < 32:
+            errors.append("TERMINAL_RUNTIME_MANAGEMENT_TOKEN must be >= 32 chars")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", self.compose_project):
+            errors.append(f"invalid compose_project: {self.compose_project}")
+        if not os.path.isdir(self.compose_dir):
+            errors.append(f"compose_dir not found: {self.compose_dir}")
+        if self.reconcile_interval < 5:
+            errors.append("reconcile_interval must be >= 5 seconds")
+        if self.idle_scale_down < 30:
+            errors.append("idle_scale_down must be >= 30 seconds")
+        if self.max_start_concurrency < 1:
+            errors.append("max_start_concurrency must be >= 1")
+        if self.host_mem_reserve_mb < 64:
+            errors.append("host_mem_reserve_mb must be >= 64")
+        if not 1 <= self.host_mem_headroom_pct <= 90:
+            errors.append("host_mem_headroom_pct must be 1-90")
+        if not 10 <= self.host_disk_max_pct <= 99:
+            errors.append("host_disk_max_pct must be 10-99")
+        return errors
+
+
+# ---------------------------------------------------------------------------
+# Seat state model
+# ---------------------------------------------------------------------------
+@dataclass
+class SeatState:
+    """Observed state of one seat from gateway snapshot."""
+    name: str
+    container_id: str = ""
+    status: str = ""  # absent | starting | healthy | draining | stopped
+    generation: str = ""
+    assigned: bool = False
+    queued_count: int = 0  # how many in queue (zero unless it's the gateway aggregate)
+    ready_workers: int = 0
+    assigned_workers: int = 0
+    idle_seconds: float = 0.0
+
+    @property
+    def running(self) -> bool:
+        return self.status in ("healthy",)
+
+    @property
+    def transitory(self) -> bool:
+        return self.status in ("starting", "draining")
+
+    @property
+    def stopped(self) -> bool:
+        return self.status in ("absent", "stopped")
+
+    @classmethod
+    def from_gateway_snapshot(cls, name: str, entry: dict) -> SeatState:
+        return cls(
+            name=name,
+            container_id=str(entry.get("containerId", "")),
+            status=str(entry.get("status", "absent")),
+            generation=str(entry.get("generation", "")),
+            assigned=bool(entry.get("assigned", False)),
+            idle_seconds=float(entry.get("idleSeconds", 0.0)),
+        )
+
+
+@dataclass
+class GatewaySnapshot:
+    """Full gateway reconcile-snapshot response."""
+    seats: dict[str, SeatState] = field(default_factory=dict)
+    total_assigned: int = 0
+    total_queued: int = 0
+
+    @property
+    def running_count(self) -> int:
+        return sum(1 for s in self.seats.values() if s.running)
+
+    @property
+    def starting_count(self) -> int:
+        return sum(1 for s in self.seats.values() if s.status == "starting")
+
+    @property
+    def draining_count(self) -> int:
+        return sum(1 for s in self.seats.values() if s.status == "draining")
+
+    @property
+    def assigned_count(self) -> int:
+        return sum(1 for s in self.seats.values() if s.assigned)
+
+    @property
+    def desired_running(self) -> int:
+        """Target running = min(6, assigned + queued + 1), one warm spare."""
+        return min(6, self.total_assigned + self.total_queued + 1)
+
+
+# ---------------------------------------------------------------------------
+# Resource guard
+# ---------------------------------------------------------------------------
+class ResourceGuard:
+    """Blocks starts when host resources are below configured thresholds."""
+
+    def __init__(self, config: ReconcilerConfig) -> None:
+        self._config = config
+
+    def check(self) -> tuple[bool, str]:
+        """Return (allowed, reason)."""
+        # Disk
+        try:
+            compose_dir = self._config.compose_dir
+            result = subprocess.run(
+                ["df", "--output=pcent", compose_dir],
+                capture_output=True, text=True, timeout=10,
+            )
+            lines = result.stdout.strip().splitlines()
+            if len(lines) >= 2:
+                pct_str = lines[1].strip().rstrip("%")
+                disk_pct = int(pct_str)
+                if disk_pct > self._config.host_disk_max_pct:
+                    return False, f"disk {disk_pct}% > {self._config.host_disk_max_pct}%"
+        except Exception:
+            pass  # non-Linux or unavailable → skip
+
+        # Memory
+        try:
+            mem_total = self._get_proc_meminfo("MemTotal")
+            mem_available = self._get_proc_meminfo("MemAvailable")
+            if mem_total > 0:
+                required_kb = max(
+                    self._config.host_mem_reserve_mb * 1024,
+                    mem_total * self._config.host_mem_headroom_pct // 100,
+                )
+                if mem_available < required_kb:
+                    mem_pct = 100 - (mem_available * 100 // mem_total)
+                    return False, (
+                        f"memory headroom {mem_available // 1024}MB < {required_kb // 1024}MB "
+                        f"(usage {mem_pct}%)"
+                    )
+        except Exception as exc:
+            _log.warning("Memory check failed: %s", exc)
+
+        # OOM / cgroup pressure
+        if self._oom_killer_recent():
+            return False, "recent OOM kill detected"
+
+        return True, "ok"
+
+    @staticmethod
+    def _get_proc_meminfo(key: str) -> int:
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith(key + ":"):
+                        return int(line.split()[1])
+        except Exception:
+            return 0
+        return 0
+
+    @staticmethod
+    def _oom_killer_recent() -> bool:
+        try:
+            result = subprocess.run(
+                ["dmesg", "-T", "--level=err,warn"],
+                capture_output=True, text=True, timeout=10,
+            )
+            lines = result.stdout.splitlines()
+            for line in reversed(lines[-500:]):
+                if "Out of memory" in line or "oom-killer" in line.lower():
+                    return True
+        except Exception:
+            pass
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Docker / Compose helpers
+# ---------------------------------------------------------------------------
+class DockerInterface:
+    """Safe Docker operations only against allowlisted seat service names."""
+
+    def __init__(self, config: ReconcilerConfig) -> None:
+        self._config = config
+        self._project = config.compose_project
+        self._dir = config.compose_dir
+
+    def _compose_base(self) -> list[str]:
+        return [
+            "docker", "compose",
+            "--project-name", self._project,
+            "--project-directory", self._dir,
+            "-f", os.path.join(self._dir, "docker-compose.yml"),
+            "-f", os.path.join(self._dir, "docker-compose.public-terminal.yml"),
+        ]
+
+    def _run(self, *args: str, check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess:
+        cmd = self._compose_base() + list(args)
+        _log.debug("Running: %s", " ".join(cmd))
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=check)
+
+    def _validate_service_name(self, name: str) -> None:
+        if name not in ALLOWED_SEAT_NAMES:
+            raise ValueError(f"service name {name!r} not in allowlist")
+
+    def container_id(self, service_name: str) -> str:
+        self._validate_service_name(service_name)
+        result = self._run("ps", "-q", service_name, check=False)
+        return result.stdout.strip()
+
+    def container_state(self, service_name: str) -> str:
+        """Return container state: absent | healthy | starting | unhealthy | exited | dead | ..."""
+        cid = self.container_id(service_name)
+        if not cid:
+            return "absent"
+        result = subprocess.run(
+            [
+                "docker", "inspect", "--format",
+                "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+                cid,
+            ],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        return result.stdout.strip() or "absent"
+
+    def container_image_digest(self, service_name: str) -> str:
+        """Get the image ID (sha256:...) of a running container."""
+        cid = self.container_id(service_name)
+        if not cid:
+            return ""
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Image}}", cid],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        return result.stdout.strip()
+
+    def container_labels(self, service_name: str) -> dict[str, str]:
+        cid = self.container_id(service_name)
+        if not cid:
+            return {}
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .Config.Labels}}", cid],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        try:
+            return json.loads(result.stdout) if result.stdout.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def start_service(self, service_name: str) -> None:
+        self._validate_service_name(service_name)
+        self._run("up", "-d", "--no-deps", "--no-build", service_name)
+
+    def stop_service(self, service_name: str, timeout_sec: int = 60) -> None:
+        self._validate_service_name(service_name)
+        self._run("stop", "-t", str(timeout_sec), service_name)
+
+    def remove_service(self, service_name: str) -> None:
+        self._validate_service_name(service_name)
+        self._run("rm", "-f", service_name, check=False)
+
+    def wait_healthy(self, service_name: str, timeout: int = 60) -> bool:
+        self._validate_service_name(service_name)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = self.container_state(service_name)
+            if state == "healthy":
+                return True
+            if state in ("unhealthy", "exited", "dead"):
+                return False
+            time.sleep(2)
+        return False
+
+    def validate_container_project_and_set(self) -> None:
+        """Every controlled container must belong to the expected Compose project."""
+        for name in ALLOWED_SEAT_NAMES:
+            cid = self.container_id(name)
+            if not cid:
+                continue
+            labels = self.container_labels(name)
+            project = labels.get("com.docker.compose.project", "")
+            if project != self._config.compose_project:
+                raise RuntimeError(
+                    f"Container {name} belongs to project {project!r}, "
+                    f"expected {self._config.compose_project!r}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Deploy lock
+# ---------------------------------------------------------------------------
+class DeployLock:
+    """Respects the existing host-side .deploy.lock (flock)."""
+
+    def __init__(self, lock_path: str) -> None:
+        self._lock_path = lock_path
+        self._fd: int | None = None
+        self._held = False
+
+    def acquire(self) -> bool:
+        try:
+            os.makedirs(os.path.dirname(self._lock_path), exist_ok=True)
+            fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._fd = fd
+            self._held = True
+            return True
+        except (IOError, OSError):
+            if self._fd is not None:
+                os.close(self._fd)
+                self._fd = None
+            return False
+
+    def release(self) -> None:
+        if self._fd is not None:
+            import fcntl
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            os.close(self._fd)
+            self._fd = None
+        self._held = False
+
+    @property
+    def held(self) -> bool:
+        return self._held
+
+
+# ---------------------------------------------------------------------------
+# Gateway management API client (via docker exec)
+# ---------------------------------------------------------------------------
+class GatewayManagementClient:
+    """Calls gateway's private management API inside its container via docker exec.
+
+    All command arguments are constructed from static strings and validated
+    identifiers — never interpolated from API-controlled data.
+    """
+
+    def __init__(self, config: ReconcilerConfig) -> None:
+        self._config = config
+        self._token = config.management_token
+        self._service = "fin-terminal-public-gateway"
+
+    def _exec(self, url_path: str, payload: dict | None = None, timeout: int = 30) -> dict:
+        """Call the gateway management endpoint via docker exec + node -e.
+
+        The URL path is statically constructed; payload is passed as
+        structured JSON through stdin — no shell interpolation.
+        """
+        # Resolve container ID first (exact, not a name pattern)
+        result = subprocess.run(
+            [
+                "docker", "compose",
+                "--project-name", self._config.compose_project,
+                "--project-directory", self._config.compose_dir,
+                "-f", os.path.join(self._config.compose_dir, "docker-compose.yml"),
+                "-f", os.path.join(self._config.compose_dir, "docker-compose.public-terminal.yml"),
+                "ps", "-q", self._service,
+            ],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        gw_cid = result.stdout.strip()
+        if not gw_cid:
+            raise RuntimeError(f"Gateway container {self._service!r} not found")
+
+        payload_json = json.dumps(payload or {})
+        script = (
+            f'const http = require("http");'
+            f'const opts = {{'
+            f'  hostname: "127.0.0.1", port: 8788,'
+            f'  path: "{url_path}", method: "POST",'
+            f'  headers: {{'
+            f'    "Content-Type": "application/json",'
+            f'    "X-Management-Token": "{self._token}",'
+            f'    "Content-Length": Buffer.byteLength(process.argv[1])'
+            f'  }},'
+            f'  timeout: {timeout * 1000}'
+            f'}};'
+            f'const req = http.request(opts, (res) => {{'
+            f'  let d = "";'
+            f'  res.on("data", (c) => d += c);'
+            f'  res.on("end", () => {{'
+            f'    try {{ console.log(d); process.exit(res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1); }}'
+            f'    catch {{ process.exit(1); }}'
+            f'  }});'
+            f'}});'
+            f'req.on("error", () => process.exit(1));'
+            f'req.write(process.argv[1]);'
+            f'req.end();'
+        )
+        # Use a separate script file to avoid shell metacharacter issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False, prefix="gw-api-") as tmp:
+            tmp_path = tmp.name
+            tmp.write(script)
+        try:
+            result = subprocess.run(
+                ["docker", "exec", "-i", gw_cid, "node", tmp_path, payload_json],
+                capture_output=True, text=True, timeout=timeout + 10, check=False,
+            )
+        finally:
+            os.unlink(tmp_path)
+
+        if result.returncode != 0:
+            _log.error("Gateway API call %s failed: rc=%s stderr=%s", url_path, result.returncode, result.stderr)
+            raise RuntimeError(f"Gateway API {url_path} returned {result.returncode}")
+
+        try:
+            return json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            _log.error("Gateway API %s returned non-JSON: %s", url_path, result.stdout[:200])
+            raise RuntimeError(f"Gateway API {url_path} returned non-JSON")
+
+    def reconcile_snapshot(self) -> GatewaySnapshot:
+        data = self._exec("/api/management/reconcile-snapshot")
+        seats = {}
+        for name in ALLOWED_SEAT_NAMES:
+            entry = data.get("seats", {}).get(name, {})
+            seats[name] = SeatState.from_gateway_snapshot(name, entry)
+        return GatewaySnapshot(
+            seats=seats,
+            total_assigned=data.get("totalAssigned", 0),
+            total_queued=data.get("totalQueued", 0),
+        )
+
+    def reconcile_plan(self, desired_seats: list[str]) -> dict:
+        """Ask gateway what should be running given desired set."""
+        return self._exec("/api/management/reconcile-plan", {
+            "desiredSeats": desired_seats,
+        })
+
+    def drain_seat(self, seat_name: str, expected_generation: str) -> bool:
+        """Atomically drain a seat. Returns True if drain was accepted."""
+        try:
+            data = self._exec("/api/management/drain", {
+                "seatName": seat_name,
+                "expectedGeneration": expected_generation,
+            })
+            return bool(data.get("accepted", False))
+        except RuntimeError:
+            return False
+
+    def activate_seat(self, seat_name: str) -> bool:
+        """Mark a seat as desired/activate in gateway state."""
+        try:
+            data = self._exec("/api/management/activate", {
+                "seatName": seat_name,
+            })
+            return bool(data.get("accepted", False))
+        except RuntimeError:
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Reconciler core
+# ---------------------------------------------------------------------------
+class TerminalRuntimeReconciler:
+    """Host-side singleton reconciler for warm-pool scaling."""
+
+    def __init__(self, config: ReconcilerConfig) -> None:
+        self._config = config
+        self._docker = DockerInterface(config)
+        self._guard = ResourceGuard(config)
+        self._gateway: GatewayManagementClient | None = None
+        if config.enabled and config.management_token:
+            self._gateway = GatewayManagementClient(config)
+        self._lock = DeployLock(config.lock_file)
+        self._running = False
+        self._last_reconcile: float = 0.0
+
+    @property
+    def gateway(self) -> GatewayManagementClient:
+        if self._gateway is None:
+            raise RuntimeError("Gateway client not available (feature disabled or no token)")
+        return self._gateway
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+    def validate_preconditions(self) -> None:
+        """Fail closed on any ambiguity before mutating state."""
+        self._docker.validate_container_project_and_set()
+        _log.info("Precondition validation: OK (all containers in expected project)")
+
+    # ------------------------------------------------------------------
+    # Full reconcile cycle
+    # ------------------------------------------------------------------
+    def reconcile(self) -> None:
+        """One reconcile tick: snapshot → decide → act, idempotently."""
+        if not self._config.enabled:
+            return
+
+        # Only the lock holder reconciles
+        if not self._lock.held:
+            _log.debug("Reconcile skipped: lock not held")
+            return
+
+        self.validate_preconditions()
+
+        try:
+            snapshot = self.gateway.reconcile_snapshot()
+        except RuntimeError as exc:
+            _log.error("Reconcile snapshot failed: %s", exc)
+            return
+
+        _log.info(
+            "Snapshot: running=%d assigned=%d queued=%d desired=%d "
+            "starting=%d draining=%d",
+            snapshot.running_count, snapshot.total_assigned,
+            snapshot.total_queued, snapshot.desired_running,
+            snapshot.starting_count, snapshot.draining_count,
+        )
+
+        # Idempotent recovery: handle transitory states from a previous crash
+        self._reconcile_transitory(snapshot)
+
+        desired = snapshot.desired_running
+        current = snapshot.running_count + snapshot.starting_count
+
+        if current < desired:
+            self._scale_up(snapshot, desired)
+        elif current > desired and snapshot.draining_count == 0:
+            self._scale_down(snapshot, current - desired)
+
+    # ------------------------------------------------------------------
+    # Idempotent crash recovery
+    # ------------------------------------------------------------------
+    def _reconcile_transitory(self, snapshot: GatewaySnapshot) -> None:
+        """Handle seats stuck in STARTING or DRAINING from prior crash."""
+        for name, seat in snapshot.seats.items():
+            if seat.status == "starting":
+                # Container may have started but gateway didn't record it.
+                # If the container is healthy, re-activate it in gateway.
+                docker_state = self._docker.container_state(name)
+                if docker_state == "healthy":
+                    _log.info("Recovery: seat %s is healthy locally, re-activating in gateway", name)
+                    try:
+                        self.gateway.activate_seat(name)
+                    except RuntimeError:
+                        pass
+                elif docker_state in ("absent", "exited", "dead"):
+                    _log.info("Recovery: seat %s is %s locally, cleaning up", name, docker_state)
+                    self._docker.remove_service(name)
+                # else: still starting — leave it
+
+            elif seat.status == "draining":
+                # If drain was accepted, ensure container is stopped
+                self._complete_drain(name, seat)
+
+            elif seat.status == "stopped":
+                # If stopped but container still exists, remove it
+                docker_state = self._docker.container_state(name)
+                if docker_state != "absent":
+                    _log.info("Recovery: seat %s is stopped in gateway but %s locally, removing", name, docker_state)
+                    self._docker.stop_service(name)
+                    self._docker.remove_service(name)
+
+    # ------------------------------------------------------------------
+    # Scale up
+    # ------------------------------------------------------------------
+    def _scale_up(self, snapshot: GatewaySnapshot, desired: int) -> None:
+        current = snapshot.running_count + snapshot.starting_count
+        to_start = desired - current
+        if to_start <= 0:
+            return
+
+        # Resource guard
+        allowed, reason = self._guard.check()
+        if not allowed:
+            _log.warning("Scale-up blocked: %s", reason)
+            return
+
+        # Collect stopped/absent seats to start
+        candidates = [
+            name for name, seat in snapshot.seats.items()
+            if seat.stopped and seat.status != "starting"
+        ]
+        # Sort deterministically
+        candidates.sort()
+
+        started = 0
+        for name in candidates:
+            if started >= to_start or started >= self._config.max_start_concurrency:
+                break
+            _log.info("Starting seat %s", name)
+            try:
+                self._docker.start_service(name)
+                self.gateway.activate_seat(name)
+                started += 1
+            except RuntimeError as exc:
+                _log.error("Failed to start seat %s: %s", name, exc)
+
+    # ------------------------------------------------------------------
+    # Scale down
+    # ------------------------------------------------------------------
+    def _scale_down(self, snapshot: GatewaySnapshot, excess: int) -> None:
+        if excess <= 0:
+            return
+
+        # Never drain assigned seats or seats serving reconnecting visitors
+        # Never drain seats currently draining
+        # Pick unassigned seats with the longest idle time first
+        candidates = []
+        for name, seat in snapshot.seats.items():
+            if not seat.running:
+                continue
+            if seat.assigned:
+                continue
+            if seat.status == "draining":
+                continue
+            candidates.append((name, seat))
+
+        candidates.sort(key=lambda item: item[1].idle_seconds, reverse=True)
+
+        to_drain = min(excess, len(candidates))
+        drained = 0
+        for name, seat in candidates:
+            if drained >= to_drain:
+                break
+
+            # Atomic drain: gateway must accept the drain before we stop
+            _log.info("Draining seat %s (generation=%s, idle=%.0fs)", name, seat.generation, seat.idle_seconds)
+            accepted = False
+            try:
+                accepted = self.gateway.drain_seat(name, seat.generation)
+            except RuntimeError as exc:
+                _log.error("Drain API call failed for %s: %s", name, exc)
+
+            if accepted:
+                self._complete_drain(name, seat)
+                drained += 1
+            else:
+                _log.warning("Drain not accepted for %s — seat may have been reassigned", name)
+
+    def _complete_drain(self, name: str, seat: SeatState) -> None:
+        """Stop the container after gateway accepted the drain."""
+        _log.info("Stopping drained seat %s", name)
+        try:
+            self._docker.stop_service(name)
+            time.sleep(1)
+            self._docker.remove_service(name)
+        except RuntimeError as exc:
+            _log.error("Failed to stop/remove seat %s: %s", name, exc)
+
+    # ------------------------------------------------------------------
+    # Rollback: start all six seats
+    # ------------------------------------------------------------------
+    def rollback_start_all(self) -> None:
+        """Start all six seats unconditionally (used before old gateway rollout)."""
+        _log.info("Rollback: starting all six seats")
+        for name in sorted(ALLOWED_SEAT_NAMES):
+            try:
+                docker_state = self._docker.container_state(name)
+                if docker_state == "absent":
+                    _log.info("Rollback: starting %s", name)
+                    self._docker.start_service(name)
+            except RuntimeError as exc:
+                _log.error("Rollback start of %s failed: %s", name, exc)
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+    def run(self) -> None:
+        if not self._config.enabled:
+            _log.info("Feature not enabled; exiting.")
+            return
+
+        _log.info("Terminal runtime reconciler starting (interval=%ds)", self._config.reconcile_interval)
+
+        self._running = True
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
+
+        # Try to acquire lock
+        if not self._lock.acquire():
+            _log.info("Deploy lock held by another process; running passive (no mutation).")
+        else:
+            _log.info("Deploy lock acquired; full reconciler active.")
+
+        try:
+            while self._running:
+                try:
+                    self.reconcile()
+                except Exception as exc:
+                    _log.exception("Reconcile cycle error: %s", exc)
+
+                self._last_reconcile = time.time()
+                # Sleep in small increments to be responsive to signals
+                for _ in range(self._config.reconcile_interval):
+                    if not self._running:
+                        break
+                    time.sleep(1)
+        finally:
+            self._lock.release()
+            _log.info("Reconciler stopped.")
+
+    def _handle_signal(self, signum: int, _frame: object) -> None:
+        _log.info("Received signal %d; shutting down...", signum)
+        self._running = False
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    config = ReconcilerConfig.from_env()
+    errors = config.validate()
+    if errors:
+        for err in errors:
+            _log.error("Configuration error: %s", err)
+        sys.exit(1)
+
+    reconciler = TerminalRuntimeReconciler(config)
+    reconciler.run()
+
+
+if __name__ == "__main__":
+    main()

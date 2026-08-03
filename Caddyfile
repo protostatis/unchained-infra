@@ -237,6 +237,46 @@ unbrowser.unchainedsky.com {
 		}
 	}
 
+	# Financial workspace integration — opt-in feature flag.
+	# The separate Python workspace-control slice owns auth/S3/KMS logic.
+	# This infrastructure slice provides only the Compose/env/Caddy scaffolding.
+	# No wildcard: only exact internal/public auth callback routes are accepted.
+	@fin_workspace_enabled expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	@fin_workspace_auth {
+		path /fin-terminal-workspace/auth /fin-terminal-workspace/auth/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	@fin_workspace_callback {
+		path /fin-terminal-workspace/callback /fin-terminal-workspace/callback/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	@fin_workspace_api {
+		path /fin-terminal-workspace/api/* /fin-terminal-live-pilot/api/workspace/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	# Workspace requests: strip browser cookies, never expose raw internal
+	# endpoints, block claim secrets from logs.
+	handle @fin_workspace_auth {
+		uri strip_prefix /fin-terminal-workspace
+		log_skip
+		request_header -Cookie
+		request_header -Authorization
+		reverse_proxy fin-terminal-workspace-control:8790
+	}
+	handle @fin_workspace_callback {
+		uri strip_prefix /fin-terminal-workspace
+		log_skip
+		request_header -Cookie
+		request_header -Authorization
+		reverse_proxy fin-terminal-workspace-control:8790
+	}
+	handle @fin_workspace_api {
+		log_skip
+		request_header -Cookie
+		request_header -Authorization
+		reverse_proxy fin-terminal-workspace-control:8790
+	}
+
 	# The root reuses the existing public landing-page handler. Only its fixed
 	# supporting endpoints are exposed on this host.
 	@unbrowser_outbound path /go/unbrowser-connect /go/unbrowser-github /go/unbrowser-smithery

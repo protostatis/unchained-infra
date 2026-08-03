@@ -176,6 +176,12 @@ services:
       - PUBLIC_ADMISSION_ATTEMPTS=5
       - PUBLIC_ADMISSION_WINDOW_SECONDS=600
       - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787,seat-02=http://fin-terminal-public-seat-02:8787,seat-03=http://fin-terminal-public-seat-03:8787,seat-04=http://fin-terminal-public-seat-04:8787,seat-05=http://fin-terminal-public-seat-05:8787,seat-06=http://fin-terminal-public-seat-06:8787
+      # Private management API for the host-side reconciler. Never exposed on the
+      # public edge. The token is passed via an exact header; the listener is on a
+      # separate internal port and never accepts connections from Caddy or other
+      # containers.
+      - TERMINAL_RUNTIME_MANAGEMENT_TOKEN=${TERMINAL_RUNTIME_MANAGEMENT_TOKEN:-}
+      - TERMINAL_RUNTIME_FEATURE_ENABLED=${TERMINAL_RUNTIME_FEATURE_ENABLED:-false}
     depends_on:
       fin-terminal-public-redis:
         condition: service_healthy
@@ -263,6 +269,47 @@ services:
       - fin_terminal_public_egress_06
       - fin_terminal_public_mcp_06
     profiles: ["fin-terminal-public-pilot"]
+
+  # Financial workspace control — opt-in feature flag.
+  # The separate Python workspace-control slice owns auth/S3/KMS logic.
+  # This infrastructure slice provides only the Compose/env/Caddy scaffolding:
+  # S3/KMS config passed only to this control service, exact internal/public
+  # auth callback routes, no wildcard, claim secrets blocked from logs, no raw
+  # internal endpoint exposure. Always-on runtime state service on a dedicated
+  # network; generic /workspace unchanged.
+  fin-terminal-workspace-control:
+    image: busybox:1.37.0-musl@sha256:2f855d0647270759b8270a8c98c76ab55389a76f336807e2479fa3ff65e1779f
+    command: ["sh", "-c", "echo 'workspace-control placeholder — Python slice handles auth/S3/KMS'; tail -f /dev/null"]
+    expose:
+      - "8790"
+    networks:
+      - fin_terminal_public  # accessible from Caddy
+      - fin_terminal_workspace_state
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=33554432,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    cpus: 0.25
+    mem_limit: 256m
+    mem_reservation: 64m
+    restart: unless-stopped
+    profiles: ["fin-terminal-workspace"]
+    # Feature-gate: only starts when env flag is enabled
+    environment:
+      - FIN_TERMINAL_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - WORKSPACE_S3_BUCKET=${WORKSPACE_S3_BUCKET:-}
+      - WORKSPACE_S3_REGION=${WORKSPACE_S3_REGION:-}
+      - WORKSPACE_KMS_KEY_ID=${WORKSPACE_KMS_KEY_ID:-}
+      - WORKSPACE_REDIS_URL=redis://fin-terminal-public-redis:6379/1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   fin_terminal_public_redis:
@@ -355,3 +402,8 @@ networks:
     ipam:
       config:
         - subnet: 10.253.0.136/29
+  fin_terminal_workspace_state:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.253.0.144/29
