@@ -1177,6 +1177,33 @@ def post(payload, session_id=None):
     connection.close()
     return status, returned_session, decode_response(data, content_type)
 
+def tool_http_error_status(message):
+    if not isinstance(message, dict):
+        return None
+    content = message.get("result", {}).get("content", [])
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        status = (
+            payload.get("blockmap", {})
+            .get("density", {})
+            .get("http_error_status")
+        )
+        if isinstance(status, int):
+            return status
+    return None
+
 session_id = ""
 cleanup_ok = False
 try:
@@ -1233,8 +1260,11 @@ try:
                 "arguments": {"url": target},
             },
         }, session_id)
-        rejected = "error" in rejection or rejection.get("result", {}).get("isError") is True
-        if status != 200 or not rejected:
+        # The navigate tool successfully returns a parsed blockmap for upstream
+        # HTTP errors, so the egress denial is represented as an embedded 403
+        # rather than a JSON-RPC/tool error.
+        blocked_status = tool_http_error_status(rejection)
+        if status != 200 or blocked_status != 403:
             raise ValueError("private target was not rejected")
 finally:
     if session_id:
