@@ -37,16 +37,20 @@ from typing import Optional
 # Static data
 # ---------------------------------------------------------------------------
 
+PILOT_SEATS = [
+    f"fin-terminal-public-seat-{value:02d}" for value in range(1, 7)
+]
+
 PILOT_SERVICES = [
     "fin-terminal-public-redis",
     "fin-terminal-public-unbrowser-mcp",
-    "fin-terminal-public-seat-01",
+    *PILOT_SEATS,
     "fin-terminal-public-gateway",
 ]
 
 PILOT_STOP_ORDER = [
     "fin-terminal-public-gateway",
-    "fin-terminal-public-seat-01",
+    *PILOT_SEATS,
     "fin-terminal-public-unbrowser-mcp",
     "fin-terminal-public-redis",
 ]
@@ -295,6 +299,178 @@ class CaddyValidationTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Persisted worker-set transition — real embedded Python with fake Redis CLI
+# ---------------------------------------------------------------------------
+
+
+class RedisWorkerSetTransitionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.code = _extract_embedded_python(
+            _script_text(), "transition_redis_worker_set()"
+        )
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.work = Path(self._temp_dir.name)
+        self.state_path = self.work / "redis-state.json"
+        self.backup_path = self.work / "backup.json"
+        self.code_path = self.work / "transition.py"
+        self.code_path.write_text(self.code, encoding="utf-8")
+        docker = self.work / "docker"
+        docker.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import os
+                import sys
+                from pathlib import Path
+
+                state_path = Path(os.environ["FAKE_REDIS_STATE"])
+                args = sys.argv[1:]
+                try:
+                    redis_index = args.index("redis-cli")
+                except ValueError:
+                    raise SystemExit(2)
+                command = args[redis_index + 1:]
+                use_stdin = False
+                while command and command[0] in {"--raw", "-x"}:
+                    use_stdin = use_stdin or command[0] == "-x"
+                    command = command[1:]
+                if command[:1] == ["EXISTS"]:
+                    print("1" if state_path.exists() else "0")
+                elif command[:1] == ["GET"]:
+                    if state_path.exists():
+                        sys.stdout.write(state_path.read_text(encoding="utf-8") + "\\n")
+                elif command[:1] == ["SET"] and use_stdin:
+                    state_path.write_text(sys.stdin.read(), encoding="utf-8")
+                    print("OK")
+                elif command[:1] == ["DEL"]:
+                    existed = state_path.exists()
+                    if existed:
+                        state_path.unlink()
+                    print("1" if existed else "0")
+                else:
+                    raise SystemExit(3)
+                """
+            ),
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _run(self, target: int, backup: Optional[Path] = None) -> subprocess.CompletedProcess:
+        env = {
+            **os.environ,
+            "PATH": f"{self.work}:{os.environ.get('PATH', '')}",
+            "FAKE_REDIS_STATE": str(self.state_path),
+        }
+        return subprocess.run(
+            [
+                sys.executable,
+                str(self.code_path),
+                "fake-container-id",
+                str(target),
+                str(backup) if backup else "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+
+    @staticmethod
+    def _state(worker_ids: list[str]) -> dict:
+        return {
+            "version": 1,
+            "dailyBudgetDay": "2026-08-03",
+            "dailyReservedMicroUsd": 6_000_000,
+            "queue": ["active-ticket"],
+            "sessions": [
+                {
+                    "id": "active-ticket",
+                    "visitorId": "visitor",
+                    "state": "active",
+                    "ticketExpiresAt": 1,
+                    "researchRuns": 1,
+                    "connectionVersion": 1,
+                    "nextConnectionVersion": 1,
+                }
+            ],
+            "workers": [
+                {"id": worker_id, "generation": f"generation-{worker_id}"}
+                for worker_id in worker_ids
+            ],
+        }
+
+    def test_forward_transition_preserves_budget_and_ends_live_state(self) -> None:
+        original = json.dumps(self._state(["seat-01"]), separators=(",", ":"))
+        self.state_path.write_text(original, encoding="utf-8")
+        result = self._run(6, self.backup_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "STATE_TRANSITION_OK:present")
+        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["dailyReservedMicroUsd"], 6_000_000)
+        self.assertEqual(state["dailyBudgetDay"], "2026-08-03")
+        self.assertEqual(state["queue"], [])
+        self.assertEqual(state["sessions"][0]["state"], "ended")
+        self.assertEqual(state["sessions"][0]["endReason"], "worker-unavailable")
+        self.assertEqual(
+            [worker["id"] for worker in state["workers"]],
+            [f"seat-{value:02d}" for value in range(1, 7)],
+        )
+        self.assertEqual(self.backup_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(stat.S_IMODE(self.backup_path.stat().st_mode), 0o600)
+
+    def test_reverse_transition_restores_one_worker_shape(self) -> None:
+        state = self._state([f"seat-{value:02d}" for value in range(1, 7)])
+        state["queue"] = []
+        state["sessions"][0]["state"] = "ended"
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+        result = self._run(1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        restored = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(restored["dailyReservedMicroUsd"], 6_000_000)
+        self.assertEqual(restored["workers"], [{"id": "seat-01"}])
+
+    def test_rejects_unknown_worker_set_without_mutating_state(self) -> None:
+        original = json.dumps(self._state(["seat-unknown"]))
+        self.state_path.write_text(original, encoding="utf-8")
+        result = self._run(6, self.backup_path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state_path.read_text(encoding="utf-8"), original)
+
+    def test_absent_state_remains_absent_and_is_backed_up_as_empty(self) -> None:
+        result = self._run(6, self.backup_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "STATE_TRANSITION_OK:absent")
+        self.assertFalse(self.state_path.exists())
+        self.assertEqual(self.backup_path.read_text(encoding="utf-8"), "")
+        self.assertEqual(
+            Path(f"{self.backup_path}.presence").read_text(encoding="utf-8"),
+            "absent\n",
+        )
+
+    def test_present_empty_state_is_not_mistaken_for_absence(self) -> None:
+        self.state_path.write_text("", encoding="utf-8")
+        result = self._run(6, self.backup_path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.state_path.exists())
+        self.assertEqual(self.state_path.read_text(encoding="utf-8"), "")
+        self.assertEqual(self.backup_path.read_text(encoding="utf-8"), "")
+        self.assertEqual(
+            Path(f"{self.backup_path}.presence").read_text(encoding="utf-8"),
+            "present\n",
+        )
+
+    def test_backup_write_retries_short_writes(self) -> None:
+        self.assertIn("while written < len(data)", self.code)
+        self.assertIn('redis("--raw", "EXISTS", STATE_KEY)', self.code)
+
+
+# ---------------------------------------------------------------------------
 # (C) MCP protocol check requirements
 # ---------------------------------------------------------------------------
 
@@ -342,6 +518,14 @@ class MCPProtocolRequirementsTests(unittest.TestCase):
         self.assertIn("blocked_status != 403", mcp_func)
         self.assertNotIn('rejected = "error" in rejection', mcp_func)
 
+    def test_mcp_checks_six_concurrent_unique_sessions(self) -> None:
+        mcp_func_start = self.text.find("mcp_protocol_check()")
+        mcp_func = self.text[mcp_func_start:] if mcp_func_start >= 0 else self.text
+        self.assertIn("ThreadPoolExecutor(max_workers=6)", mcp_func)
+        self.assertIn("range(1, 7)", mcp_func)
+        self.assertIn("len(set(session_ids)) != 6", mcp_func)
+        self.assertIn("MCP_SIX_OK", mcp_func)
+
 
 # ---------------------------------------------------------------------------
 # (D) Gateway status check
@@ -362,6 +546,12 @@ class GatewayStatusTests(unittest.TestCase):
 
     def test_gateway_checks_http_2xx(self) -> None:
         self.assertIn("statusCode", self.text)
+
+    def test_gateway_requires_six_ready_unique_worker_generations(self) -> None:
+        self.assertIn('gateway.readyWorkers !== 6', self.text)
+        self.assertIn('gateway.assignedWorkers !== 0', self.text)
+        self.assertIn('gateway.queuedVisitors !== 0', self.text)
+        self.assertIn('new Set(generations).size !== 6', self.text)
 
 
 # ---------------------------------------------------------------------------
@@ -397,9 +587,110 @@ class FormatJsonTests(unittest.TestCase):
             self.text,
         )
 
+
+class SixSeatComposeContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).resolve().parent.parent
+        command = [
+            "docker",
+            "compose",
+            "-f",
+            str(root / "docker-compose.yml"),
+            "-f",
+            str(root / "docker-compose.public-terminal.yml"),
+            "--profile",
+            "fin-terminal-public-pilot",
+            "config",
+            "--no-interpolate",
+            "--format",
+            "json",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise AssertionError(f"Compose render failed:\n{result.stderr}")
+        cls.config = json.loads(result.stdout)
+        cls.services = cls.config["services"]
+
+    @staticmethod
+    def _networks(service: dict) -> set[str]:
+        networks = service.get("networks", {})
+        return set(networks if isinstance(networks, list) else networks.keys())
+
+    @staticmethod
+    def _environment(service: dict) -> dict[str, str]:
+        environment = service.get("environment", {})
+        if isinstance(environment, dict):
+            return {str(key): str(value) for key, value in environment.items()}
+        result = {}
+        for entry in environment:
+            key, value = entry.split("=", 1)
+            result[key] = value
+        return result
+
+    def test_exact_six_workers_and_gateway_contract(self) -> None:
+        for service in PILOT_SERVICES:
+            self.assertIn(service, self.services)
+        seats = sorted(name for name in self.services if name.startswith("fin-terminal-public-seat-"))
+        self.assertEqual(seats, PILOT_SEATS)
+        environment = self._environment(self.services["fin-terminal-public-gateway"])
+        self.assertEqual(environment["PUBLIC_MAX_SESSIONS"], "6")
+        expected = ",".join(
+            f"seat-{value:02d}=http://fin-terminal-public-seat-{value:02d}:8787"
+            for value in range(1, 7)
+        )
+        self.assertEqual(environment["PUBLIC_WORKER_ENDPOINTS"], expected)
+
+    def test_each_worker_has_disjoint_gateway_mcp_and_egress_networks(self) -> None:
+        worker_networks = {
+            seat: self._networks(self.services[seat]) for seat in PILOT_SEATS
+        }
+        for index, seat in enumerate(PILOT_SEATS, start=1):
+            suffix = f"{index:02d}"
+            self.assertEqual(
+                worker_networks[seat],
+                {
+                    f"fin_terminal_public_seat_{suffix}",
+                    f"fin_terminal_public_mcp_{suffix}",
+                    f"fin_terminal_public_egress_{suffix}",
+                },
+            )
+        for index, left in enumerate(PILOT_SEATS):
+            for right in PILOT_SEATS[index + 1 :]:
+                self.assertTrue(worker_networks[left].isdisjoint(worker_networks[right]))
+
+    def test_shared_services_attach_only_to_reviewed_sides(self) -> None:
+        gateway = self._networks(self.services["fin-terminal-public-gateway"])
+        mcp = self._networks(self.services["fin-terminal-public-unbrowser-mcp"])
+        self.assertEqual(
+            gateway,
+            {
+                "fin_terminal_public",
+                "fin_terminal_public_state",
+                "fin_terminal_public_egress",
+                *{f"fin_terminal_public_seat_{value:02d}" for value in range(1, 7)},
+            },
+        )
+        self.assertEqual(
+            mcp,
+            {
+                "unbrowser_egress_proxy",
+                *{f"fin_terminal_public_mcp_{value:02d}" for value in range(1, 7)},
+            },
+        )
+
+    def test_worker_private_network_types(self) -> None:
+        networks = self.config["networks"]
+        for value in range(1, 7):
+            suffix = f"{value:02d}"
+            self.assertTrue(networks[f"fin_terminal_public_seat_{suffix}"]["internal"])
+            self.assertTrue(networks[f"fin_terminal_public_mcp_{suffix}"]["internal"])
+            self.assertFalse(networks[f"fin_terminal_public_egress_{suffix}"].get("internal", False))
+
     def test_no_extra_seat_or_container(self) -> None:
-        self.assertIn("seat_count", self.text)
-        self.assertIn("fin-terminal-public-seat-", self.text)
+        text = _script_text()
+        self.assertIn("seat_count", text)
+        self.assertIn('PILOT_SEAT_COUNT="${#PILOT_SEATS[@]}"', text)
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +836,7 @@ class ConfirmationPhraseTests(unittest.TestCase):
             / "public-terminal-pilot.yml"
         )
         wf_text = wf_path.read_text(encoding="utf-8")
-        self.assertIn("ACTIVATE ONE SEAT", wf_text)
+        self.assertIn("ACTIVATE SIX SEATS", wf_text)
         self.assertIn("DISABLE PUBLIC PILOT", wf_text)
         self.assertNotIn("CONFIRM != \"yes\"", wf_text)
 
@@ -638,6 +929,17 @@ class SecureTempRollbackTests(unittest.TestCase):
     def test_rollback_stops_in_pilot_stop_order(self) -> None:
         self.assertIn("PILOT_STOP_ORDER", self.text)
 
+    def test_rollback_restores_exact_redis_snapshot_before_removing_services(self) -> None:
+        handler_start = self.text.find("activate_rollback_handler()")
+        handler_end = self.text.find("# Validate overlay safety", handler_start)
+        handler = self.text[handler_start:handler_end]
+        stop_gateway = handler.find("stop fin-terminal-public-gateway")
+        restore_redis = handler.find("restore_redis_state_backup")
+        remove_loop = handler.find('compose_cmd rm -f "$svc"')
+        self.assertGreater(stop_gateway, -1)
+        self.assertGreater(restore_redis, stop_gateway)
+        self.assertGreater(remove_loop, restore_redis)
+
     def test_no_backup_temp_leftovers(self) -> None:
         self.assertNotIn("BACKUP_TEMP", self.text)
 
@@ -695,27 +997,26 @@ class StaticSafetyTests(unittest.TestCase):
             self.assertIn(svc, self.text, f"service {svc} not found in script")
 
     def test_defines_exact_stop_order_array(self) -> None:
+        seats_marker = "PILOT_SEATS=("
+        seats_idx = self.text.find(seats_marker)
+        self.assertGreater(seats_idx, -1)
+        seats_section = self.text[seats_idx : seats_idx + 500]
+        for seat in PILOT_SEATS:
+            self.assertIn(seat, seats_section)
+
         marker = "PILOT_STOP_ORDER=("
         idx = self.text.find(marker)
         self.assertGreater(idx, -1)
         section = self.text[idx : idx + 600]
-        positions = {}
-        for svc in PILOT_STOP_ORDER:
-            pos = section.find(svc)
-            self.assertGreater(pos, -1, f"service {svc} not in PILOT_STOP_ORDER")
-            positions[svc] = pos
-        self.assertLess(
-            positions["fin-terminal-public-gateway"],
-            positions["fin-terminal-public-seat-01"],
-        )
-        self.assertLess(
-            positions["fin-terminal-public-seat-01"],
-            positions["fin-terminal-public-unbrowser-mcp"],
-        )
-        self.assertLess(
-            positions["fin-terminal-public-unbrowser-mcp"],
-            positions["fin-terminal-public-redis"],
-        )
+        gateway = section.find("fin-terminal-public-gateway")
+        seats = section.find('"${PILOT_SEATS[@]}"')
+        mcp = section.find("fin-terminal-public-unbrowser-mcp")
+        redis = section.find("fin-terminal-public-redis")
+        for name, position in (("gateway", gateway), ("seats", seats), ("MCP", mcp), ("Redis", redis)):
+            self.assertGreater(position, -1, f"{name} missing from PILOT_STOP_ORDER")
+        self.assertLess(gateway, seats)
+        self.assertLess(seats, mcp)
+        self.assertLess(mcp, redis)
 
     def test_lock_acquire_pattern(self) -> None:
         self.assertIn(".deploy.lock", self.text)
@@ -789,6 +1090,17 @@ class StaticSafetyTests(unittest.TestCase):
         self.assertIn("validate_runtime_pilot", active_branch)
         self.assertIn("verify_live_edge_surface", active_branch)
 
+    def test_runtime_checks_cross_seat_isolation_and_capacity(self) -> None:
+        self.assertIn("Cross-seat and worker-to-state negative connectivity", self.text)
+        self.assertIn("check_post_start_capacity", self.text)
+        self.assertIn("512 * 1024", self.text)
+        self.assertIn("mem_total_kb * 15 / 100", self.text)
+
+    def test_disable_returns_persisted_state_to_one_worker_shape(self) -> None:
+        disable_start = self.text.find("cmd_disable()")
+        disable = self.text[disable_start:]
+        self.assertIn("transition_redis_worker_set 1 -", disable)
+
     def test_public_config_must_require_turnstile(self) -> None:
         self.assertIn('public_config.get("turnstileRequired") is not True', self.text)
         self.assertIn('public_config.get("turnstileSiteKey")', self.text)
@@ -809,10 +1121,10 @@ class BuildStartOrderingTests(unittest.TestCase):
         build_pos = self.text.find("compose_cmd build")
         self.assertLess(pull_pos, build_pos, "Redis pull must precede build steps")
 
-    def test_start_order_redis_mcp_seat_gateway(self) -> None:
+    def test_start_order_redis_mcp_seats_gateway(self) -> None:
         redis_start = self.text.find("up -d --no-build fin-terminal-public-redis")
         mcp_start = self.text.find("up -d --no-deps --no-build fin-terminal-public-unbrowser-mcp")
-        seat_start = self.text.find("up -d --no-deps --no-build fin-terminal-public-seat-01")
+        seat_start = self.text.find('for seat in "${PILOT_SEATS[@]}"')
         gateway_start = self.text.find("up -d --no-deps --no-build fin-terminal-public-gateway")
         self.assertLess(redis_start, mcp_start)
         self.assertLess(mcp_start, seat_start)

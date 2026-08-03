@@ -13,7 +13,7 @@ on:
           - disable
       confirm:
         description: >-
-          For activate: type 'ACTIVATE ONE SEAT'.
+          For activate: type 'ACTIVATE SIX SEATS'.
           For disable: type 'DISABLE PUBLIC PILOT'.
           For status: leave empty.
         required: false
@@ -49,13 +49,13 @@ jobs:
           ACTION: ${{ inputs.action }}
         run: |
           case "$ACTION" in
-            activate) expected="ACTIVATE ONE SEAT" ;;
+            activate) expected="ACTIVATE SIX SEATS" ;;
             disable)  expected="DISABLE PUBLIC PILOT" ;;
             *)        expected="" ;;
           esac
           if [[ "$CONFIRM" != "$expected" ]]; then
             echo "::error::The '$ACTION' action requires confirmation."
-            echo "::error::For activate: type 'ACTIVATE ONE SEAT' in the confirm input."
+            echo "::error::For activate: type 'ACTIVATE SIX SEATS' in the confirm input."
             echo "::error::For disable:  type 'DISABLE PUBLIC PILOT' in the confirm input."
             exit 1
           fi

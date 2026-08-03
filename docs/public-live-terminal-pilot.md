@@ -1,6 +1,6 @@
 # Public Live Terminal Pilot
 
-This optional overlay runs one real, disposable Pi-backed terminal for public
+This optional overlay runs six real, disposable Pi-backed terminals for public
 visitors. The normal deployment stages and validates the overlay but never
 starts its profiled services. `FIN_TERMINAL_PUBLIC_ENABLED` defaults to
 `false`, so Caddy returns a 404 instead of proxying a dead pilot upstream.
@@ -9,7 +9,7 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
 
 ## Architecture
 
-`browser → Caddy → Turnstile → public gateway → one disposable worker seat`
+`browser → Caddy → Turnstile → public gateway → six disposable worker seats`
 
 - Caddy strips any client-supplied edge token and real-IP header, injects an
   independent edge token, and omits the capability-bearing route from access
@@ -18,9 +18,12 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
   conservative admission reservation, and WebSocket proxying. Browser cookies
   and ordinary authorization headers do not cross the public boundary.
 - Redis persists admission state and permits only one active gateway lease.
-- The one seat has its own container, Pi session, temporary storage, and one
-  concurrent research worker. Idle, absolute-duration, and disconnect-grace
-  expiry stop the process; Compose restarts a clean generation before reuse.
+- Each of the six seats has its own container, Pi session, temporary storage,
+  private gateway network, private direct-egress network, private attachment to
+  the shared MCP service, and one concurrent research worker. Seats share no
+  Docker network with one another. Idle, absolute-duration, and
+  disconnect-grace expiry stop the process; Compose restarts a clean generation
+  before reuse.
 - Public research uses a dedicated MCP process but intentionally receives the
   same `OPENROUTER_API_KEY` as the trial agent. Provider quota, billing, and
   outage blast radius are shared.
@@ -57,19 +60,41 @@ keeps the route disabled and does not start the profile.
 
 ### Docker rehearsal evidence
 
-The current immutable pins passed an isolated arm64 Docker Desktop rehearsal
-on 2026-08-03. Turnstile was bypassed only through a test-only Compose override;
-the production Turnstile gate remains separate. The rehearsal verified:
+The immutable pins passed an isolated arm64 Docker Desktop one-seat rehearsal
+on 2026-08-03. This historical evidence established the worker lifecycle but
+does not by itself authorize the six-seat topology. Turnstile was bypassed only
+through a test-only Compose override; the production Turnstile gate remains
+separate. The rehearsal verified:
 
-- all four profiled services reached healthy with no host-published ports;
+- the one-seat service set reached healthy with no host-published ports;
 - MCP SDK `1.29.0` initialized, listed 32 tools, and completed a harmless
   `navigate` call through the dedicated SSRF egress proxy;
 - a browser reconnected inside grace without changing worker generation;
 - disconnect expiry stopped the worker, Compose restarted it once with a new
   generation, and the stale ticket was rejected with HTTP 409;
-- the replacement returned to the one-seat ready pool;
+- the replacement returned to the ready pool;
 - the named-service rollback removed every profiled container, retained the
   Redis volume for diagnosis, and left the production pilot route at 404.
+
+The explicit six-seat topology then passed a second isolated arm64 rehearsal on
+2026-08-03 using the same immutable application and dependency pins. A
+development-only Compose override bypassed Turnstile; production mode still
+forbids that override. The six-seat rehearsal verified:
+
+- Redis, the shared MCP service, six workers, and the gateway all reached
+  healthy with no host-published ports;
+- all six worker generations were unique, each worker had only its private
+  gateway/MCP/egress networks, and every worker failed to resolve the other five
+  workers and Redis;
+- the shared MCP process concurrently initialized six unique sessions, listed
+  tools, navigated a harmless public target, and deleted every session;
+- six browser WebSockets simultaneously received independent worker frames, a
+  seventh verified ticket remained FIFO queue position 1, and gateway metrics
+  reported exactly six assigned workers;
+- after all six clients disconnected, every worker was replaced and returned to
+  the ready pool; the queued no-show expired without contaminating a worker;
+- persisted admission state made a one-worker → six-worker → one-worker →
+  six-worker round trip without resetting its reservation counter.
 
 Repeat this rehearsal after changing an application, Redis, MCP dependency, or
 lifecycle configuration pin. It does not authorize activation without the
@@ -77,7 +102,7 @@ other gates above.
 
 ## Pilot policy
 
-- Exactly one worker seat. Multi-seat activation is not defined by this PR.
+- Exactly six worker seats. A seventh seat is not defined by this revision.
 - 50 waiting tickets, with a 10-minute ticket lifetime.
 - 5-minute idle timeout, 15-minute absolute session maximum, and 30-second
   reconnect grace.
@@ -119,7 +144,7 @@ trial agent. Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper
 require both Turnstile values. Do not put any protected value in this repository
 or a command-line argument.
 
-## One-seat activation workflow
+## Six-seat activation workflow
 
 Do not activate from an SSH shell. Use the protected **Public Terminal Pilot**
 GitHub Actions workflow on `main`. Every action uses the GitHub `production`
@@ -139,11 +164,11 @@ The workflow refuses a stale branch or, for activation, a host whose
 `.deploy-current` revision does not exactly match current `main`. It rechecks
 the protected remote `main` branch under the host deployment lock both before
 building and immediately before edge promotion. To activate the reviewed
-one-seat profile:
+six-seat profile:
 
 ```bash
 gh workflow run public-terminal-pilot.yml --ref main \
-  -f action=activate -f confirm='ACTIVATE ONE SEAT'
+  -f action=activate -f confirm='ACTIVATE SIX SEATS'
 ```
 
 Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
@@ -152,12 +177,16 @@ Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
 2. proves all retired replay URLs are 404 and the old demo container is absent;
 3. validates credentials against a protected temporary copy without rotating
    or printing them;
-4. renders the exact four-service overlay, verifies one seat, rejects published
-   ports, host networking, unsafe privileges, devices, and bind mounts, and
-   checks host capacity;
-5. builds and starts only Redis, the dedicated MCP service, seat 01, and the
-   public gateway, then verifies health, the exact runtime service/network set,
-   and no host port bindings;
+4. renders the exact nine-service overlay, verifies six seats and six unique
+   worker endpoints, rejects published ports, host networking, unsafe
+   privileges, devices, and bind mounts, and checks host capacity;
+5. builds the pinned images, starts Redis, snapshots its exact admission state,
+   transitions only the persisted worker set from one to six while preserving
+   the daily reservation counter and ending stale tickets, then starts the
+   shared dedicated MCP service, seats 01–06, and the public gateway; it
+   verifies health, six unique worker generations, exact per-seat runtime isolation,
+   negative cross-seat/state connectivity, no host port bindings, and retained
+   memory headroom;
 6. completes a real stateful MCP initialize/list/navigate/private-target
    rejection/delete sequence and the gateway's internal readiness check;
 7. validates a staged Caddy configuration, atomically enables the host flag,
@@ -167,27 +196,28 @@ Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
    cases without logging visitor or session tokens.
 
 Any activation failure after services start restores the exact pre-activation
-`.env`, recreates Caddy in the disabled state, proves the route is 404, and
-removes the four named containers in reverse dependency order. If the disabled
-edge cannot be proved, the script stops Caddy rather than leave the pilot
-reachable.
+`.env` and exact pre-activation Redis state, recreates Caddy in the disabled
+state, proves the route is 404, and removes the nine named containers in reverse
+dependency order. If the disabled edge cannot be proved, the script stops Caddy
+rather than leave the pilot reachable.
 
 After workflow success, complete a real browser Turnstile and terminal-session
 test immediately. Verify the Turnstile action `public_terminal_admission`, the
 hostname `unbrowser.unchainedsky.com`, queue admission, WebSocket reconnect,
 timeout cleanup, and worker replacement generation. If that test fails, disable
 the pilot before investigating. Record RSS, CPU, actual provider charges, and
-dedicated MCP health throughout the one-seat soak.
+dedicated MCP health throughout the six-seat soak.
 
 Keep the pilot at `/fin-terminal-live-pilot/`. Any canonical-path change or
-multi-seat expansion requires a separate operational review and infrastructure
-PR.
+expansion beyond six seats requires a separate operational review and
+infrastructure PR.
 
 ## Expansion boundary
 
-This overlay deliberately defines no second seat. Multi-seat rollout requires
-per-seat network and authentication isolation plus a separate capacity and cost
-review; it must not be enabled by copying the seat-01 service definition.
+This overlay deliberately defines exactly six seats with explicit per-seat
+gateway, MCP, and egress networks. Expansion beyond six requires another
+capacity, cost, state-migration, and isolation review; it must not be enabled by
+copying an existing seat definition without updating the fail-closed contracts.
 
 ## Fail-closed rollback
 
@@ -200,8 +230,11 @@ gh workflow run public-terminal-pilot.yml --ref main \
 ```
 
 Disable atomically writes the false flag, validates and recreates Caddy, proves
-the public route is 404, then stops and removes only the four reviewed services
-in reverse dependency order. It also rechecks the primary health route, public
+the public route is 404, then stops and removes only the nine reviewed services
+in reverse dependency order. After stopping the gateway writer and before
+stopping Redis, it transitions the persisted worker set back to the one-seat
+shape expected by the previous production revision while preserving accounting
+and ended ticket history. It also rechecks the primary health route, public
 landing page, signed terminal, and replay tombstones. The Redis volume is
 retained for diagnosis unless data removal is separately approved. Never run
 `docker compose down` with this overlay: the merged project also contains the
