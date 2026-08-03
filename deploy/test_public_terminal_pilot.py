@@ -628,6 +628,13 @@ class SixSeatComposeContractTests(unittest.TestCase):
             result[key] = value
         return result
 
+    @staticmethod
+    def _subnets(network: dict) -> list[str]:
+        return [
+            str(entry.get("subnet", ""))
+            for entry in network.get("ipam", {}).get("config", [])
+        ]
+
     def test_exact_six_workers_and_gateway_contract(self) -> None:
         for service in PILOT_SERVICES:
             self.assertIn(service, self.services)
@@ -686,6 +693,29 @@ class SixSeatComposeContractTests(unittest.TestCase):
             self.assertTrue(networks[f"fin_terminal_public_seat_{suffix}"]["internal"])
             self.assertTrue(networks[f"fin_terminal_public_mcp_{suffix}"]["internal"])
             self.assertFalse(networks[f"fin_terminal_public_egress_{suffix}"].get("internal", False))
+            self.assertEqual(
+                self._subnets(networks[f"fin_terminal_public_mcp_{suffix}"]),
+                [f"10.253.0.{(value - 1) * 8}/29"],
+            )
+            self.assertEqual(
+                self._subnets(networks[f"fin_terminal_public_egress_{suffix}"]),
+                [f"10.253.0.{48 + (value - 1) * 8}/29"],
+            )
+            self.assertEqual(
+                self._subnets(networks[f"fin_terminal_public_seat_{suffix}"]),
+                [f"10.253.0.{96 + (value - 1) * 8}/29"],
+            )
+
+    def test_per_seat_subnets_are_unique_and_fit_the_reviewed_block(self) -> None:
+        networks = self.config["networks"]
+        subnets = []
+        for prefix in ("mcp", "egress", "seat"):
+            for value in range(1, 7):
+                name = f"fin_terminal_public_{prefix}_{value:02d}"
+                subnets.extend(self._subnets(networks[name]))
+        self.assertEqual(len(subnets), 18)
+        self.assertEqual(len(set(subnets)), 18)
+        self.assertTrue(all(subnet.startswith("10.253.0.") for subnet in subnets))
 
     def test_no_extra_seat_or_container(self) -> None:
         text = _script_text()
@@ -1095,6 +1125,15 @@ class StaticSafetyTests(unittest.TestCase):
         self.assertIn("check_post_start_capacity", self.text)
         self.assertIn("512 * 1024", self.text)
         self.assertIn("mem_total_kb * 15 / 100", self.text)
+        self.assertIn("PILOT_EPHEMERAL_NETWORK_SPECS", self.text)
+        self.assertIn("Per-seat bridge subnets", self.text)
+
+    def test_unused_pilot_network_cleanup_is_label_scoped_and_required(self) -> None:
+        self.assertIn("remove_unused_pilot_networks", self.text)
+        self.assertIn('com.docker.compose.network', self.text)
+        self.assertIn('[[ "$container_count" != "0" ]]', self.text)
+        self.assertIn("PILOT_LEGACY_NETWORK_KEYS", self.text)
+        self.assertGreaterEqual(self.text.count("remove_unused_pilot_networks"), 4)
 
     def test_disable_returns_persisted_state_to_one_worker_shape(self) -> None:
         disable_start = self.text.find("cmd_disable()")
