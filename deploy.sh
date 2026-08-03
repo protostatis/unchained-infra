@@ -12,6 +12,20 @@
 
 set -euo pipefail
 
+# GitHub injects these only into the approved production deployment job. Copy
+# them into non-exported shell variables, then remove the inherited names before
+# invoking any unrelated child process. They are later streamed to the protected
+# remote staging directory through verified SSH stdin, never arguments or files.
+TURNSTILE_SITE_KEY_INPUT="${FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY-}"
+TURNSTILE_SECRET_INPUT="${FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET-}"
+export -n TURNSTILE_SITE_KEY_INPUT TURNSTILE_SECRET_INPUT
+unset FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET
+if [[ ( -z "$TURNSTILE_SITE_KEY_INPUT" && -n "$TURNSTILE_SECRET_INPUT" ) \
+    || ( -n "$TURNSTILE_SITE_KEY_INPUT" && -z "$TURNSTILE_SECRET_INPUT" ) ]]; then
+    echo "ERROR: both FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY and FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET must be provided together" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -373,13 +387,65 @@ EOF
         "$EC2_USER@$EC2_HOST:$REMOTE_CONFIG_STAGE/"
 }
 
+install_staged_public_turnstile_values() {
+    if [[ -z "$TURNSTILE_SITE_KEY_INPUT" ]]; then
+        echo "    External Turnstile values not supplied; retaining deployment-host values."
+        unset TURNSTILE_SITE_KEY_INPUT TURNSTILE_SECRET_INPUT
+        return 0
+    fi
+
+    local helper_path="$REMOTE_CONFIG_STAGE/ensure_fin_terminal_secrets.py"
+    local env_path="$REMOTE_CONFIG_STAGE/.env"
+    local quoted_helper quoted_env result
+    printf -v quoted_helper '%q' "$helper_path"
+    printf -v quoted_env '%q' "$env_path"
+    if ! result="$(
+        printf '%s\0%s\0' "$TURNSTILE_SITE_KEY_INPUT" "$TURNSTILE_SECRET_INPUT" \
+            | "${SSH_CMD[@]}" \
+                "python3 $quoted_helper --install-public-turnstile $quoted_env"
+    )"; then
+        unset TURNSTILE_SITE_KEY_INPUT TURNSTILE_SECRET_INPUT
+        echo "ERROR: failed to provision staged Turnstile values" >&2
+        return 1
+    fi
+    unset TURNSTILE_SITE_KEY_INPUT TURNSTILE_SECRET_INPUT
+
+    case "$result" in
+        turnstile_changed=true)
+            echo "    Staged external Turnstile values updated."
+            ;;
+        turnstile_changed=false)
+            echo "    Existing external Turnstile values retained."
+            ;;
+        *)
+            echo "ERROR: unexpected staged Turnstile provisioning result" >&2
+            return 1
+            ;;
+    esac
+}
+
 ensure_staged_fin_terminal_secrets() {
-    remote_bash "$REMOTE_CONFIG_STAGE" <<'EOF'
+    local result
+    result="$(remote_bash "$REMOTE_CONFIG_STAGE" <<'EOF'
 set -euo pipefail
 stage_dir="$1"
 test -f "$stage_dir/ensure_fin_terminal_secrets.py"
-python3 "$stage_dir/ensure_fin_terminal_secrets.py" "$stage_dir/.env"
+python3 "$stage_dir/ensure_fin_terminal_secrets.py" --ensure-status "$stage_dir/.env"
 EOF
+)"
+    case "$result" in
+        fin_terminal_credentials_changed=true)
+            FIN_TERMINAL_SECRETS_CHANGED=true
+            echo "    Generated independent fin-terminal credential(s) on the host."
+            ;;
+        fin_terminal_credentials_changed=false)
+            echo "    Existing independent fin-terminal credentials retained."
+            ;;
+        *)
+            echo "ERROR: unexpected fin-terminal credential preparation result" >&2
+            return 1
+            ;;
+    esac
 }
 
 validate_staged_caddy_config() {
@@ -405,10 +471,7 @@ exec bash "$stage_dir/caddy_config_preflight.sh" \
 EOF
 )"
     case "$result" in
-        fin_terminal_secrets_changed=true)
-            FIN_TERMINAL_SECRETS_CHANGED=true
-            ;;
-        fin_terminal_secrets_changed=false)
+        environment_changed=true|environment_changed=false)
             ;;
         *)
             echo "ERROR: unexpected Caddy preflight promotion result: $result" >&2
@@ -1058,6 +1121,8 @@ fi
 # environment while a malformed file cannot trigger rollback/recreation.
 echo "==> Staging prospective configuration..."
 create_remote_config_stage
+echo "==> Provisioning staged Turnstile values..."
+install_staged_public_turnstile_values
 echo "==> Validating staged fin-terminal production secrets..."
 ensure_staged_fin_terminal_secrets
 echo "==> Validating staged Caddyfile..."

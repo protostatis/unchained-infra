@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import secrets
+import stat
 import sys
 import tempfile
 
@@ -22,6 +24,9 @@ PUBLIC_EXTERNAL_NAMES = (
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY",
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET",
 )
+TURNSTILE_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,256}$")
+TURNSTILE_PAYLOAD_MAX_BYTES = 515
+ENV_MAX_BYTES = 1024 * 1024
 
 
 def _env_value(lines: list[str], name: str) -> str:
@@ -42,14 +47,118 @@ def _new_token(*, excluding: set[str]) -> str:
             return token
 
 
+def _read_regular_env(env_path: Path) -> tuple[str, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(env_path, flags)
+    except OSError as exc:
+        raise ValueError("production .env is missing or unsafe") from exc
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("production .env is not a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            content = handle.read(ENV_MAX_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(content.encode("utf-8")) > ENV_MAX_BYTES:
+        raise ValueError("production .env is too large")
+    return content, opened
+
+
+def _replace_env_atomically(
+    env_path: Path,
+    content: str,
+    expected: os.stat_result,
+) -> None:
+    current = os.stat(env_path, follow_symlinks=False)
+    if not stat.S_ISREG(current.st_mode):
+        raise ValueError("production .env is not a regular file")
+    if current.st_dev != expected.st_dev or current.st_ino != expected.st_ino:
+        raise ValueError("production .env changed while preparing credentials")
+
+    fd, tmp_name = tempfile.mkstemp(prefix=".env.fin-terminal.", dir=env_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, env_path)
+        directory_fd = os.open(env_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def _validate_turnstile_value(label: str, value: str) -> None:
+    if not TURNSTILE_VALUE_PATTERN.fullmatch(value):
+        raise ValueError(f"invalid {label}")
+
+
+def install_public_turnstile_values(
+    env_path: Path,
+    site_key: str,
+    secret: str,
+) -> bool:
+    """Atomically upsert externally issued Turnstile values into a staged .env."""
+    _validate_turnstile_value("Turnstile site key", site_key)
+    _validate_turnstile_value("Turnstile secret", secret)
+
+    original, opened = _read_regular_env(env_path)
+    lines = original.splitlines()
+    public_enabled_value = _env_value(lines, "FIN_TERMINAL_PUBLIC_ENABLED")
+    if public_enabled_value not in {"", "false", "true"}:
+        raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must be true or false")
+
+    replacements = {
+        "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": site_key,
+        "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": secret,
+    }
+    if all(
+        sum(line.startswith(f"{name}=") for line in lines) == 1
+        and _env_value(lines, name) == replacements[name]
+        for name in PUBLIC_EXTERNAL_NAMES
+    ):
+        _replace_env_atomically(env_path, original, opened)
+        return False
+
+    prefixes = tuple(f"{name}=" for name in PUBLIC_EXTERNAL_NAMES)
+    updated = [line for line in lines if not line.startswith(prefixes)]
+    updated.extend(f"{name}={replacements[name]}" for name in PUBLIC_EXTERNAL_NAMES)
+    content = "\n".join(updated) + "\n"
+    changed = content != original
+    if changed and public_enabled_value == "true":
+        raise ValueError("disable the public route before changing Turnstile credentials")
+
+    _replace_env_atomically(env_path, content, opened)
+    return changed
+
+
+def _read_turnstile_payload() -> tuple[str, str]:
+    payload = sys.stdin.buffer.read(TURNSTILE_PAYLOAD_MAX_BYTES + 1)
+    if len(payload) > TURNSTILE_PAYLOAD_MAX_BYTES:
+        raise ValueError("Turnstile payload is too large")
+    parts = payload.split(b"\0")
+    if len(parts) != 3 or parts[-1] != b"":
+        raise ValueError("invalid Turnstile payload framing")
+    try:
+        site_key, secret = (part.decode("ascii") for part in parts[:2])
+    except UnicodeDecodeError as exc:
+        raise ValueError("Turnstile payload must be ASCII") from exc
+    return site_key, secret
+
+
 def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     """Return True when a terminal credential was generated or replaced."""
-    if env_path.is_symlink():
-        raise ValueError("refusing symlinked production .env")
-    if not env_path.is_file():
-        raise ValueError("production .env is missing")
-
-    lines = env_path.read_text(encoding="utf-8").splitlines()
+    original, opened = _read_regular_env(env_path)
+    lines = original.splitlines()
     openrouter_key = _env_value(lines, "OPENROUTER_API_KEY")
     if not openrouter_key:
         raise ValueError("OPENROUTER_API_KEY is missing from production .env")
@@ -65,6 +174,14 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
                 "public terminal is enabled but required external values are missing: "
                 + ", ".join(missing)
             )
+        _validate_turnstile_value(
+            "Turnstile site key",
+            _env_value(lines, "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY"),
+        )
+        _validate_turnstile_value(
+            "Turnstile secret",
+            _env_value(lines, "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET"),
+        )
 
     tokens = {name: _env_value(lines, name) for name in TOKEN_NAMES}
     existing_values = {value for value in tokens.values() if value}
@@ -96,29 +213,33 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     ]
     updated.extend(f"{name}={tokens[name]}" for name in TOKEN_NAMES)
     content = "\n".join(updated) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=".env.fin-terminal.", dir=env_path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp_name, 0o600)
-        os.replace(tmp_name, env_path)
-    finally:
-        if os.path.exists(tmp_name):
-            os.unlink(tmp_name)
+    _replace_env_atomically(env_path, content, opened)
     return changed
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(f"Usage: {argv[0]} /path/to/.env", file=sys.stderr)
+    install_turnstile = len(argv) == 3 and argv[1] == "--install-public-turnstile"
+    ensure_status = len(argv) == 3 and argv[1] == "--ensure-status"
+    if len(argv) != 2 and not install_turnstile and not ensure_status:
+        print(
+            f"Usage: {argv[0]} [--ensure-status|--install-public-turnstile] /path/to/.env",
+            file=sys.stderr,
+        )
         return 2
     try:
-        generated = ensure_fin_terminal_secrets(Path(argv[1]))
+        env_path = Path(argv[2] if install_turnstile or ensure_status else argv[1])
+        if install_turnstile:
+            site_key, secret = _read_turnstile_payload()
+            changed = install_public_turnstile_values(env_path, site_key, secret)
+            print(f"turnstile_changed={str(changed).lower()}")
+            return 0
+        generated = ensure_fin_terminal_secrets(env_path)
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+    if ensure_status:
+        print(f"fin_terminal_credentials_changed={str(generated).lower()}")
+        return 0
     if generated:
         print("    Generated independent fin-terminal credential(s) on the host.")
     else:

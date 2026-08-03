@@ -286,7 +286,7 @@ esac
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "fin_terminal_secrets_changed=true")
+            self.assertEqual(result.stdout.strip(), "environment_changed=true")
             self.assertEqual(live_caddy.stat().st_ino, before_inode)
             self.assertEqual(live_caddy.read_text(), "candidate config\n")
             self.assertEqual((remote_dir / ".env").read_text(), "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n")
@@ -339,7 +339,7 @@ esac
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "fin_terminal_secrets_changed=false")
+            self.assertEqual(result.stdout.strip(), "environment_changed=false")
             self.assertEqual(live_env.stat().st_mode & 0o777, 0o600)
 
 
@@ -367,6 +367,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         ).read_text()
         cls.caddy_preflight = cls.repo_root.joinpath(
             "deploy", "caddy_config_preflight.sh"
+        ).read_text()
+        cls.workflow = cls.repo_root.joinpath(
+            ".github", "workflows", "ci.yml"
         ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
@@ -643,6 +646,58 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn(".deploy-tools/ensure_fin_terminal_secrets.py .env", self.pilot_doc)
         self.assertIn("--no-deps --no-build --pull never --force-recreate caddy", self.pilot_doc)
         self.assertIn("Never run `docker compose down`", self.pilot_doc)
+
+    def test_turnstile_values_are_provisioned_through_protected_staging(self):
+        capture_index = self.deploy.index(
+            'TURNSTILE_SITE_KEY_INPUT="${FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY-}"'
+        )
+        unset_index = self.deploy.index(
+            "unset FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY "
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET"
+        )
+        child_process_index = self.deploy.index('SCRIPT_DIR="$(cd')
+        stage_index = self.deploy.index('echo "==> Staging prospective configuration..."')
+        install_index = self.deploy.index(
+            'echo "==> Provisioning staged Turnstile values..."',
+            stage_index,
+        )
+        validate_index = self.deploy.index(
+            'echo "==> Validating staged fin-terminal production secrets..."',
+            install_index,
+        )
+        mutation_index = self.deploy.index("DEPLOY_MUTATED=true", validate_index)
+
+        self.assertLess(capture_index, unset_index)
+        self.assertLess(unset_index, child_process_index)
+        self.assertIn(
+            "export -n TURNSTILE_SITE_KEY_INPUT TURNSTILE_SECRET_INPUT",
+            self.deploy,
+        )
+        self.assertLess(stage_index, install_index)
+        self.assertLess(install_index, validate_index)
+        self.assertLess(validate_index, mutation_index)
+        self.assertIn("printf '%s\\0%s\\0'", self.deploy)
+        self.assertIn("--install-public-turnstile", self.deploy)
+        self.assertIn("--ensure-status", self.deploy)
+        self.assertIn("turnstile_changed=true", self.deploy)
+        self.assertIn("fin_terminal_credentials_changed=true", self.deploy)
+        self.assertNotIn(
+            'remote_bash "$TURNSTILE_SITE_KEY_INPUT"',
+            self.deploy,
+        )
+
+        self.assertIn(
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY: "
+            "${{ vars.FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY }}",
+            self.workflow,
+        )
+        self.assertIn(
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET: "
+            "${{ secrets.FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET }}",
+            self.workflow,
+        )
+        self.assertIn("GitHub `production` Environment", self.pilot_doc)
+        self.assertIn("never command arguments", self.pilot_doc)
 
     def test_demo_site_serves_unbrowser_page_at_root(self):
         route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
