@@ -351,6 +351,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.public_compose = cls.repo_root.joinpath(
             "docker-compose.public-terminal.yml"
         ).read_text()
+        cls.unbrowser_mcp_dockerfile = cls.repo_root.joinpath(
+            "Dockerfile.unbrowser-mcp"
+        ).read_text()
         cls.caddy = cls.repo_root.joinpath("Caddyfile").read_text()
         cls.deploy = cls.repo_root.joinpath("deploy.sh").read_text()
         cls.runtime_context = cls.repo_root.joinpath(
@@ -520,7 +523,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("mcp:8766", route)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "604bed09b55568f2564eee78addcebcc0c8a7cfa"
+        app_revision = "e287a54e12b29c33e4ee9e751946fb98ec3fba8e"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
@@ -557,6 +560,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             gateway,
         )
         self.assertNotIn("seat-02", self.public_compose)
+        self.assertIn("VITE_TERMINAL_BUILD_MODE: live", worker)
         self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
         self.assertIn("MARKET_RESEARCH_CONCURRENCY=1", worker)
         self.assertIn(
@@ -581,6 +585,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("- unbrowser_egress_proxy", public_mcp)
         self.assertIn("read_only: true", public_mcp)
         self.assertIn("cap_drop:\n      - ALL", public_mcp)
+
+    def test_unbrowser_mcp_pins_a_compatible_patched_sdk_version(self):
+        self.assertIn("mcp-proxy==0.12.0", self.unbrowser_mcp_dockerfile)
+        self.assertIn("mcp==1.29.0", self.unbrowser_mcp_dockerfile)
+        self.assertIn("pyunbrowser==0.0.18", self.unbrowser_mcp_dockerfile)
 
     def test_public_live_edge_route_is_authenticated_and_fail_closed(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
@@ -771,6 +780,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             'docker compose up -d --no-deps --no-build --force-recreate "$service"',
             self.deploy,
         )
+
+    def test_rollback_restores_retained_images_without_rebuilding(self):
+        self.assertIn("runtime-images.tsv", self.deploy)
+        self.assertIn("unchained-deploy-rollback:${deploy_id}-${service}", self.deploy)
+        self.assertIn('docker image tag "$image_id" "$rollback_ref"', self.deploy)
+        self.assertIn('docker image tag "$rollback_ref" "$image_ref"', self.deploy)
+        self.assertIn('[[ "$restored_id" == "$image_id" ]]', self.deploy)
+        self.assertIn("release_remote_rollback_images", self.deploy)
+        self.assertNotIn('docker compose build "${runtime_services[@]}"', self.deploy)
 
 
 if __name__ == "__main__":
