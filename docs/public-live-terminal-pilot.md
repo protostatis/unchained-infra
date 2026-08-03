@@ -28,7 +28,7 @@ pilot upstream. The signed-in `/fin-terminal/` application and static replay at
   traffic can address only Caddy, never a worker container.
 
 The gateway and worker are pinned to application commit
-`604bed09b55568f2564eee78addcebcc0c8a7cfa`. Redis is also pinned by its
+`e287a54e12b29c33e4ee9e751946fb98ec3fba8e`. Redis is also pinned by its
 multi-platform image digest. Changes to either pin require a reviewed
 infrastructure PR.
 
@@ -36,11 +36,13 @@ infrastructure PR.
 
 Do not build or start the profile until all of these gates pass:
 
-1. Application PR
+1. Application PRs
    [`protostatis/unbrowser-fin-terminal#13`](https://github.com/protostatis/unbrowser-fin-terminal/pull/13)
-   is merged, and commit `604bed09b55568f2564eee78addcebcc0c8a7cfa`
-   remains reachable from a protected branch or release tag. If merge strategy
-   changes that commit, update the immutable pin in another infrastructure PR.
+   and
+   [`protostatis/unbrowser-fin-terminal#14`](https://github.com/protostatis/unbrowser-fin-terminal/pull/14)
+   are merged, and commit `e287a54e12b29c33e4ee9e751946fb98ec3fba8e`
+   remains reachable from a protected branch or release tag. Any application
+   release change requires a reviewed immutable-pin update.
 2. The operator accepts that anonymous pilot research and the trial agent share
    the existing OpenRouter credential, quota, billing, and provider-level
    limits. The application reservation guard is not provider-side metering.
@@ -52,6 +54,26 @@ Do not build or start the profile until all of these gates pass:
 
 The infrastructure PR may merge before these gates because the normal deploy
 keeps the route disabled and does not start the profile.
+
+### Docker rehearsal evidence
+
+The current immutable pins passed an isolated arm64 Docker Desktop rehearsal
+on 2026-08-03. Turnstile was bypassed only through a test-only Compose override;
+the production Turnstile gate remains separate. The rehearsal verified:
+
+- all four profiled services reached healthy with no host-published ports;
+- MCP SDK `1.29.0` initialized, listed 32 tools, and completed a harmless
+  `navigate` call through the dedicated SSRF egress proxy;
+- a browser reconnected inside grace without changing worker generation;
+- disconnect expiry stopped the worker, Compose restarted it once with a new
+  generation, and the stale ticket was rejected with HTTP 409;
+- the replacement returned to the one-seat ready pool;
+- the named-service rollback removed every profiled container, retained the
+  Redis volume for diagnosis, and left the production pilot route at 404.
+
+Repeat this rehearsal after changing an application, Redis, MCP dependency, or
+lifecycle configuration pin. It does not authorize activation without the
+other gates above.
 
 ## Pilot policy
 

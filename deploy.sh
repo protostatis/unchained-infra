@@ -231,10 +231,12 @@ cat >/dev/null'
 }
 
 snapshot_remote_release() {
-    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" <<'EOF'
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" "$DEPLOY_ID" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
 backup_dir="$2"
+deploy_id="$3"
+[[ "$deploy_id" =~ ^[0-9a-f]{24}$ ]]
 mkdir -p "$(dirname "$backup_dir")"
 if [[ -e "$backup_dir" ]]; then
     echo "rollback snapshot path already exists: $backup_dir" >&2
@@ -244,6 +246,19 @@ test -f "$remote_dir/docker-compose.yml"
 test -f "$remote_dir/.env"
 test ! -L "$remote_dir/.env"
 mkdir -m 700 "$backup_dir"
+rollback_tags=()
+cleanup_snapshot_on_error() {
+    local status=$?
+    trap - EXIT
+    if [[ "$status" -ne 0 ]]; then
+        if [[ "${#rollback_tags[@]}" -gt 0 ]]; then
+            docker image rm "${rollback_tags[@]}" >/dev/null 2>&1 || true
+        fi
+        rm -rf -- "$backup_dir"
+    fi
+    exit "$status"
+}
+trap cleanup_snapshot_on_error EXIT
 # The staged preflight may generate a proxy token. Preserve the previous
 # environment separately because it is intentionally excluded from source.tgz.
 cp -p -- "$remote_dir/.env" "$backup_dir/.env"
@@ -261,8 +276,50 @@ for item in "${items[@]}"; do
 done
 printf '%s\n' "${present[@]}" > "$backup_dir/items"
 tar -C "$remote_dir" -czf "$backup_dir/source.tgz" "${present[@]}"
+
+# Candidate builds replace Compose image tags. Retain an independently tagged
+# reference to every current runtime image so automatic rollback never needs to
+# resolve mutable package indexes or rebuild an old source tree.
+cd "$remote_dir"
+mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
+[[ "${#runtime_services[@]}" -gt 0 ]]
+image_map="$backup_dir/runtime-images.tsv"
+: > "$image_map"
+for service in "${runtime_services[@]}"; do
+    [[ "$service" =~ ^[a-z0-9][a-z0-9-]*$ ]]
+    container="$(docker compose ps -q "$service")"
+    [[ -n "$container" ]]
+    image_id="$(docker inspect --format '{{.Image}}' "$container")"
+    image_ref="$(docker inspect --format '{{.Config.Image}}' "$container")"
+    [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+    if [[ ! "$image_ref" =~ ^[A-Za-z0-9._/:@-]+$ \
+        || "$image_ref" == *@* || "$image_ref" == sha256:* ]]; then
+        echo "ERROR: runtime service $service does not use a retaggable image reference: $image_ref" >&2
+        exit 1
+    fi
+    rollback_ref="unchained-deploy-rollback:${deploy_id}-${service}"
+    docker image tag "$image_id" "$rollback_ref"
+    rollback_tags+=("$rollback_ref")
+    printf '%s\t%s\t%s\t%s\n' \
+        "$service" "$image_ref" "$image_id" "$rollback_ref" >> "$image_map"
+done
+[[ "$(wc -l < "$image_map")" -eq "${#runtime_services[@]}" ]]
+trap - EXIT
 EOF
     DEPLOY_BACKUP_READY=true
+}
+
+release_remote_rollback_images() {
+    remote_bash "$REMOTE_BACKUP_DIR" <<'EOF'
+set -euo pipefail
+backup_dir="$1"
+image_map="$backup_dir/runtime-images.tsv"
+[[ -f "$image_map" ]] || exit 0
+while IFS=$'\t' read -r service image_ref image_id rollback_ref; do
+    [[ -n "$service" && -n "$image_ref" && -n "$image_id" && -n "$rollback_ref" ]]
+    docker image rm "$rollback_ref" >/dev/null
+done < "$image_map"
+EOF
 }
 
 create_remote_config_stage() {
@@ -515,6 +572,19 @@ remote_dir="$1"
 backup_dir="$2"
 test -f "$backup_dir/source.tgz"
 test -f "$backup_dir/.env"
+test -s "$backup_dir/runtime-images.tsv"
+
+# Validate every retained image before mutating the failed release again.
+while IFS=$'\t' read -r service image_ref image_id rollback_ref; do
+    [[ "$service" =~ ^[a-z0-9][a-z0-9-]*$ ]]
+    [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+    [[ "$image_ref" =~ ^[A-Za-z0-9._/:@-]+$ \
+        && "$image_ref" != *@* && "$image_ref" != sha256:* ]]
+    [[ "$rollback_ref" =~ ^unchained-deploy-rollback:[0-9a-f]{24}-[a-z0-9-]+$ ]]
+    retained_id="$(docker image inspect --format '{{.Id}}' "$rollback_ref")"
+    [[ "$retained_id" == "$image_id" ]]
+done < "$backup_dir/runtime-images.tsv"
+
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
       "$remote_dir/docker-compose.yml" "$remote_dir/docker-compose.public-terminal.yml" \
@@ -525,7 +595,17 @@ chmod 600 "$remote_dir/.env"
 cd "$remote_dir"
 mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
 [[ "${#runtime_services[@]}" -gt 0 ]]
-docker compose build "${runtime_services[@]}"
+declare -A restored_services=()
+while IFS=$'\t' read -r service image_ref image_id rollback_ref; do
+    docker image tag "$rollback_ref" "$image_ref"
+    restored_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+    [[ "$restored_id" == "$image_id" ]]
+    restored_services["$service"]=1
+done < "$backup_dir/runtime-images.tsv"
+[[ "${#restored_services[@]}" -eq "${#runtime_services[@]}" ]]
+for service in "${runtime_services[@]}"; do
+    [[ "${restored_services[$service]:-}" == 1 ]]
+done
 EOF
     then
         echo "ERROR: automatic rollback failed; inspect $REMOTE_BACKUP_DIR on the host." >&2
@@ -584,6 +664,8 @@ EOF
         echo "ERROR: rollback restarted services but could not restore Caddy." >&2
         return 1
     fi
+    release_remote_rollback_images \
+        || echo "    (could not release retained rollback image tags; keeping them for recovery)" >&2
     echo "    Previous source release restored; verify services before retrying." >&2
 }
 
@@ -825,6 +907,9 @@ cleanup_deploy() {
     cleanup_remote_config_stage || echo "ERROR: could not remove staged Caddy preflight files." >&2
     if [[ "$status" -ne 0 && "$DEPLOY_SUCCEEDED" != "true" && "$DEPLOY_MUTATED" == "true" && "$DEPLOY_BACKUP_READY" == "true" && "$DEPLOY_ROLLBACK_ON_FAILURE" == "1" ]]; then
         rollback_remote_release
+    elif [[ "$status" -ne 0 && "$DEPLOY_MUTATED" != "true" && "$DEPLOY_BACKUP_READY" == "true" ]]; then
+        release_remote_rollback_images \
+            || echo "ERROR: could not release retained images after pre-mutation failure." >&2
     fi
     restore_private_core_worktree
     release_remote_deploy_lock
@@ -1368,6 +1453,8 @@ fi
 echo "==> Verifying production health..."
 verify_production_health "$SERVICES_TO_REBUILD"
 write_deploy_metadata
+release_remote_rollback_images \
+    || echo "    (could not release retained rollback image tags; keeping them for recovery)"
 prune_remote_deploy_backups || echo "    (backup retention cleanup failed, ignoring)"
 DEPLOY_SUCCEEDED=true
 echo "    Health checks passed."
