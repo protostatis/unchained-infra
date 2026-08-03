@@ -39,6 +39,7 @@ py-modules = [
     "provision_helpers", "rate_limit", "reflex", "relay",
     "scheduled_tasks", "scheduler_agent", "scheduler_tool", "signup_agent", "stream_ctl",
     "template_utils", "web", "web_state", "webmcp",
+    "checkpoint_store", "financial_workspace",
 ]
 
 [tool.setuptools.package-data]

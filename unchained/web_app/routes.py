@@ -179,6 +179,26 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/web/credit/status/history", "web_app.handlers.auth_admin:handle_credit_history"),
     # Admin grant
     ("POST", "/admin/credit/grant", "web_app.handlers.auth_admin:handle_admin_credit_grant"),
+
+    # -- Financial workspace control plane (feature-flagged) --
+    ("POST", "/internal/financial-workspace/checkpoints",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_create_checkpoint"),
+    ("GET", "/internal/financial-workspace/checkpoints/{checkpoint_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_checkpoint"),
+    ("POST", "/internal/financial-workspace/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_claim"),
+    ("POST", "/internal/financial-workspace/claim/accept",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_claim_accept"),
+    ("GET", "/internal/financial-workspace/claims/{claim_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_claim"),
+    ("GET", "/internal/financial-workspace/workspace",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_workspace"),
+    ("GET", "/internal/financial-workspace/snapshots",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_snapshots"),
+    ("POST", "/internal/financial-workspace/effects/process",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_process_effects"),
+    ("POST", "/internal/financial-workspace/sweep",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_sweep"),
 )
 
 
