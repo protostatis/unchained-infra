@@ -382,6 +382,12 @@ class FormatJsonTests(unittest.TestCase):
 
     def test_network_attachment_verification(self) -> None:
         self.assertIn("Networks", self.text)
+        self.assertIn("{{json .NetworkSettings.Networks}}", self.text)
+        self.assertIn('"\\n".join(sorted(data))', self.text)
+        self.assertNotIn(
+            '.NetworkSettings.Networks}}{{$name}}{{"\\n"}}',
+            self.text,
+        )
 
     def test_no_extra_seat_or_container(self) -> None:
         self.assertIn("seat_count", self.text)

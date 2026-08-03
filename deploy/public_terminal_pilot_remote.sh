@@ -1055,8 +1055,8 @@ validate_runtime_pilot() {
     for svc in "${PILOT_SERVICES[@]}"; do
         cid="$(resolve_container_id "$svc")"
         actual_networks="$(docker inspect \
-            --format '{{range $name,$config := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' \
-            "$cid" 2>/dev/null | sort)"
+            --format '{{json .NetworkSettings.Networks}}' "$cid" 2>/dev/null \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
         case "$svc" in
             fin-terminal-public-redis)
                 expected_networks="${COMPOSE_PROJECT}_fin_terminal_public_state"
