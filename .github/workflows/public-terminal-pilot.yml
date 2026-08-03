@@ -1,0 +1,167 @@
+name: Public Terminal Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Pilot control action"
+        required: true
+        type: choice
+        options:
+          - status
+          - activate
+          - disable
+      confirm:
+        description: >-
+          For activate: type 'ACTIVATE ONE SEAT'.
+          For disable: type 'DISABLE PUBLIC PILOT'.
+          For status: leave empty.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    # Restrict to main branch only.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://unbrowser.unchainedsky.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require action-specific confirmation for mutating actions
+        if: inputs.action != 'status'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          case "$ACTION" in
+            activate) expected="ACTIVATE ONE SEAT" ;;
+            disable)  expected="DISABLE PUBLIC PILOT" ;;
+            *)        expected="" ;;
+          esac
+          if [[ "$CONFIRM" != "$expected" ]]; then
+            echo "::error::The '$ACTION' action requires confirmation."
+            echo "::error::For activate: type 'ACTIVATE ONE SEAT' in the confirm input."
+            echo "::error::For disable:  type 'DISABLE PUBLIC PILOT' in the confirm input."
+            exit 1
+          fi
+
+      - name: Guard against stale main revision
+        id: candidate
+        run: |
+          git fetch --no-tags origin main --depth=1
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo "::error::A newer main commit exists; this pilot action is not on latest main."
+            exit 1
+          fi
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Require production pilot secrets
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          missing=()
+          for name in EC2_HOST EC2_SSH_KEY SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            echo "::error::Missing required production secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Prepare verified SSH configuration
+        id: ssh
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          ssh_dir="$RUNNER_TEMP/unchained-pilot-ssh"
+          umask 077
+          mkdir -p "$ssh_dir"
+          printf '%s\n' "$EC2_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh-keygen -l -f "$ssh_dir/known_hosts" >/dev/null
+          echo "key=$ssh_dir/key" >> "$GITHUB_OUTPUT"
+          echo "known_hosts=$ssh_dir/known_hosts" >> "$GITHUB_OUTPUT"
+
+      - name: Execute pilot control script
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ vars.EC2_USER || 'ec2-user' }}
+          KEY_PATH: ${{ steps.ssh.outputs.key }}
+          SSH_KNOWN_HOSTS_PATH: ${{ steps.ssh.outputs.known_hosts }}
+          ACTION: ${{ inputs.action }}
+          MAIN_SHA: ${{ steps.candidate.outputs.revision }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "::error::EC2_USER has an invalid format."
+            exit 1
+          fi
+          if [[ ! "$EC2_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::EC2_HOST has an invalid format."
+            exit 1
+          fi
+          git fetch --no-tags origin main --depth=1
+          if [[ "$(git rev-parse origin/main)" != "$MAIN_SHA" ]]; then
+            echo "::error::Main advanced before the pilot action started."
+            exit 1
+          fi
+          ssh_opts=(
+            -i "$KEY_PATH"
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=4
+          )
+          # Read and validate the exact host revision immediately before the
+          # locked action. Disable/status may target an older deployed main
+          # after a newer main deploy was correctly blocked by an active pilot.
+          metadata_path="/home/${EC2_USER}/unchained/.deploy-current"
+          printf -v q_metadata_path '%q' "$metadata_path"
+          deployed_sha="$(ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" \
+            "awk -F= '/^revision=/ { print \$2; exit }' $q_metadata_path")"
+          if [[ ! "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The host did not report a valid deployed revision."
+            exit 1
+          fi
+          if [[ "$ACTION" == "activate" ]]; then
+            expected_sha="$MAIN_SHA"
+          else
+            expected_sha="$deployed_sha"
+          fi
+
+          # Quote and validate ACTION and the exact expected host revision for
+          # the remote command. The script rechecks it after acquiring .deploy.lock.
+          printf -v q_action '%q' "$ACTION"
+          printf -v q_sha '%q' "$expected_sha"
+          # Stream the remote script over verified SSH stdin. Never pass
+          # Turnstile or OpenRouter values; the remote script reads them
+          # from the protected host .env file inside the transaction.
+          ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" \
+            "bash -s -- $q_action $q_sha" \
+            < "$GITHUB_WORKSPACE/deploy/public_terminal_pilot_remote.sh"
+
+      - name: Remove deployment SSH files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/unchained-pilot-ssh"

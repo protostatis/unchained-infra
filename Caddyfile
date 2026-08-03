@@ -51,13 +51,20 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 		reverse_proxy unbrowser-mcp:8767
 	}
 
-	# The authenticated terminal and public demo are separate interactive
-	# applications at the dedicated Unbrowser host. Preserve full paths and
-	# query strings for old shared links, including the earlier nested alias.
-	@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo ^/unbrowser/fin-terminal-demo(?:/(.*))?$
-	redir @legacy_fin_terminal_demo https://unbrowser.unchainedsky.com/fin-terminal-demo/{re.legacy_fin_terminal_demo.1}{?query} 308
-	@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias ^/unbrowser/fin-terminal/demo(?:/(.*))?$
-	redir @legacy_fin_terminal_demo_alias https://unbrowser.unchainedsky.com/fin-terminal-demo/{re.legacy_fin_terminal_demo_alias.1}{?query} 308
+	# The authenticated terminal and the now-retired replay demo were separate
+	# applications at the dedicated Unbrowser host. Replay is retired so its
+	# legacy URLs return direct HTTP 404 (no redirect). The authenticated
+	# terminal redirect remains active.
+	@legacy_fin_terminal_demo path /unbrowser/fin-terminal-demo /unbrowser/fin-terminal-demo/*
+	handle @legacy_fin_terminal_demo {
+		header Cache-Control "no-store"
+		respond "Not found" 404
+	}
+	@legacy_fin_terminal_demo_alias path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*
+	handle @legacy_fin_terminal_demo_alias {
+		header Cache-Control "no-store"
+		respond "Not found" 404
+	}
 	@legacy_fin_terminal {
 		path_regexp legacy_fin_terminal ^/unbrowser/fin-terminal(?:/(.*))?$
 		not path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*
@@ -131,8 +138,9 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 }
 
 # Dedicated public Unbrowser site. Keep this separate from the primary site so
-# the subdomain exposes only its landing page, supporting endpoints, authenticated
-# terminal, and public terminal demo—not the API, tunnel, or MCP routes.
+# the subdomain exposes only its landing page, supporting endpoints,
+# authenticated terminal, retired-demo tombstones, and opt-in live pilot—not
+# the API, tunnel, or primary MCP routes.
 unbrowser.unchainedsky.com {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -181,29 +189,18 @@ unbrowser.unchainedsky.com {
 		}
 	}
 
-	# Public static replay demo. Its path deliberately retains the
-	# fin-terminal-demo build marker, which selects the replay-only frontend.
-	@fin_terminal_demo_base path /fin-terminal-demo
-	redir @fin_terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal-demo/{?query} 308
-	handle_path /fin-terminal-demo/* {
-		route {
-			# Never trust identity or service-auth headers supplied by a client.
-			request_header -X-Fin-Terminal-User
-			request_header -X-Fin-Terminal-Proxy-Token
-			request_header -X-Real-IP
-			# A public kiosk must not receive a visitor's browser credentials.
-			request_header -Cookie
-			request_header -Authorization
-			request_header -Proxy-Authorization
-			reverse_proxy fin-terminal-demo:8788 {
-				header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}
-			}
-		}
+	# The static fin-terminal replay demo is retired. All requests to its
+	# former URLs return a direct HTTP 404 (no redirect, no-store).
+	# The live-session pilot below is the only public terminal path.
+	@fin_terminal_demo_retired path /fin-terminal-demo /fin-terminal-demo/*
+	handle @fin_terminal_demo_retired {
+		header Cache-Control "no-store"
+		respond "Not found" 404
 	}
 
 	# Opt-in live-session pilot. The gateway verifies Turnstile, owns the FIFO
-	# queue, and proxies a guest only to an isolated internal worker. This remains
-	# a separate path until the benchmark gate promotes it over the replay route.
+	# queue, and proxies a guest only to an isolated internal worker. Its path is
+	# intentionally separate from the retired replay URLs.
 	@fin_terminal_live_pilot_base {
 		path /fin-terminal-live-pilot
 		expression `{$FIN_TERMINAL_PUBLIC_ENABLED:false}`

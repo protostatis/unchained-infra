@@ -3,9 +3,9 @@
 This optional overlay runs one real, disposable Pi-backed terminal for public
 visitors. The normal deployment stages and validates the overlay but never
 starts its profiled services. `FIN_TERMINAL_PUBLIC_ENABLED` defaults to
-`false`, so Caddy returns the existing catch-all 404 instead of proxying a dead
-pilot upstream. The signed-in `/fin-terminal/` application and static replay at
-`/fin-terminal-demo/` are unchanged.
+`false`, so Caddy returns a 404 instead of proxying a dead pilot upstream.
+The signed-in `/fin-terminal/` application is unchanged. The former static
+replay at `/fin-terminal-demo/` is retired and returns 404.
 
 ## Architecture
 
@@ -119,76 +119,69 @@ trial agent. Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper
 require both Turnstile values. Do not put any protected value in this repository
 or a command-line argument.
 
-## One-seat startup and enablement
+## One-seat activation workflow
 
-Run Compose from the deployed release directory. Always name the public
-services explicitly: invoking `up` without service names would also act on all
-unprofiled services from the base production file.
+Do not activate from an SSH shell. Use the protected **Public Terminal Pilot**
+GitHub Actions workflow on `main`. Every action uses the GitHub `production`
+Environment approval and the same `production-deploy` concurrency lock as a
+normal release.
 
-Keep `FIN_TERMINAL_PUBLIC_ENABLED=false` while starting the upstreams:
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.public-terminal.yml \
-  --profile fin-terminal-public-pilot \
-  pull fin-terminal-public-redis
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.public-terminal.yml \
-  --profile fin-terminal-public-pilot \
-  build \
-  fin-terminal-public-unbrowser-mcp \
-  fin-terminal-public-seat-01 \
-  fin-terminal-public-gateway
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.public-terminal.yml \
-  --profile fin-terminal-public-pilot \
-  up -d --no-build \
-  fin-terminal-public-redis \
-  fin-terminal-public-unbrowser-mcp \
-  fin-terminal-public-seat-01 \
-  fin-terminal-public-gateway
-```
-
-Verify the four public services are healthy and complete the Docker rehearsal
-before changing the edge flag. Then set `FIN_TERMINAL_PUBLIC_ENABLED=true`
-through the protected environment. Run the host-side credential helper and
-proceed only when it reports that existing credentials were retained; if it
-generates a default-terminal credential, stop and use the normal deployment
-flow so every affected trust-boundary container is recreated:
+First merge and deploy the replay-retirement/activation-tooling revision through
+the normal CI workflow. Confirm the former replay URLs return 404 and then run a
+read-only status action:
 
 ```bash
-python3 .deploy-tools/ensure_fin_terminal_secrets.py .env
+gh workflow run public-terminal-pilot.yml --ref main \
+  -f action=status -f confirm=''
 ```
 
-That check enforces the external Turnstile gate once the flag is true. Next,
-validate the exact rendered Caddy candidate using the already pinned image:
+The workflow refuses a stale branch or, for activation, a host whose
+`.deploy-current` revision does not exactly match current `main`. It rechecks
+the protected remote `main` branch under the host deployment lock both before
+building and immediately before edge promotion. To activate the reviewed
+one-seat profile:
 
 ```bash
-docker compose -f docker-compose.yml run --rm --no-deps --pull never \
-  --entrypoint caddy caddy \
-  validate --config /etc/caddy/Caddyfile --adapter caddyfile
+gh workflow run public-terminal-pilot.yml --ref main \
+  -f action=activate -f confirm='ACTIVATE ONE SEAT'
 ```
 
-Only after validation succeeds, force-recreate Caddy without dependencies so
-its process receives the new boolean value:
+Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
 
-```bash
-docker compose -f docker-compose.yml up -d \
-  --no-deps --no-build --pull never --force-recreate caddy
-```
+1. acquires the normal host deployment lock;
+2. proves all retired replay URLs are 404 and the old demo container is absent;
+3. validates credentials against a protected temporary copy without rotating
+   or printing them;
+4. renders the exact four-service overlay, verifies one seat, rejects published
+   ports, host networking, unsafe privileges, devices, and bind mounts, and
+   checks host capacity;
+5. builds and starts only Redis, the dedicated MCP service, seat 01, and the
+   public gateway, then verifies health, the exact runtime service/network set,
+   and no host port bindings;
+6. completes a real stateful MCP initialize/list/navigate/private-target
+   rejection/delete sequence and the gateway's internal readiness check;
+7. validates a staged Caddy configuration, atomically enables the host flag,
+   and force-recreates only Caddy; and
+8. verifies the public-live build marker and asset prefix, CSP, normal routes,
+   replay tombstones, required Turnstile configuration, and negative admission
+   cases without logging visitor or session tokens.
 
-Verify `/fin-terminal-live-pilot/api/ready`, invalid-origin rejection,
-Turnstile action and hostname binding, queue expiry, WebSocket reconnect,
-timeout cleanup, and worker replacement generation. Record RSS, CPU, actual
-provider charges, and dedicated MCP health throughout the one-seat soak.
+Any activation failure after services start restores the exact pre-activation
+`.env`, recreates Caddy in the disabled state, proves the route is 404, and
+removes the four named containers in reverse dependency order. If the disabled
+edge cannot be proved, the script stops Caddy rather than leave the pilot
+reachable.
 
-Keep the pilot at `/fin-terminal-live-pilot/`. Promoting it over the replay path
-requires a separate operational review and infrastructure PR.
+After workflow success, complete a real browser Turnstile and terminal-session
+test immediately. Verify the Turnstile action `public_terminal_admission`, the
+hostname `unbrowser.unchainedsky.com`, queue admission, WebSocket reconnect,
+timeout cleanup, and worker replacement generation. If that test fails, disable
+the pilot before investigating. Record RSS, CPU, actual provider charges, and
+dedicated MCP health throughout the one-seat soak.
+
+Keep the pilot at `/fin-terminal-live-pilot/`. Any canonical-path change or
+multi-seat expansion requires a separate operational review and infrastructure
+PR.
 
 ## Expansion boundary
 
@@ -198,45 +191,27 @@ review; it must not be enabled by copying the seat-01 service definition.
 
 ## Fail-closed rollback
 
-First set `FIN_TERMINAL_PUBLIC_ENABLED=false` through the protected environment,
-then validate and recreate Caddy with the exact two commands from the enablement
-section. Confirm the disabled route is live before stopping an upstream:
+Use the protected workflow rather than changing `.env` or running Compose by
+hand:
 
 ```bash
-test "$(curl --silent --show-error --output /dev/null \
-  --write-out '%{http_code}' \
-  https://unbrowser.unchainedsky.com/fin-terminal-live-pilot/)" = 404
+gh workflow run public-terminal-pilot.yml --ref main \
+  -f action=disable -f confirm='DISABLE PUBLIC PILOT'
 ```
 
-Stop and remove only the named pilot services:
+Disable atomically writes the false flag, validates and recreates Caddy, proves
+the public route is 404, then stops and removes only the four reviewed services
+in reverse dependency order. It also rechecks the primary health route, public
+landing page, signed terminal, and replay tombstones. The Redis volume is
+retained for diagnosis unless data removal is separately approved. Never run
+`docker compose down` with this overlay: the merged project also contains the
+default production services.
 
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.public-terminal.yml \
-  --profile fin-terminal-public-pilot \
-  stop \
-  fin-terminal-public-gateway \
-  fin-terminal-public-seat-01 \
-  fin-terminal-public-unbrowser-mcp \
-  fin-terminal-public-redis
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.public-terminal.yml \
-  --profile fin-terminal-public-pilot \
-  rm -f \
-  fin-terminal-public-gateway \
-  fin-terminal-public-seat-01 \
-  fin-terminal-public-unbrowser-mcp \
-  fin-terminal-public-redis
-```
-
-Retain the Redis volume for diagnosis unless data removal has been separately
-approved. Never run `docker compose down` with this overlay: the merged project
-also contains the default production services.
-
-The regular deploy script does not start, rebuild, stop, or health-check the
-profiled pilot. Its automatic rollback includes a renderable overlay when
-removing orphans; if external pilot configuration is incomplete, it preserves
-orphans rather than deleting independently managed public containers.
+The regular deploy script refuses to run while the pilot is enabled. Disable
+the pilot through the protected workflow before every normal production deploy;
+after that deployment succeeds, explicitly run the activation workflow again.
+This prevents `.deploy-current` from advancing while old independently managed
+pilot containers remain active. A normal deploy never starts the profiled
+services. Its automatic rollback includes a renderable overlay when removing
+orphans; if external pilot configuration is incomplete, it preserves orphans
+rather than deleting independently managed public containers.

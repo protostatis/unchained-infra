@@ -371,6 +371,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.workflow = cls.repo_root.joinpath(
             ".github", "workflows", "ci.yml"
         ).read_text()
+        cls.route_doc = cls.repo_root.joinpath(
+            "docs", "fin-terminal-route.md"
+        ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
         self.assertIn(
@@ -387,7 +390,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     def test_caddy_strips_client_headers_then_runs_forward_auth(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split("handle_path /fin-terminal/*", 1)[1].split(
-            "# Public static replay demo.", 1
+            "# The static fin-terminal replay demo is retired.", 1
         )[0]
         strip_user = route.index("request_header -X-Fin-Terminal-User")
         forward_auth = route.index("forward_auth web:8080")
@@ -420,8 +423,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.deploy,
         )
         self.assertIn('"https://$health_host/unbrowser/fin-terminal/"', self.deploy)
-        self.assertIn('[[ "$legacy_terminal_check" == "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
+        self.assertIn('[[ "$legacy_terminal_check" == "308 https://$public_host/fin-terminal/" ]]', self.deploy)
+        self.assertIn('"https://$public_host/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 
     def test_caddyfile_is_staged_and_validated_before_live_mutation(self):
@@ -448,7 +451,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_compose_pins_and_hardens_the_terminal(self):
         service = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
-            "\n  fin-terminal-demo:\n", 1
+            "\n  unbrowser-egress:\n", 1
         )[0]
 
         self.assertIn(
@@ -475,55 +478,28 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("- fin_terminal_demo", service)
         self.assertNotIn("- app", service)
 
-    def test_demo_service_is_a_static_replay_with_no_agent_dependencies(self):
-        service = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
-            "\n  unbrowser-egress:\n", 1
-        )[0]
-
-        self.assertIn(
-            "4c587fe7d7713304b26b226433cb2282b25faea6",
-            service,
-        )
-        self.assertIn("PUBLIC_BASE_PATH: /fin-terminal-demo/", service)
-        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal-demo/", service)
-        self.assertNotIn("https://unchainedsky.com", service)
-        self.assertIn("PUBLIC_DEMO=1", service)
-        self.assertIn("read_only: true", service)
-        self.assertIn("no-new-privileges:true", service)
-        self.assertIn(
-            "MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}",
-            service,
-        )
-        self.assertNotIn("OPENROUTER_API_KEY", service)
-        self.assertNotIn("UNBROWSER_MCP_URL", service)
-        self.assertNotIn("PI_CODING_AGENT_DIR", service)
-        self.assertNotIn("DEMO_IDLE_SECONDS", service)
-        self.assertNotIn("depends_on:", service)
-        self.assertNotIn("- fin_terminal_egress", service)
-        self.assertNotIn("- unbrowser_mcp\n", service)
-        self.assertNotIn("volumes:", service)
-
-    def test_demo_caddy_site_proxies_static_replay_without_auth_or_identity(self):
+    def test_retired_demo_returns_404_tombstones(self):
+        """All retired demo URLs must return direct 404 with no-store, no redirects."""
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
-        route = subdomain.split("handle_path /fin-terminal-demo/*", 1)[1].split(
+
+        # The canonical demo URL must return 404 with Cache-Control: no-store
+        self.assertIn("@fin_terminal_demo_retired path /fin-terminal-demo /fin-terminal-demo/*", subdomain)
+        self.assertIn("respond \"Not found\" 404", subdomain)
+        route = subdomain.split("@fin_terminal_demo_retired path /fin-terminal-demo /fin-terminal-demo/*", 1)[1].split(
             "# Opt-in live-session pilot.", 1
         )[0]
-
-        self.assertIn("request_header -X-Fin-Terminal-User", route)
-        self.assertIn("request_header -X-Fin-Terminal-Proxy-Token", route)
-        self.assertIn("request_header -Cookie", route)
-        self.assertIn("request_header -Authorization", route)
-        self.assertIn("request_header -Proxy-Authorization", route)
+        self.assertIn("no-store", route)
+        self.assertNotIn("reverse_proxy", route)
+        self.assertNotIn("redir", route)
         self.assertNotIn("forward_auth", route)
-        self.assertNotIn("rate_limit", route)
-        self.assertIn(
-            "header_up X-Fin-Terminal-Proxy-Token {$FIN_TERMINAL_DEMO_PROXY_TOKEN}",
-            route,
-        )
-        self.assertNotIn("header_up X-Fin-Terminal-User", route)
-        self.assertNotIn("header_up X-Real-IP", route)
-        self.assertNotIn("relay:8765", route)
-        self.assertNotIn("mcp:8766", route)
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", route)
+
+        # Legacy demo redirects on the main host must also return 404
+        main_site = self.caddy.split("unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {", 1)[1].split(
+            "unbrowser.unchainedsky.com {", 1
+        )[0]
+        self.assertIn("@legacy_fin_terminal_demo path /unbrowser/fin-terminal-demo", main_site)
+        self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
         app_revision = "e287a54e12b29c33e4ee9e751946fb98ec3fba8e"
@@ -643,9 +619,11 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("unbrowser-fin-terminal/pull/13", self.pilot_doc)
         self.assertIn("not a hard spend", self.pilot_doc)
         self.assertIn("same `OPENROUTER_API_KEY` as the trial agent", self.pilot_doc)
-        self.assertIn(".deploy-tools/ensure_fin_terminal_secrets.py .env", self.pilot_doc)
-        self.assertIn("--no-deps --no-build --pull never --force-recreate caddy", self.pilot_doc)
-        self.assertIn("Never run `docker compose down`", self.pilot_doc)
+        self.assertIn("Public Terminal Pilot", self.pilot_doc)
+        self.assertIn("-f action=activate -f confirm='ACTIVATE ONE SEAT'", self.pilot_doc)
+        self.assertIn("-f action=disable -f confirm='DISABLE PUBLIC PILOT'", self.pilot_doc)
+        self.assertIn("restores the exact pre-activation", self.pilot_doc)
+        self.assertRegex(self.pilot_doc, r"Never run\s+`docker compose down`")
 
     def test_turnstile_values_are_provisioned_through_protected_staging(self):
         capture_index = self.deploy.index(
@@ -709,74 +687,42 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn("handle_path /fin-terminal/*", route)
         self.assertIn("forward_auth web:8080", route)
-        self.assertIn("handle_path /fin-terminal-demo/*", route)
         self.assertIn("@fin_terminal_base path /fin-terminal", route)
         self.assertIn(
             "redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308",
             route,
         )
-        self.assertIn("@fin_terminal_demo_base path /fin-terminal-demo", route)
-        self.assertIn(
-            "redir @fin_terminal_demo_base https://unbrowser.unchainedsky.com/fin-terminal-demo/{?query} 308",
-            route,
-        )
+        # Retired demo returns 404 tombstone, never a redirect or upstream proxy
+        self.assertIn("@fin_terminal_demo_retired path /fin-terminal-demo", route)
+        self.assertIn("respond \"Not found\" 404", route)
+        self.assertNotIn("@fin_terminal_demo_base", route)
+        self.assertNotIn("reverse_proxy fin-terminal-demo:8788", route)
         self.assertIn("@unbrowser_outbound path /go/unbrowser-connect", route)
         self.assertIn("handle /web/unbrowser/*", route)
         self.assertIn("handle /web/analytics/*", route)
         self.assertIn("handle /favicon.svg", route)
         self.assertIn('respond "Not found" 404', route)
 
-    def test_demo_is_isolated_from_persistent_terminal_networks(self):
-        caddy = self.compose.split("\n  caddy:\n", 1)[1].split("\n  relay:\n", 1)[0]
-        mcp = self.compose.split("\n  unbrowser-mcp:\n", 1)[1].split(
-            "\n  fin-terminal:\n", 1
-        )[0]
-        demo = self.compose.split("\n  fin-terminal-demo:\n", 1)[1].split(
-            "\n  unbrowser-egress:\n", 1
-        )[0]
-
-        self.assertIn("- fin_terminal", caddy)
-        self.assertIn("- fin_terminal_demo", caddy)
-        self.assertIn("- unbrowser_mcp", mcp)
-        self.assertNotIn("- unbrowser_mcp_demo", mcp)
-        self.assertIn("- fin_terminal_demo", demo)
-        self.assertNotIn("- fin_terminal_demo_egress", demo)
-        self.assertNotIn("- unbrowser_mcp_demo", demo)
-        self.assertNotIn("- fin_terminal\n", demo)
-        self.assertNotIn("- fin_terminal_egress", demo)
-        self.assertNotIn("- unbrowser_mcp\n", demo)
+    def test_demo_service_and_network_are_absent(self):
+        """fin-terminal-demo service and its dedicated network must not exist."""
+        self.assertNotIn("fin-terminal-demo:", self.compose)
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
+        self.assertNotIn("fin_terminal_demo", self.compose)
 
     def test_legacy_terminal_routes_redirect_to_separate_canonical_paths(self):
-        canonical_demo = "https://unbrowser.unchainedsky.com/fin-terminal-demo/"
         canonical_terminal = "https://unbrowser.unchainedsky.com/fin-terminal/"
-        legacy_demo = "@legacy_fin_terminal_demo path_regexp legacy_fin_terminal_demo"
-        legacy_alias = "@legacy_fin_terminal_demo_alias path_regexp legacy_fin_terminal_demo_alias"
 
-        self.assertIn(legacy_demo, self.caddy)
-        self.assertIn(legacy_alias, self.caddy)
-        self.assertIn(
-            "^/unbrowser/fin-terminal-demo(?:/(.*))?$",
-            self.caddy,
-        )
-        self.assertIn(
-            "^/unbrowser/fin-terminal/demo(?:/(.*))?$",
-            self.caddy,
-        )
-        self.assertIn(
-            "^/unbrowser/fin-terminal(?:/(.*))?$",
-            self.caddy,
-        )
-        self.assertIn(
-            f"redir @legacy_fin_terminal_demo {canonical_demo}{{re.legacy_fin_terminal_demo.1}}{{?query}} 308",
-            self.caddy,
-        )
-        self.assertIn(
-            f"redir @legacy_fin_terminal_demo_alias {canonical_demo}{{re.legacy_fin_terminal_demo_alias.1}}{{?query}} 308",
-            self.caddy,
-        )
+        # Legacy demo routes are retired — must return direct 404, not redirect
+        self.assertIn('@legacy_fin_terminal_demo path /unbrowser/fin-terminal-demo', self.caddy)
+        self.assertIn('@legacy_fin_terminal_demo_alias path /unbrowser/fin-terminal/demo', self.caddy)
+        self.assertIn("respond \"Not found\" 404", self.caddy)
+        self.assertNotIn("^/unbrowser/fin-terminal-demo(?:/(.*))?$", self.caddy)
+        self.assertNotIn("^/unbrowser/fin-terminal/demo(?:/(.*))?$", self.caddy)
+
+        # Legacy authenticated terminal must still redirect
         self.assertIn("@legacy_fin_terminal {", self.caddy)
         self.assertIn(
-            "not path /unbrowser/fin-terminal/demo /unbrowser/fin-terminal/demo/*",
+            "^/unbrowser/fin-terminal(?:/(.*))?$",
             self.caddy,
         )
         self.assertIn(
@@ -789,37 +735,53 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             self.caddy,
         )
 
-    def test_deploy_tracks_the_demo_service_and_route(self):
-        self.assertIn("fin-terminal-demo", self.deploy)
-        self.assertIn(
-            "FIN_TERMINAL_DEMO_HOST",
-            self.deploy,
-        )
-        self.assertIn('"https://$demo_host/"', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal-demo/"', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal/"', self.deploy)
-        self.assertIn("/fin-terminal-demo/assets/", self.deploy)
-        self.assertIn('name="x-build-mode" content="replay"', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal-demo/ws"', self.deploy)
+    def test_deploy_retires_demo_service_and_verifies_404(self):
+        """Deploy must retire fin-terminal-demo and verify 404 on all former URLs."""
+        self.assertIn("FIN_TERMINAL_PUBLIC_HOST", self.deploy)
+        self.assertNotIn("FIN_TERMINAL_DEMO_HOST", self.deploy)
+        self.assertIn('"https://$public_host/"', self.deploy)
+        self.assertIn('"https://$public_host/fin-terminal/"', self.deploy)
         self.assertIn("unbrowser by Unchained - MCP Browser for LLM Agents", self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal"', self.deploy)
-        self.assertIn('[[ "$terminal_base_check" != "308 https://$demo_host/fin-terminal/" ]]', self.deploy)
-        self.assertIn('"https://$demo_host/fin-terminal-demo"', self.deploy)
-        self.assertIn('[[ "$demo_base_check" != "308 https://$demo_host/fin-terminal-demo/" ]]', self.deploy)
-        self.assertIn('"https://$health_host/unbrowser/fin-terminal-demo/"', self.deploy)
-        self.assertIn('[[ "$legacy_demo_check" != "308 https://$demo_host/fin-terminal-demo/" ]]', self.deploy)
+        self.assertIn('"https://$public_host/fin-terminal"', self.deploy)
+        self.assertIn('[[ "$terminal_base_check" != "308 https://$public_host/fin-terminal/" ]]', self.deploy)
+
+        # Retired URLs checked for 404, not 200-content or 308-redirect.
+        # Host-specific --resolve: each URL uses its own host, not a hardcoded one.
+        self.assertIn('"$public_host|/fin-terminal-demo/"', self.deploy)
+        self.assertIn('"$health_host|/unbrowser/fin-terminal-demo/"', self.deploy)
+        self.assertIn('--resolve "$host:443:127.0.0.1"', self.deploy)
+        self.assertIn('"$retired_check" != "404"', self.deploy)
+        self.assertIn("retired fin-terminal-demo URL", self.deploy)
+        # Covers canonical base/slash/ws + both apex legacy aliases with wildcard representatives
+        self.assertIn("fin-terminal-demo/ws", self.deploy)
+        self.assertIn("unbrowser/fin-terminal/demo/", self.deploy)
+        self.assertIn("unbrowser/fin-terminal-demo/", self.deploy)
+        self.assertNotIn("/fin-terminal-demo/assets/", self.deploy)
+        self.assertNotIn('name="x-build-mode" content="replay"', self.deploy)
+        # The retirement function checks for fin-terminal-demo in old/new compose
         self.assertIn("grep -qx fin-terminal-demo", self.deploy)
+
+        # Retirement lifecycle: old container cleanup using backup compose
+        self.assertIn("retire_fin_terminal_demo", self.deploy)
+        self.assertIn("docker compose --project-directory \"$remote_dir\"", self.deploy)
+        # Finds stopped containers too, verifies absence after rm
+        self.assertIn("ps -aq fin-terminal-demo", self.deploy)
+        self.assertIn("still present after removal", self.deploy)
+        # Network removal uses label verification from backup Compose JSON
+        self.assertIn("com.docker.compose.project", self.deploy)
+        self.assertIn("com.docker.compose.network", self.deploy)
+        # Network key queried from JSON and label value verified
+        self.assertIn("fin_terminal_demo", self.deploy)
 
     def test_deploy_lifecycle_tracks_the_terminal(self):
         self.assertIn(
-            "unbrowser-mcp fin-terminal fin-terminal-demo web",
+            "unbrowser-mcp fin-terminal web",
             self.deploy,
         )
-        self.assertIn(
-            "unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent",
-            self.deploy,
+        self.assertNotIn(
+            "fin-terminal-demo",
+            self.deploy.split("ALL_RUNTIME_SERVICES=", 1)[1].split("\n", 1)[0],
         )
-        self.assertIn("caddy fin-terminal fin-terminal-demo mcp private-core", self.deploy)
         self.assertIn("ensure_staged_fin_terminal_secrets", self.deploy)
         self.assertIn("FIN_TERMINAL_SECRETS_CHANGED", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
@@ -827,9 +789,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("public_enabled and name in PUBLIC_TOKEN_NAMES", self.secrets_helper)
         self.assertIn("FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET", self.secrets_helper)
         self.assertNotIn("FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY", self.secrets_helper)
-        self.assertIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
+        # Retired demo token is scrubbed silently
+        self.assertIn("RETIRED_TOKEN_NAMES", self.secrets_helper)
+        self.assertIn("retired_token_prefixes", self.secrets_helper)
         self.assertIn(
-            'add_services "caddy fin-terminal fin-terminal-demo"', self.deploy
+            'add_services "caddy fin-terminal"', self.deploy
         )
         self.assertIn(
             'docker compose up -d --no-deps --no-build --force-recreate "$service"',
@@ -844,6 +809,42 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('[[ "$restored_id" == "$image_id" ]]', self.deploy)
         self.assertIn("release_remote_rollback_images", self.deploy)
         self.assertNotIn('docker compose build "${runtime_services[@]}"', self.deploy)
+
+    def test_normal_deploy_requires_public_pilot_disabled_before_snapshot(self):
+        lock_index = self.deploy.index("acquire_remote_deploy_lock\n")
+        guard_index = self.deploy.index("assert_public_pilot_disabled_for_deploy\n")
+        snapshot_index = self.deploy.index("snapshot_remote_release\n")
+        self.assertLess(lock_index, guard_index)
+        self.assertLess(guard_index, snapshot_index)
+        self.assertIn(
+            "normal deployment is blocked while the public terminal pilot is active",
+            self.deploy,
+        )
+
+    def test_deploy_rollback_restores_exact_deployment_metadata(self):
+        self.assertIn(
+            'cp -p -- "$remote_dir/.deploy-current" "$backup_dir/.deploy-current"',
+            self.deploy,
+        )
+        self.assertIn('deploy-current.state', self.deploy)
+        self.assertIn(
+            'cmp -s "$backup_dir/.deploy-current" "$remote_dir/.deploy-current"',
+            self.deploy,
+        )
+        self.assertIn('rm -f -- "$remote_dir/.deploy-current"', self.deploy)
+        metadata_index = self.deploy.rindex("write_deploy_metadata\n")
+        committed_index = self.deploy.index("DEPLOY_SUCCEEDED=true", metadata_index)
+        release_index = self.deploy.index(
+            "release_remote_rollback_images", committed_index
+        )
+        self.assertLess(metadata_index, committed_index)
+        self.assertLess(committed_index, release_index)
+
+    def test_route_doc_lists_retired_demo_404_not_200(self):
+        """Retired demo must be documented as returning 404, not conflated with root's 200."""
+        self.assertIn("must return `200`", self.route_doc)
+        self.assertIn("must return `404` (no-store, no redirect)", self.route_doc)
+        self.assertNotIn("both the Unbrowser root and\n`https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`", self.route_doc)
 
 
 if __name__ == "__main__":

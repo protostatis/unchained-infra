@@ -19,7 +19,6 @@ services:
         condition: service_healthy
     environment:
       - FIN_TERMINAL_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
-      - FIN_TERMINAL_DEMO_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}
       - FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN_required}
       - FIN_TERMINAL_PUBLIC_ENABLED=${FIN_TERMINAL_PUBLIC_ENABLED:-false}
     networks:
@@ -27,7 +26,6 @@ services:
       - app
       - unbrowser_mcp
       - fin_terminal
-      - fin_terminal_demo
       - fin_terminal_public
     restart: unless-stopped
     logging:
@@ -206,52 +204,6 @@ services:
       retries: 3
       start_period: 30s
 
-  fin-terminal-demo:
-    # Public static replay of the financial terminal. It has no agent, model,
-    # source retrieval, persistence, or outbound dependency.
-    build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#4c587fe7d7713304b26b226433cb2282b25faea6"
-      args:
-        PUBLIC_BASE_PATH: /fin-terminal-demo/
-    expose:
-      - "8788"
-    environment:
-      - NODE_ENV=production
-      - HOST=0.0.0.0
-      - PORT=8788
-      - PUBLIC_BASE_PATH=/fin-terminal-demo/
-      - MARKET_ROOT=/app
-      - MARKET_PROXY_TOKEN=${FIN_TERMINAL_DEMO_PROXY_TOKEN:?FIN_TERMINAL_DEMO_PROXY_TOKEN_required}
-      - PUBLIC_DEMO=1
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
-      - /data:rw,nosuid,nodev,size=134217728,mode=0755,uid=1000,gid=1000
-    networks:
-      - fin_terminal_demo
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    init: true
-    pids_limit: 64
-    cpus: 0.5
-    mem_limit: 768m
-    mem_reservation: 128m
-    stop_grace_period: 30s
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 3s
-      retries: 3
-      start_period: 30s
-
   unbrowser-egress:
     build:
       context: .
@@ -419,10 +371,9 @@ networks:
     internal: true
   # Deliberately non-internal: only the terminal joins this network, for OpenRouter.
   fin_terminal_egress:
-  fin_terminal_demo:
-    internal: true
-  # Gateway ↔ disposable public terminal workers only. It is deliberately
-  # separate from both the signed-in terminal and the static replay network.
+  # Gateway ↔ disposable public terminal workers only. The static replay
+  # network is retired; this network is deliberately separate from the
+  # signed-in terminal network.
   fin_terminal_public:
     internal: true
   app:

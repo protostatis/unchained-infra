@@ -21,11 +21,10 @@ FIN_TERMINAL_ALLOWED_EMAILS=
 
 This deployment intentionally reuses the hosted trial worker's OpenRouter key
 for inference. Apply a provider-side spend limit that accounts for both services.
-`deploy.sh` creates `FIN_TERMINAL_PROXY_TOKEN` and
-`FIN_TERMINAL_DEMO_PROXY_TOKEN` directly in the host `.env` when either is
-absent. They are independent 256-bit tokens; deployment replaces a token that
-matches `OPENROUTER_API_KEY` or the other terminal token rather than sending a
-billing credential or public-demo credential to the persistent terminal.
+`deploy.sh` creates `FIN_TERMINAL_PROXY_TOKEN` directly in the host `.env` when
+it is absent. It is an independent 256-bit token; deployment replaces a token
+that matches `OPENROUTER_API_KEY` rather than sending a billing credential to
+the persistent terminal.
 
 Every approved account in `ADMIN_EMAILS` can access the terminal.
 `FIN_TERMINAL_ALLOWED_EMAILS` optionally adds other approved accounts. This
@@ -61,37 +60,22 @@ state is limited to `fin_terminal_data` mounted at `/data`.
 The archive currently has no automatic retention limit. Treat the volume as
 operator-visible shared state and remove old archives manually when required.
 
-## Public demo route
+## Public Unbrowser landing page
 
 The Unbrowser product landing page is served at:
 
 - `https://unbrowser.unchainedsky.com/`
 
-Its public financial-terminal demo is served at:
+## Replay demo (retired)
 
-- `https://unbrowser.unchainedsky.com/fin-terminal-demo/`
+The static fin-terminal replay demo at
+`https://unbrowser.unchainedsky.com/fin-terminal-demo/` and all legacy redirects
+are retired. All former demo URLs return direct HTTP 404 (no-store, no redirect).
 
-Caddy does not call `forward_auth` for the public demo path. It removes browser
-credentials and client-supplied identity headers, then injects only the separate
-demo-only proxy token before proxying to `fin-terminal-demo` on port `8788`.
-The demo is attached only to its Caddy network, so it cannot reach the
-persistent terminal, MCP service, or an outbound network.
-
-`https://unchainedsky.com/unbrowser/fin-terminal-demo/` and the earlier
-`/unbrowser/fin-terminal/demo` spelling permanently redirect to the canonical
-demo path while preserving a path suffix and query string. The former
-`https://unchainedsky.com/unbrowser` landing page redirects to the new root.
-
-The demo service runs the same image with `PUBLIC_DEMO=1` and serves an
-immutable synthetic replay fixture. It starts no agent session and performs no
-WebSocket, model, source-retrieval, authentication, entitlement, workspace, or
-persistence work. It has no provider credential, MCP dependency, persistent
-volume, or outbound network. Its informational pilot controls do not create an
-account, activation, workspace, saved item, or follow.
-
-The demo host and authenticated route are independent deployments of the same
-singleton product, so an active demo visitor never disturbs the authenticated
-terminal and vice versa.
+The live-session pilot at `/fin-terminal-live-pilot/` is a separate, opt-in
+public terminal path that is not enabled by default. See
+[`public-live-terminal-pilot.md`](public-live-terminal-pilot.md) for activation
+instructions.
 
 ## Verification
 
@@ -103,18 +87,18 @@ docker compose exec -T fin-terminal \
   node -e "fetch('http://127.0.0.1:8787/api/ready').then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1) })"
 ```
 
-From a logged-out browser or client, both the Unbrowser root and
-`https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`.
-The bare `/fin-terminal` and `/fin-terminal-demo` paths must return `308` to
-their trailing-slash canonical URLs. The authenticated `/fin-terminal/` route
-must return `401` when logged out;
-the former apex terminal must redirect to `/fin-terminal/`, and its landing and
-demo URLs must redirect to their canonical paths. The demo HTML must reference
-`/fin-terminal-demo/assets/` and an `x-build-mode` marker of `replay`. The demo
-`/ws` endpoint must return `403`, never a WebSocket `101` response. From an approved allowlisted session, the page
-and `/fin-terminal/ws` WebSocket should load through Caddy. Direct
-container-network requests without `X-Fin-Terminal-Proxy-Token` must return
-`403`.
+From a logged-out browser or client:
+- The Unbrowser root (`https://unbrowser.unchainedsky.com/`) must return `200`.
+- The retired demo (`https://unbrowser.unchainedsky.com/fin-terminal-demo/`)
+  must return `404` (no-store, no redirect).
+- The bare `/fin-terminal` path must return `308` to its trailing-slash
+  canonical URL.
+- The authenticated `/fin-terminal/` route must return `401` when logged out;
+  the former apex terminal must redirect to `/fin-terminal/`.
+  From an approved allowlisted session, the page and `/fin-terminal/ws`
+  WebSocket should load through Caddy.
+- Direct container-network requests without `X-Fin-Terminal-Proxy-Token` must
+  return `403`.
 
 When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
