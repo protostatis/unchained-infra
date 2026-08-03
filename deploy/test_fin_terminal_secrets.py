@@ -143,7 +143,6 @@ class FinTerminalSecretsTests(unittest.TestCase):
             "FIN_TERMINAL_PUBLIC_ENABLED=true",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY=site-key",
             "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET=turnstile-secret",
-            "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY=public-provider-key",
         ]
         lines.extend(f"{name}={value}" for name, value in tokens.items())
         self._write("\n".join(lines) + "\n")
@@ -151,48 +150,19 @@ class FinTerminalSecretsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disable the public route"):
             ensure_fin_terminal_secrets(self.env_path)
 
-    def test_enabled_public_route_retains_valid_credentials(self):
+    def test_enabled_public_route_accepts_trial_agent_provider_key(self):
         tokens = self._write_valid(
             extra=(
                 "FIN_TERMINAL_PUBLIC_ENABLED=true\n"
                 "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY=site-key\n"
-                "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET=turnstile-secret\n"
-                "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY=public-provider-key"
+                "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET=turnstile-secret"
             )
         )
 
         self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
         values = self._values()
+        self.assertEqual(values["OPENROUTER_API_KEY"], "provider-secret")
         self.assertEqual({name: values[name] for name in TOKEN_NAMES}, tokens)
-
-    def test_enabled_public_route_rejects_shared_provider_key(self):
-        self._write_valid(
-            extra=(
-                "FIN_TERMINAL_PUBLIC_ENABLED=true\n"
-                "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY=site-key\n"
-                "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET=turnstile-secret\n"
-                "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY=provider-secret"
-            )
-        )
-
-        with self.assertRaisesRegex(ValueError, "must be independent"):
-            ensure_fin_terminal_secrets(self.env_path)
-
-    def test_machine_tokens_cannot_reuse_the_public_provider_key(self):
-        provider_key = "a" * 64
-        tokens = self._valid_tokens()
-        lines = [
-            "OPENROUTER_API_KEY=provider-secret",
-            f"FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY={provider_key}",
-        ]
-        lines.extend(f"{name}={value}" for name, value in tokens.items())
-        self._write("\n".join(lines) + "\n")
-
-        self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
-        self.assertNotEqual(
-            self._values()["FIN_TERMINAL_PROXY_TOKEN"],
-            provider_key,
-        )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,6 @@ PUBLIC_TOKEN_NAMES = frozenset(TOKEN_NAMES[2:])
 PUBLIC_EXTERNAL_NAMES = (
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY",
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET",
-    "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY",
 )
 
 
@@ -59,9 +58,6 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     if public_enabled_value not in {"", "false", "true"}:
         raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must be true or false")
     public_enabled = public_enabled_value == "true"
-    public_openrouter_key = _env_value(
-        lines, "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY"
-    )
     if public_enabled:
         missing = [name for name in PUBLIC_EXTERNAL_NAMES if not _env_value(lines, name)]
         if missing:
@@ -69,17 +65,10 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
                 "public terminal is enabled but required external values are missing: "
                 + ", ".join(missing)
             )
-        if public_openrouter_key == openrouter_key:
-            raise ValueError(
-                "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY must be independent from "
-                "OPENROUTER_API_KEY"
-            )
 
     tokens = {name: _env_value(lines, name) for name in TOKEN_NAMES}
     existing_values = {value for value in tokens.values() if value}
     protected_values = {openrouter_key}
-    if public_openrouter_key:
-        protected_values.add(public_openrouter_key)
     changed = False
 
     # Generate on the deployment host so tokens never pass through CI logs or

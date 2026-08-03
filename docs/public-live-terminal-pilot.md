@@ -21,8 +21,9 @@ pilot upstream. The signed-in `/fin-terminal/` application and static replay at
 - The one seat has its own container, Pi session, temporary storage, and one
   concurrent research worker. Idle, absolute-duration, and disconnect-grace
   expiry stop the process; Compose restarts a clean generation before reuse.
-- Public research uses a dedicated MCP process and dedicated OpenRouter key,
-  separate from the signed-in terminal's MCP process and provider credential.
+- Public research uses a dedicated MCP process but intentionally receives the
+  same `OPENROUTER_API_KEY` as the trial agent. Provider quota, billing, and
+  outage blast radius are shared.
 - No gateway, Redis, MCP, or worker port is published on the host. Browser
   traffic can address only Caddy, never a worker container.
 
@@ -40,10 +41,9 @@ Do not build or start the profile until all of these gates pass:
    is merged, and commit `604bed09b55568f2564eee78addcebcc0c8a7cfa`
    remains reachable from a protected branch or release tag. If merge strategy
    changes that commit, update the immutable pin in another infrastructure PR.
-2. A dedicated `FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY` is provisioned. It must
-   not equal the signed-in production `OPENROUTER_API_KEY`, and its provider
-   project/key must have a provider-enforced hard credit or rate limit no higher
-   than the approved pilot exposure.
+2. The operator accepts that anonymous pilot research and the trial agent share
+   the existing OpenRouter credential, quota, billing, and provider-level
+   limits. The application reservation guard is not provider-side metering.
 3. Production Turnstile site and secret values are provisioned for
    `unbrowser.unchainedsky.com` and action `public_terminal_admission`.
 4. A real Docker rehearsal verifies startup, health, timeout exit, restart
@@ -64,8 +64,9 @@ keeps the route disabled and does not start the profile.
   USD 0.20 reservations for each possible run when a seat is assigned.
 
 The reservation guard does not meter provider invoices and is not a hard spend
-ceiling: one run may cost more than its assumed reservation. The dedicated
-provider key's external hard limit is the authoritative financial boundary.
+ceiling: one run may cost more than its assumed reservation. Any provider-level
+limit applies jointly to the pilot and trial agent, so pilot traffic can consume
+trial-agent quota.
 
 ## Protected configuration
 
@@ -82,11 +83,11 @@ external values through the protected runtime environment:
 
 - `FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY`
 - `FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET`
-- `FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY`
 
-Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper require all
-three external values and reject reuse of the signed-in OpenRouter key. Do not
-put any protected value in this repository or a command-line argument.
+The worker receives the existing protected `OPENROUTER_API_KEY`, matching the
+trial agent. Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper
+require both Turnstile values. Do not put any protected value in this repository
+or a command-line argument.
 
 ## One-seat startup and enablement
 
@@ -134,9 +135,8 @@ flow so every affected trust-boundary container is recreated:
 python3 .deploy-tools/ensure_fin_terminal_secrets.py .env
 ```
 
-That check enforces the external-value and provider-key-independence gates once
-the flag is true. Next, validate the exact rendered Caddy candidate using the
-already pinned image:
+That check enforces the external Turnstile gate once the flag is true. Next,
+validate the exact rendered Caddy candidate using the already pinned image:
 
 ```bash
 docker compose -f docker-compose.yml run --rm --no-deps --pull never \
