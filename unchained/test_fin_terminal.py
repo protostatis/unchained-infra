@@ -88,6 +88,9 @@ class CaddyConfigPreflightTests(unittest.TestCase):
         remote_dir.joinpath("Dockerfile").write_text("FROM old\n")
         remote_dir.joinpath("Dockerfile.unbrowser-mcp").write_text("FROM old\n")
         remote_dir.joinpath("docker-compose.yml").write_text("services: {}\n")
+        remote_dir.joinpath("docker-compose.public-terminal.yml").write_text(
+            "services: {}\n"
+        )
         stage_dir.joinpath("Caddyfile").write_text("candidate config\n")
         stage_dir.joinpath(".env").write_text(
             "FIN_TERMINAL_PROXY_TOKEN=candidate-token\n"
@@ -97,6 +100,9 @@ class CaddyConfigPreflightTests(unittest.TestCase):
             "FROM candidate-mcp\n"
         )
         stage_dir.joinpath("docker-compose.yml").write_text("services: {}\n")
+        stage_dir.joinpath("docker-compose.public-terminal.yml").write_text(
+            "services:\n  public: {}\n"
+        )
         return remote_dir, stage_dir
 
     def _fake_docker(self, root: Path) -> tuple[Path, Path, Path]:
@@ -139,9 +145,10 @@ env_file_arg() {
 
 case "$1" in
     compose)
-        env_file="$(env_file_arg "$@")"
-        token="$(read_token "$env_file")"
-        printf '{"services":{"caddy":{"image":"example.test/caddy@sha256:expected","environment":{"FIN_TERMINAL_PROXY_TOKEN":"%s"}}}}\\n' "$token"
+        if env_file="$(env_file_arg "$@")"; then
+            token="$(read_token "$env_file")"
+            printf '{"services":{"caddy":{"image":"example.test/caddy@sha256:expected","environment":{"FIN_TERMINAL_PROXY_TOKEN":"%s"}}}}\\n' "$token"
+        fi
         ;;
     image)
         [[ "$2" == "pull" ]] || exit 2
@@ -288,6 +295,29 @@ esac
                 (remote_dir / "Dockerfile.unbrowser-mcp").read_text(),
                 "FROM candidate-mcp\n",
             )
+            self.assertEqual(
+                (remote_dir / "docker-compose.public-terminal.yml").read_text(),
+                "services:\n  public: {}\n",
+            )
+
+    def test_validation_requires_the_staged_public_terminal_overlay(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            remote_dir, stage_dir = self._layout(Path(tmpdir))
+            fake_bin, log_path, token_path = self._fake_docker(Path(tmpdir))
+            stage_dir.joinpath("docker-compose.public-terminal.yml").unlink()
+
+            result = self._run_helper(
+                fake_bin,
+                log_path,
+                token_path,
+                "validate",
+                stage_dir,
+                remote_dir,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("docker-compose.public-terminal.yml", result.stderr)
+            self.assertFalse(log_path.exists())
 
     def test_promotion_hardens_an_unchanged_secret_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -318,8 +348,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[1]
         cls.compose = cls.repo_root.joinpath("docker-compose.yml").read_text()
+        cls.public_compose = cls.repo_root.joinpath(
+            "docker-compose.public-terminal.yml"
+        ).read_text()
         cls.caddy = cls.repo_root.joinpath("Caddyfile").read_text()
         cls.deploy = cls.repo_root.joinpath("deploy.sh").read_text()
+        cls.runtime_context = cls.repo_root.joinpath(
+            "deploy", "runtime_context_files.sh"
+        ).read_text()
+        cls.pilot_doc = cls.repo_root.joinpath(
+            "docs", "public-live-terminal-pilot.md"
+        ).read_text()
         cls.secrets_helper = cls.repo_root.joinpath(
             "deploy", "ensure_fin_terminal_secrets.py"
         ).read_text()
@@ -342,7 +381,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     def test_caddy_strips_client_headers_then_runs_forward_auth(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split("handle_path /fin-terminal/*", 1)[1].split(
-            "# Public kiosk demo.", 1
+            "# Public static replay demo.", 1
         )[0]
         strip_user = route.index("request_header -X-Fin-Terminal-User")
         forward_auth = route.index("forward_auth web:8080")
@@ -392,6 +431,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("docker image pull", self.caddy_preflight)
         self.assertIn("docker run --rm", self.caddy_preflight)
         self.assertIn("--network none", self.caddy_preflight)
+        self.assertIn("docker-compose.public-terminal.yml", self.caddy_preflight)
+        self.assertIn("config --no-interpolate --quiet", self.caddy_preflight)
         self.assertNotIn("docker compose run --rm --no-deps caddy", self.deploy)
         self.assertLess(stage_index, validate_index)
         self.assertLess(validate_index, mutation_index)
@@ -459,7 +500,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     def test_demo_caddy_site_proxies_static_replay_without_auth_or_identity(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split("handle_path /fin-terminal-demo/*", 1)[1].split(
-            "# The root reuses", 1
+            "# Opt-in live-session pilot.", 1
         )[0]
 
         self.assertIn("request_header -X-Fin-Terminal-User", route)
@@ -477,6 +518,121 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("header_up X-Real-IP", route)
         self.assertNotIn("relay:8765", route)
         self.assertNotIn("mcp:8766", route)
+
+    def test_public_live_overlay_uses_reviewed_immutable_images(self):
+        app_revision = "604bed09b55568f2564eee78addcebcc0c8a7cfa"
+        redis_revision = (
+            "redis:7.4.2-alpine@sha256:"
+            "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
+        )
+
+        self.assertEqual(self.public_compose.count(app_revision), 2)
+        self.assertIn(redis_revision, self.public_compose)
+        self.assertNotIn("FIN_TERMINAL_PUBLIC_APP_REF", self.public_compose)
+        self.assertNotIn("image: redis:7.4.2-alpine\n", self.public_compose)
+
+    def test_public_live_gateway_matches_the_reviewed_runtime_contract(self):
+        gateway = self.public_compose.split(
+            "\n  fin-terminal-public-gateway:\n", 1
+        )[1].split("\n  fin-terminal-public-seat-01:\n", 1)[0]
+        worker = self.public_compose.split(
+            "x-fin-terminal-public-worker: &fin-terminal-public-worker\n", 1
+        )[1].split("\nservices:\n", 1)[0]
+
+        self.assertIn("VITE_TERMINAL_BUILD_MODE: public-live", gateway)
+        self.assertIn("TERMINAL_RUNTIME_MODE=public-gateway", gateway)
+        self.assertNotIn("PUBLIC_DEMO=", gateway)
+        self.assertIn("PUBLIC_BASE_PATH=/fin-terminal-live-pilot/", gateway)
+        self.assertIn(
+            "PUBLIC_ALLOWED_ORIGIN=https://unbrowser.unchainedsky.com", gateway
+        )
+        self.assertIn(
+            "PUBLIC_EDGE_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN:",
+            gateway,
+        )
+        self.assertIn("PUBLIC_TURNSTILE_EXPECTED_HOSTNAME=unbrowser.unchainedsky.com", gateway)
+        self.assertIn("PUBLIC_MAX_SESSIONS=1", gateway)
+        self.assertIn(
+            "PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787",
+            gateway,
+        )
+        self.assertNotIn("seat-02", self.public_compose)
+        self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
+        self.assertIn("MARKET_RESEARCH_CONCURRENCY=1", worker)
+        self.assertIn(
+            "OPENROUTER_API_KEY=${FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY:",
+            worker,
+        )
+        self.assertNotIn("OPENROUTER_API_KEY=${OPENROUTER_API_KEY:", worker)
+        self.assertIn(
+            "UNBROWSER_MCP_URL=http://fin-terminal-public-unbrowser-mcp:8767/mcp",
+            worker,
+        )
+        self.assertNotIn("- unbrowser_mcp", worker)
+        self.assertIn("read_only: true", worker)
+        self.assertIn("cap_drop:\n    - ALL", worker)
+        self.assertNotIn("ports:", self.public_compose)
+
+        public_mcp = self.public_compose.split(
+            "\n  fin-terminal-public-unbrowser-mcp:\n", 1
+        )[1].split("\n  fin-terminal-public-gateway:\n", 1)[0]
+        self.assertIn("dockerfile: Dockerfile.unbrowser-mcp", public_mcp)
+        self.assertIn("- fin_terminal_public_mcp", public_mcp)
+        self.assertIn("- unbrowser_egress_proxy", public_mcp)
+        self.assertIn("read_only: true", public_mcp)
+        self.assertIn("cap_drop:\n      - ALL", public_mcp)
+
+    def test_public_live_edge_route_is_authenticated_and_fail_closed(self):
+        subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
+        route = subdomain.split("# Opt-in live-session pilot.", 1)[1].split(
+            "# The root reuses", 1
+        )[0]
+
+        self.assertIn(
+            "FIN_TERMINAL_PUBLIC_ENABLED=${FIN_TERMINAL_PUBLIC_ENABLED:-false}",
+            self.compose,
+        )
+        self.assertIn(
+            "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN:",
+            self.compose,
+        )
+        self.assertEqual(
+            route.count("expression `{$FIN_TERMINAL_PUBLIC_ENABLED:false}`"), 2
+        )
+        self.assertIn("uri strip_prefix /fin-terminal-live-pilot", route)
+        self.assertIn("log_skip", route)
+        self.assertIn("request_header -X-Fin-Terminal-Edge-Token", route)
+        self.assertIn("request_header -X-Real-IP", route)
+        self.assertIn("request_header -Cookie", route)
+        self.assertIn(
+            "header_up X-Fin-Terminal-Edge-Token {$FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN}",
+            route,
+        )
+        self.assertIn("header_up X-Real-IP {remote_host}", route)
+        self.assertLess(
+            route.index("request_header -X-Fin-Terminal-Edge-Token"),
+            route.index("reverse_proxy fin-terminal-public-gateway:8788"),
+        )
+        self.assertNotIn("forward_auth", route)
+
+    def test_public_live_overlay_is_staged_but_not_auto_started(self):
+        self.assertIn('"docker-compose.public-terminal.yml"', self.runtime_context)
+        self.assertIn(
+            "docker-compose.public-terminal.yml Caddyfile unchained", self.deploy
+        )
+        self.assertIn(
+            '"$remote_dir/docker-compose.public-terminal.yml"', self.deploy
+        )
+        self.assertNotIn("--profile fin-terminal-public-pilot", self.deploy)
+        self.assertIn("profiles: [\"fin-terminal-public-pilot\"]", self.public_compose)
+        self.assertNotIn("fin-terminal-public-pilot-10", self.public_compose)
+        self.assertIn("FIN_TERMINAL_PUBLIC_ENABLED=false", self.pilot_doc)
+        self.assertIn("Exactly one worker seat", self.pilot_doc)
+        self.assertIn("unbrowser-fin-terminal/pull/13", self.pilot_doc)
+        self.assertIn("not a hard spend", self.pilot_doc)
+        self.assertIn(".deploy-tools/ensure_fin_terminal_secrets.py .env", self.pilot_doc)
+        self.assertIn("--no-deps --no-build --pull never --force-recreate caddy", self.pilot_doc)
+        self.assertIn("Never run `docker compose down`", self.pilot_doc)
 
     def test_demo_site_serves_unbrowser_page_at_root(self):
         route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
@@ -602,9 +758,14 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("ensure_staged_fin_terminal_secrets", self.deploy)
         self.assertIn("FIN_TERMINAL_SECRETS_CHANGED", self.deploy)
         self.assertIn("secrets.token_hex(32)", self.secrets_helper)
-        self.assertIn("terminal_token == openrouter_key", self.secrets_helper)
-        self.assertIn("demo_token == terminal_token", self.secrets_helper)
+        self.assertIn("PUBLIC_TOKEN_NAMES", self.secrets_helper)
+        self.assertIn("public_enabled and name in PUBLIC_TOKEN_NAMES", self.secrets_helper)
+        self.assertIn("FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET", self.secrets_helper)
+        self.assertIn("FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY", self.secrets_helper)
         self.assertIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
+        self.assertIn(
+            'add_services "caddy fin-terminal fin-terminal-demo"', self.deploy
+        )
         self.assertIn(
             'docker compose up -d --no-deps --no-build --force-recreate "$service"',
             self.deploy,

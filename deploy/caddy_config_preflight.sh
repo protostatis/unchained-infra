@@ -24,10 +24,13 @@ validate_staged_config() {
     validate_stage_path "$stage_dir" "$remote_dir" "$deploy_id"
 
     local compose_file="$stage_dir/docker-compose.yml"
+    local public_terminal_compose_file="$stage_dir/docker-compose.public-terminal.yml"
     local candidate_file="$stage_dir/Caddyfile"
     local env_file="$stage_dir/.env"
     [[ -f "$compose_file" && ! -L "$compose_file" ]] \
         || die "staged docker-compose.yml is missing or symlinked"
+    [[ -f "$public_terminal_compose_file" && ! -L "$public_terminal_compose_file" ]] \
+        || die "staged docker-compose.public-terminal.yml is missing or symlinked"
     [[ -f "$candidate_file" && ! -L "$candidate_file" ]] \
         || die "staged Caddyfile is missing or symlinked"
     [[ -f "$env_file" && ! -L "$env_file" ]] \
@@ -48,6 +51,12 @@ validate_staged_config() {
         exit "$status"
     }
     trap cleanup_validation EXIT
+
+    # Validate the optional overlay's merged structure without requiring its
+    # external Turnstile credentials. deploy.sh stages but never activates it.
+    docker compose --project-directory "$stage_dir" \
+        -f "$compose_file" -f "$public_terminal_compose_file" \
+        config --no-interpolate --quiet >/dev/null </dev/null
 
     docker compose --project-directory "$stage_dir" --env-file "$env_file" \
         -f "$compose_file" config --format json > "$work_dir/compose.json" </dev/null
@@ -196,7 +205,8 @@ promote_staged_config() {
     validate_stage_path "$stage_dir" "$remote_dir" "$deploy_id"
 
     local file
-    for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml Caddyfile .env; do
+    for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml \
+        docker-compose.public-terminal.yml Caddyfile .env; do
         [[ -f "$stage_dir/$file" && ! -L "$stage_dir/$file" ]] \
             || die "staged $file is missing or symlinked"
     done
@@ -205,7 +215,8 @@ promote_staged_config() {
     [[ -f "$remote_dir/.env" && ! -L "$remote_dir/.env" ]] \
         || die "live .env is missing or symlinked"
 
-    for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml; do
+    for file in Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml \
+        docker-compose.public-terminal.yml; do
         copy_atomically "$stage_dir/$file" "$remote_dir/$file" 0644
     done
 

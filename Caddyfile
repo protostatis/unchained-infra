@@ -201,6 +201,45 @@ unbrowser.unchainedsky.com {
 		}
 	}
 
+	# Opt-in live-session pilot. The gateway verifies Turnstile, owns the FIFO
+	# queue, and proxies a guest only to an isolated internal worker. This remains
+	# a separate path until the benchmark gate promotes it over the replay route.
+	@fin_terminal_live_pilot_base {
+		path /fin-terminal-live-pilot
+		expression `{$FIN_TERMINAL_PUBLIC_ENABLED:false}`
+	}
+	redir @fin_terminal_live_pilot_base https://unbrowser.unchainedsky.com/fin-terminal-live-pilot/{?query} 308
+	@fin_terminal_live_pilot {
+		path /fin-terminal-live-pilot/*
+		expression `{$FIN_TERMINAL_PUBLIC_ENABLED:false}`
+	}
+	handle @fin_terminal_live_pilot {
+		uri strip_prefix /fin-terminal-live-pilot
+		# Ticket capabilities travel in request headers / WebSocket protocols.
+		# Do not retain them in edge access logs.
+		log_skip
+		header {
+			Content-Security-Policy "default-src 'self'; connect-src 'self' wss://unbrowser.unchainedsky.com https://challenges.cloudflare.com; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+		}
+		route {
+			# The gateway accepts only signed opaque public-session tokens. Strip
+			# caller-supplied terminal identity/service headers before proxying.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Edge-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			request_header -X-Real-IP
+			# Public admission uses signed opaque headers / WebSocket protocol, not
+			# browser cookies. Do not pass a signed-in visitor's cookie to it.
+			request_header -Cookie
+			reverse_proxy fin-terminal-public-gateway:8788 {
+				header_up X-Real-IP {remote_host}
+				header_up X-Fin-Terminal-Edge-Token {$FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN}
+			}
+		}
+	}
+
 	# The root reuses the existing public landing-page handler. Only its fixed
 	# supporting endpoints are exposed on this host.
 	@unbrowser_outbound path /go/unbrowser-connect /go/unbrowser-github /go/unbrowser-smithery

@@ -1,0 +1,222 @@
+# Opt-in public live-terminal pilot. Keep this overlay separate from the
+# default compose deployment: it is enabled only after Turnstile credentials
+# and the benchmark gate are in place. Both builds are pinned to the reviewed
+# application commit rather than a mutable branch or environment variable.
+#
+# Always name the public services explicitly with `up`; otherwise Compose also
+# acts on every unprofiled production service in docker-compose.yml. See the
+# enablement and rollback commands in docs/public-live-terminal-pilot.md.
+# This revision intentionally defines one seat only. Multi-seat isolation needs
+# a separate application and infrastructure review.
+
+x-fin-terminal-public-worker: &fin-terminal-public-worker
+  build:
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#604bed09b55568f2564eee78addcebcc0c8a7cfa"
+    args:
+      PUBLIC_BASE_PATH: /
+  expose:
+    - "8787"
+  environment:
+    - NODE_ENV=production
+    - HOST=0.0.0.0
+    - PORT=8787
+    - MARKET_ROOT=/app
+    - MARKET_DATA_DIR=/tmp/market-terminal
+    - PI_CODING_AGENT_DIR=/tmp/pi-agent
+    - UNBROWSER_MCP_URL=http://fin-terminal-public-unbrowser-mcp:8767/mcp
+    - UNBROWSER_MCP_REQUIRED=1
+    - OPENROUTER_API_KEY=${FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY:?FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY_required}
+    - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
+    - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
+    - MARKET_RESEARCH_CONCURRENCY=1
+    - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN_required}
+    - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
+    - PUBLIC_DEMO=0
+    - PUBLIC_SESSION_WORKER=1
+    - PUBLIC_IDLE_TIMEOUT_SECONDS=300
+    - PUBLIC_SESSION_MAX_SECONDS=900
+    - PUBLIC_RECONNECT_GRACE_SECONDS=30
+    - PUBLIC_MAX_RESEARCH_RUNS=5
+  networks:
+    - fin_terminal_public
+    - fin_terminal_public_egress
+    - fin_terminal_public_mcp
+  read_only: true
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=268435456,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  init: true
+  pids_limit: 128
+  cpus: 1.0
+  mem_limit: 1g
+  mem_reservation: 256m
+  stop_grace_period: 60s
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+    interval: 15s
+    timeout: 3s
+    retries: 3
+    start_period: 30s
+
+services:
+  fin-terminal-public-redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1"]
+    expose:
+      - "6379"
+    volumes:
+      - fin_terminal_public_redis:/data
+    networks:
+      - fin_terminal_public_state
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16777216,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    cpus: 0.25
+    mem_limit: 256m
+    mem_reservation: 64m
+    restart: unless-stopped
+    profiles: ["fin-terminal-public-pilot"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  fin-terminal-public-unbrowser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    depends_on:
+      unbrowser-egress:
+        condition: service_healthy
+    networks:
+      - fin_terminal_public_mcp
+      - unbrowser_egress_proxy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=67108864,mode=1777
+      - /home/unchained:rw,nosuid,nodev,noexec,size=67108864,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    restart: unless-stopped
+    profiles: ["fin-terminal-public-pilot"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  fin-terminal-public-gateway:
+    build:
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#604bed09b55568f2564eee78addcebcc0c8a7cfa"
+      args:
+        PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
+        VITE_TERMINAL_BUILD_MODE: public-live
+    expose:
+      - "8788"
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8788
+      - MARKET_ROOT=/app
+      - TERMINAL_RUNTIME_MODE=public-gateway
+      - PUBLIC_BASE_PATH=/fin-terminal-live-pilot/
+      - PUBLIC_ALLOWED_ORIGIN=https://unbrowser.unchainedsky.com
+      - PUBLIC_REDIS_URL=redis://fin-terminal-public-redis:6379/0
+      - PUBLIC_SESSION_SIGNING_KEY=${FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY:?FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY_required}
+      - PUBLIC_EDGE_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN_required}
+      - PUBLIC_WORKER_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN_required}
+      - PUBLIC_TURNSTILE_SITE_KEY=${FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY:?FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY_required}
+      - PUBLIC_TURNSTILE_SECRET=${FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET:?FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET_required}
+      - PUBLIC_TURNSTILE_EXPECTED_HOSTNAME=unbrowser.unchainedsky.com
+      - PUBLIC_MAX_SESSIONS=1
+      - PUBLIC_MAX_QUEUE=50
+      - PUBLIC_TICKET_TTL_SECONDS=600
+      - PUBLIC_RECONNECT_GRACE_SECONDS=30
+      - PUBLIC_IDLE_TIMEOUT_SECONDS=300
+      - PUBLIC_SESSION_MAX_SECONDS=900
+      - PUBLIC_MAX_RESEARCH_RUNS=5
+      - PUBLIC_DAILY_RESEARCH_BUDGET_MICRO_USD=10000000
+      - PUBLIC_RESEARCH_RUN_RESERVATION_MICRO_USD=200000
+      - PUBLIC_ADMISSION_ATTEMPTS=5
+      - PUBLIC_ADMISSION_WINDOW_SECONDS=600
+      - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787
+    depends_on:
+      fin-terminal-public-redis:
+        condition: service_healthy
+    networks:
+      - fin_terminal_public
+      - fin_terminal_public_state
+      - fin_terminal_public_egress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    stop_grace_period: 30s
+    restart: unless-stopped
+    profiles: ["fin-terminal-public-pilot"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  fin-terminal-public-seat-01:
+    <<: *fin-terminal-public-worker
+    profiles: ["fin-terminal-public-pilot"]
+
+volumes:
+  fin_terminal_public_redis:
+
+networks:
+  fin_terminal_public_state:
+    internal: true
+  fin_terminal_public_mcp:
+    internal: true
+  fin_terminal_public_egress:
