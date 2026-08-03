@@ -334,6 +334,14 @@ class MCPProtocolRequirementsTests(unittest.TestCase):
         # After resolution, docker exec should reference the variable.
         self.assertIn('"$mcp_cid"', mcp_func)
 
+    def test_mcp_requires_embedded_egress_403_for_private_targets(self) -> None:
+        """Navigate reports an egress denial in its blockmap, not as a tool error."""
+        mcp_func_start = self.text.find("mcp_protocol_check()")
+        mcp_func = self.text[mcp_func_start:] if mcp_func_start >= 0 else self.text
+        self.assertIn('get("http_error_status")', mcp_func)
+        self.assertIn("blocked_status != 403", mcp_func)
+        self.assertNotIn('rejected = "error" in rejection', mcp_func)
+
 
 # ---------------------------------------------------------------------------
 # (D) Gateway status check
