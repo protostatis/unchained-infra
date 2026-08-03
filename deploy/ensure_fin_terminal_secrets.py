@@ -10,6 +10,21 @@ import sys
 import tempfile
 
 
+TOKEN_NAMES = (
+    "FIN_TERMINAL_PROXY_TOKEN",
+    "FIN_TERMINAL_DEMO_PROXY_TOKEN",
+    "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
+    "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
+    "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
+)
+PUBLIC_TOKEN_NAMES = frozenset(TOKEN_NAMES[2:])
+PUBLIC_EXTERNAL_NAMES = (
+    "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY",
+    "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET",
+    "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY",
+)
+
+
 def _env_value(lines: list[str], name: str) -> str:
     prefix = f"{name}="
     value = ""
@@ -29,7 +44,7 @@ def _new_token(*, excluding: set[str]) -> str:
 
 
 def ensure_fin_terminal_secrets(env_path: Path) -> bool:
-    """Return True when either terminal proxy token was generated or replaced."""
+    """Return True when a terminal credential was generated or replaced."""
     if env_path.is_symlink():
         raise ValueError("refusing symlinked production .env")
     if not env_path.is_file():
@@ -40,34 +55,57 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     if not openrouter_key:
         raise ValueError("OPENROUTER_API_KEY is missing from production .env")
 
-    terminal_token = _env_value(lines, "FIN_TERMINAL_PROXY_TOKEN")
-    demo_token = _env_value(lines, "FIN_TERMINAL_DEMO_PROXY_TOKEN")
+    public_enabled_value = _env_value(lines, "FIN_TERMINAL_PUBLIC_ENABLED")
+    if public_enabled_value not in {"", "false", "true"}:
+        raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must be true or false")
+    public_enabled = public_enabled_value == "true"
+    public_openrouter_key = _env_value(
+        lines, "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY"
+    )
+    if public_enabled:
+        missing = [name for name in PUBLIC_EXTERNAL_NAMES if not _env_value(lines, name)]
+        if missing:
+            raise ValueError(
+                "public terminal is enabled but required external values are missing: "
+                + ", ".join(missing)
+            )
+        if public_openrouter_key == openrouter_key:
+            raise ValueError(
+                "FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY must be independent from "
+                "OPENROUTER_API_KEY"
+            )
+
+    tokens = {name: _env_value(lines, name) for name in TOKEN_NAMES}
+    existing_values = {value for value in tokens.values() if value}
+    protected_values = {openrouter_key}
+    if public_openrouter_key:
+        protected_values.add(public_openrouter_key)
     changed = False
 
     # Generate on the deployment host so tokens never pass through CI logs or
-    # shell arguments and can never reuse provider billing credentials. The
-    # public kiosk receives a different token from the persistent terminal.
-    if len(terminal_token) < 64 or terminal_token == openrouter_key:
-        terminal_token = _new_token(excluding={openrouter_key, demo_token})
-        changed = True
-    if (
-        len(demo_token) < 64
-        or demo_token == openrouter_key
-        or demo_token == terminal_token
-    ):
-        demo_token = _new_token(excluding={openrouter_key, terminal_token})
-        changed = True
+    # shell arguments and can never reuse provider billing credentials. Every
+    # trust boundary receives an independent 256-bit value. Public credentials
+    # may be prepared while the pilot is disabled, but are never rotated
+    # implicitly while its edge route is enabled.
+    for name in TOKEN_NAMES:
+        value = tokens[name]
+        if len(value) < 64 or value in protected_values:
+            if public_enabled and name in PUBLIC_TOKEN_NAMES:
+                raise ValueError(
+                    f"{name} is invalid while FIN_TERMINAL_PUBLIC_ENABLED=true; "
+                    "disable the public route before rotating it"
+                )
+            value = _new_token(excluding=protected_values | existing_values)
+            tokens[name] = value
+            existing_values.add(value)
+            changed = True
+        protected_values.add(value)
 
     updated = [
         line for line in lines
-        if not line.startswith(("FIN_TERMINAL_PROXY_TOKEN=", "FIN_TERMINAL_DEMO_PROXY_TOKEN="))
+        if not line.startswith(tuple(f"{name}=" for name in TOKEN_NAMES))
     ]
-    updated.extend(
-        (
-            f"FIN_TERMINAL_PROXY_TOKEN={terminal_token}",
-            f"FIN_TERMINAL_DEMO_PROXY_TOKEN={demo_token}",
-        )
-    )
+    updated.extend(f"{name}={tokens[name]}" for name in TOKEN_NAMES)
     content = "\n".join(updated) + "\n"
     fd, tmp_name = tempfile.mkstemp(prefix=".env.fin-terminal.", dir=env_path.parent)
     try:
@@ -93,9 +131,9 @@ def main(argv: list[str]) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     if generated:
-        print("    Generated independent fin-terminal proxy token(s) on the host.")
+        print("    Generated independent fin-terminal credential(s) on the host.")
     else:
-        print("    Existing independent fin-terminal proxy tokens retained.")
+        print("    Existing independent fin-terminal credentials retained.")
     return 0
 
 

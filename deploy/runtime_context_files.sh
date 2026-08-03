@@ -4,6 +4,7 @@ TOP_LEVEL_CONTEXT_FILES=(
     "Dockerfile"
     "Dockerfile.unbrowser-mcp"
     "docker-compose.yml"
+    "docker-compose.public-terminal.yml"
     "Caddyfile"
 )
 

@@ -51,6 +51,13 @@ COMPOSE_FILES = {
     "docker-compose.yml",
 }
 
+# This overlay is staged with every release but never activated by deploy.sh.
+# Operators roll its profiled services independently after the soak-test gate,
+# so changing it must not rebuild or restart the default production stack.
+OPTIONAL_COMPOSE_FILES = {
+    "docker-compose.public-terminal.yml",
+}
+
 # Caddy-only changes — graceful reload, no other service touched.
 CADDY_FILES = {
     "Caddyfile",
@@ -177,6 +184,8 @@ def classify_path(path: str) -> set[str]:
     """
     if path in FULL_REBUILD_FILES:
         return {"ALL"}
+    if path in OPTIONAL_COMPOSE_FILES:
+        return set()
     if path in COMPOSE_FILES:
         return {"COMPOSE"}
     if path in CADDY_FILES:

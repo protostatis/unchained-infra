@@ -252,7 +252,7 @@ chmod 600 "$backup_dir/.env"
 # post-upload runtime comparison can render both revisions with the live .env.
 cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
 test -s "$backup_dir/docker-compose.yml"
-items=(Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml Caddyfile unchained research_desk_vendor rhythm)
+items=(Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml docker-compose.public-terminal.yml Caddyfile unchained research_desk_vendor rhythm)
 present=()
 for item in "${items[@]}"; do
     if [[ -e "$remote_dir/$item" ]]; then
@@ -517,7 +517,8 @@ test -f "$backup_dir/source.tgz"
 test -f "$backup_dir/.env"
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
-      "$remote_dir/docker-compose.yml" "$remote_dir/Caddyfile" "$remote_dir/.env"
+      "$remote_dir/docker-compose.yml" "$remote_dir/docker-compose.public-terminal.yml" \
+      "$remote_dir/Caddyfile" "$remote_dir/.env"
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cp -p -- "$backup_dir/.env" "$remote_dir/.env"
 chmod 600 "$remote_dir/.env"
@@ -546,9 +547,23 @@ EOF
 set -euo pipefail
 cd "$1"
 # Recreate Caddy from the restored Compose definition so rolled-back
-# environment values and network attachments cannot linger. Also remove any
-# service introduced only by the failed release.
-docker compose up -d --no-deps --no-build --force-recreate --remove-orphans caddy
+# environment values and network attachments cannot linger. Preserve opt-in
+# public-terminal containers by including their overlay when it can be rendered;
+# otherwise omit --remove-orphans rather than deleting an independently rolled
+# pilot during an unrelated default-stack rollback.
+compose_args=(-f docker-compose.yml)
+remove_orphans=(--remove-orphans)
+if [[ -f docker-compose.public-terminal.yml ]]; then
+    if docker compose -f docker-compose.yml -f docker-compose.public-terminal.yml \
+        config --quiet >/dev/null 2>&1; then
+        compose_args+=(-f docker-compose.public-terminal.yml)
+    else
+        echo "    Public-terminal overlay is not renderable; preserving orphan containers." >&2
+        remove_orphans=()
+    fi
+fi
+docker compose "${compose_args[@]}" up -d --no-deps --no-build \
+    --force-recreate "${remove_orphans[@]}" caddy
 for attempt in $(seq 1 24); do
     container="$(docker compose ps -q caddy)"
     state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true)"
@@ -953,7 +968,7 @@ if ! $FORCE_FULL_DEPLOY; then
 fi
 
 # Stage the prospective top-level release before mutating the live source
-# directory. The staged .env receives any generated terminal token, allowing
+# directory. The staged .env receives any generated terminal credential, allowing
 # the Caddy candidate to be validated with the exact future Compose image and
 # environment while a malformed file cannot trigger rollback/recreation.
 echo "==> Staging prospective configuration..."
@@ -1123,10 +1138,10 @@ SERVICES_TO_REBUILD=""
 CADDY_RECREATE_REQUIRED=false
 if $FIN_TERMINAL_SECRETS_CHANGED; then
     # Existing Caddy and terminal containers retain their old environment.
-    # Recreate both so a generated proxy token reaches both sides of the
-    # authenticated terminal proxy.
-    echo "==> Fin-terminal proxy token changed; recreating Caddy and fin-terminal."
-    add_services "caddy fin-terminal"
+    # Recreate all default terminal trust-boundary participants so generated
+    # persistent, replay, or public-edge credentials are never one-sided.
+    echo "==> Fin-terminal credentials changed; recreating Caddy and terminal services."
+    add_services "caddy fin-terminal fin-terminal-demo"
     CADDY_RECREATE_REQUIRED=true
 fi
 if $FORCE_FULL_DEPLOY; then
@@ -1184,6 +1199,11 @@ else
             # changed, even if another file forced a broad app rebuild.
             if printf '%s\n' "$CHANGED_FILES" | grep -qx 'Caddyfile'; then
                 add_services caddy
+            fi
+
+            if printf '%s\n' "$CHANGED_FILES" \
+                | grep -qx 'docker-compose.public-terminal.yml'; then
+                echo "    Public-terminal overlay staged; opt-in profile services left unchanged."
             fi
 
             if printf '%s\n' "$CHANGED_FILES" | grep -qx 'docker-compose.yml'; then
