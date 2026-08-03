@@ -6,8 +6,9 @@
 # Always name the public services explicitly with `up`; otherwise Compose also
 # acts on every unprofiled production service in docker-compose.yml. See the
 # enablement and rollback commands in docs/public-live-terminal-pilot.md.
-# This revision intentionally defines one seat only. Multi-seat isolation needs
-# a separate application and infrastructure review.
+# This revision defines exactly six isolated worker seats. Each worker has a
+# private gateway network, a private attachment to the shared MCP service, and
+# a private direct-egress network so workers cannot address one another.
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
@@ -38,10 +39,6 @@ x-fin-terminal-public-worker: &fin-terminal-public-worker
     - PUBLIC_SESSION_MAX_SECONDS=900
     - PUBLIC_RECONNECT_GRACE_SECONDS=30
     - PUBLIC_MAX_RESEARCH_RUNS=5
-  networks:
-    - fin_terminal_public
-    - fin_terminal_public_egress
-    - fin_terminal_public_mcp
   read_only: true
   tmpfs:
     - /tmp:rw,nosuid,nodev,noexec,size=268435456,mode=1777
@@ -110,7 +107,12 @@ services:
       unbrowser-egress:
         condition: service_healthy
     networks:
-      - fin_terminal_public_mcp
+      - fin_terminal_public_mcp_01
+      - fin_terminal_public_mcp_02
+      - fin_terminal_public_mcp_03
+      - fin_terminal_public_mcp_04
+      - fin_terminal_public_mcp_05
+      - fin_terminal_public_mcp_06
       - unbrowser_egress_proxy
     read_only: true
     tmpfs:
@@ -162,7 +164,7 @@ services:
       - PUBLIC_TURNSTILE_SITE_KEY=${FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY:?FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY_required}
       - PUBLIC_TURNSTILE_SECRET=${FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET:?FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET_required}
       - PUBLIC_TURNSTILE_EXPECTED_HOSTNAME=unbrowser.unchainedsky.com
-      - PUBLIC_MAX_SESSIONS=1
+      - PUBLIC_MAX_SESSIONS=6
       - PUBLIC_MAX_QUEUE=50
       - PUBLIC_TICKET_TTL_SECONDS=600
       - PUBLIC_RECONNECT_GRACE_SECONDS=30
@@ -173,7 +175,7 @@ services:
       - PUBLIC_RESEARCH_RUN_RESERVATION_MICRO_USD=200000
       - PUBLIC_ADMISSION_ATTEMPTS=5
       - PUBLIC_ADMISSION_WINDOW_SECONDS=600
-      - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787
+      - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787,seat-02=http://fin-terminal-public-seat-02:8787,seat-03=http://fin-terminal-public-seat-03:8787,seat-04=http://fin-terminal-public-seat-04:8787,seat-05=http://fin-terminal-public-seat-05:8787,seat-06=http://fin-terminal-public-seat-06:8787
     depends_on:
       fin-terminal-public-redis:
         condition: service_healthy
@@ -181,6 +183,12 @@ services:
       - fin_terminal_public
       - fin_terminal_public_state
       - fin_terminal_public_egress
+      - fin_terminal_public_seat_01
+      - fin_terminal_public_seat_02
+      - fin_terminal_public_seat_03
+      - fin_terminal_public_seat_04
+      - fin_terminal_public_seat_05
+      - fin_terminal_public_seat_06
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
@@ -210,6 +218,50 @@ services:
 
   fin-terminal-public-seat-01:
     <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_01
+      - fin_terminal_public_egress_01
+      - fin_terminal_public_mcp_01
+    profiles: ["fin-terminal-public-pilot"]
+
+  fin-terminal-public-seat-02:
+    <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_02
+      - fin_terminal_public_egress_02
+      - fin_terminal_public_mcp_02
+    profiles: ["fin-terminal-public-pilot"]
+
+  fin-terminal-public-seat-03:
+    <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_03
+      - fin_terminal_public_egress_03
+      - fin_terminal_public_mcp_03
+    profiles: ["fin-terminal-public-pilot"]
+
+  fin-terminal-public-seat-04:
+    <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_04
+      - fin_terminal_public_egress_04
+      - fin_terminal_public_mcp_04
+    profiles: ["fin-terminal-public-pilot"]
+
+  fin-terminal-public-seat-05:
+    <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_05
+      - fin_terminal_public_egress_05
+      - fin_terminal_public_mcp_05
+    profiles: ["fin-terminal-public-pilot"]
+
+  fin-terminal-public-seat-06:
+    <<: *fin-terminal-public-worker
+    networks:
+      - fin_terminal_public_seat_06
+      - fin_terminal_public_egress_06
+      - fin_terminal_public_mcp_06
     profiles: ["fin-terminal-public-pilot"]
 
 volumes:
@@ -218,6 +270,34 @@ volumes:
 networks:
   fin_terminal_public_state:
     internal: true
-  fin_terminal_public_mcp:
+  fin_terminal_public_mcp_01:
+    internal: true
+  fin_terminal_public_mcp_02:
+    internal: true
+  fin_terminal_public_mcp_03:
+    internal: true
+  fin_terminal_public_mcp_04:
+    internal: true
+  fin_terminal_public_mcp_05:
+    internal: true
+  fin_terminal_public_mcp_06:
     internal: true
   fin_terminal_public_egress:
+  fin_terminal_public_egress_01:
+  fin_terminal_public_egress_02:
+  fin_terminal_public_egress_03:
+  fin_terminal_public_egress_04:
+  fin_terminal_public_egress_05:
+  fin_terminal_public_egress_06:
+  fin_terminal_public_seat_01:
+    internal: true
+  fin_terminal_public_seat_02:
+    internal: true
+  fin_terminal_public_seat_03:
+    internal: true
+  fin_terminal_public_seat_04:
+    internal: true
+  fin_terminal_public_seat_05:
+    internal: true
+  fin_terminal_public_seat_06:
+    internal: true

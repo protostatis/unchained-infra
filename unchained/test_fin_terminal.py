@@ -533,12 +533,24 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             gateway,
         )
         self.assertIn("PUBLIC_TURNSTILE_EXPECTED_HOSTNAME=unbrowser.unchainedsky.com", gateway)
-        self.assertIn("PUBLIC_MAX_SESSIONS=1", gateway)
-        self.assertIn(
-            "PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787",
-            gateway,
+        self.assertIn("PUBLIC_MAX_SESSIONS=6", gateway)
+        expected_endpoints = ",".join(
+            f"seat-{value:02d}=http://fin-terminal-public-seat-{value:02d}:8787"
+            for value in range(1, 7)
         )
-        self.assertNotIn("seat-02", self.public_compose)
+        self.assertIn(f"PUBLIC_WORKER_ENDPOINTS={expected_endpoints}", gateway)
+        for value in range(1, 7):
+            suffix = f"{value:02d}"
+            self.assertEqual(
+                self.public_compose.count(
+                    f"\n  fin-terminal-public-seat-{suffix}:\n"
+                ),
+                1,
+            )
+            self.assertIn(f"- fin_terminal_public_seat_{suffix}", self.public_compose)
+            self.assertIn(f"- fin_terminal_public_mcp_{suffix}", self.public_compose)
+            self.assertIn(f"- fin_terminal_public_egress_{suffix}", self.public_compose)
+        self.assertNotIn("fin-terminal-public-seat-07", self.public_compose)
         self.assertIn("VITE_TERMINAL_BUILD_MODE: live", worker)
         self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
         self.assertIn("MARKET_RESEARCH_CONCURRENCY=1", worker)
@@ -560,7 +572,8 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "\n  fin-terminal-public-unbrowser-mcp:\n", 1
         )[1].split("\n  fin-terminal-public-gateway:\n", 1)[0]
         self.assertIn("dockerfile: Dockerfile.unbrowser-mcp", public_mcp)
-        self.assertIn("- fin_terminal_public_mcp", public_mcp)
+        for value in range(1, 7):
+            self.assertIn(f"- fin_terminal_public_mcp_{value:02d}", public_mcp)
         self.assertIn("- unbrowser_egress_proxy", public_mcp)
         self.assertIn("read_only: true", public_mcp)
         self.assertIn("cap_drop:\n      - ALL", public_mcp)
@@ -615,12 +628,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("profiles: [\"fin-terminal-public-pilot\"]", self.public_compose)
         self.assertNotIn("fin-terminal-public-pilot-10", self.public_compose)
         self.assertIn("FIN_TERMINAL_PUBLIC_ENABLED=false", self.pilot_doc)
-        self.assertIn("Exactly one worker seat", self.pilot_doc)
+        self.assertIn("Exactly six worker seats", self.pilot_doc)
         self.assertIn("unbrowser-fin-terminal/pull/13", self.pilot_doc)
         self.assertIn("not a hard spend", self.pilot_doc)
         self.assertIn("same `OPENROUTER_API_KEY` as the trial agent", self.pilot_doc)
         self.assertIn("Public Terminal Pilot", self.pilot_doc)
-        self.assertIn("-f action=activate -f confirm='ACTIVATE ONE SEAT'", self.pilot_doc)
+        self.assertIn("-f action=activate -f confirm='ACTIVATE SIX SEATS'", self.pilot_doc)
         self.assertIn("-f action=disable -f confirm='DISABLE PUBLIC PILOT'", self.pilot_doc)
         self.assertIn("restores the exact pre-activation", self.pilot_doc)
         self.assertRegex(self.pilot_doc, r"Never run\s+`docker compose down`")

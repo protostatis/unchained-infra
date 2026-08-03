@@ -47,17 +47,27 @@ readonly PILOT_PATH="/fin-terminal-live-pilot"
 readonly PILOT_URL="https://${PUBLIC_HOST}${PILOT_PATH}/"
 readonly MAIN_REPO_URL="https://github.com/protostatis/unchained-infra.git"
 
-# The four profiled pilot services — always these exact names.
+# The six reviewed worker seats and nine profiled pilot services.
+readonly PILOT_SEATS=(
+    fin-terminal-public-seat-01
+    fin-terminal-public-seat-02
+    fin-terminal-public-seat-03
+    fin-terminal-public-seat-04
+    fin-terminal-public-seat-05
+    fin-terminal-public-seat-06
+)
 readonly PILOT_SERVICES=(
     fin-terminal-public-redis
     fin-terminal-public-unbrowser-mcp
-    fin-terminal-public-seat-01
+    "${PILOT_SEATS[@]}"
     fin-terminal-public-gateway
 )
-# Stop/remove order (reverse dependency: gateway → seat → MCP → redis).
+readonly PILOT_SEAT_COUNT="${#PILOT_SEATS[@]}"
+readonly PILOT_SERVICE_COUNT="${#PILOT_SERVICES[@]}"
+# Stop/remove order (reverse dependency: gateway → seats → MCP → redis).
 readonly PILOT_STOP_ORDER=(
     fin-terminal-public-gateway
-    fin-terminal-public-seat-01
+    "${PILOT_SEATS[@]}"
     fin-terminal-public-unbrowser-mcp
     fin-terminal-public-redis
 )
@@ -79,6 +89,11 @@ ROLLBACK_SNAPSHOT=""
 STAGED_ENV=""
 LOCK_FD=""
 ROLLBACK_ARMED=false
+REDIS_STATE_BACKUP=""
+REDIS_STATE_BACKUP_PRESENCE=""
+REDIS_STATE_BACKUP_READY=false
+REDIS_STATE_EXISTED=false
+REDIS_STATE_MIGRATED=false
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -120,6 +135,11 @@ secure_workdir_cleanup() {
     SECURE_WORKDIR=""
     STAGED_ENV=""
     ROLLBACK_SNAPSHOT=""
+    REDIS_STATE_BACKUP=""
+    REDIS_STATE_BACKUP_PRESENCE=""
+    REDIS_STATE_BACKUP_READY=false
+    REDIS_STATE_EXISTED=false
+    REDIS_STATE_MIGRATED=false
 }
 
 common_exit_cleanup() {
@@ -624,6 +644,223 @@ validate_overlay_services() {
 }
 
 # ---------------------------------------------------------------------------
+# Reversible Redis worker-set transition
+# ---------------------------------------------------------------------------
+# The pinned gateway intentionally refuses persisted state whose worker IDs do
+# not exactly match configuration. While the gateway is stopped, transition
+# only the worker-set portion between the rollback-compatible one-seat shape
+# and the reviewed six-seat shape. Preserve the daily reservation counter and
+# ended ticket history; terminate any stale live/queued tickets fail-closed.
+wait_redis_gateway_lock_clear() {
+    local redis_cid="$1" lock_value attempts
+    for attempts in $(seq 1 20); do
+        lock_value="$(docker exec "$redis_cid" redis-cli --raw \
+            GET 'fin-terminal-public:v1:gateway-lock' 2>/dev/null || true)"
+        if [[ -z "$lock_value" ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "ERROR: Redis gateway lease did not clear" >&2
+    return 1
+}
+
+transition_redis_worker_set() {
+    local target_count="$1" backup_path="${2:--}" redis_cid result
+    redis_cid="$(resolve_container_id fin-terminal-public-redis)"
+    if [[ -z "$redis_cid" ]]; then
+        echo "ERROR: could not resolve Redis container for worker-set transition" >&2
+        return 1
+    fi
+    wait_redis_gateway_lock_clear "$redis_cid" || return 1
+
+    result="$(python3 - "$redis_cid" "$target_count" "$backup_path" 2>/dev/null <<'PYEOF'
+import json
+import os
+import stat
+import subprocess
+import sys
+import time
+
+container_id, target_raw, backup_path = sys.argv[1:]
+target_count = int(target_raw)
+if target_count not in {1, 6}:
+    raise SystemExit(1)
+
+STATE_KEY = "fin-terminal-public:v1:state"
+ONE = ["seat-01"]
+SIX = [f"seat-{value:02d}" for value in range(1, 7)]
+target_workers = ONE if target_count == 1 else SIX
+
+def redis(*args, stdin=None):
+    completed = subprocess.run(
+        ["docker", "exec", "-i", container_id, "redis-cli", *args],
+        input=stdin,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Redis command failed")
+    # redis-cli appends one protocol newline. Remove exactly that newline so a
+    # persisted value that itself ends in a newline can still be backed up and
+    # restored byte-for-byte.
+    return completed.stdout[:-1] if completed.stdout.endswith("\n") else completed.stdout
+
+exists_raw = redis("--raw", "EXISTS", STATE_KEY)
+if exists_raw not in {"0", "1"}:
+    raise RuntimeError("Redis existence check failed")
+existed = exists_raw == "1"
+raw = redis("--raw", "GET", STATE_KEY) if existed else ""
+if backup_path != "-":
+    def write_backup(path, value):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)
+        try:
+            data = value.encode("utf-8")
+            written = 0
+            while written < len(data):
+                count = os.write(fd, data[written:])
+                if count <= 0:
+                    raise OSError("short Redis backup write")
+                written += count
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        backup_stat = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(backup_stat.st_mode) or stat.S_IMODE(backup_stat.st_mode) != 0o600:
+            raise RuntimeError("unsafe Redis backup file")
+
+    # The separate presence marker distinguishes an absent key from a present
+    # empty value. Both files are durable before any Redis mutation occurs.
+    write_backup(backup_path, raw)
+    write_backup(backup_path + ".presence", "present\n" if existed else "absent\n")
+
+if existed:
+    state = json.loads(raw)
+    if state.get("version") != 1:
+        raise ValueError("unsupported persisted state version")
+    sessions = state.get("sessions")
+    queue = state.get("queue")
+    workers = state.get("workers")
+    if not isinstance(sessions, list) or not isinstance(queue, list) or not isinstance(workers, list):
+        raise ValueError("invalid persisted state shape")
+    current_workers = [worker.get("id") for worker in workers if isinstance(worker, dict)]
+    if len(current_workers) != len(workers) or sorted(current_workers) not in [ONE, SIX]:
+        raise ValueError("unexpected persisted worker set")
+    reserved = state.get("dailyReservedMicroUsd")
+    if not isinstance(reserved, int) or isinstance(reserved, bool) or reserved < 0:
+        raise ValueError("invalid persisted reservation counter")
+    now = int(time.time() * 1000)
+    for session in sessions:
+        if not isinstance(session, dict):
+            raise ValueError("invalid persisted session")
+        if session.get("state") != "ended":
+            session["state"] = "ended"
+            session["endReason"] = "worker-unavailable"
+            session["endedAt"] = now
+            session.pop("pendingConnectionVersion", None)
+            session.pop("pendingConnectionReservedAt", None)
+    state["queue"] = []
+    state["workers"] = [{"id": worker_id} for worker_id in target_workers]
+    updated = json.dumps(state, separators=(",", ":"), sort_keys=True)
+    if redis("-x", "SET", STATE_KEY, stdin=updated).strip() != "OK":
+        raise RuntimeError("Redis state write failed")
+    if redis("--raw", "GET", STATE_KEY) != updated:
+        raise RuntimeError("Redis state verification failed")
+
+print("STATE_TRANSITION_OK:" + ("present" if existed else "absent"))
+PYEOF
+)" || {
+        echo "ERROR: persisted worker-set transition failed (details scrubbed)" >&2
+        return 1
+    }
+    case "$result" in
+        STATE_TRANSITION_OK:present)
+            [[ "$backup_path" == "-" ]] || REDIS_STATE_EXISTED=true
+            ;;
+        STATE_TRANSITION_OK:absent)
+            [[ "$backup_path" == "-" ]] || REDIS_STATE_EXISTED=false
+            ;;
+        *)
+            echo "ERROR: persisted worker-set transition returned an unexpected result" >&2
+            return 1
+            ;;
+    esac
+    echo "    Persisted admission worker set: transitioned to ${target_count}."
+    return 0
+}
+
+prepare_six_worker_state() {
+    REDIS_STATE_BACKUP="$SECURE_WORKDIR/redis-state.backup"
+    REDIS_STATE_BACKUP_PRESENCE="${REDIS_STATE_BACKUP}.presence"
+    REDIS_STATE_MIGRATED=true
+    if ! transition_redis_worker_set 6 "$REDIS_STATE_BACKUP"; then
+        # The transition cannot mutate Redis before writing the presence marker.
+        # If the marker is absent there is therefore nothing to restore.
+        if [[ ! -f "$REDIS_STATE_BACKUP_PRESENCE" ]]; then
+            REDIS_STATE_MIGRATED=false
+        elif ! load_redis_backup_presence; then
+            # A marker without a valid backup is ambiguous after a failed SET;
+            # leave rollback armed so it fails closed rather than guessing.
+            REDIS_STATE_BACKUP_READY=false
+        fi
+        return 1
+    fi
+    load_redis_backup_presence || return 1
+}
+
+load_redis_backup_presence() {
+    [[ -f "$REDIS_STATE_BACKUP" ]] || return 1
+    [[ -f "$REDIS_STATE_BACKUP_PRESENCE" ]] || return 1
+    local presence
+    presence="$(<"$REDIS_STATE_BACKUP_PRESENCE")"
+    case "$presence" in
+        present) REDIS_STATE_EXISTED=true ;;
+        absent)  REDIS_STATE_EXISTED=false ;;
+        *)       return 1 ;;
+    esac
+    REDIS_STATE_BACKUP_READY=true
+    return 0
+}
+
+restore_redis_state_backup() {
+    $REDIS_STATE_MIGRATED || return 0
+    if ! $REDIS_STATE_BACKUP_READY; then
+        echo "ERROR: Redis state changed without a restorable snapshot" >&2
+        return 1
+    fi
+    local redis_cid result
+    redis_cid="$(resolve_container_id fin-terminal-public-redis)"
+    if [[ -z "$redis_cid" ]]; then
+        echo "ERROR: could not resolve Redis container for state restore" >&2
+        return 1
+    fi
+    wait_redis_gateway_lock_clear "$redis_cid" || return 1
+    if $REDIS_STATE_EXISTED; then
+        result="$(docker exec -i "$redis_cid" redis-cli -x SET \
+            'fin-terminal-public:v1:state' < "$REDIS_STATE_BACKUP" 2>/dev/null || true)"
+        if [[ "$result" != "OK" ]]; then
+            echo "ERROR: could not restore persisted admission state" >&2
+            return 1
+        fi
+    else
+        result="$(docker exec "$redis_cid" redis-cli DEL \
+            'fin-terminal-public:v1:state' 2>/dev/null || true)"
+        if [[ "$result" != "0" && "$result" != "1" ]]; then
+            echo "ERROR: could not remove newly-created persisted admission state" >&2
+            return 1
+        fi
+    fi
+    echo "    Persisted admission state: pre-activation snapshot restored."
+    REDIS_STATE_MIGRATED=false
+    REDIS_STATE_BACKUP_READY=false
+    REDIS_STATE_BACKUP_PRESENCE=""
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Rollback trap — fail-closed for activate (review item K)
 # ---------------------------------------------------------------------------
 arm_activate_rollback() {
@@ -692,6 +929,14 @@ activate_rollback_handler() {
 
     # Step 5: Stop/remove pilot services in reverse order (use ps -aq).
     printf 'Rollback: stopping/removing pilot services...\n' >&2
+    # Stop the only Redis writer first, then restore the exact pre-activation
+    # state while Redis is still available.
+    compose_cmd stop fin-terminal-public-gateway 2>/dev/null || true
+    if ! restore_redis_state_backup; then
+        echo "FATAL: could not restore persisted admission state during rollback" >&2
+        secure_workdir_cleanup
+        exit 1
+    fi
     for svc in "${PILOT_STOP_ORDER[@]}"; do
         compose_cmd stop "$svc" 2>/dev/null || true
     done
@@ -718,15 +963,15 @@ activate_rollback_handler() {
 validate_overlay_safety() {
     echo "==> Validating overlay safety..."
 
-    # Exactly one seat.
+    # Exactly the reviewed six seats.
     local seat_count
     if ! seat_count="$(compose_cmd config --format json 2>/dev/null \
             | python3 -c "import json,sys; cfg=json.load(sys.stdin); services=list(cfg.get('services',{}).keys()); print(sum(1 for s in services if s.startswith('fin-terminal-public-seat-')))" 2>/dev/null)"; then
         echo "ERROR: could not inspect seat count in merged Compose configuration" >&2
         return 1
     fi
-    if [[ "$seat_count" -ne 1 ]]; then
-        echo "ERROR: expected exactly 1 seat, found $seat_count" >&2
+    if [[ "$seat_count" -ne "$PILOT_SEAT_COUNT" ]]; then
+        echo "ERROR: expected exactly $PILOT_SEAT_COUNT seats, found $seat_count" >&2
         return 1
     fi
 
@@ -736,7 +981,17 @@ validate_overlay_safety() {
         | python3 -c "
 import json, sys
 cfg = json.load(sys.stdin)
-pilot = ['fin-terminal-public-redis','fin-terminal-public-unbrowser-mcp','fin-terminal-public-seat-01','fin-terminal-public-gateway']
+pilot = [
+    'fin-terminal-public-redis',
+    'fin-terminal-public-unbrowser-mcp',
+    'fin-terminal-public-seat-01',
+    'fin-terminal-public-seat-02',
+    'fin-terminal-public-seat-03',
+    'fin-terminal-public-seat-04',
+    'fin-terminal-public-seat-05',
+    'fin-terminal-public-seat-06',
+    'fin-terminal-public-gateway',
+]
 out = {}
 for name in pilot:
     if name in cfg.get('services',{}):
@@ -764,7 +1019,7 @@ print(json.dumps(out))
     if ! has_published="$(python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-if len(data) != 4:
+if len(data) != 9:
     raise SystemExit(1)
 for svc in data.values():
     if svc.get('ports'):
@@ -826,7 +1081,67 @@ print('HARDENED')
         return 1
     fi
 
-    echo "    Overlay safety: OK (1 seat, no published ports/host networking, hardened runtimes)."
+    # Validate the exact six-seat endpoint and network-isolation contract before
+    # any image is built or container is started.
+    local six_seat_contract
+    if ! six_seat_contract="$(compose_cmd config --format json 2>/dev/null \
+        | python3 -c "
+import json, sys
+
+cfg = json.load(sys.stdin)
+services = cfg.get('services', {})
+seat_numbers = [f'{value:02d}' for value in range(1, 7)]
+seat_services = [f'fin-terminal-public-seat-{value}' for value in seat_numbers]
+gateway = services.get('fin-terminal-public-gateway', {})
+mcp = services.get('fin-terminal-public-unbrowser-mcp', {})
+environment = gateway.get('environment', {})
+if str(environment.get('PUBLIC_MAX_SESSIONS')) != '6':
+    raise SystemExit(1)
+expected_endpoints = [
+    f'seat-{value}=http://fin-terminal-public-seat-{value}:8787'
+    for value in seat_numbers
+]
+actual_endpoints = str(environment.get('PUBLIC_WORKER_ENDPOINTS', '')).split(',')
+if actual_endpoints != expected_endpoints or len(set(actual_endpoints)) != 6:
+    raise SystemExit(1)
+
+def networks(service):
+    value = service.get('networks', {})
+    return set(value if isinstance(value, list) else value.keys())
+
+expected_gateway = {
+    'fin_terminal_public',
+    'fin_terminal_public_state',
+    'fin_terminal_public_egress',
+    *{f'fin_terminal_public_seat_{value}' for value in seat_numbers},
+}
+if networks(gateway) != expected_gateway:
+    raise SystemExit(1)
+expected_mcp = {
+    'unbrowser_egress_proxy',
+    *{f'fin_terminal_public_mcp_{value}' for value in seat_numbers},
+}
+if networks(mcp) != expected_mcp:
+    raise SystemExit(1)
+for value, name in zip(seat_numbers, seat_services):
+    expected = {
+        f'fin_terminal_public_seat_{value}',
+        f'fin_terminal_public_egress_{value}',
+        f'fin_terminal_public_mcp_{value}',
+    }
+    if networks(services.get(name, {})) != expected:
+        raise SystemExit(1)
+print('SIX_SEAT_CONTRACT_OK')
+" 2>/dev/null)"; then
+        echo "ERROR: six-seat endpoint/network isolation validation could not complete" >&2
+        return 1
+    fi
+    if [[ "$six_seat_contract" != "SIX_SEAT_CONTRACT_OK" ]]; then
+        echo "ERROR: six-seat endpoint/network isolation contract does not match" >&2
+        return 1
+    fi
+
+    echo "    Overlay safety: OK (6 isolated seats, no published ports/host networking, hardened runtimes)."
     return 0
 }
 
@@ -871,6 +1186,33 @@ check_resources() {
         fi
     fi
     echo "    Resources: sufficient (disk ${disk_pct}%, memory ${mem_pct:-?}%)."
+    return 0
+}
+
+check_post_start_capacity() {
+    local mem_available_kb mem_total_kb required_kb required_percent_kb
+    mem_available_kb="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    mem_total_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    required_kb=$((512 * 1024))
+    required_percent_kb=$((mem_total_kb * 15 / 100))
+    if [[ "$required_percent_kb" -gt "$required_kb" ]]; then
+        required_kb="$required_percent_kb"
+    fi
+    if [[ "$mem_available_kb" -lt "$required_kb" ]]; then
+        echo "ERROR: six-seat startup left less than the required memory reserve" >&2
+        return 1
+    fi
+
+    local svc cid lifecycle
+    for svc in "${PILOT_SERVICES[@]}"; do
+        cid="$(resolve_container_id "$svc")"
+        lifecycle="$(docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' "$cid" 2>/dev/null || true)"
+        if [[ "$lifecycle" != "false 0" ]]; then
+            echo "ERROR: $svc OOMed or restarted during six-seat startup" >&2
+            return 1
+        fi
+    done
+    echo "    Six-seat startup capacity: memory reserve retained; no OOMs/restarts."
     return 0
 }
 
@@ -1004,7 +1346,7 @@ run_activate_gates() {
 # Runtime service-set, health, host-port, and network-isolation verification
 # ---------------------------------------------------------------------------
 validate_runtime_pilot() {
-    # Verify exactly four healthy containers with unambiguous resolved IDs.
+    # Verify exactly nine healthy containers with unambiguous resolved IDs.
     local svc cid count=0
     for svc in "${PILOT_SERVICES[@]}"; do
         cid="$(resolve_container_id "$svc")"
@@ -1018,11 +1360,11 @@ validate_runtime_pilot() {
         fi
         count=$((count + 1))
     done
-    if [[ "$count" -ne 4 ]]; then
-        echo "ERROR: expected 4 pilot containers, found $count" >&2
+    if [[ "$count" -ne "$PILOT_SERVICE_COUNT" ]]; then
+        echo "ERROR: expected $PILOT_SERVICE_COUNT pilot containers, found $count" >&2
         return 1
     fi
-    echo "    Pilot containers: 4/4 present."
+    echo "    Pilot containers: ${PILOT_SERVICE_COUNT}/${PILOT_SERVICE_COUNT} present."
 
     # Runtime PortBindings check (not exposed null).
     local port_bindings
@@ -1046,7 +1388,7 @@ validate_runtime_pilot() {
         | grep '^fin-terminal-public-' | sort -u || true)"
     expected_public_services="$(printf '%s\n' "${PILOT_SERVICES[@]}" | sort)"
     if [[ "$runtime_public_services" != "$expected_public_services" ]]; then
-        echo "ERROR: runtime public-profile service set is not the reviewed four-service set" >&2
+        echo "ERROR: runtime public-profile service set is not the reviewed nine-service set" >&2
         return 1
     fi
 
@@ -1062,21 +1404,32 @@ validate_runtime_pilot() {
                 expected_networks="${COMPOSE_PROJECT}_fin_terminal_public_state"
                 ;;
             fin-terminal-public-unbrowser-mcp)
-                expected_networks="$(printf '%s\n' \
-                    "${COMPOSE_PROJECT}_fin_terminal_public_mcp" \
-                    "${COMPOSE_PROJECT}_unbrowser_egress_proxy" | sort)"
+                expected_networks="$({
+                    printf '%s\n' "${COMPOSE_PROJECT}_unbrowser_egress_proxy"
+                    local seat_number
+                    for seat_number in 01 02 03 04 05 06; do
+                        printf '%s\n' "${COMPOSE_PROJECT}_fin_terminal_public_mcp_${seat_number}"
+                    done
+                } | sort)"
                 ;;
-            fin-terminal-public-seat-01)
+            fin-terminal-public-seat-0[1-6])
+                local seat_number="${svc##*-seat-}"
                 expected_networks="$(printf '%s\n' \
-                    "${COMPOSE_PROJECT}_fin_terminal_public" \
-                    "${COMPOSE_PROJECT}_fin_terminal_public_egress" \
-                    "${COMPOSE_PROJECT}_fin_terminal_public_mcp" | sort)"
+                    "${COMPOSE_PROJECT}_fin_terminal_public_seat_${seat_number}" \
+                    "${COMPOSE_PROJECT}_fin_terminal_public_egress_${seat_number}" \
+                    "${COMPOSE_PROJECT}_fin_terminal_public_mcp_${seat_number}" | sort)"
                 ;;
             fin-terminal-public-gateway)
-                expected_networks="$(printf '%s\n' \
-                    "${COMPOSE_PROJECT}_fin_terminal_public" \
-                    "${COMPOSE_PROJECT}_fin_terminal_public_egress" \
-                    "${COMPOSE_PROJECT}_fin_terminal_public_state" | sort)"
+                expected_networks="$({
+                    printf '%s\n' \
+                        "${COMPOSE_PROJECT}_fin_terminal_public" \
+                        "${COMPOSE_PROJECT}_fin_terminal_public_egress" \
+                        "${COMPOSE_PROJECT}_fin_terminal_public_state"
+                    local seat_number
+                    for seat_number in 01 02 03 04 05 06; do
+                        printf '%s\n' "${COMPOSE_PROJECT}_fin_terminal_public_seat_${seat_number}"
+                    done
+                } | sort)"
                 ;;
             *)
                 echo "ERROR: unexpected pilot service during network verification" >&2
@@ -1090,6 +1443,36 @@ validate_runtime_pilot() {
     done
     echo "    Runtime service set and network isolation: verified."
 
+    # Defense in depth: each worker must be unable to resolve every other
+    # worker or Redis. Exact network membership above is the primary contract;
+    # these live negative probes catch Docker/DNS behavior that differs from the
+    # rendered configuration.
+    local source target targets=()
+    for source in "${PILOT_SEATS[@]}"; do
+        targets=(fin-terminal-public-redis)
+        for target in "${PILOT_SEATS[@]}"; do
+            [[ "$target" == "$source" ]] || targets+=("$target")
+        done
+        cid="$(resolve_container_id "$source")"
+        if ! docker exec "$cid" node -e '
+const dns = require("dns").promises;
+const targets = process.argv.slice(1);
+const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("timeout"), {code: "ETIME"})), ms));
+Promise.all(targets.map(async (target) => {
+  try {
+    await Promise.race([dns.lookup(target), timeout(2000)]);
+    process.exitCode = 1;
+  } catch (error) {
+    if (!["ENOTFOUND", "EAI_AGAIN", "ETIME"].includes(error && error.code)) process.exitCode = 1;
+  }
+})).then(() => process.exit(process.exitCode || 0)).catch(() => process.exit(1));
+' "${targets[@]}" 2>/dev/null; then
+            echo "ERROR: $source can resolve another seat or Redis" >&2
+            return 1
+        fi
+    done
+    echo "    Cross-seat and worker-to-state negative connectivity: verified."
+
     return 0
 }
 
@@ -1101,23 +1484,27 @@ build_and_start_pilot() {
     compose_cmd pull fin-terminal-public-redis || return 1
     compose_cmd build \
         fin-terminal-public-unbrowser-mcp \
-        fin-terminal-public-seat-01 \
+        "${PILOT_SEATS[@]}" \
         fin-terminal-public-gateway || return 1
 
     echo "    Starting Redis..."
     compose_cmd up -d --no-build fin-terminal-public-redis || return 1
     wait_healthy fin-terminal-public-redis || return 1
     echo "    Redis: healthy."
+    prepare_six_worker_state || return 1
 
     echo "    Starting MCP..."
     compose_cmd up -d --no-deps --no-build fin-terminal-public-unbrowser-mcp || return 1
     wait_healthy fin-terminal-public-unbrowser-mcp || return 1
     echo "    MCP: healthy."
 
-    echo "    Starting seat-01..."
-    compose_cmd up -d --no-deps --no-build fin-terminal-public-seat-01 || return 1
-    wait_healthy fin-terminal-public-seat-01 || return 1
-    echo "    Seat-01: healthy."
+    local seat
+    for seat in "${PILOT_SEATS[@]}"; do
+        echo "    Starting ${seat##fin-terminal-public-}..."
+        compose_cmd up -d --no-deps --no-build "$seat" || return 1
+        wait_healthy "$seat" || return 1
+        echo "    ${seat##fin-terminal-public-}: healthy."
+    done
 
     echo "    Starting gateway..."
     compose_cmd up -d --no-deps --no-build fin-terminal-public-gateway || return 1
@@ -1125,6 +1512,7 @@ build_and_start_pilot() {
     echo "    Gateway: healthy."
 
     validate_runtime_pilot || return 1
+    check_post_start_capacity || return 1
 
     echo "==> Pilot services healthy and ready."
     return 0
@@ -1291,7 +1679,113 @@ print("MCP_OK")
         printf '    (protocol output scrubbed for security)\n' >&2
         return 1
     fi
-    echo "    MCP protocol: OK (navigate + private rejection + cleanup)."
+
+    # Prove the shared MCP process can isolate six simultaneous logical
+    # sessions. Never print session identifiers or protocol bodies.
+    local concurrent_result
+    concurrent_result="$(docker exec -i "$mcp_cid" python3 - 2>/dev/null <<'PYMCP'
+from concurrent.futures import ThreadPoolExecutor
+import http.client
+import json
+
+PROTOCOL = "2025-06-18"
+
+def decode(data, content_type):
+    if "text/event-stream" in content_type:
+        for line in data.splitlines():
+            if line.startswith("data:"):
+                return json.loads(line[5:].strip())
+        raise ValueError("SSE response contained no data event")
+    return json.loads(data) if data else None
+
+def post(payload, session_id=""):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id:
+        headers["MCP-Session-Id"] = session_id
+        headers["MCP-Protocol-Version"] = PROTOCOL
+    connection = http.client.HTTPConnection("localhost", 8767, timeout=30)
+    connection.request("POST", "/mcp", json.dumps(payload), headers)
+    response = connection.getresponse()
+    data = response.read().decode("utf-8")
+    result = (
+        response.status,
+        response.getheader("MCP-Session-Id", ""),
+        decode(data, response.getheader("Content-Type", "")),
+    )
+    connection.close()
+    return result
+
+def close_session(session_id):
+    connection = http.client.HTTPConnection("localhost", 8767, timeout=5)
+    connection.request("DELETE", "/mcp", headers={
+        "MCP-Session-Id": session_id,
+        "MCP-Protocol-Version": PROTOCOL,
+    })
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    return response.status in {200, 202, 204}
+
+def check_session(index):
+    session_id = ""
+    try:
+        status, session_id, initialized = post({
+            "jsonrpc": "2.0",
+            "id": index * 10 + 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": PROTOCOL,
+                "capabilities": {},
+                "clientInfo": {"name": "six-seat-check", "version": "1.0"},
+            },
+        })
+        if status != 200 or not session_id or "result" not in initialized:
+            raise ValueError("initialize failed")
+        status, _, _ = post({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        }, session_id)
+        if status not in {200, 202, 204}:
+            raise ValueError("initialized notification failed")
+        status, _, tools = post({
+            "jsonrpc": "2.0",
+            "id": index * 10 + 2,
+            "method": "tools/list",
+            "params": {},
+        }, session_id)
+        names = [tool.get("name") for tool in tools.get("result", {}).get("tools", [])]
+        if status != 200 or "navigate" not in names:
+            raise ValueError("navigate tool missing")
+        status, _, navigation = post({
+            "jsonrpc": "2.0",
+            "id": index * 10 + 3,
+            "method": "tools/call",
+            "params": {"name": "navigate", "arguments": {"url": "https://example.com/"}},
+        }, session_id)
+        result = navigation.get("result", {})
+        if status != 200 or result.get("isError") is True or not result.get("content"):
+            raise ValueError("public navigation failed")
+        return session_id
+    finally:
+        if session_id and not close_session(session_id):
+            raise ValueError("session cleanup failed")
+
+with ThreadPoolExecutor(max_workers=6) as executor:
+    session_ids = list(executor.map(check_session, range(1, 7)))
+if len(set(session_ids)) != 6:
+    raise SystemExit(1)
+print("MCP_SIX_OK")
+PYMCP
+    )" || true
+    if [[ "$concurrent_result" != "MCP_SIX_OK" ]]; then
+        echo "ERROR: six-session MCP concurrency check failed (scrubbed)" >&2
+        return 1
+    fi
+
+    echo "    MCP protocol: OK (private rejection + six isolated sessions + cleanup)."
     return 0
 }
 
@@ -1300,35 +1794,48 @@ print("MCP_OK")
 # ---------------------------------------------------------------------------
 gateway_internal_ready() {
     echo "    Checking gateway /api/ready internally..."
-    local gw_cid
+    local gw_cid attempts
     gw_cid="$(resolve_container_id fin-terminal-public-gateway)"
     if [[ -z "$gw_cid" ]]; then
         echo "ERROR: could not resolve gateway container ID" >&2
         return 1
     fi
 
-    docker exec "$gw_cid" node -e '
+    for attempts in $(seq 1 30); do
+        if docker exec "$gw_cid" node -e '
 const http = require("http");
-const req = http.get("http://127.0.0.1:8788/api/ready", (res) => {
-    if (res.statusCode < 200 || res.statusCode >= 300) { process.exit(1); }
-    let data = "";
-    res.on("data", c => data += c);
-    res.on("end", () => {
-        try {
-            const obj = JSON.parse(data);
-            if (obj && obj.status === "ready") { process.exit(0); }
-        } catch(e) {}
-        process.exit(1);
-    });
+const endpoints = Array.from({length: 6}, (_, index) => {
+  const seat = String(index + 1).padStart(2, "0");
+  return `http://fin-terminal-public-seat-${seat}:8787/api/ready`;
 });
-req.on("error", () => process.exit(1));
-req.setTimeout(5000, () => process.exit(1));
-' 2>/dev/null || {
-        echo "ERROR: gateway /api/ready failed internally" >&2
-        return 1
-    }
-    echo "    Gateway /api/ready: ready."
-    return 0
+const getJson = (url) => new Promise((resolve, reject) => {
+  const req = http.get(url, (res) => {
+    let data = "";
+    res.on("data", chunk => data += chunk);
+    res.on("end", () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error("status"));
+      try { resolve(JSON.parse(data)); } catch { reject(new Error("json")); }
+    });
+  });
+  req.on("error", reject);
+  req.setTimeout(5000, () => req.destroy(new Error("timeout")));
+});
+Promise.all([getJson("http://127.0.0.1:8788/api/ready"), ...endpoints.map(getJson)])
+  .then(([gateway, ...workers]) => {
+    if (gateway.status !== "ready" || gateway.readyWorkers !== 6 || gateway.assignedWorkers !== 0 || gateway.queuedVisitors !== 0) process.exit(1);
+    const generations = workers.map(worker => worker && worker.publicWorker === true && typeof worker.instanceId === "string" ? worker.instanceId : "");
+    if (generations.some(value => value.length < 16) || new Set(generations).size !== 6) process.exit(1);
+    process.exit(0);
+  })
+  .catch(() => process.exit(1));
+' 2>/dev/null; then
+            echo "    Gateway /api/ready: six unique workers ready."
+            return 0
+        fi
+        sleep 2
+    done
+    echo "ERROR: gateway did not report six unique ready workers internally" >&2
+    return 1
 }
 
 # Verify the already-enabled browser surface without changing Caddy or .env.
@@ -1702,9 +2209,19 @@ cmd_disable() {
     fi
     echo "    Pilot URL: 404 confirmed."
 
-    # Step 4: Stop/remove pilot services (ps -aq) in reverse order.
+    # Step 4: Stop the gateway first, transition persisted state back to the
+    # rollback-compatible one-seat shape, then remove the remaining services.
     if pilot_any_container_present; then
         echo "    Stopping pilot services..."
+        compose_cmd stop fin-terminal-public-gateway 2>/dev/null || true
+        local redis_cid
+        redis_cid="$(resolve_container_id fin-terminal-public-redis)"
+        if [[ -n "$redis_cid" ]]; then
+            transition_redis_worker_set 1 - || {
+                echo "ERROR: could not restore rollback-compatible admission state" >&2
+                exit 1
+            }
+        fi
         for svc in "${PILOT_STOP_ORDER[@]}"; do
             compose_cmd stop "$svc" 2>/dev/null || true
         done
