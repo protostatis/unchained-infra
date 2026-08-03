@@ -101,10 +101,18 @@ trust boundaries while the pilot is disabled:
 
 It refuses to generate or rotate those values while
 `FIN_TERMINAL_PUBLIC_ENABLED=true`. Before starting the pilot, provision these
-external values through the protected runtime environment:
+external values in the GitHub `production` Environment:
 
-- `FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY`
-- `FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET`
+- variable `FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY` (public browser site key)
+- secret `FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET` (server-only verification key)
+
+The approved production job requires both values and streams them over the
+verified SSH connection directly into the protected staging directory. They are
+never command arguments, log output, repository files, or local temporary
+files. The staging helper validates their format and atomically upserts them
+into the candidate `.env`; a validation failure leaves the live `.env`
+untouched. Changing either value while the public route is enabled is rejected,
+so disable the route before rotating the Turnstile pair.
 
 The worker receives the existing protected `OPENROUTER_API_KEY`, matching the
 trial agent. Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper

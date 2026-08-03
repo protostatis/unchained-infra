@@ -220,10 +220,10 @@ promote_staged_config() {
         copy_atomically "$stage_dir/$file" "$remote_dir/$file" 0644
     done
 
-    local secrets_changed=false
+    local environment_changed=false
     if ! cmp -s "$stage_dir/.env" "$remote_dir/.env"; then
         copy_atomically "$stage_dir/.env" "$remote_dir/.env" 0600
-        secrets_changed=true
+        environment_changed=true
     else
         # The staged secret helper enforces this even when it retains the
         # existing token, so preserve that hardening on the live file too.
@@ -234,7 +234,7 @@ promote_staged_config() {
     # leave that container attached to the old inode, so write validated bytes
     # in place and verify that the inode did not change.
     promote_caddyfile_in_place "$stage_dir/Caddyfile" "$remote_dir/Caddyfile"
-    printf 'fin_terminal_secrets_changed=%s\n' "$secrets_changed"
+    printf 'environment_changed=%s\n' "$environment_changed"
 }
 
 if [[ "$#" != "4" ]]; then

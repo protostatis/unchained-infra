@@ -166,9 +166,12 @@ jobs:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           PRIVATE_CORE_REPO_PAT: ${{ secrets.PRIVATE_CORE_REPO_PAT }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY }}
+          FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET: ${{ secrets.FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET }}
         run: |
           missing=()
-          for name in EC2_HOST EC2_SSH_KEY PRIVATE_CORE_REPO_PAT SSH_KNOWN_HOSTS; do
+          for name in EC2_HOST EC2_SSH_KEY PRIVATE_CORE_REPO_PAT SSH_KNOWN_HOSTS \
+            FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET; do
             if [[ -z "${!name}" ]]; then
               missing+=("$name")
             fi
@@ -211,6 +214,8 @@ jobs:
           KEY_PATH: ${{ steps.ssh.outputs.key }}
           DEPLOY_SSH_KNOWN_HOSTS_FILE: ${{ steps.ssh.outputs.known_hosts }}
           PRIVATE_CORE_SRC: ${{ github.workspace }}/private-core/unchained
+          FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY }}
+          FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET: ${{ secrets.FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET }}
         run: ./deploy.sh
 
       - name: Remove deployment SSH files
