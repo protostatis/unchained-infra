@@ -12,14 +12,23 @@ import sys
 import tempfile
 
 
+RETIRED_TOKEN_NAMES = (
+    "FIN_TERMINAL_DEMO_PROXY_TOKEN",
+)
+
 TOKEN_NAMES = (
     "FIN_TERMINAL_PROXY_TOKEN",
-    "FIN_TERMINAL_DEMO_PROXY_TOKEN",
     "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
     "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
     "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
 )
-PUBLIC_TOKEN_NAMES = frozenset(TOKEN_NAMES[2:])
+PUBLIC_TOKEN_NAMES = frozenset(
+    {
+        "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
+        "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
+        "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
+    }
+)
 PUBLIC_EXTERNAL_NAMES = (
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY",
     "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET",
@@ -113,6 +122,11 @@ def install_public_turnstile_values(
 
     original, opened = _read_regular_env(env_path)
     lines = original.splitlines()
+    public_enabled_count = sum(
+        line.startswith("FIN_TERMINAL_PUBLIC_ENABLED=") for line in lines
+    )
+    if public_enabled_count > 1:
+        raise ValueError("duplicate FIN_TERMINAL_PUBLIC_ENABLED definitions")
     public_enabled_value = _env_value(lines, "FIN_TERMINAL_PUBLIC_ENABLED")
     if public_enabled_value not in {"", "false", "true"}:
         raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must be true or false")
@@ -163,6 +177,11 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
     if not openrouter_key:
         raise ValueError("OPENROUTER_API_KEY is missing from production .env")
 
+    public_enabled_count = sum(
+        line.startswith("FIN_TERMINAL_PUBLIC_ENABLED=") for line in lines
+    )
+    if public_enabled_count > 1:
+        raise ValueError("duplicate FIN_TERMINAL_PUBLIC_ENABLED definitions")
     public_enabled_value = _env_value(lines, "FIN_TERMINAL_PUBLIC_ENABLED")
     if public_enabled_value not in {"", "false", "true"}:
         raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must be true or false")
@@ -207,10 +226,21 @@ def ensure_fin_terminal_secrets(env_path: Path) -> bool:
             changed = True
         protected_values.add(value)
 
+    # Strip retired token lines silently. This is not treated as a credential
+    # rotation — the old token value is simply removed from the active .env
+    # without reporting a credential change to the deploy orchestrator.
+    active_token_prefixes = tuple(f"{name}=" for name in TOKEN_NAMES)
+    retired_token_prefixes = tuple(f"{name}=" for name in RETIRED_TOKEN_NAMES)
     updated = [
         line for line in lines
-        if not line.startswith(tuple(f"{name}=" for name in TOKEN_NAMES))
+        if not line.startswith(active_token_prefixes)
+        and not line.startswith(retired_token_prefixes)
     ]
+    # Materialize the fail-closed default on first deployment. Activation reads
+    # exactly one explicit true/false definition and never relies on a Compose
+    # interpolation default for an operational state transition.
+    if public_enabled_count == 0:
+        updated.append("FIN_TERMINAL_PUBLIC_ENABLED=false")
     updated.extend(f"{name}={tokens[name]}" for name in TOKEN_NAMES)
     content = "\n".join(updated) + "\n"
     _replace_env_atomically(env_path, content, opened)

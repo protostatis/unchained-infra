@@ -117,19 +117,19 @@ CADDY_CONFIG_PREFLIGHT_TOOL="$SCRIPT_DIR/deploy/caddy_config_preflight.sh"
 REMOTE_CONFIG_STAGE="$REMOTE_DIR/.deploy-staging/$DEPLOY_ID"
 REMOTE_CONFIG_STAGE_ACTIVE=false
 FIN_TERMINAL_SECRETS_CHANGED=false
-ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal fin-terminal-demo web scheduler trial-agent"
+ALL_RUNTIME_SERVICES="relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web scheduler trial-agent"
 ALL_SERVICES="caddy $ALL_RUNTIME_SERVICES"
 IFS= read -r CADDY_SITE_LINE < "$SCRIPT_DIR/Caddyfile"
 DEFAULT_DEPLOY_HEALTH_HOST="${CADDY_SITE_LINE%%,*}"
 DEPLOY_HEALTH_HOST="${DEPLOY_HEALTH_HOST:-$DEFAULT_DEPLOY_HEALTH_HOST}"
-FIN_TERMINAL_DEMO_HOST="${FIN_TERMINAL_DEMO_HOST:-unbrowser.unchainedsky.com}"
+FIN_TERMINAL_PUBLIC_HOST="${FIN_TERMINAL_PUBLIC_HOST:-unbrowser.unchainedsky.com}"
 
 if [[ ! "$DEPLOY_HEALTH_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
     echo "ERROR: DEPLOY_HEALTH_HOST must be a hostname" >&2
     exit 1
 fi
-if [[ ! "$FIN_TERMINAL_DEMO_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
-    echo "ERROR: FIN_TERMINAL_DEMO_HOST must be a hostname" >&2
+if [[ ! "$FIN_TERMINAL_PUBLIC_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "ERROR: FIN_TERMINAL_PUBLIC_HOST must be a hostname" >&2
     exit 1
 fi
 
@@ -244,6 +244,53 @@ cat >/dev/null'
     return 1
 }
 
+assert_public_pilot_disabled_for_deploy() {
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+env_path="$1/.env"
+python3 - "$env_path" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+try:
+    opened = os.fstat(fd)
+    if not stat.S_ISREG(opened.st_mode):
+        raise ValueError("production .env is not a regular file")
+    content = bytearray()
+    while True:
+        chunk = os.read(fd, 65_536)
+        if not chunk:
+            break
+        content.extend(chunk)
+        if len(content) > 1024 * 1024:
+            raise ValueError("production .env is too large")
+finally:
+    os.close(fd)
+
+prefix = "FIN_TERMINAL_PUBLIC_ENABLED="
+values = []
+for line in content.decode("utf-8").splitlines():
+    if not line.startswith(prefix):
+        continue
+    value = line[len(prefix):].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    values.append(value)
+
+if len(values) > 1 or (values and values[0] not in {"true", "false"}):
+    raise ValueError("FIN_TERMINAL_PUBLIC_ENABLED must have at most one true/false definition")
+if values == ["true"]:
+    raise SystemExit(
+        "ERROR: normal deployment is blocked while the public terminal pilot is active; "
+        "run the approved disable workflow first"
+    )
+PY
+EOF
+}
+
 snapshot_remote_release() {
     remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" "$DEPLOY_ID" <<'EOF'
 set -euo pipefail
@@ -277,6 +324,17 @@ trap cleanup_snapshot_on_error EXIT
 # environment separately because it is intentionally excluded from source.tgz.
 cp -p -- "$remote_dir/.env" "$backup_dir/.env"
 chmod 600 "$backup_dir/.env"
+# Deployment identity is part of the release transaction. Preserve its exact
+# bytes (or explicit absence) so a post-metadata transport failure cannot leave
+# old source falsely identified as the new revision after automatic rollback.
+if [[ -e "$remote_dir/.deploy-current" ]]; then
+    test -f "$remote_dir/.deploy-current"
+    test ! -L "$remote_dir/.deploy-current"
+    cp -p -- "$remote_dir/.deploy-current" "$backup_dir/.deploy-current"
+    printf 'present\n' > "$backup_dir/deploy-current.state"
+else
+    printf 'absent\n' > "$backup_dir/deploy-current.state"
+fi
 # Keep the previous Compose file addressable outside the source archive so the
 # post-upload runtime comparison can render both revisions with the live .env.
 cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
@@ -541,7 +599,9 @@ add_services() {
     local service
     for service in $services; do
         case "$service" in
-            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|fin-terminal-demo|web|scheduler|trial-agent)
+            caddy|relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web|scheduler|trial-agent|fin-terminal-demo)
+                # rollback-only: fin-terminal-demo is retired but accepted so a failed
+                # retirement deploy can restore the old snapshot and restart the demo.
                 ;;
             "")
                 continue
@@ -596,7 +656,11 @@ wait_for_state() {
 
 expected_state() {
     case "$1" in
-        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|fin-terminal-demo|web)
+        relay|private-core|mcp|unbrowser-egress|unbrowser-mcp|fin-terminal|web)
+            printf '%s\n' healthy
+            ;;
+        fin-terminal-demo)
+            # rollback-only: retired demo may be restarted during restore
             printf '%s\n' healthy
             ;;
         scheduler|trial-agent)
@@ -612,6 +676,8 @@ expected_state() {
 # --no-deps prevents Compose from expanding this into a broad restart, while
 # --force-recreate guarantees restart-dependent readiness checks observe a new
 # container even when its rendered Compose configuration is unchanged.
+# Note: fin-terminal-demo appears here only for rollback compatibility — a
+# failed retirement deployment may restore the old snapshot and restart it.
 for service in relay private-core unbrowser-egress web mcp unbrowser-mcp fin-terminal fin-terminal-demo scheduler trial-agent; do
     if ! selected "$service"; then
         continue
@@ -636,6 +702,19 @@ backup_dir="$2"
 test -f "$backup_dir/source.tgz"
 test -f "$backup_dir/.env"
 test -s "$backup_dir/runtime-images.tsv"
+test -f "$backup_dir/deploy-current.state"
+metadata_state="$(<"$backup_dir/deploy-current.state")"
+case "$metadata_state" in
+    present)
+        test -f "$backup_dir/.deploy-current"
+        test ! -L "$backup_dir/.deploy-current"
+        ;;
+    absent) ;;
+    *)
+        echo "ERROR: invalid rollback deployment-metadata state" >&2
+        exit 1
+        ;;
+esac
 
 # Validate every retained image before mutating the failed release again.
 while IFS=$'\t' read -r service image_ref image_id rollback_ref; do
@@ -655,6 +734,16 @@ rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cp -p -- "$backup_dir/.env" "$remote_dir/.env"
 chmod 600 "$remote_dir/.env"
+if [[ "$metadata_state" == "present" ]]; then
+    metadata_tmp="$(mktemp "$remote_dir/.deploy-current.rollback.XXXXXX")"
+    cat -- "$backup_dir/.deploy-current" > "$metadata_tmp"
+    chmod 644 "$metadata_tmp"
+    mv -f -- "$metadata_tmp" "$remote_dir/.deploy-current"
+    cmp -s "$backup_dir/.deploy-current" "$remote_dir/.deploy-current"
+else
+    rm -f -- "$remote_dir/.deploy-current"
+    test ! -e "$remote_dir/.deploy-current"
+fi
 cd "$remote_dir"
 mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
 [[ "${#runtime_services[@]}" -gt 0 ]]
@@ -734,12 +823,12 @@ EOF
 
 verify_production_health() {
     local services="$1"
-    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" "$FIN_TERMINAL_DEMO_HOST" <<'EOF'
+    remote_bash "$REMOTE_DIR" "$services" "$DEPLOY_HEALTH_HOST" "$FIN_TERMINAL_PUBLIC_HOST" <<'EOF'
 set -euo pipefail
 remote_dir="$1"
 services="$2"
 health_host="$3"
-demo_host="$4"
+public_host="$4"
 cd "$remote_dir"
 
 selected() {
@@ -775,7 +864,7 @@ wait_for_state() {
 # reach "healthy", while process-only services below must reach "running".
 # The Compose service-list contract above fails deployment when either policy
 # needs to be updated for a newly added service.
-for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal fin-terminal-demo web; do
+for service in relay private-core mcp unbrowser-egress unbrowser-mcp fin-terminal web; do
     if ! selected "$service"; then
         continue
     fi
@@ -824,113 +913,89 @@ for attempt in $(seq 1 20); do
         --output /dev/null --write-out '%{http_code} %{redirect_url}' \
         --resolve "$health_host:443:127.0.0.1" \
         "https://$health_host/unbrowser/fin-terminal/" || true)"
-    if [[ "$legacy_terminal_check" == "308 https://$demo_host/fin-terminal/" ]]; then
+    if [[ "$legacy_terminal_check" == "308 https://$public_host/fin-terminal/" ]]; then
         break
     fi
     sleep 2
 done
-if [[ "$legacy_terminal_check" != "308 https://$demo_host/fin-terminal/" ]]; then
+if [[ "$legacy_terminal_check" != "308 https://$public_host/fin-terminal/" ]]; then
     echo "legacy authenticated fin-terminal redirect health check failed (result: ${legacy_terminal_check:-request-failed})" >&2
     docker compose logs --tail 80 caddy web fin-terminal >&2 || true
     exit 1
 fi
 
-# The public Unbrowser host must serve its landing page and terminal demo with
-# no session, proving its dedicated Caddy site and TLS certificate are live
-# after reload. Gated on the service existing so an automatic rollback to a
-# release predating the demo still passes.
-if docker compose config --services | grep -qx fin-terminal-demo; then
-    for attempt in $(seq 1 20); do
-        if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
-            --resolve "$demo_host:443:127.0.0.1" \
-            "https://$demo_host/" \
-            | grep -Fq "unbrowser by Unchained - MCP Browser for LLM Agents"; then
-            unbrowser_page_ready=true
-            break
-        fi
-        sleep 2
-    done
-    if [[ "${unbrowser_page_ready:-false}" != "true" ]]; then
-        echo "public Unbrowser landing-page health check failed" >&2
-        docker compose logs --tail 80 caddy web >&2 || true
-        exit 1
+# The public Unbrowser host must serve its landing page and authenticated
+# terminal with no session, proving its dedicated Caddy site and TLS
+# certificate are live after reload.
+for attempt in $(seq 1 20); do
+    if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+        --resolve "$public_host:443:127.0.0.1" \
+        "https://$public_host/" \
+        | grep -Fq "unbrowser by Unchained - MCP Browser for LLM Agents"; then
+        unbrowser_page_ready=true
+        break
     fi
-
-    # A logged-out request to the persistent terminal must reach forward_auth;
-    # it must never silently become the anonymous kiosk session.
-    for attempt in $(seq 1 20); do
-        terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-            --output /dev/null --write-out '%{http_code}' \
-            --resolve "$demo_host:443:127.0.0.1" \
-            "https://$demo_host/fin-terminal/" || true)"
-        if [[ "$terminal_status" == "401" ]]; then
-            break
-        fi
-        sleep 2
-    done
-    if [[ "$terminal_status" != "401" ]]; then
-        echo "authenticated subdomain fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
-        docker compose logs --tail 80 caddy web fin-terminal >&2 || true
-        exit 1
-    fi
-
-    terminal_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-        --resolve "$demo_host:443:127.0.0.1" \
-        "https://$demo_host/fin-terminal" || true)"
-    if [[ "$terminal_base_check" != "308 https://$demo_host/fin-terminal/" ]]; then
-        echo "authenticated terminal base redirect health check failed (result: ${terminal_base_check:-request-failed})" >&2
-        docker compose logs --tail 80 caddy >&2 || true
-        exit 1
-    fi
-
-    for attempt in $(seq 1 20); do
-        demo_html="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
-            --resolve "$demo_host:443:127.0.0.1" \
-            "https://$demo_host/fin-terminal-demo/" || true)"
-        if grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html" \
-            && grep -Fq 'name="x-build-mode" content="replay"' <<<"$demo_html"; then
-            break
-        fi
-        sleep 2
-    done
-    if ! grep -Fq '/fin-terminal-demo/assets/' <<<"$demo_html" \
-        || ! grep -Fq 'name="x-build-mode" content="replay"' <<<"$demo_html"; then
-        echo "public replay demo health check failed (missing canonical asset path or replay build marker)" >&2
-        docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
-        exit 1
-    fi
-
-    demo_ws_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code}' \
-        --resolve "$demo_host:443:127.0.0.1" \
-        "https://$demo_host/fin-terminal-demo/ws" || true)"
-    if [[ "$demo_ws_status" != "403" ]]; then
-        echo "public replay demo WebSocket refusal check failed (status: ${demo_ws_status:-request-failed})" >&2
-        docker compose logs --tail 80 caddy fin-terminal-demo >&2 || true
-        exit 1
-    fi
-
-    demo_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-        --resolve "$demo_host:443:127.0.0.1" \
-        "https://$demo_host/fin-terminal-demo" || true)"
-    if [[ "$demo_base_check" != "308 https://$demo_host/fin-terminal-demo/" ]]; then
-        echo "public demo base redirect health check failed (result: ${demo_base_check:-request-failed})" >&2
-        docker compose logs --tail 80 caddy >&2 || true
-        exit 1
-    fi
-
-    legacy_demo_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
-        --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-        --resolve "$health_host:443:127.0.0.1" \
-        "https://$health_host/unbrowser/fin-terminal-demo/" || true)"
-    if [[ "$legacy_demo_check" != "308 https://$demo_host/fin-terminal-demo/" ]]; then
-        echo "legacy public demo redirect health check failed (result: ${legacy_demo_check:-request-failed})" >&2
-        docker compose logs --tail 80 caddy >&2 || true
-        exit 1
-    fi
+    sleep 2
+done
+if [[ "${unbrowser_page_ready:-false}" != "true" ]]; then
+    echo "public Unbrowser landing-page health check failed" >&2
+    docker compose logs --tail 80 caddy web >&2 || true
+    exit 1
 fi
+
+# A logged-out request to the persistent terminal must reach forward_auth;
+# it must never silently become the anonymous kiosk session.
+for attempt in $(seq 1 20); do
+    terminal_status="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$public_host:443:127.0.0.1" \
+        "https://$public_host/fin-terminal/" || true)"
+    if [[ "$terminal_status" == "401" ]]; then
+        break
+    fi
+    sleep 2
+done
+if [[ "$terminal_status" != "401" ]]; then
+    echo "authenticated subdomain fin-terminal route health check failed (status: ${terminal_status:-request-failed})" >&2
+    docker compose logs --tail 80 caddy web fin-terminal >&2 || true
+    exit 1
+fi
+
+terminal_base_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+    --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+    --resolve "$public_host:443:127.0.0.1" \
+    "https://$public_host/fin-terminal" || true)"
+if [[ "$terminal_base_check" != "308 https://$public_host/fin-terminal/" ]]; then
+    echo "authenticated terminal base redirect health check failed (result: ${terminal_base_check:-request-failed})" >&2
+    docker compose logs --tail 80 caddy >&2 || true
+    exit 1
+fi
+
+# The static fin-terminal replay demo is retired. Verify all its former
+# URLs return direct HTTP 404 (no redirect, no-store cache control).
+# Each host/path pair uses the URL's own host for --resolve so apex and
+# subdomain URLs each hit their correct Caddy site block.
+retired_routes=(
+    "$public_host|/fin-terminal-demo/"
+    "$public_host|/fin-terminal-demo"
+    "$public_host|/fin-terminal-demo/ws"
+    "$health_host|/unbrowser/fin-terminal-demo/"
+    "$health_host|/unbrowser/fin-terminal-demo"
+    "$health_host|/unbrowser/fin-terminal/demo/"
+    "$health_host|/unbrowser/fin-terminal/demo"
+)
+for route in "${retired_routes[@]}"; do
+    IFS='|' read -r host path <<< "$route"
+    retired_check="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$host:443:127.0.0.1" \
+        "https://$host$path" || true)"
+    if [[ "$retired_check" != "404" ]]; then
+        echo "retired fin-terminal-demo URL https://$host$path returned ${retired_check:-request-failed} (expected 404)" >&2
+        docker compose logs --tail 80 caddy >&2 || true
+        exit 1
+    fi
+done
 
 exit 0
 EOF
@@ -1095,6 +1160,9 @@ DEPLOYED_PATHS_COUNT=$(wc -l < "$DEPLOYED_PATHS_FILE" | awk '{print $1}')
 echo "==> Acquiring exclusive deployment lock..."
 acquire_remote_deploy_lock
 echo "    Lock acquired."
+echo "==> Verifying public terminal pilot is disabled..."
+assert_public_pilot_disabled_for_deploy
+echo "    Public terminal pilot is disabled."
 echo "==> Snapshotting current release for automatic rollback..."
 snapshot_remote_release
 
@@ -1273,7 +1341,7 @@ remote_bash "$REMOTE_DIR" <<'EOF'
 set -euo pipefail
 cd "$1"
 actual=$(docker compose config --services | sort)
-expected=$(printf '%s\n' caddy fin-terminal fin-terminal-demo mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
+expected=$(printf '%s\n' caddy fin-terminal mcp private-core relay scheduler trial-agent unbrowser-egress unbrowser-mcp web)
 if [ "$actual" != "$expected" ]; then
     diff <(echo "$expected") <(echo "$actual") >&2 || true
     echo "ERROR: docker-compose.yml services changed — update deploy/classify_changes.py and deploy.sh" >&2
@@ -1291,7 +1359,7 @@ if $FIN_TERMINAL_SECRETS_CHANGED; then
     # Recreate all default terminal trust-boundary participants so generated
     # persistent, replay, or public-edge credentials are never one-sided.
     echo "==> Fin-terminal credentials changed; recreating Caddy and terminal services."
-    add_services "caddy fin-terminal fin-terminal-demo"
+    add_services "caddy fin-terminal"
     CADDY_RECREATE_REQUIRED=true
 fi
 if $FORCE_FULL_DEPLOY; then
@@ -1515,13 +1583,148 @@ exit 1
 EOF
 fi
 
+# The fin-terminal-demo service is retired. If the backup Compose has the demo
+# but the new Compose does not, retire the old container and its dedicated
+# network. Never down, wildcard delete, remove volumes, or touch profile services.
+retire_fin_terminal_demo() {
+    remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" \
+        "$FIN_TERMINAL_PUBLIC_HOST" "$DEPLOY_HEALTH_HOST" <<'RETIRE_EOF'
+set -euo pipefail
+remote_dir="$1"
+backup_dir="$2"
+public_host="$3"
+health_host="$4"
+
+backup_compose="$backup_dir/docker-compose.yml"
+new_compose="$remote_dir/docker-compose.yml"
+backup_env="$backup_dir/.env"
+
+test -f "$backup_compose"
+test -f "$new_compose"
+test -f "$backup_env"
+
+# Only act when the backup had fin-terminal-demo but the new one does not.
+# Preserve the production project identity and path resolution by pointing
+# every Compose operation at the live remote directory.
+if ! docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        config --services | grep -qx fin-terminal-demo; then
+    exit 0
+fi
+if docker compose --project-directory "$remote_dir" \
+        -f "$new_compose" config --services 2>/dev/null \
+        | grep -qx fin-terminal-demo; then
+    exit 0
+fi
+
+echo "    Old release contains fin-terminal-demo; retiring the service..."
+
+# Verify new Caddy is routing the retired URLs to 404 before touching the
+# old container. This proves the retirement route is live.
+# Each host/path pair uses the URL's own host for --resolve.
+pre_retire_routes=(
+    "$public_host|/fin-terminal-demo/"
+    "$health_host|/unbrowser/fin-terminal-demo/"
+)
+for route in "${pre_retire_routes[@]}"; do
+    IFS='|' read -r host url_path <<< "$route"
+    code="$(curl --silent --show-error --connect-timeout 3 --max-time 10 \
+        --output /dev/null --write-out '%{http_code}' \
+        --resolve "$host:443:127.0.0.1" \
+        "https://$host$url_path" || true)"
+    if [[ "$code" != "404" ]]; then
+        echo "ERROR: retired fin-terminal-demo URL https://$host$url_path returned $code (expected 404); aborting container retirement" >&2
+        exit 1
+    fi
+done
+
+# Find all old demo containers (running or stopped) using the backup Compose
+# with its project directory pointing to the live remote dir and backup .env.
+old_containers="$(docker compose --project-directory "$remote_dir" \
+    -f "$backup_compose" --env-file "$backup_env" \
+    ps -aq fin-terminal-demo 2>/dev/null || true)"
+old_containers="$(echo "$old_containers" | grep -E '^[0-9a-f]{12,}$' || true)"
+if [[ -z "$old_containers" ]]; then
+    echo "    No old fin-terminal-demo container found (running or stopped)."
+else
+    count=$(echo "$old_containers" | wc -l | tr -d ' ')
+    if [[ "$count" -gt 1 ]]; then
+        echo "ERROR: found $count fin-terminal-demo containers (expected at most 1); aborting" >&2
+        exit 1
+    fi
+
+    # Stop and remove the old demo container.
+    echo "    Stopping and removing old fin-terminal-demo container..."
+    docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        stop fin-terminal-demo 2>/dev/null || true
+    docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        rm -f fin-terminal-demo 2>/dev/null || true
+
+    # Prove the container is gone.
+    remaining="$(docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        ps -aq fin-terminal-demo 2>/dev/null | grep -E '^[0-9a-f]{12,}$' || true)"
+    if [[ -n "$remaining" ]]; then
+        echo "ERROR: fin-terminal-demo container still present after removal: $remaining" >&2
+        exit 1
+    fi
+fi
+
+# Derive the old demo network name from the backup Compose JSON so its
+# exact label/scope can be verified before removal. If the backup Compose
+# cannot be rendered or the network name cannot be confirmed, leave it
+# harmless — never fail deployment over an already-empty legacy network.
+demo_network=""
+if compose_json="$(docker compose --project-directory "$remote_dir" \
+        -f "$backup_compose" --env-file "$backup_env" \
+        config --format json --no-path-resolution 2>/dev/null)"; then
+    demo_network="$(echo "$compose_json" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("networks",{}).get("fin_terminal_demo",{}).get("name",""))' 2>/dev/null || true)"
+fi
+if [[ -n "$demo_network" && "$demo_network" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    # Verify the network belongs to the expected Compose project and has the
+    # correct network key label before any mutation.
+    project_label="$(docker network inspect "$demo_network" \
+        --format '{{index .Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+    network_label="$(docker network inspect "$demo_network" \
+        --format '{{index .Labels "com.docker.compose.network"}}' 2>/dev/null || true)"
+    container_count="$(docker network inspect "$demo_network" \
+        --format '{{len .Containers}}' 2>/dev/null || echo 0)"
+    if [[ "$project_label" == "unchained" && "$network_label" == "fin_terminal_demo" ]]; then
+        if [[ "$container_count" == "0" ]]; then
+            if docker network rm "$demo_network" >/dev/null 2>&1; then
+                echo "    Removed empty demo network $demo_network (project=$project_label network=$network_label)."
+            else
+                echo "    (could not remove proven-empty demo network $demo_network; leaving it harmless)"
+            fi
+        else
+            echo "    (demo network $demo_network has $container_count container(s); leaving it harmless)"
+        fi
+    else
+        echo "    (demo network $demo_network labels project=$project_label network=$network_label; skipping removal)"
+    fi
+elif [[ -z "$demo_network" ]]; then
+    echo "    (could not determine demo network name from backup Compose; nothing to remove)"
+else
+    echo "    (demo network name is unsafe: $demo_network; skipping)"
+fi
+RETIRE_EOF
+}
+
+retire_fin_terminal_demo
+
 echo "==> Verifying production health..."
 verify_production_health "$SERVICES_TO_REBUILD"
 write_deploy_metadata
+# Metadata is the transaction commit point. From here onward only best-effort
+# cleanup remains, so an interrupted cleanup must not roll back a healthy,
+# revision-stamped release after its retained images have begun to be removed.
+DEPLOY_SUCCEEDED=true
 release_remote_rollback_images \
     || echo "    (could not release retained rollback image tags; keeping them for recovery)"
 prune_remote_deploy_backups || echo "    (backup retention cleanup failed, ignoring)"
-DEPLOY_SUCCEEDED=true
 echo "    Health checks passed."
 
 # Show status

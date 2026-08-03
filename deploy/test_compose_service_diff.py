@@ -37,7 +37,7 @@ class TestChangedServices(unittest.TestCase):
 
     def test_classifier_knows_fin_terminal_service(self):
         self.assertIn("fin-terminal", SERVICES)
-        self.assertIn("fin-terminal-demo", SERVICES)
+        self.assertNotIn("fin-terminal-demo", SERVICES)
 
     def test_deployment_tooling_does_not_rebuild_runtime_services(self):
         self.assertEqual(classify_path("deploy.sh"), set())

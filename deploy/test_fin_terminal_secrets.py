@@ -11,6 +11,8 @@ import unittest
 
 from ensure_fin_terminal_secrets import (
     PUBLIC_EXTERNAL_NAMES,
+    PUBLIC_TOKEN_NAMES,
+    RETIRED_TOKEN_NAMES,
     TOKEN_NAMES,
     _env_value,
     ensure_fin_terminal_secrets,
@@ -47,6 +49,10 @@ class FinTerminalSecretsTests(unittest.TestCase):
             for index, name in enumerate(TOKEN_NAMES)
         }
 
+    @staticmethod
+    def _retired_token_value() -> str:
+        return "z" * 64
+
     def _write_valid(self, *, extra: str = "") -> dict[str, str]:
         tokens = self._valid_tokens()
         content = ["OPENROUTER_API_KEY=provider-secret", extra]
@@ -68,11 +74,45 @@ class FinTerminalSecretsTests(unittest.TestCase):
 
         self.assertEqual(values["OPENROUTER_API_KEY"], "provider-secret")
         generated = [values[name] for name in TOKEN_NAMES]
+        self.assertEqual(len(generated), len(TOKEN_NAMES))
         for token in generated:
             self.assertRegex(token, r"^[0-9a-f]{64}$")
             self.assertNotEqual(token, values["OPENROUTER_API_KEY"])
         self.assertEqual(len(set(generated)), len(TOKEN_NAMES))
         self.assertEqual(stat.S_IMODE(self.env_path.stat().st_mode), 0o600)
+        # Retired token must not appear in output
+        for retired_name in RETIRED_TOKEN_NAMES:
+            self.assertNotIn(retired_name, values)
+
+    def test_scrub_retired_token_does_not_trigger_rotation_and_preserves_rollback_semantics(self):
+        """Scrubbing retired token must be idempotent and not signal rotation."""
+        retired_value = self._retired_token_value()
+        tokens = self._write_valid(
+            extra=f"FIN_TERMINAL_DEMO_PROXY_TOKEN={retired_value}\n"
+        )
+
+        # First run: scrub the retired token, retain active tokens unchanged.
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
+        content = self.env_path.read_text(encoding="utf-8")
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", content)
+
+        # Second run: must remain idempotent (already scrubbed).
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
+        content2 = self.env_path.read_text(encoding="utf-8")
+        self.assertEqual(content, content2)
+
+        # Re-add the retired token (simulating rollback restoring old .env)
+        content_with_retired = content.rstrip("\n") + "\n"
+        content_with_retired += f"FIN_TERMINAL_DEMO_PROXY_TOKEN={retired_value}\n"
+        self._write(content_with_retired)
+
+        # Third run: scrub again, must still not signal rotation.
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
+        content3 = self.env_path.read_text(encoding="utf-8")
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", content3)
+        # Active tokens must be preserved through the scrub cycle
+        for name in TOKEN_NAMES:
+            self.assertIn(f"{name}={tokens[name]}", content3)
 
     def test_replaces_provider_key_reused_as_proxy_token(self):
         self._write(
@@ -105,23 +145,23 @@ class FinTerminalSecretsTests(unittest.TestCase):
             r"^[0-9a-f]{64}$",
         )
 
-    def test_replaces_demo_token_reused_from_persistent_terminal(self):
-        existing = "a" * 64
-        self._write(
-            "OPENROUTER_API_KEY=provider-secret\n"
-            f"FIN_TERMINAL_PROXY_TOKEN={existing}\n"
-            f"FIN_TERMINAL_DEMO_PROXY_TOKEN={existing}\n"
+    def test_scrubs_retired_demo_token_silently(self):
+        retired_value = self._retired_token_value()
+        tokens = self._write_valid(
+            extra=f"FIN_TERMINAL_DEMO_PROXY_TOKEN={retired_value}\n"
         )
 
-        self.assertTrue(ensure_fin_terminal_secrets(self.env_path))
-        values = self._values()
+        # Scrubbing the retired token must not be reported as a credential
+        # rotation when it is the only change. All active tokens are already
+        # valid so no generation occurs.
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
 
-        self.assertEqual(values["FIN_TERMINAL_PROXY_TOKEN"], existing)
-        self.assertRegex(values["FIN_TERMINAL_DEMO_PROXY_TOKEN"], r"^[0-9a-f]{64}$")
-        self.assertNotEqual(
-            values["FIN_TERMINAL_DEMO_PROXY_TOKEN"],
-            values["FIN_TERMINAL_PROXY_TOKEN"],
-        )
+        content = self.env_path.read_text(encoding="utf-8")
+        self.assertNotIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", content)
+        self.assertNotIn(retired_value, content)
+        for name, value in tokens.items():
+            self.assertIn(f"{name}={value}", content)
+        self.assertEqual(stat.S_IMODE(self.env_path.stat().st_mode), 0o600)
 
     def test_retains_existing_independent_credentials(self):
         tokens = self._write_valid()
@@ -135,6 +175,26 @@ class FinTerminalSecretsTests(unittest.TestCase):
         self._write_valid(extra="FIN_TERMINAL_PUBLIC_ENABLED=1")
 
         with self.assertRaisesRegex(ValueError, "must be true or false"):
+            ensure_fin_terminal_secrets(self.env_path)
+
+    def test_first_deployment_materializes_disabled_public_flag(self):
+        self._write_valid()
+
+        self.assertFalse(ensure_fin_terminal_secrets(self.env_path))
+
+        content = self.env_path.read_text(encoding="utf-8")
+        self.assertEqual(content.count("FIN_TERMINAL_PUBLIC_ENABLED="), 1)
+        self.assertIn("FIN_TERMINAL_PUBLIC_ENABLED=false\n", content)
+
+    def test_rejects_duplicate_public_enabled_definitions(self):
+        self._write_valid(
+            extra=(
+                "FIN_TERMINAL_PUBLIC_ENABLED=false\n"
+                "FIN_TERMINAL_PUBLIC_ENABLED=true"
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "duplicate"):
             ensure_fin_terminal_secrets(self.env_path)
 
         self._write_valid(extra="FIN_TERMINAL_PUBLIC_ENABLED=TRUE")
@@ -160,19 +220,29 @@ class FinTerminalSecretsTests(unittest.TestCase):
             ensure_fin_terminal_secrets(self.env_path)
 
     def test_does_not_rotate_public_credentials_while_route_is_enabled(self):
-        tokens = self._valid_tokens()
-        tokens["FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN"] = "short"
-        lines = [
-            "OPENROUTER_API_KEY=provider-secret",
-            "FIN_TERMINAL_PUBLIC_ENABLED=true",
-            f"FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY={self.site_key}",
-            f"FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET={self.turnstile_secret}",
-        ]
-        lines.extend(f"{name}={value}" for name, value in tokens.items())
-        self._write("\n".join(lines) + "\n")
+        self.assertEqual(
+            PUBLIC_TOKEN_NAMES,
+            {
+                "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY",
+                "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN",
+                "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
+            },
+        )
+        for invalid_name in PUBLIC_TOKEN_NAMES:
+            with self.subTest(invalid_name=invalid_name):
+                tokens = self._valid_tokens()
+                tokens[invalid_name] = "short"
+                lines = [
+                    "OPENROUTER_API_KEY=provider-secret",
+                    "FIN_TERMINAL_PUBLIC_ENABLED=true",
+                    f"FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY={self.site_key}",
+                    f"FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET={self.turnstile_secret}",
+                ]
+                lines.extend(f"{name}={value}" for name, value in tokens.items())
+                self._write("\n".join(lines) + "\n")
 
-        with self.assertRaisesRegex(ValueError, "disable the public route"):
-            ensure_fin_terminal_secrets(self.env_path)
+                with self.assertRaisesRegex(ValueError, "disable the public route"):
+                    ensure_fin_terminal_secrets(self.env_path)
 
     def test_enabled_public_route_accepts_trial_agent_provider_key(self):
         tokens = self._write_valid(
