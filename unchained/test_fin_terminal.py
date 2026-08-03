@@ -560,10 +560,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
         self.assertIn("MARKET_RESEARCH_CONCURRENCY=1", worker)
         self.assertIn(
-            "OPENROUTER_API_KEY=${FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY:",
+            "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:",
             worker,
         )
-        self.assertNotIn("OPENROUTER_API_KEY=${OPENROUTER_API_KEY:", worker)
+        self.assertNotIn("FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY", worker)
         self.assertIn(
             "UNBROWSER_MCP_URL=http://fin-terminal-public-unbrowser-mcp:8767/mcp",
             worker,
@@ -630,6 +630,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("Exactly one worker seat", self.pilot_doc)
         self.assertIn("unbrowser-fin-terminal/pull/13", self.pilot_doc)
         self.assertIn("not a hard spend", self.pilot_doc)
+        self.assertIn("same `OPENROUTER_API_KEY` as the trial agent", self.pilot_doc)
         self.assertIn(".deploy-tools/ensure_fin_terminal_secrets.py .env", self.pilot_doc)
         self.assertIn("--no-deps --no-build --pull never --force-recreate caddy", self.pilot_doc)
         self.assertIn("Never run `docker compose down`", self.pilot_doc)
@@ -761,7 +762,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("PUBLIC_TOKEN_NAMES", self.secrets_helper)
         self.assertIn("public_enabled and name in PUBLIC_TOKEN_NAMES", self.secrets_helper)
         self.assertIn("FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET", self.secrets_helper)
-        self.assertIn("FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY", self.secrets_helper)
+        self.assertNotIn("FIN_TERMINAL_PUBLIC_OPENROUTER_API_KEY", self.secrets_helper)
         self.assertIn("FIN_TERMINAL_DEMO_PROXY_TOKEN", self.compose)
         self.assertIn(
             'add_services "caddy fin-terminal fin-terminal-demo"', self.deploy
