@@ -401,6 +401,23 @@ class LockAndSplitBrainTests(unittest.TestCase):
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
+    def test_lock_busy_cycle_emits_info_marker(self) -> None:
+        """Lock contention must be observable: a lock-busy cycle logs an INFO
+        marker ('Cycle outcome: lock-busy'), not a silent DEBUG skip."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        with mock.patch.object(r, "_gateway") as mock_gw, \
+             mock.patch("fcntl.flock", side_effect=IOError("locked")), \
+             self.assertLogs("terminal-runtime-reconciler", level="INFO") as logs:
+            r.reconcile()  # lock-busy → cycle returns before any gateway call
+            mock_gw.reconcile_snapshot.assert_not_called()
+        self.assertTrue(
+            any("Cycle outcome: lock-busy" in message for message in logs.output),
+            f"expected lock-busy marker in {logs.output}",
+        )
+
     def test_reconciler_holds_lock_only_per_cycle(self) -> None:
         """After a reconcile cycle the deploy lock must be released so
         activate/disable/rollback can acquire it (no lifetime lock)."""
@@ -461,6 +478,41 @@ class LockAndSplitBrainTests(unittest.TestCase):
                         # Reset side_effect for release
                         mock_flock.side_effect = None
                         self.assertTrue(result)
+
+    def test_lock_acquire_closes_open_fd_once_when_flock_raises(self) -> None:
+        """A nonblocking flock failure must close the exact fd returned by
+        os.open exactly once, leave self._fd None, and stay unheld. This is the
+        lock-busy path that previously leaked the fd (it checked self._fd,
+        which was still None at that point)."""
+        lock = reconciler_module.DeployLock("/tmp/.deploy.lock.test")
+        with mock.patch("fcntl.flock", side_effect=IOError("locked")), \
+             mock.patch("os.open", return_value=17), \
+             mock.patch("os.close") as mock_close, \
+             mock.patch("os.makedirs"):
+            result = lock.acquire()
+            self.assertFalse(result)
+            self.assertFalse(lock.held)
+            self.assertIsNone(lock._fd)
+            mock_close.assert_called_once_with(17)
+
+    def test_lock_acquire_repeated_flock_failure_never_leaks_fd(self) -> None:
+        """Each failed attempt closes exactly its own os.open fd; repeated
+        contention must not accumulate open descriptors."""
+        lock = reconciler_module.DeployLock("/tmp/.deploy.lock.test")
+        open_fds = iter([17, 18, 19])
+        with mock.patch("fcntl.flock", side_effect=IOError("locked")), \
+             mock.patch("os.open", side_effect=lambda *a, **k: next(open_fds)), \
+             mock.patch("os.close") as mock_close, \
+             mock.patch("os.makedirs"):
+            for _ in range(3):
+                result = lock.acquire()
+                self.assertFalse(result)
+                self.assertFalse(lock.held)
+                self.assertIsNone(lock._fd)
+        self.assertEqual(
+            mock_close.call_args_list,
+            [mock.call(17), mock.call(18), mock.call(19)],
+        )
 
     def test_reconcile_transitory_recovers_starting_seat(self) -> None:
         config = reconciler_module.ReconcilerConfig(

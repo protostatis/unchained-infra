@@ -460,6 +460,10 @@ class DeployLock:
         self._held = False
 
     def acquire(self) -> bool:
+        # The local fd is tracked separately from self._fd: flock can raise
+        # before the lock is recorded as held, and the fd must still be closed
+        # (the previous implementation only checked self._fd and leaked here).
+        fd: int | None = None
         try:
             os.makedirs(os.path.dirname(self._lock_path), exist_ok=True)
             fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -469,9 +473,13 @@ class DeployLock:
             self._held = True
             return True
         except (IOError, OSError):
-            if self._fd is not None:
-                os.close(self._fd)
-                self._fd = None
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            self._fd = None
+            self._held = False
             return False
 
     def release(self) -> None:
@@ -692,7 +700,7 @@ class TerminalRuntimeReconciler:
         # process lifetime. Non-blocking: a deploy/pilot action holding the
         # lock simply means this cycle observes without mutating.
         if not self._lock.acquire():
-            _log.debug("Reconcile skipped: deploy lock not held")
+            _log.info("Cycle outcome: lock-busy")
             return
 
         try:

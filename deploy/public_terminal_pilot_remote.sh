@@ -1158,6 +1158,67 @@ start_reconciler() {
     return 1
 }
 
+# Redact secret-like material from reconciler diagnostics before output:
+#   * values assigned to known token keys (any length) — management tokens,
+#     visitor/edge tokens, or bare "token:" headers
+#   * any standalone token of 32+ alphanumeric characters — management tokens
+#     are validated 64-hex, InvocationID is 32-hex, container ids/digests etc.
+# The awk pass walks each maximal alphanumeric run so adjacent tokens cannot
+# dodge the redaction.
+redact_diagnostic_output() {
+    sed -E \
+        -e 's/(TERMINAL_RUNTIME_MANAGEMENT_TOKEN[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
+        -e 's/([Mm]anagement[ _-]?[Tt]oken[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
+        -e 's/([A-Za-z0-9_-]*[Tt]oken[=:][[:space:]]*)[^[:space:]]+/\1<redacted>/g' \
+        | awk '{
+              line = $0
+              out = ""
+              while (match(line, /[A-Za-z0-9]{32,}/)) {
+                  out = out substr(line, 1, RSTART - 1) "<redacted>"
+                  line = substr(line, RSTART + RLENGTH)
+              }
+              print out line
+          }'
+}
+
+# Bounded, redacted systemd reconciler diagnostics. Advisory only: a missing
+# sudo/systemctl/journalctl, a removed unit, or any diagnostic failure never
+# fails the caller. Never prints the unit file, environment-file contents, or
+# process command lines — only the selected systemctl show fields and at most
+# the last 80 journal lines, redacted.
+reconciler_diagnostics() {
+    if ! command -v sudo >/dev/null 2>&1 \
+        || ! command -v systemctl >/dev/null 2>&1; then
+        echo "    Reconciler diagnostics: sudo/systemctl unavailable"
+        return 0
+    fi
+    # Non-interactive sudo only: a diagnostic must never block on a password
+    # prompt inside status/verify paths.
+    if ! sudo -n true >/dev/null 2>&1; then
+        echo "    Reconciler diagnostics: passwordless sudo unavailable (skipped)"
+        return 0
+    fi
+    echo "    Reconciler diagnostics:"
+    if sudo -n systemctl cat terminal-runtime-reconciler >/dev/null 2>&1; then
+        local show_fields
+        show_fields="$(sudo -n systemctl show terminal-runtime-reconciler \
+            -p LoadState -p ActiveState -p SubState -p NRestarts -p InvocationID \
+            2>/dev/null || true)"
+        if [[ -n "$show_fields" ]]; then
+            printf '%s\n' "$show_fields" | redact_diagnostic_output | sed 's/^/      /' || true
+        fi
+    else
+        echo "      unit not installed (removed or never created)"
+    fi
+    # journald retains evidence after fail-closed removes the unit, so query it
+    # independently of the current unit-load state.
+    if command -v journalctl >/dev/null 2>&1; then
+        sudo -n journalctl -u terminal-runtime-reconciler -n 80 --no-pager -o cat 2>/dev/null \
+            | redact_diagnostic_output | sed 's/^/      /' || true
+    fi
+    return 0
+}
+
 verify_reconciler_cycle() {
     local started_at logs cycle_state restarts
     started_at="$(runtime_metadata_value started_at)" || {
@@ -1182,6 +1243,7 @@ END {
 }
 ' <<<"$logs")" || [[ "$cycle_state" != "healthy" ]]; then
         echo "ERROR: no latest successful post-unlock reconciler cycle was observed" >&2
+        reconciler_diagnostics >&2
         return 1
     fi
     if ! sudo systemctl is-active --quiet terminal-runtime-reconciler; then
@@ -3275,6 +3337,9 @@ cmd_status() {
     local deployed_rev
     deployed_rev="$(awk -F= '/^revision=/ { print $2; exit }' "$DEPLOY_CURRENT" 2>/dev/null || echo "unknown")"
     echo "    deployed-revision: $deployed_rev"
+
+    # Retained, bounded systemd journal evidence even after fail-closed removal.
+    reconciler_diagnostics
 }
 
 # ---------------------------------------------------------------------------

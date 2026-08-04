@@ -1405,6 +1405,66 @@ class MockEnviron:
                         echo "fin-terminal-public-unbrowser-mcp"
                     fi
                     ;;
+                sudo)
+                    # Re-dispatch to the mocked subcommand: every mock binary
+                    # is the same dispatcher, so exec the subcommand's symlink.
+                    while [[ "${1-}" == "-n" || "${1-}" == "-k" || "${1-}" == "-v" ]]; do
+                        shift || break
+                    done
+                    sub="${1-}"
+                    shift || true
+                    case "$sub" in
+                        true)
+                            exit 0
+                            ;;
+                        systemctl|journalctl)
+                            exec /bin/bash "${BASH_SOURCE[0]%/*}/$sub" "$@"
+                            ;;
+                        *)
+                            exit 0
+                            ;;
+                    esac
+                    ;;
+                systemctl)
+                    # DIAG_UNIT_INSTALLED=1 simulates the reconciler unit being
+                    # installed with a management token in the journal.
+                    case "${1-}" in
+                        cat)
+                            if [[ "${DIAG_UNIT_INSTALLED-}" == "1" ]]; then
+                                echo "[Unit]"
+                                echo "Description=mock reconciler"
+                                exit 0
+                            fi
+                            exit 1
+                            ;;
+                        show)
+                            if [[ "${DIAG_UNIT_INSTALLED-}" == "1" ]]; then
+                                echo "LoadState=loaded"
+                                echo "ActiveState=active"
+                                echo "SubState=running"
+                                echo "NRestarts=0"
+                                echo "InvocationID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            fi
+                            exit 0
+                            ;;
+                        is-active|is-enabled|start|stop|enable|disable|daemon-reload|reset-failed)
+                            exit 0
+                            ;;
+                        *)
+                            exit 0
+                            ;;
+                    esac
+                    ;;
+                journalctl)
+                    if [[ "${DIAG_UNIT_INSTALLED-}" == "1" ]]; then
+                        echo "Aug 04 10:00:00 host terminal-runtime-reconciler[1]: Cycle outcome: lock-busy"
+                        echo "Aug 04 10:00:15 host terminal-runtime-reconciler[1]: Snapshot: running=0 assigned=0 queued=0 desired=1 starting=0 draining=0"
+                        echo "Aug 04 10:00:16 host terminal-runtime-reconciler[1]: TERMINAL_RUNTIME_MANAGEMENT_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        echo "Aug 04 10:00:17 host terminal-runtime-reconciler[1]: X-Public-Visitor-Token: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                        echo "Aug 04 10:00:18 host terminal-runtime-reconciler[1]: Management token: supersecret"
+                    fi
+                    exit 0
+                    ;;
                 *)
                     exit 0
                     ;;
@@ -1435,7 +1495,7 @@ class DynamicPilotScriptTests(unittest.TestCase):
         mock_script.write_text(self.env.make_mock_script())
         mock_script.chmod(0o755)
 
-        for name in ("awk", "curl", "flock", "python3", "df", "stat", "ssh-keygen", "mktemp", "comm"):
+        for name in ("awk", "curl", "flock", "python3", "df", "stat", "ssh-keygen", "mktemp", "comm", "sudo", "systemctl", "journalctl"):
             (self._mock_dir / name).symlink_to(mock_script)
 
         deploy_tools = self._work_dir / ".deploy-tools"
@@ -1451,6 +1511,7 @@ class DynamicPilotScriptTests(unittest.TestCase):
         self,
         action: str,
         expected_sha: Optional[str] = None,
+        env_extra: Optional[dict] = None,
     ) -> subprocess.CompletedProcess:
         if expected_sha is None:
             expected_sha = "0000000000000000000000000000000000000000"
@@ -1459,6 +1520,8 @@ class DynamicPilotScriptTests(unittest.TestCase):
         env["PATH"] = f"{self._mock_dir}:{env.get('PATH', '')}"
         env["REMOTE_DIR"] = str(self._work_dir)
         env["USER"] = "ec2-user"
+        if env_extra:
+            env.update(env_extra)
 
         with open(str(self.script_path), "rb") as fh:
             result = subprocess.run(
@@ -1518,6 +1581,33 @@ class DynamicPilotScriptTests(unittest.TestCase):
         result = self._run_script("status")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not match", result.stdout + result.stderr)
+
+    def test_status_runs_diagnostics_redacting_secret_fixtures(self) -> None:
+        """status must emit the retained reconciler diagnostics with every
+        secret-like journal fixture redacted."""
+        result = self._run_script("status", env_extra={"DIAG_UNIT_INSTALLED": "1"})
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("Reconciler diagnostics:", output)
+        self.assertIn("<redacted>", output)
+        # Selected systemctl show fields survive redaction.
+        self.assertIn("LoadState=", output)
+        self.assertIn("NRestarts=", output)
+        # Secret value fixtures must never appear, even from the retained journal.
+        for secret in (
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "supersecret",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ):
+            self.assertNotIn(secret, output, f"secret fixture leaked in output")
+
+    def test_status_diagnostics_are_nonfatal_when_unit_removed(self) -> None:
+        """A removed unit must not turn the advisory diagnostics into a failure."""
+        result = self._run_script("status")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("unit not installed", output)
 
 
 # ---------------------------------------------------------------------------
@@ -1617,6 +1707,72 @@ class DynamicModeIntegrationTests(unittest.TestCase):
         edge_404 = disable.index("Pilot URL: 404 confirmed")
         stop = disable.index("stop_reconciler")
         self.assertLess(edge_404, stop)
+
+
+# ---------------------------------------------------------------------------
+# Reconciler diagnostics — bounded, redacted, non-failing (source contract)
+# ---------------------------------------------------------------------------
+
+
+class ReconcilerDiagnosticsContractTests(unittest.TestCase):
+    """Source-level contract: the diagnostic helper is bounded to the last 80
+    journal lines, shows only selected systemctl fields, redacts secret-like
+    material, and is wired into verification failure and status."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _script_path().read_text()
+        start = cls.source.find("redact_diagnostic_output()")
+        end = cls.source.find("verify_reconciler_cycle()", start)
+        cls.helper = cls.source[start:end] if start >= 0 and end > start else ""
+
+    def test_diagnostics_helper_present(self) -> None:
+        self.assertIn("reconciler_diagnostics()", self.source)
+        self.assertIn("redact_diagnostic_output()", self.source)
+        self.assertGreater(len(self.helper), 0)
+
+    def test_diagnostics_journal_is_bounded_to_last_80_lines(self) -> None:
+        self.assertIn("journalctl", self.helper)
+        self.assertIn("-n 80", self.helper)
+
+    def test_diagnostics_queries_retained_journal_after_unit_removal(self) -> None:
+        unit_missing = self.helper.find("unit not installed")
+        journal = self.helper.find("journalctl", unit_missing)
+        self.assertGreater(unit_missing, -1)
+        self.assertGreater(journal, unit_missing)
+        self.assertNotIn("return 0", self.helper[unit_missing:journal])
+
+    def test_diagnostics_shows_only_selected_systemctl_fields(self) -> None:
+        self.assertIn(
+            "-p LoadState -p ActiveState -p SubState -p NRestarts -p InvocationID",
+            self.helper,
+        )
+        # The show probe must never widen to env/command-line properties.
+        self.assertNotIn("-p Environment", self.helper)
+        self.assertNotIn("-p Exec", self.helper)
+
+    def test_diagnostics_never_prints_env_files_or_command_lines(self) -> None:
+        self.assertNotIn("EnvironmentFile", self.helper)
+        self.assertNotIn("ExecStart", self.helper)
+        self.assertNotIn("CommandLine", self.helper)
+        self.assertNotIn(".env.reconciler", self.helper)
+
+    def test_diagnostics_redacts_long_tokens_and_token_assignments(self) -> None:
+        self.assertIn("[A-Za-z0-9]{32,}", self.helper)
+        self.assertIn("<redacted>", self.helper)
+        self.assertIn("TERMINAL_RUNTIME_MANAGEMENT_TOKEN", self.helper)
+
+    def test_diagnostics_called_on_verify_cycle_failure(self) -> None:
+        verify = self.source[self.source.find("verify_reconciler_cycle()") :]
+        fail = verify.find("no latest successful post-unlock reconciler cycle")
+        self.assertGreater(fail, -1)
+        self.assertIn("reconciler_diagnostics", verify[fail : fail + 200])
+
+    def test_diagnostics_called_from_cmd_status(self) -> None:
+        status = self.source[
+            self.source.find("cmd_status()") : self.source.find("cmd_activate_runtime()")
+        ]
+        self.assertIn("reconciler_diagnostics", status)
 
 
 # ---------------------------------------------------------------------------
