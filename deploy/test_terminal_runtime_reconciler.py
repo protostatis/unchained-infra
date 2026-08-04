@@ -418,6 +418,83 @@ class LockAndSplitBrainTests(unittest.TestCase):
             f"expected lock-busy marker in {logs.output}",
         )
 
+    def test_success_cycle_emits_success_marker(self) -> None:
+        """A lock-owning cycle that passes precondition validation, obtains and
+        parses a gateway snapshot, and completes its decide/action path must
+        emit the stable 'Cycle outcome: success' release-gate marker."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32,
+            compose_project="unchained", compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        # One healthy running seat and a plan that wants exactly one: a no-op
+        # decide/action cycle (current == desired), yet still a completed cycle.
+        snapshot = reconciler_module.GatewaySnapshot(
+            seats={
+                name: reconciler_module.SeatState(name=name, status="healthy", assigned=True)
+                for name in (SEAT_NAMES[0],)
+            },
+            total_assigned=1, total_queued=0,
+            plan={"desiredRunning": 1},
+        )
+        with mock.patch.object(r, "_docker", autospec=True), \
+             mock.patch.object(r._guard, "check", return_value=(True, "ok")), \
+             mock.patch.object(r.gateway, "reconcile_snapshot", return_value=snapshot), \
+             self.assertLogs("terminal-runtime-reconciler", level="INFO") as logs:
+            r.reconcile()
+        messages = [message for message in logs.output]
+        self.assertTrue(
+            any("Cycle outcome: success" in message for message in messages),
+            f"expected success marker in {messages}",
+        )
+        self.assertFalse(r._lock.held,
+                         "deploy lock must be released after a successful cycle")
+
+    def test_lock_busy_cycle_never_emits_success_marker(self) -> None:
+        """A lock-busy (passive) cycle must never emit the success marker: the
+        release gate only acknowledges a lock-owning completed cycle."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        with mock.patch.object(r, "_gateway") as mock_gw, \
+             mock.patch("fcntl.flock", side_effect=IOError("locked")), \
+             self.assertLogs("terminal-runtime-reconciler", level="INFO") as logs:
+            r.reconcile()
+            mock_gw.reconcile_snapshot.assert_not_called()
+        self.assertTrue(
+            any("Cycle outcome: lock-busy" in message for message in logs.output),
+            f"expected lock-busy marker in {logs.output}",
+        )
+        self.assertFalse(
+            any("Cycle outcome: success" in message for message in logs.output),
+            f"lock-busy cycle must not emit success marker in {logs.output}",
+        )
+
+    def test_snapshot_failure_cycle_never_emits_success_marker(self) -> None:
+        """A cycle whose snapshot acquisition fails must not emit the success
+        marker (it reports 'Reconcile snapshot failed' instead)."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32,
+            compose_project="unchained", compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        with mock.patch.object(r.gateway, "reconcile_snapshot",
+                               side_effect=RuntimeError("boom")), \
+             self.assertLogs("terminal-runtime-reconciler", level="INFO") as logs:
+            r.reconcile()
+        messages = [message for message in logs.output]
+        self.assertTrue(
+            any("Reconcile snapshot failed" in message for message in messages),
+            f"expected snapshot failure in {messages}",
+        )
+        self.assertFalse(
+            any("Cycle outcome: success" in message for message in messages),
+            f"failed cycle must not emit success marker in {messages}",
+        )
+        self.assertFalse(r._lock.held,
+                         "deploy lock must be released after a failed cycle")
+
     def test_reconciler_holds_lock_only_per_cycle(self) -> None:
         """After a reconcile cycle the deploy lock must be released so
         activate/disable/rollback can acquire it (no lifetime lock)."""

@@ -98,6 +98,18 @@ def _extract_embedded_python(text: str, marker: str) -> str:
     return text[body_start:py_end]
 
 
+def _extract_verify_gate_source(text: str) -> str:
+    """Extract the invocation-scoped release-gate helpers verbatim from the
+    pilot script (redact_diagnostic_output, reconciler_diagnostics, and
+    verify_reconciler_cycle) as a standalone shell unit so the gate can be
+    exercised in isolation without invoking the script's main dispatch."""
+    start = text.find("redact_diagnostic_output()")
+    end = text.find("stop_reconciler()", start)
+    if start < 0 or end <= start:
+        return ""
+    return text[start:end]
+
+
 # ---------------------------------------------------------------------------
 # (A) Embedded atomic updater — real execution, no mocks
 # ---------------------------------------------------------------------------
@@ -1459,9 +1471,10 @@ class MockEnviron:
                     if [[ "${DIAG_UNIT_INSTALLED-}" == "1" ]]; then
                         echo "Aug 04 10:00:00 host terminal-runtime-reconciler[1]: Cycle outcome: lock-busy"
                         echo "Aug 04 10:00:15 host terminal-runtime-reconciler[1]: Snapshot: running=0 assigned=0 queued=0 desired=1 starting=0 draining=0"
-                        echo "Aug 04 10:00:16 host terminal-runtime-reconciler[1]: TERMINAL_RUNTIME_MANAGEMENT_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        echo "Aug 04 10:00:17 host terminal-runtime-reconciler[1]: X-Public-Visitor-Token: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-                        echo "Aug 04 10:00:18 host terminal-runtime-reconciler[1]: Management token: supersecret"
+                        echo "Aug 04 10:00:16 host terminal-runtime-reconciler[1]: Cycle outcome: success"
+                        echo "Aug 04 10:00:17 host terminal-runtime-reconciler[1]: TERMINAL_RUNTIME_MANAGEMENT_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        echo "Aug 04 10:00:18 host terminal-runtime-reconciler[1]: X-Public-Visitor-Token: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                        echo "Aug 04 10:00:19 host terminal-runtime-reconciler[1]: Management token: supersecret"
                     fi
                     exit 0
                     ;;
@@ -1698,9 +1711,10 @@ class DynamicModeIntegrationTests(unittest.TestCase):
         self.assertLess(reconciler, edge)
 
     def test_post_unlock_verification_accepts_recovery_only_after_error(self) -> None:
-        self.assertIn("last_success = NR", self.source)
-        self.assertIn("last_error = NR", self.source)
-        self.assertIn("last_error > last_success", self.source)
+        verify = self.source[self.source.find("verify_reconciler_cycle()") :]
+        self.assertIn("/Cycle outcome: success/ { last_success = NR }", verify)
+        self.assertIn("last_error = NR", verify)
+        self.assertIn("last_error > last_success", verify)
 
     def test_disable_stops_reconciler_after_edge_404(self) -> None:
         disable = self.source[self.source.index("cmd_disable()") :]
@@ -1773,6 +1787,274 @@ class ReconcilerDiagnosticsContractTests(unittest.TestCase):
             self.source.find("cmd_status()") : self.source.find("cmd_activate_runtime()")
         ]
         self.assertIn("reconciler_diagnostics", status)
+
+
+# ---------------------------------------------------------------------------
+# Invocation-scoped reconciler release gate — source contract
+# ---------------------------------------------------------------------------
+
+
+class ReconcilerInvocationReleaseGateTests(unittest.TestCase):
+    """Source-level contract: verify_reconciler_cycle synchronizes on the live
+    systemd InvocationID (journald field match) instead of wall-clock --since
+    filtering, requires the latest event to be 'Cycle outcome: success', and
+    keeps journal-query failures fail-closed with diagnostics."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = _script_path().read_text()
+        start = cls.source.find("verify_reconciler_cycle()")
+        end = cls.source.find("stop_reconciler()", start)
+        cls.verify = cls.source[start:end] if start >= 0 and end > start else ""
+
+    def test_gate_scoped_by_invocation_id_not_wall_clock(self) -> None:
+        self.assertIn("-p InvocationID --value", self.verify)
+        self.assertIn("_SYSTEMD_INVOCATION_ID=", self.verify)
+        self.assertIn("-n 200", self.verify)
+        self.assertIn("--no-pager -o cat", self.verify)
+
+    def test_no_journalctl_since_filter_or_metadata_timestamp(self) -> None:
+        self.assertNotIn("--since", self.verify)
+        self.assertNotIn("runtime_metadata_value started_at", self.verify)
+
+    def test_invocation_id_validated_as_32_lowercase_hex(self) -> None:
+        self.assertIn("^[0-9a-f]{32}$", self.verify)
+        self.assertIn("tr '[:upper:]' '[:lower:]'", self.verify)
+
+    def test_success_marker_is_cycle_outcome_success(self) -> None:
+        self.assertIn("/Cycle outcome: success/ { last_success = NR }", self.verify)
+        self.assertNotIn("/Snapshot:/ { last_success", self.verify)
+
+    def test_journal_failure_is_fail_closed_with_diagnostics(self) -> None:
+        self.assertIn("could not read reconciler journal", self.verify)
+        self.assertIn("reconciler_diagnostics >&2", self.verify)
+
+    def test_lock_busy_is_neither_success_nor_fatal(self) -> None:
+        # lock-busy is documented in the gate as expected (deploy lock held
+        # during activation/disable) and is deliberately absent from both the
+        # success and the error awk patterns.
+        self.assertIn("neither success nor fatal", self.verify)
+        self.assertNotIn("/Cycle outcome: lock-busy/", self.verify)
+
+    def test_error_patterns_unchanged(self) -> None:
+        self.assertIn("Reconcile snapshot failed", self.verify)
+        self.assertIn("Reconcile cycle error", self.verify)
+        self.assertIn("Traceback", self.verify)
+
+
+# ---------------------------------------------------------------------------
+# Invocation-scoped reconciler release gate — executable isolated helper tests
+# ---------------------------------------------------------------------------
+
+
+class ReconcilerInvocationShellGateTests(unittest.TestCase):
+    """Run the real verify_reconciler_cycle helper (extracted verbatim from the
+    pilot script) against mocked systemctl/journalctl/sudo binaries to prove
+    the parser and fail-closed behavior end to end."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.helper_source = _extract_verify_gate_source(_script_text())
+        if not cls.helper_source:
+            raise AssertionError("could not extract verify gate helpers from script")
+
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._root = Path(self._temp_dir.name)
+        self._mock_dir = self._root / "bin"
+        self._mock_dir.mkdir()
+        self._invocation_id = "a" * 32
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _write_mock(self, name: str, body: str) -> None:
+        path = self._mock_dir / name
+        path.write_text(f"#!/bin/bash\n{body}\n")
+        path.chmod(0o755)
+
+    def _install_mocks(self) -> None:
+        self._write_mock(
+            "systemctl",
+            textwrap.dedent(
+                """\
+                if [[ "${1-}" == "show" ]]; then
+                    shift
+                    value_flag=0
+                    fields=()
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            -p) fields+=("$2"); shift 2 ;;
+                            --value) value_flag=1; shift ;;
+                            *) shift ;;
+                        esac
+                    done
+                    for f in "${fields[@]}"; do
+                        case "$f" in
+                            InvocationID) v="${MOCK_INVOCATION_ID-}" ;;
+                            NRestarts) v="${MOCK_NRESTARTS:-0}" ;;
+                            LoadState) v="loaded" ;;
+                            ActiveState) v="active" ;;
+                            SubState) v="running" ;;
+                            *) v="" ;;
+                        esac
+                        if [[ "$value_flag" == "1" ]]; then
+                            printf '%s\\n' "$v"
+                        else
+                            printf '%s=%s\\n' "$f" "$v"
+                        fi
+                    done
+                    exit 0
+                fi
+                if [[ "${1-}" == "cat" && "${2-}" == "terminal-runtime-reconciler" ]]; then
+                    [[ "${MOCK_UNIT_INSTALLED:-0}" == "1" ]] && exit 0 || exit 1
+                fi
+                if [[ "${1-}" == "is-active" ]]; then
+                    [[ "${MOCK_ACTIVE:-1}" == "1" ]] && exit 0 || exit 3
+                fi
+                exit 0
+                """
+            ),
+        )
+        self._write_mock(
+            "journalctl",
+            textwrap.dedent(
+                """\
+                if [[ "${MOCK_JOURNAL_FAIL:-0}" == "1" ]]; then
+                    echo "mock journalctl failure" >&2
+                    exit 1
+                fi
+                printf '%s' "$MOCK_JOURNAL_LINES"
+                exit 0
+                """
+            ),
+        )
+        self._write_mock(
+            "sudo",
+            textwrap.dedent(
+                """\
+                while [[ "${1-}" == "-n" ]]; do shift; done
+                case "${1-}" in
+                    true) exit 0 ;;
+                    systemctl|journalctl) cmd="$1"; shift; exec "$cmd" "$@" ;;
+                    *) exit 0 ;;
+                esac
+                """
+            ),
+        )
+
+    def _run_gate(self, env_extra: Optional[dict] = None) -> subprocess.CompletedProcess:
+        self._install_mocks()
+        harness = self._root / "harness.sh"
+        harness.write_text(
+            "#!/bin/bash\nset -Eeuo pipefail\n"
+            + self.helper_source
+            + "\nverify_reconciler_cycle\n"
+        )
+        harness.chmod(0o755)
+        run_env = os.environ.copy()
+        run_env["PATH"] = f"{self._mock_dir}:{run_env.get('PATH', '')}"
+        run_env["MOCK_INVOCATION_ID"] = self._invocation_id
+        if env_extra:
+            run_env.update(env_extra)
+        return subprocess.run(
+            [str(harness)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=run_env,
+        )
+
+    def _journal(self, content: str) -> str:
+        return content if content.endswith("\n") else content + "\n"
+
+    def test_success_marker_accepted(self) -> None:
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal("Cycle outcome: success")}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("Reconciler post-unlock cycle: verified.", result.stdout)
+
+    def test_error_then_later_success_accepted(self) -> None:
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal(
+                "Configuration error: bad flag\nCycle outcome: success")}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+    def test_success_then_later_error_rejected(self) -> None:
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal(
+                "Cycle outcome: success\nReconcile cycle error: boom")}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no latest successful", result.stderr)
+        self.assertIn("Reconciler diagnostics:", result.stderr)
+
+    def test_lock_busy_markers_ignored(self) -> None:
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal(
+                "Cycle outcome: lock-busy\nCycle outcome: success\nCycle outcome: lock-busy")}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+    def test_lock_busy_alone_is_not_success(self) -> None:
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal("Cycle outcome: lock-busy")}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no latest successful", result.stderr)
+
+    def test_empty_journal_is_fail_closed(self) -> None:
+        result = self._run_gate({"MOCK_JOURNAL_LINES": ""})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no latest successful", result.stderr)
+
+    def test_journal_query_failure_not_treated_as_success(self) -> None:
+        result = self._run_gate(
+            {
+                "MOCK_JOURNAL_FAIL": "1",
+                "MOCK_JOURNAL_LINES": self._journal("Cycle outcome: success"),
+            }
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not read reconciler journal", result.stderr)
+        self.assertIn("Reconciler diagnostics:", result.stderr)
+        self.assertNotIn("verified.", result.stdout)
+
+    def test_invalid_invocation_id_rejected(self) -> None:
+        self._invocation_id = "nothex"
+        result = self._run_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("InvocationID is invalid or unavailable", result.stderr)
+        self.assertIn("Reconciler diagnostics:", result.stderr)
+
+    def test_uppercase_invocation_id_normalized(self) -> None:
+        self._invocation_id = "A" * 32
+        result = self._run_gate(
+            {"MOCK_JOURNAL_LINES": self._journal("Cycle outcome: success")}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+
+    def test_active_state_required(self) -> None:
+        result = self._run_gate(
+            {
+                "MOCK_ACTIVE": "0",
+                "MOCK_JOURNAL_LINES": self._journal("Cycle outcome: success"),
+            }
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not active", result.stderr)
+
+    def test_restart_count_required_zero(self) -> None:
+        result = self._run_gate(
+            {
+                "MOCK_NRESTARTS": "2",
+                "MOCK_JOURNAL_LINES": self._journal("Cycle outcome: success"),
+            }
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("restarted after activation", result.stderr)
 
 
 # ---------------------------------------------------------------------------
