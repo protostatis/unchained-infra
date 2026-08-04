@@ -115,7 +115,11 @@ Every request requires header `X-Management-Token: $TERMINAL_RUNTIME_MANAGEMENT_
 - `status` is one of `absent | starting | healthy | draining | stopped`
   (mapped from the app's phase model; `recycling` → `stopped`).
 - `assigned` is true for `assigned|admitted|active|disconnected` phases.
-- `idleSeconds` is `idleSinceMs / 1000` (integer seconds).
+- `idleSeconds` is `idleSinceMs / 1000` (integer seconds). It is populated for
+  `active` seats from the session's last-activity time; seats without a
+  tracked idle time (e.g. `ready-idle`) report `0`. The reconciler uses it only
+  to order scale-down candidates, so a zero value is safe (drain-then-stop and
+  generation CAS still protect every seat).
 - `containerId` is always `""` — Docker authority is host-side.
 - The reconciler maps worker ids to its allowlisted Compose service names
   (`fin-terminal-public-seat-01`..`-06`) via an exact tested bijection.
