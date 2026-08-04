@@ -331,10 +331,18 @@ Provider flush (host-side → runtime → control plane):
    `X-Fin-Terminal-Proxy-Token: $FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` and
    `X-Fin-Terminal-Control-Token: $FIN_WORKSPACE_CONTROL_TOKEN`.
    `generation` is the app's `workerGenerationEpoch(TERMINAL_RUNTIME_WORKER_GENERATION)`
-   — a deterministic hash both sides implement.
+   — a deterministic hash both sides implement. The request is executed INSIDE
+   the runtime's network namespace via `docker exec -i` (payload on stdin).
 2. On 200, `POST /internal/financial-workspace/runtime/flush` with
    `{slug, checkpoint}` (Bearer control token) → the control plane persists a
    new snapshot for the account. This is the ONLY acknowledged-flush path.
+   The control plane is Docker-internal only and never publishes a host port,
+   so the host cannot resolve `fin-terminal-workspace-control`; the provider
+   executes the S2S persist INSIDE the control-plane container via
+   `docker exec -i fin-terminal-workspace-control node -e <script>` against
+   its loopback (`127.0.0.1:8790`). Only the PORT of `FIN_WORKSPACE_CONTROL_URL`
+   is used; the payload travels on bounded stdin and the token is JSON-escaped
+   into the JS literal (never argv/shell/logs).
 3. If the runtime is not running, the checkpoint file is used ONLY when its
    content is durably acknowledged (equals the last snapshot written or
    persisted); otherwise flush fails closed and sleep is refused.
@@ -358,7 +366,8 @@ so the path can never fall through to the landing page.
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_URL` | host-side runtime provider base (hard enablement gate) | `http://host.docker.internal:8793` |
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN` | shared secret with the provider (32+ chars) | required when enabled |
 | `FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` | shared proxy token injected toward account runtimes (also their `MARKET_PROXY_TOKEN`) | required when enabled |
-| `FIN_WORKSPACE_CONTROL_URL` | control-plane base the provider uses for flush/wake callbacks | `http://fin-terminal-workspace-control:8790` |
+| `FIN_WORKSPACE_CONTROL_URL` | control-plane S2S base the control plane sends for flush callbacks; only its **port** (default `8790`) is used — the provider executes the S2S request inside the control container on loopback | `http://fin-terminal-workspace-control:8790` (name is never resolved from the host) |
+| `FIN_WORKSPACE_RUNTIME_CONTROL_PORT` | control-plane listener port reached on the control container's loopback | `8790` |
 | `FIN_TERMINAL_BASE_URL` | public base (`/fin-terminal-workspace`) | `https://unbrowser.unchainedsky.com/fin-terminal-workspace` |
 
 ### Host-side runtime provider (`fin-workspace-runtime-provider.service`)
@@ -392,6 +401,7 @@ so the path can never fall through to the landing page.
 | `FINANCIAL_WORKSPACE_CHECKPOINTS` | derived from `FIN_TERMINAL_WORKSPACE_ENABLED` |
 | `FINANCIAL_WORKSPACE_CONTROL_TOKEN` | must equal `FIN_WORKSPACE_CONTROL_TOKEN` |
 | `FINANCIAL_WORKSPACE_SERVICE_URL` | `http://fin-terminal-workspace-control:8790` |
+| `FINANCIAL_WORKSPACE_AUTH_URL_PREFIX` | only auth-redirect target the gateway may hand the browser; the control plane's `auth_url` (built from `FIN_TERMINAL_BASE_URL`) must start with it — `https://unbrowser.unchainedsky.com/fin-terminal-workspace/` (trailing slash canonical; missing → handoff fails closed 503) |
 | `FINANCIAL_WORKSPACE_HANDOFF_COOKIE_DOMAIN` | optional `Domain` for the handoff cookie (host-only when unset) |
 
 ### Worker seats (app `fin-terminal-public-seat-01..06`)

@@ -652,6 +652,12 @@ class TerminalRuntimeReconciler:
         self._lock = DeployLock(config.lock_file)
         self._running = False
         self._last_reconcile: float = 0.0
+        # seat_name -> process generation observed when the seat entered
+        # DRAINING. Used as a crash-recovery cross-check for the sticky-drain
+        # activate path (a drain is only releasable once the generation
+        # changed). The gateway's ``plan.activateCandidates`` is authoritative;
+        # this map is the fallback for gateways without that field.
+        self._drain_generations: dict[str, str] = {}
 
     @property
     def gateway(self) -> GatewayManagementClient:
@@ -709,6 +715,11 @@ class TerminalRuntimeReconciler:
             # Idempotent recovery: handle transitory states from a previous crash
             self._reconcile_transitory(snapshot)
 
+            # Release sticky drains whose process generation changed (the
+            # container was restarted and a new healthy generation registered).
+            # Independent of scale direction: it runs every cycle, idempotently.
+            self._activate_ready_drained(snapshot)
+
             # The gateway's plan is authoritative; the totals are informational.
             desired = snapshot.desired_from_plan
             current = snapshot.running_count + snapshot.starting_count
@@ -744,8 +755,13 @@ class TerminalRuntimeReconciler:
                 # else: still starting — leave it
 
             elif seat.status == "draining":
-                # If drain was accepted, ensure container is stopped
-                self._complete_drain(name, seat)
+                # A draining seat may be a completed scale-down stop OR a
+                # scale-up restart in progress (the container was restarted
+                # while the drain stayed sticky). Record the generation the
+                # seat entered draining with (crash-recovery cross-check for
+                # the activate path) and recover based on local container state.
+                self._drain_generations.setdefault(name, seat.generation or "")
+                self._recover_draining_seat(name, seat)
 
             elif seat.status == "stopped":
                 # If stopped but container still exists, remove it
@@ -754,6 +770,121 @@ class TerminalRuntimeReconciler:
                     _log.info("Recovery: seat %s is stopped in gateway but %s locally, removing", name, docker_state)
                     self._docker.stop_service(name)
                     self._docker.remove_service(name)
+
+    def _recover_draining_seat(self, name: str, seat: SeatState) -> None:
+        """Crash recovery for a DRAINING seat, based on local container state.
+
+        - Container already gone → the scale-down drain was completed; nothing
+          to do (stop/remove are idempotent no-ops on an absent container).
+        - Container healthy/starting/running → a scale-up restart is in
+          progress: the drain is sticky and the container is left RUNNING so
+          the new generation can register. The activate path releases the
+          drain only after the generation changed AND the container is healthy.
+        - Container exited/dead → clean it up.
+        """
+        local = self._docker.container_state(name)
+        if local in ("exited", "dead"):
+            _log.info(
+                "Recovery: draining seat %s has %s container locally; removing",
+                name, local,
+            )
+            try:
+                self._docker.remove_service(name)
+            except RuntimeError as exc:
+                _log.error("Recovery cleanup of %s failed: %s", name, exc)
+        elif local == "absent":
+            # Completed drain (container already stopped/removed).
+            _log.debug("Recovery: draining seat %s has no container; nothing to do", name)
+        else:
+            # healthy / starting / running — a scale-up restart in progress.
+            _log.info(
+                "Recovery: draining seat %s has %s container locally; "
+                "leaving it running until the new generation registers",
+                name, local,
+            )
+
+    # ------------------------------------------------------------------
+    # Sticky-drain activation (scale-up)
+    # ------------------------------------------------------------------
+    def _is_start_candidate(self, name: str, seat: SeatState) -> bool:
+        """A seat is startable when its container is locally absent/stopped —
+        including drained seats whose container was stopped by scale-down.
+
+        Drained seats are start candidates while the drain stays sticky: the
+        container is restarted (a new process generation), and only an explicit
+        ``activate`` with the changed generation releases the drain. A seat
+        that is still STARTING, or whose container is already running/healthy,
+        is never a candidate (avoids double-starts).
+        """
+        if seat.status == "starting":
+            return False
+        local = self._docker.container_state(name)
+        return local in ("absent", "exited", "dead")
+
+    def _activate_ready_drained(self, snapshot: GatewaySnapshot) -> None:
+        """Release sticky drains whose process generation changed.
+
+        The gateway's ``plan.activateCandidates`` is authoritative: it lists
+        exactly the draining seats whose generation changed since the drain was
+        requested (the container was restarted and a new generation registered).
+        Before activating, the container must ALSO be healthy locally (readiness
+        gate — a seat is never activated/assigned before it is ready). A
+        same-generation drain is never released (the gateway rejects it with
+        ``409 drain sticky; generation unchanged``).
+        """
+        plan_candidates: set[str] = set()
+        for worker_id in (snapshot.plan.get("activateCandidates") or []):
+            try:
+                plan_candidates.add(_worker_to_service(str(worker_id)))
+            except ValueError:
+                _log.warning("Ignoring unexpected activate candidate %r", worker_id)
+
+        names: set[str] = set()
+        if plan_candidates:
+            names |= plan_candidates
+        else:
+            # Fallback for gateways without activateCandidates: cross-check
+            # draining seats where the container is healthy AND the generation
+            # changed since the drain was observed (crash-recovery map).
+            for name, seat in snapshot.seats.items():
+                if seat.status != "draining":
+                    continue
+                drain_gen = self._drain_generations.get(name)
+                if not drain_gen or not seat.generation:
+                    continue
+                if seat.generation != drain_gen:
+                    names.add(name)
+
+        for name in sorted(names):
+            seat = snapshot.seats.get(name)
+            if seat is None:
+                continue
+            if seat.status != "draining":
+                # A concurrent activation (or a stale plan entry) already
+                # released this drain — nothing to do. Only a seat still
+                # reported as draining is releasable.
+                self._drain_generations.pop(name, None)
+                continue
+            if self._docker.container_state(name) != "healthy":
+                _log.debug(
+                    "Activate candidate %s is not ready locally; deferring", name,
+                )
+                continue
+            try:
+                accepted = self.gateway.activate_seat(name)
+            except RuntimeError as exc:
+                _log.error("Activate failed for %s: %s", name, exc)
+                continue
+            if accepted:
+                _log.info(
+                    "Released sticky drain for %s (generation %s)",
+                    name, seat.generation or "",
+                )
+                self._drain_generations.pop(name, None)
+            else:
+                _log.info(
+                    "Activate not accepted for %s (drain still sticky)", name,
+                )
 
     # ------------------------------------------------------------------
     # Scale up
@@ -770,10 +901,12 @@ class TerminalRuntimeReconciler:
             _log.warning("Scale-up blocked: %s", reason)
             return
 
-        # Collect stopped/absent seats to start
+        # Collect locally-stopped seats to start — including drained seats
+        # whose containers were stopped by scale-down (the drain stays sticky
+        # until the restarted container registers a new generation).
         candidates = [
             name for name, seat in snapshot.seats.items()
-            if seat.stopped and seat.status != "starting"
+            if self._is_start_candidate(name, seat)
         ]
         # Sort deterministically
         candidates.sort()
@@ -782,10 +915,26 @@ class TerminalRuntimeReconciler:
         for name in candidates:
             if started >= to_start or started >= self._config.max_start_concurrency:
                 break
-            _log.info("Starting seat %s", name)
+            seat = snapshot.seats[name]
+            was_draining = seat.status == "draining"
+            _log.info("Starting seat %s (was_draining=%s)", name, was_draining)
             try:
                 self._docker.start_service(name)
-                self.gateway.activate_seat(name)
+                if was_draining:
+                    # Sticky drain: do NOT activate yet. The gateway rejects a
+                    # same-generation activate (409); the new container boots
+                    # with a fresh generation, and once it is healthy AND the
+                    # generation changed, _activate_ready_drained() releases
+                    # the drain via the generation CAS.
+                    self._drain_generations.setdefault(name, seat.generation or "")
+                    _log.info(
+                        "Seat %s was draining; drain stays sticky until the new "
+                        "generation registers", name,
+                    )
+                else:
+                    # Non-draining seat: mark desired in the gateway (a no-op
+                    # when the seat was already desired).
+                    self.gateway.activate_seat(name)
                 started += 1
             except RuntimeError as exc:
                 _log.error("Failed to start seat %s: %s", name, exc)
@@ -837,6 +986,10 @@ class TerminalRuntimeReconciler:
                 _log.error("Drain API call failed for %s: %s", name, exc)
 
             if accepted:
+                # Record the generation the seat was drained at: the sticky
+                # drain is only releasable once the restarted container's
+                # generation differs (the activate path cross-checks this).
+                self._drain_generations[name] = seat.generation
                 self._complete_drain(name, seat)
                 drained += 1
             else:

@@ -88,6 +88,15 @@ if not isinstance(environment, dict):
     raise SystemExit("rendered Caddy environment must be a mapping")
 
 name_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Caddy boolean feature flags. The Caddyfile references them with
+# `{$VAR:false}` placeholders — an EMPTY value substitutes to the literal
+# empty string and produces an invalid `expression ''` config, so a
+# set-but-empty value must never reach Caddy. Non-boolean values are rejected
+# with a clear error before reload (Caddy CEL matchers require true/false).
+caddy_boolean_flags = {
+    "FIN_TERMINAL_PUBLIC_ENABLED",
+    "FIN_TERMINAL_WORKSPACE_ENABLED",
+}
 with open(environment_path, "x", encoding="utf-8", newline="\n") as handle:
     for name, value in sorted(environment.items()):
         if not isinstance(name, str) or not name_pattern.fullmatch(name):
@@ -97,6 +106,20 @@ with open(environment_path, "x", encoding="utf-8", newline="\n") as handle:
         value = str(value)
         if "\n" in value or "\r" in value:
             raise SystemExit(f"Caddy environment variable {name} contains a newline")
+        if name in caddy_boolean_flags:
+            normalized = value.strip().lower()
+            if normalized == "":
+                # Compose's `:-false` interpolation normally normalizes this;
+                # reject any path that still delivers an empty value so the
+                # staged Caddyfile can never validate against it.
+                raise SystemExit(
+                    f"Caddy boolean flag {name} must be 'true' or 'false', got empty value"
+                )
+            if normalized not in ("true", "false"):
+                raise SystemExit(
+                    f"Caddy boolean flag {name} must be 'true' or 'false', got {value!r}"
+                )
+            value = normalized
         handle.write(f"{name}={value}\n")
 os.chmod(environment_path, 0o600)
 

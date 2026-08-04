@@ -130,10 +130,13 @@ def _runtime_provider_token() -> str:
 
 
 def _runtime_control_url() -> str:
-    """Control-plane base URL the provider uses for flush/wake callbacks.
+    """Control-plane S2S base the provider uses for flush callbacks.
 
-    Defaults to the Docker-internal control-plane service name; an operator
-    (or the local E2E harness) can override with ``FIN_WORKSPACE_CONTROL_URL``.
+    Defaults to the Docker-internal control-plane service name. The host can
+    never resolve that name (no published control-plane port): the provider
+    uses only the URL's PORT and executes the S2S request inside the control
+    container on its loopback. ``FIN_WORKSPACE_CONTROL_URL`` is therefore a
+    functional default — no host-reachable override is required.
     """
     return os.environ.get("FIN_WORKSPACE_CONTROL_URL", "").strip() or (
         "http://fin-terminal-workspace-control:8790"

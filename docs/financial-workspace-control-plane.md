@@ -81,11 +81,18 @@ A private runtime must never stop and lose state without a durable flush:
 - **Flush** (`POST /v1/accounts/{slug}/flush`): while the runtime container is
   running, the provider asks the app for its CURRENT authoritative checkpoint
   (`POST /internal/financial-workspace/checkpoint-export`, authenticated with
-  the proxy + control tokens, for the exact session/generation), then persists
-  it to the control plane (`POST /internal/financial-workspace/runtime/flush`
-  → new snapshot). The original checkpoint file is used ONLY as a fallback and
-  ONLY when its content is durably acknowledged (equals the last snapshot
-  written/persisted); an unacknowledged file fails closed instead of
+  the proxy + control tokens, for the exact session/generation; executed INSIDE
+  the runtime via `docker exec -i`), then persists it to the control plane
+  (`POST /internal/financial-workspace/runtime/flush` → new snapshot). The
+  control plane is Docker-internal only and never publishes a host port, so the
+  provider executes the S2S persist INSIDE the control container on its
+  loopback (`docker exec -i fin-terminal-workspace-control` → `127.0.0.1:8790`):
+  `FIN_WORKSPACE_CONTROL_URL` contributes only the port and the documented
+  default is functional — the host never resolves the service name. The payload
+  travels on bounded stdin; the token is JSON-escaped into the JS literal
+  (never argv/shell/logs). The original checkpoint file is used ONLY as a
+  fallback and ONLY when its content is durably acknowledged (equals the last
+  snapshot written/persisted); an unacknowledged file fails closed instead of
   overwriting good state.
 - **Durable sleep** (`runtime_sleep_durable`): the control plane sleeps an
   account runtime ONLY after a successful flush. If the flush fails the

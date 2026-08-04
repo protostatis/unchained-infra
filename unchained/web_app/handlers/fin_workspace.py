@@ -55,6 +55,7 @@ import logging
 import os
 
 from aiohttp import web
+from yarl import URL
 
 from financial_workspace import (
     FinancialWorkspace,
@@ -958,6 +959,45 @@ def _resolve_runtime_proxy_token() -> str:
     return os.environ.get("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN", "").strip()
 
 
+def _resolve_runtime_allowed_origins() -> set[str]:
+    """Allowed browser origins for the account runtime (the runtime's own
+    ``ALLOWED_ORIGINS`` contract). Default: the public unbrowser origin. An
+    unset value fails closed (empty allowlist → origins never forwarded)."""
+    raw = os.environ.get(
+        "FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS",
+        "https://unbrowser.unchainedsky.com",
+    )
+    entries = {entry.strip() for entry in raw.split(",") if entry.strip()}
+    return entries
+
+
+def _validated_browser_origin(request: web.Request) -> str:
+    """Return the browser's ``Origin`` header when it is a well-formed HTTP(S)
+    origin allowed by ``FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS``; ``""``
+    otherwise (missing, ``null``, malformed, or foreign — fail closed).
+
+    The control plane forwards ONLY a validated origin toward the account
+    runtime; caller-supplied identity/proxy headers are still stripped and only
+    server-owned values are injected."""
+    raw = (request.headers.get("Origin", "") or "").strip()
+    if not raw or raw == "null":
+        return ""
+    try:
+        parsed = URL(raw)
+    except Exception:
+        return ""
+    if parsed.scheme not in ("http", "https"):
+        return ""
+    try:
+        canonical = str(parsed.origin())
+    except Exception:
+        return ""  # non-absolute (e.g. scheme with no host) — fail closed
+    if canonical != raw:
+        return ""  # must be a canonical origin (no path/query/trailing slash)
+    allowed = _resolve_runtime_allowed_origins()
+    return raw if raw in allowed else ""
+
+
 def _runtime_upstream_headers(slug: str) -> dict[str, str] | None:
     """Build the ONLY headers the control plane ever injects toward the
     account runtime: the shared proxy token and the server-derived principal
@@ -1087,7 +1127,7 @@ async def handle_fin_workspace_terminal_proxy(request: web.Request) -> web.Respo
 async def _proxy_http(request: web.Request, upstream: str, slug: str) -> web.Response:
     """Stream a plain HTTP request to the account runtime, injecting ONLY the
     server-derived principal and proxy token (caller-supplied versions are
-    always stripped)."""
+    always stripped) and forwarding only a validated browser ``Origin``."""
     injected = _runtime_upstream_headers(slug)
     if injected is None:
         return _terminal_fail_closed(
@@ -1101,6 +1141,13 @@ async def _proxy_http(request: web.Request, upstream: str, slug: str) -> web.Res
         if k.lower() not in _STRIP_RUNTIME_HEADERS
     }
     headers.update(injected)
+    origin = _validated_browser_origin(request)
+    if origin:
+        headers["Origin"] = origin
+    else:
+        # Never forward a caller-supplied Origin the control plane did not
+        # validate (same-origin/curl requests simply omit the header).
+        headers.pop("Origin", None)
     data = await request.read()
     try:
         async with aiohttp.ClientSession() as session:
@@ -1137,11 +1184,21 @@ async def _proxy_websocket(
     user_id: str,
 ) -> web.Response:
     """Relay a WebSocket between the browser and the account runtime, injecting
-    the server-derived principal + proxy token. The principal is bound to the
-    authenticated account/slug — caller-supplied identity headers are stripped."""
+    the server-derived principal + proxy token AND forwarding the VALIDATED
+    browser ``Origin`` when dialing the runtime (the runtime enforces its own
+    ``ALLOWED_ORIGINS`` gate on WebSocket upgrades). The principal is bound to
+    the authenticated account/slug — caller-supplied identity headers are
+    stripped. A missing or foreign Origin is rejected (fail closed) before any
+    dial."""
     injected = _runtime_upstream_headers(slug)
     if injected is None:
         raise web.HTTPBadGateway(text="workspace runtime proxy token not configured")
+    origin = _validated_browser_origin(request)
+    if not origin:
+        log.warning("[fin-workspace] WS proxy rejected missing/foreign Origin for %s", slug)
+        raise web.HTTPForbidden(text="origin not allowed")
+    headers = dict(injected)
+    headers["Origin"] = origin
     import aiohttp
     try:
         ws_local = web.WebSocketResponse(heartbeat=30.0)
@@ -1149,7 +1206,7 @@ async def _proxy_websocket(
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 upstream,
-                headers=injected,
+                headers=headers,
                 timeout=aiohttp.ClientWSTimeout(ws_close=10.0),
             ) as ws_upstream:
                 async def pump_upstream() -> None:

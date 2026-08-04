@@ -1227,5 +1227,270 @@ class AuthCodeClaimBindingTests(unittest.IsolatedAsyncioTestCase):
             temp_dir.cleanup()
 
 
+# ---------------------------------------------------------------------------
+# WS proxy Origin forwarding (blocker: real runtime accepts through the
+# control plane; missing/foreign Origin is rejected before any dial)
+# ---------------------------------------------------------------------------
+class WsProxyOriginForwardingTests(unittest.IsolatedAsyncioTestCase):
+    """Proxy-level test of the control-plane WS proxy.
+
+    The control plane forwards the VALIDATED browser ``Origin`` when dialing
+    the account runtime (the runtime enforces its own ``ALLOWED_ORIGINS`` gate
+    on WebSocket upgrades), while continuing to strip caller identity/proxy
+    headers and injecting only server-owned principal/token. A missing or
+    foreign Origin is rejected by the control plane itself (403) before any
+    dial. The runtime server below implements the app runtime's exact origin
+    policy (only the configured origin is accepted on upgrade)."""
+
+    VALID_ORIGIN = "https://unbrowser.unchainedsky.com"
+    FOREIGN_ORIGIN = "https://evil.example.com"
+    PROXY_TOKEN = "r" * 40
+    SLUG = "a" * 24
+
+    async def asyncSetUp(self):
+        self._saved_proxy = os.environ.get("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN")
+        self._saved_allowed = os.environ.get("FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS")
+        os.environ["FIN_WORKSPACE_RUNTIME_PROXY_TOKEN"] = self.PROXY_TOKEN
+        os.environ["FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS"] = self.VALID_ORIGIN
+        import aiohttp  # noqa: F401  (exercised below)
+
+    async def asyncTearDown(self):
+        _env_cleanup({
+            "FIN_WORKSPACE_RUNTIME_PROXY_TOKEN": self._saved_proxy,
+            "FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS": self._saved_allowed,
+        })
+
+    async def _start_runtime(self):
+        """Real WS echo server that only accepts upgrades whose Origin is the
+        allowed origin (mirrors the app runtime's isAllowedWebSocketRequest:
+        exactly one non-null, canonical http(s) origin in ALLOWED_ORIGINS)."""
+        import aiohttp
+        from aiohttp import web as aio_web
+
+        received = {"origin": None, "user": None, "token": None}
+
+        async def handle(request):
+            ws = aio_web.WebSocketResponse()
+            await ws.prepare(request)
+            origin = request.headers.get("Origin", "")
+            if origin != self.VALID_ORIGIN:
+                await ws.close(code=1008)
+                return ws
+            received["origin"] = origin
+            received["user"] = request.headers.get("X-Fin-Terminal-User", "")
+            received["token"] = request.headers.get("X-Fin-Terminal-Proxy-Token", "")
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    await ws.send_str("echo:" + msg.data)
+                elif msg.type == aiohttp.WSMsgType.CLOSE:
+                    await ws.close()
+                    break
+            return ws
+
+        app = aio_web.Application()
+        app.router.add_get("/ws", handle)
+        runner = aio_web.AppRunner(app)
+        await runner.setup()
+        site = aio_web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        return runner, f"http://127.0.0.1:{port}/ws", received
+
+    async def _start_proxy(self, upstream):
+        """Control-plane WS proxy endpoint: browser → _proxy_websocket → runtime."""
+        import aiohttp  # noqa: F401
+        from aiohttp import web as aio_web
+        from financial_workspace import FinancialWorkspaceRuntimeScheduler
+
+        async def proxy_handler(request):
+            scheduler = FinancialWorkspaceRuntimeScheduler.__new__(  # type: ignore[misc]
+                FinancialWorkspaceRuntimeScheduler
+            )
+            return await fin_workspace._proxy_websocket(
+                request, upstream, self.SLUG, scheduler, "u-proxy",
+            )
+
+        app = aio_web.Application()
+        app.router.add_get("/ws", proxy_handler)
+        runner = aio_web.AppRunner(app)
+        await runner.setup()
+        site = aio_web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        return runner, f"http://127.0.0.1:{port}/ws"
+
+    async def test_real_runtime_accepts_valid_origin_through_control_plane(self):
+        import aiohttp
+
+        runtime, runtime_url, received = await self._start_runtime()
+        proxy, proxy_url = await self._start_proxy(runtime_url)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    proxy_url, headers={"Origin": self.VALID_ORIGIN},
+                ) as ws:
+                    await ws.send_str("hello")
+                    msg = await ws.receive()
+            self.assertEqual(msg.data, "echo:hello")
+            # The runtime saw the forwarded Origin + server-derived identity.
+            self.assertEqual(received["origin"], self.VALID_ORIGIN)
+            self.assertEqual(received["user"], f"account:{self.SLUG}")
+            self.assertEqual(received["token"], self.PROXY_TOKEN)
+        finally:
+            await proxy.cleanup()
+            await runtime.cleanup()
+
+    async def test_missing_origin_rejected_by_control_plane(self):
+        import aiohttp
+
+        runtime, runtime_url, _received = await self._start_runtime()
+        proxy, proxy_url = await self._start_proxy(runtime_url)
+        try:
+            async with aiohttp.ClientSession() as session:
+                with self.assertRaises(aiohttp.WSServerHandshakeError) as ctx:
+                    await session.ws_connect(proxy_url)
+            self.assertEqual(ctx.exception.status, 403)
+        finally:
+            await proxy.cleanup()
+            await runtime.cleanup()
+
+    async def test_foreign_origin_rejected_by_control_plane(self):
+        import aiohttp
+
+        runtime, runtime_url, _received = await self._start_runtime()
+        proxy, proxy_url = await self._start_proxy(runtime_url)
+        try:
+            async with aiohttp.ClientSession() as session:
+                with self.assertRaises(aiohttp.WSServerHandshakeError) as ctx:
+                    await session.ws_connect(
+                        proxy_url, headers={"Origin": self.FOREIGN_ORIGIN},
+                    )
+            self.assertEqual(ctx.exception.status, 403)
+        finally:
+            await proxy.cleanup()
+            await runtime.cleanup()
+
+
+class ValidatedBrowserOriginTests(unittest.TestCase):
+    """Unit behavior of the control plane's Origin validation gate."""
+
+    def _req(self, origin):
+        from types import SimpleNamespace as _NS
+        return _NS(headers={"Origin": origin} if origin else {})
+
+    def setUp(self):
+        self._saved = os.environ.get("FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS")
+        os.environ["FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS"] = (
+            "https://unbrowser.unchainedsky.com"
+        )
+
+    def tearDown(self):
+        _env_cleanup({"FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS": self._saved})
+
+    def test_allowed_origin_passes(self):
+        self.assertEqual(
+            fin_workspace._validated_browser_origin(self._req("https://unbrowser.unchainedsky.com")),
+            "https://unbrowser.unchainedsky.com",
+        )
+
+    def test_missing_origin_rejected(self):
+        self.assertEqual(fin_workspace._validated_browser_origin(self._req(None)), "")
+
+    def test_null_origin_rejected(self):
+        self.assertEqual(fin_workspace._validated_browser_origin(self._req("null")), "")
+
+    def test_foreign_origin_rejected(self):
+        self.assertEqual(
+            fin_workspace._validated_browser_origin(self._req("https://evil.example.com")), ""
+        )
+
+    def test_noncanonical_origin_rejected(self):
+        for raw in (
+            "https://unbrowser.unchainedsky.com/",
+            "https://unbrowser.unchainedsky.com/path",
+            "unbrowser.unchainedsky.com",
+            "https://",
+            "javascript:alert(1)",
+        ):
+            self.assertEqual(
+                fin_workspace._validated_browser_origin(self._req(raw)), ""
+            )
+
+    def test_fails_closed_when_allowlist_empty(self):
+        os.environ["FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS"] = ""
+        self.assertEqual(
+            fin_workspace._validated_browser_origin(self._req("https://unbrowser.unchainedsky.com")),
+            "",
+        )
+
+
+class _BreakSweepLoop(Exception):
+    """Raised from the fake asyncio.sleep to stop the endless sweep loop."""
+
+
+class RuntimeIdleSweepLoopTests(unittest.IsolatedAsyncioTestCase):
+    """web.py's idle-sweep loop executes the REAL loop/tick seam: it resolves
+    the actual in-process core scheduler (regression: an undefined ``_core``
+    used to raise NameError so scheduler.tick() never ran) and drives
+    ``tick()``, which schedules the durable-flush idle sleep."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in (
+            "FIN_WORKSPACE_RUNTIME_SWEEP_INTERVAL_SECONDS",
+            "FIN_WORKSPACE_RUNTIME_IDLE_SLEEP_SECONDS",
+            "JWT_SECRET",
+        )}
+        os.environ["JWT_SECRET"] = os.environ.get("JWT_SECRET", "test-jwt-secret-for-sweep")
+
+    def tearDown(self):
+        _env_cleanup(self._saved)
+
+    async def test_sweep_loop_resolves_core_and_ticks_idle_sleep(self):
+        import web as web_module
+        from financial_workspace import FinancialWorkspace
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            fw = FinancialWorkspace(
+                os.path.join(tmp.name, "auth.db"), LocalCheckpointStore()
+            )
+            user_id = "u-sweep"
+            # The scheduler sees exactly one awake runtime with no live
+            # activity and an elapsed idle window.
+            fw._iter_workspace_user_ids = lambda: [(user_id,)]
+            fw.runtime_status = lambda uid: {
+                "runtime_state": "awake", "last_wake_at": 0.0,
+            }
+            sleep_calls: list[str] = []
+            fw.runtime_sleep_durable = (
+                lambda uid, reason="idle", **kw: sleep_calls.append(uid)
+                or {"runtime_state": "asleep", "flush": {"ok": True}}
+            )
+
+            os.environ["FIN_WORKSPACE_RUNTIME_SWEEP_INTERVAL_SECONDS"] = "15"
+            os.environ["FIN_WORKSPACE_RUNTIME_IDLE_SLEEP_SECONDS"] = "60"
+
+            sleep_count = 0
+
+            def _fake_sleep(*_args, **_kwargs):
+                nonlocal sleep_count
+                sleep_count += 1
+                if sleep_count > 1:
+                    raise _BreakSweepLoop()
+
+            with patch.object(web_module, "_fin_workspace", fw), \
+                 patch("asyncio.sleep", side_effect=_fake_sleep):
+                with self.assertRaises(_BreakSweepLoop):
+                    await web_module._fin_workspace_runtime_sweep_loop()
+
+            # The loop completed one real iteration: the real resolver
+            # constructed the scheduler off the in-process core and tick()
+            # invoked the durable-flush idle sleep for the idle account.
+            self.assertEqual(sleep_calls, [user_id])
+            self.assertEqual(sleep_count, 2)
+        finally:
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

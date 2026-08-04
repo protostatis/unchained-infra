@@ -197,6 +197,12 @@ services:
       - FINANCIAL_WORKSPACE_CHECKPOINTS=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
       - FINANCIAL_WORKSPACE_CONTROL_TOKEN=${FIN_WORKSPACE_CONTROL_TOKEN:-}
       - FINANCIAL_WORKSPACE_SERVICE_URL=http://fin-terminal-workspace-control:8790
+      # The only redirect target the gateway hands the browser after a
+      # successful handoff: an HTTPS origin + path prefix that the control
+      # plane's auth_url (built from FIN_TERMINAL_BASE_URL) starts with.
+      # Trailing slash is canonical; a missing prefix makes the handoff fail
+      # closed (503) instead of issuing a redirect.
+      - FINANCIAL_WORKSPACE_AUTH_URL_PREFIX=${FINANCIAL_WORKSPACE_AUTH_URL_PREFIX:-https://unbrowser.unchainedsky.com/fin-terminal-workspace/}
     depends_on:
       fin-terminal-public-redis:
         condition: service_healthy

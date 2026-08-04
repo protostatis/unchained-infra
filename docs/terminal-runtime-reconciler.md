@@ -49,6 +49,15 @@ activation workflow requires all nine containers running and is unchanged.
   threshold on `/drain`.
 - **Drain-then-stop**: the gateway must accept an atomic drain before the
   container is stopped. A rejected drain leaves the seat running.
+- **Sticky-drain scale-up**: when demand returns, drained seats whose
+  containers were stopped are restart candidates. The reconciler starts the
+  container while the drain stays **sticky** — it never calls `activate` on a
+  same-generation drain (the gateway rejects it with `409 drain sticky;
+  generation unchanged`). Once the restarted container registers a NEW healthy
+  generation (the gateway lists the seat in `plan.activateCandidates`), the
+  reconciler calls `activate` so the generation CAS releases the drain. A seat
+  is never activated before its container is healthy, and a same-generation
+  drain is never released.
 - **Assigned seats never stopped**: seats with active or reconnecting sessions
   are excluded from scale-down.
 - **Resource guard**: starts are blocked when host memory/disk headroom is
@@ -60,16 +69,22 @@ activation workflow requires all nine containers running and is unchanged.
   next reconcile cycle detects the transitory state. If the container is
   healthy locally, it reactivates the seat in the gateway. If absent, it
   cleans up.
-- **DRAINING seats**: if drain was accepted but the container wasn't stopped,
-  the next reconcile completes the stop.
+- **DRAINING seats**: recovery is container-state aware. A draining seat with
+  no local container is a completed scale-down stop (nothing to do). A
+  draining seat with a running/healthy container is a scale-up restart in
+  progress — it is LEFT RUNNING so the new generation can register, and the
+  activate path releases the drain once `plan.activateCandidates` lists it.
+  An exited/dead container is cleaned up.
 - **STOPPED seats**: any lingering containers are removed.
 
 ## Deployment lock
 
-The reconciler respects the existing `.deploy.lock` shared with `deploy.sh`.
+The reconciler respects the existing `.deploy.lock` shared with `deploy.sh`
+and the pilot workflow (`public_terminal_pilot_remote.sh` activate/disable/
+rollback actions hold it via `flock` while they mutate deployment state).
 The lock is held **only during each observed→mutate cycle** — never for the
-process lifetime — so activate/disable/rollback (which stop the reconciler
-systemd unit in deploy preflight before or while holding the lock) can never
+process lifetime — so those actions (including rollback, which stops the
+reconciler systemd unit and re-enables the static six-seat pilot) can never
 deadlock behind a lifetime lock. If the lock is held by a deploy at the start
 of a cycle, the reconciler runs that cycle passive (reads snapshot, logs, does
 not start/stop) and retries on the next tick.

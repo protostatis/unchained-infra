@@ -867,6 +867,66 @@ class ComposeRenderTests(unittest.TestCase):
         self.assertEqual(control_env.get("FIN_WORKSPACE_ENABLED"), "true")
         self.assertEqual(gateway_env.get("FINANCIAL_WORKSPACE_CHECKPOINTS"), "true")
 
+    def test_workspace_handoff_configuration_is_functional(self) -> None:
+        """The shipped compose can complete POST /api/public/workspace-handoff
+        configuration (no 503): the gateway receives a non-empty HTTPS
+        FINANCIAL_WORKSPACE_AUTH_URL_PREFIX that the control plane's auth_url
+        (built from FIN_TERMINAL_BASE_URL) actually starts with, plus the
+        service URL and control token."""
+        env = {
+            **os.environ,
+            "PRIVATE_CORE_TOKEN": "test-token",
+            "OPENROUTER_API_KEY": "test-key",
+            "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY": "test-sig",
+            "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN": "test-worker",
+            "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
+            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
+            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
+            "TRIAL_AGENT_KEY": "test-trial",
+            "JWT_SECRET": "test-jwt",
+            "FIN_WORKSPACE_CONTROL_TOKEN": "test-control-token-value-32chars",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN": "test-runtime-provider-token-32",
+            "FIN_TERMINAL_WORKSPACE_ENABLED": "true",
+        }
+        result = subprocess.run(
+            self._compose_args("config", "--format", "json"),
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            self.skipTest(f"Compose config not renderable: {result.stderr}")
+        config = json.loads(result.stdout)
+        gateway_env = dict(config["services"]["fin-terminal-public-gateway"].get("environment", {}))
+        control_env = dict(config["services"]["fin-terminal-workspace-control"].get("environment", {}))
+
+        # Every prerequisite for the handoff endpoint is rendered.
+        self.assertEqual(gateway_env.get("FINANCIAL_WORKSPACE_CHECKPOINTS"), "true")
+        self.assertEqual(
+            gateway_env.get("FINANCIAL_WORKSPACE_CONTROL_TOKEN"),
+            "test-control-token-value-32chars",
+        )
+        self.assertEqual(
+            gateway_env.get("FINANCIAL_WORKSPACE_SERVICE_URL"),
+            "http://fin-terminal-workspace-control:8790",
+        )
+        prefix = gateway_env.get("FINANCIAL_WORKSPACE_AUTH_URL_PREFIX", "")
+        self.assertTrue(prefix.startswith("https://"), f"prefix must be HTTPS: {prefix!r}")
+        self.assertTrue(prefix.endswith("/"), f"prefix must end with a path slash: {prefix!r}")
+
+        # The control plane builds auth_url from FIN_TERMINAL_BASE_URL; the
+        # gateway must accept that exact URL (startsWith + same origin).
+        base = (control_env.get("FIN_TERMINAL_BASE_URL", "")
+                or "https://unbrowser.unchainedsky.com/fin-terminal-workspace").rstrip("/")
+        auth_url = f"{base}/workspace/auth/claim?handoff_id=fh-test"
+        self.assertTrue(auth_url.startswith(prefix),
+                        f"control-plane auth_url {auth_url} must start with prefix {prefix}")
+        self.assertEqual(
+            __import__("urllib.parse", fromlist=["urlparse"]).urlparse(auth_url).scheme,
+            "https",
+        )
+
     def test_no_host_port_published_for_private_services(self) -> None:
         """Management (8789) and control-plane (8790) listeners are exposed
         only on the private Docker networks — never published to the host."""
@@ -927,6 +987,41 @@ class ComposeRenderTests(unittest.TestCase):
         self.assertGreaterEqual(len(pilot_nets), 18,
             f"Expected at least 18 pilot networks, got {len(pilot_nets)}")
 
+    def test_empty_feature_flag_renders_false_for_caddy(self) -> None:
+        """A set-but-empty Caddy feature flag must render as the literal
+        ``false`` (Compose ``:-`` interpolation) so the Caddyfile's
+        ``{$FLAG:false}`` placeholder can never substitute an empty string
+        (which would be an invalid ``expression ''``)."""
+        env = {
+            **os.environ,
+            "PRIVATE_CORE_TOKEN": "test-token",
+            "OPENROUTER_API_KEY": "test-key",
+            "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY": "test-sig",
+            "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN": "test-worker",
+            "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
+            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
+            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
+            "TRIAL_AGENT_KEY": "test-trial",
+            "JWT_SECRET": "test-jwt",
+            "FIN_WORKSPACE_CONTROL_TOKEN": "test-control-token-value-32chars",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN": "test-runtime-provider-token-32",
+            "FIN_TERMINAL_WORKSPACE_ENABLED": "",
+            "FIN_TERMINAL_PUBLIC_ENABLED": "",
+        }
+        result = subprocess.run(
+            self._compose_args("config", "--format", "json"),
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            self.skipTest(f"Compose config not renderable: {result.stderr}")
+        config = json.loads(result.stdout)
+        caddy_env = dict(config["services"]["caddy"].get("environment", {}))
+        self.assertEqual(caddy_env.get("FIN_TERMINAL_WORKSPACE_ENABLED"), "false")
+        self.assertEqual(caddy_env.get("FIN_TERMINAL_PUBLIC_ENABLED"), "false")
+
 
 class ShellSyntaxTests(unittest.TestCase):
     def test_reconciler_valid_python_syntax(self) -> None:
@@ -978,6 +1073,27 @@ class ShellSyntaxTests(unittest.TestCase):
             self.assertIn("[Install]", text)
             self.assertIn("ExecStart=", text)
             self.assertIn("Restart=", text)
+
+    def test_caddy_preflight_rejects_empty_or_invalid_boolean_flags(self) -> None:
+        """The deploy-staging Caddy preflight must reject (never reload) an
+        empty or non-boolean feature flag: the Caddyfile's `{$FLAG:false}`
+        placeholders substitute an empty value to `expression ''` (invalid)."""
+        preflight = DEPLOY_DIR / "caddy_config_preflight.sh"
+        if not preflight.exists():
+            self.skipTest("caddy_config_preflight.sh not present")
+        source = preflight.read_text()
+        self.assertIn("FIN_TERMINAL_PUBLIC_ENABLED", source)
+        self.assertIn("FIN_TERMINAL_WORKSPACE_ENABLED", source)
+        self.assertIn("caddy_boolean_flags", source)
+        self.assertIn("got empty value", source)
+        self.assertIn("must be 'true' or 'false'", source)
+        # bash syntax stays valid after the edit.
+        result = subprocess.run(
+            ["bash", "-n", str(preflight)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+                         f"Bash syntax error:\n{result.stderr}")
 
 
 # ---------------------------------------------------------------------------
@@ -1140,6 +1256,254 @@ class IdleScaleDownTests(unittest.TestCase):
         url_path, payload = mock_exec.call_args[0]
         self.assertEqual(url_path, "/api/management/reconcile-plan")
         self.assertEqual(payload["idleScaleDownSeconds"], 600)
+
+
+# ---------------------------------------------------------------------------
+# K2) Sticky-drain scale-up lifecycle (6 → 1 → 6)
+# ---------------------------------------------------------------------------
+class _StickyDrainHarness:
+    """Deterministic fake of the gateway + Docker for the 6→1→6 lifecycle.
+
+    Mirrors the app-side warm-pool contract exactly:
+      - a drained seat stays ``draining`` in the gateway (sticky) until an
+        explicit ``activate`` with a CHANGED generation releases it;
+      - ``plan.activateCandidates`` lists exactly the draining seats whose
+        generation changed since the drain was requested;
+      - the gateway rejects a same-generation activate (drain sticky).
+    """
+
+    def __init__(self, config) -> None:
+        self.config = config
+        self.containers: dict[str, str] = {}          # name -> local docker state
+        self.seat_status: dict[str, str] = {}         # name -> gateway status
+        self.seat_generation: dict[str, str] = {}     # name -> gateway generation
+        self.drain_generation: dict[str, str] = {}    # name -> generation at drain
+        self.drain_requested: dict[str, bool] = {}
+        self.plan: dict = {
+            "desiredRunning": 6,
+            "activateCandidates": [],
+            "scaleDownCandidates": [],
+        }
+        self.activate_calls: list[str] = []
+        self.drain_calls: list[str] = []
+        self.start_calls: list[str] = []
+        self.stop_calls: list[str] = []
+
+    # ── Gateway side ────────────────────────────────────────────────────
+    def snapshot(self) -> reconciler_module.GatewaySnapshot:
+        seats = {}
+        for name in sorted(ALLOWED_SEAT_NAMES):
+            status = self.seat_status.get(name, "absent")
+            seats[name] = reconciler_module.SeatState(
+                name=name,
+                status=status,
+                generation=self.seat_generation.get(name, ""),
+                assigned=False,
+                idle_seconds=600.0 if status == "healthy" else 0.0,
+            )
+        return reconciler_module.GatewaySnapshot(
+            seats=seats,
+            total_assigned=0,
+            total_queued=0,
+            plan=dict(self.plan),
+        )
+
+    def reconcile_snapshot(self) -> reconciler_module.GatewaySnapshot:
+        return self.snapshot()
+
+    def drain_seat(self, name: str, expected_generation: str) -> bool:
+        if self.seat_status.get(name) != "healthy":
+            return False
+        if self.seat_generation.get(name) != expected_generation:
+            return False
+        self.drain_requested[name] = True
+        self.drain_generation[name] = expected_generation
+        self.seat_status[name] = "draining"
+        self.drain_calls.append(name)
+        return True
+
+    def activate_seat(self, name: str) -> bool:
+        self.activate_calls.append(name)
+        if self.drain_requested.get(name, False):
+            if self.seat_generation.get(name) == self.drain_generation.get(name):
+                return False  # sticky: same generation is never releasable
+            self.drain_requested[name] = False
+            self.drain_generation.pop(name, None)
+        self.seat_status[name] = "healthy"
+        return True
+
+    # ── Docker side ─────────────────────────────────────────────────────
+    def container_state(self, name: str) -> str:
+        return self.containers.get(name, "absent")
+
+    def container_id(self, name: str) -> str:
+        return f"cid-{name}" if name in self.containers else ""
+
+    def container_labels(self, name: str) -> dict:
+        if name not in self.containers:
+            return {}
+        return {"com.docker.compose.project": self.config.compose_project}
+
+    def validate_container_project_and_set(self) -> None:
+        return None
+
+    def start_service(self, name: str) -> None:
+        self.containers[name] = "running"
+        self.start_calls.append(name)
+
+    def stop_service(self, name: str) -> None:
+        self.containers.pop(name, None)
+        self.stop_calls.append(name)
+
+    def remove_service(self, name: str) -> None:
+        self.containers.pop(name, None)
+
+
+class StickyDrainLifecycleTests(unittest.TestCase):
+    """Deterministic 6 → 1 → 6 warm-pool lifecycle.
+
+    Demand drops: five idle seats are drained and stopped. Demand rises: the
+    five drained seats are treated as start candidates, the containers restart
+    while the drains stay sticky, and the drain is released only after a NEW
+    healthy generation registers (activate via the generation CAS). The
+    reconciler never releases a same-generation drain and never activates a
+    seat before its container is healthy.
+    """
+
+    def _make(self):
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True,
+            management_token="t" * 32,
+            compose_dir="/tmp",
+            idle_scale_down=300,
+            max_start_concurrency=6,
+        )
+        harness = _StickyDrainHarness(config)
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        r._docker = harness
+        r._gateway = harness
+        r._guard = mock.Mock()
+        r._guard.check.return_value = (True, "ok")
+        return r, harness
+
+    def _all_healthy(self, harness: _StickyDrainHarness, gen: str) -> None:
+        for name in sorted(ALLOWED_SEAT_NAMES):
+            harness.seat_status[name] = "healthy"
+            harness.seat_generation[name] = f"{gen}-{name}"
+            harness.containers[name] = "healthy"
+
+    def test_full_6_to_1_to_6_sticky_drain_lifecycle(self) -> None:
+        r, harness = self._make()
+        self._all_healthy(harness, "gen-a")
+        harness.plan["desiredRunning"] = 1
+
+        # ── Phase 1: demand drops to 1 → five idle seats drained + stopped ──
+        r.reconcile()
+        self.assertEqual(len(harness.drain_calls), 5, harness.drain_calls)
+        self.assertEqual(len(harness.stop_calls), 5, harness.stop_calls)
+        self.assertEqual(
+            [n for n in sorted(ALLOWED_SEAT_NAMES) if harness.seat_status[n] == "draining"],
+            sorted(ALLOWED_SEAT_NAMES)[:5],
+        )
+        # The drain generation is recorded for the sticky-release cross-check.
+        self.assertEqual(len(r._drain_generations), 5)
+
+        # ── Phase 2: demand rises to 6 → drained seats restart, drain sticky ──
+        harness.plan["desiredRunning"] = 6
+        # The gateway still reports the OLD generation (container just started).
+        r.reconcile()
+        self.assertEqual(harness.start_calls, sorted(ALLOWED_SEAT_NAMES)[:5])
+        # Exactly the five drained seats were restarted; seat-06 was never
+        # stopped and its container remains.
+        self.assertEqual(
+            [n for n in sorted(ALLOWED_SEAT_NAMES) if harness.containers.get(n)],
+            sorted(ALLOWED_SEAT_NAMES),
+        )
+        # Restarted drained seats must NOT be activated while the generation is
+        # still the drained one — never release a same-generation drain.
+        self.assertFalse(harness.activate_calls)
+
+        # ── Phase 2b: same-generation containers become healthy ─────────────
+        # Readiness alone must never release the drain (generation unchanged).
+        for name in sorted(ALLOWED_SEAT_NAMES)[:5]:
+            harness.containers[name] = "healthy"
+        harness.plan["activateCandidates"] = []
+        r.reconcile()
+        self.assertFalse(
+            harness.activate_calls,
+            "a same-generation draining seat must never be activated",
+        )
+
+        # ── Phase 3: new generation registers → activate candidates appear ──
+        for name in sorted(ALLOWED_SEAT_NAMES)[:5]:
+            harness.seat_generation[name] = f"gen-b-{name}"
+        harness.plan["activateCandidates"] = [
+            f"seat-{n:02d}" for n in range(1, 6)
+        ]
+        # seat-01 is NOT healthy locally yet — readiness gate defers it.
+        harness.containers["fin-terminal-public-seat-01"] = "starting"
+        r.reconcile()
+        self.assertEqual(
+            harness.activate_calls,
+            sorted(ALLOWED_SEAT_NAMES)[1:5],
+            "only ready seats may be activated (seat-01 must be deferred)",
+        )
+        # The deferred seat is still draining and was NOT assigned.
+        self.assertEqual(harness.seat_status["fin-terminal-public-seat-01"], "draining")
+        self.assertNotIn("fin-terminal-public-seat-01", harness.activate_calls)
+
+        # ── Phase 3b: seat-01 becomes healthy → activate releases its drain ──
+        harness.containers["fin-terminal-public-seat-01"] = "healthy"
+        r.reconcile()
+        self.assertEqual(
+            harness.activate_calls,
+            sorted(ALLOWED_SEAT_NAMES)[1:5] + ["fin-terminal-public-seat-01"],
+        )
+        # All drains released; every seat healthy and running again.
+        for name in sorted(ALLOWED_SEAT_NAMES):
+            self.assertFalse(harness.drain_requested.get(name, False), name)
+            self.assertEqual(harness.seat_status[name], "healthy", name)
+            self.assertEqual(harness.containers[name], "healthy", name)
+
+        # ── Phase 4: steady state → no further mutation ─────────────────────
+        harness.plan["activateCandidates"] = []
+        r.reconcile()
+        self.assertEqual(len(harness.activate_calls), 5, harness.activate_calls)
+        self.assertEqual(len(harness.start_calls), 5)
+        self.assertEqual(len(harness.drain_calls), 5)
+
+    def test_crash_recovery_leaves_restarted_draining_seat_running(self) -> None:
+        """After a crash mid-scale-up, a draining seat with a running/healthy
+        container is left running (the activate path releases the drain once
+        the new generation registers) — never stopped."""
+        r, harness = self._make()
+        self._all_healthy(harness, "gen-a")
+        harness.plan["desiredRunning"] = 1
+        r.reconcile()  # drain + stop five
+        self.assertEqual(len(harness.drain_calls), 5)
+
+        # Scale-up restarts seat-01; reconciler crashes; restart observes a
+        # draining seat with a healthy container (old generation still).
+        harness.plan["desiredRunning"] = 6
+        harness.containers["fin-terminal-public-seat-01"] = "healthy"
+        harness.seat_status["fin-terminal-public-seat-01"] = "draining"
+        snapshot = harness.snapshot()
+        # Fresh reconciler (same config) — the drain-generation map is empty,
+        # mirroring a process restart.
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        r2 = reconciler_module.TerminalRuntimeReconciler(config)
+        r2._docker = harness
+        r2._gateway = harness
+        r2._guard = mock.Mock()
+        r2._guard.check.return_value = (True, "ok")
+        with mock.patch.object(r2._docker, "container_state", return_value="healthy") as m_state:
+            r2._reconcile_transitory(snapshot)
+        # The healthy restarted container must not be stopped by recovery.
+        self.assertEqual(harness.containers["fin-terminal-public-seat-01"], "healthy")
+        self.assertEqual(harness.stop_calls, [n for n in sorted(ALLOWED_SEAT_NAMES)[:5]])
+        m_state.assert_called()
 
 
 # ---------------------------------------------------------------------------

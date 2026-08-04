@@ -2560,8 +2560,13 @@ async def _fin_workspace_runtime_sweep_loop() -> None:
         if _fin_workspace is None:
             continue
         try:
+            from web_app.core import get_core as _core_resolver
             from web_app.handlers.fin_workspace import _resolve_runtime_scheduler
-            scheduler = _resolve_runtime_scheduler(_core, _fin_workspace)
+            # Resolve the SAME in-process core object the proxy handlers use
+            # (the running web.py instance when launched as ``python web.py``,
+            # or the imported ``web`` module otherwise) so the idle scheduler
+            # shared with attach/detach/touch is the one being ticked.
+            scheduler = _resolve_runtime_scheduler(_core_resolver(), _fin_workspace)
             results = await asyncio.to_thread(scheduler.tick)
             for result in results:
                 if result.get("error") or not (result.get("flush") or {}).get("ok"):

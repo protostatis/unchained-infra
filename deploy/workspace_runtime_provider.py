@@ -22,6 +22,11 @@ container per workspace account:
 - flush contract: before sleep/shutdown the provider asks the RUNNING app
   runtime to export its current authoritative checkpoint (authenticated with
   the proxy + control tokens), then persists it to the control plane (S2S).
+  The control plane is Docker-internal only and never publishes a host port,
+  so the S2S persist request is executed INSIDE the control-plane container
+  (``docker exec -i`` against ``127.0.0.1:8790``) — the host never resolves
+  the Docker service name. The payload travels on bounded stdin and the token
+  is JSON-escaped into the JS literal (never argv/shell/logs).
   A read of the original checkpoint file is used only as a fallback when the
   file's content was durably acknowledged (equals the last snapshot written).
 - no published host ports; ``cap_drop ALL``, ``no-new-privileges``, read-only
@@ -45,6 +50,9 @@ Environment:
                                                   only turns on when a real probe
                                                   of the pinned image also passes
   FIN_WORKSPACE_RUNTIME_CONTROL_CONTAINER    str   (default: fin-terminal-workspace-control)
+  FIN_WORKSPACE_RUNTIME_CONTROL_PORT         int   (default: 8790) — control-plane
+                                                  listener port reached on the
+                                                  control container's loopback
   FIN_WORKSPACE_RUNTIME_MCP_CONTAINER        str   (default: fin-terminal-workspace-unbrowser-mcp)
   FIN_WORKSPACE_RUNTIME_CHECKPOINT_FILE      str   (default: /data/checkpoint.json)
   FIN_WORKSPACE_RUNTIME_PROXY_TOKEN          str   — app MARKET_PROXY_TOKEN (>=32)
@@ -87,6 +95,11 @@ _log = logging.getLogger("workspace-runtime-provider")
 _SLUG_RE = re.compile(r"^[a-f0-9]{24}$")
 _TRUE_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
 
+# Upper bound on a flushed checkpoint payload (bytes). The S2S flush body is
+# bounded before it is piped into the control container over stdin so a runaway
+# checkpoint can never exhaust the container's stdin/HTTP buffers.
+_MAX_FLUSH_PAYLOAD_BYTES = 8 * 1024 * 1024
+
 # Labels the provider stamps on every resource it owns so it can verify, before
 # any destructive mutation, that a container/network is really its own.
 _LABEL_SLUG = "com.unchained.fin-workspace.slug"
@@ -98,6 +111,25 @@ _LABEL_SESSION = "com.unchained.fin-workspace.session-id"
 def parse_feature_flag(value: str | None) -> bool:
     """Same cross-repo boolean contract as the control plane: 1|true|yes|on."""
     return (value or "").strip().lower() in _TRUE_FLAG_VALUES
+
+
+def _is_immutable_image_ref(image: str) -> bool:
+    """Return whether an image reference is actually immutable.
+
+    Accepted forms:
+      - digest-pinned: ``repo@sha256:<64 hex>``
+      - content-derived tag: ``<name>:<40 hex>`` (e.g. ``unbrowser-fin-terminal:``
+        followed by the app commit sha)
+
+    Rejected forms (mutable / unqualified): ``latest``, ``repo`` (no tag,
+    implies ``latest``), and any other tag (``repo:v1``, ``repo:stable``, ...).
+    """
+    value = (image or "").strip()
+    if not value:
+        return False
+    if re.search(r"@sha256:[0-9a-f]{64}$", value, flags=re.IGNORECASE):
+        return True
+    return bool(re.fullmatch(r"[\w./:\-]+:[0-9a-f]{40}", value, flags=re.IGNORECASE))
 
 
 def _imul(a: int, b: int) -> int:
@@ -135,6 +167,9 @@ class ProviderConfig:
         self.control_container = os.environ.get(
             "FIN_WORKSPACE_RUNTIME_CONTROL_CONTAINER", "fin-terminal-workspace-control"
         ).strip()
+        self.control_port = int(
+            os.environ.get("FIN_WORKSPACE_RUNTIME_CONTROL_PORT", "8790")
+        )
         self.mcp_container = os.environ.get(
             "FIN_WORKSPACE_RUNTIME_MCP_CONTAINER", "fin-terminal-workspace-unbrowser-mcp"
         ).strip()
@@ -176,10 +211,12 @@ class ProviderConfig:
         errs: list[str] = []
         if not self.token or len(self.token) < 32:
             errs.append("FIN_WORKSPACE_RUNTIME_TOKEN must be >= 32 chars")
-        if not self.app_image:
+        if not self.app_image or not _is_immutable_image_ref(self.app_image):
             errs.append(
-                "FIN_WORKSPACE_RUNTIME_APP_IMAGE must be the immutable pinned "
-                "app image (no mutable tags)"
+                "FIN_WORKSPACE_RUNTIME_APP_IMAGE must be an actually immutable "
+                "image reference: a digest (@sha256:<64 hex>) or a content-derived "
+                "tag (<name>:<40 hex>). Mutable tags ('latest', 'v1', unqualified "
+                "refs) are rejected."
             )
         host, _sep, port = self.listen.partition(":")
         if not host or not port.isdigit() or not 1 <= int(port) <= 65535:
@@ -190,6 +227,8 @@ class ProviderConfig:
         ):
             if not value or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", value):
                 errs.append(f"invalid {label} name: {value!r}")
+        if not 1 <= self.control_port <= 65535:
+            errs.append("FIN_WORKSPACE_RUNTIME_CONTROL_PORT must be 1-65535")
         if not self.checkpoint_file.startswith("/"):
             errs.append("checkpoint file path must be absolute inside the container")
         if not self.proxy_token or len(self.proxy_token) < 32:
@@ -723,6 +762,14 @@ class WorkspaceRuntimeProvider:
 
     # ── Flush (export from the RUNNING runtime, then S2S persist) ────────
     def flush(self, slug: str, control_url: str, control_token: str) -> dict:
+        """Export the RUNNING runtime's authoritative checkpoint, then persist
+        it to the control plane (S2S).
+
+        ``control_url`` is the control-plane S2S base the control plane sends
+        (default ``http://fin-terminal-workspace-control:8790``). The host can
+        never resolve that Docker-internal name; only its PORT is used — the
+        persist request is executed inside the control container on loopback.
+        """
         if not _SLUG_RE.fullmatch(slug):
             return {"ok": False, "reason": "invalid slug"}
         if not control_url or not control_token:
@@ -850,32 +897,100 @@ class WorkspaceRuntimeProvider:
             return None
         return checkpoint
 
+    def _control_port_from_url(self, control_url: str) -> int:
+        """Derive the control-plane listener port from the S2S base URL.
+
+        The host can never resolve the Docker-internal control service name;
+        only the PORT is used (the request itself is executed inside the
+        control container on its loopback). Defaults to the configured
+        ``FIN_WORKSPACE_RUNTIME_CONTROL_PORT`` (8790)."""
+        try:
+            from urllib.parse import urlsplit
+            parsed = urlsplit((control_url or "").strip())
+            if parsed.port:
+                return parsed.port
+        except Exception:
+            pass
+        return int(self.cfg.control_port)
+
     def _persist_to_control_plane(
         self, slug: str, checkpoint: dict, control_url: str, control_token: str
     ) -> dict:
-        import urllib.request
+        """Persist the flushed checkpoint to the control plane S2S endpoint.
+
+        The control plane is Docker-internal only (``fin-terminal-workspace-control``)
+        and never publishes a host port, so the host cannot resolve its name.
+        The S2S request is therefore executed INSIDE the control-plane
+        container via ``docker exec -i`` against its loopback
+        (``127.0.0.1:<control_port>/internal/financial-workspace/runtime/flush``)
+        — the same pattern the reconciler uses for the gateway's private
+        management API. The payload travels on bounded stdin; the token is
+        JSON-escaped into the JS string literal so it never appears in argv,
+        the shell, or the logs.
+        """
         try:
-            body = json.dumps({"slug": slug, "checkpoint": checkpoint}).encode("utf-8")
-            req = urllib.request.Request(
-                f"{control_url.rstrip('/')}/internal/financial-workspace/runtime/flush",
-                data=body,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {control_token}",
-                },
+            body = json.dumps(
+                {"slug": slug, "checkpoint": checkpoint},
+                separators=(",", ":"), default=str,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "checkpoint not JSON-serializable"}
+        if len(body) > _MAX_FLUSH_PAYLOAD_BYTES:
+            return {"ok": False, "reason": f"flush payload exceeds {_MAX_FLUSH_PAYLOAD_BYTES} bytes"}
+
+        port = self._control_port_from_url(control_url)
+        token_lit = json.dumps(control_token)
+        script = (
+            "const http = require('http');"
+            "let d = '';"
+            "process.stdin.setEncoding('utf8');"
+            "process.stdin.on('data', (c) => d += c);"
+            "process.stdin.on('end', () => {"
+            "  const opts = {"
+            "    hostname: '127.0.0.1', port: %d,"
+            "    path: '/internal/financial-workspace/runtime/flush',"
+            "    method: 'POST',"
+            "    headers: {"
+            "      'Content-Type': 'application/json',"
+            "      'Authorization': 'Bearer ' + %s,"
+            "      'Content-Length': Buffer.byteLength(d)"
+            "    },"
+            "    timeout: 30000"
+            "  };"
+            "  const req = http.request(opts, (res) => {"
+            "    let out = '';"
+            "    res.on('data', (c) => out += c);"
+            "    res.on('end', () => {"
+            "      if (res.statusCode !== 200) { process.exit(1); return; }"
+            "      process.stdout.write(out);"
+            "      process.exit(0);"
+            "    });"
+            "  });"
+            "  req.on('error', () => process.exit(1));"
+            "  req.write(d);"
+            "  req.end();"
+            "});"
+        ) % (port, token_lit)
+        try:
+            result = subprocess.run(
+                ["docker", "exec", "-i", self.cfg.control_container, "node", "-e", script],
+                input=body.decode("utf-8"),
+                capture_output=True, text=True, timeout=45, check=False,
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if resp.status != 200:
-                    return {"ok": False, "reason": f"control plane returned {resp.status}"}
-                payload = resp.read().decode("utf-8")
-                try:
-                    return json.loads(payload)
-                except json.JSONDecodeError:
-                    return {"ok": True}
         except Exception as exc:
             _log.error("flush failed for %s: %s", slug, exc)
             return {"ok": False, "reason": str(exc)}
+        if result.returncode != 0:
+            _log.error(
+                "control-plane flush failed for %s: %s",
+                slug, (result.stderr or result.stdout or "").strip()[:300],
+            )
+            return {"ok": False, "reason": "control plane flush request failed"}
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {"ok": True}
+        return payload if isinstance(payload, dict) else {"ok": True}
 
     # ── Sleep / delete ───────────────────────────────────────────────────
     def sleep(self, slug: str) -> dict | None:

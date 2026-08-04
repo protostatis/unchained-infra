@@ -16,7 +16,10 @@ Covers the private account-workspace runtime end-to-end with REAL Docker:
   2. authenticated HTTP assets load under /fin-terminal/ (strip proxy)
   3. WebSocket connects with the injected principal + proxy token
   4. current authoritative state exports (proxy + control tokens)
-  5. provider flush persists a new snapshot to the control plane
+  5. provider flush persists a new snapshot to the control plane through the
+     REAL mechanism: the S2S request is executed inside the control container
+     on its loopback (docker exec -i → 127.0.0.1:8790) using the documented
+     default FIN_WORKSPACE_CONTROL_URL — no host-reachable stub URL
   6. sleep occurs only after a durable flush (container + networks removed)
   7. a second account cannot reach the first account's runtime/network/data
 """
@@ -253,18 +256,42 @@ class E2EPrivateWorkspaceRuntimeTests(unittest.TestCase):
         )
         os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN"] = cfg.token
         os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "c" * 40
-        # The provider's flush/wake callbacks reach the control plane through
-        # the shared service name; point them at the local stub for the E2E.
+        # The provider's flush/wake callbacks use the DOCUMENTED default
+        # control-plane base. The host can never resolve the Docker-internal
+        # name: the provider executes the S2S persist request INSIDE the
+        # control container on its loopback (127.0.0.1:8790), so this default
+        # is functional — no host-reachable stub URL is needed.
         os.environ["FIN_WORKSPACE_CONTROL_URL"] = (
-            f"http://127.0.0.1:{cls.control_stub.port}"
+            "http://fin-terminal-workspace-control:8790"
         )
 
         # Shared stub containers the provider attaches to each per-account
         # network (control plane name + MCP name must be running).
+        # The CONTROL container hosts the real flush endpoint on its loopback
+        # (127.0.0.1:8790): it validates the Bearer control token and forwards
+        # the S2S body to the host-side real FinancialWorkspace over the host
+        # gateway (mirrors the compose control plane's extra_hosts). The
+        # provider reaches it via `docker exec -i` — the real mechanism.
         cls.shared_containers = []
+        _control_flush_script = (
+            "const http=require('http');"
+            "const token='" + ("c" * 40) + "';"
+            "const stub='host.docker.internal:%d';"
+            "http.createServer((q,r)=>{"
+            "let d='';q.on('data',c=>d+=c);q.on('end',()=>{"
+            "if(q.headers['authorization']!=='Bearer '+token){r.writeHead(401);r.end();return;}"
+            "const u='http://'+stub+'/internal/financial-workspace/runtime/flush';"
+            "const req=http.request(u,{method:'POST',headers:{'Content-Type':'application/json',"
+            "'Content-Length':Buffer.byteLength(d),'Authorization':q.headers['authorization']}},"
+            "(res)=>{let o='';res.on('data',c=>o+=c);res.on('end',()=>{"
+            "r.writeHead(res.statusCode,{'Content-Type':'application/json'});r.end(o);});});"
+            "req.on('error',()=>{r.writeHead(502);r.end();});req.write(d);req.end();});"
+            "}).listen(8790,'127.0.0.1');setTimeout(()=>{},3600000)"
+        ) % cls.control_stub.port
         _run_docker(
             "run", "-d", "--name", cfg.control_container, "--restart", "no",
-            IMAGE, "node", "-e", "setTimeout(()=>{},3600000)",
+            "--add-host", "host.docker.internal:host-gateway",
+            IMAGE, "node", "-e", _control_flush_script,
         )
         cls.shared_containers.append(cfg.control_container)
         _run_docker(
@@ -436,9 +463,14 @@ class E2EPrivateWorkspaceRuntimeTests(unittest.TestCase):
 
     def test_07_provider_flush_persists_snapshot(self):
         """provider.flush() must export from the RUNNING runtime and persist a
-        new snapshot to the control plane (real FinancialWorkspace)."""
+        new snapshot to the control plane (real FinancialWorkspace).
+
+        The S2S persist uses the REAL mechanism: the provider executes the
+        flush request INSIDE the control container on its loopback
+        (``docker exec -i`` against 127.0.0.1:8790) using the documented
+        default ``FIN_WORKSPACE_CONTROL_URL`` — no host-reachable stub URL."""
         result = self.provider.flush(
-            self.slug1, f"http://127.0.0.1:{self.control_stub.port}", "c" * 40
+            self.slug1, "http://fin-terminal-workspace-control:8790", "c" * 40
         )
         self.assertTrue(result["ok"], f"flush failed: {result}")
         self.assertEqual(len(self.control_stub.received), 1)

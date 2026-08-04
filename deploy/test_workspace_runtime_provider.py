@@ -112,6 +112,60 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertTrue(any("absolute" in e for e in errors))
 
 
+class ImmutableImageRefTests(unittest.TestCase):
+    """The workspace runtime image reference must be actually immutable:
+    a digest (@sha256:<64hex>) or a content-derived 40-hex tag. Mutable or
+    unqualified refs ('latest', 'v1', bare repo) are rejected."""
+
+    def test_content_derived_40hex_tag_accepted(self):
+        self.assertTrue(provider._is_immutable_image_ref(IMAGE))
+        self.assertTrue(
+            provider._is_immutable_image_ref(
+                "registry.example.com/team/unbrowser-fin-terminal:e937377b945ed84d721ebd06e22510b5f805e19d"
+            )
+        )
+
+    def test_digest_pinned_accepted(self):
+        self.assertTrue(
+            provider._is_immutable_image_ref(
+                "unbrowser-fin-terminal@sha256:" + "a" * 64
+            )
+        )
+        self.assertTrue(
+            provider._is_immutable_image_ref(
+                "ghcr.io/org/app@sha256:" + "0" * 64
+            )
+        )
+
+    def test_latest_rejected(self):
+        self.assertFalse(provider._is_immutable_image_ref("unbrowser-fin-terminal:latest"))
+
+    def test_unqualified_rejected(self):
+        self.assertFalse(provider._is_immutable_image_ref("unbrowser-fin-terminal"))
+
+    def test_mutable_tag_rejected(self):
+        for ref in (
+            "unbrowser-fin-terminal:v1",
+            "unbrowser-fin-terminal:stable",
+            "unbrowser-fin-terminal:2026-08-03",
+            "unbrowser-fin-terminal:8a95cb7",
+        ):
+            self.assertFalse(provider._is_immutable_image_ref(ref), ref)
+
+    def test_config_rejects_mutable_image(self):
+        cfg = make_cfg(app_image="unbrowser-fin-terminal:latest")
+        errors = cfg.errors()
+        self.assertTrue(any("IMMUTABLE" in e or "immutable" in e for e in errors))
+
+    def test_config_rejects_unqualified_image(self):
+        cfg = make_cfg(app_image="unbrowser-fin-terminal")
+        errors = cfg.errors()
+        self.assertTrue(any("immutable" in e for e in errors))
+
+    def test_config_accepts_immutable_image(self):
+        self.assertEqual(make_cfg(app_image=IMAGE).errors(), [])
+
+
 class ParseFeatureFlagTests(unittest.TestCase):
     def test_contract_truthy(self):
         for value in ("1", "true", "yes", "on", " True ", "ON"):
@@ -542,6 +596,96 @@ class FlushTests(unittest.TestCase):
         p = provider.WorkspaceRuntimeProvider(make_cfg())
         result = p.flush("bad slug!", "http://control:8790", "ct-1")
         self.assertFalse(result["ok"])
+
+
+class FlushPersistMechanismTests(unittest.TestCase):
+    """The S2S persist step executes INSIDE the control-plane container.
+
+    The control plane is Docker-internal only and never publishes a host port,
+    so the host cannot resolve ``fin-terminal-workspace-control``. The flush
+    request is run via ``docker exec -i <control-container> node -e <script>``
+    against the control container's loopback (127.0.0.1:<port>); the payload
+    travels on bounded stdin and the token is JSON-escaped into the JS literal
+    (never argv/shell/logs)."""
+
+    def test_persist_execs_into_control_container_with_loopback_bearer(self):
+        p = provider.WorkspaceRuntimeProvider(make_cfg())
+        checkpoint = {"holdings": [{"ticker": "AAPL", "qty": 1}]}
+        with mock.patch("subprocess.run") as m_run:
+            m_run.return_value.returncode = 0
+            m_run.return_value.stdout = '{"ok": true, "snapshot_id": "fsn-1"}'
+            m_run.return_value.stderr = ""
+            result = p._persist_to_control_plane(
+                SLUG, checkpoint, "http://fin-terminal-workspace-control:8790", "ct-1",
+            )
+        self.assertTrue(result["ok"])
+        args, kwargs = m_run.call_args
+        cmd = args[0]
+        self.assertEqual(
+            cmd[:5],
+            ["docker", "exec", "-i", p.cfg.control_container, "node"],
+        )
+        script = cmd[-1]
+        # The request targets the control container's loopback — never a host-
+        # resolvable URL with the Docker-internal service name.
+        self.assertIn("hostname: '127.0.0.1', port: 8790", script)
+        self.assertIn("/internal/financial-workspace/runtime/flush", script)
+        self.assertIn("'Authorization': 'Bearer ' + \"ct-1\"", script)
+        self.assertNotIn("fin-terminal-workspace-control:8790", script)
+        # Payload travels on stdin, JSON-encoded — never in argv.
+        body = json.loads(kwargs["input"])
+        self.assertEqual(body["slug"], SLUG)
+        self.assertEqual(body["checkpoint"], checkpoint)
+
+    def test_persist_port_derived_from_control_url(self):
+        p = provider.WorkspaceRuntimeProvider(make_cfg(control_port=8790))
+        with mock.patch("subprocess.run") as m_run:
+            m_run.return_value.returncode = 0
+            m_run.return_value.stdout = "{}"
+            m_run.return_value.stderr = ""
+            p._persist_to_control_plane(
+                SLUG, {"k": 1}, "http://fin-terminal-workspace-control:8790", "ct-1",
+            )
+        script = m_run.call_args[0][0][-1]
+        self.assertIn("port: 8790", script)
+
+    def test_persist_default_port_used_when_url_has_no_port(self):
+        p = provider.WorkspaceRuntimeProvider(make_cfg(control_port=8790))
+        with mock.patch("subprocess.run") as m_run:
+            m_run.return_value.returncode = 0
+            m_run.return_value.stdout = "{}"
+            m_run.return_value.stderr = ""
+            p._persist_to_control_plane(SLUG, {"k": 1}, "http://control", "ct-1")
+        script = m_run.call_args[0][0][-1]
+        self.assertIn("port: 8790", script)
+
+    def test_persist_oversized_payload_rejected_before_exec(self):
+        p = provider.WorkspaceRuntimeProvider(make_cfg())
+        big = {"data": "x" * (provider._MAX_FLUSH_PAYLOAD_BYTES + 1)}
+        with mock.patch("subprocess.run") as m_run:
+            result = p._persist_to_control_plane(SLUG, big, "http://c:8790", "ct-1")
+        self.assertFalse(result["ok"])
+        m_run.assert_not_called()
+
+    def test_persist_failure_returns_fail_closed(self):
+        p = provider.WorkspaceRuntimeProvider(make_cfg())
+        with mock.patch("subprocess.run") as m_run:
+            m_run.return_value.returncode = 1
+            m_run.return_value.stdout = ""
+            m_run.return_value.stderr = "boom"
+            result = p._persist_to_control_plane(
+                SLUG, {"k": 1}, "http://fin-terminal-workspace-control:8790", "ct-1",
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("failed", result["reason"])
+
+    def test_no_token_or_payload_in_shell(self):
+        """The token and payload never appear in argv or shell — the token is
+        JSON-escaped into the JS literal and the payload flows over stdin."""
+        source = (DEPLOY_DIR / "workspace_runtime_provider.py").read_text()
+        self.assertNotIn("os.system", source)
+        self.assertNotIn("shell=True", source)
+        self.assertIn('"docker", "exec", "-i", self.cfg.control_container', source)
 
 
 class DockerSecurityTests(unittest.TestCase):
