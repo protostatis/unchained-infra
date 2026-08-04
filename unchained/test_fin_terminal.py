@@ -502,7 +502,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "e287a54e12b29c33e4ee9e751946fb98ec3fba8e"
+        app_revision = "b70a7901bac99c981e3ced240cf25600ca8fc589"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
