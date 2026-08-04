@@ -631,9 +631,14 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_public_live_overlay_is_staged_but_not_auto_started(self):
         self.assertIn('"docker-compose.public-terminal.yml"', self.runtime_context)
-        self.assertIn(
-            "docker-compose.public-terminal.yml Caddyfile unchained", self.deploy
-        )
+        for release_item in (
+            "docker-compose.public-terminal.yml",
+            "Caddyfile",
+            "deploy/terminal_runtime_reconciler.py",
+            "deploy/terminal-runtime-reconciler.service",
+            "unchained",
+        ):
+            self.assertIn(release_item, self.deploy)
         self.assertIn(
             '"$remote_dir/docker-compose.public-terminal.yml"', self.deploy
         )
@@ -646,7 +651,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("not a hard spend", self.pilot_doc)
         self.assertIn("same `OPENROUTER_API_KEY` as the trial agent", self.pilot_doc)
         self.assertIn("Public Terminal Pilot", self.pilot_doc)
-        self.assertIn("-f action=activate -f confirm='ACTIVATE SIX SEATS'", self.pilot_doc)
+        self.assertIn(
+            "-f action=activate-runtime -f confirm='ACTIVATE RUNTIME PILOT'",
+            self.pilot_doc,
+        )
         self.assertIn("-f action=disable -f confirm='DISABLE PUBLIC PILOT'", self.pilot_doc)
         self.assertIn("restores the exact pre-activation", self.pilot_doc)
         self.assertRegex(self.pilot_doc, r"Never run\s+`docker compose down`")
