@@ -9,9 +9,9 @@ RUN useradd -m -u 10001 -s /bin/bash unchained \
 COPY unchained/unbrowser_ssrf_proxy.py .
 
 RUN pip install --no-cache-dir \
-    mcp-proxy==0.12.0 \
-    mcp==1.29.0 \
-    pyunbrowser==0.0.18
+    "mcp-proxy==0.12.0" \
+    "mcp==1.29.0" \
+    "pyunbrowser==0.0.18"
 
 ENV PYTHONUNBUFFERED=1
 ENV HOME=/home/unchained

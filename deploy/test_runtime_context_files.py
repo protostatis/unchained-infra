@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -38,6 +39,15 @@ def _root_unchained_copy_sources(dockerfile: Path) -> set[str]:
     return sources
 
 
+def _logical_instructions(dockerfile: Path) -> list[str]:
+    text = dockerfile.read_text(encoding="utf-8")
+    return [
+        line.strip()
+        for line in re.sub(r"\\\s*\n", " ", text).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 class RuntimeContextFilesTests(unittest.TestCase):
     def test_manifest_covers_root_unchained_dockerfile_copies(self) -> None:
         runtime_files = _manifest_array("UNCHAINED_RUNTIME_FILES")
@@ -61,6 +71,29 @@ class RuntimeContextFilesTests(unittest.TestCase):
             if not (ROOT / "unchained" / relative).is_file()
         }
         self.assertEqual(missing, set())
+
+    def test_pip_requirements_do_not_become_shell_redirections(self) -> None:
+        failures: list[str] = []
+        for relative in _manifest_array("TOP_LEVEL_CONTEXT_FILES"):
+            if not Path(relative).name.startswith("Dockerfile"):
+                continue
+            for instruction in _logical_instructions(ROOT / relative):
+                if not instruction.startswith("RUN ") or "pip install" not in instruction:
+                    continue
+                lexer = shlex.shlex(
+                    instruction.removeprefix("RUN "),
+                    posix=True,
+                    punctuation_chars="<>",
+                )
+                lexer.whitespace_split = True
+                lexer.commenters = ""
+                redirections = [
+                    token for token in lexer if token and set(token) <= {"<", ">"}
+                ]
+                if redirections:
+                    failures.append(f"{relative}: {redirections}")
+
+        self.assertEqual(failures, [])
 
     def test_deploy_snapshots_auth_database_before_mutation(self) -> None:
         deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
