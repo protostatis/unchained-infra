@@ -9,7 +9,7 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
 
 ## Architecture
 
-`browser → Caddy → Turnstile → public gateway → six disposable worker seats`
+`browser → Caddy → Turnstile → public gateway → 1–6 disposable worker seats`
 
 - Caddy strips any client-supplied edge token and real-IP header, injects an
   independent edge token, and omits the capability-bearing route from access
@@ -18,6 +18,10 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
   conservative admission reservation, and WebSocket proxying. Browser cookies
   and ordinary authorization headers do not cross the public boundary.
 - Redis persists admission state and permits only one active gateway lease.
+- A host-side systemd reconciler keeps one warm spare and targets
+  `min(6, assigned + queued + 1)` running seats. It scales excess unassigned
+  seats down only after five continuous idle minutes. The gateway owns a FIFO
+  global research-permit gate with at most two acquired jobs across all seats.
 - Each of the six seats has its own container, Pi session, temporary storage,
   private gateway network, private direct-egress network, private attachment to
   the shared MCP service, and one concurrent research worker. Seats share no
@@ -110,6 +114,9 @@ other gates above.
 - 5-minute idle timeout, 15-minute absolute session maximum, and 30-second
   reconnect grace.
 - Up to five research launches per guest session; one runs at a time.
+- At most two research jobs run globally; additional jobs remain FIFO queued.
+- Six logical seats remain defined, but the host normally keeps one warm seat
+  when there is no assigned or queued demand.
 - USD 10 daily application admission-reservation budget, using conservative
   USD 0.20 reservations for each possible run when a seat is assigned.
 
@@ -147,7 +154,12 @@ trial agent. Setting `FIN_TERMINAL_PUBLIC_ENABLED=true` makes the secret helper
 require both Turnstile values. Do not put any protected value in this repository
 or a command-line argument.
 
-## Six-seat activation workflow
+The runtime activation action generates a separate 256-bit management token on
+the production host. It atomically installs the same value into the gateway /
+worker Compose environment and the owner-only reconciler environment. The token
+is never a workflow input, command argument, log value, or repository file.
+
+## Runtime activation workflow
 
 Do not activate from an SSH shell. Use the protected **Public Terminal Pilot**
 GitHub Actions workflow on `main`. Every action uses the GitHub `production`
@@ -167,11 +179,11 @@ The workflow refuses a stale branch or, for activation, a host whose
 `.deploy-current` revision does not exactly match current `main`. It rechecks
 the protected remote `main` branch under the host deployment lock both before
 building and immediately before edge promotion. To activate the reviewed
-six-seat profile:
+autoscaled runtime:
 
 ```bash
 gh workflow run public-terminal-pilot.yml --ref main \
-  -f action=activate -f confirm='ACTIVATE SIX SEATS'
+  -f action=activate-runtime -f confirm='ACTIVATE RUNTIME PILOT'
 ```
 
 Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
@@ -180,31 +192,47 @@ Activation keeps `FIN_TERMINAL_PUBLIC_ENABLED=false` while it:
 2. proves all retired replay URLs are 404 and the old demo container is absent;
 3. validates credentials against a protected temporary copy without rotating
    or printing them;
-4. renders the exact nine-service overlay, verifies six seats, six unique worker
-   endpoints, and 18 exact compact bridge subnets, rejects published ports,
-   host networking, unsafe privileges, devices, and bind mounts, and checks
-   host capacity;
+4. verifies the deployed reconciler and systemd-unit hashes against current
+   `main`, generates the management token on-host, atomically installs the
+   default-off runtime configuration, and renders the exact nine-service
+   overlay; it verifies six seats, six unique worker endpoints, and 18 exact
+   compact bridge subnets, rejects published ports, host networking, unsafe
+   privileges, devices, and bind mounts, and checks host capacity;
 5. removes only unused, exact-label-matched per-seat/legacy pilot networks,
    builds the pinned images, starts Redis, snapshots its exact admission state,
    transitions only the persisted worker set from one to six while preserving
-   the daily reservation counter and ending stale tickets, then starts the
+   the daily reservation counter and ending stale tickets, snapshots and clears
+   stale capacity-drain / research-permit process state, then starts the
    shared dedicated MCP service, seats 01–06, and the public gateway; it
    verifies health, six unique worker generations, exact per-seat runtime
    network/subnet isolation, negative cross-seat/state connectivity, no host
    port bindings, and retained memory headroom;
 6. completes a real stateful MCP initialize/list/navigate/private-target
    rejection/delete sequence and the gateway's internal readiness check;
-7. validates a staged Caddy configuration, atomically enables the host flag,
+7. proves the private research gate rejects bad credentials, grants exactly two
+   permits, FIFO-queues a third, promotes it after release, returns to zero
+   permits, and is reachable with the configured token from every worker;
+8. installs, enables, and starts the host reconciler while the deployment lock
+   still prevents it from mutating seats;
+9. validates a staged Caddy configuration, atomically enables the host flag,
    and force-recreates only Caddy; and
-8. verifies the public-live build marker and asset prefix, CSP, normal routes,
+10. verifies the public-live build marker and asset prefix, CSP, normal routes,
    replay tombstones, required Turnstile configuration, and negative admission
-   cases without logging visitor or session tokens.
+   cases without logging visitor or session tokens. After the activation lock
+   is released, the workflow requires a real reconciler snapshot cycle; failure
+   immediately invokes the fail-closed disable action.
 
 Any activation failure after services start restores the exact pre-activation
-`.env` and exact pre-activation Redis state, recreates Caddy in the disabled
-state, proves the route is 404, and removes the nine named containers and unused
+`.env` and exact pre-activation Redis state, stops/removes the newly installed
+reconciler and token configuration, recreates Caddy in the disabled state,
+proves the route is 404, and removes the nine named containers and unused
 per-seat networks in reverse dependency order. If the disabled edge cannot be
-proved, the script stops Caddy rather than leave the pilot reachable.
+proved, the script stops Caddy rather than leave the pilot reachable. A
+feature-disabled public static-six fallback is forbidden because it would
+remove the global max-two research gate.
+
+All six workers initially start for release verification. With no demand, the
+reconciler drains five only after the configured five-minute idle threshold.
 
 After workflow success, complete a real browser Turnstile and terminal-session
 test immediately. Verify the Turnstile action `public_terminal_admission`, the
@@ -234,14 +262,19 @@ gh workflow run public-terminal-pilot.yml --ref main \
   -f action=disable -f confirm='DISABLE PUBLIC PILOT'
 ```
 
-Disable atomically writes the false flag, validates and recreates Caddy, proves
-the public route is 404, then stops and removes only the nine reviewed services
+Disable atomically writes the public false flag, validates and recreates Caddy,
+proves the public route is 404, disables/stops the reconciler, then stops and
+removes only the nine reviewed services
 in reverse dependency order. After stopping the gateway writer and before
 stopping Redis, it transitions the persisted worker set back to the one-seat
 shape expected by the previous production revision while preserving accounting
 and ended ticket history. It then removes only unused, exact-label-matched
-per-seat and legacy pilot networks. It also rechecks the primary health route,
-public landing page, signed terminal, and replay tombstones. The Redis volume is
+per-seat and legacy pilot networks and clears capacity-drain / research-permit
+process state so the next activation starts clean. It removes only
+hash/metadata-matched systemd configuration, resets the runtime feature to
+false, clears the
+management token, and also rechecks the primary health route, public landing
+page, signed terminal, and replay tombstones. The Redis volume is
 retained for diagnosis unless data removal is separately approved. Never run
 `docker compose down` with this overlay: the merged project also contains the
 default production services.

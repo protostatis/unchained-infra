@@ -345,7 +345,18 @@ fi
 # post-upload runtime comparison can render both revisions with the live .env.
 cp -p -- "$remote_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
 test -s "$backup_dir/docker-compose.yml"
-items=(Dockerfile Dockerfile.unbrowser-mcp docker-compose.yml docker-compose.public-terminal.yml Caddyfile unchained research_desk_vendor rhythm)
+    items=(
+        Dockerfile
+        Dockerfile.unbrowser-mcp
+        docker-compose.yml
+        docker-compose.public-terminal.yml
+        Caddyfile
+        deploy/terminal_runtime_reconciler.py
+        deploy/terminal-runtime-reconciler.service
+        unchained
+        research_desk_vendor
+        rhythm
+    )
 present=()
 for item in "${items[@]}"; do
     if [[ -e "$remote_dir/$item" ]]; then
@@ -611,6 +622,26 @@ EOF
         "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/"
 }
 
+upload_host_runtime_files() {
+    local runtime_file
+    for runtime_file in "${HOST_RUNTIME_FILES[@]}"; do
+        if [[ ! -f "$SCRIPT_DIR/deploy/$runtime_file" ]]; then
+            echo "ERROR: missing host runtime file: deploy/$runtime_file" >&2
+            return 1
+        fi
+    done
+    remote_bash "$REMOTE_DIR/deploy" <<'EOF'
+set -euo pipefail
+mkdir -p "$1"
+EOF
+    local upload_files=()
+    for runtime_file in "${HOST_RUNTIME_FILES[@]}"; do
+        upload_files+=("$SCRIPT_DIR/deploy/$runtime_file")
+    done
+    "${SCP_CMD[@]}" "${upload_files[@]}" \
+        "$EC2_USER@$EC2_HOST:$REMOTE_DIR/deploy/"
+}
+
 compare_compose_services() {
     remote_bash "$REMOTE_DIR" "$REMOTE_BACKUP_DIR" \
         "$REMOTE_DEPLOY_TOOLS_DIR/compose_service_diff.py" <<'EOF'
@@ -770,7 +801,9 @@ done < "$backup_dir/runtime-images.tsv"
 rm -rf "$remote_dir/unchained" "$remote_dir/research_desk_vendor" "$remote_dir/rhythm"
 rm -f "$remote_dir/Dockerfile" "$remote_dir/Dockerfile.unbrowser-mcp" \
       "$remote_dir/docker-compose.yml" "$remote_dir/docker-compose.public-terminal.yml" \
-      "$remote_dir/Caddyfile" "$remote_dir/.env"
+      "$remote_dir/Caddyfile" "$remote_dir/.env" \
+      "$remote_dir/deploy/terminal_runtime_reconciler.py" \
+      "$remote_dir/deploy/terminal-runtime-reconciler.service"
 tar -C "$remote_dir" -xzf "$backup_dir/source.tgz"
 cp -p -- "$backup_dir/.env" "$remote_dir/.env"
 chmod 600 "$remote_dir/.env"
@@ -1112,6 +1145,9 @@ emit_deployed_paths() {
     for f in "${TOP_LEVEL_CONTEXT_FILES[@]}"; do
         printf '%s\n' "$f"
     done
+    for f in "${HOST_RUNTIME_FILES[@]}"; do
+        printf '%s\n' "deploy/$f"
+    done
     for f in "${UNCHAINED_RUNTIME_FILES[@]}"; do
         printf '%s\n' "unchained/$f"
     done
@@ -1243,6 +1279,8 @@ cleanup_remote_config_stage
 
 echo "==> Uploading deploy helpers..."
 upload_deploy_helpers
+echo "==> Uploading host runtime controller files..."
+upload_host_runtime_files
 
 # Upload Python modules
 echo "==> Uploading Python modules..."

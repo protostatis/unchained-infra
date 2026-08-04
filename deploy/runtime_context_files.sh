@@ -8,6 +8,14 @@ TOP_LEVEL_CONTEXT_FILES=(
     "Caddyfile"
 )
 
+# Host-side public-terminal runtime controller files. These are not part of a
+# container build context, but the protected activation workflow installs the
+# exact deployed copies into systemd and verifies their hashes against main.
+HOST_RUNTIME_FILES=(
+    "terminal_runtime_reconciler.py"
+    "terminal-runtime-reconciler.service"
+)
+
 UNCHAINED_RUNTIME_FILES=(
     "relay.py"
     "rate_limit.py"

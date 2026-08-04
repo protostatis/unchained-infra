@@ -33,7 +33,9 @@ names — any unrecognized name is rejected before a subprocess is invoked.
 
 Feature flag `TERMINAL_RUNTIME_FEATURE_ENABLED` defaults to `false`. When
 disabled, the reconciler exits immediately. The existing six-seat pilot
-activation workflow requires all nine containers running and is unchanged.
+is not publicly activatable: the protected workflow enables the runtime gate,
+proves the global max-two permit policy, and starts this reconciler before it
+exposes the edge.
 
 ## Warm pool contract
 
@@ -91,20 +93,16 @@ not start/stop) and retries on the next tick.
 
 ## Rollback
 
-To disable the reconciler and return to static six-seat mode:
-
-1. Stop the systemd service: `sudo systemctl stop terminal-runtime-reconciler`
-2. Set `TERMINAL_RUNTIME_FEATURE_ENABLED=false` in `.env.reconciler` (or
-   remove the file).
-3. Run `rollback_start_all()` from the reconciler to start all six seats, or
-   re-run the pilot activation workflow.
-
-The rollback path has been tested: `rollback_start_all` starts only absent
-seats, skips already-healthy ones, and never touches Redis/MCP/gateway.
+Use the protected pilot `disable` action. It closes and verifies the edge first,
+disables/stops the systemd service, removes the named pilot containers, resets
+the runtime feature and token, and removes only metadata/hash-matched managed
+configuration. A public feature-disabled static-six fallback is forbidden: it
+would bypass the global max-two research gate.
 
 ## Pilot workflow integration
 
-`deploy/public_terminal_pilot_remote.sh` (activate/disable/status/**rollback**)
+`deploy/public_terminal_pilot_remote.sh`
+(`activate-runtime`/`verify-runtime`/`disable`/`status`)
 is dynamic-mode aware:
 
 - **Dynamic mode** (`TERMINAL_RUNTIME_FEATURE_ENABLED=true`): the activate
@@ -112,15 +110,19 @@ is dynamic-mode aware:
   verification accepts the exact nine-service set with seats absent, and the
   gateway readiness check requires only the one-warm-spare pool (never six
   stopped seats).
-- **Feature-disabled mode**: the legacy requirement of six ready unique
-  workers is unchanged.
-- **rollback action**: starts all six seats, atomically disables
-  `TERMINAL_RUNTIME_FEATURE_ENABLED`, stops the `terminal-runtime-reconciler`
-  systemd unit, re-enables the static pilot flag, and verifies the six-seat
-  pool — `rollback starts all six` is part of the deploy workflow, not just
-  the standalone reconciler.
+- **Feature-disabled mode**: the public edge remains 404. It is not an
+  activation fallback.
+- **Activation**: verifies exact deployed artifact hashes, generates the shared
+  management token on-host, starts all six seats behind the closed edge, proves
+  max-two FIFO permits, starts the reconciler under the deployment lock, then
+  promotes Caddy. A post-unlock workflow check requires a real reconcile cycle.
+- **rollback compatibility action**: aliases fail-closed `disable`; it never
+  exposes static-six mode.
 - **Companion Redis keys** (workspace DB 1) are backed up before any state
   mutation, restored on rollback, and cleaned on disable.
+- **Runtime Redis keys** (`capacity` and `research-permits` in DB 0) are backed
+  up and cleared before a fresh activation, restored on activation rollback,
+  and cleared on disable so stale drains cannot fence the next warm pool.
 - **SQLite online backup** is performed before any additive schema migration
   (activate gate) via the Python `sqlite3` online backup API; the snapshot is
   stored in the secure workdir.
@@ -164,7 +166,9 @@ paths) is the canonical document in
 
 ## Configuration
 
-Create `/home/ec2-user/unchained/.env.reconciler`:
+The protected activation action atomically creates
+`/home/ec2-user/unchained/.env.reconciler` with this exact shape (never place a
+real token in source control):
 
 ```bash
 TERMINAL_RUNTIME_FEATURE_ENABLED=true
@@ -181,6 +185,10 @@ TERMINAL_RUNTIME_HOST_DISK_MAX_PCT=85
 ```
 
 ## Installation
+
+Production installation is owned by the protected `activate-runtime` workflow,
+which verifies the deployed file hashes and systemd unit before installation.
+The following commands are diagnostic/development reference only:
 
 ```bash
 sudo cp deploy/terminal-runtime-reconciler.service /etc/systemd/system/
