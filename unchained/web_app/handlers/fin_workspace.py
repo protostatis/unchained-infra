@@ -20,7 +20,7 @@ Browser routes (proxied by Caddy under ``/fin-terminal-workspace``):
   GET    /api/claims/{claim_id}         — claim status
   GET    /api/workspace                 — current user workspace
   GET    /api/snapshots                 — current user snapshots
-  GET    /callback/{provider}           — claim-aware OAuth callback (allowlist)
+  GET    /auth/{provider}/callback      — claim-aware OAuth callback (allowlist)
 
 All internal S2S handlers require the bearer control token
 (``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``) — including the
