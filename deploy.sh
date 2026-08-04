@@ -308,9 +308,15 @@ test -f "$remote_dir/.env"
 test ! -L "$remote_dir/.env"
 mkdir -m 700 "$backup_dir"
 rollback_tags=()
+web_container=""
+db_backup_container_path=""
 cleanup_snapshot_on_error() {
     local status=$?
     trap - EXIT
+    if [[ -n "$web_container" && -n "$db_backup_container_path" ]]; then
+        docker exec "$web_container" rm -f -- "$db_backup_container_path" \
+            >/dev/null 2>&1 || true
+    fi
     if [[ "$status" -ne 0 ]]; then
         if [[ "${#rollback_tags[@]}" -gt 0 ]]; then
             docker image rm "${rollback_tags[@]}" >/dev/null 2>&1 || true
@@ -349,10 +355,44 @@ done
 printf '%s\n' "${present[@]}" > "$backup_dir/items"
 tar -C "$remote_dir" -czf "$backup_dir/source.tgz" "${present[@]}"
 
+# Preserve a verified online SQLite snapshot outside relay_data before any
+# candidate container can start and apply an additive auth-schema migration.
+# Rollback does not restore this automatically because newer writes may exist;
+# the retained snapshot is for explicit recovery after diagnosis.
+cd "$remote_dir"
+web_container="$(docker compose ps -q web)"
+[[ "$web_container" =~ ^[0-9a-f]{12,64}$ ]]
+db_backup_container_path="/tmp/unchained-auth-${deploy_id}.db"
+docker exec -i "$web_container" python3 - "$db_backup_container_path" <<'PY'
+import os
+import sqlite3
+import sys
+
+destination = sys.argv[1]
+if os.path.exists(destination):
+    raise SystemExit("temporary auth backup already exists")
+
+source = sqlite3.connect("file:/data/auth.db?mode=ro", uri=True, timeout=30)
+target = sqlite3.connect(destination, timeout=30)
+try:
+    source.backup(target)
+    result = target.execute("PRAGMA quick_check").fetchone()
+    if result != ("ok",):
+        raise RuntimeError(f"auth backup quick_check failed: {result!r}")
+finally:
+    target.close()
+    source.close()
+PY
+docker cp "$web_container:$db_backup_container_path" "$backup_dir/auth.db.backup"
+docker exec "$web_container" rm -f -- "$db_backup_container_path"
+db_backup_container_path=""
+chmod 600 "$backup_dir/auth.db.backup"
+[[ -s "$backup_dir/auth.db.backup" ]]
+sha256sum "$backup_dir/auth.db.backup" > "$backup_dir/auth.db.backup.sha256"
+
 # Candidate builds replace Compose image tags. Retain an independently tagged
 # reference to every current runtime image so automatic rollback never needs to
 # resolve mutable package indexes or rebuild an old source tree.
-cd "$remote_dir"
 mapfile -t runtime_services < <(docker compose config --services | grep -v '^caddy$')
 [[ "${#runtime_services[@]}" -gt 0 ]]
 image_map="$backup_dir/runtime-images.tsv"

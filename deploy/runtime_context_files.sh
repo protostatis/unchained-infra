@@ -12,6 +12,8 @@ UNCHAINED_RUNTIME_FILES=(
     "relay.py"
     "rate_limit.py"
     "auth.py"
+    "checkpoint_store.py"
+    "financial_workspace.py"
     "analytics.py"
     "credit.py"
     "hosted_conversations.py"
