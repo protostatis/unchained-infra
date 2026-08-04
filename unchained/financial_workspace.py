@@ -57,10 +57,7 @@ _MAX_WORKER_ID_LENGTH = 128
 _MAX_GENERATION_LENGTH = 64
 _MAX_SOURCE_REVISION_LENGTH = 128
 _CLAIM_SECRET_BYTES = 32
-_NONCE_BYTES = 32
-_HANDOFF_SECRET_BYTES = 32
 _EFFECT_MAX_RETRIES = 5
-_GUARD_KEY_BYTES = 32
 
 # Feature flag — off by default, enabled via env
 _FEATURE_FLAG_ENV = "FIN_WORKSPACE_ENABLED"
@@ -146,19 +143,6 @@ def validate_fin_workspace_config(env: dict | None = None) -> list[str]:
     except Exception as exc:  # pragma: no cover - import safety
         errors.append(f"checkpoint storage validation error: {exc}")
     return errors
-
-
-def _guard_key() -> bytes:
-    """Derive a guard key from the control token for HMAC-based claim binding.
-
-    The control token is validated before the feature can be enabled, so a
-    static fallback key is never used in production.
-    """
-    token = _resolve_control_token()
-    if not token:
-        # Feature-disabled path (tests / local): deterministic test key.
-        return hashlib.sha256(b"fin-workspace-guard").digest()
-    return hashlib.sha256(token.encode()).digest()
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +249,10 @@ class FinancialWorkspace:
                 "CREATE INDEX IF NOT EXISTS idx_fin_chk_request "
                 "ON fin_terminal_checkpoints(request_id)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_chk_handoff "
+                "ON fin_terminal_checkpoints(handoff_id)"
+            )
 
             # ------------------------------------------------------------------
             # Claims
@@ -291,6 +279,15 @@ class FinancialWorkspace:
                     FOREIGN KEY (checkpoint_id) REFERENCES fin_terminal_checkpoints(checkpoint_id)
                 )
             """)
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_claims_secret "
+                "ON fin_terminal_claims(claim_secret_hash)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fin_claims_checkpoint "
+                "ON fin_terminal_claims(checkpoint_id)"
+            )
 
             # Additive columns for pre-existing claim tables
             try:
@@ -449,16 +446,10 @@ class FinancialWorkspace:
                             f"ALTER TABLE auth_codes ADD COLUMN {col_name} {col_def}"
                         )
             except sqlite3.OperationalError:
-                # auth_codes table doesn't exist yet (fresh DB before Auth init)
+                # auth_codes table doesn't exist yet (fresh DB before Auth init);
+                # Auth._init_db owns the columns unconditionally and adds them
+                # when it creates the table.
                 pass
-
-            # Guard key for claim binding
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS fin_workspace_guard (
-                    guard_id TEXT PRIMARY KEY DEFAULT 'primary',
-                    guard_key_hash TEXT NOT NULL DEFAULT ''
-                )
-            """)
 
     # ==================================================================
     # User origin — get-or-create across providers
@@ -561,16 +552,28 @@ class FinancialWorkspace:
         # Check idempotency
         with self._conn() as conn:
             existing = conn.execute(
-                "SELECT checkpoint_id, status, handoff_id, expires_at "
+                "SELECT checkpoint_id, status, handoff_id, expires_at, handoff_secret_hash "
                 "FROM fin_terminal_checkpoints WHERE request_id = ?",
                 (rid,),
             ).fetchone()
             if existing:
                 if existing[1] == "ready":
                     handoff_id = existing[2]
+                    # The handoff secret is deterministically derived from the
+                    # handoff_id + control token, so an idempotent retry returns
+                    # the SAME secret that matches the stored hash.
                     handoff_secret = self._derive_handoff_secret(handoff_id)
+                    derived_hash = hashlib.sha256(handoff_secret.encode()).hexdigest()
+                    if not hmac.compare_digest(derived_hash, existing[4] or ""):
+                        # Control token rotated since creation: the original
+                        # secret cannot be recovered without storing it in
+                        # plaintext. Fail closed rather than hand back a secret
+                        # that would be rejected at claim initiation.
+                        raise CheckpointStateError(
+                            "existing checkpoint handoff secret cannot be recovered "
+                            "(control token rotated); create a new checkpoint"
+                        )
                     auth_url = self._build_auth_url(handoff_id, handoff_secret)
-                    from urllib.parse import urlencode
                     return {
                         "checkpoint_id": existing[0],
                         "expires_at": existing[3],
@@ -589,9 +592,12 @@ class FinancialWorkspace:
         version = 1
         expires_at = _format_expiry(_CHECKPOINT_EXPIRY_SECONDS)
 
-        # Generate handoff credentials
+        # Generate handoff credentials: deterministic derivation (HMAC over
+        # handoff_id keyed by the control token) so a retry of the same
+        # requestId can re-derive the identical secret. Only the SHA-256 hash
+        # is persisted — never the plaintext secret.
         handoff_id = f"fh-{_uuid_hex()[:16]}"
-        handoff_secret = secrets.token_hex(_HANDOFF_SECRET_BYTES)
+        handoff_secret = self._derive_handoff_secret(handoff_id)
         handoff_secret_hash = hashlib.sha256(handoff_secret.encode()).hexdigest()
 
         # Store envelope-encrypted checkpoint
@@ -755,7 +761,14 @@ class FinancialWorkspace:
             claim_id = f"fcl-{_uuid_hex()[:20]}"
             claim_secret = secrets.token_hex(_CLAIM_SECRET_BYTES)
             claim_secret_hash = hashlib.sha256(claim_secret.encode()).hexdigest()
-            claim_expires = _format_expiry(_CHECKPOINT_EXPIRY_SECONDS)
+            # A claim must never outlive its checkpoint: the authorization
+            # window is bounded by the checkpoint's own expiry. If the claim
+            # were issued a fresh full hour, it could stay valid after the
+            # checkpoint had already been swept.
+            claim_expires = min(
+                _format_expiry(_CHECKPOINT_EXPIRY_SECONDS),
+                expires_at,
+            )
 
             browser_nonce_hash = hashlib.sha256(
                 str(browser_nonce or "").encode()
@@ -767,7 +780,7 @@ class FinancialWorkspace:
                 "browser_nonce_hash, purpose, audience, status, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (claim_id, checkpoint_id, claim_secret_hash, claim_expires,
-                 browser_nonce_hash, str(purpose or "").strip()[:64], 
+                 browser_nonce_hash, str(purpose or "").strip()[:64],
                  str(audience or "").strip().lower()[:32], now),
             )
             conn.execute(
@@ -838,7 +851,8 @@ class FinancialWorkspace:
             row = conn.execute(
                 "SELECT claim_id, checkpoint_id, claim_secret_hash, "
                 "claim_secret_expires_at, browser_nonce_hash, status, "
-                "final_account_user_id, oauth_state_hash, purpose, audience "
+                "final_account_user_id, final_account_email, oauth_state_hash, "
+                "purpose, audience "
                 "FROM fin_terminal_claims WHERE claim_id = ?",
                 (cid,),
             ).fetchone()
@@ -847,73 +861,104 @@ class FinancialWorkspace:
 
             (db_claim_id, checkpoint_id, db_secret_hash,
              claim_expires, db_browser_nonce_hash, status,
-             existing_account_user_id, db_oauth_state_hash,
-             db_purpose, db_audience) = row
+             existing_account_user_id, existing_account_email,
+             db_oauth_state_hash, db_purpose, db_audience) = row
 
             # Purpose/audience binding: the claim must be a fin-workspace claim
             # bound to the exact audience (provider) before accept is allowed.
             if db_purpose and db_purpose != "fin-workspace-claim":
                 raise ClaimRejectedError("claim purpose mismatch")
-            # OAuth callback must present the exact state bound at start. A
-            # claim that was bound to a state but receives no state (or a
-            # different one) is rejected.
+
+            # 1) Capability check FIRST — for pending AND already-accepted
+            # claims. A wrong claim secret must never read the victim's
+            # workspace/user/email/snapshot from an accepted claim.
+            if not hmac.compare_digest(secret_hash, db_secret_hash or ""):
+                raise ClaimRejectedError("claim secret mismatch")
+
+            # 2) Transactional checkpoint recheck: the checkpoint must still
+            # exist, be in a claimable state, and be inside its expiry window.
+            # This closes the sweep race where the checkpoint expired between
+            # claim initiation and callback acceptance.
+            chk_row = conn.execute(
+                "SELECT status, expires_at FROM fin_terminal_checkpoints "
+                "WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+            if chk_row is None:
+                raise ClaimRejectedError("checkpoint deleted; claim rejected")
+            chk_status, chk_expires = chk_row
+            if now > chk_expires:
+                # Durable bookkeeping: mark the claim/checkpoint expired in a
+                # separate short transaction. The accept transaction itself
+                # rolls back on raise, so the expiry marks must commit here.
+                self._mark_expired(checkpoint_id, cid, now)
+                raise ClaimRejectedError("checkpoint authorization expired")
+            if chk_status not in ("ready", "claiming", "imported"):
+                raise ClaimRejectedError(f"checkpoint is {chk_status}, not claimable")
+
+            # 3) Same-tab browser nonce binding (both paths).
+            if db_browser_nonce_hash:
+                expected_bnonce = hashlib.sha256(bnonce.encode()).hexdigest()
+                if not hmac.compare_digest(expected_bnonce, db_browser_nonce_hash):
+                    raise ClaimRejectedError("browser nonce mismatch — cross-tab claim rejected")
+
+            # 4) OAuth state binding (both paths): the exact state bound at
+            # OAuth start must be presented at accept.
             if db_oauth_state_hash:
                 expected_state_hash = hashlib.sha256(ostate.encode()).hexdigest()
                 if not hmac.compare_digest(expected_state_hash, db_oauth_state_hash):
                     raise ClaimRejectedError("oauth state binding mismatch")
 
-            # Reject if already accepted
             if status == "accepted":
+                # Idempotent re-accept: only the account that originally won
+                # the claim may retry. Never create a duplicate snapshot or
+                # effect, and never reveal the accepted account to a different
+                # user/email (the secret check above already gates this path).
                 if existing_account_user_id and existing_account_user_id != uid:
                     raise ClaimRejectedError("claim already accepted by a different account")
-                # Idempotent re-accept for same account (retry)
+                if existing_account_email and existing_account_email != email:
+                    raise ClaimRejectedError(
+                        "claim already accepted with a different email"
+                    )
                 return self._finalize_accept(conn, cid, checkpoint_id, uid, email, now,
                                             auth_code_id, already_accepted=True)
 
             if status != "pending":
                 raise ClaimRejectedError(f"claim is {status}, not pending")
             if now > claim_expires:
-                conn.execute(
-                    "UPDATE fin_terminal_claims SET status = 'expired', rejected_reason = 'expired' "
-                    "WHERE claim_id = ?",
-                    (cid,),
-                )
-                conn.execute(
-                    "UPDATE fin_terminal_checkpoints SET status = 'expired', expired_at = ? "
-                    "WHERE checkpoint_id = ? AND status = 'claiming'",
-                    (now, checkpoint_id),
-                )
+                self._mark_expired(checkpoint_id, cid, now, reason="expired")
                 raise ClaimRejectedError("claim expired")
 
-            # Verify claim secret
-            if not hmac.compare_digest(secret_hash, db_secret_hash or ""):
-                raise ClaimRejectedError("claim secret mismatch")
-
-            # Verify browser nonce (same-tab binding)
-            expected_bnonce = hashlib.sha256(bnonce.encode()).hexdigest()
-            if db_browser_nonce_hash and not hmac.compare_digest(expected_bnonce, db_browser_nonce_hash):
-                raise ClaimRejectedError("browser nonce mismatch — cross-tab claim rejected")
-
-            # Mark claim accepted
+            # Mark claim accepted (atomic compare-and-set; exactly one winner)
             ostate_hash = hashlib.sha256(ostate.encode()).hexdigest()
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE fin_terminal_claims SET status = 'accepted', "
                 "final_account_user_id = ?, final_account_email = ?, "
                 "oauth_state_hash = ?, auth_code_id = ?, accepted_at = ? "
                 "WHERE claim_id = ? AND status = 'pending'",
                 (uid, email, ostate_hash, str(auth_code_id or ""), now, cid),
             )
-
-            cur = conn.execute("SELECT changes()")
-            if cur.fetchone()[0] == 0:
-                # Lost race — another callback won
+            if cur.rowcount == 0:
+                # Lost race — another callback won.
                 recheck = conn.execute(
-                    "SELECT status, final_account_user_id FROM fin_terminal_claims WHERE claim_id = ?",
+                    "SELECT status, final_account_user_id, final_account_email, "
+                    "claim_secret_hash, browser_nonce_hash, oauth_state_hash "
+                    "FROM fin_terminal_claims WHERE claim_id = ?",
                     (cid,),
                 ).fetchone()
-                if recheck and recheck[0] == "accepted" and recheck[1] != uid:
-                    raise ClaimRejectedError("claim accepted by a different account")
-                elif recheck and recheck[0] == "accepted":
+                if recheck and recheck[0] == "accepted":
+                    if recheck[1] != uid or (recheck[2] or "") != email:
+                        raise ClaimRejectedError("claim accepted by a different account")
+                    if not hmac.compare_digest(secret_hash, recheck[3] or ""):
+                        raise ClaimRejectedError("claim secret mismatch")
+                    if recheck[4] and not hmac.compare_digest(
+                        hashlib.sha256(bnonce.encode()).hexdigest(), recheck[4]
+                    ):
+                        raise ClaimRejectedError("browser nonce mismatch — cross-tab claim rejected")
+                    if recheck[5] and not hmac.compare_digest(
+                        hashlib.sha256(ostate.encode()).hexdigest(), recheck[5]
+                    ):
+                        raise ClaimRejectedError("oauth state binding mismatch")
                     return self._finalize_accept(conn, cid, checkpoint_id, uid, email, now,
                                                 auth_code_id, already_accepted=True)
                 raise ClaimRejectedError("claim race lost")
@@ -962,52 +1007,68 @@ class FinancialWorkspace:
         self._ensure_import_under_lock(conn, workspace_id, checkpoint_id, claim_id,
                                        user_id, email, now)
 
-        # Create snapshot from checkpoint data
-        ckpt_data = self.store.get(checkpoint_id)
-        if ckpt_data is not None:
+        # Snapshot: reuse the existing snapshot for this checkpoint when the
+        # accept is being retried (exactly-once; never a duplicate row).
+        existing_snap = conn.execute(
+            "SELECT snapshot_id FROM financial_workspace_snapshots "
+            "WHERE workspace_id = ? AND checkpoint_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (workspace_id, checkpoint_id),
+        ).fetchone()
+        if existing_snap is not None:
+            snapshot_id = existing_snap[0]
+        else:
+            ckpt_data = self.store.get(checkpoint_id)
+            if ckpt_data is None:
+                # The checkpoint envelope is gone (swept or deleted). Importing
+                # an empty "{}" snapshot would silently destroy the user's data
+                # — reject instead so the whole accept transaction rolls back.
+                raise ClaimRejectedError(
+                    "checkpoint data unavailable; checkpoint was swept or deleted"
+                )
             try:
                 snapshot_json_str = ckpt_data.decode("utf-8")
                 # Validate it's valid JSON
                 json.loads(snapshot_json_str)
             except (UnicodeDecodeError, json.JSONDecodeError):
                 snapshot_json_str = "{}"
-        else:
-            snapshot_json_str = "{}"
 
-        snapshot_id = f"fsn-{_uuid_hex()[:16]}"
-        conn.execute(
-            "INSERT INTO financial_workspace_snapshots "
-            "(snapshot_id, workspace_id, checkpoint_id, version, snapshot_json, created_at) "
-            "VALUES (?, ?, ?, 1, ?, ?)",
-            (snapshot_id, workspace_id, checkpoint_id, snapshot_json_str, now),
-        )
+            snapshot_id = f"fsn-{_uuid_hex()[:16]}"
+            conn.execute(
+                "INSERT INTO financial_workspace_snapshots "
+                "(snapshot_id, workspace_id, checkpoint_id, version, snapshot_json, created_at) "
+                "VALUES (?, ?, ?, 1, ?, ?)",
+                (snapshot_id, workspace_id, checkpoint_id, snapshot_json_str, now),
+            )
 
-        # Enqueue outbox effects
-        self._enqueue_effect_under_lock(conn, "workspace_upsert", {
-            "workspace_id": workspace_id,
-            "user_id": user_id,
-            "is_new": is_new_workspace,
-        }, now)
+        # Outbox effects are enqueued only on the FIRST accept. A re-accept of
+        # an already-accepted claim must never create duplicate effects.
+        if not already_accepted:
+            self._enqueue_effect_under_lock(conn, "workspace_upsert", {
+                "workspace_id": workspace_id,
+                "user_id": user_id,
+                "is_new": is_new_workspace,
+            }, now)
 
-        if is_new_workspace:
-            # New-account-only idempotent $1 credit, transactionally tied to
-            # this claim-created workspace/account. Existing accounts (an
-            # existing credit_accounts row) receive no grant.
-            credit_account_exists = self._credit_account_exists(conn, user_id)
-            if not credit_account_exists:
-                self._enqueue_effect_under_lock(conn, "account_grant", {
-                    "user_id": user_id,
-                    "workspace_id": workspace_id,
-                    "grant_micro_usd": _NEW_ACCOUNT_GRANT_MICRO_USD,
-                    "account_was_new": True,
-                }, now)
+            if is_new_workspace:
+                # New-account-only idempotent $1 credit, transactionally tied to
+                # this claim-created workspace/account. Existing accounts (an
+                # existing credit_accounts row) receive no grant.
+                credit_account_exists = self._credit_account_exists(conn, user_id)
+                if not credit_account_exists:
+                    self._enqueue_effect_under_lock(conn, "account_grant", {
+                        "user_id": user_id,
+                        "workspace_id": workspace_id,
+                        "grant_micro_usd": _NEW_ACCOUNT_GRANT_MICRO_USD,
+                        "account_was_new": True,
+                    }, now)
 
-        self._enqueue_effect_under_lock(conn, "snapshot_import", {
-            "workspace_id": workspace_id,
-            "snapshot_id": snapshot_id,
-            "checkpoint_id": checkpoint_id,
-            "user_id": user_id,
-        }, now)
+            self._enqueue_effect_under_lock(conn, "snapshot_import", {
+                "workspace_id": workspace_id,
+                "snapshot_id": snapshot_id,
+                "checkpoint_id": checkpoint_id,
+                "user_id": user_id,
+            }, now)
 
         # Mark checkpoint imported
         conn.execute(
@@ -1026,6 +1087,39 @@ class FinancialWorkspace:
             "snapshot_id": snapshot_id,
             "already_accepted": already_accepted,
         }
+
+    def _mark_expired(
+        self,
+        checkpoint_id: str,
+        claim_id: str,
+        now: float,
+        *,
+        reason: str = "checkpoint_expired",
+    ) -> None:
+        """Durably mark a claim/checkpoint expired in its own transaction.
+
+        Called on the rejection paths of ``accept_claim``, where the accept
+        transaction rolls back when the error propagates. This bookkeeping must
+        survive, so it commits separately; the sweep loop is the authoritative
+        cleanup regardless.
+        """
+        try:
+            with self._conn() as mark_conn:
+                mark_conn.execute(
+                    "UPDATE fin_terminal_checkpoints SET status = 'expired', expired_at = ? "
+                    "WHERE checkpoint_id = ? AND status IN ('ready', 'claiming')",
+                    (now, checkpoint_id),
+                )
+                mark_conn.execute(
+                    "UPDATE fin_terminal_claims SET status = 'expired', "
+                    "rejected_reason = ? "
+                    "WHERE claim_id = ? AND status = 'pending'",
+                    (reason, claim_id),
+                )
+        except Exception:
+            log.warning(
+                "fin-workspace: failed to durably mark claim %s expired", claim_id
+            )
 
     def _ensure_import_under_lock(
         self, conn: sqlite3.Connection, workspace_id: str, checkpoint_id: str,
@@ -1341,7 +1435,7 @@ class FinancialWorkspace:
             for checkpoint_id, status in rows:
                 conn.execute(
                     "UPDATE fin_terminal_checkpoints SET status = 'expired', expired_at = ? "
-                    "WHERE checkpoint_id = ?",
+                    "WHERE checkpoint_id = ? AND status IN ('ready', 'claiming')",
                     (now, checkpoint_id),
                 )
                 conn.execute(
@@ -1516,8 +1610,20 @@ class FinancialWorkspace:
             return {"deleted": False, "reason": "no workspace"}
 
         wid = ws["workspace_id"]
+        deleted_checkpoint_ids: list[str] = []
         with self._conn() as conn:
-            # Delete snapshots, imports, then workspace
+            # Capture the workspace's checkpoint ids BEFORE deleting imports:
+            # the claims/checkpoints rows and the S3/local blobs are keyed off
+            # this list, so it must be read first.
+            chk_rows = conn.execute(
+                "SELECT checkpoint_id FROM financial_workspace_imports "
+                "WHERE workspace_id = ?",
+                (wid,),
+            ).fetchall()
+            deleted_checkpoint_ids = [r[0] for r in chk_rows]
+
+            # Delete dependents in foreign-key order: snapshots and imports
+            # reference workspaces/checkpoints/claims and must go first.
             conn.execute(
                 "DELETE FROM financial_workspace_snapshots WHERE workspace_id = ?",
                 (wid,),
@@ -1526,32 +1632,40 @@ class FinancialWorkspace:
                 "DELETE FROM financial_workspace_imports WHERE workspace_id = ?",
                 (wid,),
             )
-            # Delete related checkpoints from storage
-            chk_rows = conn.execute(
-                "SELECT checkpoint_id FROM financial_workspace_imports WHERE workspace_id = ?",
-                (wid,),
-            ).fetchall()
+            if deleted_checkpoint_ids:
+                placeholders = ",".join("?" * len(deleted_checkpoint_ids))
+                conn.execute(
+                    f"DELETE FROM fin_terminal_claims "
+                    f"WHERE checkpoint_id IN ({placeholders})",
+                    deleted_checkpoint_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM fin_terminal_checkpoints "
+                    f"WHERE checkpoint_id IN ({placeholders})",
+                    deleted_checkpoint_ids,
+                )
             conn.execute(
-                "DELETE FROM fin_terminal_claims "
-                "WHERE checkpoint_id IN (SELECT checkpoint_id FROM financial_workspace_imports WHERE workspace_id = ?)",
+                "DELETE FROM financial_workspace_runtimes WHERE workspace_id = ?",
                 (wid,),
             )
             conn.execute(
-                "DELETE FROM fin_terminal_checkpoints "
-                "WHERE checkpoint_id IN (SELECT checkpoint_id FROM financial_workspace_imports WHERE workspace_id = ?)",
-                (wid,),
-            )
-            for (chk_id,) in chk_rows:
-                self.store.delete(chk_id)
-            conn.execute(
-                "DELETE FROM financial_workspace_imports WHERE workspace_id = ?",
-                (wid,),
+                "DELETE FROM financial_workspace_account_origins WHERE user_id = ?",
+                (uid,),
             )
             conn.execute(
                 "DELETE FROM financial_workspaces WHERE workspace_id = ?",
                 (wid,),
             )
-        return {"deleted": True, "workspace_id": wid, "user_id": uid}
+            # Permanently delete the encrypted checkpoint objects.
+            for chk_id in deleted_checkpoint_ids:
+                self.store.delete(chk_id)
+        return {
+            "deleted": True,
+            "workspace_id": wid,
+            "user_id": uid,
+            "deleted_checkpoint_ids": deleted_checkpoint_ids,
+            "deleted_checkpoint_count": len(deleted_checkpoint_ids),
+        }
 
     def export_workspace_metadata(self, user_id: str) -> dict | None:
         """Export metadata for data portability."""
@@ -1559,9 +1673,30 @@ class FinancialWorkspace:
         if ws is None:
             return None
         snapshots = self.get_snapshots_for_workspace(ws["workspace_id"])
+        imports = []
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT import_id, workspace_id, checkpoint_id, claim_id, "
+                "user_id, account_email, created_at "
+                "FROM financial_workspace_imports WHERE workspace_id = ?",
+                (ws["workspace_id"],),
+            ).fetchall()
+            imports = [
+                {
+                    "import_id": r[0],
+                    "workspace_id": r[1],
+                    "checkpoint_id": r[2],
+                    "claim_id": r[3],
+                    "user_id": r[4],
+                    "account_email": r[5],
+                    "created_at": r[6],
+                }
+                for r in rows
+            ]
         return {
             "workspace": ws,
             "snapshots": snapshots,
+            "imports": imports,
         }
 
 

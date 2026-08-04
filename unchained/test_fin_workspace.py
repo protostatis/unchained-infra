@@ -379,6 +379,52 @@ class CheckpointLifecycleTests(unittest.TestCase):
         self.assertTrue(second["already_exists"])
         self.assertEqual(second["checkpoint_id"], first["checkpoint_id"])
 
+    def test_idempotent_retry_returns_matching_handoff_secret(self):
+        """Regression: the idempotent retry used to hand back a *different*
+        secret than the one hashed at creation, so claim initiation failed
+        with a credential mismatch. The retry must return the SAME
+        deterministic secret that matches the stored hash."""
+        first = self._create_checkpoint()
+        retry = self.fw.create_checkpoint(
+            request_id="req-001",
+            session_id="sess-abc",
+            worker_id="worker-xyz",
+            generation="gen-1",
+            source_revision="rev-abc123",
+            checkpoint=json.dumps({"holdings": []}).encode(),
+        )
+        self.assertTrue(retry["already_exists"])
+        self.assertEqual(retry["handoff_id"], first["handoff_id"])
+        self.assertEqual(retry["handoff_secret"], first["handoff_secret"])
+        # The re-derived secret authenticates at claim initiation.
+        claim = self.fw.initiate_claim(
+            retry["handoff_id"], retry["handoff_secret"],
+            browser_nonce="nonce", audience="github",
+        )
+        self.assertIn("claim_secret", claim)
+
+    def test_retried_secret_matches_stored_hash(self):
+        first = self._create_checkpoint()
+        retry = self.fw.create_checkpoint(
+            request_id="req-001",
+            session_id="sess-abc",
+            worker_id="worker-xyz",
+            checkpoint=b'{}',
+        )
+        with self.fw._conn() as conn:
+            row = conn.execute(
+                "SELECT handoff_secret_hash FROM fin_terminal_checkpoints "
+                "WHERE handoff_id = ?",
+                (retry["handoff_id"],),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(
+            hashlib.sha256(retry["handoff_secret"].encode()).hexdigest(),
+            row[0],
+        )
+        # The stored value is a hash — never the plaintext secret.
+        self.assertNotEqual(retry["handoff_secret"], row[0])
+
     def test_validate_bounded_fields(self):
         with self.assertRaises(CheckpointValidationError):
             self.fw.create_checkpoint(
@@ -575,6 +621,79 @@ class ClaimFlowTests(unittest.TestCase):
         self.assertTrue(second.get("already_accepted"))
         self.assertEqual(second["workspace_id"], first["workspace_id"])
 
+    def test_accept_wrong_secret_on_accepted_claim_rejected_no_leak(self):
+        """Regression: a wrong claim secret on an ALREADY-ACCEPTED claim used
+        to be silently accepted for retry, leaking the victim's
+        workspace/user/email/snapshot. The accepted path must still verify the
+        claim secret (and nonce/state/account binding)."""
+        ckpt, claim = self._create_and_claim()
+        self.fw.accept_claim(
+            claim_id=claim["claim_id"],
+            claim_secret=claim["claim_secret"],
+            final_account_user_id="u-alice",
+            final_account_email="alice@example.com",
+            browser_nonce="nonce-123",
+            oauth_state="state",
+        )
+        with self.assertRaises(ClaimRejectedError):
+            self.fw.accept_claim(
+                claim_id=claim["claim_id"],
+                claim_secret="wrong-secret",
+                final_account_user_id="u-alice",
+                final_account_email="alice@example.com",
+                browser_nonce="nonce-123",
+                oauth_state="state",
+            )
+        # No duplicate rows were created by the rejected attempt.
+        with self.fw._conn() as conn:
+            snaps = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_snapshots"
+            ).fetchone()[0]
+            effs = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_effects"
+            ).fetchone()[0]
+        self.assertEqual(snaps, 1)
+        self.assertEqual(effs, 3)
+
+    def test_reaccept_same_account_no_duplicate_snapshot_or_effects(self):
+        """Regression: re-accepting an already-accepted claim created a second
+        snapshot row and re-enqueued outbox effects. Re-accept must reuse the
+        existing snapshot and enqueue nothing."""
+        ckpt, claim = self._create_and_claim()
+        first = self.fw.accept_claim(
+            claim_id=claim["claim_id"],
+            claim_secret=claim["claim_secret"],
+            final_account_user_id="u-alice",
+            final_account_email="alice@example.com",
+            browser_nonce="nonce-123",
+            oauth_state="state",
+        )
+        with self.fw._conn() as conn:
+            effects_before = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_effects"
+            ).fetchone()[0]
+
+        second = self.fw.accept_claim(
+            claim_id=claim["claim_id"],
+            claim_secret=claim["claim_secret"],
+            final_account_user_id="u-alice",
+            final_account_email="alice@example.com",
+            browser_nonce="nonce-123",
+            oauth_state="state",
+        )
+        self.assertTrue(second["already_accepted"])
+        self.assertEqual(second["snapshot_id"], first["snapshot_id"])
+
+        with self.fw._conn() as conn:
+            snaps = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_snapshots"
+            ).fetchone()[0]
+            effs = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_effects"
+            ).fetchone()[0]
+        self.assertEqual(snaps, 1)
+        self.assertEqual(effs, effects_before)
+
     def test_expired_claim_rejected(self):
         ckpt = self.fw.create_checkpoint(
             request_id="req-001",
@@ -710,6 +829,122 @@ class ExpiryAndSweepTests(unittest.TestCase):
         # imported checkpoints should NOT be swept
         chk = self.fw.get_checkpoint(ckpt["checkpoint_id"])
         self.assertEqual(chk["status"], "imported")
+
+    def test_claim_expiry_never_outlives_checkpoint(self):
+        """Regression: a claim issued near the end of the checkpoint window
+        used to get a fresh one-hour expiry and stay valid after the
+        checkpoint had already been swept."""
+        ckpt = self.fw.create_checkpoint(
+            request_id="req-claim-exp", session_id="sess", worker_id="worker",
+            checkpoint=b'{}',
+        )
+        # The checkpoint is nearly at its TTL (60s left).
+        with self.fw._conn() as conn:
+            conn.execute(
+                "UPDATE fin_terminal_checkpoints SET expires_at = ? "
+                "WHERE checkpoint_id = ?",
+                (time.time() + 60, ckpt["checkpoint_id"]),
+            )
+        claim = self.fw.initiate_claim(
+            handoff_id=ckpt["handoff_id"],
+            handoff_secret=ckpt["handoff_secret"],
+            browser_nonce="nonce",
+        )
+        with self.fw._conn() as conn:
+            chk_exp = conn.execute(
+                "SELECT expires_at FROM fin_terminal_checkpoints "
+                "WHERE checkpoint_id = ?",
+                (ckpt["checkpoint_id"],),
+            ).fetchone()[0]
+            claim_exp = conn.execute(
+                "SELECT claim_secret_expires_at FROM fin_terminal_claims "
+                "WHERE claim_id = ?",
+                (claim["claim_id"],),
+            ).fetchone()[0]
+        self.assertLessEqual(claim_exp, chk_exp)
+
+    def test_accept_rechecks_checkpoint_expiry(self):
+        """Regression: accept_claim only checked the claim expiry, so a claim
+        on an already-expired (or swept) checkpoint could still import. Accept
+        must recheck checkpoint status/expiry transactionally."""
+        ckpt = self.fw.create_checkpoint(
+            request_id="req-chk-exp", session_id="sess", worker_id="worker",
+            checkpoint=b'{}',
+        )
+        claim = self.fw.initiate_claim(
+            handoff_id=ckpt["handoff_id"],
+            handoff_secret=ckpt["handoff_secret"],
+            browser_nonce="nonce",
+        )
+        with self.fw._conn() as conn:
+            conn.execute(
+                "UPDATE fin_terminal_checkpoints SET expires_at = ? "
+                "WHERE checkpoint_id = ?",
+                (time.time() - 10, ckpt["checkpoint_id"]),
+            )
+        with self.assertRaises(ClaimRejectedError):
+            self.fw.accept_claim(
+                claim_id=claim["claim_id"],
+                claim_secret=claim["claim_secret"],
+                final_account_user_id="u-exp",
+                final_account_email="exp@example.com",
+                browser_nonce="nonce",
+                oauth_state="state",
+            )
+        # Expiry marking is durable and no partial import was created.
+        with self.fw._conn() as conn:
+            chk = conn.execute(
+                "SELECT status FROM fin_terminal_checkpoints "
+                "WHERE checkpoint_id = ?",
+                (ckpt["checkpoint_id"],),
+            ).fetchone()[0]
+            clm = conn.execute(
+                "SELECT status FROM fin_terminal_claims WHERE claim_id = ?",
+                (claim["claim_id"],),
+            ).fetchone()[0]
+            imp = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_imports"
+            ).fetchone()[0]
+        self.assertEqual(chk, "expired")
+        self.assertEqual(clm, "expired")
+        self.assertEqual(imp, 0)
+
+    def test_accept_fails_when_checkpoint_data_swept(self):
+        """Regression: after the sweep deleted the encrypted checkpoint object,
+        accept_claim imported an empty '{}' snapshot. It must reject instead of
+        silently destroying the user's data."""
+        ckpt = self.fw.create_checkpoint(
+            request_id="req-sweep-race", session_id="sess", worker_id="worker",
+            checkpoint=b'{"holdings": [42]}',
+        )
+        claim = self.fw.initiate_claim(
+            handoff_id=ckpt["handoff_id"],
+            handoff_secret=ckpt["handoff_secret"],
+            browser_nonce="nonce",
+        )
+        # Simulate the sweep deleting the encrypted object while the claim is
+        # still pending.
+        self.store.delete(ckpt["checkpoint_id"])
+        with self.assertRaises(ClaimRejectedError):
+            self.fw.accept_claim(
+                claim_id=claim["claim_id"],
+                claim_secret=claim["claim_secret"],
+                final_account_user_id="u-sweep",
+                final_account_email="sweep@example.com",
+                browser_nonce="nonce",
+                oauth_state="state",
+            )
+        with self.fw._conn() as conn:
+            imp = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_imports"
+            ).fetchone()[0]
+            snap = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_snapshots"
+            ).fetchone()[0]
+            eff = conn.execute(
+                "SELECT COUNT(*) FROM financial_workspace_effects"
+            ).fetchone()[0]
+        self.assertEqual((imp, snap, eff), (0, 0, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +1172,49 @@ class DeletionExportTests(unittest.TestCase):
         self.assertEqual(
             len(self.fw.get_snapshots_for_workspace(result["workspace_id"])), 0
         )
+
+    def test_delete_removes_claims_checkpoints_and_objects(self):
+        """Regression: deletion deleted imports first, so the checkpoint/claim
+        rows and the encrypted S3/local object were never removed. Deletion
+        must capture checkpoint ids before deleting imports and purge the
+        claims, checkpoints, runtimes, and storage objects."""
+        self._create_and_accept()
+        with self.fw._conn() as conn:
+            chk_id = conn.execute(
+                "SELECT checkpoint_id FROM financial_workspace_imports LIMIT 1"
+            ).fetchone()[0]
+            claim_id = conn.execute(
+                "SELECT claim_id FROM financial_workspace_imports LIMIT 1"
+            ).fetchone()[0]
+        self.assertIsNotNone(self.fw.store.get(chk_id))
+
+        result = self.fw.delete_workspace_for_user("u-del")
+        self.assertTrue(result["deleted"])
+        self.assertEqual(result["deleted_checkpoint_count"], 1)
+        self.assertEqual(result["deleted_checkpoint_ids"], [chk_id])
+
+        with self.fw._conn() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM fin_terminal_checkpoints "
+                    "WHERE checkpoint_id = ?",
+                    (chk_id,),
+                ).fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM fin_terminal_claims WHERE claim_id = ?",
+                    (claim_id,),
+                ).fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM financial_workspace_imports").fetchone()[0],
+                0,
+            )
+        # The encrypted object is permanently gone from the store.
+        self.assertIsNone(self.fw.store.get(chk_id))
 
     def test_delete_nonexistent_returns_false(self):
         result = self.fw.delete_workspace_for_user("nonexistent")
@@ -1269,6 +1547,109 @@ class FinWorkspaceHandlerTests(unittest.IsolatedAsyncioTestCase):
         data = _payload(resp)
         self.assertIn("expired_count", data)
         self.assertGreater(data["expired_count"], 0)
+
+    async def test_internal_claim_requires_control_token(self):
+        """Regression: the internal claim handler skipped token verification.
+        The documented model requires the bearer control token on every
+        /internal/* handler; the browser flow uses POST /api/claim."""
+        ckpt = self.fw.create_checkpoint(
+            request_id="req-int-claim", session_id="sess", worker_id="worker",
+            checkpoint=b'{}',
+        )
+        body = {
+            "handoff_id": ckpt["handoff_id"],
+            "browser_nonce": "nonce",
+            "audience": "github",
+        }
+        cookies = {"fin-terminal-handoff-secret": ckpt["handoff_secret"]}
+
+        # No token → 401 even with a valid handoff cookie.
+        req = _Request(body=body, cookies=cookies)
+        resp = await fin_workspace.handle_fin_workspace_claim(req)
+        self.assertEqual(resp.status, 401)
+
+        # With the token the internal claim succeeds.
+        req = _Request(body=body, cookies=cookies, token=self.control_token)
+        resp = await fin_workspace.handle_fin_workspace_claim(req)
+        self.assertEqual(resp.status, 201)
+
+    async def test_internal_claim_accept_requires_control_token(self):
+        """The internal claim/accept handler must require the control token."""
+        req = _Request(
+            body={"claim_id": "nope"}, cookies={"fw_claim_secret": "x"},
+        )
+        resp = await fin_workspace.handle_fin_workspace_claim_accept(req)
+        self.assertEqual(resp.status, 401)
+
+        # With the token, the request proceeds to claim validation (409, not
+        # an auth failure).
+        req = _Request(
+            body={"claim_id": "nope"}, cookies={"fw_claim_secret": "x"},
+            token=self.control_token,
+        )
+        resp = await fin_workspace.handle_fin_workspace_claim_accept(req)
+        self.assertEqual(resp.status, 409)
+
+    async def test_control_token_verification_rejects_wrong_token(self):
+        """Constant-time bearer comparison: wrong/missing/case-shifted tokens
+        are rejected, the exact token is accepted."""
+        ckpt = self.fw.create_checkpoint(
+            request_id="req-tok", session_id="sess", worker_id="worker",
+            checkpoint=b'{}',
+        )
+        with self.fw._conn() as conn:
+            conn.execute(
+                "UPDATE fin_terminal_checkpoints SET expires_at = ? "
+                "WHERE checkpoint_id = ?",
+                (time.time() - 100, ckpt["checkpoint_id"]),
+            )
+        for token in ("", "wrong", self.control_token.upper(),
+                      self.control_token + "x"):
+            req = _Request(body={}, token=token)
+            resp = await fin_workspace.handle_fin_workspace_sweep(req)
+            self.assertEqual(resp.status, 401, f"token {token!r} not rejected")
+        req = _Request(body={}, token=self.control_token)
+        resp = await fin_workspace.handle_fin_workspace_sweep(req)
+        self.assertEqual(resp.status, 200)
+
+    async def test_process_effects_lazily_instantiates_ledger(self):
+        """Regression: with no preconfigured core._credit_ledger, an
+        account_grant effect was mislabeled 'unknown effect type' and failed.
+        The handler must lazily instantiate the ledger and process the grant."""
+        from types import SimpleNamespace as _NS
+        from credit import CreditLedger
+        from web_app.handlers import fin_workspace as fw_mod
+
+        with self.fw._conn() as conn:
+            conn.execute(
+                "INSERT INTO financial_workspace_effects "
+                "(effect_id, effect_type, context_json, status, created_at) "
+                "VALUES (?, 'account_grant', ?, 'pending', ?)",
+                ("fe-test", json.dumps({
+                    "user_id": "u-grant",
+                    "workspace_id": "fws-g",
+                    "grant_micro_usd": 1000000,
+                    "account_was_new": True,
+                }), time.time()),
+            )
+        fake_core = _NS(_auth=_NS(db_path=self.db_path))
+        with patch("web_app.handlers.fin_workspace._core", return_value=fake_core):
+            req = _Request(body={}, token=self.control_token)
+            resp = await fw_mod.handle_fin_workspace_process_effects(req)
+        self.assertEqual(resp.status, 200)
+        data = _payload(resp)
+        self.assertEqual(data["processed"], 1)
+        self.assertTrue(data["results"][0]["success"])
+        # The ledger was instantiated, cached, and granted $1.00.
+        self.assertIsNotNone(getattr(fake_core, "_credit_ledger", None))
+        self.assertEqual(CreditLedger(self.db_path).get_balance("u-grant"), 1000000)
+        with self.fw._conn() as conn:
+            status = conn.execute(
+                "SELECT status FROM financial_workspace_effects "
+                "WHERE effect_id = ?",
+                ("fe-test",),
+            ).fetchone()[0]
+        self.assertEqual(status, "completed")
 
 
 # ---------------------------------------------------------------------------

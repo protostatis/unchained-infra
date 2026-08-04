@@ -23,16 +23,25 @@ Browser routes (proxied by Caddy under ``/fin-terminal-workspace``):
   GET    /callback/{provider}           — claim-aware OAuth callback (allowlist)
 
 All internal S2S handlers require the bearer control token
-(``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``). The S2S handoff
-secret travels only in the gateway-set HttpOnly ``fin-terminal-handoff-secret``
-cookie and is read server-side at claim initiation; it never appears in the
-browser JS, the POST body, a URL, or a log line. The claim secret is carried
-only in an HttpOnly Secure SameSite=Lax parent-domain cookie.
+(``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``) — including the
+internal ``/internal/.../claim`` and ``/internal/.../claim/accept`` variants.
+The S2S handoff secret travels only in the gateway-set HttpOnly
+``fin-terminal-handoff-secret`` cookie and is read server-side at claim
+initiation; it never appears in the browser JS, the POST body, a URL, or a log
+line. The claim secret is carried only in an HttpOnly Secure SameSite=Lax
+parent-domain cookie.
+
+Browser cookie-auth paths (no control token): ``POST /api/claim``,
+``GET /api/claims/{claim_id}``, ``GET /api/workspace``,
+``GET /api/snapshots``, ``GET /api/runtime/status``, and the OAuth
+start/callback handlers in ``fin_workspace_auth``. The internal claim/accept
+handlers are the S2S contract and reject cookie-only callers without the token.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -128,18 +137,21 @@ def _resolve_fw() -> FinancialWorkspace | None:
 
 
 def _verify_control_token(request: web.Request) -> bool:
-    """Explicit control token only — never JWT_SECRET or a cookie session."""
-    token = getattr(_core(), "_resolve_control_token", None)
-    if not callable(token):
-        expected = os.environ.get("FIN_WORKSPACE_CONTROL_TOKEN", "").strip()
-    else:
-        expected = token()
+    """Explicit control token only — never JWT_SECRET or a cookie session.
+
+    Constant-time comparison (``hmac.compare_digest``) so timing cannot leak
+    token length/prefix. Reads the canonical env-backed resolver, never the
+    lazily-imported web runtime, so a missing ``JWT_SECRET`` during tests
+    cannot crash token verification.
+    """
+    from financial_workspace import _resolve_control_token as _token
+    expected = _token()
     if not expected:
         return False
     auth = request.headers.get(_CONTROL_TOKEN_HEADER, "")
     if auth.startswith("Bearer "):
         auth = auth[7:]
-    return auth == expected
+    return hmac.compare_digest(auth, expected)
 
 
 def _extract_claim_cookie(request: web.Request) -> str:
@@ -354,7 +366,14 @@ async def _initiate_claim_impl(request: web.Request) -> web.Response:
 
 
 async def handle_fin_workspace_claim(request: web.Request) -> web.Response:
-    """POST /internal/financial-workspace/claim (internal S2S-adjacent)."""
+    """POST /internal/financial-workspace/claim — internal S2S variant.
+
+    The documented model requires the bearer control token on every
+    ``/internal/*`` handler. The browser cookie flow must use the
+    ``POST /api/claim`` route (no token, handoff cookie) instead.
+    """
+    if not _verify_control_token(request):
+        return _error_response("unauthorized", status=401)
     return await _initiate_claim_impl(request)
 
 
@@ -448,15 +467,19 @@ async def handle_fin_workspace_auth_claim_page(request: web.Request) -> web.Resp
 # POST /internal/financial-workspace/claim/accept
 # ---------------------------------------------------------------------------
 async def handle_fin_workspace_claim_accept(request: web.Request) -> web.Response:
-    """Accept a claim after OAuth callback.
+    """Accept a claim after OAuth callback (internal S2S variant).
 
-    The claim_secret comes from the HttpOnly cookie (never from the body/URL).
-    Body provides: {claim_id, final_account_user_id, final_account_email,
-                     browser_nonce, oauth_state, auth_code_id}
+    Requires the bearer control token: the browser OAuth callbacks
+    (``/auth/{provider}/callback``, ``POST /api/google``) call the core
+    accept logic directly with the HttpOnly claim cookie and are the
+    documented cookie-auth path.
     """
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
+
+    if not _verify_control_token(request):
+        return _error_response("unauthorized", status=401)
 
     claim_secret = _extract_claim_cookie(request)
     if not claim_secret:
@@ -582,6 +605,32 @@ async def handle_fin_workspace_get_snapshots(request: web.Request) -> web.Respon
     return _json_response({"workspace_id": ws["workspace_id"], "snapshots": snapshots})
 
 
+def _resolve_credit_ledger(core) -> "object | None":
+    """Resolve (and lazily instantiate) the credit ledger on the core module.
+
+    The ledger is intentionally lazy in production. A missing
+    ``core._credit_ledger`` must not cause a legitimate ``account_grant``
+    effect to be mislabeled or dropped — instantiate it against the Auth DB
+    path exactly like the background outbox loop does.
+    """
+    ledger = getattr(core, "_credit_ledger", None)
+    if ledger is not None:
+        return ledger
+    auth = getattr(core, "_auth", None)
+    db_path = getattr(auth, "db_path", "") if auth is not None else ""
+    if not db_path:
+        db_path = os.environ.get("UNCHAINED_DB_PATH", "")
+    if not db_path:
+        return None
+    from credit import CreditLedger
+    ledger = CreditLedger(db_path=db_path)
+    try:
+        core._credit_ledger = ledger
+    except Exception:
+        pass  # read-only core mock in tests; ledger still returned
+    return ledger
+
+
 # ---------------------------------------------------------------------------
 # POST /internal/financial-workspace/effects/process
 # ---------------------------------------------------------------------------
@@ -595,7 +644,6 @@ async def handle_fin_workspace_process_effects(request: web.Request) -> web.Resp
         return _error_response("unauthorized", status=401)
 
     core = _core()
-    ledger = getattr(core, "_credit_ledger", None)
 
     effects = fw.poll_pending_effects(limit=10)
     results = []
@@ -605,7 +653,18 @@ async def handle_fin_workspace_process_effects(request: web.Request) -> web.Resp
         if not fw.mark_effect_processing(eid):
             continue
         try:
-            if effect["effect_type"] == "account_grant" and ledger:
+            if effect["effect_type"] == "account_grant":
+                ledger = _resolve_credit_ledger(core)
+                if ledger is None:
+                    # The ledger is genuinely unavailable (no DB path). Keep
+                    # the effect failed/retryable — never mislabel it unknown
+                    # or dead.
+                    fw.mark_effect_completed(eid, failed=True, error="credit ledger unavailable")
+                    results.append({
+                        "effect_id": eid, "success": False,
+                        "error": "credit ledger unavailable",
+                    })
+                    continue
                 grant_result = fw.process_account_grant_effect(effect["context"], ledger)
                 fw.mark_effect_completed(eid)
                 results.append({"effect_id": eid, "success": True, "result": grant_result})

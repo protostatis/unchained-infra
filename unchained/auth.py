@@ -87,9 +87,28 @@ class Auth:
                     scope TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL,
-                    used INTEGER DEFAULT 0
+                    used INTEGER DEFAULT 0,
+                    purpose TEXT NOT NULL DEFAULT '',
+                    audience TEXT NOT NULL DEFAULT '',
+                    claim_id TEXT,
+                    state_binding TEXT NOT NULL DEFAULT ''
                 )
             """)
+            # Claim-flow binding columns are UNCONDITIONAL: the auth-code
+            # handlers read and write purpose/audience/claim_id/state_binding
+            # in every deploy, even when the financial workspace feature flag
+            # is off. Migrate pre-existing databases so feature-OFF OAuth
+            # keeps working without any control-plane schema init.
+            for col_def in (
+                "purpose TEXT NOT NULL DEFAULT ''",
+                "audience TEXT NOT NULL DEFAULT ''",
+                "claim_id TEXT",
+                "state_binding TEXT NOT NULL DEFAULT ''",
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE auth_codes ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS lifecycle_email_suppressions (
                     user_id TEXT PRIMARY KEY,

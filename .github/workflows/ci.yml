@@ -45,6 +45,7 @@ jobs:
           python deploy/test_compose_service_diff.py
           python deploy/test_fin_terminal_secrets.py
           python deploy/test_public_terminal_pilot.py
+          python deploy/test_terminal_runtime_reconciler.py
 
       - name: Run public-safe tests
         run: |
@@ -66,6 +67,8 @@ jobs:
             test_hosted_conversations \
             test_dev_script \
             test_fin_terminal \
+            test_fin_workspace \
+            test_fin_workspace_integration \
             test_trial_new_chat \
             test_web_contracts
 

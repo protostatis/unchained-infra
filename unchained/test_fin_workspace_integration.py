@@ -829,6 +829,52 @@ class AuthCodeClaimBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 400)
         self.assertIn("audience mismatch", resp.body.decode())
 
+    async def test_feature_off_auth_code_flow_works_without_control_plane(self):
+        """Regression (feature-OFF OAuth): the auth_codes binding columns are
+        part of the UNCONDITIONAL Auth schema. A deployment where the financial
+        workspace is disabled never initializes FinancialWorkspace, so the
+        columns must already exist from ``Auth._init_db`` — otherwise issuing
+        or exchanging an auth code fails with 'no such column'."""
+        from auth import Auth
+
+        temp_dir = tempfile.TemporaryDirectory()
+        try:
+            db_path = os.path.join(temp_dir.name, "auth-off.db")
+            auth = Auth(db_path)
+            with auth._conn() as conn:
+                conn.execute(
+                    "INSERT INTO users (user_id, email, api_key, status, "
+                    "created_at, last_login_at) VALUES ('u-off', "
+                    "'off@example.com', 'key', 'approved', ?, ?)",
+                    (time.time(), time.time()),
+                )
+            # No FinancialWorkspace is ever constructed for this DB.
+            core = SimpleNamespace(
+                _auth=auth,
+                _authenticate=lambda request: None,
+                GOOGLE_CLIENT_ID="",
+                JWT_SECRET=os.environ.get("JWT_SECRET", "test-jwt-secret-for-auth-code"),
+                _public_base_url=lambda request: "https://unchainedsky.com",
+                _PUBLIC_BASE_URL="https://unchainedsky.com",
+            )
+            from web_app.handlers import auth_admin
+
+            with patch("web_app.handlers.auth_admin._core", return_value=core):
+                code = auth_admin._issue_auth_code(
+                    {"user_id": "u-off"}, "https://app.example/cb", "workspace"
+                )
+                self.assertTrue(code)
+                req = _Request(body={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": "https://app.example/cb",
+                })
+                resp = await auth_admin.handle_auth_token(req)
+                self.assertEqual(resp.status, 200)
+                self.assertIn("access_token", json.loads(resp.body))
+        finally:
+            temp_dir.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()
