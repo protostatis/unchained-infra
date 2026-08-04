@@ -206,29 +206,44 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
      "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_sleep"),
     ("GET", "/internal/financial-workspace/runtime/status",
      "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_status"),
+    ("POST", "/internal/financial-workspace/runtime/flush",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_flush"),
 
     # Browser handoff/auth/callback routes — proxied by Caddy under
-    # /fin-terminal-workspace (prefix stripped). Exact provider allowlist.
-    ("GET", "/auth/claim",
+    # /fin-terminal-workspace (prefix stripped). Dedicated /workspace/*
+    # namespace so the claim OAuth routes can never shadow (or be shadowed
+    # by) the site's own login routes (/auth/facebook/..., /auth/github/...).
+    # Exact provider allowlist.
+    ("GET", "/workspace/auth/claim",
      "web_app.handlers.fin_workspace:handle_fin_workspace_auth_claim_page"),
-    ("POST", "/api/claim",
+    ("POST", "/workspace/claim",
      "web_app.handlers.fin_workspace:handle_fin_workspace_browser_claim"),
-    ("GET", "/api/claims/{claim_id}",
+    ("GET", "/workspace/claims/{claim_id}",
      "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_claim"),
-    ("GET", "/api/workspace",
+    ("GET", "/workspace/workspace",
      "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_workspace"),
-    ("GET", "/api/snapshots",
+    ("GET", "/workspace/snapshots",
      "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_snapshots"),
-    ("GET", "/api/runtime/status",
+    ("GET", "/workspace/runtime/status",
      "web_app.handlers.fin_workspace:handle_fin_workspace_browser_runtime_status"),
-    ("POST", "/api/google",
+    ("POST", "/workspace/oauth/google",
      "web_app.handlers.fin_workspace_auth:handle_claim_google_token"),
-    ("GET", "/done",
+    ("GET", "/workspace/done",
      "web_app.handlers.fin_workspace_auth:handle_claim_done"),
-    ("GET", "/auth/{provider}/start",
+    ("GET", "/workspace/oauth/{provider}/start",
      "web_app.handlers.fin_workspace_auth:handle_claim_oauth_start"),
-    ("GET", "/auth/{provider}/callback",
+    ("GET", "/workspace/oauth/{provider}/callback",
      "web_app.handlers.fin_workspace_auth:handle_claim_oauth_callback"),
+    # Private workspace leg: authenticated /fin-terminal/ (Caddy strips the
+    # prefix and rewrites the base to /workspace-terminal). Fails closed when
+    # no validated runtime provider exists — never the marketing index.
+    ("GET", "/workspace-terminal",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal"),
+    # Per-account runtime attach proxy (HTTP + WebSocket) over the private
+    # per-account network. The slug is derived server-side from the session —
+    # never trusted from the URL.
+    ("GET", "/attach/{slug}/{tail:.*}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_attach_proxy"),
 )
 
 

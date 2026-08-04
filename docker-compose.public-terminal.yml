@@ -306,6 +306,11 @@ services:
       - fin_terminal_public          # accessible from Caddy
       - fin_terminal_public_state    # Redis (fin-terminal-public-redis:6379)
       - fin_terminal_workspace_egress  # AWS S3/KMS egress only
+    # The host-side runtime provider (fin-workspace-runtime-provider.service)
+    # owns the Docker socket. The control plane reaches it over the host
+    # gateway at the configured URL; nothing is published to the host edge.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=33554432,mode=1777
@@ -343,6 +348,11 @@ services:
       - GITHUB_OAUTH_TOKEN_URL=${GITHUB_OAUTH_TOKEN_URL:-}
       - GITHUB_API_BASE=${GITHUB_API_BASE:-}
       - FIN_TERMINAL_BASE_URL=${FIN_TERMINAL_BASE_URL:-https://unbrowser.unchainedsky.com/fin-terminal-workspace}
+      # Host-side runtime provider (hard enablement gate). Enabling the
+      # feature without a validated provider is a fail-closed startup error;
+      # /fin-terminal/ never falls back to the marketing index or singleton.
+      - FIN_WORKSPACE_RUNTIME_PROVIDER_URL=${FIN_WORKSPACE_RUNTIME_PROVIDER_URL:-http://host.docker.internal:8793}
+      - FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN=${FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN:-}
       - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:-}
     logging:
       driver: json-file

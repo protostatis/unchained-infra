@@ -65,6 +65,20 @@ _FEATURE_FLAG_ENV = "FIN_WORKSPACE_ENABLED"
 # Control-token for internal S2S calls
 _FIN_CONTROL_TOKEN_ENV = "FIN_WORKSPACE_CONTROL_TOKEN"
 
+# Account-scoped runtime provider (host-side Docker authority). The control
+# plane never touches the Docker socket; it calls the validated host-side
+# provider over the Docker-internal network. Enabling the feature without a
+# validated provider is a fail-closed startup error (no false marketing
+# routing under /fin-terminal/).
+_FIN_RUNTIME_PROVIDER_URL_ENV = "FIN_WORKSPACE_RUNTIME_PROVIDER_URL"
+_FIN_RUNTIME_PROVIDER_TOKEN_ENV = "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN"
+
+# Canonical truthy spellings for feature-flag env values (trimmed,
+# case-insensitive): 1|true|yes|on. This is the single cross-repo contract;
+# Compose/Caddy use the canonical ``true`` while every runtime consumer
+# normalizes all four spellings.
+_TRUE_FEATURE_VALUES = frozenset({"1", "true", "yes", "on"})
+
 # Grant amount for new accounts: $1.00 in micro-USD
 _NEW_ACCOUNT_GRANT_MICRO_USD = 1_000_000
 
@@ -92,8 +106,142 @@ def _format_expiry(seconds: float) -> float:
 # ---------------------------------------------------------------------------
 # Control token helpers
 # ---------------------------------------------------------------------------
+def parse_feature_flag(value: str | None) -> bool:
+    """Normalize a feature-flag env value to a boolean.
+
+    Accepted truthy spellings (trimmed, case-insensitive): ``1``, ``true``,
+    ``yes``, ``on``. Anything else (including empty/None) is False. This is
+    the canonical cross-repo boolean contract.
+    """
+    return (value or "").strip().lower() in _TRUE_FEATURE_VALUES
+
+
 def is_fin_workspace_enabled() -> bool:
-    return os.environ.get(_FEATURE_FLAG_ENV, "").strip().lower() in ("1", "true", "yes")
+    return parse_feature_flag(os.environ.get(_FEATURE_FLAG_ENV, ""))
+
+
+def _runtime_provider_url() -> str:
+    """Return the configured host-side runtime provider base URL ('' if none)."""
+    return os.environ.get(_FIN_RUNTIME_PROVIDER_URL_ENV, "").strip()
+
+
+def _runtime_provider_token() -> str:
+    return os.environ.get(_FIN_RUNTIME_PROVIDER_TOKEN_ENV, "").strip()
+
+
+def _runtime_provider_headers() -> dict[str, str]:
+    return {
+        "X-Workspace-Runtime-Token": _runtime_provider_token(),
+        "Content-Type": "application/json",
+    }
+
+
+def runtime_provider_validate(timeout: float = 5.0) -> dict | None:
+    """Validate the configured host-side runtime provider.
+
+    GET ``{url}/v1/health`` with the shared token. Returns the provider's
+    status payload only when it is reachable AND declares the two capabilities
+    the private workspace leg requires (``accountRuntime`` and
+    ``checkpointFile``). Returns None otherwise — callers must fail closed.
+    """
+    url = _runtime_provider_url()
+    if not url or not _runtime_provider_token():
+        return None
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(f"{url.rstrip('/')}/v1/health", headers=_runtime_provider_headers())
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        if not isinstance(data, dict) or data.get("status") != "ok":
+            return None
+        caps = data.get("capabilities") or {}
+        if not (caps.get("accountRuntime") and caps.get("checkpointFile")):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def runtime_provider_wake(
+    slug: str,
+    checkpoint: dict,
+    *,
+    control_token: str,
+    timeout: float = 30.0,
+) -> dict | None:
+    """Ask the host-side provider to provision the account's isolated runtime.
+
+    ``checkpoint`` is the imported workspace snapshot (the checkpoint-file
+    payload the app runtime consumes). ``control_token`` is the same
+    ``FIN_WORKSPACE_CONTROL_TOKEN`` so the provider can reach back over the
+    private network. Returns the provider's status dict or None on failure.
+    """
+    url = _runtime_provider_url()
+    if not url or not _runtime_provider_token() or not slug:
+        return None
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{url.rstrip('/')}/v1/accounts/{slug}/wake",
+                json={
+                    "checkpoint": checkpoint,
+                    "controlUrl": "http://fin-terminal-workspace-control:8790",
+                    "controlToken": control_token,
+                },
+                headers=_runtime_provider_headers(),
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def runtime_provider_sleep(slug: str, timeout: float = 30.0) -> bool:
+    """Ask the host-side provider to put the account runtime to sleep."""
+    url = _runtime_provider_url()
+    if not url or not _runtime_provider_token() or not slug:
+        return False
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{url.rstrip('/')}/v1/accounts/{slug}/sleep",
+                json={},
+                headers=_runtime_provider_headers(),
+            )
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def runtime_provider_status(slug: str, timeout: float = 10.0) -> dict | None:
+    """Return the provider's status for one account runtime (or None)."""
+    url = _runtime_provider_url()
+    if not url or not _runtime_provider_token() or not slug:
+        return None
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                f"{url.rstrip('/')}/v1/accounts/{slug}/status",
+                headers=_runtime_provider_headers(),
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def workspace_runtime_slug(user_id: str) -> str:
+    """Stable, path-safe per-account runtime namespace (24 hex chars)."""
+    return hashlib.sha256((str(user_id or "")).encode()).hexdigest()[:24]
 
 
 def _resolve_control_token() -> str:
@@ -142,6 +290,26 @@ def validate_fin_workspace_config(env: dict | None = None) -> list[str]:
             errors.append(f"checkpoint storage: {missing} required")
     except Exception as exc:  # pragma: no cover - import safety
         errors.append(f"checkpoint storage validation error: {exc}")
+
+    # Hard enablement gate: without a validated runtime provider the private
+    # workspace leg (/fin-terminal/) cannot open the imported checkpoint in an
+    # isolated app runtime. Activating the feature without one would otherwise
+    # falsely route to the marketing index — fail activation instead.
+    provider_url = env.get(_FIN_RUNTIME_PROVIDER_URL_ENV, "").strip()
+    provider_token = env.get(_FIN_RUNTIME_PROVIDER_TOKEN_ENV, "").strip()
+    if not provider_url:
+        errors.append(
+            f"{_FIN_RUNTIME_PROVIDER_URL_ENV} must be set when the financial "
+            "workspace is enabled (no validated runtime provider: "
+            "/fin-terminal/ would fail closed with no CTA)"
+        )
+    if provider_url and not provider_token:
+        errors.append(
+            f"{_FIN_RUNTIME_PROVIDER_TOKEN_ENV} must be set when the financial "
+            "workspace is enabled (shared secret with the host-side runtime provider)"
+        )
+    elif provider_token and len(provider_token) < 32:
+        errors.append(f"{_FIN_RUNTIME_PROVIDER_TOKEN_ENV} must be >= 32 characters")
     return errors
 
 
@@ -1311,8 +1479,95 @@ class FinancialWorkspace:
         ]
 
     # ==================================================================
-    # Account-scoped runtime control (wake/sleep/status) — canary scaffolding
+    # Account-scoped runtime control (wake/sleep/status) — canary runtime
     # ==================================================================
+
+    def get_workspace_runtime_checkpoint(self, user_id: str) -> dict | None:
+        """Return the provisioning payload for the account's isolated runtime.
+
+        Prefers the most recent imported snapshot (the exact checkpoint the
+        claim flow wrote); falls back to the workspace metadata. The host-side
+        runtime provider writes this payload to the per-account checkpoint
+        file that the app runtime consumes.
+        """
+        uid = str(user_id or "").strip()
+        if not uid:
+            return None
+        ws = self.get_workspace_for_user(uid)
+        if ws is None:
+            return None
+        snapshots = self.get_snapshots_for_workspace(ws["workspace_id"], limit=1)
+        if snapshots:
+            return snapshots[0].get("snapshot") or {}
+        return ws.get("metadata") or {}
+
+    def _iter_workspace_user_ids(self) -> list[tuple[str]]:
+        """Yield (user_id,) for every workspace (slug → account reverse map)."""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT user_id FROM financial_workspaces"
+            ).fetchall()
+
+    def import_flushed_checkpoint(self, user_id: str, checkpoint: dict) -> dict | None:
+        """Persist a checkpoint flushed back from the account runtime.
+
+        Writes a new snapshot row for the user's workspace so a subsequent
+        wake provisions the flushed state (the app's authoritative checkpoint
+        after a session). ``checkpoint_id`` is reused from the workspace's
+        most recent snapshot (the FK target); when the workspace has none, a
+        fresh checkpoint envelope is created so the reference stays valid.
+        Returns the snapshot record, or None when the user has no workspace or
+        the checkpoint is not a dict.
+        """
+        uid = str(user_id or "").strip()
+        if not uid or not isinstance(checkpoint, dict):
+            return None
+        ws = self.get_workspace_for_user(uid)
+        if ws is None:
+            return None
+        snapshot_json_str = json.dumps(checkpoint, separators=(",", ":"), default=str)
+        snapshot_id = f"fsn-{_uuid_hex()[:16]}"
+        now = _now_ts()
+        with self._conn() as conn:
+            # Reuse the workspace's most recent checkpoint as the FK target;
+            # the checkpoint envelope is immutable once stored.
+            row = conn.execute(
+                "SELECT checkpoint_id FROM financial_workspace_snapshots "
+                "WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1",
+                (ws["workspace_id"],),
+            ).fetchone()
+            checkpoint_id = row[0] if row else ""
+            if not checkpoint_id:
+                ckpt_id = f"fcp-{_uuid_hex()[:16]}"
+                conn.execute(
+                    "INSERT INTO fin_terminal_checkpoints "
+                    "(checkpoint_id, request_id, session_id, worker_id, "
+                    "status, expires_at, created_at) VALUES (?, ?, '', '', 'imported', ?, ?)",
+                    (ckpt_id, f"flush-{snapshot_id}", now, now),
+                )
+                checkpoint_id = ckpt_id
+            version = self._next_snapshot_version(conn, ws["workspace_id"])
+            conn.execute(
+                "INSERT INTO financial_workspace_snapshots "
+                "(snapshot_id, workspace_id, checkpoint_id, version, snapshot_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (snapshot_id, ws["workspace_id"], checkpoint_id, version,
+                 snapshot_json_str, now),
+            )
+        return {
+            "snapshot_id": snapshot_id,
+            "workspace_id": ws["workspace_id"],
+            "version": version,
+            "created_at": now,
+        }
+
+    def _next_snapshot_version(self, conn: sqlite3.Connection, workspace_id: str) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM financial_workspace_snapshots "
+            "WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchone()
+        return int(row[0] or 1)
 
     def runtime_wake(self, user_id: str, *, reason: str = "") -> dict | None:
         """Wake the account-scoped workspace runtime (idempotent).
@@ -1585,7 +1840,10 @@ class FinancialWorkspace:
         then in the claim-initiation POST body; it never appears in a URL,
         log, referrer, or analytics.
 
-        The path is the exact Caddy workspace auth route (no wildcard).
+        The path is the exact Caddy workspace auth route (no wildcard). The
+        claim surface lives under the dedicated ``/workspace/*`` namespace so
+        it can never shadow (or be shadowed by) the site's own login OAuth
+        routes (``/auth/facebook/...``, ``/auth/github/...``).
         """
         from urllib.parse import urlencode
         base = os.environ.get(
@@ -1593,7 +1851,7 @@ class FinancialWorkspace:
             "https://unbrowser.unchainedsky.com/fin-terminal-workspace",
         ).strip().rstrip("/")
         params = urlencode({"handoff_id": handoff_id, "action": "claim"})
-        return f"{base}/auth/claim?{params}"
+        return f"{base}/workspace/auth/claim?{params}"
 
     # ==================================================================
     # Delete / export metadata

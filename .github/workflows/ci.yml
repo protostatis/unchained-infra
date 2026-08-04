@@ -46,6 +46,7 @@ jobs:
           python deploy/test_fin_terminal_secrets.py
           python deploy/test_public_terminal_pilot.py
           python deploy/test_terminal_runtime_reconciler.py
+          python deploy/test_workspace_runtime_provider.py
 
       - name: Run public-safe tests
         run: |
@@ -69,6 +70,7 @@ jobs:
             test_fin_terminal \
             test_fin_workspace \
             test_fin_workspace_integration \
+            test_web_routes \
             test_trial_new_chat \
             test_web_contracts
 

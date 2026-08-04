@@ -1,0 +1,24 @@
+# Host-side account-scoped workspace runtime provider.
+# Owns the Docker socket on the host; application containers never see it.
+# Installed by the deploy transaction when the workspace feature is enabled:
+#   sudo cp deploy/fin-workspace-runtime-provider.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fin-workspace-runtime-provider
+[Unit]
+Description=Fin-terminal workspace runtime provider (account-scoped canary)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /home/ec2-user/unchained/deploy/workspace_runtime_provider.py
+EnvironmentFile=/home/ec2-user/unchained/.env.reconciler
+Restart=on-failure
+RestartSec=10
+# The provider is the only Docker-touching host component for account
+# runtimes; keep it on the host (never inside a container).
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

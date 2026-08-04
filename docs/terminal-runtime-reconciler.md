@@ -41,9 +41,12 @@ activation workflow requires all nine containers running and is unchanged.
   creates or removes seat definitions.
 - **Target running = min(6, assigned + queued + 1)**: one warm spare is always
   available when feasible.
-- **5-minute idle scale-down**: unassigned seats idle longer than
-  `TERMINAL_RUNTIME_IDLE_SCALE_DOWN` seconds (default 300) are candidates for
-  drain.
+- **5-minute idle scale-down**: the reconciler enforces the configured
+  `TERMINAL_RUNTIME_IDLE_SCALE_DOWN` seconds (default 300) itself — an
+  unassigned seat below the threshold is never a candidate — and it sends the
+  same value to the gateway via `reconcile-plan` (`idleScaleDownSeconds`) so
+  both sides share one source of truth. The gateway also enforces the exact
+  threshold on `/drain`.
 - **Drain-then-stop**: the gateway must accept an atomic drain before the
   container is stopped. A rejected drain leaves the seat running.
 - **Assigned seats never stopped**: seats with active or reconnecting sessions
@@ -64,8 +67,12 @@ activation workflow requires all nine containers running and is unchanged.
 ## Deployment lock
 
 The reconciler respects the existing `.deploy.lock` shared with `deploy.sh`.
-Only the lock holder performs mutations. If the lock is held by a deploy, the
-reconciler runs passive (reads snapshot, logs, does not start/stop).
+The lock is held **only during each observed→mutate cycle** — never for the
+process lifetime — so activate/disable/rollback (which stop the reconciler
+systemd unit in deploy preflight before or while holding the lock) can never
+deadlock behind a lifetime lock. If the lock is held by a deploy at the start
+of a cycle, the reconciler runs that cycle passive (reads snapshot, logs, does
+not start/stop) and retries on the next tick.
 
 ## Rollback
 
@@ -113,7 +120,7 @@ The gateway must expose a private management listener on port **8789**
 | Endpoint | Method | Input | Output |
 |---|---|---|---|
 | `/api/management/reconcile-snapshot` | POST | `{}` | `{version: 1, seats: {workerId: {workerId, status, phase, generation\|null, assigned, idleSeconds, drainRequested, drainId\|null, containerId:""}}, totalAssigned, totalQueued, plan}` |
-| `/api/management/reconcile-plan` | POST | `{}` | `{version: 1, reconciled: true, plan}` |
+| `/api/management/reconcile-plan` | POST | `{desiredSeats, idleScaleDownSeconds}` | `{version: 1, reconciled: true, plan}` |
 | `/api/management/drain` | POST | `{workerId, drainId, expectedGeneration}` | `{accepted: true, drainId}` \| 409 `{accepted: false, reason}` |
 | `/api/management/activate` | POST | `{workerId}` | `{accepted: true}` \| 409 `{accepted: false, reason}` |
 

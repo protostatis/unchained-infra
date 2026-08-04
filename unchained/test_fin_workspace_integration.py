@@ -36,7 +36,9 @@ from financial_workspace import (
     ClaimRejectedError,
     _resolve_control_token,
     is_fin_workspace_enabled,
+    parse_feature_flag,
     validate_fin_workspace_config,
+    workspace_runtime_slug,
 )
 from web_app.handlers import fin_workspace
 from web_app.handlers import fin_workspace_auth
@@ -87,6 +89,8 @@ class FailClosedConfigTests(unittest.TestCase):
             "FIN_WORKSPACE_S3_REGION",
             "FIN_WORKSPACE_KMS_KEY_ID",
             "FIN_WORKSPACE_COOKIE_DOMAIN",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_URL",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN",
             "JWT_SECRET",
         )}
 
@@ -100,6 +104,8 @@ class FailClosedConfigTests(unittest.TestCase):
         os.environ["FIN_WORKSPACE_S3_REGION"] = "us-west-2"
         os.environ["FIN_WORKSPACE_KMS_KEY_ID"] = "arn:aws:kms:us-west-2:123:key/abc"
         os.environ["FIN_WORKSPACE_COOKIE_DOMAIN"] = ".unchainedsky.com"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_URL"] = "http://host.docker.internal:8793"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN"] = "p" * 40
         for key, value in overrides.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -153,6 +159,53 @@ class FailClosedConfigTests(unittest.TestCase):
         os.environ.pop("FIN_WORKSPACE_CONTROL_TOKEN", None)
         os.environ["JWT_SECRET"] = "jwt-secret-should-not-be-used"
         self.assertEqual(_resolve_control_token(), "")
+
+    def test_enabled_without_runtime_provider_fails_closed(self):
+        """Hard enablement gate: activating the workspace feature requires a
+        configured host-side runtime provider; without one the private leg
+        (/fin-terminal/) would falsely route to the marketing index."""
+        self._enable(FIN_WORKSPACE_RUNTIME_PROVIDER_URL=None)
+        errors = validate_fin_workspace_config()
+        self.assertTrue(any("FIN_WORKSPACE_RUNTIME_PROVIDER_URL" in e for e in errors))
+
+    def test_enabled_without_runtime_provider_token_fails_closed(self):
+        self._enable(FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN=None)
+        errors = validate_fin_workspace_config()
+        self.assertTrue(any("FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN" in e for e in errors))
+
+    def test_short_runtime_provider_token_rejected(self):
+        self._enable(FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN="short")
+        errors = validate_fin_workspace_config()
+        self.assertTrue(any("FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN" in e for e in errors))
+
+
+class FeatureFlagBooleanContractTests(unittest.TestCase):
+    """The feature-flag contract accepts 1|true|yes|on (trimmed, case-
+    insensitive); everything else is off. Caddy/Compose use canonical ``true``
+    while every runtime consumer normalizes all four spellings."""
+
+    def test_truthy_spellings_accepted(self):
+        for value in ("1", "true", "TRUE", "yes", "on", " True ", " YES "):
+            self.assertTrue(parse_feature_flag(value), f"expected {value!r} truthy")
+
+    def test_falsy_and_invalid_rejected(self):
+        for value in ("0", "false", "no", "off", "", "garbage", "2", None):
+            self.assertFalse(parse_feature_flag(value), f"expected {value!r} falsy")
+
+    def test_env_flag_uses_contract(self):
+        saved = os.environ.get("FIN_WORKSPACE_ENABLED")
+        try:
+            for value in ("1", "true", "yes", "on"):
+                os.environ["FIN_WORKSPACE_ENABLED"] = value
+                self.assertTrue(is_fin_workspace_enabled(), f"env={value!r}")
+            os.environ["FIN_WORKSPACE_ENABLED"] = "0"
+            self.assertFalse(is_fin_workspace_enabled())
+            os.environ["FIN_WORKSPACE_ENABLED"] = "on"
+        finally:
+            if saved is None:
+                os.environ.pop("FIN_WORKSPACE_ENABLED", None)
+            else:
+                os.environ["FIN_WORKSPACE_ENABLED"] = saved
 
 
 class S3StoreFactoryTests(unittest.TestCase):
@@ -230,7 +283,7 @@ class HandoffUrlAndCookieTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("handoff_id", chk["auth_url"])
         self.assertNotIn(chk["handoff_secret"], chk["auth_url"])
         self.assertNotIn("handoff_secret=", chk["auth_url"])
-        self.assertIn("/fin-terminal-workspace/auth/claim", chk["auth_url"])
+        self.assertIn("/fin-terminal-workspace/workspace/auth/claim", chk["auth_url"])
 
     def test_auth_url_defaults_to_workspace_base(self):
         os.environ.pop("FIN_TERMINAL_BASE_URL", None)
@@ -270,20 +323,23 @@ class HandoffUrlAndCookieTests(unittest.IsolatedAsyncioTestCase):
 
     def test_public_paths_match_caddy_prefix_stripping_and_routes(self):
         """auth_url / oauth start / callback / done all live under the Caddy
-        /fin-terminal-workspace prefix and strip to the exact handler routes."""
+        /fin-terminal-workspace prefix and strip to the exact dedicated
+        /workspace/* handler routes (never /auth/... or /api/...)."""
         from web_app.routes import ROUTE_SPECS
         public = {(m, p) for m, p, _ in ROUTE_SPECS if not p.startswith("/internal")}
         for expected in (
-            ("GET", "/auth/claim"),
-            ("POST", "/api/claim"),
-            ("GET", "/api/claims/{claim_id}"),
-            ("GET", "/api/workspace"),
-            ("GET", "/api/snapshots"),
-            ("GET", "/api/runtime/status"),
-            ("POST", "/api/google"),
-            ("GET", "/done"),
-            ("GET", "/auth/{provider}/start"),
-            ("GET", "/auth/{provider}/callback"),
+            ("GET", "/workspace/auth/claim"),
+            ("POST", "/workspace/claim"),
+            ("GET", "/workspace/claims/{claim_id}"),
+            ("GET", "/workspace/workspace"),
+            ("GET", "/workspace/snapshots"),
+            ("GET", "/workspace/runtime/status"),
+            ("POST", "/workspace/oauth/google"),
+            ("GET", "/workspace/done"),
+            ("GET", "/workspace/oauth/{provider}/start"),
+            ("GET", "/workspace/oauth/{provider}/callback"),
+            ("GET", "/workspace-terminal"),
+            ("GET", "/attach/{slug}/{tail:.*}"),
         ):
             self.assertIn(expected, public, f"handler route {expected} not registered")
 
@@ -292,19 +348,19 @@ class HandoffUrlAndCookieTests(unittest.IsolatedAsyncioTestCase):
             request_id="req-path", session_id="sess", worker_id="w",
             checkpoint=b'{}',
         )
-        self.assertIn("/fin-terminal-workspace/auth/claim", chk["auth_url"])
+        self.assertIn("/fin-terminal-workspace/workspace/auth/claim", chk["auth_url"])
         claim = self.fw.initiate_claim(
             chk["handoff_id"], chk["handoff_secret"],
             browser_nonce="n", audience="github",
         )
         start = fin_workspace._claim_oauth_start_url(claim["claim_id"], "github")
-        self.assertIn("/fin-terminal-workspace/auth/github/start", start)
+        self.assertIn("/fin-terminal-workspace/workspace/oauth/github/start", start)
         done = fin_workspace_auth._claim_done_url(claim["claim_id"], "accepted")
-        self.assertIn("/fin-terminal-workspace/done", done)
-        callback = f"{fin_workspace_auth._claim_callback_base_url()}/auth/github/callback"
+        self.assertIn("/fin-terminal-workspace/workspace/done", done)
+        callback = f"{fin_workspace_auth._claim_callback_base_url()}/workspace/oauth/github/callback"
         self.assertEqual(
             callback,
-            "https://unbrowser.unchainedsky.com/fin-terminal-workspace/auth/github/callback",
+            "https://unbrowser.unchainedsky.com/fin-terminal-workspace/workspace/oauth/github/callback",
         )
 
     async def test_claim_requires_handoff_cookie_and_rotates_it(self):
@@ -694,6 +750,174 @@ class BrowserRouteTests(unittest.IsolatedAsyncioTestCase):
 
 
 # ---------------------------------------------------------------------------
+# Private workspace leg — authenticated /fin-terminal/ (fail closed, never the
+# marketing index or the public singleton)
+# ---------------------------------------------------------------------------
+class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self._temp_dir.name, "auth.db")
+        self.store = LocalCheckpointStore()
+        self.fw = FinancialWorkspace(self.db_path, self.store)
+        self._saved = {k: os.environ.get(k) for k in (
+            "FIN_WORKSPACE_CONTROL_TOKEN",
+            "FIN_WORKSPACE_COOKIE_DOMAIN",
+        )}
+        os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "t" * 40
+
+    def tearDown(self):
+        _env_cleanup(self._saved)
+        self._temp_dir.cleanup()
+
+    def _create_workspace(self, user_id, email):
+        chk = self.fw.create_checkpoint(
+            request_id=f"req-leg-{user_id}", session_id="sess", worker_id="worker",
+            checkpoint=b'{"holdings":[{"ticker":"AAPL","qty":10}]}',
+        )
+        claim = self.fw.initiate_claim(
+            chk["handoff_id"], chk["handoff_secret"],
+            browser_nonce="nonce", audience="github",
+        )
+        self.fw.bind_oauth_state(claim["claim_id"], "state-leg", audience="github")
+        return self.fw.accept_claim(
+            claim["claim_id"], claim["claim_secret"],
+            final_account_user_id=user_id, final_account_email=email,
+            browser_nonce="nonce", oauth_state="state-leg",
+        )
+
+    def _core(self, *, user_id="u-leg"):
+        return SimpleNamespace(
+            _authenticate=lambda request: {"user_id": user_id} if user_id else None,
+        )
+
+    async def test_leg_requires_authentication(self):
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core",
+                   return_value=self._core(user_id=None)):
+            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+        self.assertEqual(resp.status, 401)
+        self.assertNotIn("/fin-terminal/", resp.text)
+
+    async def test_leg_fails_closed_without_workspace(self):
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core",
+                   return_value=self._core(user_id="u-none")):
+            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+        self.assertEqual(resp.status, 404)
+        self.assertNotIn("/fin-terminal/", resp.text)
+
+    async def test_leg_fails_closed_when_provider_not_validated(self):
+        """No validated runtime provider ⇒ 503 with an explicit reason and NO
+        CTA — the leg never falsely routes to the marketing index."""
+        self._create_workspace("u-leg", "leg@example.com")
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_validate",
+                   return_value=None):
+            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+        self.assertEqual(resp.status, 503)
+        self.assertNotIn("/fin-terminal/", resp.text)
+        self.assertIn("runtime provider is not validated", resp.text)
+
+    async def test_leg_wakes_and_attaches_when_provider_validated(self):
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_validate",
+                   return_value={"status": "ok", "provider": "host-side-v1"}), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_wake",
+                   return_value={"slug": slug, "state": "running"}):
+            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+        self.assertEqual(resp.status, 200)
+        self.assertIn(f"/fin-terminal/attach/{slug}/", resp.text)
+        self.assertNotIn("Workspace unavailable", resp.text)
+
+    async def test_leg_provisions_imported_checkpoint_to_provider(self):
+        """wake must receive the imported workspace snapshot (checkpoint-file
+        payload) — never an empty placeholder."""
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        captured: dict = {}
+        def _fake_wake(s, checkpoint, **kwargs):
+            captured.update({"slug": s, "checkpoint": checkpoint})
+            return {"slug": s, "state": "running"}
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_validate",
+                   return_value={"status": "ok"}), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_wake",
+                   side_effect=_fake_wake):
+            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(captured["slug"], slug)
+        self.assertEqual(
+            captured["checkpoint"]["holdings"],
+            [{"ticker": "AAPL", "qty": 10}],
+        )
+
+    async def test_attach_proxy_rejects_slug_mismatch(self):
+        self._create_workspace("u-leg", "leg@example.com")
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core", return_value=self._core()):
+            req = _Request(match_info={"slug": "b" * 24, "tail": ""})
+            resp = await fin_workspace.handle_fin_workspace_attach_proxy(req)
+        self.assertEqual(resp.status, 403)
+
+    async def test_attach_proxy_requires_running_runtime(self):
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_status",
+                   return_value=None):
+            req = _Request(match_info={"slug": slug, "tail": ""})
+            resp = await fin_workspace.handle_fin_workspace_attach_proxy(req)
+        self.assertEqual(resp.status, 409)
+
+    async def test_done_page_cta_renders_only_when_provider_validated(self):
+        """Done-page 'Open workspace' link must work when the feature is
+        enabled (validated provider) and carry no CTA otherwise."""
+        with patch("financial_workspace.runtime_provider_validate", return_value=None):
+            resp = await fin_workspace_auth.handle_claim_done(
+                _Request(query={"status": "accepted"})
+            )
+        self.assertNotIn("/fin-terminal/", resp.text)
+        with patch("financial_workspace.runtime_provider_validate",
+                   return_value={"status": "ok"}):
+            resp = await fin_workspace_auth.handle_claim_done(
+                _Request(query={"status": "accepted"})
+            )
+        self.assertEqual(resp.status, 200)
+        self.assertIn('<a href="/fin-terminal/">Open workspace</a>', resp.text)
+
+    async def test_flush_endpoint_persists_snapshot(self):
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        body = {"slug": slug, "checkpoint": {"holdings": [{"ticker": "TSLA"}]}}
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._verify_control_token",
+                   return_value=True):
+            req = _Request(body=body)
+            resp = await fin_workspace.handle_fin_workspace_runtime_flush(req)
+        self.assertEqual(resp.status, 200)
+        data = _payload(resp)
+        self.assertTrue(data["ok"])
+        snapshots = self.fw.get_snapshots_for_workspace(
+            self.fw.get_workspace_for_user("u-leg")["workspace_id"]
+        )
+        self.assertEqual(snapshots[0]["snapshot"], {"holdings": [{"ticker": "TSLA"}]})
+
+    async def test_flush_unknown_slug_404(self):
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
+             patch("web_app.handlers.fin_workspace._verify_control_token",
+                   return_value=True):
+            req = _Request(body={"slug": "f" * 24, "checkpoint": {}})
+            resp = await fin_workspace.handle_fin_workspace_runtime_flush(req)
+        self.assertEqual(resp.status, 404)
+
+
+# ---------------------------------------------------------------------------
 # Web startup fail-closed
 # ---------------------------------------------------------------------------
 class WebStartupFailClosedTests(unittest.TestCase):
@@ -705,6 +929,8 @@ class WebStartupFailClosedTests(unittest.TestCase):
             "FIN_WORKSPACE_S3_REGION",
             "FIN_WORKSPACE_KMS_KEY_ID",
             "FIN_WORKSPACE_COOKIE_DOMAIN",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_URL",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN",
             "JWT_SECRET",
         )}
         os.environ["JWT_SECRET"] = "test-jwt-for-web-import"
@@ -726,6 +952,43 @@ class WebStartupFailClosedTests(unittest.TestCase):
             self.assertIn("refusing to start", str(ctx.exception))
             self.assertIn("FIN_WORKSPACE_CONTROL_TOKEN", str(ctx.exception))
             self.assertIn("FIN_WORKSPACE_S3_BUCKET", str(ctx.exception))
+
+    def test_activation_refused_without_validated_runtime_provider(self):
+        """Hard enablement gate: FIN_WORKSPACE_ENABLED=true cannot activate
+        when the runtime provider is missing or unreachable — activation fails
+        instead of falsely routing /fin-terminal/ to the marketing index."""
+        os.environ["FIN_WORKSPACE_ENABLED"] = "true"
+        os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "t" * 40
+        os.environ["FIN_WORKSPACE_S3_BUCKET"] = "chk-bucket"
+        os.environ["FIN_WORKSPACE_S3_REGION"] = "us-west-2"
+        os.environ["FIN_WORKSPACE_KMS_KEY_ID"] = "kms-key"
+        os.environ["FIN_WORKSPACE_COOKIE_DOMAIN"] = ".unchainedsky.com"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_URL"] = "http://host.docker.internal:8793"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN"] = "p" * 40
+        import web as web_module
+        with patch.object(web_module, "_fin_workspace", None), \
+             patch("financial_workspace.runtime_provider_validate", return_value=None):
+            with self.assertRaises(RuntimeError) as ctx:
+                web_module._init_fin_workspace_control_plane()
+            self.assertIn("runtime provider is not validated", str(ctx.exception))
+
+    def test_activation_succeeds_with_validated_runtime_provider(self):
+        os.environ["FIN_WORKSPACE_ENABLED"] = "true"
+        os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "t" * 40
+        os.environ["FIN_WORKSPACE_S3_BUCKET"] = "chk-bucket"
+        os.environ["FIN_WORKSPACE_S3_REGION"] = "us-west-2"
+        os.environ["FIN_WORKSPACE_KMS_KEY_ID"] = "kms-key"
+        os.environ["FIN_WORKSPACE_COOKIE_DOMAIN"] = ".unchainedsky.com"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_URL"] = "http://host.docker.internal:8793"
+        os.environ["FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN"] = "p" * 40
+        import web as web_module
+        with patch.object(web_module, "_fin_workspace", None), \
+             patch("financial_workspace.runtime_provider_validate",
+                   return_value={"status": "ok", "provider": "host-side-v1"}), \
+             patch("checkpoint_store.create_checkpoint_store") as m_store:
+            web_module._init_fin_workspace_control_plane()
+            self.assertIsNotNone(web_module._fin_workspace)
+            m_store.assert_called_once_with(require_s3=True)
 
 
 # ---------------------------------------------------------------------------

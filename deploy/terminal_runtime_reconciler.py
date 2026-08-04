@@ -7,11 +7,16 @@ Design contract:
   starts/stops containers within that set; it never creates or removes seat
   definitions.
 - Target running = min(6, assigned + queued + 1), one warm spare,
-  5-minute idle scale-down.
+  5-minute idle scale-down. The configured idle threshold
+  (TERMINAL_RUNTIME_IDLE_SCALE_DOWN, default 300s) is enforced here AND sent
+  to the gateway so both sides share one source of truth.
 - Calls the gateway's private management API via docker-exec; never mounts the
   Docker socket into application containers.
 - Controls only exact allowlisted seat service names.
-- Holds and respects the existing host deployment lock (.deploy.lock).
+- Holds the host deployment lock (.deploy.lock) ONLY during each observed→
+  mutate cycle — never for the process lifetime — so activate/disable/rollback
+  (which coordinate the reconciler systemd stop in deploy preflight) cannot
+  deadlock behind a lifetime lock.
 - Validates project, labels, image digest, and generation before every mutation.
 - Counts STARTING seats, starts with bounded concurrency, drains atomically
   before stopping, and fails closed on any ambiguity.
@@ -23,7 +28,9 @@ Design contract:
 - Features default off; all current behavior is preserved.
 
 Environment (all require TERMINAL_RUNTIME_FEATURE_ENABLED=true):
-  TERMINAL_RUNTIME_FEATURE_ENABLED     bool  (default: false) — master enable
+  TERMINAL_RUNTIME_FEATURE_ENABLED     bool  (default: false) — master enable.
+                                         Truthy spellings (trimmed,
+                                         case-insensitive): 1|true|yes|on.
   TERMINAL_RUNTIME_MANAGEMENT_TOKEN    str   — gateway management token
   TERMINAL_RUNTIME_MANAGEMENT_PORT     int   (default: 8789) — private gateway port
   TERMINAL_RUNTIME_COMPOSE_PROJECT     str   (default: unchained)
@@ -60,6 +67,20 @@ ALLOWED_SEAT_NAMES = frozenset(
     f"fin-terminal-public-seat-{n:02d}" for n in range(1, 7)
 )
 
+# Canonical feature-flag truthy spellings (trimmed, case-insensitive). The
+# cross-repo contract requires every consumer to normalize 1|true|yes|on.
+_TRUE_FLAG_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def parse_feature_flag(value: str | None) -> bool:
+    """Normalize a feature-flag env value to a boolean.
+
+    Accepted truthy spellings (trimmed, case-insensitive): ``1``, ``true``,
+    ``yes``, ``on``. Anything else (including empty/None) is False. This is
+    the same normalization the app core uses for ``FIN_WORKSPACE_ENABLED``.
+    """
+    return (value or "").strip().lower() in _TRUE_FLAG_VALUES
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -86,7 +107,7 @@ class ReconcilerConfig:
     def from_env(cls, env: dict | None = None) -> ReconcilerConfig:
         if env is None:
             env = dict(os.environ)
-        enabled = env.get("TERMINAL_RUNTIME_FEATURE_ENABLED", "false").strip().lower() == "true"
+        enabled = parse_feature_flag(env.get("TERMINAL_RUNTIME_FEATURE_ENABLED", "false"))
         manage_dir = env.get("TERMINAL_RUNTIME_COMPOSE_DIR", "/home/ec2-user/unchained").strip()
         return cls(
             enabled=enabled,
@@ -577,9 +598,16 @@ class GatewayManagementClient:
         )
 
     def reconcile_plan(self, desired_seats: list[str]) -> dict:
-        """Ask gateway what should be running given desired set."""
+        """Ask gateway what should be running given desired set.
+
+        Also sends the reconciler's ``idleScaleDownSeconds`` so the gateway
+        enforces the exact same 5-minute idle threshold (one source of truth:
+        ``TERMINAL_RUNTIME_IDLE_SCALE_DOWN``). The gateway ignores the field
+        during rollout if it does not yet support it.
+        """
         return self._exec("/api/management/reconcile-plan", {
             "desiredSeats": desired_seats,
+            "idleScaleDownSeconds": self._config.idle_scale_down,
         })
 
     def drain_seat(self, seat_name: str, expected_generation: str) -> bool:
@@ -643,42 +671,56 @@ class TerminalRuntimeReconciler:
     # Full reconcile cycle
     # ------------------------------------------------------------------
     def reconcile(self) -> None:
-        """One reconcile tick: snapshot → decide → act, idempotently."""
+        """One reconcile tick: snapshot → decide → act, idempotently.
+
+        The host deployment lock (``.deploy.lock``) is held ONLY for the
+        duration of this observed→mutate cycle so a concurrent
+        activate/disable/rollback (which stop the reconciler systemd unit in
+        deploy preflight) can never deadlock behind a lifetime lock. When the
+        lock is held by another process the cycle runs passive (no mutation).
+        """
         if not self._config.enabled:
             return
 
-        # Only the lock holder reconciles
-        if not self._lock.held:
-            _log.debug("Reconcile skipped: lock not held")
+        # Only the lock holder reconciles — acquire per-cycle, never for the
+        # process lifetime. Non-blocking: a deploy/pilot action holding the
+        # lock simply means this cycle observes without mutating.
+        if not self._lock.acquire():
+            _log.debug("Reconcile skipped: deploy lock not held")
             return
-
-        self.validate_preconditions()
 
         try:
-            snapshot = self.gateway.reconcile_snapshot()
-        except RuntimeError as exc:
-            _log.error("Reconcile snapshot failed: %s", exc)
-            return
+            self.validate_preconditions()
 
-        _log.info(
-            "Snapshot: running=%d assigned=%d queued=%d desired=%d "
-            "starting=%d draining=%d",
-            snapshot.running_count, snapshot.total_assigned,
-            snapshot.total_queued, snapshot.desired_running,
-            snapshot.starting_count, snapshot.draining_count,
-        )
+            try:
+                snapshot = self.gateway.reconcile_snapshot()
+            except RuntimeError as exc:
+                _log.error("Reconcile snapshot failed: %s", exc)
+                return
 
-        # Idempotent recovery: handle transitory states from a previous crash
-        self._reconcile_transitory(snapshot)
+            _log.info(
+                "Snapshot: running=%d assigned=%d queued=%d desired=%d "
+                "starting=%d draining=%d",
+                snapshot.running_count, snapshot.total_assigned,
+                snapshot.total_queued, snapshot.desired_running,
+                snapshot.starting_count, snapshot.draining_count,
+            )
 
-        # The gateway's plan is authoritative; the totals are informational.
-        desired = snapshot.desired_from_plan
-        current = snapshot.running_count + snapshot.starting_count
+            # Idempotent recovery: handle transitory states from a previous crash
+            self._reconcile_transitory(snapshot)
 
-        if current < desired:
-            self._scale_up(snapshot, desired)
-        elif current > desired and snapshot.draining_count == 0:
-            self._scale_down(snapshot, current - desired)
+            # The gateway's plan is authoritative; the totals are informational.
+            desired = snapshot.desired_from_plan
+            current = snapshot.running_count + snapshot.starting_count
+
+            if current < desired:
+                self._scale_up(snapshot, desired)
+            elif current > desired and snapshot.draining_count == 0:
+                self._scale_down(snapshot, current - desired)
+        finally:
+            # Never hold the deploy lock past the cycle: activate/disable/
+            # rollback need it to make forward progress.
+            self._lock.release()
 
     # ------------------------------------------------------------------
     # Idempotent crash recovery
@@ -757,7 +799,11 @@ class TerminalRuntimeReconciler:
 
         # Never drain assigned seats or seats serving reconnecting visitors
         # Never drain seats currently draining
-        # Pick unassigned seats with the longest idle time first
+        # Enforce the configured 5-minute idle threshold (single source of
+        # truth: TERMINAL_RUNTIME_IDLE_SCALE_DOWN, default 300s). The gateway
+        # enforces the same exact threshold; the reconciler must not drain a
+        # seat that has not been continuously idle long enough.
+        # Pick the longest-idle candidates first.
         candidates = []
         for name, seat in snapshot.seats.items():
             if not seat.running:
@@ -765,6 +811,12 @@ class TerminalRuntimeReconciler:
             if seat.assigned:
                 continue
             if seat.status == "draining":
+                continue
+            if seat.idle_seconds < self._config.idle_scale_down:
+                _log.debug(
+                    "Seat %s idle=%.0fs below threshold %ds; not a candidate",
+                    name, seat.idle_seconds, self._config.idle_scale_down,
+                )
                 continue
             candidates.append((name, seat))
 
@@ -804,16 +856,27 @@ class TerminalRuntimeReconciler:
     # Rollback: start all six seats
     # ------------------------------------------------------------------
     def rollback_start_all(self) -> None:
-        """Start all six seats unconditionally (used before old gateway rollout)."""
+        """Start all six seats unconditionally (used before old gateway rollout).
+
+        Acquires the deploy lock only for the duration of the operation so a
+        concurrent pilot/rollback action cannot deadlock behind a lifetime
+        lock.
+        """
         _log.info("Rollback: starting all six seats")
-        for name in sorted(ALLOWED_SEAT_NAMES):
-            try:
-                docker_state = self._docker.container_state(name)
-                if docker_state == "absent":
-                    _log.info("Rollback: starting %s", name)
-                    self._docker.start_service(name)
-            except RuntimeError as exc:
-                _log.error("Rollback start of %s failed: %s", name, exc)
+        if not self._lock.acquire():
+            _log.warning("Rollback skipped: deploy lock not held")
+            return
+        try:
+            for name in sorted(ALLOWED_SEAT_NAMES):
+                try:
+                    docker_state = self._docker.container_state(name)
+                    if docker_state == "absent":
+                        _log.info("Rollback: starting %s", name)
+                        self._docker.start_service(name)
+                except RuntimeError as exc:
+                    _log.error("Rollback start of %s failed: %s", name, exc)
+        finally:
+            self._lock.release()
 
     # ------------------------------------------------------------------
     # Main loop
@@ -829,12 +892,6 @@ class TerminalRuntimeReconciler:
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
 
-        # Try to acquire lock
-        if not self._lock.acquire():
-            _log.info("Deploy lock held by another process; running passive (no mutation).")
-        else:
-            _log.info("Deploy lock acquired; full reconciler active.")
-
         try:
             while self._running:
                 try:
@@ -849,7 +906,6 @@ class TerminalRuntimeReconciler:
                         break
                     time.sleep(1)
         finally:
-            self._lock.release()
             _log.info("Reconciler stopped.")
 
     def _handle_signal(self, signum: int, _frame: object) -> None:

@@ -11,6 +11,24 @@ Any change to a value below must update this document and both implementations
 in the same change. Version bumps (`v1`, wire `expires_at` seconds) are
 intentional and additive-only until a new major version is cut.
 
+## 0. Feature-boolean contract
+
+Every feature-flag env value accepts **`1|true|yes|on`** (trimmed,
+case-insensitive) as truthy and normalizes it before use; everything else is
+off. Caddy expression matchers and the Compose render use the canonical
+**`true`/`false`** value (Caddy's CEL matchers require the literal boolean),
+so the master flag on the edge is always `true`/`false` while the control
+plane, gateway, and reconciler normalize all four spellings:
+
+- `FIN_TERMINAL_WORKSPACE_ENABLED` (Caddy + Compose + control plane + gateway)
+- `FIN_WORKSPACE_ENABLED` (app-level mirror, derived from the master flag)
+- `FINANCIAL_WORKSPACE_CHECKPOINTS` (gateway, derived from the master flag)
+- `TERMINAL_RUNTIME_FEATURE_ENABLED` (reconciler + gateway + workers)
+
+Infra tests render the compose with the master flag set and assert the same
+value reaches every consumer (see `test_terminal_runtime_reconciler.py` →
+`ComposeRenderTests`).
+
 ---
 
 ## 1. Workspace checkpoint create (S2S, app gateway → infra control plane)
@@ -31,7 +49,7 @@ Response `201` (canonical **snake_case**):
   "expires_at": 1750000000.0,
   "handoff_id": "fh-...",
   "handoff_secret": "<S2S only>",
-  "auth_url": "https://unbrowser.unchainedsky.com/fin-terminal-workspace/auth/claim?handoff_id=fh-...",
+  "auth_url": "https://unbrowser.unchainedsky.com/fin-terminal-workspace/workspace/auth/claim?handoff_id=fh-...",
   "already_exists": false,
   "status": "ready"
 }
@@ -55,7 +73,7 @@ Response `201` (canonical **snake_case**):
 
 | Cookie | Set by | Read by | Attributes |
 |---|---|---|---|
-| `fin-terminal-handoff-secret` | app gateway (`workspace-checkpoint-control.ts`) | infra control plane, server-side at `POST /api/claim` | `HttpOnly; Secure; SameSite=Lax; Path=/`; **host-only** (no `Domain`). Optional `Domain` only via `FINANCIAL_WORKSPACE_HANDOFF_COOKIE_DOMAIN` if the surfaces are ever split across subdomains. |
+| `fin-terminal-handoff-secret` | app gateway (`workspace-checkpoint-control.ts`) | infra control plane, server-side at `POST /workspace/claim` | `HttpOnly; Secure; SameSite=Lax; Path=/`; **host-only** (no `Domain`). Optional `Domain` only via `FINANCIAL_WORKSPACE_HANDOFF_COOKIE_DOMAIN` if the surfaces are ever split across subdomains. |
 | `fw_claim_secret` | infra control plane at claim initiation | infra control plane at OAuth start/callback | `HttpOnly; Secure; SameSite=Lax; Path=/; Domain=$FIN_WORKSPACE_COOKIE_DOMAIN` |
 | `fw_claim_nonce` | infra control plane at claim initiation | infra control plane at claim accept | `HttpOnly; Secure; SameSite=Lax; Path=/; Domain=$FIN_WORKSPACE_COOKIE_DOMAIN` |
 
@@ -187,16 +205,22 @@ to `fin-terminal-workspace-control:8790`.
 
 | Public URL (Caddy) | Stripped → handler route | Handler |
 |---|---|---|
-| `GET /fin-terminal-workspace/auth/claim?handoff_id=...` | `GET /auth/claim` | `handle_fin_workspace_auth_claim_page` |
-| `POST /fin-terminal-workspace/api/claim` | `POST /api/claim` | `handle_fin_workspace_browser_claim` |
-| `GET /fin-terminal-workspace/api/claims/{claim_id}` | `GET /api/claims/{claim_id}` | `handle_fin_workspace_browser_get_claim` |
-| `GET /fin-terminal-workspace/api/workspace` | `GET /api/workspace` | `handle_fin_workspace_browser_get_workspace` |
-| `GET /fin-terminal-workspace/api/snapshots` | `GET /api/snapshots` | `handle_fin_workspace_browser_get_snapshots` |
-| `GET /fin-terminal-workspace/api/runtime/status` | `GET /api/runtime/status` | `handle_fin_workspace_browser_runtime_status` |
-| `POST /fin-terminal-workspace/api/google` | `POST /api/google` | `handle_claim_google_token` |
-| `GET /fin-terminal-workspace/auth/{provider}/start?claim_id=...` | `GET /auth/{provider}/start` | `handle_claim_oauth_start` |
-| `GET /fin-terminal-workspace/auth/{provider}/callback` | `GET /auth/{provider}/callback` | `handle_claim_oauth_callback` |
-| `GET /fin-terminal-workspace/done?claim_id=...&status=...` | `GET /done` | `handle_claim_done` |
+| `POST /fin-terminal-workspace/workspace/auth/claim?handoff_id=...` | `GET /workspace/auth/claim` | `handle_fin_workspace_auth_claim_page` |
+| `POST /fin-terminal-workspace/workspace/claim` | `POST /workspace/claim` | `handle_fin_workspace_browser_claim` |
+| `GET /fin-terminal-workspace/workspace/claims/{claim_id}` | `GET /workspace/claims/{claim_id}` | `handle_fin_workspace_browser_get_claim` |
+| `GET /fin-terminal-workspace/workspace/workspace` | `GET /workspace/workspace` | `handle_fin_workspace_browser_get_workspace` |
+| `GET /fin-terminal-workspace/workspace/snapshots` | `GET /workspace/snapshots` | `handle_fin_workspace_browser_get_snapshots` |
+| `GET /fin-terminal-workspace/workspace/runtime/status` | `GET /workspace/runtime/status` | `handle_fin_workspace_browser_runtime_status` |
+| `POST /fin-terminal-workspace/workspace/oauth/google` | `POST /workspace/oauth/google` | `handle_claim_google_token` |
+| `GET /fin-terminal-workspace/workspace/oauth/{provider}/start?claim_id=...` | `GET /workspace/oauth/{provider}/start` | `handle_claim_oauth_start` |
+| `GET /fin-terminal-workspace/workspace/oauth/{provider}/callback` | `GET /workspace/oauth/{provider}/callback` | `handle_claim_oauth_callback` |
+| `GET /fin-terminal-workspace/workspace/done?claim_id=...&status=...` | `GET /workspace/done` | `handle_claim_done` |
+
+The claim surface is the **dedicated `/workspace/*` namespace** — it can never
+shadow (or be shadowed by) the site's own login OAuth routes
+(`/auth/facebook/...`, `/auth/github/...`). Router-resolution tests in
+`test_web_routes.py` pin both sides: the login routes resolve to the login
+handlers and the claim routes resolve to the claim handlers.
 
 Provider allowlist is exact: `google`, `facebook`, `github`; anything else
 returns 404. Caddy strips `Authorization`, `Proxy-Authorization`,
@@ -216,6 +240,7 @@ Internal (control-token protected, Docker-internal only):
 | `GET /internal/financial-workspace/workspace` / `snapshots` | user data reads |
 | `POST /internal/financial-workspace/effects/process` / `sweep` | outbox / expiry |
 | `POST /internal/financial-workspace/runtime/wake` / `sleep`; `GET .../status` | account runtime |
+| `POST /internal/financial-workspace/runtime/flush` | persist a checkpoint flushed back from the account runtime (`{slug, checkpoint}`) |
 
 Worker-side private route (app, never public):
 
@@ -223,17 +248,59 @@ Worker-side private route (app, never public):
 |---|---|
 | `POST /internal/financial-workspace/checkpoint-export` | worker exports authoritative checkpoint for the exact `{sessionId, generation}`; headers `X-Fin-Terminal-Control-Token` + worker proxy token |
 
+## 4b. Private workspace leg — authenticated `/fin-terminal/`
+
+When `FIN_TERMINAL_WORKSPACE_ENABLED=true`, Caddy maps `/fin-terminal/` to the
+control plane's private-workspace leg (`/workspace-terminal` after the prefix
+is stripped; subpaths such as `/fin-terminal/attach/<slug>/` proxy unchanged
+and are routed to the account's isolated runtime). The leg NEVER renders the
+marketing index or the public singleton:
+
+1. Session-authenticated account required (401 fail-closed page otherwise).
+2. Imported workspace required (404 fail-closed page otherwise).
+3. A **validated** host-side runtime provider required — the provider must
+   answer `/v1/health` with `accountRuntime` + `checkpointFile` capabilities.
+   Without it the leg returns 503 with an explicit reason and **no CTA**
+   (activation itself is gated at control-plane boot).
+4. On success the leg wakes the account runtime (provisioning the imported
+   checkpoint to the per-account checkpoint file) and serves the attach page;
+   `/fin-terminal/attach/{slug}/*` is proxied (HTTP + WebSocket) to
+   `fin-workspace-<slug>:8787` over the private per-account network. The slug
+   is derived server-side from the session — never trusted from the URL.
+
+The account runtime contract (app core, validated via the provider's
+`FIN_WORKSPACE_RUNTIME_APP_CAPABLE` flag):
+
+- Per-account container `fin-workspace-<slug>` on private network
+  `fin_ws_<slug>` (internal) + volume `fin_ws_<slug>_data`; no published host
+  ports; `cap_drop ALL`; no-new-privileges; read-only rootfs; never a Docker
+  socket inside a container (Docker authority is host-side only).
+- Checkpoint-file provisioning: the imported snapshot is written to
+  `FIN_WORKSPACE_CHECKPOINT_FILE` (default `/data/checkpoint.json`) on the
+  per-account volume; the app runtime reads it on boot.
+- The control-plane container is attached to the per-account network at wake
+  and detached at sleep so it is the only bridge to the account runtime.
+- Wake/attach/flush/sleep lifecycle is owned by the host-side
+  `fin-workspace-runtime-provider` systemd service.
+
+When the workspace flag is OFF the signed-in singleton
+(`fin-terminal:8787` + `forward_auth`) serves `/fin-terminal/*` unchanged —
+Caddy's singleton matchers are the exact negation of the workspace matcher,
+so the path can never fall through to the landing page.
+
 ## 5. Environment variables
 
 ### Control plane (infra `fin-terminal-workspace-control`)
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIN_TERMINAL_WORKSPACE_ENABLED` | master flag (Caddy + control plane + gateway) | `false` |
-| `FIN_WORKSPACE_ENABLED` | app-level mirror of the master flag | derived |
+| `FIN_TERMINAL_WORKSPACE_ENABLED` | master flag (Caddy + control plane + gateway); canonical `true`/`false` | `false` |
+| `FIN_WORKSPACE_ENABLED` | app-level mirror of the master flag (normalizes `1|true|yes|on`) | derived |
 | `FIN_WORKSPACE_CONTROL_TOKEN` | S2S bearer for `/internal/*` (32+ chars) | required when enabled |
 | `FIN_WORKSPACE_COOKIE_DOMAIN` | parent domain for `fw_claim_secret`/`fw_claim_nonce` | required when enabled |
 | `FIN_WORKSPACE_S3_BUCKET` / `_REGION` / `KMS_KEY_ID` | envelope-encrypted checkpoint storage | required when enabled |
+| `FIN_WORKSPACE_RUNTIME_PROVIDER_URL` | host-side runtime provider base (hard enablement gate) | `http://host.docker.internal:8793` |
+| `FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN` | shared secret with the provider (32+ chars) | required when enabled |
 | `FIN_TERMINAL_BASE_URL` | public base (`/fin-terminal-workspace`) | `https://unbrowser.unchainedsky.com/fin-terminal-workspace` |
 
 ### Gateway (app `fin-terminal-public-gateway`)

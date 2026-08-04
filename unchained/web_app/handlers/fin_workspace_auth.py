@@ -3,19 +3,21 @@
 Integrates the existing Google / Facebook / GitHub account creation with the
 one-time claim flow:
 
-1. The browser initiates a claim (``POST /api/claim``). The control plane reads
+1. The browser initiates a claim (``POST /workspace/claim``). The control plane reads
    the S2S handoff secret from the gateway-set HttpOnly
    ``fin-terminal-handoff-secret`` cookie, creates the claim, rotates the
    handoff cookie away, and sets an HttpOnly parent-domain claim cookie plus a
    same-tab nonce cookie. The body carries only ``handoff_id``/``browser_nonce``/
    ``audience`` — never the secret.
-2. ``GET /auth/{provider}/start?claim_id=...`` binds the provider OAuth state
-   to the claim (exact provider allowlist, purpose/audience checked) and
-   redirects to the provider.
-3. ``GET /auth/{provider}/callback`` verifies the exact callback path, the
+2. ``GET /workspace/oauth/{provider}/start?claim_id=...`` binds the provider
+   OAuth state to the claim (exact provider allowlist, purpose/audience
+   checked) and redirects to the provider. The dedicated ``/workspace/oauth/``
+   namespace can never shadow (or be shadowed by) the site's own login routes
+   (``/auth/facebook/...``, ``/auth/github/...``).
+3. ``GET /workspace/oauth/{provider}/callback`` verifies the exact callback path, the
    claim cookie, and the OAuth state binding, then get-or-creates the user,
    records the user origin, and accepts the claim exactly once.
-4. Google uses GSI (client-side id token): ``POST /api/google`` accepts the
+4. Google uses GSI (client-side id token): ``POST /workspace/oauth/google`` accepts the
    id token bound to the claim cookie and the same claim state.
 
 No bearer value ever travels in a URL or a log line; the claim secret lives
@@ -79,7 +81,7 @@ const params = new URLSearchParams(location.search);
 const claimId = params.get("claim_id") || "";
 const state = params.get("state") || "";
 function handleCredential(response) {
-  fetch("../../api/google", {method: "POST", headers: {"Content-Type": "application/json"},
+  fetch("../google", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({credential: response.credential, claim_id: claimId,
       oauth_state: state})})
     .then((r) => r.json().then((d) => ({ok: r.ok, d})))
@@ -131,7 +133,7 @@ def _claim_done_url(claim_id: str, status: str) -> str:
         "FIN_TERMINAL_BASE_URL",
         "https://unbrowser.unchainedsky.com/fin-terminal-workspace",
     ).strip().rstrip("/")
-    return f"{base}/done?claim_id={claim_id}&status={status}"
+    return f"{base}/workspace/done?claim_id={claim_id}&status={status}"
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ async def handle_claim_oauth_start(request: web.Request) -> web.Response:
         )
         if not client_id or not client_secret:
             return _error_response("github not configured", status=503)
-        redirect_uri = f"{_claim_callback_base_url()}/auth/github/callback"
+        redirect_uri = f"{_claim_callback_base_url()}/workspace/oauth/github/callback"
         oauth_url = f"{authorize_url}?{urlencode({
             'client_id': client_id,
             'redirect_uri': redirect_uri,
@@ -184,7 +186,7 @@ async def handle_claim_oauth_start(request: web.Request) -> web.Response:
         app_id, app_secret, dialog_url, _graph_base = _auth_admin._facebook_oauth_config()
         if not app_id or not app_secret:
             return _error_response("facebook not configured", status=503)
-        redirect_uri = f"{_claim_callback_base_url()}/auth/facebook/callback"
+        redirect_uri = f"{_claim_callback_base_url()}/workspace/oauth/facebook/callback"
         oauth_url = f"{dialog_url}?{urlencode({
             'client_id': app_id,
             'redirect_uri': redirect_uri,
@@ -196,7 +198,7 @@ async def handle_claim_oauth_start(request: web.Request) -> web.Response:
             return _error_response("claim no longer pending", status=409)
         return web.HTTPFound(oauth_url, headers=_NO_STORE_HEADERS)
 
-    # google — GSI page; the client posts the id token to /api/google.
+    # google — GSI page; the client posts the id token to /workspace/oauth/google.
     if not core.GOOGLE_CLIENT_ID:
         return _error_response("google not configured", status=503)
     if not fw.bind_oauth_state(claim_id, state, audience=provider):
@@ -208,7 +210,7 @@ async def handle_claim_oauth_start(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/{provider}/callback  (exact allowlist, claim cookie required)
+# GET /workspace/oauth/{provider}/callback  (exact allowlist, claim cookie required)
 # ---------------------------------------------------------------------------
 async def handle_claim_oauth_callback(request: web.Request) -> web.Response:
     """Callback for claim-aware OAuth. Verifies state binding + claim cookie."""
@@ -342,7 +344,7 @@ async def _exchange_github(request: web.Request):
     code = str(request.query.get("code", "") or "").strip()
     if not code:
         return None
-    redirect_uri = f"{_claim_callback_base_url()}/auth/github/callback"
+    redirect_uri = f"{_claim_callback_base_url()}/workspace/oauth/github/callback"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             token_resp = await client.post(
@@ -413,7 +415,7 @@ async def _exchange_facebook(request: web.Request):
     code = str(request.query.get("code", "") or "").strip()
     if not code:
         return None
-    redirect_uri = f"{_claim_callback_base_url()}/auth/facebook/callback"
+    redirect_uri = f"{_claim_callback_base_url()}/workspace/oauth/facebook/callback"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             token_resp = await client.get(
@@ -449,7 +451,7 @@ async def _exchange_facebook(request: web.Request):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/google — Google GSI id-token bound to the claim cookie
+# POST /workspace/oauth/google — Google GSI id-token bound to the claim cookie
 # ---------------------------------------------------------------------------
 async def handle_claim_google_token(request: web.Request) -> web.Response:
     """Accept a Google id token and accept the claim (GSI flow)."""
@@ -538,7 +540,7 @@ async def handle_claim_google_token(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
-# GET /done — claim completion page (no secrets)
+# GET /workspace/done — claim completion page (no secrets)
 # ---------------------------------------------------------------------------
 _DONE_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -556,21 +558,31 @@ a{color:#58a6ff;font-weight:600;text-decoration:none}
 <div class="card">
 <h1>Workspace {status}</h1>
 <p>Your workspace snapshot {status}. You can now open the workspace.</p>
-<p><a href="/fin-terminal/">Open workspace</a></p>
+{cta}
 </div>
 </body></html>
 """
 
+_DONE_CTA_VALIDATED = '<p><a href="/fin-terminal/">Open workspace</a></p>'
+
 
 async def handle_claim_done(request: web.Request) -> web.Response:
-    """GET /done — claim completion page (never echoes secrets)."""
+    """GET /workspace/done — claim completion page (never echoes secrets).
+
+    The "Open workspace" CTA renders only while the host-side runtime
+    provider is validated; otherwise the page carries no CTA (fail closed,
+    never a false marketing/singleton route).
+    """
+    from financial_workspace import runtime_provider_validate
+
     status = str(request.query.get("status", "") or "").strip()
     safe_status = status if status in ("accepted", "denied", "rejected",
                                        "profile_failed", "email_required",
                                        "account_failed", "claim_failed") else "accepted"
     label = "ready" if safe_status == "accepted" else safe_status
+    cta = _DONE_CTA_VALIDATED if runtime_provider_validate() is not None else ""
     return web.Response(
-        text=_DONE_PAGE.format(status=label),
+        text=_DONE_PAGE.replace("{status}", label).replace("{cta}", cta),
         content_type="text/html",
         headers=_NO_STORE_HEADERS,
     )

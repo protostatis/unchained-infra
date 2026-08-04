@@ -1764,6 +1764,22 @@ async def handle_google_verification_current(request: web.Request) -> web.Respon
 
 
 async def handle_index(request: web.Request) -> web.Response:
+    # When the financial workspace control plane is enabled, "/" must never
+    # render the marketing index: /fin-terminal/ is served by the dedicated
+    # /workspace-terminal leg, and a stray direct hit on "/" of the control
+    # plane (Docker-internal only) fails closed instead of falsely routing a
+    # workspace visitor to marketing.
+    try:
+        from financial_workspace import is_fin_workspace_enabled
+        if is_fin_workspace_enabled():
+            return web.Response(
+                status=404,
+                text="Not found",
+                content_type="text/plain",
+                headers={"Cache-Control": "no-store"},
+            )
+    except Exception:
+        pass
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
     # preview cookies are ignored on plain "/" visits so V4 is truly default.
@@ -2432,13 +2448,16 @@ def _init_fin_workspace_control_plane() -> None:
     """Eagerly initialize the financial workspace control plane.
 
     Fails closed: enabling ``FIN_WORKSPACE_ENABLED`` without the explicit
-    control token, S3 bucket, region, KMS key, and storage configuration is a
-    startup error — the container refuses to boot rather than falling back to
-    ``JWT_SECRET`` or local storage.
+    control token, S3 bucket, region, KMS key, storage configuration, and a
+    *validated* host-side runtime provider is a startup error — the container
+    refuses to boot rather than falling back to ``JWT_SECRET`` or local
+    storage, and ``/fin-terminal/`` is never falsely routed to the marketing
+    index or the public singleton.
     """
     from financial_workspace import (
         FinancialWorkspace,
         is_fin_workspace_enabled,
+        runtime_provider_validate,
         validate_fin_workspace_config,
     )
     from checkpoint_store import create_checkpoint_store
@@ -2455,6 +2474,20 @@ def _init_fin_workspace_control_plane() -> None:
             "financial workspace enabled but misconfigured (refusing to start): "
             + "; ".join(errors)
         )
+
+    # Hard enablement gate: activation requires a validated host-side runtime
+    # provider (reachable AND declaring accountRuntime+checkpointFile
+    # capabilities). Without it the private workspace leg cannot open the
+    # imported checkpoint in an isolated runtime — fail activation now.
+    provider = runtime_provider_validate()
+    if provider is None:
+        raise RuntimeError(
+            "financial workspace enabled but the runtime provider is not "
+            "validated (refusing to start): FIN_WORKSPACE_RUNTIME_PROVIDER_URL "
+            "must answer /v1/health with accountRuntime+checkpointFile "
+            "capabilities"
+        )
+    log.info("[fin-workspace] runtime provider validated: %s", provider.get("provider", "unknown"))
 
     store = create_checkpoint_store(require_s3=True)
     _fin_workspace = FinancialWorkspace(_auth.db_path, store)

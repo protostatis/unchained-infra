@@ -14,13 +14,21 @@ Internal API (Docker-internal only; Caddy denies ``/internal/*``):
   POST   /internal/financial-workspace/runtime/sleep       — account runtime sleep
   GET    /internal/financial-workspace/runtime/status      — account runtime status
 
-Browser routes (proxied by Caddy under ``/fin-terminal-workspace``):
-  GET    /auth/claim                    — handoff entry page (no secret in URL)
-  POST   /api/claim                     — initiate claim (secret in HttpOnly cookie)
-  GET    /api/claims/{claim_id}         — claim status
-  GET    /api/workspace                 — current user workspace
-  GET    /api/snapshots                 — current user snapshots
-  GET    /auth/{provider}/callback      — claim-aware OAuth callback (allowlist)
+Browser routes (proxied by Caddy under ``/fin-terminal-workspace``, dedicated
+``/workspace/*`` namespace — never ``/auth/...`` or ``/api/...`` so the claim
+OAuth routes cannot shadow the site's login routes):
+  GET    /workspace/auth/claim                 — handoff entry page (no secret in URL)
+  POST   /workspace/claim                      — initiate claim (secret in HttpOnly cookie)
+  GET    /workspace/claims/{claim_id}          — claim status
+  GET    /workspace/workspace                  — current user workspace
+  GET    /workspace/snapshots                  — current user snapshots
+  GET    /workspace/runtime/status             — current user runtime state
+  POST   /workspace/oauth/google               — Google GSI id token (claim-bound)
+  GET    /workspace/oauth/{provider}/start     — provider OAuth start (allowlist)
+  GET    /workspace/oauth/{provider}/callback  — provider OAuth callback (allowlist)
+  GET    /workspace/done                       — claim completion page
+  GET    /workspace-terminal                   — /fin-terminal/ leg (auth + provider gate)
+  GET    /attach/{slug}/{tail:.*}              — per-account runtime proxy (HTTP + WS)
 
 All internal S2S handlers require the bearer control token
 (``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``) — including the
@@ -31,9 +39,9 @@ initiation; it never appears in the browser JS, the POST body, a URL, or a log
 line. The claim secret is carried only in an HttpOnly Secure SameSite=Lax
 parent-domain cookie.
 
-Browser cookie-auth paths (no control token): ``POST /api/claim``,
-``GET /api/claims/{claim_id}``, ``GET /api/workspace``,
-``GET /api/snapshots``, ``GET /api/runtime/status``, and the OAuth
+Browser cookie-auth paths (no control token): ``POST /workspace/claim``,
+``GET /workspace/claims/{claim_id}``, ``GET /workspace/workspace``,
+``GET /workspace/snapshots``, ``GET /workspace/runtime/status``, and the OAuth
 start/callback handlers in ``fin_workspace_auth``. The internal claim/accept
 handlers are the S2S contract and reject cookie-only callers without the token.
 """
@@ -58,6 +66,10 @@ from financial_workspace import (
     ImportConflictError,
     UnauthorizedError,
     is_fin_workspace_enabled,
+    runtime_provider_status,
+    runtime_provider_validate,
+    runtime_provider_wake,
+    workspace_runtime_slug,
 )
 from web_app.core import get_core as _core
 
@@ -294,7 +306,7 @@ async def handle_fin_workspace_get_checkpoint(request: web.Request) -> web.Respo
 
 
 # ---------------------------------------------------------------------------
-# POST /internal/financial-workspace/claim  (and browser POST /api/claim)
+# POST /internal/financial-workspace/claim  (and browser POST /workspace/claim)
 # ---------------------------------------------------------------------------
 async def _initiate_claim_impl(request: web.Request) -> web.Response:
     """Initiate a one-time claim for a handoff.
@@ -370,7 +382,7 @@ async def handle_fin_workspace_claim(request: web.Request) -> web.Response:
 
     The documented model requires the bearer control token on every
     ``/internal/*`` handler. The browser cookie flow must use the
-    ``POST /api/claim`` route (no token, handoff cookie) instead.
+    ``POST /workspace/claim`` route (no token, handoff cookie) instead.
     """
     if not _verify_control_token(request):
         return _error_response("unauthorized", status=401)
@@ -378,7 +390,7 @@ async def handle_fin_workspace_claim(request: web.Request) -> web.Response:
 
 
 async def handle_fin_workspace_browser_claim(request: web.Request) -> web.Response:
-    """POST /api/claim — browser claim initiation under /fin-terminal-workspace."""
+    """POST /workspace/claim — browser claim initiation under /fin-terminal-workspace."""
     return await _initiate_claim_impl(request)
 
 
@@ -387,11 +399,11 @@ def _claim_oauth_start_url(claim_id: str, audience: str) -> str:
         "FIN_TERMINAL_BASE_URL",
         "https://unbrowser.unchainedsky.com/fin-terminal-workspace",
     ).strip().rstrip("/")
-    return f"{base}/auth/{audience}/start?claim_id={claim_id}"
+    return f"{base}/workspace/oauth/{audience}/start?claim_id={claim_id}"
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/claim — browser handoff entry page (no secret in URL)
+# GET /workspace/auth/claim — browser handoff entry page (no secret in URL)
 # ---------------------------------------------------------------------------
 _CLAIM_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -427,13 +439,15 @@ if (!handoffId) { document.getElementById("err").style.display = "block";
   document.getElementById("err").textContent = "Missing handoff id."; }
 /* The S2S handoff secret is held in the HttpOnly fin-terminal-handoff-secret
    cookie set by the gateway; it never reaches this page's JS. The server
-   reads it from the cookie when this POST is processed, then rotates it away. */
+   reads it from the cookie when this POST is processed, then rotates it away.
+   This page lives at /workspace/auth/claim; the claim POST endpoint is
+   /workspace/claim (one directory up). */
 document.querySelectorAll("button[data-provider]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const audience = btn.dataset.provider;
     btn.disabled = true;
     try {
-      const res = await fetch("../../api/claim", {method: "POST", headers: {"Content-Type": "application/json"},
+      const res = await fetch("../claim", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({handoff_id: handoffId,
           browser_nonce: crypto.randomUUID(), audience})});
       if (!res.ok) throw new Error("claim initiation failed");
@@ -452,7 +466,7 @@ document.querySelectorAll("button[data-provider]").forEach((btn) => {
 
 
 async def handle_fin_workspace_auth_claim_page(request: web.Request) -> web.Response:
-    """GET /auth/claim — serve the handoff entry page (secret never in URL)."""
+    """GET /workspace/auth/claim — serve the handoff entry page (secret never in URL)."""
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -470,7 +484,7 @@ async def handle_fin_workspace_claim_accept(request: web.Request) -> web.Respons
     """Accept a claim after OAuth callback (internal S2S variant).
 
     Requires the bearer control token: the browser OAuth callbacks
-    (``/auth/{provider}/callback``, ``POST /api/google``) call the core
+    (``/workspace/oauth/{provider}/callback``, ``POST /workspace/oauth/google``) call the core
     accept logic directly with the HttpOnly claim cookie and are the
     documented cookie-auth path.
     """
@@ -713,7 +727,7 @@ def _browser_auth_user_id(request: web.Request) -> str:
 
 
 async def handle_fin_workspace_browser_get_claim(request: web.Request) -> web.Response:
-    """GET /api/claims/{claim_id} — claim status via the HttpOnly claim cookie."""
+    """GET /workspace/claims/{claim_id} — claim status via the HttpOnly claim cookie."""
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -731,7 +745,7 @@ async def handle_fin_workspace_browser_get_claim(request: web.Request) -> web.Re
 
 
 async def handle_fin_workspace_browser_get_workspace(request: web.Request) -> web.Response:
-    """GET /api/workspace — workspace for the session-authenticated user."""
+    """GET /workspace/workspace — workspace for the session-authenticated user."""
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -745,7 +759,7 @@ async def handle_fin_workspace_browser_get_workspace(request: web.Request) -> we
 
 
 async def handle_fin_workspace_browser_get_snapshots(request: web.Request) -> web.Response:
-    """GET /api/snapshots — snapshots for the session-authenticated user."""
+    """GET /workspace/snapshots — snapshots for the session-authenticated user."""
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -760,7 +774,7 @@ async def handle_fin_workspace_browser_get_snapshots(request: web.Request) -> we
 
 
 async def handle_fin_workspace_browser_runtime_status(request: web.Request) -> web.Response:
-    """GET /api/runtime/status — account-scoped runtime state."""
+    """GET /workspace/runtime/status — account-scoped runtime state."""
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -832,3 +846,318 @@ async def handle_fin_workspace_runtime_status(request: web.Request) -> web.Respo
     if status is None:
         return _error_response("no workspace for user", status=404)
     return _json_response(status)
+
+
+async def handle_fin_workspace_runtime_flush(request: web.Request) -> web.Response:
+    """POST /internal/financial-workspace/runtime/flush — persist a checkpoint
+    flushed back from the account's isolated runtime (S2S, control-token).
+
+    Body: ``{slug, checkpoint}`` — ``slug`` is the account runtime slug the
+    provider provisioned; ``user_id`` is derived from the slug server-side so
+    the provider only needs to know the opaque slug (the account slug is
+    never stored as a user identifier anywhere else).
+    """
+    fw = _resolve_fw()
+    if fw is None:
+        return _error_response("financial workspace disabled", status=503)
+    if not _verify_control_token(request):
+        return _error_response("unauthorized", status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response("invalid JSON body", status=400)
+
+    from financial_workspace import workspace_runtime_slug
+
+    slug = str(body.get("slug", "") or "").strip()
+    checkpoint = body.get("checkpoint")
+    if not slug or not isinstance(checkpoint, dict):
+        return _error_response("slug and checkpoint required", status=400)
+
+    # Recover the account from the slug (slug is sha256(user_id)[:24]).
+    candidate_user_id = ""
+    for row in fw._iter_workspace_user_ids():
+        if workspace_runtime_slug(row[0]) == slug:
+            candidate_user_id = row[0]
+            break
+    if not candidate_user_id:
+        return _error_response("no account for slug", status=404)
+
+    result = fw.import_flushed_checkpoint(candidate_user_id, checkpoint)
+    if result is None:
+        return _error_response("no workspace for account", status=404)
+    return _json_response({"ok": True, "snapshot_id": result["snapshot_id"], "version": result["version"]})
+
+
+# ---------------------------------------------------------------------------
+# Private workspace leg — authenticated /fin-terminal/
+# ---------------------------------------------------------------------------
+# Caddy maps /fin-terminal/ to this leg (via /workspace-terminal) only when
+# FIN_TERMINAL_WORKSPACE_ENABLED=true. The leg NEVER renders the marketing
+# index: it authenticates the session, requires an imported workspace, and
+# requires a validated host-side runtime provider before waking the account's
+# isolated runtime. Every failure is a fail-closed page with no CTA.
+
+_TERMINAL_FAIL_CLOSED_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Workspace unavailable</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;
+display:grid;place-items:center;min-height:100vh;margin:0}
+.card{max-width:460px;padding:32px;border:1px solid #2d3748;border-radius:12px;
+background:#11161d;text-align:center}
+h1{font-size:18px;margin:0 0 8px}
+p{color:#9aa7b4;font-size:14px;line-height:1.5;margin:0}
+</style></head><body>
+<div class="card">
+<h1>{title}</h1>
+<p>{message}</p>
+</div>
+</body></html>
+"""
+
+_TERMINAL_ATTACH_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Workspace</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;
+display:grid;place-items:center;min-height:100vh;margin:0}
+.card{max-width:460px;padding:32px;border:1px solid #2d3748;border-radius:12px;
+background:#11161d;text-align:center}
+h1{font-size:18px;margin:0 0 8px}
+p{color:#9aa7b4;font-size:14px;line-height:1.5;margin:0 0 20px}
+a{display:inline-block;background:#238636;color:#fff;text-decoration:none;
+padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600}
+</style></head><body>
+<div class="card">
+<h1>Workspace ready</h1>
+<p>Your workspace runtime is up. Open the terminal to continue from your
+imported checkpoint.</p>
+<p><a href="{attach_url}">Open workspace</a></p>
+</div>
+</body></html>
+"""
+
+
+def _terminal_fail_closed(title: str, message: str, *, status: int) -> web.Response:
+    html = (
+        _TERMINAL_FAIL_CLOSED_TEMPLATE
+        .replace("{title}", title)
+        .replace("{message}", message)
+    )
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        status=status,
+        headers={**_NO_STORE_HEADERS},
+    )
+
+
+async def _wake_account_runtime(fw: FinancialWorkspace, user_id: str) -> dict | None:
+    """Validate provider + provision the account's isolated runtime.
+
+    Returns the provider status dict, or None when the provider is missing,
+    unreachable, or lacks the required capabilities. The control plane never
+    touches the Docker socket — the host-side provider owns it.
+    """
+    if runtime_provider_validate() is None:
+        return None
+    slug = workspace_runtime_slug(user_id)
+    checkpoint = fw.get_workspace_runtime_checkpoint(user_id)
+    if checkpoint is None:
+        return None
+    from financial_workspace import _resolve_control_token
+    return runtime_provider_wake(
+        slug,
+        checkpoint,
+        control_token=_resolve_control_token(),
+    )
+
+
+async def handle_fin_workspace_terminal(request: web.Request) -> web.Response:
+    """GET /workspace-terminal — the authenticated /fin-terminal/ leg.
+
+    Fail-closed contract:
+      1. Feature disabled              → 404 (no CTA)
+      2. Not authenticated             → 401 (no CTA)
+      3. No imported workspace         → 404 (no CTA)
+      4. Provider not validated        → 503, explicit reason, NO CTA
+      5. Provider validated            → wake + attach page (opens the runtime)
+    """
+    fw = _resolve_fw()
+    if fw is None:
+        return _terminal_fail_closed(
+            "Workspace unavailable", "Workspaces are not enabled for this host.", status=404
+        )
+
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return _terminal_fail_closed(
+            "Sign in required",
+            "Sign in to open your workspace. It stays private to your account.",
+            status=401,
+        )
+    user_id = str(auth_info.get("user_id", "") or "").strip()
+    if not user_id:
+        return _terminal_fail_closed("Sign in required", "Sign in to open your workspace.", status=401)
+
+    if fw.get_workspace_for_user(user_id) is None:
+        return _terminal_fail_closed(
+            "No workspace",
+            "This account has not imported a workspace yet.",
+            status=404,
+        )
+
+    provider_status = await _wake_account_runtime(fw, user_id)
+    if provider_status is None:
+        return _terminal_fail_closed(
+            "Workspace runtime unavailable",
+            "The workspace runtime provider is not validated. Workspace is "
+            "not being routed to a placeholder — it will open once a "
+            "validated runtime provider is provisioned.",
+            status=503,
+        )
+
+    slug = workspace_runtime_slug(user_id)
+    attach_url = f"/fin-terminal/attach/{slug}/"
+    return web.Response(
+        text=_TERMINAL_ATTACH_PAGE.replace("{attach_url}", attach_url),
+        content_type="text/html",
+        headers={**_NO_STORE_HEADERS},
+    )
+
+
+async def handle_fin_workspace_attach_proxy(request: web.Request) -> web.Response:
+    """GET /attach/{slug}/{tail:.*} — proxy HTTP + WebSocket to the account runtime.
+
+    The slug is derived server-side from the authenticated session — a
+    caller-supplied slug that does not match the session's workspace is
+    rejected. The upstream is the per-account container on its private
+    per-account network, reachable only from this control plane (Docker DNS).
+    """
+    fw = _resolve_fw()
+    if fw is None:
+        return _error_response("financial workspace disabled", status=503)
+
+    core = _core()
+    auth_info = core._authenticate(request)
+    if not auth_info:
+        return _error_response("authentication required", status=401)
+    user_id = str(auth_info.get("user_id", "") or "").strip()
+    if not user_id:
+        return _error_response("user identity required", status=401)
+    if fw.get_workspace_for_user(user_id) is None:
+        return _error_response("no workspace for user", status=404)
+
+    # Server-derived slug only; never trust the URL parameter.
+    expected_slug = workspace_runtime_slug(user_id)
+    slug = str(request.match_info.get("slug", "") or "").strip()
+    if slug != expected_slug:
+        return _error_response("slug mismatch", status=403)
+
+    if runtime_provider_status(slug) is None:
+        return _error_response("runtime not running", status=409)
+
+    tail = str(request.match_info.get("tail", "") or "").strip()
+    upstream = f"http://fin-workspace-{slug}:8787/{tail}"
+
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return await _proxy_websocket(request, upstream)
+    return await _proxy_http(request, upstream)
+
+
+async def _proxy_http(request: web.Request, upstream: str) -> web.Response:
+    """Stream a plain HTTP request to the account runtime."""
+    import aiohttp
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in {"host", "connection", "upgrade", "x-workspace-runtime-token"}
+    }
+    data = await request.read()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                request.method,
+                upstream,
+                headers=headers,
+                data=data or None,
+                timeout=aiohttp.ClientTimeout(total=90),
+            ) as resp:
+                body = await resp.read()
+                return web.Response(
+                    status=resp.status,
+                    body=body,
+                    headers={
+                        "Content-Type": resp.headers.get("Content-Type", "text/html"),
+                        "Cache-Control": "no-store",
+                    },
+                )
+    except Exception as exc:
+        log.error("[fin-workspace] attach proxy failed: %s", exc)
+        return _terminal_fail_closed(
+            "Workspace runtime unreachable",
+            "The workspace runtime did not respond. Try again in a moment.",
+            status=502,
+        )
+
+
+async def _proxy_websocket(request: web.Request, upstream: str) -> web.Response:
+    """Relay a WebSocket between the browser and the account runtime."""
+    import aiohttp
+    try:
+        ws_local = web.WebSocketResponse(heartbeat=30.0)
+        await ws_local.prepare(request)
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(
+                upstream,
+                headers={
+                    "X-Workspace-Runtime-Token": _resolve_fw_token(),
+                },
+                timeout=aiohttp.ClientWSTimeout(ws_close=10.0),
+            ) as ws_upstream:
+                async def pump_upstream() -> None:
+                    async for msg in ws_upstream:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await ws_local.send_str(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            await ws_local.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.CLOSE:
+                            await ws_local.close()
+                            break
+
+                async def pump_local() -> None:
+                    async for msg in ws_local:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await ws_upstream.send_str(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            await ws_upstream.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.CLOSE:
+                            await ws_upstream.close()
+                            break
+
+                import asyncio as _asyncio
+                tasks = [_asyncio.ensure_future(pump_upstream()), _asyncio.ensure_future(pump_local())]
+                done, pending = await _asyncio.wait(
+                    tasks, return_when=_asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    try:
+                        task.result()
+                    except Exception:
+                        pass
+        return ws_local
+    except Exception as exc:
+        log.error("[fin-workspace] attach WS proxy failed: %s", exc)
+        raise web.HTTPBadGateway(text="workspace runtime unreachable")
+
+
+def _resolve_fw_token() -> str:
+    from financial_workspace import _resolve_control_token as _token
+    return _token()

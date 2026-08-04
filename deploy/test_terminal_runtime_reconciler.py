@@ -202,7 +202,7 @@ class NoStopWithoutDrainTests(unittest.TestCase):
             for i, name in enumerate(sorted(ALLOWED_SEAT_NAMES)):
                 seats[name] = reconciler_module.SeatState(
                     name=name, status="healthy", assigned=False,
-                    generation=f"gen-{name}", idle_seconds=float(i * 60),
+                    generation=f"gen-{name}", idle_seconds=float(300 + i * 300),
                 )
             snapshot = reconciler_module.GatewaySnapshot(
                 seats=seats,
@@ -212,8 +212,8 @@ class NoStopWithoutDrainTests(unittest.TestCase):
 
             r._scale_down(snapshot, 2)
 
-            # seat-06 (idle 300s) should be first candidate, rejected -> no stop for seat-06
-            # seat-05 (idle 240s) second candidate, accepted -> stopped
+            # seat-06 (idle 1800s) should be first candidate, rejected -> no stop for seat-06
+            # seat-05 (idle 1500s) second candidate, accepted -> stopped
             # If seat-05 was accepted, stop count should be >= 1
             # First drain call should be for seat-06 and return False
             self.assertGreaterEqual(mock_drain.call_count, 2)
@@ -381,14 +381,66 @@ class LabelValidationTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class LockAndSplitBrainTests(unittest.TestCase):
     def test_reconciler_skips_when_lock_not_held(self) -> None:
+        """Reconcile runs passive (no mutation) when another process holds the
+        deploy lock; the lock is acquired per-cycle, never for the process
+        lifetime."""
         config = reconciler_module.ReconcilerConfig(
             enabled=True, management_token="t" * 32, compose_dir="/tmp",
         )
         r = reconciler_module.TerminalRuntimeReconciler(config)
-        # The lock is not acquired, so reconcile() should skip the gateway call
-        with mock.patch.object(r, "_gateway") as mock_gw:
-            r.reconcile()  # lock not held → should skip
-            mock_gw.reconcile_snapshot.assert_not_called()
+        # Hold the lock from a separate file descriptor so acquire() fails.
+        import fcntl
+        lock_fd = os.open(config.lock_file, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with mock.patch.object(r, "_gateway") as mock_gw:
+                r.reconcile()  # lock held elsewhere → skip, no gateway call
+                mock_gw.reconcile_snapshot.assert_not_called()
+                self.assertFalse(r._lock.held)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+    def test_reconciler_holds_lock_only_per_cycle(self) -> None:
+        """After a reconcile cycle the deploy lock must be released so
+        activate/disable/rollback can acquire it (no lifetime lock)."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32,
+            compose_project="unchained", compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        snapshot = reconciler_module.GatewaySnapshot(
+            seats={name: reconciler_module.SeatState(name=name) for name in SEAT_NAMES},
+            total_assigned=0, total_queued=0,
+        )
+        with mock.patch.object(r, "_docker", autospec=True), \
+             mock.patch.object(r._guard, "check", return_value=(True, "ok")), \
+             mock.patch.object(r.gateway, "reconcile_snapshot", return_value=snapshot), \
+             mock.patch.object(r.gateway, "activate_seat"):
+            r.reconcile()
+        self.assertFalse(r._lock.held,
+                         "deploy lock must be released after each reconcile cycle")
+
+    def test_reconciler_acquires_lock_for_cycle_and_releases_on_error(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        with mock.patch.object(r.gateway, "reconcile_snapshot",
+                               side_effect=RuntimeError("boom")):
+            r.reconcile()  # snapshot fails → still releases the lock
+        self.assertFalse(r._lock.held)
+
+    def test_rollback_acquires_and_releases_lock(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        with mock.patch.object(r._docker, "container_state", return_value="absent"), \
+             mock.patch.object(r._docker, "start_service") as mock_start:
+            r.rollback_start_all()
+            self.assertEqual(mock_start.call_count, 6)
+        self.assertFalse(r._lock.held, "rollback must release the deploy lock")
 
     def test_lock_released_after_exception(self) -> None:
         lock = reconciler_module.DeployLock("/tmp/.deploy.lock.test")
@@ -658,6 +710,50 @@ class CaddyHeaderContractTests(unittest.TestCase):
         caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
         self.assertIn("log_skip", caddyfile)
 
+    def test_dead_callback_matcher_removed(self) -> None:
+        """No dead /fin-terminal-workspace/callback/* matcher: the claim OAuth
+        callbacks live at /workspace/oauth/{provider}/callback (dedicated
+        namespace) served by a single surface matcher."""
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        self.assertNotIn("@fin_workspace_callback", caddyfile)
+        self.assertNotIn("/fin-terminal-workspace/callback", caddyfile)
+        self.assertIn("@fin_workspace_surface {", caddyfile)
+
+    def test_singleton_served_only_when_workspace_flag_off(self) -> None:
+        """The authenticated singleton must serve when the workspace flag is
+        OFF (negated matcher). Without the negation, /fin-terminal/ would fall
+        through to the landing page — a false marketing route."""
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        self.assertIn(
+            "expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`",
+            caddyfile,
+        )
+        self.assertIn("@fin_terminal_singleton {", caddyfile)
+        self.assertIn("@fin_terminal_base {", caddyfile)
+
+    def test_workspace_terminal_leg_maps_base_to_runtime_leg(self) -> None:
+        """When enabled, /fin-terminal/ is rewritten to the private-workspace
+        leg (/workspace-terminal) on the control plane — never the marketing
+        index; subpaths (attach proxy) proxy unchanged."""
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        self.assertIn("uri strip_prefix /fin-terminal", caddyfile)
+        self.assertIn("rewrite / /workspace-terminal", caddyfile)
+        self.assertIn("fin-terminal-workspace-control:8790", caddyfile)
+
+    def test_management_listener_never_proxied_by_caddy(self) -> None:
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        # Port 8789 (the private management listener) is never a proxy target
+        # and never appears in the edge config at all.
+        self.assertNotIn(":8789", caddyfile)
+        self.assertNotIn("8789", caddyfile)
+        # Management tokens are stripped, never forwarded upstream.
+        self.assertIn("request_header -X-Management-Token", caddyfile)
+
+    def test_internal_namespace_denied_on_workspace_host(self) -> None:
+        caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
+        self.assertIn('handle /internal/*', caddyfile)
+        self.assertIn('respond "Not found" 404', caddyfile)
+
 
 # ---------------------------------------------------------------------------
 # I) Compose render, shell syntax, deployment tests
@@ -670,6 +766,7 @@ class ComposeRenderTests(unittest.TestCase):
             "-f", str(PROJECT_DIR / "docker-compose.yml"),
             "-f", str(PROJECT_DIR / "docker-compose.public-terminal.yml"),
             "--profile", "fin-terminal-public-pilot",
+            "--profile", "fin-terminal-workspace",
             *extra,
         ]
 
@@ -689,6 +786,8 @@ class ComposeRenderTests(unittest.TestCase):
             "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
             "TRIAL_AGENT_KEY": "test-trial",
             "JWT_SECRET": "test-jwt",
+            "FIN_WORKSPACE_CONTROL_TOKEN": "test-control-token-value-32chars",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN": "test-runtime-provider-token-32",
         }
         return subprocess.run(
             cls._compose_args(*extra),
@@ -701,6 +800,95 @@ class ComposeRenderTests(unittest.TestCase):
             self.skipTest("PRIVATE_CORE_TOKEN env var required for compose config")
         self.assertEqual(result.returncode, 0,
                          f"Compose render failed:\n{result.stderr}")
+
+    def test_workspace_compose_valid_with_feature_off(self) -> None:
+        """The workspace-control service renders with the feature off."""
+        result = self._render_compose("config", "--no-interpolate", "--quiet")
+        if result.returncode != 0 and "PRIVATE_CORE_TOKEN" in (result.stderr or ""):
+            self.skipTest("PRIVATE_CORE_TOKEN env var required for compose config")
+        self.assertEqual(result.returncode, 0,
+                         f"Compose render failed:\n{result.stderr}")
+
+    def test_default_render_activates_false_everywhere(self) -> None:
+        """Default render (master flag unset) delivers false to every
+        consumer — one documented value, no drift."""
+        result = self._render_compose("config", "--format", "json")
+        if result.returncode != 0:
+            self.skipTest(f"Compose config not renderable: {result.stderr}")
+        config = json.loads(result.stdout)
+        services = config.get("services", {})
+        control = services.get("fin-terminal-workspace-control", {})
+        gateway = services.get("fin-terminal-public-gateway", {})
+        self.assertIn("fin-terminal-workspace-control", services)
+        control_env = dict(control.get("environment", {}))
+        self.assertEqual(control_env.get("FIN_WORKSPACE_ENABLED"), "false")
+        self.assertEqual(control_env.get("FIN_TERMINAL_WORKSPACE_ENABLED"), "false")
+        gateway_env = dict(gateway.get("environment", {}))
+        self.assertEqual(gateway_env.get("FINANCIAL_WORKSPACE_CHECKPOINTS"), "false")
+
+    def test_rendered_true_master_flag_activates_control_plane_and_gateway(self) -> None:
+        """FIN_TERMINAL_WORKSPACE_ENABLED=true renders the master value into
+        every consumer — the control plane's FIN_WORKSPACE_ENABLED /
+        FIN_TERMINAL_WORKSPACE_ENABLED and the gateway's
+        FINANCIAL_WORKSPACE_CHECKPOINTS — so the app-side boolean contract
+        (1|true|yes|on) sees the same canonical value."""
+        env = {
+            **os.environ,
+            "PRIVATE_CORE_TOKEN": "test-token",
+            "OPENROUTER_API_KEY": "test-key",
+            "FIN_TERMINAL_PUBLIC_SESSION_SIGNING_KEY": "test-sig",
+            "FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN": "test-worker",
+            "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test-edge",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SITE_KEY": "test-ts-site",
+            "FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET": "test-ts-secret",
+            "FIN_TERMINAL_PROXY_TOKEN": "test-proxy",
+            "FIN_TERMINAL_DEMO_PROXY_TOKEN": "test-demo",
+            "HOSTED_AGENT_SERVICE_TOKEN": "test-hosted",
+            "TRIAL_AGENT_KEY": "test-trial",
+            "JWT_SECRET": "test-jwt",
+            "FIN_WORKSPACE_CONTROL_TOKEN": "test-control-token-value-32chars",
+            "FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN": "test-runtime-provider-token-32",
+            "FIN_TERMINAL_WORKSPACE_ENABLED": "true",
+        }
+        result = subprocess.run(
+            self._compose_args("config", "--format", "json"),
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            self.skipTest(f"Compose config not renderable: {result.stderr}")
+        config = json.loads(result.stdout)
+        services = config.get("services", {})
+        control_env = dict(services["fin-terminal-workspace-control"].get("environment", {}))
+        gateway_env = dict(services["fin-terminal-public-gateway"].get("environment", {}))
+        self.assertEqual(control_env.get("FIN_TERMINAL_WORKSPACE_ENABLED"), "true")
+        self.assertEqual(control_env.get("FIN_WORKSPACE_ENABLED"), "true")
+        self.assertEqual(gateway_env.get("FINANCIAL_WORKSPACE_CHECKPOINTS"), "true")
+
+    def test_no_host_port_published_for_private_services(self) -> None:
+        """Management (8789) and control-plane (8790) listeners are exposed
+        only on the private Docker networks — never published to the host."""
+        result = self._render_compose("config", "--format", "json")
+        if result.returncode != 0:
+            self.skipTest("Compose config not renderable in test env")
+        config = json.loads(result.stdout)
+        for name in ("fin-terminal-public-gateway",
+                     "fin-terminal-workspace-control",
+                     "fin-terminal-public-seat-01"):
+            svc = config.get("services", {}).get(name, {})
+            self.assertEqual(svc.get("ports", []), [],
+                             f"{name} must not publish host ports: {svc.get('ports')}")
+
+    def test_control_plane_reaches_host_gateway_for_runtime_provider(self) -> None:
+        result = self._render_compose("config", "--format", "json")
+        if result.returncode != 0:
+            self.skipTest("Compose config not renderable in test env")
+        config = json.loads(result.stdout)
+        control = config["services"]["fin-terminal-workspace-control"]
+        self.assertIn("host.docker.internal=host-gateway",
+                      control.get("extra_hosts", []))
+        env = dict(control.get("environment", {}))
+        self.assertIn("FIN_WORKSPACE_RUNTIME_PROVIDER_URL", env)
+        self.assertIn("FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN", env)
 
     def test_exactly_six_seats_in_overlay(self) -> None:
         result = self._render_compose("config", "--format", "json")
@@ -745,6 +933,29 @@ class ShellSyntaxTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0,
                          f"Python syntax error:\n{result.stderr}")
+
+    def test_runtime_provider_valid_python_syntax(self) -> None:
+        provider_path = DEPLOY_DIR / "workspace_runtime_provider.py"
+        if not provider_path.exists():
+            self.skipTest("workspace runtime provider not present")
+        result = subprocess.run(
+            [sys.executable, "-m", "py_compile", str(provider_path)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+                         f"Python syntax error:\n{result.stderr}")
+
+    def test_runtime_provider_systemd_unit_valid_syntax(self) -> None:
+        unit_path = DEPLOY_DIR / "fin-workspace-runtime-provider.service"
+        if not unit_path.exists():
+            self.skipTest("runtime provider unit not present")
+        text = unit_path.read_text()
+        self.assertIn("[Unit]", text)
+        self.assertIn("[Service]", text)
+        self.assertIn("[Install]", text)
+        self.assertIn("ExecStart=", text)
+        self.assertIn("Restart=", text)
+        self.assertIn("workspace_runtime_provider.py", text)
 
     def test_pilot_script_valid_bash_syntax(self) -> None:
         result = subprocess.run(
@@ -830,7 +1041,7 @@ class ConfigValidationTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class IdleScaleDownTests(unittest.TestCase):
     def test_idle_seats_ordered_by_idle_time_descending(self) -> None:
-        """Seats with longest idle time should be drained first."""
+        """Seats with longest idle time (above the threshold) drain first."""
         config = reconciler_module.ReconcilerConfig(
             enabled=True, management_token="t" * 32, compose_dir="/tmp",
         )
@@ -845,18 +1056,87 @@ class IdleScaleDownTests(unittest.TestCase):
             for i, name in enumerate(sorted(ALLOWED_SEAT_NAMES)):
                 seats[name] = reconciler_module.SeatState(
                     name=name, status="healthy", assigned=False,
-                    generation=f"gen-{name}", idle_seconds=float(i * 60),
+                    generation=f"gen-{name}", idle_seconds=float(300 + i * 60),
                 )
             snapshot = reconciler_module.GatewaySnapshot(
                 seats=seats, total_assigned=0, total_queued=0,
             )
             r._scale_down(snapshot, 2)
 
-            # Most idle first: seat-06 (300s) then seat-05 (240s)
+            # Most idle first: seat-06 (600s) then seat-05 (540s)
             drain_calls = [c[0][0] for c in mock_drain.call_args_list]
             self.assertEqual(len(drain_calls), 2)
             self.assertEqual(drain_calls[0], "fin-terminal-public-seat-06")
             self.assertEqual(drain_calls[1], "fin-terminal-public-seat-05")
+
+    def test_idle_threshold_blocks_candidates_below_threshold(self) -> None:
+        """The configured 5-minute idle threshold is enforced: seats idle
+        below TERMINAL_RUNTIME_IDLE_SCALE_DOWN are never scale-down
+        candidates, even when the pool is over target."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+            idle_scale_down=300,
+        )
+        with mock.patch.object(reconciler_module.DockerInterface, "container_state", return_value="healthy"), \
+             mock.patch.object(reconciler_module.DockerInterface, "stop_service") as mock_stop, \
+             mock.patch.object(reconciler_module.DockerInterface, "remove_service"), \
+             mock.patch.object(reconciler_module.GatewayManagementClient, "drain_seat") as mock_drain:
+            mock_drain.return_value = True
+
+            r = reconciler_module.TerminalRuntimeReconciler(config)
+            seats = {}
+            for i, name in enumerate(sorted(ALLOWED_SEAT_NAMES)):
+                # 0..250s — every seat below the 300s threshold
+                seats[name] = reconciler_module.SeatState(
+                    name=name, status="healthy", assigned=False,
+                    generation=f"gen-{name}", idle_seconds=float(i * 50),
+                )
+            snapshot = reconciler_module.GatewaySnapshot(
+                seats=seats, total_assigned=0, total_queued=0,
+            )
+            r._scale_down(snapshot, 4)
+            mock_drain.assert_not_called()
+            mock_stop.assert_not_called()
+
+    def test_idle_threshold_exact_value_is_candidate(self) -> None:
+        """A seat idle for exactly the threshold is eligible (>= threshold)."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+            idle_scale_down=300,
+        )
+        with mock.patch.object(reconciler_module.DockerInterface, "container_state", return_value="healthy"), \
+             mock.patch.object(reconciler_module.DockerInterface, "stop_service"), \
+             mock.patch.object(reconciler_module.DockerInterface, "remove_service"), \
+             mock.patch.object(reconciler_module.GatewayManagementClient, "drain_seat") as mock_drain:
+            mock_drain.return_value = True
+
+            r = reconciler_module.TerminalRuntimeReconciler(config)
+            seats = {}
+            for i, name in enumerate(sorted(ALLOWED_SEAT_NAMES)):
+                seats[name] = reconciler_module.SeatState(
+                    name=name, status="healthy", assigned=False,
+                    generation=f"gen-{name}", idle_seconds=float(300 if i == 5 else i * 50),
+                )
+            snapshot = reconciler_module.GatewaySnapshot(
+                seats=seats, total_assigned=0, total_queued=0,
+            )
+            r._scale_down(snapshot, 1)
+            self.assertEqual(mock_drain.call_count, 1)
+            self.assertEqual(mock_drain.call_args[0][0], "fin-terminal-public-seat-06")
+
+    def test_reconcile_plan_sends_aligned_idle_threshold_to_gateway(self) -> None:
+        """The reconciler sends its configured idle threshold to the gateway so
+        both sides enforce one source of truth."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+            idle_scale_down=600,
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", return_value={"reconciled": True}) as mock_exec:
+            client.reconcile_plan(["fin-terminal-public-seat-01"])
+        url_path, payload = mock_exec.call_args[0]
+        self.assertEqual(url_path, "/api/management/reconcile-plan")
+        self.assertEqual(payload["idleScaleDownSeconds"], 600)
 
 
 # ---------------------------------------------------------------------------
@@ -922,6 +1202,28 @@ class FeatureFlagDefaultOffTests(unittest.TestCase):
             "TERMINAL_RUNTIME_FEATURE_ENABLED": " True ",
         })
         self.assertTrue(config.enabled, "Flag ' True ' should be truthy after trim+lower")
+
+    def test_from_env_accepts_all_contract_truthy_spellings(self) -> None:
+        """The feature-flag contract normalizes 1|true|yes|on (trimmed,
+        case-insensitive) everywhere, including the reconciler."""
+        for value in ("1", "true", "TRUE", "yes", "on", " yes "):
+            config = reconciler_module.ReconcilerConfig.from_env({
+                "TERMINAL_RUNTIME_FEATURE_ENABLED": value,
+            })
+            self.assertTrue(config.enabled, f"spelling {value!r} should enable")
+
+    def test_from_env_rejects_falsy_spellings(self) -> None:
+        for value in ("0", "false", "no", "off", "", "garbage", None):
+            config = reconciler_module.ReconcilerConfig.from_env({
+                "TERMINAL_RUNTIME_FEATURE_ENABLED": value,
+            })
+            self.assertFalse(config.enabled, f"spelling {value!r} should disable")
+
+    def test_parse_feature_flag_contract(self) -> None:
+        for value in ("1", "true", "yes", "on", " YES ", "On"):
+            self.assertTrue(reconciler_module.parse_feature_flag(value), value)
+        for value in ("0", "false", "no", "off", "", None, "2"):
+            self.assertFalse(reconciler_module.parse_feature_flag(value), value)
 
     def test_from_env_lowercase_false_is_disabled(self) -> None:
         config = reconciler_module.ReconcilerConfig.from_env({

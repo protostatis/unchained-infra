@@ -1551,7 +1551,7 @@ class FinWorkspaceHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_claim_requires_control_token(self):
         """Regression: the internal claim handler skipped token verification.
         The documented model requires the bearer control token on every
-        /internal/* handler; the browser flow uses POST /api/claim."""
+        /internal/* handler; the browser flow uses POST /workspace/claim."""
         ckpt = self.fw.create_checkpoint(
             request_id="req-int-claim", session_id="sess", worker_id="worker",
             checkpoint=b'{}',
