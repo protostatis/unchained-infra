@@ -736,6 +736,12 @@ class TerminalRuntimeReconciler:
                 self._scale_up(snapshot, desired)
             elif current > desired and snapshot.draining_count == 0:
                 self._scale_down(snapshot, current - desired)
+
+            # Stable release-gate marker: only a lock-owning cycle that passed
+            # precondition validation, obtained/parsed a gateway snapshot, and
+            # completed its decide/action path reports success. Feature-disabled,
+            # lock-busy, snapshot-failed, and exception cycles never reach here.
+            _log.info("Cycle outcome: success")
         finally:
             # Never hold the deploy lock past the cycle: activate/disable/
             # rollback need it to make forward progress.

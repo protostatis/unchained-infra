@@ -1220,22 +1220,34 @@ reconciler_diagnostics() {
 }
 
 verify_reconciler_cycle() {
-    local started_at logs cycle_state restarts
-    started_at="$(runtime_metadata_value started_at)" || {
-        echo "ERROR: runtime activation timestamp is unavailable" >&2
-        return 1
-    }
-    if [[ ! "$started_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-        echo "ERROR: runtime activation timestamp is invalid" >&2
+    local invocation_id logs cycle_state restarts
+    # Synchronize on the live unit's systemd InvocationID (journald field
+    # match) instead of a wall-clock/RFC3339 timestamp boundary: the activation
+    # timestamp is not a reliable journald filter on this host. Reject any
+    # value that is not exactly 32 lowercase hex (normalize only case).
+    invocation_id="$(sudo systemctl show terminal-runtime-reconciler \
+        -p InvocationID --value 2>/dev/null || true)"
+    invocation_id="$(printf '%s' "$invocation_id" | tr '[:upper:]' '[:lower:]')"
+    if [[ ! "$invocation_id" =~ ^[0-9a-f]{32}$ ]]; then
+        echo "ERROR: reconciler InvocationID is invalid or unavailable" >&2
+        reconciler_diagnostics >&2
         return 1
     fi
-    logs="$(sudo journalctl -u terminal-runtime-reconciler \
-        --since "$started_at" --no-pager -o cat 2>/dev/null || true)"
+    # Query only the current invocation's journal lines. A journalctl command
+    # failure must never be suppressed into an empty "successful" log.
+    if ! logs="$(sudo journalctl -u terminal-runtime-reconciler -n 200 \
+        "_SYSTEMD_INVOCATION_ID=$invocation_id" --no-pager -o cat 2>/dev/null)"; then
+        echo "ERROR: could not read reconciler journal for the current invocation" >&2
+        reconciler_diagnostics >&2
+        return 1
+    fi
     # A transient failed cycle may recover. Require the most recent relevant
-    # journal event to be a successful snapshot; retrying the workflow can then
-    # observe recovery instead of being poisoned by an older error line.
+    # journal event to be a successful reconcile cycle; retrying the workflow
+    # can then observe recovery instead of being poisoned by an older error line.
+    # lock-busy markers are expected while an activate/disable holds the deploy
+    # lock and are neither success nor fatal.
     if ! cycle_state="$(awk '
-/Snapshot:/ { last_success = NR }
+/Cycle outcome: success/ { last_success = NR }
 /Configuration error|Reconcile cycle error|Reconcile snapshot failed|Traceback/ { last_error = NR }
 END {
     if (last_success == 0 || last_error > last_success) exit 1
