@@ -739,7 +739,9 @@ class ResourceGuardTests(unittest.TestCase):
             with mock.patch.object(r._docker, "start_service") as mock_start:
                 seats = {name: reconciler_module.SeatState(name=name) for name in SEAT_NAMES}
                 snapshot = reconciler_module.GatewaySnapshot(seats=seats, total_assigned=3, total_queued=2)
-                r._scale_up(snapshot, 6)  # need 6 but guard blocks
+                # deficit 6 (projected 0), no in-flight starts → budget allows,
+                # but the resource guard blocks every start.
+                r._scale_up(snapshot, 6, 0, set())
                 mock_start.assert_not_called()
 
 
@@ -1640,6 +1642,264 @@ class StickyDrainLifecycleTests(unittest.TestCase):
         self.assertEqual(harness.containers["fin-terminal-public-seat-01"], "healthy")
         self.assertEqual(harness.stop_calls, [n for n in sorted(ALLOWED_SEAT_NAMES)[:5]])
         m_state.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# K3) Sticky-drain convergence fixes (scale-down without draining_count gate,
+#     projected-capacity scale-up, stale-tick start concurrency)
+# ---------------------------------------------------------------------------
+class _RejectingDrainHarness(_StickyDrainHarness):
+    """Gateway that never accepts a drain (concurrent assignment/reassignment)."""
+
+    def drain_seat(self, name: str, expected_generation: str) -> bool:
+        self.drain_calls.append(name)
+        return False
+
+
+class StickyDrainConvergenceTests(unittest.TestCase):
+    """Regression tests for the two proven production bugs:
+
+    1. Durable absent drains (completed scale-downs) must never globally block
+       scaling down healthy idle excess — `_scale_down` already excludes
+       per-seat draining/assigned/not-idle seats and the gateway drain CAS
+       revalidates.
+    2. Locally-present sticky-drain replacements count as projected committed
+       capacity for scale-up (deficit + start budget passed explicitly), so a
+       stale snapshot can neither start a second seat after an in-cycle
+       activation nor exceed `max_start_concurrency` across stale ticks.
+    """
+
+    def _make(self, max_start_concurrency: int = 2, idle_scale_down: int = 300):
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True,
+            management_token="t" * 32,
+            compose_dir="/tmp",
+            idle_scale_down=idle_scale_down,
+            max_start_concurrency=max_start_concurrency,
+        )
+        harness = _StickyDrainHarness(config)
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        r._docker = harness
+        r._gateway = harness
+        r._guard = mock.Mock()
+        r._guard.check.return_value = (True, "ok")
+        return r, harness
+
+    def _healthy_idle(self, harness: _StickyDrainHarness, names) -> None:
+        for name in names:
+            harness.seat_status[name] = "healthy"
+            harness.seat_generation[name] = f"gen-a-{name}"
+            harness.containers[name] = "healthy"
+
+    def _absent_drains(self, harness: _StickyDrainHarness, names) -> None:
+        """Durable absent drains: gateway says draining, container long gone."""
+        for name in names:
+            harness.seat_status[name] = "draining"
+            harness.seat_generation[name] = f"gen-a-{name}"
+            harness.drain_requested[name] = True
+            harness.drain_generation[name] = f"gen-a-{name}"
+
+    def test_production_state_drains_excess_despite_residual_drains(self) -> None:
+        """Exact production state: 3 healthy idle + 3 draining/local-absent,
+        desired=1. A full reconcile() drains exactly two healthy seats and never
+        touches the absent drains."""
+        r, harness = self._make()
+        healthy = sorted(ALLOWED_SEAT_NAMES)[:3]
+        drained = sorted(ALLOWED_SEAT_NAMES)[3:]
+        self._healthy_idle(harness, healthy)
+        self._absent_drains(harness, drained)
+        harness.plan["desiredRunning"] = 1
+
+        r.reconcile()
+
+        # Exactly two of the three healthy idle seats are drained+stopped.
+        self.assertEqual(len(harness.drain_calls), 2, harness.drain_calls)
+        self.assertEqual(len(harness.stop_calls), 2, harness.stop_calls)
+        self.assertTrue(
+            set(harness.stop_calls).issubset(set(healthy)),
+            f"only healthy seats may be stopped: {harness.stop_calls}",
+        )
+        # Absent drains are never touched: no start, no stop, no activate.
+        self.assertEqual(harness.start_calls, [])
+        self.assertEqual(harness.activate_calls, [])
+        for name in drained:
+            self.assertNotIn(name, harness.stop_calls)
+            self.assertEqual(harness.seat_status[name], "draining")
+            self.assertEqual(harness.containers.get(name), None)
+        # The pool converged to exactly one healthy running seat.
+        self.assertEqual(
+            [n for n in healthy if harness.containers.get(n) == "healthy"],
+            [healthy[-1]],
+        )
+
+    def test_active_draining_seat_excluded_per_seat_but_does_not_block(self) -> None:
+        """A draining seat whose container is still up locally is excluded
+        per-seat, but its presence must not globally block draining unrelated
+        healthy excess capacity."""
+        r, harness = self._make()
+        healthy = sorted(ALLOWED_SEAT_NAMES)[:3]
+        active = sorted(ALLOWED_SEAT_NAMES)[3]
+        self._healthy_idle(harness, healthy)
+        # Actively draining seat with its container STILL running locally.
+        harness.seat_status[active] = "draining"
+        harness.seat_generation[active] = "gen-a-04"
+        harness.drain_requested[active] = True
+        harness.drain_generation[active] = "gen-a-04"
+        harness.containers[active] = "healthy"
+        harness.plan["desiredRunning"] = 1
+
+        r.reconcile()
+
+        # The unrelated healthy excess is drained (2 of 3), the active draining
+        # seat is never drained or stopped and keeps its container.
+        self.assertEqual(len(harness.drain_calls), 2, harness.drain_calls)
+        self.assertEqual(len(harness.stop_calls), 2, harness.stop_calls)
+        self.assertNotIn(active, harness.stop_calls)
+        self.assertNotIn(active, harness.drain_calls)
+        self.assertEqual(harness.containers.get(active), "healthy")
+        self.assertEqual(harness.seat_status[active], "draining")
+
+    def test_concurrent_rejection_never_stops_candidate_through_full_reconcile(self) -> None:
+        """Concurrent assignment/drain rejection still never stops or removes a
+        candidate through a full reconcile() cycle."""
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+            idle_scale_down=300,
+        )
+        harness = _RejectingDrainHarness(config)
+        r = reconciler_module.TerminalRuntimeReconciler(config)
+        r._docker = harness
+        r._gateway = harness
+        r._guard = mock.Mock()
+        r._guard.check.return_value = (True, "ok")
+        healthy = sorted(ALLOWED_SEAT_NAMES)[:3]
+        drained = sorted(ALLOWED_SEAT_NAMES)[3:]
+        self._healthy_idle(harness, healthy)
+        self._absent_drains(harness, drained)
+        harness.plan["desiredRunning"] = 1
+
+        r.reconcile()
+
+        # Drain attempts were made but NO seat was ever stopped or removed.
+        self.assertGreaterEqual(len(harness.drain_calls), 2, harness.drain_calls)
+        self.assertEqual(harness.stop_calls, [])
+        self.assertEqual(harness.start_calls, [])
+        for name in healthy:
+            self.assertEqual(harness.containers.get(name), "healthy", name)
+        for name in drained:
+            self.assertEqual(harness.seat_status[name], "draining", name)
+            self.assertEqual(harness.containers.get(name), None, name)
+
+    def test_partial_scale_up_with_local_pending_replacement_stays_put(self) -> None:
+        """One healthy + one drained seat whose container is already restarting
+        locally (pending capacity), desired=2: repeated stale snapshots must not
+        start a second seat."""
+        r, harness = self._make()
+        h1, h2 = sorted(ALLOWED_SEAT_NAMES)[:2]
+        self._healthy_idle(harness, [h1])
+        # h2 restarted by a previous tick; gateway snapshot still says draining.
+        harness.seat_status[h2] = "draining"
+        harness.seat_generation[h2] = "gen-a-02"
+        harness.drain_requested[h2] = True
+        harness.drain_generation[h2] = "gen-a-02"
+        harness.containers[h2] = "starting"
+        harness.plan["desiredRunning"] = 2
+
+        for _ in range(3):
+            r.reconcile()   # repeated stale snapshots
+
+        self.assertEqual(harness.start_calls, [])
+        self.assertEqual(harness.activate_calls, [])
+        self.assertEqual(harness.containers.get(h1), "healthy")
+        self.assertEqual(harness.containers.get(h2), "starting")
+
+    def test_same_cycle_activation_does_not_start_another_seat(self) -> None:
+        """A successfully activated local-healthy seat is included in projected
+        capacity, so the same pre-activation snapshot cannot start another
+        unnecessary seat."""
+        r, harness = self._make()
+        h1, h2 = sorted(ALLOWED_SEAT_NAMES)[:2]
+        # h1: sticky drain, container restarted, NEW generation registered and
+        # locally healthy → an activation candidate.
+        harness.seat_status[h1] = "draining"
+        harness.seat_generation[h1] = "gen-b-01"     # generation changed
+        harness.drain_requested[h1] = True
+        harness.drain_generation[h1] = "gen-a-01"    # drained at old generation
+        harness.containers[h1] = "healthy"
+        self._healthy_idle(harness, [h2])
+        harness.plan["desiredRunning"] = 2
+        harness.plan["activateCandidates"] = ["seat-01"]
+
+        r.reconcile()
+
+        # h1's sticky drain is released this cycle…
+        self.assertEqual(harness.activate_calls, [h1])
+        self.assertEqual(harness.seat_status[h1], "healthy")
+        # …but the same stale pre-activation snapshot (current=1, h1 still
+        # draining) must NOT start a third seat.
+        self.assertEqual(harness.start_calls, [])
+        self.assertEqual(harness.containers.get(h2), "healthy")
+
+    def test_max_start_concurrency_bounded_across_stale_snapshots(self) -> None:
+        """In-flight starts from a prior tick consume max_start_concurrency
+        slots: repeated stale snapshots never exceed the bound."""
+        r, harness = self._make(max_start_concurrency=2)
+        drained = sorted(ALLOWED_SEAT_NAMES)[:4]
+        self._absent_drains(harness, drained)
+        harness.plan["desiredRunning"] = 4
+
+        for _ in range(4):
+            r.reconcile()   # four stale ticks
+
+        # Exactly the two allowed starts; the in-flight replacements keep
+        # consuming the remaining budget and no further seat is started.
+        self.assertEqual(harness.start_calls, drained[:2])
+        self.assertEqual(harness.containers.get(drained[0]), "running")
+        self.assertEqual(harness.containers.get(drained[2]), None)
+        self.assertEqual(harness.containers.get(drained[3]), None)
+
+    def test_integrated_6_to_1_to_2_to_1_sticky_lifecycle(self) -> None:
+        """End-to-end: 6 → 1 (five sticky drains) → 2 (one replacement restarts,
+        generation CAS) → 1 (converges), preserving all generation checks and
+        never overshooting on scale-up."""
+        r, harness = self._make(max_start_concurrency=2)
+        all_seats = sorted(ALLOWED_SEAT_NAMES)
+
+        # Phase A: demand drops to 1 → five seats drained + stopped.
+        self._healthy_idle(harness, all_seats)
+        harness.plan["desiredRunning"] = 1
+        r.reconcile()
+        self.assertEqual(len(harness.drain_calls), 5, harness.drain_calls)
+        self.assertEqual(len(harness.stop_calls), 5, harness.stop_calls)
+        for name in all_seats[:5]:
+            self.assertEqual(harness.seat_status[name], "draining", name)
+            self.assertEqual(harness.containers.get(name), None, name)
+        self.assertEqual(len(r._drain_generations), 5)
+
+        # Phase B: demand rises to 2 → exactly one drained seat restarts.
+        harness.plan["desiredRunning"] = 2
+        r.reconcile()
+        self.assertEqual(harness.start_calls, all_seats[:1])
+        self.assertEqual(harness.activate_calls, [])   # drain stays sticky
+
+        # Phase C: restarted container healthy + new generation → sticky drain
+        # released via activateCandidates; no second seat started from the
+        # stale pre-activation snapshot.
+        harness.containers[all_seats[0]] = "healthy"
+        harness.seat_generation[all_seats[0]] = "gen-b-01"
+        harness.plan["activateCandidates"] = ["seat-01"]
+        r.reconcile()
+        self.assertEqual(harness.activate_calls, [all_seats[0]])
+        self.assertEqual(harness.start_calls, all_seats[:1])
+
+        # Phase D: demand falls back to 1 → converges to exactly one healthy.
+        harness.plan["desiredRunning"] = 1
+        harness.plan["activateCandidates"] = []
+        r.reconcile()
+        self.assertEqual(len(harness.drain_calls), 6, harness.drain_calls)
+        self.assertEqual(len(harness.stop_calls), 6, harness.stop_calls)
+        healthy = [n for n in all_seats if harness.seat_status.get(n) == "healthy"]
+        self.assertEqual(len(healthy), 1, healthy)
 
 
 # ---------------------------------------------------------------------------

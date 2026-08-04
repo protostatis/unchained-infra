@@ -20,6 +20,12 @@ Design contract:
 - Validates project, labels, image digest, and generation before every mutation.
 - Counts STARTING seats, starts with bounded concurrency, drains atomically
   before stopping, and fails closed on any ambiguity.
+- Scale-down is decided from the REPORTED healthy+starting current versus
+  desired (durable absent drains never globally block it; _scale_down keeps
+  per-seat exclusions and the atomic gateway drain CAS). Locally-present
+  sticky-drain replacements count as projected capacity for SCALE-UP only —
+  never for scale-down, so an in-flight replacement can never push healthy
+  seats to be drained.
 - Resource guard blocks starts when host memory/disk headroom is below
   configured thresholds or when a pressure/OOM signal is detected.
 - Crash/restart reconciles STARTING / DRAINED / stopped seats idempotently.
@@ -716,7 +722,7 @@ class TerminalRuntimeReconciler:
                 "Snapshot: running=%d assigned=%d queued=%d desired=%d "
                 "starting=%d draining=%d",
                 snapshot.running_count, snapshot.total_assigned,
-                snapshot.total_queued, snapshot.desired_running,
+                snapshot.total_queued, snapshot.desired_from_plan,
                 snapshot.starting_count, snapshot.draining_count,
             )
 
@@ -726,15 +732,39 @@ class TerminalRuntimeReconciler:
             # Release sticky drains whose process generation changed (the
             # container was restarted and a new healthy generation registered).
             # Independent of scale direction: it runs every cycle, idempotently.
-            self._activate_ready_drained(snapshot)
+            # Returns the seats whose drains were released this cycle so their
+            # capacity is included in the projected current below — the same
+            # stale snapshot can never start an unnecessary seat on top of a
+            # seat it just activated.
+            activated = self._activate_ready_drained(snapshot)
 
             # The gateway's plan is authoritative; the totals are informational.
             desired = snapshot.desired_from_plan
             current = snapshot.running_count + snapshot.starting_count
 
-            if current < desired:
-                self._scale_up(snapshot, desired)
-            elif current > desired and snapshot.draining_count == 0:
+            # Projected capacity: reported current plus locally-present seats
+            # the stale gateway snapshot does not yet count (sticky-draining
+            # replacements already restarted, or seats started this cycle whose
+            # containers are still booting). Used for SCALE-UP only — scale-down
+            # stays on the reported current so an in-flight replacement can
+            # never cause healthy seats to be drained.
+            pending, in_flight = self._pending_capacity(snapshot, set(activated))
+            projected = current + len(pending)
+
+            _log.info(
+                "Reconcile decision: current=%d projected=%d desired=%d "
+                "pending=%d in_flight=%d",
+                current, projected, desired, len(pending), len(in_flight),
+            )
+
+            if projected < desired:
+                self._scale_up(snapshot, desired, projected, in_flight)
+            elif current > desired:
+                # Scale-down is decided from the REPORTED healthy+starting
+                # current versus desired — durable absent drains no longer
+                # globally block it. _scale_down retains its per-seat safety
+                # (assigned/draining/not-idle seats are excluded) and the
+                # atomic gateway drain CAS before any Docker stop.
                 self._scale_down(snapshot, current - desired)
 
             # Stable release-gate marker: only a lock-owning cycle that passed
@@ -835,7 +865,7 @@ class TerminalRuntimeReconciler:
         local = self._docker.container_state(name)
         return local in ("absent", "exited", "dead")
 
-    def _activate_ready_drained(self, snapshot: GatewaySnapshot) -> None:
+    def _activate_ready_drained(self, snapshot: GatewaySnapshot) -> list[str]:
         """Release sticky drains whose process generation changed.
 
         The gateway's ``plan.activateCandidates`` is authoritative: it lists
@@ -845,6 +875,10 @@ class TerminalRuntimeReconciler:
         gate — a seat is never activated/assigned before it is ready). A
         same-generation drain is never released (the gateway rejects it with
         ``409 drain sticky; generation unchanged``).
+
+        Returns the seat names whose drains were actually released this cycle;
+        the caller folds them into the projected capacity so the same stale
+        pre-activation snapshot cannot start an unnecessary extra seat.
         """
         plan_candidates: set[str] = set()
         for worker_id in (snapshot.plan.get("activateCandidates") or []):
@@ -869,6 +903,7 @@ class TerminalRuntimeReconciler:
                 if seat.generation != drain_gen:
                     names.add(name)
 
+        activated: list[str] = []
         for name in sorted(names):
             seat = snapshot.seats.get(name)
             if seat is None:
@@ -895,24 +930,103 @@ class TerminalRuntimeReconciler:
                     name, seat.generation or "",
                 )
                 self._drain_generations.pop(name, None)
+                activated.append(name)
             else:
                 _log.info(
                     "Activate not accepted for %s (drain still sticky)", name,
                 )
+        return activated
 
     # ------------------------------------------------------------------
     # Scale up
     # ------------------------------------------------------------------
-    def _scale_up(self, snapshot: GatewaySnapshot, desired: int) -> None:
-        current = snapshot.running_count + snapshot.starting_count
-        to_start = desired - current
-        if to_start <= 0:
+    def _pending_capacity(
+        self,
+        snapshot: GatewaySnapshot,
+        activated: set[str],
+    ) -> tuple[set[str], set[str]]:
+        """Projected committed capacity not visible in the gateway snapshot.
+
+        Returns ``(pending, in_flight)``:
+
+        - ``pending`` — seats whose containers are locally present (starting,
+          running, or healthy) but that the gateway snapshot does NOT count in
+          ``running_count``/``starting_count``: sticky-draining scale-up
+          replacements already restarted locally, seats started by a prior tick
+          before the gateway snapshot refreshed, or a seat successfully
+          activated this cycle (``activated`` is folded in explicitly so a
+          pre-activation stale snapshot can never start an extra seat). These
+          are committed warm-pool capacity: they count toward the projected
+          current for scale-up decisions, and NEVER toward scale-down (a
+          scale-down is decided only from the reported healthy+starting count,
+          so an in-flight replacement can never push healthy seats to drain).
+        - ``in_flight`` — the subset of pending capacity still booting locally
+          (starting/running, not yet healthy). Gateway-reported ``starting``
+          seats are likewise in-flight until their container is locally
+          healthy. In-flight seats consume ``max_start_concurrency`` slots so
+          repeated stale snapshot ticks stay bounded.
+        """
+        pending: set[str] = set()
+        in_flight: set[str] = set()
+        for name, seat in snapshot.seats.items():
+            if seat.status in ("healthy", "starting"):
+                # Already counted in running_count/starting_count. A gateway-
+                # reported "starting" seat is still booting and consumes a
+                # start-concurrency slot until its container is locally healthy.
+                if seat.status == "starting":
+                    local = self._docker.container_state(name)
+                    if local in ("starting", "running"):
+                        in_flight.add(name)
+                continue
+            local = self._docker.container_state(name)
+            if local in ("healthy", "running", "starting"):
+                pending.add(name)
+                if local in ("running", "starting"):
+                    in_flight.add(name)
+        # A successfully activated seat is committed capacity even if the
+        # local-state check raced; it is added only to pending (activation
+        # already requires a locally-healthy container), never to the reported
+        # counts, so it cannot be double-counted.
+        pending |= set(activated)
+        return pending, in_flight
+
+    def _scale_up(
+        self,
+        snapshot: GatewaySnapshot,
+        desired: int,
+        projected: int,
+        in_flight: set[str],
+    ) -> None:
+        """Scale up by the projected deficit, bounded by start concurrency.
+
+        ``desired`` is the authoritative plan target and ``projected`` the
+        reported current plus pending committed capacity (see
+        :meth:`_pending_capacity`) — the deficit is derived from those explicit
+        values instead of being recomputed from the stale snapshot, so
+        in-flight sticky-drain replacements already count toward the target.
+        ``in_flight`` (locally starting/running seats the snapshot does not yet
+        count) consumes ``max_start_concurrency`` slots, keeping the bound
+        across repeated stale ticks.
+        """
+        deficit = desired - projected
+        if deficit <= 0:
             return
 
         # Resource guard
         allowed, reason = self._guard.check()
         if not allowed:
             _log.warning("Scale-up blocked: %s", reason)
+            return
+
+        # Locally pending starts consume start-concurrency slots: an in-flight
+        # replacement booting from a prior tick still counts against the bound.
+        start_budget = self._config.max_start_concurrency - len(in_flight)
+        if start_budget <= 0:
+            _log.info(
+                "Scale-up deferred: %d in-flight starts saturate the "
+                "max_start_concurrency=%d budget",
+                len(in_flight), self._config.max_start_concurrency,
+            )
             return
 
         # Collect locally-stopped seats to start — including drained seats
@@ -925,9 +1039,10 @@ class TerminalRuntimeReconciler:
         # Sort deterministically
         candidates.sort()
 
+        to_start = min(deficit, start_budget)
         started = 0
         for name in candidates:
-            if started >= to_start or started >= self._config.max_start_concurrency:
+            if started >= to_start:
                 break
             seat = snapshot.seats[name]
             was_draining = seat.status == "draining"
