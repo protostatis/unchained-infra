@@ -77,6 +77,11 @@ log = logging.getLogger(__name__)
 
 _auth = Auth()
 
+# Financial workspace control plane (feature-flagged, default off). Eagerly
+# initialized in ``create_app()`` when FIN_WORKSPACE_ENABLED=true; the
+# workspace-control slice serves browser handoff/auth/callback + S2S routes.
+_fin_workspace = None
+
 
 def _resolve_analytics_db_path(auth_db_path: str) -> str:
     """Use dedicated analytics.db; auth.db analytics tables are legacy only."""
@@ -1759,6 +1764,22 @@ async def handle_google_verification_current(request: web.Request) -> web.Respon
 
 
 async def handle_index(request: web.Request) -> web.Response:
+    # When the financial workspace control plane is enabled, "/" must never
+    # render the marketing index: /fin-terminal/ is served by the dedicated
+    # /terminal leg (Caddy rewrites /fin-terminal/* → /terminal/*), and a
+    # stray direct hit on "/" of the control plane (Docker-internal only)
+    # fails closed instead of falsely routing a workspace visitor to marketing.
+    try:
+        from financial_workspace import is_fin_workspace_enabled
+        if is_fin_workspace_enabled():
+            return web.Response(
+                status=404,
+                text="Not found",
+                content_type="text/plain",
+                headers={"Cache-Control": "no-store"},
+            )
+    except Exception:
+        pass
     # Explicit per-variant routing so a flip of LANDING_HTML can't accidentally
     # break the v2/v3 escape hatches. Default falls back to LANDING_HTML. Old
     # preview cookies are ignored on plain "/" visits so V4 is truly default.
@@ -2413,6 +2434,152 @@ def _register_routes(app: web.Application):
     )
 
 
+# ---------------------------------------------------------------------------
+# Financial workspace control plane — eager init + outbox/sweep loops.
+# The separate workspace-control slice runs this same app on port 8790.
+# ---------------------------------------------------------------------------
+
+def _resolve_fin_workspace_control_token() -> str:
+    from financial_workspace import _resolve_control_token as _token
+    return _token()
+
+
+def _init_fin_workspace_control_plane() -> None:
+    """Eagerly initialize the financial workspace control plane.
+
+    Fails closed: enabling ``FIN_WORKSPACE_ENABLED`` without the explicit
+    control token, S3 bucket, region, KMS key, storage configuration, and a
+    *validated* host-side runtime provider is a startup error — the container
+    refuses to boot rather than falling back to ``JWT_SECRET`` or local
+    storage, and ``/fin-terminal/`` is never falsely routed to the marketing
+    index or the public singleton.
+    """
+    from financial_workspace import (
+        FinancialWorkspace,
+        is_fin_workspace_enabled,
+        runtime_provider_validate,
+        validate_fin_workspace_config,
+    )
+    from checkpoint_store import create_checkpoint_store
+
+    global _fin_workspace
+    if _fin_workspace is not None:
+        return
+    if not is_fin_workspace_enabled():
+        return
+
+    errors = validate_fin_workspace_config()
+    if errors:
+        raise RuntimeError(
+            "financial workspace enabled but misconfigured (refusing to start): "
+            + "; ".join(errors)
+        )
+
+    # Hard enablement gate: activation requires a validated host-side runtime
+    # provider (reachable AND declaring accountRuntime+checkpointFile
+    # capabilities). Without it the private workspace leg cannot open the
+    # imported checkpoint in an isolated runtime — fail activation now.
+    provider = runtime_provider_validate()
+    if provider is None:
+        raise RuntimeError(
+            "financial workspace enabled but the runtime provider is not "
+            "validated (refusing to start): FIN_WORKSPACE_RUNTIME_PROVIDER_URL "
+            "must answer /v1/health with accountRuntime+checkpointFile "
+            "capabilities"
+        )
+    log.info("[fin-workspace] runtime provider validated: %s", provider.get("provider", "unknown"))
+
+    store = create_checkpoint_store(require_s3=True)
+    _fin_workspace = FinancialWorkspace(_auth.db_path, store)
+    log.info(
+        "[fin-workspace] control plane initialized "
+        "(store=%s)", type(store).__name__
+    )
+
+
+async def _fin_workspace_effects_loop() -> None:
+    """Real outbox consumer: processes pending workspace effects periodically."""
+    import os as _os
+    interval = max(5, int(_os.environ.get("FIN_WORKSPACE_EFFECT_INTERVAL_SECONDS", "15")))
+    while True:
+        await asyncio.sleep(interval)
+        if _fin_workspace is None:
+            continue
+        try:
+            from credit import CreditLedger
+            ledger = CreditLedger(db_path=_auth.db_path)
+            effects = await asyncio.to_thread(_fin_workspace.poll_pending_effects, 10)
+            for effect in effects:
+                eid = effect["effect_id"]
+                try:
+                    if not _fin_workspace.mark_effect_processing(eid):
+                        continue
+                    if effect["effect_type"] == "account_grant":
+                        await asyncio.to_thread(
+                            _fin_workspace.process_account_grant_effect,
+                            effect["context"], ledger,
+                        )
+                    # workspace_upsert/snapshot_import are applied inline during
+                    # claim accept; the outbox row exists for idempotent replay.
+                    _fin_workspace.mark_effect_completed(eid)
+                except Exception as exc:
+                    _fin_workspace.mark_effect_completed(eid, failed=True, error=str(exc))
+                    log.warning("[fin-workspace] effect %s failed: %s", eid, exc)
+        except Exception as exc:
+            log.warning("[fin-workspace] effects loop error: %s", exc)
+
+
+async def _fin_workspace_sweep_loop() -> None:
+    """Real sweeper: expires stale checkpoints and deletes their storage."""
+    import os as _os
+    interval = max(30, int(_os.environ.get("FIN_WORKSPACE_SWEEP_INTERVAL_SECONDS", "300")))
+    while True:
+        await asyncio.sleep(interval)
+        if _fin_workspace is None:
+            continue
+        try:
+            count = await asyncio.to_thread(_fin_workspace.sweep_expired)
+            if count:
+                log.info("[fin-workspace] sweep: expired %d checkpoint(s)", count)
+        except Exception as exc:
+            log.warning("[fin-workspace] sweep error: %s", exc)
+
+
+async def _fin_workspace_runtime_sweep_loop() -> None:
+    """Idle-sleep scheduler for account runtimes.
+
+    Every sweep tick resolves the in-process runtime scheduler (same instance
+    the proxy handlers attach/detach/touch) and sleeps idle runtimes ONLY
+    after a durable checkpoint flush. When a flush fails the runtime stays
+    awake (fail closed) and the scheduler backs off.
+    """
+    import os as _os
+    interval = max(15, int(os.environ.get("FIN_WORKSPACE_RUNTIME_SWEEP_INTERVAL_SECONDS", "60")))
+    while True:
+        await asyncio.sleep(interval)
+        if _fin_workspace is None:
+            continue
+        try:
+            from web_app.core import get_core as _core_resolver
+            from web_app.handlers.fin_workspace import _resolve_runtime_scheduler
+            # Resolve the SAME in-process core object the proxy handlers use
+            # (the running web.py instance when launched as ``python web.py``,
+            # or the imported ``web`` module otherwise) so the idle scheduler
+            # shared with attach/detach/touch is the one being ticked.
+            scheduler = _resolve_runtime_scheduler(_core_resolver(), _fin_workspace)
+            results = await asyncio.to_thread(scheduler.tick)
+            for result in results:
+                if result.get("error") or not (result.get("flush") or {}).get("ok"):
+                    log.warning(
+                        "[fin-workspace] idle sleep refused for %s (flush not durable): %s",
+                        result.get("user_id"), result.get("error") or "flush failed",
+                    )
+                else:
+                    log.info("[fin-workspace] idle-slept runtime for %s", result.get("user_id"))
+        except Exception as exc:
+            log.warning("[fin-workspace] runtime sweep error: %s", exc)
+
+
 async def _on_startup(app_: web.Application):
     del app_
     global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
@@ -2424,6 +2591,13 @@ async def _on_startup(app_: web.Application):
     _headless_watchdog_task = _state.headless_watchdog_task
     # Credit stale-run sweep finalizes unresolved reservations after crashes.
     _state.credit_sweep_task = asyncio.create_task(_credit_stale_sweep_loop())
+    # Financial workspace outbox consumer + sweeper (feature-flagged).
+    if _fin_workspace is not None:
+        _state.fin_workspace_effect_task = asyncio.create_task(_fin_workspace_effects_loop())
+        _state.fin_workspace_sweep_task = asyncio.create_task(_fin_workspace_sweep_loop())
+        _state.fin_workspace_runtime_task = asyncio.create_task(
+            _fin_workspace_runtime_sweep_loop()
+        )
 
 
 async def _credit_stale_sweep_loop():
@@ -2456,10 +2630,19 @@ async def _on_cleanup(app_: web.Application):
         _state.headless_watchdog_task.cancel()
     if getattr(_state, "credit_sweep_task", None):
         _state.credit_sweep_task.cancel()
+    if getattr(_state, "fin_workspace_effect_task", None):
+        _state.fin_workspace_effect_task.cancel()
+    if getattr(_state, "fin_workspace_sweep_task", None):
+        _state.fin_workspace_sweep_task.cancel()
+    if getattr(_state, "fin_workspace_runtime_task", None):
+        _state.fin_workspace_runtime_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
     _state.headless_watchdog_task = None
     _state.credit_sweep_task = None
+    _state.fin_workspace_effect_task = None
+    _state.fin_workspace_sweep_task = None
+    _state.fin_workspace_runtime_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
     _headless_watchdog_task = None
@@ -2509,6 +2692,8 @@ async def _on_cleanup(app_: web.Application):
 
 
 def create_app() -> web.Application:
+    # Eager, fail-closed control-plane init runs before the app serves.
+    _init_fin_workspace_control_plane()
     app = web.Application(middlewares=[branded_not_found_middleware])
     _register_routes(app)
     app.cleanup_ctx.append(trial_new_chat_status_cleanup_context)

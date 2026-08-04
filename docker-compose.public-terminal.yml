@@ -12,7 +12,7 @@
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
-    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#b70a7901bac99c981e3ced240cf25600ca8fc589"
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7872245223842e113fd9fbf805946601129a59ae"
     args:
       PUBLIC_BASE_PATH: /
       VITE_TERMINAL_BUILD_MODE: live
@@ -39,6 +39,12 @@ x-fin-terminal-public-worker: &fin-terminal-public-worker
     - PUBLIC_SESSION_MAX_SECONDS=900
     - PUBLIC_RECONNECT_GRACE_SECONDS=30
     - PUBLIC_MAX_RESEARCH_RUNS=5
+    # Research-permit gate: workers acquire the gateway-owned global permit over
+    # the private seat network (fin-terminal-public-gateway:8789). The
+    # management listener is never published and never proxied by Caddy.
+    - TERMINAL_RUNTIME_FEATURE_ENABLED=${TERMINAL_RUNTIME_FEATURE_ENABLED:-false}
+    - TERMINAL_RUNTIME_MANAGEMENT_TOKEN=${TERMINAL_RUNTIME_MANAGEMENT_TOKEN:-}
+    - TERMINAL_RUNTIME_MANAGEMENT_URL=http://fin-terminal-public-gateway:8789
   read_only: true
   tmpfs:
     - /tmp:rw,nosuid,nodev,noexec,size=268435456,mode=1777
@@ -143,7 +149,7 @@ services:
 
   fin-terminal-public-gateway:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#b70a7901bac99c981e3ced240cf25600ca8fc589"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#7872245223842e113fd9fbf805946601129a59ae"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
         VITE_TERMINAL_BUILD_MODE: public-live
@@ -176,6 +182,27 @@ services:
       - PUBLIC_ADMISSION_ATTEMPTS=5
       - PUBLIC_ADMISSION_WINDOW_SECONDS=600
       - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787,seat-02=http://fin-terminal-public-seat-02:8787,seat-03=http://fin-terminal-public-seat-03:8787,seat-04=http://fin-terminal-public-seat-04:8787,seat-05=http://fin-terminal-public-seat-05:8787,seat-06=http://fin-terminal-public-seat-06:8787
+      # Private management API for the host-side reconciler. Never exposed on the
+      # public edge. The token is passed via an exact header; the listener is on a
+      # separate internal port (8789) that Caddy never proxies. The reconciler
+      # reaches it via `docker exec` on loopback; workers reach it over the
+      # private seat networks.
+      - TERMINAL_RUNTIME_MANAGEMENT_TOKEN=${TERMINAL_RUNTIME_MANAGEMENT_TOKEN:-}
+      - TERMINAL_RUNTIME_FEATURE_ENABLED=${TERMINAL_RUNTIME_FEATURE_ENABLED:-false}
+      - TERMINAL_RUNTIME_MANAGEMENT_PORT=${TERMINAL_RUNTIME_MANAGEMENT_PORT:-8789}
+      # Workspace checkpoint S2S: the gateway exports the assigned worker's
+      # authoritative checkpoint and forwards it to the control plane over the
+      # private network. All three names must match the control-plane service
+      # exactly (FIN_WORKSPACE_CONTROL_TOKEN / FIN_TERMINAL_BASE_URL below).
+      - FINANCIAL_WORKSPACE_CHECKPOINTS=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FINANCIAL_WORKSPACE_CONTROL_TOKEN=${FIN_WORKSPACE_CONTROL_TOKEN:-}
+      - FINANCIAL_WORKSPACE_SERVICE_URL=http://fin-terminal-workspace-control:8790
+      # The only redirect target the gateway hands the browser after a
+      # successful handoff: an HTTPS origin + path prefix that the control
+      # plane's auth_url (built from FIN_TERMINAL_BASE_URL) starts with.
+      # Trailing slash is canonical; a missing prefix makes the handoff fail
+      # closed (503) instead of issuing a redirect.
+      - FINANCIAL_WORKSPACE_AUTH_URL_PREFIX=${FINANCIAL_WORKSPACE_AUTH_URL_PREFIX:-https://unbrowser.unchainedsky.com/fin-terminal-workspace/}
     depends_on:
       fin-terminal-public-redis:
         condition: service_healthy
@@ -263,6 +290,136 @@ services:
       - fin_terminal_public_egress_06
       - fin_terminal_public_mcp_06
     profiles: ["fin-terminal-public-pilot"]
+
+  # Financial workspace control — opt-in feature flag.
+  # Real Python control plane (the same unchained web app as `web`, on its own
+  # port 8790). It owns auth/S3/KMS/checkpoint logic and serves:
+  #   - S2S internal API (Docker-internal only; Caddy denies /internal/*)
+  #   - browser handoff/auth/callback routes under /fin-terminal-workspace/*
+  # Fail-closed: when FIN_TERMINAL_WORKSPACE_ENABLED=true without the explicit
+  # control token / S3 bucket / region / KMS key / storage config, the app
+  # refuses to start (no JWT_SECRET fallback, no local storage).
+  fin-terminal-workspace-control:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "web", "--host", "0.0.0.0", "--port", "8790"]
+    expose:
+      - "8790"
+    volumes:
+      - relay_data:/data
+    networks:
+      - fin_terminal_public          # accessible from Caddy
+      - fin_terminal_public_state    # Redis (fin-terminal-public-redis:6379)
+      - fin_terminal_workspace_egress  # AWS S3/KMS egress only
+    # The host-side runtime provider (fin-workspace-runtime-provider.service)
+    # owns the Docker socket. The control plane reaches it over the host
+    # gateway at the configured URL; nothing is published to the host edge.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=33554432,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    restart: unless-stopped
+    profiles: ["fin-terminal-workspace"]
+    # Feature-gate: only starts when the workspace profile is explicitly enabled.
+    environment:
+      - UNCHAINED_DB_PATH=/data/auth.db
+      - FIN_TERMINAL_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FIN_WORKSPACE_ENABLED=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FIN_WORKSPACE_CONTROL_TOKEN=${FIN_WORKSPACE_CONTROL_TOKEN:-}
+      - FIN_WORKSPACE_COOKIE_DOMAIN=${FIN_WORKSPACE_COOKIE_DOMAIN:-}
+      - FIN_WORKSPACE_S3_BUCKET=${FIN_WORKSPACE_S3_BUCKET:-}
+      - FIN_WORKSPACE_S3_REGION=${FIN_WORKSPACE_S3_REGION:-}
+      - FIN_WORKSPACE_KMS_KEY_ID=${FIN_WORKSPACE_KMS_KEY_ID:-}
+      - WORKSPACE_REDIS_URL=redis://fin-terminal-public-redis:6379/1
+      - JWT_SECRET=${JWT_SECRET:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - FACEBOOK_APP_ID=${FACEBOOK_APP_ID:-}
+      - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET:-}
+      - FACEBOOK_OAUTH_DIALOG_URL=${FACEBOOK_OAUTH_DIALOG_URL:-}
+      - FACEBOOK_GRAPH_API_BASE=${FACEBOOK_GRAPH_API_BASE:-}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GITHUB_OAUTH_AUTHORIZE_URL=${GITHUB_OAUTH_AUTHORIZE_URL:-}
+      - GITHUB_OAUTH_TOKEN_URL=${GITHUB_OAUTH_TOKEN_URL:-}
+      - GITHUB_API_BASE=${GITHUB_API_BASE:-}
+      - FIN_TERMINAL_BASE_URL=${FIN_TERMINAL_BASE_URL:-https://unbrowser.unchainedsky.com/fin-terminal-workspace}
+      # Host-side runtime provider (hard enablement gate). Enabling the
+      # feature without a validated provider is a fail-closed startup error;
+      # /fin-terminal/ never falls back to the marketing index or singleton.
+      - FIN_WORKSPACE_RUNTIME_PROVIDER_URL=${FIN_WORKSPACE_RUNTIME_PROVIDER_URL:-http://host.docker.internal:8793}
+      - FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN=${FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN:-}
+      # Shared proxy token the control plane injects toward each account
+      # runtime (X-Fin-Terminal-Proxy-Token) and the provider hands to the
+      # runtime container as MARKET_PROXY_TOKEN. Must match the provider's
+      # FIN_WORKSPACE_RUNTIME_PROXY_TOKEN.
+      - FIN_WORKSPACE_RUNTIME_PROXY_TOKEN=${FIN_WORKSPACE_RUNTIME_PROXY_TOKEN:-}
+      - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8790,timeout=2); c.request('GET','/internal/health'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  # Shared unbrowser MCP service for account workspace runtimes. The host-side
+  # runtime provider attaches this container to every per-account private
+  # network at wake so each isolated runtime can run research against the MCP
+  # while siblings can never reach each other's network or data. Sibling
+  # runtimes are never placed on a shared network.
+  fin-terminal-workspace-unbrowser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    depends_on:
+      unbrowser-egress:
+        condition: service_healthy
+    networks:
+      - fin_terminal_public
+      - unbrowser_egress_proxy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=67108864,mode=1777
+      - /home/unchained:rw,nosuid,nodev,noexec,size=67108864,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    restart: unless-stopped
+    profiles: ["fin-terminal-workspace"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 volumes:
   fin_terminal_public_redis:
@@ -355,3 +512,7 @@ networks:
     ipam:
       config:
         - subnet: 10.253.0.136/29
+  # Deliberately non-internal: the workspace control plane needs S3/KMS egress
+  # for envelope-encrypted checkpoint storage. No other service joins this
+  # network; nothing on it is reachable from Caddy or the public edge.
+  fin_terminal_workspace_egress:

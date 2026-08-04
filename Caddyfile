@@ -167,9 +167,54 @@ unbrowser.unchainedsky.com {
 	redir @unbrowser_subpath https://unbrowser.unchainedsky.com/{?query} 308
 	# Authenticated persistent terminal. The path prefix is stripped upstream so
 	# the Vite-built client and its WebSocket both resolve beneath /fin-terminal/.
-	@fin_terminal_base path /fin-terminal
+	# When the workspace canary is enabled, /fin-terminal/ routes to the
+	# workspace control plane's private-workspace leg (authenticated account
+	# runtime, fail-closed when no validated runtime provider exists); the
+	# singleton remains reachable only by rolling the workspace flag off
+	# (feature-flagged canary with rollback). The singleton matchers are
+	# negated: they serve exactly when the workspace flag is OFF — never fall
+	# through to the landing page.
+	@fin_workspace_terminal_exact {
+		path /fin-terminal
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	redir @fin_workspace_terminal_exact https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308
+	@fin_workspace_terminal {
+		path /fin-terminal/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	handle @fin_workspace_terminal {
+		# /fin-terminal/<rest> → /terminal/<rest>. The control plane proxies the
+		# account runtime's root-relative surface (/, /assets/*, /ws) unchanged
+		# after this handler strips the /terminal marker, so the runtime image
+		# built at PUBLIC_BASE_PATH=/fin-terminal/ stays coherent: the client's
+		# absolute /fin-terminal/* asset and /ws URLs round-trip through here.
+		uri strip_prefix /fin-terminal
+		rewrite * /terminal{http.request.uri.path}
+		route {
+			# Never trust identity or service-auth headers supplied by a client.
+			# The control plane derives the principal from the authenticated
+			# session and injects the proxy token itself.
+			request_header -X-Fin-Terminal-User
+			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Control-Token
+			request_header -Authorization
+			request_header -Proxy-Authorization
+			request_header -X-Management-Token
+			reverse_proxy fin-terminal-workspace-control:8790
+		}
+	}
+	@fin_terminal_base {
+		path /fin-terminal
+		expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
 	redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308
-	handle_path /fin-terminal/* {
+	@fin_terminal_singleton {
+		path /fin-terminal/*
+		expression `!{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	handle @fin_terminal_singleton {
+		uri strip_prefix /fin-terminal
 		route {
 			# Never trust identity or service-auth headers supplied by a client.
 			request_header -X-Fin-Terminal-User
@@ -235,6 +280,35 @@ unbrowser.unchainedsky.com {
 				header_up X-Fin-Terminal-Edge-Token {$FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN}
 			}
 		}
+	}
+
+	# Financial workspace integration — opt-in feature flag.
+	# The separate Python workspace-control slice owns auth/S3/KMS logic.
+	# This infrastructure slice provides only the Compose/env/Caddy scaffolding.
+	# A single exact surface matcher proxies every /fin-terminal-workspace/*
+	# route (prefix stripped); there is no separate /callback/* matcher because
+	# the claim OAuth callbacks live at /fin-terminal-workspace/workspace/oauth/
+	# (dedicated namespace, never /auth/... or /api/...).
+	# Browser cookies are preserved on the workspace surface (the control plane
+	# reads only its own claim/session cookies); caller-supplied identity and
+	# management headers are always stripped.
+	@fin_workspace_surface {
+		path /fin-terminal-workspace /fin-terminal-workspace/*
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	handle @fin_workspace_surface {
+		uri strip_prefix /fin-terminal-workspace
+		log_skip
+		request_header -Authorization
+		request_header -Proxy-Authorization
+		request_header -X-Management-Token
+		request_header -X-Fin-Terminal-User
+		request_header -X-Fin-Terminal-Proxy-Token
+		reverse_proxy fin-terminal-workspace-control:8790
+	}
+	# Internal namespaces must never be reachable from the public edge.
+	handle /internal/* {
+		respond "Not found" 404
 	}
 
 	# The root reuses the existing public landing-page handler. Only its fixed

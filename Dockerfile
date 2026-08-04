@@ -51,6 +51,8 @@ COPY unchained/nudge.py .
 COPY unchained/reflex.py .
 COPY unchained/scheduled_tasks.py .
 COPY unchained/web_app/ web_app/
+COPY unchained/checkpoint_store.py .
+COPY unchained/financial_workspace.py .
 COPY unchained/benchmark/__init__.py benchmark/__init__.py
 COPY unchained/benchmark/progress_critic.py benchmark/progress_critic.py
 COPY unchained/benchmark/intermediate_goal.py benchmark/intermediate_goal.py
@@ -70,6 +72,7 @@ RUN pip install --no-cache-dir \
     fastmcp>=2.0 \
     PyJWT>=2.0 \
     cryptography>=42.0 \
+    boto3>=1.34,<2.0 \
     pypdf>=4.0 \
     pyunbrowser==0.0.18
 

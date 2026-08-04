@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
 import unittest
+from types import SimpleNamespace
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+
+from yarl import URL
 
 import web
 import web_routes
@@ -57,6 +61,92 @@ class TestWebRouteSpecs(unittest.TestCase):
             if route.method in {"GET", "POST"}
         }
         self.assertIn(("GET", "/__route-spec-test"), routes)
+
+
+class TestClaimOAuthRouteResolution(unittest.TestCase):
+    """Router-resolution tests for the claim OAuth surface.
+
+    The claim flow lives under the dedicated /workspace/* namespace. The
+    site's own login OAuth routes (/auth/facebook/..., /auth/github/...)
+    resolve to the login handlers and the claim routes resolve to the claim
+    handlers — neither can shadow the other.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = web.web.Application()
+        web._register_routes(cls.app)
+
+    def _resolve(self, method: str, path: str):
+        req = SimpleNamespace(
+            method=method,
+            rel_url=URL(path),
+            headers={},
+            match_info={},
+        )
+        return asyncio.run(self.app.router.resolve(req))
+
+    def test_login_oauth_routes_unshadowed(self):
+        """The claim flow must not shadow the site's login OAuth routes."""
+        for path, expected in (
+            ("/auth/facebook/start", "handle_facebook_start"),
+            ("/auth/facebook/callback", "handle_facebook_callback"),
+            ("/auth/github/start", "handle_github_start"),
+            ("/auth/github/callback", "handle_github_callback"),
+        ):
+            match = self._resolve("GET", path)
+            self.assertEqual(match.handler.__name__, expected, f"route {path}")
+
+    def test_claim_oauth_routes_resolve_to_claim_handlers(self):
+        """The claim OAuth start/callback resolve to the claim handlers only
+        under the dedicated workspace namespace."""
+        cases = (
+            ("GET", "/workspace/oauth/github/start", "handle_claim_oauth_start"),
+            ("GET", "/workspace/oauth/github/callback", "handle_claim_oauth_callback"),
+            ("GET", "/workspace/oauth/facebook/start", "handle_claim_oauth_start"),
+            ("GET", "/workspace/oauth/facebook/callback", "handle_claim_oauth_callback"),
+            ("GET", "/workspace/oauth/google/start", "handle_claim_oauth_start"),
+            ("GET", "/workspace/oauth/google/callback", "handle_claim_oauth_callback"),
+            ("POST", "/workspace/oauth/google", "handle_claim_google_token"),
+        )
+        for method, path, expected in cases:
+            match = self._resolve(method, path)
+            self.assertEqual(match.handler.__name__, expected, f"route {method} {path}")
+
+    def test_claim_surface_routes(self):
+        for method, path, expected in (
+            ("GET", "/workspace/auth/claim", "handle_fin_workspace_auth_claim_page"),
+            ("POST", "/workspace/claim", "handle_fin_workspace_browser_claim"),
+            ("GET", "/workspace/claims/fcl-1", "handle_fin_workspace_browser_get_claim"),
+            ("GET", "/workspace/workspace", "handle_fin_workspace_browser_get_workspace"),
+            ("GET", "/workspace/snapshots", "handle_fin_workspace_browser_get_snapshots"),
+            ("GET", "/workspace/runtime/status", "handle_fin_workspace_browser_runtime_status"),
+            ("GET", "/workspace/done", "handle_claim_done"),
+            ("GET", "/terminal", "handle_fin_workspace_terminal_proxy"),
+            ("GET", "/terminal/ws", "handle_fin_workspace_terminal_proxy"),
+        ):
+            match = self._resolve(method, path)
+            self.assertEqual(match.handler.__name__, expected, f"route {method} {path}")
+
+    def test_no_claim_route_under_legacy_auth_or_api_paths(self):
+        """No claim handler may be reachable at the legacy /auth/{provider}/*
+        or /api/* paths that would collide with the site's login routes."""
+        from web_app.handlers import fin_workspace_auth
+        from web_app.handlers import fin_workspace
+
+        claim_handlers = {
+            fin_workspace_auth.handle_claim_oauth_start,
+            fin_workspace_auth.handle_claim_oauth_callback,
+            fin_workspace_auth.handle_claim_google_token,
+            fin_workspace.handle_fin_workspace_browser_claim,
+        }
+        for route in self.app.router.routes():
+            if route.method not in {"GET", "POST"}:
+                continue
+            canonical = route.resource.canonical
+            if canonical.startswith("/auth/") or canonical.startswith("/api/"):
+                self.assertNotIn(route.handler, claim_handlers,
+                                 f"claim handler registered at {canonical}")
 
 
 if __name__ == "__main__":

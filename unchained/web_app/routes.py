@@ -179,6 +179,70 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("GET", "/web/credit/status/history", "web_app.handlers.auth_admin:handle_credit_history"),
     # Admin grant
     ("POST", "/admin/credit/grant", "web_app.handlers.auth_admin:handle_admin_credit_grant"),
+
+    # -- Financial workspace control plane (feature-flagged) --
+    ("POST", "/internal/financial-workspace/checkpoints",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_create_checkpoint"),
+    ("GET", "/internal/financial-workspace/checkpoints/{checkpoint_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_checkpoint"),
+    ("POST", "/internal/financial-workspace/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_claim"),
+    ("POST", "/internal/financial-workspace/claim/accept",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_claim_accept"),
+    ("GET", "/internal/financial-workspace/claims/{claim_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_claim"),
+    ("GET", "/internal/financial-workspace/workspace",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_workspace"),
+    ("GET", "/internal/financial-workspace/snapshots",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_get_snapshots"),
+    ("POST", "/internal/financial-workspace/effects/process",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_process_effects"),
+    ("POST", "/internal/financial-workspace/sweep",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_sweep"),
+    # Account-scoped runtime control (wake/sleep/status) — canary S2S API.
+    ("POST", "/internal/financial-workspace/runtime/wake",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_wake"),
+    ("POST", "/internal/financial-workspace/runtime/sleep",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_sleep"),
+    ("GET", "/internal/financial-workspace/runtime/status",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_status"),
+    ("POST", "/internal/financial-workspace/runtime/flush",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_runtime_flush"),
+
+    # Browser handoff/auth/callback routes — proxied by Caddy under
+    # /fin-terminal-workspace (prefix stripped). Dedicated /workspace/*
+    # namespace so the claim OAuth routes can never shadow (or be shadowed
+    # by) the site's own login routes (/auth/facebook/..., /auth/github/...).
+    # Exact provider allowlist.
+    ("GET", "/workspace/auth/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_auth_claim_page"),
+    ("POST", "/workspace/claim",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_claim"),
+    ("GET", "/workspace/claims/{claim_id}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_claim"),
+    ("GET", "/workspace/workspace",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_workspace"),
+    ("GET", "/workspace/snapshots",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_get_snapshots"),
+    ("GET", "/workspace/runtime/status",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_browser_runtime_status"),
+    ("POST", "/workspace/oauth/google",
+     "web_app.handlers.fin_workspace_auth:handle_claim_google_token"),
+    ("GET", "/workspace/done",
+     "web_app.handlers.fin_workspace_auth:handle_claim_done"),
+    ("GET", "/workspace/oauth/{provider}/start",
+     "web_app.handlers.fin_workspace_auth:handle_claim_oauth_start"),
+    ("GET", "/workspace/oauth/{provider}/callback",
+     "web_app.handlers.fin_workspace_auth:handle_claim_oauth_callback"),
+    # Private workspace leg: authenticated /fin-terminal/. Caddy strips
+    # /fin-terminal and rewrites to /terminal/<rest> so the account runtime's
+    # root-relative surface (/, /assets/*, /ws) is proxied unchanged with the
+    # server-derived principal injected. Fails closed when no validated
+    # runtime provider exists — never the marketing index.
+    ("GET", "/terminal",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal_proxy"),
+    ("GET", "/terminal/{tail:.*}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal_proxy"),
 )
 
 

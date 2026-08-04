@@ -12,6 +12,7 @@ dependencies = [
     "fastmcp>=2.0",
     "PyJWT>=2.0",
     "cryptography>=42.0",
+    "boto3>=1.34,<2.0",
     "pypdf>=4.0",
     "edge-tts>=7.0",
     "openrouter-agent-cli>=0.1.2",
@@ -39,6 +40,7 @@ py-modules = [
     "provision_helpers", "rate_limit", "reflex", "relay",
     "scheduled_tasks", "scheduler_agent", "scheduler_tool", "signup_agent", "stream_ctl",
     "template_utils", "web", "web_state", "webmcp",
+    "checkpoint_store", "financial_workspace",
 ]
 
 [tool.setuptools.package-data]

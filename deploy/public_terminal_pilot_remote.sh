@@ -20,9 +20,9 @@ readonly ACTION
 readonly EXPECTED_SHA
 
 case "$ACTION" in
-    activate|disable|status) ;;
+    activate|disable|status|rollback) ;;
     *)
-        echo "ERROR: ACTION must be one of activate, disable, or status" >&2
+        echo "ERROR: ACTION must be one of activate, disable, status, or rollback" >&2
         exit 1
         ;;
 esac
@@ -242,6 +242,172 @@ if len(values) != 1 or values[0] not in {"true", "false"}:
     raise SystemExit(f"ERROR: {key} must have exactly one true/false definition")
 print(values[0])
 PYEOF
+}
+
+# Read the reconciler/dynamic-mode flag from .env. Returns exactly "true" or
+# "false". The dynamic runtime reconciler (terminal-runtime-reconciler) owns
+# seat start/stop when this is true; the pilot workflow then allows stopped
+# seats and requires only the warm pool, while feature-disabled mode keeps the
+# legacy requirement of six ready seats.
+read_dynamic_mode_enabled() {
+    python3 - "$ENV_FILE" <<'PYEOF'
+import os, stat, sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+try:
+    opened = os.fstat(fd)
+    if not stat.S_ISREG(opened.st_mode):
+        raise ValueError("not a regular file")
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        fd = -1
+        content = handle.read(1024 * 1024 + 1)
+finally:
+    if fd >= 0:
+        os.close(fd)
+
+key = "TERMINAL_RUNTIME_FEATURE_ENABLED"
+prefix = key + "="
+value = "false"
+for line in content.splitlines():
+    if line.startswith(prefix):
+        candidate = line[len(prefix):].strip()
+        if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in {"'", '"'}:
+            candidate = candidate[1:-1]
+        value = candidate
+print(value if value in {"true", "false"} else "false")
+PYEOF
+}
+
+# True when the host-side reconciler owns seat lifecycle (dynamic mode).
+dynamic_mode_enabled() {
+    [[ "$(read_dynamic_mode_enabled)" == "true" ]]
+}
+
+# ---------------------------------------------------------------------------
+# SQLite online backup (additive-migration safety gate)
+# ---------------------------------------------------------------------------
+sqlite_online_backup() {
+    local web_cid backup_path
+    web_cid="$(resolve_container_id web 2>/dev/null || true)"
+    backup_path="$SECURE_WORKDIR/auth.db.backup"
+    if [[ -z "$web_cid" ]]; then
+        echo "ERROR: cannot take SQLite online backup — web container not found" >&2
+        return 1
+    fi
+    # Online backup via python3 sqlite3 .backup (safe under WAL; no downtime).
+    if ! docker exec "$web_cid" python3 -c '
+import sqlite3, sys
+src = sqlite3.connect("/data/auth.db", timeout=30)
+dst = sqlite3.connect("/tmp/auth.db.backup", timeout=30)
+try:
+    src.backup(dst)
+finally:
+    dst.close(); src.close()
+'; then
+        echo "ERROR: SQLite online backup inside web failed" >&2
+        return 1
+    fi
+    if ! docker cp "$web_cid:/tmp/auth.db.backup" "$backup_path" >/dev/null 2>&1; then
+        echo "ERROR: could not copy SQLite backup out of web" >&2
+        return 1
+    fi
+    docker exec "$web_cid" sh -c 'rm -f /tmp/auth.db.backup' >/dev/null 2>&1 || true
+    echo "    SQLite online backup: saved ($(stat -c%s "$backup_path" 2>/dev/null || echo 0) bytes)."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Companion Redis (DB 1) backup / restore / clean — workspace state keys
+# ---------------------------------------------------------------------------
+workspace_redis_dump() {
+    local redis_cid="$1" out_dir="$2"
+    docker exec "$redis_cid" redis-cli -n 1 --scan > "$out_dir/keys.txt" 2>/dev/null || {
+        echo "ERROR: could not scan workspace Redis DB 1" >&2
+        return 1
+    }
+    local key
+    while IFS= read -r key; do
+        [[ -z "$key" ]] && continue
+        if ! docker exec "$redis_cid" redis-cli -n 1 --raw DUMP "$key" > "$out_dir/key.bin" 2>/dev/null; then
+            echo "ERROR: could not dump workspace Redis key" >&2
+            return 1
+        fi
+        local ttl
+        ttl="$(docker exec "$redis_cid" redis-cli -n 1 --raw TTL "$key" 2>/dev/null || echo -1)"
+        if [[ "$ttl" == "-1" ]]; then ttl="0"; fi
+        if [[ "$ttl" == "-2" ]]; then continue; fi
+        docker exec "$redis_cid" redis-cli -n 1 --raw PTTL "$key" 2>/dev/null \
+            > "$out_dir/ttl-$key.txt" 2>/dev/null || true
+        printf '%s\n' "$key" >> "$out_dir/dumped-keys.txt"
+        mv "$out_dir/key.bin" "$out_dir/dump-$key.bin" 2>/dev/null || true
+    done < "$out_dir/keys.txt"
+    return 0
+}
+
+backup_workspace_redis() {
+    local redis_cid out_dir
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    if [[ -z "$redis_cid" ]]; then
+        echo "    Companion Redis: container not running; nothing to back up."
+        return 0
+    fi
+    out_dir="$SECURE_WORKDIR/workspace-redis"
+    mkdir -p "$out_dir" && chmod 700 "$out_dir"
+    : > "$out_dir/dumped-keys.txt"
+    workspace_redis_dump "$redis_cid" "$out_dir" || return 1
+    echo "    Companion Redis (DB 1): backed up $(wc -l < "$out_dir/dumped-keys.txt") key(s)."
+    return 0
+}
+
+restore_workspace_redis_backup() {
+    local redis_cid out_dir key
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    out_dir="$SECURE_WORKDIR/workspace-redis"
+    [[ -n "$redis_cid" ]] || return 0
+    [[ -f "$out_dir/dumped-keys.txt" ]] || return 0
+    docker exec "$redis_cid" redis-cli -n 1 FLUSHDB >/dev/null 2>&1 || true
+    while IFS= read -r key; do
+        [[ -z "$key" ]] && continue
+        if [[ -f "$out_dir/dump-$key.bin" ]]; then
+            docker exec -i "$redis_cid" redis-cli -n 1 -x RESTORE "$key" 0 \
+                < "$out_dir/dump-$key.bin" >/dev/null 2>&1 || true
+            local ttl_file="$out_dir/ttl-$key.txt"
+            if [[ -f "$ttl_file" ]]; then
+                local pttl
+                pttl="$(<"$ttl_file")"
+                if [[ "$pttl" =~ ^[0-9]+$ ]] && (( pttl > 0 )); then
+                    docker exec "$redis_cid" redis-cli -n 1 PEXPIRE "$key" "$pttl" >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+    done < "$out_dir/dumped-keys.txt"
+    echo "    Companion Redis (DB 1): snapshot restored."
+    return 0
+}
+
+cleanup_workspace_redis() {
+    local redis_cid
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    [[ -n "$redis_cid" ]] || return 0
+    docker exec "$redis_cid" redis-cli -n 1 FLUSHDB >/dev/null 2>&1
+    echo "    Companion Redis (DB 1): workspace keys cleaned."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Rollback: start all six seats (reconciler-agnostic rollback path)
+# ---------------------------------------------------------------------------
+start_all_seats_for_rollback() {
+    echo "    Rollback: starting all six seats..."
+    local svc
+    for svc in "${PILOT_SEATS[@]}"; do
+        if [[ "$(container_state "$svc")" == "absent" ]]; then
+            compose_cmd up -d --no-deps --no-build "$svc" >/dev/null 2>&1 \
+                || echo "    WARN: could not start $svc (will retry on next reconcile)" >&2
+        fi
+    done
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -821,6 +987,9 @@ prepare_six_worker_state() {
     REDIS_STATE_BACKUP="$SECURE_WORKDIR/redis-state.backup"
     REDIS_STATE_BACKUP_PRESENCE="${REDIS_STATE_BACKUP}.presence"
     REDIS_STATE_MIGRATED=true
+    # Companion workspace Redis (DB 1) keys are snapshotted before any state
+    # mutation so activate/rollback/disable can restore or clean them exactly.
+    backup_workspace_redis || return 1
     if ! transition_redis_worker_set 6 "$REDIS_STATE_BACKUP"; then
         # The transition cannot mutate Redis before writing the presence marker.
         # If the marker is absent there is therefore nothing to restore.
@@ -959,6 +1128,11 @@ activate_rollback_handler() {
     compose_cmd stop fin-terminal-public-gateway 2>/dev/null || true
     if ! restore_redis_state_backup; then
         echo "FATAL: could not restore persisted admission state during rollback" >&2
+        secure_workdir_cleanup
+        exit 1
+    fi
+    if ! restore_workspace_redis_backup; then
+        echo "FATAL: could not restore companion workspace Redis during rollback" >&2
         secure_workdir_cleanup
         exit 1
     fi
@@ -1417,6 +1591,14 @@ run_activate_gates() {
     check_unbrowser_egress || return 1
     check_resources || return 1
 
+    # SQLite online backup before any additive schema migration can run. The
+    # workspace control plane adds fin_terminal_* tables/columns on startup;
+    # the deploy never migrates without a restorable pre-migration snapshot.
+    if ! sqlite_online_backup; then
+        echo "ERROR: pre-migration SQLite online backup failed" >&2
+        return 1
+    fi
+
     echo "==> All activate gates passed."
     return 0
 }
@@ -1425,10 +1607,21 @@ run_activate_gates() {
 # Runtime service-set, health, host-port, and network-isolation verification
 # ---------------------------------------------------------------------------
 validate_runtime_pilot() {
-    # Verify exactly nine healthy containers with unambiguous resolved IDs.
+    # In dynamic mode (reconciler enabled) seats may be legitimately stopped
+    # while the reconciler scales the warm pool; the shared services and any
+    # running seat must still be healthy and the service set exact.
+    local dynamic=false
+    if dynamic_mode_enabled; then dynamic=true; fi
+
+    # Verify the exact nine-service set with unambiguous resolved IDs.
     local svc cid count=0
     for svc in "${PILOT_SERVICES[@]}"; do
         cid="$(resolve_container_id "$svc")"
+        if [[ -z "$cid" ]] && $dynamic && [[ "$svc" == fin-terminal-public-seat-0[1-6] ]]; then
+            # Reconciler may have drained this seat; absent is valid in dynamic mode.
+            count=$((count + 1))
+            continue
+        fi
         if [[ ! "$cid" =~ ^[0-9a-f]{12,64}$ ]]; then
             echo "ERROR: $svc did not resolve to exactly one Docker container ID" >&2
             return 1
@@ -1443,7 +1636,10 @@ validate_runtime_pilot() {
         echo "ERROR: expected $PILOT_SERVICE_COUNT pilot containers, found $count" >&2
         return 1
     fi
-    echo "    Pilot containers: ${PILOT_SERVICE_COUNT}/${PILOT_SERVICE_COUNT} present."
+    echo "    Pilot containers: ${PILOT_SERVICE_COUNT}/${PILOT_SERVICE_COUNT} present"
+    if $dynamic; then
+        echo "    (dynamic mode: stopped seats are valid; reconciler owns lifecycle)"
+    fi
 
     # Runtime PortBindings check (not exposed null).
     local port_bindings
@@ -1890,15 +2086,18 @@ PYMCP
 # ---------------------------------------------------------------------------
 gateway_internal_ready() {
     echo "    Checking gateway /api/ready internally..."
-    local gw_cid attempts
+    local gw_cid attempts dynamic
     gw_cid="$(resolve_container_id fin-terminal-public-gateway)"
     if [[ -z "$gw_cid" ]]; then
         echo "ERROR: could not resolve gateway container ID" >&2
         return 1
     fi
+    dynamic=false
+    if dynamic_mode_enabled; then dynamic=true; fi
 
     for attempts in $(seq 1 30); do
         if docker exec "$gw_cid" node -e '
+const dynamic = process.argv[1] === "true";
 const http = require("http");
 const endpoints = Array.from({length: 6}, (_, index) => {
   const seat = String(index + 1).padStart(2, "0");
@@ -1918,19 +2117,33 @@ const getJson = (url) => new Promise((resolve, reject) => {
 });
 Promise.all([getJson("http://127.0.0.1:8788/api/ready"), ...endpoints.map(getJson)])
   .then(([gateway, ...workers]) => {
-    if (gateway.status !== "ready" || gateway.readyWorkers !== 6 || gateway.assignedWorkers !== 0 || gateway.queuedVisitors !== 0) process.exit(1);
-    const generations = workers.map(worker => worker && worker.publicWorker === true && typeof worker.instanceId === "string" ? worker.instanceId : "");
-    if (generations.some(value => value.length < 16) || new Set(generations).size !== 6) process.exit(1);
+    if (gateway.status !== "ready" || gateway.assignedWorkers !== 0 || gateway.queuedVisitors !== 0) process.exit(1);
+    const healthy = workers.filter(w => w && w.publicWorker === true && typeof w.instanceId === "string" && w.instanceId.length >= 16);
+    if (dynamic) {
+      // Reconciler owns seat start/stop: accept any consistent warm pool with
+      // the one-warm-spare invariant (never require six stopped seats).
+      if (gateway.readyWorkers !== healthy.length || healthy.length < 1) process.exit(1);
+      const generations = healthy.map(w => w.instanceId);
+      if (new Set(generations).size !== healthy.length) process.exit(1);
+      process.exit(0);
+    }
+    if (gateway.readyWorkers !== 6 || healthy.length !== 6) process.exit(1);
+    const generations = healthy.map(w => w.instanceId);
+    if (new Set(generations).size !== 6) process.exit(1);
     process.exit(0);
   })
   .catch(() => process.exit(1));
-' 2>/dev/null; then
-            echo "    Gateway /api/ready: six unique workers ready."
+' "$dynamic" 2>/dev/null; then
+            if [[ "$dynamic" == "true" ]]; then
+                echo "    Gateway /api/ready: warm pool ready (dynamic mode)."
+            else
+                echo "    Gateway /api/ready: six unique workers ready."
+            fi
             return 0
         fi
         sleep 2
     done
-    echo "ERROR: gateway did not report six unique ready workers internally" >&2
+    echo "ERROR: gateway did not report a ready pool internally" >&2
     return 1
 }
 
@@ -2185,6 +2398,22 @@ cmd_status() {
     enabled="$(read_public_enabled)"
     echo "    $ENV_FLAG: $enabled"
 
+    local dynamic
+    dynamic="$(read_dynamic_mode_enabled)"
+    echo "    TERMINAL_RUNTIME_FEATURE_ENABLED: $dynamic"
+
+    local reconciler_state="not-installed"
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files terminal-runtime-reconciler.service >/dev/null 2>&1; then
+            if systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
+                reconciler_state="active"
+            else
+                reconciler_state="inactive"
+            fi
+        fi
+    fi
+    echo "    terminal-runtime-reconciler: $reconciler_state"
+
     local svc state
     for svc in "${PILOT_SERVICES[@]}"; do
         state="$(container_state "$svc")"
@@ -2329,6 +2558,9 @@ cmd_disable() {
     else
         echo "    Pilot containers: already absent (idempotent)."
     fi
+    # Companion workspace Redis (DB 1) keys are always cleaned on disable so no
+    # claim/checkpoint state survives the pilot being taken down.
+    cleanup_workspace_redis
     if pilot_any_container_present; then
         echo "ERROR: pilot containers remain after disable" >&2
         exit 1
@@ -2354,6 +2586,80 @@ cmd_disable() {
 }
 
 # ---------------------------------------------------------------------------
+# Action: rollback — return from dynamic (reconciler) mode to the static
+# six-seat pilot. Starts all six seats, disables the reconciler flag, stops
+# the reconciler systemd service, then validates the static six-seat pool.
+# ---------------------------------------------------------------------------
+cmd_rollback() {
+    echo "==> Rolling back public-terminal pilot to static six-seat mode..."
+    secure_workdir_init
+
+    local dynamic=false
+    if dynamic_mode_enabled; then dynamic=true; fi
+    echo "    Dynamic (reconciler) mode: $dynamic"
+
+    # Step 1: Start all six seats so the static six-seat shape is restored
+    # before the reconciler is disabled (rollback starts all six).
+    start_all_seats_for_rollback || return 1
+    echo "    All six seats: started."
+
+    # Step 2: Disable the reconciler flag atomically and stop its systemd unit.
+    if $dynamic; then
+        if update_env_flag "$ENV_FILE" "TERMINAL_RUNTIME_FEATURE_ENABLED" "false"; then
+            echo "    TERMINAL_RUNTIME_FEATURE_ENABLED: atomically set to false."
+        else
+            echo "ERROR: could not disable TERMINAL_RUNTIME_FEATURE_ENABLED" >&2
+            return 1
+        fi
+        if systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
+            systemctl stop terminal-runtime-reconciler 2>/dev/null || {
+                echo "ERROR: could not stop terminal-runtime-reconciler" >&2
+                return 1
+            }
+            echo "    terminal-runtime-reconciler: stopped."
+        fi
+    fi
+
+    # Step 3: Ensure the static pilot flag is on (rollback returns to the
+    # six-seat static deployment, not to a disabled edge).
+    local enabled
+    enabled="$(read_public_enabled)"
+    if [[ "$enabled" != "true" ]]; then
+        update_env_flag "$ENV_FILE" "$ENV_FLAG" "true" || {
+            echo "ERROR: could not re-enable $ENV_FLAG=true" >&2
+            return 1
+        }
+        echo "    $ENV_FLAG: set to true (static six-seat mode)."
+    fi
+
+    # Step 4: Recreate Caddy with the rolled-back flags.
+    cp -p "$ENV_FILE" "$STAGED_ENV"
+    chmod 600 "$STAGED_ENV"
+    if ! caddy_validate; then
+        echo "ERROR: Caddy validation failed during rollback" >&2
+        return 1
+    fi
+    if ! caddy_force_recreate; then
+        echo "ERROR: Caddy force-recreate failed during rollback" >&2
+        return 1
+    fi
+    if ! wait_caddy_running; then
+        echo "ERROR: Caddy did not reach running during rollback" >&2
+        return 1
+    fi
+
+    # Step 5: Feature-disabled mode still requires six seats — verify them.
+    if ! gateway_internal_ready; then
+        echo "ERROR: static six-seat pool not verified after rollback" >&2
+        return 1
+    fi
+
+    secure_workdir_cleanup
+    echo "==> Public-terminal pilot rolled back to static six-seat mode."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 main() {
@@ -2366,6 +2672,7 @@ main() {
         status)   cmd_status ;;
         activate) cmd_activate ;;
         disable)  cmd_disable ;;
+        rollback) cmd_rollback ;;
     esac
 
     local exit_code=$?
