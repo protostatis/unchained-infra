@@ -389,9 +389,10 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
 
     def test_caddy_strips_client_headers_then_runs_forward_auth(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
-        route = subdomain.split("handle_path /fin-terminal/*", 1)[1].split(
+        route = subdomain.split("handle @fin_terminal_singleton {", 1)[1].split(
             "# The static fin-terminal replay demo is retired.", 1
         )[0]
+        self.assertIn("uri strip_prefix /fin-terminal", route)
         strip_user = route.index("request_header -X-Fin-Terminal-User")
         forward_auth = route.index("forward_auth web:8080")
 
@@ -502,7 +503,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "b70a7901bac99c981e3ced240cf25600ca8fc589"
+        app_revision = "ca767a98f566694df53507ae12d399a133c49bc5"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
@@ -710,9 +711,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
             route,
         )
-        self.assertIn("handle_path /fin-terminal/*", route)
+        # The authenticated singleton is feature-gated behind the workspace
+        # canary and strips its prefix before forward_auth.
+        self.assertIn("@fin_terminal_singleton {", route)
+        self.assertIn("uri strip_prefix /fin-terminal", route)
         self.assertIn("forward_auth web:8080", route)
-        self.assertIn("@fin_terminal_base path /fin-terminal", route)
+        self.assertIn("@fin_terminal_base {", route)
         self.assertIn(
             "redir @fin_terminal_base https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308",
             route,

@@ -10,14 +10,15 @@ existing pilot activation workflow.
 ```
 [reconciler systemd service]
         |
-        |  docker exec (private management API, X-Management-Token header)
+        |  docker exec -i <gateway> node -e ... (private API, X-Management-Token)
+        |  payload over stdin — never a host temp path inside the container
         v
-[fin-terminal-public-gateway:8788]
+[fin-terminal-public-gateway]  (private listener 127.0.0.1:8789, never published)
         |
-        |  /api/management/reconcile-snapshot  → current seat states
-        |  /api/management/reconcile-plan      → desired seat set
-        |  /api/management/drain               → atomic drain (generation check)
-        |  /api/management/activate             → mark seat desired
+        |  /api/management/reconcile-snapshot  → versioned seat map + totals + plan
+        |  /api/management/reconcile-plan      → desired warm-pool plan
+        |  /api/management/drain               → atomic drain (generation CAS)
+        |  /api/management/activate             → mark seat desired ({accepted})
         |
         v
 [docker compose start/stop of allowlisted seat-01..06 containers]
@@ -104,22 +105,40 @@ is dynamic-mode aware:
 - **status** reports `TERMINAL_RUNTIME_FEATURE_ENABLED` and the reconciler
   systemd state alongside the service states.
 
-## Gateway management API contract
+## Gateway management API contract (v1)
 
-The gateway must expose a private management listener on port 8788 with:
+The gateway must expose a private management listener on port **8789**
+(`TERMINAL_RUNTIME_MANAGEMENT_PORT`) with:
 
 | Endpoint | Method | Input | Output |
 |---|---|---|---|
-| `/api/management/reconcile-snapshot` | POST | `{}` | `{seats: {name: {containerId, status, generation, assigned, idleSeconds}}, totalAssigned, totalQueued}` |
-| `/api/management/reconcile-plan` | POST | `{desiredSeats: [string]}` | `{plan: [...], accepted: bool}` |
-| `/api/management/drain` | POST | `{seatName: string, expectedGeneration: string}` | `{accepted: bool}` |
-| `/api/management/activate` | POST | `{seatName: string}` | `{accepted: bool}` |
+| `/api/management/reconcile-snapshot` | POST | `{}` | `{version: 1, seats: {workerId: {workerId, status, phase, generation\|null, assigned, idleSeconds, drainRequested, drainId\|null, containerId:""}}, totalAssigned, totalQueued, plan}` |
+| `/api/management/reconcile-plan` | POST | `{}` | `{version: 1, reconciled: true, plan}` |
+| `/api/management/drain` | POST | `{workerId, drainId, expectedGeneration}` | `{accepted: true, drainId}` \| 409 `{accepted: false, reason}` |
+| `/api/management/activate` | POST | `{workerId}` | `{accepted: true}` \| 409 `{accepted: false, reason}` |
 
-Authentication: `X-Management-Token` header must match
-`TERMINAL_RUNTIME_MANAGEMENT_TOKEN`. The reconciler calls it via
-`docker exec` into the gateway container (host port never exposed, Caddy never
-proxies it), with the token JSON-escaped into the Node script so a token can
-never break out of the JS string literal.
+- `status` is one of `absent | starting | healthy | draining | stopped`.
+- `seats` is keyed by the gateway's **worker id** (`seat-01`..`seat-06`); the
+  reconciler maps these to the allowlisted Compose service names
+  (`fin-terminal-public-seat-01`..`-06`) via an exact, tested bijection.
+- `totalAssigned` / `totalQueued` and the plan are reported by the gateway;
+  `plan.desiredRunning` is **authoritative** for the reconcile decision (the
+  totals are informational for logging).
+- `drain` requires `expectedGeneration` matching the seat's current generation
+  (a CAS). A stale generation is rejected with 409 so a replaced worker is
+  never drained.
+- `activate` releases a sticky drain only when the process generation changed
+  (the reconciler restarted the container); a same-generation activate is
+  rejected with 409, and a non-draining seat is an accepted no-op.
+- Authentication: `X-Management-Token` header must match
+  `TERMINAL_RUNTIME_MANAGEMENT_TOKEN`. The reconciler calls it via
+  `docker exec -i <gateway> node -e <script>` with the payload on **stdin** —
+  no host temp file is assumed inside the container, and the token/path are
+  JSON-escaped so neither can break out of the JS string literal.
+
+The exact cross-repo wire contract (units, headers, cookie names, env vars,
+paths) is the canonical document in
+[`docs/financial-terminal-cross-repo-contract.md`](financial-terminal-cross-repo-contract.md).
 
 ## Configuration
 
@@ -128,6 +147,7 @@ Create `/home/ec2-user/unchained/.env.reconciler`:
 ```bash
 TERMINAL_RUNTIME_FEATURE_ENABLED=true
 TERMINAL_RUNTIME_MANAGEMENT_TOKEN=<256-bit random hex>
+TERMINAL_RUNTIME_MANAGEMENT_PORT=8789
 TERMINAL_RUNTIME_COMPOSE_PROJECT=unchained
 TERMINAL_RUNTIME_COMPOSE_DIR=/home/ec2-user/unchained
 TERMINAL_RUNTIME_RECONCILE_INTERVAL=15

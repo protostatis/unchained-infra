@@ -1009,8 +1009,159 @@ class GatewayAPIContractTests(unittest.TestCase):
         source = RECONCILER_PATH.read_text()
         # Never exposes the management listener on the host or through Caddy.
         self.assertNotIn("0.0.0.0:8788", source)
+        self.assertNotIn("0.0.0.0:8789", source)
         self.assertIn("docker", source)
         self.assertIn("exec", source)
+
+    def test_exec_uses_stdin_node_e_not_host_temp_file(self) -> None:
+        """The reconciler must call the private API via `docker exec -i ... node -e`
+        with the payload on stdin — never a host temp path inside the container."""
+        source = RECONCILER_PATH.read_text()
+        self.assertIn('"node", "-e", script', source)
+        self.assertIn('input=payload_json', source)
+        self.assertNotIn("NamedTemporaryFile", source)
+        self.assertNotIn("tmp_path", source)
+
+    def test_management_port_is_configurable_and_defaults_to_8789(self) -> None:
+        config = reconciler_module.ReconcilerConfig.from_env({
+            "TERMINAL_RUNTIME_FEATURE_ENABLED": "true",
+            "TERMINAL_RUNTIME_MANAGEMENT_TOKEN": "t" * 64,
+        })
+        self.assertEqual(config.management_port, 8789)
+        config2 = reconciler_module.ReconcilerConfig.from_env({
+            "TERMINAL_RUNTIME_FEATURE_ENABLED": "true",
+            "TERMINAL_RUNTIME_MANAGEMENT_TOKEN": "t" * 64,
+            "TERMINAL_RUNTIME_MANAGEMENT_PORT": "8791",
+        })
+        self.assertEqual(config2.management_port, 8791)
+        errors = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, management_port=0,
+        ).validate()
+        self.assertTrue(any("MANAGEMENT_PORT" in e for e in errors))
+
+    def test_worker_service_mapping_roundtrip(self) -> None:
+        for n in range(1, 7):
+            service = f"fin-terminal-public-seat-{n:02d}"
+            self.assertEqual(
+                reconciler_module._worker_to_service(f"seat-{n:02d}"), service
+            )
+            self.assertEqual(
+                reconciler_module._service_to_worker(service), f"seat-{n:02d}"
+            )
+
+    def test_worker_service_mapping_rejects_unexpected_ids(self) -> None:
+        for bad in ("seat-07", "gateway", "rm -rf /", "seat-1", "", None):
+            with self.assertRaises(ValueError):
+                reconciler_module._worker_to_service(bad)
+        with self.assertRaises(ValueError):
+            reconciler_module._service_to_worker("fin-terminal-public-gateway")
+
+    def test_reconcile_snapshot_parses_v1_seat_map(self) -> None:
+        """Gateway v1 snapshot keys seats by workerId; the reconciler maps them
+        to its own service names and prefers plan.desiredRunning."""
+        data = {
+            "version": 1,
+            "seats": {
+                "seat-01": {"workerId": "seat-01", "status": "healthy", "phase": "active",
+                            "generation": "gen-1", "assigned": True, "idleSeconds": 0,
+                            "drainRequested": False, "drainId": None, "containerId": ""},
+                "seat-02": {"workerId": "seat-02", "status": "healthy", "phase": "ready-idle",
+                            "generation": "gen-2", "assigned": False, "idleSeconds": 400,
+                            "drainRequested": True, "drainId": "dr-abc", "containerId": ""},
+                "seat-03": {"workerId": "seat-03", "status": "absent", "phase": "absent",
+                            "generation": None, "assigned": False, "idleSeconds": 0,
+                            "drainRequested": False, "drainId": None, "containerId": ""},
+                "seat-04": {"workerId": "seat-04", "status": "starting", "phase": "starting",
+                            "generation": "gen-4", "assigned": False, "idleSeconds": 0,
+                            "drainRequested": False, "drainId": None, "containerId": ""},
+                "seat-05": {"workerId": "seat-05", "status": "draining", "phase": "draining",
+                            "generation": "gen-5", "assigned": False, "idleSeconds": 0,
+                            "drainRequested": True, "drainId": "dr-5", "containerId": ""},
+                "seat-06": {"workerId": "seat-06", "status": "stopped", "phase": "recycling",
+                            "generation": "gen-6", "assigned": False, "idleSeconds": 0,
+                            "drainRequested": False, "drainId": None, "containerId": ""},
+            },
+            "totalAssigned": 1,
+            "totalQueued": 2,
+            "plan": {"desiredRunning": 4, "scaleDownCandidates": ["seat-02"],
+                     "activateCandidates": ["seat-03"]},
+        }
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", return_value=data):
+            snapshot = client.reconcile_snapshot()
+        self.assertEqual(set(snapshot.seats.keys()), set(ALLOWED_SEAT_NAMES))
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-01"].status, "healthy")
+        self.assertTrue(snapshot.seats["fin-terminal-public-seat-01"].assigned)
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-01"].generation, "gen-1")
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-02"].idle_seconds, 400.0)
+        self.assertTrue(snapshot.seats["fin-terminal-public-seat-02"].running)
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-03"].status, "absent")
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-04"].status, "starting")
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-05"].status, "draining")
+        self.assertEqual(snapshot.seats["fin-terminal-public-seat-06"].status, "stopped")
+        self.assertFalse(snapshot.seats["fin-terminal-public-seat-06"].running)
+        self.assertEqual(snapshot.total_assigned, 1)
+        self.assertEqual(snapshot.total_queued, 2)
+        # The gateway plan is authoritative.
+        self.assertEqual(snapshot.desired_from_plan, 4)
+        self.assertEqual(snapshot.running_count, 2)
+        self.assertEqual(snapshot.draining_count, 1)
+
+    def test_desired_from_plan_falls_back_to_formula(self) -> None:
+        snapshot = reconciler_module.GatewaySnapshot(
+            seats={name: reconciler_module.SeatState(name=name) for name in SEAT_NAMES},
+            total_assigned=1, total_queued=3, plan={},
+        )
+        self.assertEqual(snapshot.desired_from_plan, 5)  # formula fallback
+        snapshot.plan = {"desiredRunning": 6}
+        self.assertEqual(snapshot.desired_from_plan, 6)
+
+    def test_drain_payload_uses_workerid_drainid_and_generation_cas(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", return_value={"accepted": True}) as mock_exec:
+            accepted = client.drain_seat("fin-terminal-public-seat-03", "gen-3")
+        self.assertTrue(accepted)
+        url_path, payload = mock_exec.call_args[0]
+        self.assertEqual(url_path, "/api/management/drain")
+        self.assertEqual(payload["workerId"], "seat-03")
+        self.assertEqual(payload["expectedGeneration"], "gen-3")
+        self.assertTrue(payload["drainId"].startswith("dr-"))
+        self.assertNotIn("seatName", payload)
+
+    def test_drain_rejects_stale_generation(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", side_effect=RuntimeError("409")):
+            self.assertFalse(client.drain_seat("fin-terminal-public-seat-03", "gen-stale"))
+
+    def test_activate_uses_workerid_and_accepted_response(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", return_value={"accepted": True}) as mock_exec:
+            accepted = client.activate_seat("fin-terminal-public-seat-04")
+        self.assertTrue(accepted)
+        url_path, payload = mock_exec.call_args[0]
+        self.assertEqual(url_path, "/api/management/activate")
+        self.assertEqual(payload["workerId"], "seat-04")
+        self.assertNotIn("seatName", payload)
+
+    def test_activate_rejects_when_not_accepted(self) -> None:
+        config = reconciler_module.ReconcilerConfig(
+            enabled=True, management_token="t" * 32, compose_dir="/tmp",
+        )
+        client = reconciler_module.GatewayManagementClient(config)
+        with mock.patch.object(client, "_exec", return_value={"accepted": False, "reason": "sticky"}):
+            self.assertFalse(client.activate_seat("fin-terminal-public-seat-04"))
 
 
 # ---------------------------------------------------------------------------

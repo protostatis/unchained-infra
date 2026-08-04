@@ -25,6 +25,7 @@ Design contract:
 Environment (all require TERMINAL_RUNTIME_FEATURE_ENABLED=true):
   TERMINAL_RUNTIME_FEATURE_ENABLED     bool  (default: false) — master enable
   TERMINAL_RUNTIME_MANAGEMENT_TOKEN    str   — gateway management token
+  TERMINAL_RUNTIME_MANAGEMENT_PORT     int   (default: 8789) — private gateway port
   TERMINAL_RUNTIME_COMPOSE_PROJECT     str   (default: unchained)
   TERMINAL_RUNTIME_COMPOSE_DIR         str   (default: /home/ec2-user/unchained)
   TERMINAL_RUNTIME_RECONCILE_INTERVAL  int   (default: 15)
@@ -41,6 +42,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -65,6 +67,7 @@ ALLOWED_SEAT_NAMES = frozenset(
 class ReconcilerConfig:
     enabled: bool = False
     management_token: str = ""
+    management_port: int = 8789
     compose_project: str = "unchained"
     compose_dir: str = "/home/ec2-user/unchained"
     reconcile_interval: int = 15
@@ -88,6 +91,7 @@ class ReconcilerConfig:
         return cls(
             enabled=enabled,
             management_token=env.get("TERMINAL_RUNTIME_MANAGEMENT_TOKEN", "").strip(),
+            management_port=int(env.get("TERMINAL_RUNTIME_MANAGEMENT_PORT", "8789")),
             compose_project=env.get("TERMINAL_RUNTIME_COMPOSE_PROJECT", "unchained").strip(),
             compose_dir=manage_dir,
             reconcile_interval=int(env.get("TERMINAL_RUNTIME_RECONCILE_INTERVAL", "15")),
@@ -105,6 +109,8 @@ class ReconcilerConfig:
             return errors  # nothing else matters
         if not self.management_token or len(self.management_token) < 32:
             errors.append("TERMINAL_RUNTIME_MANAGEMENT_TOKEN must be >= 32 chars")
+        if not 1 <= self.management_port <= 65535:
+            errors.append("TERMINAL_RUNTIME_MANAGEMENT_PORT must be 1-65535")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", self.compose_project):
             errors.append(f"invalid compose_project: {self.compose_project}")
         if not os.path.isdir(self.compose_dir):
@@ -158,18 +164,43 @@ class SeatState:
             name=name,
             container_id=str(entry.get("containerId", "")),
             status=str(entry.get("status", "absent")),
-            generation=str(entry.get("generation", "")),
+            generation=str(entry.get("generation", "") or ""),
             assigned=bool(entry.get("assigned", False)),
-            idle_seconds=float(entry.get("idleSeconds", 0.0)),
+            idle_seconds=float(entry.get("idleSeconds", 0.0) or 0.0),
         )
+
+
+def _worker_to_service(worker_id: str) -> str:
+    """Map a gateway worker id to its allowlisted Compose service name.
+
+    Canonical management-contract v1 mapping: the gateway reports its seat ids
+    as ``seat-01``..``seat-06``; the Compose services the reconciler controls
+    are ``fin-terminal-public-seat-01``..``-06``. Anything else is rejected
+    before a subprocess is ever invoked.
+    """
+    match = re.fullmatch(r"seat-(\d{2})", str(worker_id or "").strip())
+    if not match:
+        raise ValueError(f"unexpected gateway worker id {worker_id!r}")
+    name = f"fin-terminal-public-seat-{match.group(1)}"
+    if name not in ALLOWED_SEAT_NAMES:
+        raise ValueError(f"worker id {worker_id!r} maps outside the seat allowlist")
+    return name
+
+
+def _service_to_worker(service_name: str) -> str:
+    """Inverse of :func:`_worker_to_service` for drain/activate payloads."""
+    if service_name not in ALLOWED_SEAT_NAMES:
+        raise ValueError(f"service name {service_name!r} not in allowlist")
+    return "seat-" + service_name.rsplit("-", 1)[-1]
 
 
 @dataclass
 class GatewaySnapshot:
-    """Full gateway reconcile-snapshot response."""
+    """Full gateway reconcile-snapshot response (management contract v1)."""
     seats: dict[str, SeatState] = field(default_factory=dict)
     total_assigned: int = 0
     total_queued: int = 0
+    plan: dict = field(default_factory=dict)
 
     @property
     def running_count(self) -> int:
@@ -189,8 +220,21 @@ class GatewaySnapshot:
 
     @property
     def desired_running(self) -> int:
-        """Target running = min(6, assigned + queued + 1), one warm spare."""
+        """Fallback target running = min(6, assigned + queued + 1)."""
         return min(6, self.total_assigned + self.total_queued + 1)
+
+    @property
+    def desired_from_plan(self) -> int:
+        """Authoritative desired running from the gateway's plan.
+
+        The gateway owns the warm-pool policy; its ``plan.desiredRunning``
+        (which counts protected seats, absent seats, and warm spares) is used
+        when present. Falls back to the formula only for legacy fixtures.
+        """
+        desired = self.plan.get("desiredRunning") if self.plan else None
+        if isinstance(desired, int) and 0 <= desired <= 6:
+            return desired
+        return self.desired_running
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +475,12 @@ class DeployLock:
 class GatewayManagementClient:
     """Calls gateway's private management API inside its container via docker exec.
 
-    All command arguments are constructed from static strings and validated
-    identifiers — never interpolated from API-controlled data.
+    The listener is private-only (never published, never proxied by Caddy) and
+    is reached on the gateway's loopback inside its own network namespace. The
+    Node script is passed via ``node -e`` (no host temp path is ever assumed
+    inside the container) and the payload via stdin (no shell interpolation).
+    The token and URL path are JSON-escaped into the JS string literals so
+    neither can break out of the script.
     """
 
     def __init__(self, config: ReconcilerConfig) -> None:
@@ -443,8 +491,9 @@ class GatewayManagementClient:
     def _exec(self, url_path: str, payload: dict | None = None, timeout: int = 30) -> dict:
         """Call the gateway management endpoint via docker exec + node -e.
 
-        The URL path is statically constructed; payload is passed as
-        structured JSON through stdin — no shell interpolation.
+        Arguments are statically constructed; the payload is passed as
+        structured JSON through stdin — no shell interpolation and no host
+        temp file path referenced inside the container.
         """
         # Resolve container ID first (exact, not a name pattern)
         result = subprocess.run(
@@ -463,46 +512,45 @@ class GatewayManagementClient:
             raise RuntimeError(f"Gateway container {self._service!r} not found")
 
         payload_json = json.dumps(payload or {})
-        # Token and path are JSON-encoded so a token can never break out of the
-        # JS string literal regardless of its characters (no shell involved).
+        # Token and path are JSON-encoded so neither can break out of the JS
+        # string literal regardless of its characters (no shell involved).
         token_lit = json.dumps(self._token)
         path_lit = json.dumps(url_path)
+        port = int(self._config.management_port)
         script = (
             "const http = require(\"http\");"
-            "const opts = {"
-            "  hostname: \"127.0.0.1\", port: 8788,"
-            f"  path: {path_lit}, method: \"POST\","
-            "  headers: {"
-            "    \"Content-Type\": \"application/json\","
-            f"    \"X-Management-Token\": {token_lit},"
-            "    \"Content-Length\": Buffer.byteLength(process.argv[1])"
-            "  },"
-            f"  timeout: {timeout * 1000}"
-            "};"
-            "const req = http.request(opts, (res) => {"
-            "  let d = \"\";"
-            "  res.on(\"data\", (c) => d += c);"
-            "  res.on(\"end\", () => {"
-            "    try { console.log(d); process.exit(res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1); }"
-            "    catch { process.exit(1); }"
+            "let payload = \"\";"
+            "process.stdin.setEncoding(\"utf8\");"
+            "process.stdin.on(\"data\", (c) => payload += c);"
+            "process.stdin.on(\"end\", () => {"
+            "  const opts = {"
+            "    hostname: \"127.0.0.1\", port: %d,"
+            "    path: %s, method: \"POST\","
+            "    headers: {"
+            "      \"Content-Type\": \"application/json\","
+            "      \"X-Management-Token\": %s,"
+            "      \"Content-Length\": Buffer.byteLength(payload)"
+            "    },"
+            "    timeout: %d"
+            "  };"
+            "  const req = http.request(opts, (res) => {"
+            "    let d = \"\";"
+            "    res.on(\"data\", (c) => d += c);"
+            "    res.on(\"end\", () => {"
+            "      try { console.log(d); process.exit(res.statusCode >= 200 && res.statusCode < 300 ? 0 : 1); }"
+            "      catch { process.exit(1); }"
+            "    });"
             "  });"
+            "  req.on(\"error\", () => process.exit(1));"
+            "  req.write(payload);"
+            "  req.end();"
             "});"
-            "req.on(\"error\", () => process.exit(1));"
-            "req.write(process.argv[1]);"
-            "req.end();"
+        ) % (port, path_lit, token_lit, timeout * 1000)
+        result = subprocess.run(
+            ["docker", "exec", "-i", gw_cid, "node", "-e", script],
+            input=payload_json,
+            capture_output=True, text=True, timeout=timeout + 10, check=False,
         )
-        # Use a separate script file to avoid shell metacharacter issues
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False, prefix="gw-api-") as tmp:
-            tmp_path = tmp.name
-            tmp.write(script)
-        try:
-            result = subprocess.run(
-                ["docker", "exec", "-i", gw_cid, "node", tmp_path, payload_json],
-                capture_output=True, text=True, timeout=timeout + 10, check=False,
-            )
-        finally:
-            os.unlink(tmp_path)
 
         if result.returncode != 0:
             _log.error("Gateway API call %s failed: rc=%s stderr=%s", url_path, result.returncode, result.stderr)
@@ -517,13 +565,15 @@ class GatewayManagementClient:
     def reconcile_snapshot(self) -> GatewaySnapshot:
         data = self._exec("/api/management/reconcile-snapshot")
         seats = {}
-        for name in ALLOWED_SEAT_NAMES:
-            entry = data.get("seats", {}).get(name, {})
+        raw_seats = data.get("seats", {}) or {}
+        for worker_id, entry in raw_seats.items():
+            name = _worker_to_service(worker_id)
             seats[name] = SeatState.from_gateway_snapshot(name, entry)
         return GatewaySnapshot(
             seats=seats,
-            total_assigned=data.get("totalAssigned", 0),
-            total_queued=data.get("totalQueued", 0),
+            total_assigned=int(data.get("totalAssigned", 0) or 0),
+            total_queued=int(data.get("totalQueued", 0) or 0),
+            plan=data.get("plan") or {},
         )
 
     def reconcile_plan(self, desired_seats: list[str]) -> dict:
@@ -533,10 +583,13 @@ class GatewayManagementClient:
         })
 
     def drain_seat(self, seat_name: str, expected_generation: str) -> bool:
-        """Atomically drain a seat. Returns True if drain was accepted."""
+        """Atomically drain a seat with a generation CAS. True if accepted."""
+        worker_id = _service_to_worker(seat_name)
+        drain_id = f"dr-{secrets.token_hex(6)}"
         try:
             data = self._exec("/api/management/drain", {
-                "seatName": seat_name,
+                "workerId": worker_id,
+                "drainId": drain_id,
                 "expectedGeneration": expected_generation,
             })
             return bool(data.get("accepted", False))
@@ -545,9 +598,10 @@ class GatewayManagementClient:
 
     def activate_seat(self, seat_name: str) -> bool:
         """Mark a seat as desired/activate in gateway state."""
+        worker_id = _service_to_worker(seat_name)
         try:
             data = self._exec("/api/management/activate", {
-                "seatName": seat_name,
+                "workerId": worker_id,
             })
             return bool(data.get("accepted", False))
         except RuntimeError:
@@ -617,7 +671,8 @@ class TerminalRuntimeReconciler:
         # Idempotent recovery: handle transitory states from a previous crash
         self._reconcile_transitory(snapshot)
 
-        desired = snapshot.desired_running
+        # The gateway's plan is authoritative; the totals are informational.
+        desired = snapshot.desired_from_plan
         current = snapshot.running_count + snapshot.starting_count
 
         if current < desired:

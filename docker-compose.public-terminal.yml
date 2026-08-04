@@ -12,7 +12,7 @@
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
-    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#b70a7901bac99c981e3ced240cf25600ca8fc589"
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#ca767a98f566694df53507ae12d399a133c49bc5"
     args:
       PUBLIC_BASE_PATH: /
       VITE_TERMINAL_BUILD_MODE: live
@@ -39,6 +39,12 @@ x-fin-terminal-public-worker: &fin-terminal-public-worker
     - PUBLIC_SESSION_MAX_SECONDS=900
     - PUBLIC_RECONNECT_GRACE_SECONDS=30
     - PUBLIC_MAX_RESEARCH_RUNS=5
+    # Research-permit gate: workers acquire the gateway-owned global permit over
+    # the private seat network (fin-terminal-public-gateway:8789). The
+    # management listener is never published and never proxied by Caddy.
+    - TERMINAL_RUNTIME_FEATURE_ENABLED=${TERMINAL_RUNTIME_FEATURE_ENABLED:-false}
+    - TERMINAL_RUNTIME_MANAGEMENT_TOKEN=${TERMINAL_RUNTIME_MANAGEMENT_TOKEN:-}
+    - TERMINAL_RUNTIME_MANAGEMENT_URL=http://fin-terminal-public-gateway:8789
   read_only: true
   tmpfs:
     - /tmp:rw,nosuid,nodev,noexec,size=268435456,mode=1777
@@ -143,7 +149,7 @@ services:
 
   fin-terminal-public-gateway:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#b70a7901bac99c981e3ced240cf25600ca8fc589"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#ca767a98f566694df53507ae12d399a133c49bc5"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
         VITE_TERMINAL_BUILD_MODE: public-live
@@ -178,10 +184,19 @@ services:
       - PUBLIC_WORKER_ENDPOINTS=seat-01=http://fin-terminal-public-seat-01:8787,seat-02=http://fin-terminal-public-seat-02:8787,seat-03=http://fin-terminal-public-seat-03:8787,seat-04=http://fin-terminal-public-seat-04:8787,seat-05=http://fin-terminal-public-seat-05:8787,seat-06=http://fin-terminal-public-seat-06:8787
       # Private management API for the host-side reconciler. Never exposed on the
       # public edge. The token is passed via an exact header; the listener is on a
-      # separate internal port and never accepts connections from Caddy or other
-      # containers.
+      # separate internal port (8789) that Caddy never proxies. The reconciler
+      # reaches it via `docker exec` on loopback; workers reach it over the
+      # private seat networks.
       - TERMINAL_RUNTIME_MANAGEMENT_TOKEN=${TERMINAL_RUNTIME_MANAGEMENT_TOKEN:-}
       - TERMINAL_RUNTIME_FEATURE_ENABLED=${TERMINAL_RUNTIME_FEATURE_ENABLED:-false}
+      - TERMINAL_RUNTIME_MANAGEMENT_PORT=${TERMINAL_RUNTIME_MANAGEMENT_PORT:-8789}
+      # Workspace checkpoint S2S: the gateway exports the assigned worker's
+      # authoritative checkpoint and forwards it to the control plane over the
+      # private network. All three names must match the control-plane service
+      # exactly (FIN_WORKSPACE_CONTROL_TOKEN / FIN_TERMINAL_BASE_URL below).
+      - FINANCIAL_WORKSPACE_CHECKPOINTS=${FIN_TERMINAL_WORKSPACE_ENABLED:-false}
+      - FINANCIAL_WORKSPACE_CONTROL_TOKEN=${FIN_WORKSPACE_CONTROL_TOKEN:-}
+      - FINANCIAL_WORKSPACE_SERVICE_URL=http://fin-terminal-workspace-control:8790
     depends_on:
       fin-terminal-public-redis:
         condition: service_healthy

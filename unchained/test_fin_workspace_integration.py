@@ -240,31 +240,145 @@ class HandoffUrlAndCookieTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("unbrowser.unchainedsky.com/fin-terminal-workspace", chk["auth_url"])
 
-    async def test_claim_cookie_is_parent_domain_httponly(self):
+    async def test_create_checkpoint_response_is_canonical_snake_case(self):
+        """The S2S create response is snake_case and expires_at is epoch seconds."""
+        os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "tok"
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw):
+            req = _Request(body={
+                "requestId": "req-wire",
+                "source": {"sessionId": "sess", "workerId": "worker", "generation": "gen-1"},
+                "checkpoint": {"k": 1},
+            }, token="tok")
+            resp = await fin_workspace.handle_fin_workspace_create_checkpoint(req)
+            self.assertEqual(resp.status, 201)
+            data = _payload(resp)
+            # Canonical snake_case wire keys only.
+            self.assertIn("checkpoint_id", data)
+            self.assertIn("expires_at", data)
+            self.assertIn("handoff_id", data)
+            self.assertIn("handoff_secret", data)
+            self.assertIn("auth_url", data)
+            self.assertNotIn("checkpointId", data)
+            self.assertNotIn("expiresAt", data)
+            self.assertNotIn("handoffSecret", data)
+            self.assertNotIn("authUrl", data)
+            # expires_at is Unix epoch SECONDS (matches the control plane's
+            # time.time() base), not milliseconds.
+            self.assertIsInstance(data["expires_at"], float)
+            self.assertGreater(data["expires_at"], 1_600_000_000)
+            self.assertLess(data["expires_at"], 9_000_000_000)
+
+    def test_public_paths_match_caddy_prefix_stripping_and_routes(self):
+        """auth_url / oauth start / callback / done all live under the Caddy
+        /fin-terminal-workspace prefix and strip to the exact handler routes."""
+        from web_app.routes import ROUTE_SPECS
+        public = {(m, p) for m, p, _ in ROUTE_SPECS if not p.startswith("/internal")}
+        for expected in (
+            ("GET", "/auth/claim"),
+            ("POST", "/api/claim"),
+            ("GET", "/api/claims/{claim_id}"),
+            ("GET", "/api/workspace"),
+            ("GET", "/api/snapshots"),
+            ("GET", "/api/runtime/status"),
+            ("POST", "/api/google"),
+            ("GET", "/done"),
+            ("GET", "/auth/{provider}/start"),
+            ("GET", "/auth/{provider}/callback"),
+        ):
+            self.assertIn(expected, public, f"handler route {expected} not registered")
+
+        os.environ["FIN_TERMINAL_BASE_URL"] = "https://unbrowser.unchainedsky.com/fin-terminal-workspace"
+        chk = self.fw.create_checkpoint(
+            request_id="req-path", session_id="sess", worker_id="w",
+            checkpoint=b'{}',
+        )
+        self.assertIn("/fin-terminal-workspace/auth/claim", chk["auth_url"])
+        claim = self.fw.initiate_claim(
+            chk["handoff_id"], chk["handoff_secret"],
+            browser_nonce="n", audience="github",
+        )
+        start = fin_workspace._claim_oauth_start_url(claim["claim_id"], "github")
+        self.assertIn("/fin-terminal-workspace/auth/github/start", start)
+        done = fin_workspace_auth._claim_done_url(claim["claim_id"], "accepted")
+        self.assertIn("/fin-terminal-workspace/done", done)
+        callback = f"{fin_workspace_auth._claim_callback_base_url()}/auth/github/callback"
+        self.assertEqual(
+            callback,
+            "https://unbrowser.unchainedsky.com/fin-terminal-workspace/auth/github/callback",
+        )
+
+    async def test_claim_requires_handoff_cookie_and_rotates_it(self):
         os.environ["FIN_WORKSPACE_COOKIE_DOMAIN"] = ".unchainedsky.com"
         os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "tok"
         chk = self.fw.create_checkpoint(
-            request_id="req-cookie", session_id="sess", worker_id="worker",
+            request_id="req-cookie2", session_id="sess", worker_id="worker",
             checkpoint=b'{}',
         )
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw):
+            # No handoff cookie → 401.
             req = _Request(body={
                 "handoff_id": chk["handoff_id"],
-                "handoff_secret": chk["handoff_secret"],
                 "browser_nonce": "nonce-123",
                 "audience": "github",
             })
             resp = await fin_workspace.handle_fin_workspace_browser_claim(req)
+            self.assertEqual(resp.status, 401)
+
+            # Sending the secret in the body is rejected outright.
+            req = _Request(
+                body={
+                    "handoff_id": chk["handoff_id"],
+                    "handoff_secret": chk["handoff_secret"],
+                    "browser_nonce": "nonce-123",
+                    "audience": "github",
+                },
+                cookies={"fin-terminal-handoff-secret": chk["handoff_secret"]},
+            )
+            resp = await fin_workspace.handle_fin_workspace_browser_claim(req)
+            self.assertEqual(resp.status, 400)
+
+            # Correct cookie → claim created; handoff cookie rotated away and
+            # the claim cookie set (HttpOnly parent-domain).
+            req = _Request(
+                body={
+                    "handoff_id": chk["handoff_id"],
+                    "browser_nonce": "nonce-123",
+                    "audience": "github",
+                },
+                cookies={"fin-terminal-handoff-secret": chk["handoff_secret"]},
+            )
+            resp = await fin_workspace.handle_fin_workspace_browser_claim(req)
             self.assertEqual(resp.status, 201)
             set_cookie = str(resp.cookies)
+            # The gateway handoff cookie is cleared (host-only, no Domain).
+            self.assertIn("fin-terminal-handoff-secret", set_cookie)
+            # The claim secret cookie is set with the parent-domain scope.
             self.assertIn("fw_claim_secret=", set_cookie)
             self.assertIn("HttpOnly", set_cookie)
             self.assertIn("Secure", set_cookie)
             self.assertIn("SameSite=Lax", set_cookie)
             self.assertIn("Path=/", set_cookie)
             self.assertIn("Domain=.unchainedsky.com", set_cookie)
-            # No __Host- prefix (it requires Path=/ + no Domain).
             self.assertNotIn("__Host-", set_cookie)
+
+    async def test_auth_claim_page_never_echoes_secrets_or_postmessage(self):
+        os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "tok"
+        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw):
+            req = _Request()
+            resp = await fin_workspace.handle_fin_workspace_auth_claim_page(req)
+            self.assertEqual(resp.status, 200)
+            # No bearer value in the page, no postMessage secret path: the
+            # handoff secret is read server-side from the HttpOnly cookie.
+            self.assertNotIn("handoff_secret=", resp.text)
+            self.assertNotIn("?handoff_secret", resp.text)
+            self.assertNotIn("handoffSecretFromParent", resp.text)
+            self.assertNotIn("postMessage", resp.text)
+            self.assertNotIn("fin-workspace-handoff-secret", resp.text)
+            # The claim initiation is a cookie-scoped POST without the secret.
+            self.assertIn('method: "POST"', resp.text)
+            self.assertNotIn("handoff_secret:", resp.text)
+            self.assertIn("Content-Security-Policy", resp.text)
+            self.assertIn('name="referrer" content="no-referrer"', resp.text)
 
 
 # ---------------------------------------------------------------------------
@@ -521,12 +635,14 @@ class BrowserRouteTests(unittest.IsolatedAsyncioTestCase):
             checkpoint=b'{}',
         )
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw):
-            req = _Request(body={
-                "handoff_id": chk["handoff_id"],
-                "handoff_secret": chk["handoff_secret"],
-                "browser_nonce": "nonce",
-                "audience": "evil-provider",
-            })
+            req = _Request(
+                body={
+                    "handoff_id": chk["handoff_id"],
+                    "browser_nonce": "nonce",
+                    "audience": "evil-provider",
+                },
+                cookies={"fin-terminal-handoff-secret": chk["handoff_secret"]},
+            )
             resp = await fin_workspace.handle_fin_workspace_browser_claim(req)
             self.assertEqual(resp.status, 400)
 
@@ -536,13 +652,16 @@ class BrowserRouteTests(unittest.IsolatedAsyncioTestCase):
             req = _Request()
             resp = await fin_workspace.handle_fin_workspace_auth_claim_page(req)
             self.assertEqual(resp.status, 200)
-            # No bearer value in the page: the secret travels via postMessage
-            # into the POST body, never in the URL or rendered state.
+            # No bearer value in the page and no postMessage secret path: the
+            # handoff secret is read server-side from the HttpOnly cookie.
             self.assertNotIn("handoff_secret=", resp.text)
             self.assertNotIn("?handoff_secret", resp.text)
-            # The claim initiation is a POST with the secret in the body.
+            self.assertNotIn("handoffSecretFromParent", resp.text)
+            self.assertNotIn("postMessage", resp.text)
+            # The claim initiation is a POST without the secret in the body.
             self.assertIn('method: "POST"', resp.text)
-            self.assertIn("handoff_secret: handoffSecretFromParent()", resp.text)
+            self.assertNotIn("handoff_secret:", resp.text)
+            self.assertIn("Content-Security-Policy", resp.text)
 
     async def test_browser_claim_cookie_owns_claim_read(self):
         os.environ["FIN_WORKSPACE_CONTROL_TOKEN"] = "tok"

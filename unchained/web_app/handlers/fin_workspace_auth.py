@@ -3,8 +3,12 @@
 Integrates the existing Google / Facebook / GitHub account creation with the
 one-time claim flow:
 
-1. The browser initiates a claim (``POST /api/claim``) and receives an HttpOnly
-   parent-domain claim cookie plus a bound ``oauth_state``.
+1. The browser initiates a claim (``POST /api/claim``). The control plane reads
+   the S2S handoff secret from the gateway-set HttpOnly
+   ``fin-terminal-handoff-secret`` cookie, creates the claim, rotates the
+   handoff cookie away, and sets an HttpOnly parent-domain claim cookie plus a
+   same-tab nonce cookie. The body carries only ``handoff_id``/``browser_nonce``/
+   ``audience`` — never the secret.
 2. ``GET /auth/{provider}/start?claim_id=...`` binds the provider OAuth state
    to the claim (exact provider allowlist, purpose/audience checked) and
    redirects to the provider.
@@ -56,12 +60,13 @@ _GOOGLE_CLAIM_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self' https://accounts.google.com https://accounts.google.com/gsi/; connect-src 'self'; frame-src https://accounts.google.com/gsi/; img-src data:">
 <title>Continue with Google</title>
 <style>
 body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;
-display:grid;place-items:center;min-height:100vh;margin:0}
+ display:grid;place-items:center;min-height:100vh;margin:0}
 .card{max-width:420px;padding:32px;border:1px solid #2d3748;border-radius:12px;
-background:#11161d;text-align:center}
+ background:#11161d;text-align:center}
 p{color:#9aa7b4;font-size:14px;margin:0 0 20px}
 </style></head><body>
 <div class="card">
@@ -76,18 +81,13 @@ const state = params.get("state") || "";
 function handleCredential(response) {
   fetch("../../api/google", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({credential: response.credential, claim_id: claimId,
-      oauth_state: state, browser_nonce: (window._bnonce || "")})})
+      oauth_state: state})})
     .then((r) => r.json().then((d) => ({ok: r.ok, d})))
     .then(({ok, d}) => {
       if (ok && d.redirect_url) { location.href = d.redirect_url; }
       else { document.querySelector("p").textContent = d.error || "Claim failed."; }
     });
 }
-window.addEventListener("message", (ev) => {
-  if (ev.origin === location.origin && ev.data && ev.data.type === "fin-workspace-handoff-secret") {
-    window._bnonce = String(ev.data.browser_nonce || "");
-  }
-});
 window.onload = () => {
   if (window.google && google.accounts && google.accounts.id) {
     google.accounts.id.initialize({client_id: document.body.dataset.clientId, callback: handleCredential});

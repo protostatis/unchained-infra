@@ -21,7 +21,7 @@ auth/credit flows are untouched.
         │  browser flow:
         v
 [unbrowser.unchainedsky.com/fin-terminal-workspace/*] via Caddy
-        │   /auth/claim  → claim initiation (secret in POST body only)
+        │   /auth/claim  → claim initiation (secret in HttpOnly cookie)
         │   /auth/{provider}/start → OAuth state bound to the claim
         │   /callback/{provider}   → state binding verified, claim accepted
         │   /api/workspace, /api/snapshots, /api/runtime/status
@@ -66,37 +66,59 @@ Required env (see `.env.workspace.example`):
     "checkpoint": {"holdings": [], "balance": 0}
   }
   ```
-- Response `201`:
+- Response `201` (canonical snake_case; `expires_at` is Unix epoch **seconds**):
   ```json
-  {"checkpoint_id": "fcp-...", "expires_at": 0, "handoff_id": "fh-...",
+  {"checkpoint_id": "fcp-...", "expires_at": 1750000000.0, "handoff_id": "fh-...",
    "handoff_secret": "<S2S only>", "auth_url": "https://.../fin-terminal-workspace/auth/claim?handoff_id=...", "status": "ready"}
   ```
 - The `handoff_secret` is returned **only** in this S2S response. It never
   appears in the `auth_url`, a log line, or a browser URL.
 - A `requestId` already in `ready` state returns `200` with the same secret
   (idempotent).
+- The app-side gateway normalizes this response: `expires_at` (seconds) →
+  `expiresAt` (epoch ms, `* 1000`), `checkpoint_id` → `checkpointId`, etc. The
+  camelCase spelling is tolerated for rollout; snake_case is canonical.
 
 Other internal endpoints (`GET /checkpoints/{id}`, `POST /claim`,
 `POST /claim/accept`, `GET /claims/{id}`, `GET /workspace`,
 `GET /snapshots`, `POST /effects/process`, `POST /sweep`, runtime
 wake/sleep/status) are documented in `unchained/web_app/handlers/fin_workspace.py`.
 
+The exact cross-repo wire contract (units, headers, cookie names, env vars,
+paths) is the canonical document in
+[`docs/financial-terminal-cross-repo-contract.md`](financial-terminal-cross-repo-contract.md).
+
 ## Claim flow (browser)
 
-1. The app opens `auth_url` (only the opaque `handoff_id` is in the URL).
-2. The claim page holds the secret in memory (postMessage from the app
-   frontend) and `POST /api/claim` with `{handoff_id, handoff_secret,
-   browser_nonce, audience}`.
-3. The control plane sets an HttpOnly Secure SameSite=Lax **parent-domain**
-   cookie (`fw_claim_secret`, `Path=/`) and redirects to
-   `/auth/{provider}/start?claim_id=...` — the provider OAuth state is bound
-   to the claim.
+1. The app's gateway exports the assigned worker's authoritative checkpoint,
+   forwards it to this control plane, and sets the **handoff secret** in a
+   host-only `HttpOnly; Secure; SameSite=Lax; Path=/` cookie named
+   `fin-terminal-handoff-secret`. The browser opens `auth_url`, which contains
+   only the opaque `handoff_id`.
+2. The claim page holds **no secret**: selecting a provider POSTs
+   `{handoff_id, browser_nonce, audience}` to `/api/claim`. The control plane
+   reads the handoff secret server-side from the `fin-terminal-handoff-secret`
+   cookie, verifies it, creates the claim, **rotates the handoff cookie away**,
+   sets the `fw_claim_secret` (HttpOnly, Secure, SameSite=Lax, parent-domain)
+   and `fw_claim_nonce` cookies, and returns `claim_id` + the OAuth start URL.
+3. The browser follows `/auth/{provider}/start?claim_id=...` — the provider
+   OAuth state is bound to the claim.
 4. `/callback/{provider}` verifies the claim cookie and the exact state
    binding, get-or-creates the user, records the provider origin, and accepts
    the claim **exactly once** (workspace + import + snapshot + outbox effects
    in one transaction).
 5. New accounts receive an idempotent USD 1.00 grant; accounts that already
    had a credit account receive nothing.
+
+Security invariants (tested):
+
+- The handoff secret is never readable by browser JS: it exists only in the
+  HttpOnly cookie and in the S2S create-checkpoint response. There is no
+  `postMessage` secret path and no `handoff_secret` field accepted in the
+  claim body (sending one returns 400).
+- The handoff secret never appears in `auth_url`, the claim page HTML, Caddy
+  logs (`log_skip`), referrers (`no-referrer`), or analytics.
+- The claim page and Google GSI page carry `Content-Security-Policy` meta tags.
 
 Exact callback allowlist: only `google`, `facebook`, `github` are accepted at
 both the Caddy layer and the handler; any other provider returns 404.

@@ -16,16 +16,18 @@ Internal API (Docker-internal only; Caddy denies ``/internal/*``):
 
 Browser routes (proxied by Caddy under ``/fin-terminal-workspace``):
   GET    /auth/claim                    — handoff entry page (no secret in URL)
-  POST   /api/claim                     — initiate claim (secret in POST body)
+  POST   /api/claim                     — initiate claim (secret in HttpOnly cookie)
   GET    /api/claims/{claim_id}         — claim status
   GET    /api/workspace                 — current user workspace
   GET    /api/snapshots                 — current user snapshots
   GET    /callback/{provider}           — claim-aware OAuth callback (allowlist)
 
 All internal S2S handlers require the bearer control token
-(``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``). The browser claim
-secret is carried only in an HttpOnly Secure SameSite=Lax parent-domain
-cookie — never in URLs or logs.
+(``Authorization: Bearer <FIN_WORKSPACE_CONTROL_TOKEN>``). The S2S handoff
+secret travels only in the gateway-set HttpOnly ``fin-terminal-handoff-secret``
+cookie and is read server-side at claim initiation; it never appears in the
+browser JS, the POST body, a URL, or a log line. The claim secret is carried
+only in an HttpOnly Secure SameSite=Lax parent-domain cookie.
 """
 
 from __future__ import annotations
@@ -67,6 +69,14 @@ _CLAIM_COOKIE_NAME = "fw_claim_secret"
 _CLAIM_NONCE_COOKIE_NAME = "fw_claim_nonce"
 _CLAIM_COOKIE_TTL = 3600  # 1 hour (must match claim expiry)
 
+# S2S handoff secret cookie set by the fin-terminal gateway (app repo). The
+# control plane reads it SERVER-SIDE from this HttpOnly cookie during claim
+# initiation — never from JS, the POST body, or the URL. Host-only: the gateway
+# and this control plane share the public terminal host, so a host-only cookie
+# with Path=/ is sent on every path of that host, including
+# /fin-terminal-workspace/*.
+_HANDOFF_COOKIE_NAME = "fin-terminal-handoff-secret"
+
 
 def _claim_cookie_domain() -> str:
     return os.environ.get("FIN_WORKSPACE_COOKIE_DOMAIN", "").strip()
@@ -82,6 +92,16 @@ def _json_response(data, *, status: int = 200, headers: dict | None = None) -> w
 
 def _error_response(message: str, status: int = 400) -> web.Response:
     return _json_response({"error": message}, status=status)
+
+
+def _extract_handoff_cookie(request: web.Request) -> str:
+    """Extract the S2S handoff secret from the gateway-set HttpOnly cookie."""
+    return request.cookies.get(_HANDOFF_COOKIE_NAME, "").strip()
+
+
+def _clear_handoff_cookie(response: web.Response) -> None:
+    """Clear the host-only handoff cookie (set by the gateway without Domain)."""
+    response.del_cookie(_HANDOFF_COOKIE_NAME, path="/")
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +287,15 @@ async def handle_fin_workspace_get_checkpoint(request: web.Request) -> web.Respo
 async def _initiate_claim_impl(request: web.Request) -> web.Response:
     """Initiate a one-time claim for a handoff.
 
-    Expects JSON: {handoff_id, handoff_secret, browser_nonce, audience?}
-    Returns: sets HttpOnly parent-domain cookie with claim_secret, returns
-    claim_id and the OAuth start URL. The secret travels in the POST body
-    only — never in the URL or logs.
+    The S2S handoff secret is read SERVER-SIDE from the gateway-set HttpOnly
+    ``fin-terminal-handoff-secret`` cookie — never from JS, the POST body, or
+    the URL. The browser only supplies ``handoff_id`` (the same opaque value
+    already in the URL), a same-tab ``browser_nonce``, and the provider
+    ``audience``.
+
+    On success: rotates the handoff cookie away (cleared), sets the HttpOnly
+    parent-domain ``fw_claim_secret`` claim cookie plus the same-tab nonce
+    cookie, and returns ``claim_id`` and the OAuth start URL.
     """
     fw = _resolve_fw()
     if fw is None:
@@ -282,9 +307,17 @@ async def _initiate_claim_impl(request: web.Request) -> web.Response:
         return _error_response("invalid JSON body", status=400)
 
     handoff_id = str(body.get("handoff_id", "") or "").strip()
-    handoff_secret = str(body.get("handoff_secret", "") or "").strip()
     browser_nonce = str(body.get("browser_nonce", "") or "").strip()
     audience = str(body.get("audience", "") or "").strip().lower()
+
+    if body.get("handoff_secret"):
+        # Never accept the handoff secret from JS/body: it is an HttpOnly
+        # cookie capability. Reject loudly so a leaky client cannot work.
+        return _error_response("handoff_secret must not be sent in the body", status=400)
+
+    handoff_secret = _extract_handoff_cookie(request)
+    if not handoff_secret:
+        return _error_response("handoff cookie missing", status=401)
 
     if audience not in ("google", "facebook", "github"):
         return _error_response("audience must be one of: google, facebook, github", status=400)
@@ -311,6 +344,9 @@ async def _initiate_claim_impl(request: web.Request) -> web.Response:
         "expires_at": result["expires_at"],
         "oauth_start_url": _claim_oauth_start_url(result["claim_id"], audience),
     }, status=201)
+    # Rotate the S2S handoff cookie: it has served its purpose and must not
+    # linger past claim initiation.
+    _clear_handoff_cookie(response)
     _set_claim_cookie(response, result["claim_secret"])
     if browser_nonce:
         _set_claim_nonce_cookie(response, browser_nonce)
@@ -341,17 +377,18 @@ def _claim_oauth_start_url(claim_id: str, audience: str) -> str:
 _CLAIM_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Workspace handoff</title>
 <meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'">
+<title>Workspace handoff</title>
 <style>
 body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;
-display:grid;place-items:center;min-height:100vh;margin:0}
+ display:grid;place-items:center;min-height:100vh;margin:0}
 .card{max-width:420px;padding:32px;border:1px solid #2d3748;border-radius:12px;
-background:#11161d;text-align:center}
+ background:#11161d;text-align:center}
 h1{font-size:18px;margin:0 0 8px}
 p{color:#9aa7b4;font-size:14px;line-height:1.5;margin:0 0 20px}
 button{background:#238636;color:#fff;border:0;padding:10px 18px;border-radius:8px;
-font-size:14px;cursor:pointer}
+ font-size:14px;cursor:pointer}
 button:disabled{opacity:.5;cursor:default}
 </style></head><body>
 <div class="card">
@@ -369,32 +406,27 @@ to sign in and import your workspace snapshot.</p>
 const handoffId = new URLSearchParams(location.search).get("handoff_id");
 if (!handoffId) { document.getElementById("err").style.display = "block";
   document.getElementById("err").textContent = "Missing handoff id."; }
+/* The S2S handoff secret is held in the HttpOnly fin-terminal-handoff-secret
+   cookie set by the gateway; it never reaches this page's JS. The server
+   reads it from the cookie when this POST is processed, then rotates it away. */
 document.querySelectorAll("button[data-provider]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const audience = btn.dataset.provider;
+    btn.disabled = true;
     try {
-      const res = await fetch("../../api/claim?action=handoff&handoff_id=" +
-        encodeURIComponent(handoffId), {method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({handoff_id: handoffId, handoff_secret: handoffSecretFromParent(),
-        browser_nonce: crypto.randomUUID(), audience})});
+      const res = await fetch("../../api/claim", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({handoff_id: handoffId,
+          browser_nonce: crypto.randomUUID(), audience})});
       if (!res.ok) throw new Error("claim initiation failed");
       const data = await res.json();
       location.href = data.oauth_start_url;
     } catch (e) {
       document.getElementById("err").style.display = "block";
       document.getElementById("err").textContent = e.message || "Failed to start claim.";
+      btn.disabled = false;
     }
   });
 });
-/* The app frontend injects the handoff secret via postMessage before this
-   page is shown; it is held in memory only and never placed in the URL. */
-let _secret = "";
-window.addEventListener("message", (ev) => {
-  if (ev.origin === location.origin && ev.data && ev.data.type === "fin-workspace-handoff-secret") {
-    _secret = String(ev.data.handoff_secret || "");
-  }
-});
-function handoffSecretFromParent() { return _secret; }
 </script>
 </body></html>
 """
