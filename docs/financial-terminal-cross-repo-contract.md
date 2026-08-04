@@ -115,11 +115,17 @@ Every request requires header `X-Management-Token: $TERMINAL_RUNTIME_MANAGEMENT_
 - `status` is one of `absent | starting | healthy | draining | stopped`
   (mapped from the app's phase model; `recycling` → `stopped`).
 - `assigned` is true for `assigned|admitted|active|disconnected` phases.
-- `idleSeconds` is `idleSinceMs / 1000` (integer seconds). It is populated for
-  `active` seats from the session's last-activity time; seats without a
-  tracked idle time (e.g. `ready-idle`) report `0`. The reconciler uses it only
-  to order scale-down candidates, so a zero value is safe (drain-then-stop and
-  generation CAS still protect every seat).
+- `idleSeconds` is the whole number of elapsed idle seconds (floored). It is
+  populated for `ready-idle` seats from the moment the slot became healthy and
+  unassigned (persisted across gateway restarts) and for `active` seats from
+  the session's last-activity time; it is monotonic and never negative.
+  Draining seats report `0`. The reconciler uses it to order scale-down
+  candidates (longest idle first).
+- Five-minute eligibility is **exact**: the gateway only lists a ready-idle
+  seat as a scale-down candidate after `TERMINAL_RUNTIME_IDLE_SCALE_DOWN`
+  seconds (default 300) of continuous idle, and the `/drain` endpoint rejects a
+  request before that threshold with `409 { accepted: false }`. Drain-then-stop
+  and the generation CAS still protect every seat.
 - `containerId` is always `""` — Docker authority is host-side.
 - The reconciler maps worker ids to its allowlisted Compose service names
   (`fin-terminal-public-seat-01`..`-06`) via an exact tested bijection.
