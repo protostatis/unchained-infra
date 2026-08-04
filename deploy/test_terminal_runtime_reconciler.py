@@ -1072,6 +1072,13 @@ class ShellSyntaxTests(unittest.TestCase):
             self.assertIn("[Service]", text)
             self.assertIn("[Install]", text)
             self.assertIn("ExecStart=", text)
+            self.assertIn(
+                "EnvironmentFile=/home/ec2-user/unchained/.env.reconciler",
+                text,
+            )
+            self.assertNotIn("EnvironmentFile=-", text)
+            self.assertIn("ExecStartPre=/usr/bin/test -s", text)
+            self.assertIn("KillMode=control-group", text)
             self.assertIn("Restart=", text)
 
     def test_caddy_preflight_rejects_empty_or_invalid_boolean_flags(self) -> None:

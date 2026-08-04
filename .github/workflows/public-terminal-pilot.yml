@@ -9,11 +9,11 @@ on:
         type: choice
         options:
           - status
-          - activate
+          - activate-runtime
           - disable
       confirm:
         description: >-
-          For activate: type 'ACTIVATE SIX SEATS'.
+          For activate-runtime: type 'ACTIVATE RUNTIME PILOT'.
           For disable: type 'DISABLE PUBLIC PILOT'.
           For status: leave empty.
         required: false
@@ -49,13 +49,13 @@ jobs:
           ACTION: ${{ inputs.action }}
         run: |
           case "$ACTION" in
-            activate) expected="ACTIVATE SIX SEATS" ;;
-            disable)  expected="DISABLE PUBLIC PILOT" ;;
-            *)        expected="" ;;
+            activate-runtime) expected="ACTIVATE RUNTIME PILOT" ;;
+            disable)          expected="DISABLE PUBLIC PILOT" ;;
+            *)                expected="" ;;
           esac
           if [[ "$CONFIRM" != "$expected" ]]; then
             echo "::error::The '$ACTION' action requires confirmation."
-            echo "::error::For activate: type 'ACTIVATE SIX SEATS' in the confirm input."
+            echo "::error::For activate-runtime: type 'ACTIVATE RUNTIME PILOT' in the confirm input."
             echo "::error::For disable:  type 'DISABLE PUBLIC PILOT' in the confirm input."
             exit 1
           fi
@@ -69,6 +69,16 @@ jobs:
             exit 1
           fi
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Hash host runtime artifacts
+        id: runtime
+        run: |
+          reconciler_sha="$(sha256sum deploy/terminal_runtime_reconciler.py | cut -d' ' -f1)"
+          unit_sha="$(sha256sum deploy/terminal-runtime-reconciler.service | cut -d' ' -f1)"
+          [[ "$reconciler_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$unit_sha" =~ ^[0-9a-f]{64}$ ]]
+          echo "reconciler_sha=$reconciler_sha" >> "$GITHUB_OUTPUT"
+          echo "unit_sha=$unit_sha" >> "$GITHUB_OUTPUT"
 
       - name: Require production pilot secrets
         env:
@@ -110,6 +120,8 @@ jobs:
           SSH_KNOWN_HOSTS_PATH: ${{ steps.ssh.outputs.known_hosts }}
           ACTION: ${{ inputs.action }}
           MAIN_SHA: ${{ steps.candidate.outputs.revision }}
+          RECONCILER_SHA: ${{ steps.runtime.outputs.reconciler_sha }}
+          RECONCILER_UNIT_SHA: ${{ steps.runtime.outputs.unit_sha }}
         run: |
           set -euo pipefail
           if [[ ! "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
@@ -145,7 +157,7 @@ jobs:
             echo "::error::The host did not report a valid deployed revision."
             exit 1
           fi
-          if [[ "$ACTION" == "activate" ]]; then
+          if [[ "$ACTION" == "activate-runtime" ]]; then
             expected_sha="$MAIN_SHA"
           else
             expected_sha="$deployed_sha"
@@ -153,14 +165,66 @@ jobs:
 
           # Quote and validate ACTION and the exact expected host revision for
           # the remote command. The script rechecks it after acquiring .deploy.lock.
-          printf -v q_action '%q' "$ACTION"
           printf -v q_sha '%q' "$expected_sha"
-          # Stream the remote script over verified SSH stdin. Never pass
-          # Turnstile or OpenRouter values; the remote script reads them
-          # from the protected host .env file inside the transaction.
-          ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" \
-            "bash -s -- $q_action $q_sha" \
-            < "$GITHUB_WORKSPACE/deploy/public_terminal_pilot_remote.sh"
+          printf -v q_reconciler_sha '%q' "$RECONCILER_SHA"
+          printf -v q_unit_sha '%q' "$RECONCILER_UNIT_SHA"
+
+          run_remote_action() {
+            local remote_action="$1" q_action
+            printf -v q_action '%q' "$remote_action"
+            # Stream the reviewed script over verified SSH stdin. Never pass
+            # provider credentials or the runtime management token; the token
+            # is generated on-host inside the locked activation transaction.
+            ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" \
+              "bash -s -- $q_action $q_sha $q_reconciler_sha $q_unit_sha" \
+              < "$GITHUB_WORKSPACE/deploy/public_terminal_pilot_remote.sh"
+          }
+
+          fail_closed_disable() {
+            local disabled=false
+            for attempt in 1 2 3; do
+              if run_remote_action disable; then
+                disabled=true
+                break
+              fi
+              sleep 10
+            done
+            [[ "$disabled" == "true" ]]
+          }
+
+          if [[ "$ACTION" != "activate-runtime" ]]; then
+            run_remote_action "$ACTION"
+            exit 0
+          fi
+
+          # Even an SSH/session failure must attempt containment. Disable is
+          # idempotent when the remote activation trap already restored 404.
+          if ! run_remote_action activate-runtime; then
+            echo "::error::Runtime activation transaction failed; enforcing fail-closed disable."
+            if ! fail_closed_disable; then
+              echo "::error::Fail-closed disable also failed; immediate operator intervention is required."
+            fi
+            exit 1
+          fi
+
+          # A systemd ActiveState check while the activation lock is held is
+          # insufficient: prove that a real post-unlock reconcile cycle ran.
+          # Any failed verification immediately returns the public edge to 404.
+          runtime_verified=false
+          for attempt in 1 2 3 4 5 6 7 8; do
+            sleep 10
+            if run_remote_action verify-runtime; then
+              runtime_verified=true
+              break
+            fi
+          done
+          if [[ "$runtime_verified" != "true" ]]; then
+            echo "::error::Runtime verification failed; disabling the public pilot fail-closed."
+            if ! fail_closed_disable; then
+              echo "::error::Fail-closed disable also failed; immediate operator intervention is required."
+            fi
+            exit 1
+          fi
 
       - name: Remove deployment SSH files
         if: always()

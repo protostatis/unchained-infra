@@ -72,6 +72,22 @@ class RuntimeContextFilesTests(unittest.TestCase):
         }
         self.assertEqual(missing, set())
 
+    def test_host_runtime_files_are_manifested_and_deployed_transactionally(self) -> None:
+        host_files = _manifest_array("HOST_RUNTIME_FILES")
+        self.assertEqual(
+            host_files,
+            {
+                "terminal_runtime_reconciler.py",
+                "terminal-runtime-reconciler.service",
+            },
+        )
+        self.assertTrue(all((ROOT / "deploy" / name).is_file() for name in host_files))
+        deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("upload_host_runtime_files()", deploy)
+        self.assertIn('upload_host_runtime_files\n', deploy)
+        for name in host_files:
+            self.assertIn(f'deploy/{name}', deploy)
+
     def test_pip_requirements_do_not_become_shell_redirections(self) -> None:
         failures: list[str] = []
         for relative in _manifest_array("TOP_LEVEL_CONTEXT_FILES"):

@@ -1,9 +1,11 @@
 #!/bin/bash
 # Production public-terminal pilot control — run on EC2 via verified SSH stdin.
 #
-# Usage (local caller): ssh ... "bash -s -- ACTION EXPECTED_SHA"
-#   ACTION       : activate | disable | status
+# Usage (local caller):
+#   ssh ... "bash -s -- ACTION EXPECTED_SHA RECONCILER_SHA UNIT_SHA"
+#   ACTION       : activate-runtime | verify-runtime | disable | status
 #   EXPECTED_SHA : exact 40-character lowercase host deployment revision
+#   *_SHA        : exact SHA-256 of the host runtime artifacts from main
 #
 # Never transport Turnstile / OpenRouter values. The remote script reads the
 # protected host .env directly during the transaction.
@@ -15,14 +17,18 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 ACTION="${1:-}"
 EXPECTED_SHA="${2:-}"
+EXPECTED_RECONCILER_SHA="${3:-}"
+EXPECTED_RECONCILER_UNIT_SHA="${4:-}"
 
 readonly ACTION
 readonly EXPECTED_SHA
+readonly EXPECTED_RECONCILER_SHA
+readonly EXPECTED_RECONCILER_UNIT_SHA
 
 case "$ACTION" in
-    activate|disable|status|rollback) ;;
+    activate-runtime|verify-runtime|disable|status|rollback) ;;
     *)
-        echo "ERROR: ACTION must be one of activate, disable, status, or rollback" >&2
+        echo "ERROR: ACTION must be one of activate-runtime, verify-runtime, disable, status, or rollback" >&2
         exit 1
         ;;
 esac
@@ -30,6 +36,14 @@ esac
 if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     echo "ERROR: EXPECTED_SHA must be a 40-character lowercase hex revision" >&2
     exit 1
+fi
+
+if [[ "$ACTION" == "activate-runtime" || "$ACTION" == "verify-runtime" ]]; then
+    if [[ ! "$EXPECTED_RECONCILER_SHA" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$EXPECTED_RECONCILER_UNIT_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "ERROR: runtime artifact hashes must be 64-character lowercase hex values" >&2
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -105,6 +119,13 @@ readonly LOCK_FILE="$REMOTE_DIR/.deploy.lock"
 readonly DEPLOY_CURRENT="$REMOTE_DIR/.deploy-current"
 readonly ENV_FILE="$REMOTE_DIR/.env"
 readonly ENV_FLAG="FIN_TERMINAL_PUBLIC_ENABLED"
+readonly RUNTIME_FEATURE_FLAG="TERMINAL_RUNTIME_FEATURE_ENABLED"
+readonly RUNTIME_MANAGEMENT_TOKEN_KEY="TERMINAL_RUNTIME_MANAGEMENT_TOKEN"
+readonly RECONCILER_ENV_FILE="$REMOTE_DIR/.env.reconciler"
+readonly RECONCILER_SOURCE="$REMOTE_DIR/deploy/terminal_runtime_reconciler.py"
+readonly RECONCILER_UNIT_SOURCE="$REMOTE_DIR/deploy/terminal-runtime-reconciler.service"
+readonly RECONCILER_UNIT_TARGET="/etc/systemd/system/terminal-runtime-reconciler.service"
+readonly RUNTIME_METADATA_FILE="$REMOTE_DIR/.terminal-runtime-current"
 # Compose project name used by the base deployment.
 readonly COMPOSE_PROJECT="unchained"
 
@@ -119,6 +140,11 @@ REDIS_STATE_BACKUP_PRESENCE=""
 REDIS_STATE_BACKUP_READY=false
 REDIS_STATE_EXISTED=false
 REDIS_STATE_MIGRATED=false
+RUNTIME_REDIS_BACKUP_DIR=""
+RUNTIME_REDIS_BACKUP_READY=false
+RUNTIME_REDIS_RESET=false
+DYNAMIC_SETUP_STARTED=false
+RUNTIME_TOKEN_FILE=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,10 +160,17 @@ cleanup_lock() {
 acquire_lock() {
     mkdir -p "$(dirname "$LOCK_FILE")"
     exec {LOCK_FD}>>"$LOCK_FILE"
-    if ! flock -n "$LOCK_FD"; then
-        echo "ERROR: deployment lock is already held" >&2
-        exit 75
-    fi
+    local attempts=1
+    if [[ "$ACTION" == "verify-runtime" ]]; then attempts=20; fi
+    local attempt
+    for attempt in $(seq 1 "$attempts"); do
+        if flock -n "$LOCK_FD"; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "ERROR: deployment lock is already held" >&2
+    exit 75
 }
 
 release_lock() {
@@ -165,6 +198,10 @@ secure_workdir_cleanup() {
     REDIS_STATE_BACKUP_READY=false
     REDIS_STATE_EXISTED=false
     REDIS_STATE_MIGRATED=false
+    RUNTIME_REDIS_BACKUP_DIR=""
+    RUNTIME_REDIS_BACKUP_READY=false
+    RUNTIME_REDIS_RESET=false
+    RUNTIME_TOKEN_FILE=""
 }
 
 common_exit_cleanup() {
@@ -329,6 +366,10 @@ workspace_redis_dump() {
     local key
     while IFS= read -r key; do
         [[ -z "$key" ]] && continue
+        if [[ ! "$key" =~ ^[A-Za-z0-9:_-]{1,200}$ ]]; then
+            echo "ERROR: workspace Redis contains an unsafe key name" >&2
+            return 1
+        fi
         if ! docker exec "$redis_cid" redis-cli -n 1 --raw DUMP "$key" > "$out_dir/key.bin" 2>/dev/null; then
             echo "ERROR: could not dump workspace Redis key" >&2
             return 1
@@ -369,6 +410,10 @@ restore_workspace_redis_backup() {
     docker exec "$redis_cid" redis-cli -n 1 FLUSHDB >/dev/null 2>&1 || true
     while IFS= read -r key; do
         [[ -z "$key" ]] && continue
+        if [[ ! "$key" =~ ^[A-Za-z0-9:_-]{1,200}$ ]]; then
+            echo "ERROR: workspace Redis backup contains an unsafe key name" >&2
+            return 1
+        fi
         if [[ -f "$out_dir/dump-$key.bin" ]]; then
             docker exec -i "$redis_cid" redis-cli -n 1 -x RESTORE "$key" 0 \
                 < "$out_dir/dump-$key.bin" >/dev/null 2>&1 || true
@@ -395,28 +440,174 @@ cleanup_workspace_redis() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
-# Rollback: start all six seats (reconciler-agnostic rollback path)
-# ---------------------------------------------------------------------------
-start_all_seats_for_rollback() {
-    echo "    Rollback: starting all six seats..."
-    local svc
-    for svc in "${PILOT_SEATS[@]}"; do
-        if [[ "$(container_state "$svc")" == "absent" ]]; then
-            compose_cmd up -d --no-deps --no-build "$svc" >/dev/null 2>&1 \
-                || echo "    WARN: could not start $svc (will retry on next reconcile)" >&2
+# Capacity drains and global research permits are persisted beside admission
+# state in Redis DB 0. They are process-lifecycle state, not durable accounting:
+# every fresh activation must start with no old drain fences or permits. Back up
+# the two fixed keys before deleting them so activation rollback can restore the
+# exact prior values.
+backup_runtime_redis_state() {
+    local redis_cid result
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    [[ -n "$redis_cid" ]] || {
+        echo "ERROR: Redis is unavailable for runtime-state backup" >&2
+        return 1
+    }
+    RUNTIME_REDIS_BACKUP_DIR="$SECURE_WORKDIR/runtime-redis"
+    mkdir -m 700 "$RUNTIME_REDIS_BACKUP_DIR"
+    result="$(python3 - "$redis_cid" "$RUNTIME_REDIS_BACKUP_DIR" <<'PYEOF'
+import os, stat, subprocess, sys
+
+container_id, backup_dir = sys.argv[1:]
+keys = {
+    "capacity": "fin-terminal-public:v1:capacity",
+    "research-permits": "fin-terminal-public:v1:research-permits",
+}
+
+def redis(*args, stdin=None):
+    completed = subprocess.run(
+        ["docker", "exec", "-i", container_id, "redis-cli", *args],
+        input=stdin,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Redis command failed")
+    return completed.stdout
+
+def write_file(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        written = 0
+        while written < len(data):
+            count = os.write(fd, data[written:])
+            if count <= 0:
+                raise OSError("short runtime Redis backup write")
+            written += count
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    st = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600:
+        raise RuntimeError("unsafe runtime Redis backup")
+
+for label, key in keys.items():
+    exists = redis("--raw", "EXISTS", key).decode("ascii").strip()
+    if exists not in {"0", "1"}:
+        raise RuntimeError("Redis existence check failed")
+    write_file(os.path.join(backup_dir, f"{label}.presence"), ("present\n" if exists == "1" else "absent\n").encode("ascii"))
+    if exists == "1":
+        dump = redis("--raw", "DUMP", key)
+        # redis-cli --raw appends one display newline after the binary reply.
+        if not dump.endswith(b"\n"):
+            raise RuntimeError("Redis DUMP response was not terminated")
+        write_file(os.path.join(backup_dir, f"{label}.dump"), dump[:-1])
+print("RUNTIME_REDIS_BACKUP_OK")
+PYEOF
+)" || true
+    if [[ "$result" != "RUNTIME_REDIS_BACKUP_OK" ]]; then
+        echo "ERROR: runtime Redis backup failed (details scrubbed)" >&2
+        return 1
+    fi
+    RUNTIME_REDIS_BACKUP_READY=true
+    echo "    Runtime Redis state: exact capacity/permit backup saved."
+}
+
+delete_runtime_redis_state() {
+    local redis_cid result
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    [[ -n "$redis_cid" ]] || return 0
+    result="$(docker exec "$redis_cid" redis-cli --raw DEL \
+        'fin-terminal-public:v1:capacity' \
+        'fin-terminal-public:v1:research-permits' 2>/dev/null || true)"
+    [[ "$result" == "0" || "$result" == "1" || "$result" == "2" ]] || {
+        echo "ERROR: could not delete runtime Redis capacity/permit state" >&2
+        return 1
+    }
+    for key in fin-terminal-public:v1:capacity fin-terminal-public:v1:research-permits; do
+        if [[ "$(docker exec "$redis_cid" redis-cli --raw EXISTS "$key" 2>/dev/null || true)" != "0" ]]; then
+            echo "ERROR: runtime Redis key remains after deletion" >&2
+            return 1
         fi
     done
-    return 0
+    echo "    Runtime Redis state: capacity drains and permits cleared."
+}
+
+reset_runtime_redis_state_for_activation() {
+    RUNTIME_REDIS_RESET=true
+    delete_runtime_redis_state
+}
+
+restore_runtime_redis_state_backup() {
+    $RUNTIME_REDIS_RESET || return 0
+    if ! $RUNTIME_REDIS_BACKUP_READY || [[ -z "$RUNTIME_REDIS_BACKUP_DIR" ]]; then
+        echo "ERROR: runtime Redis state changed without a restorable backup" >&2
+        return 1
+    fi
+    local redis_cid result
+    redis_cid="$(resolve_container_id fin-terminal-public-redis 2>/dev/null || true)"
+    [[ -n "$redis_cid" ]] || {
+        echo "ERROR: Redis is unavailable for runtime-state restore" >&2
+        return 1
+    }
+    result="$(python3 - "$redis_cid" "$RUNTIME_REDIS_BACKUP_DIR" <<'PYEOF'
+import os, subprocess, sys
+
+container_id, backup_dir = sys.argv[1:]
+keys = {
+    "capacity": "fin-terminal-public:v1:capacity",
+    "research-permits": "fin-terminal-public:v1:research-permits",
+}
+
+def redis(*args, stdin=None):
+    completed = subprocess.run(
+        ["docker", "exec", "-i", container_id, "redis-cli", *args],
+        input=stdin,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Redis command failed")
+    return completed.stdout.decode("ascii", errors="strict").strip()
+
+for label, key in keys.items():
+    presence_path = os.path.join(backup_dir, f"{label}.presence")
+    with open(presence_path, "r", encoding="ascii") as handle:
+        presence = handle.read().strip()
+    if presence not in {"present", "absent"}:
+        raise RuntimeError("invalid runtime Redis presence marker")
+    redis("DEL", key)
+    if presence == "present":
+        dump_path = os.path.join(backup_dir, f"{label}.dump")
+        with open(dump_path, "rb") as handle:
+            dump = handle.read()
+        if redis("-x", "RESTORE", key, "0", stdin=dump) != "OK":
+            raise RuntimeError("runtime Redis restore failed")
+    expected = "1" if presence == "present" else "0"
+    if redis("--raw", "EXISTS", key) != expected:
+        raise RuntimeError("runtime Redis restore verification failed")
+print("RUNTIME_REDIS_RESTORE_OK")
+PYEOF
+)" || true
+    if [[ "$result" != "RUNTIME_REDIS_RESTORE_OK" ]]; then
+        echo "ERROR: runtime Redis restore failed (details scrubbed)" >&2
+        return 1
+    fi
+    RUNTIME_REDIS_RESET=false
+    RUNTIME_REDIS_BACKUP_READY=false
+    echo "    Runtime Redis state: pre-activation capacity/permit values restored."
 }
 
 # ---------------------------------------------------------------------------
 # Atomic .env updater — embedded Python with full safety (review item A).
+# Values beginning with @ are read from that owner-only regular file. This is
+# used for the management token so the secret never appears in argv or logs.
 # ---------------------------------------------------------------------------
 update_env_flag() {
     local env_path="$1" key="$2" value="$3"
     python3 - "$env_path" "$key" "$value" <<'PYEOF'
-import os, stat, sys, tempfile
+import os, re, stat, sys, tempfile
 
 ENV_MAX_BYTES = 1024 * 1024
 
@@ -539,7 +730,28 @@ def atomic_write(path_str, lines, expected_st):
 def main():
     env_path = sys.argv[1]
     key = sys.argv[2]
-    value = sys.argv[3]
+    if not re.fullmatch(r'[A-Z][A-Z0-9_]*', key):
+        raise ValueError('invalid environment key')
+    value_arg = sys.argv[3]
+    if value_arg.startswith('@'):
+        value_path = value_arg[1:]
+        value_fd = os.open(value_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            value_st = os.fstat(value_fd)
+            if not stat.S_ISREG(value_st.st_mode):
+                raise ValueError('value source is not a regular file')
+            if stat.S_IMODE(value_st.st_mode) != 0o600 or value_st.st_uid != os.geteuid():
+                raise ValueError('value source must be owner-only')
+            value_bytes = os.read(value_fd, 4097)
+        finally:
+            os.close(value_fd)
+        if len(value_bytes) > 4096:
+            raise ValueError('environment value too large')
+        value = value_bytes.decode('utf-8')
+    else:
+        value = value_arg
+    if '\x00' in value or '\n' in value or '\r' in value:
+        raise ValueError('environment value contains a line break')
     content, st = read_env(env_path)
     lines = content.splitlines(True)
     validate_no_duplicate(lines, key)
@@ -625,6 +837,389 @@ def atomic_restore(env_path, src_path):
 
 atomic_restore(sys.argv[1], sys.argv[2])
 PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# Dynamic runtime configuration and systemd lifecycle
+# ---------------------------------------------------------------------------
+verify_runtime_artifacts() {
+    local reconciler_sha unit_sha
+    for path in "$RECONCILER_SOURCE" "$RECONCILER_UNIT_SOURCE"; do
+        if [[ ! -f "$path" || -L "$path" ]]; then
+            echo "ERROR: deployed runtime artifact is missing or unsafe: $path" >&2
+            return 1
+        fi
+    done
+    reconciler_sha="$(sha256sum "$RECONCILER_SOURCE" | cut -d' ' -f1)"
+    unit_sha="$(sha256sum "$RECONCILER_UNIT_SOURCE" | cut -d' ' -f1)"
+    if [[ "$reconciler_sha" != "$EXPECTED_RECONCILER_SHA" ]] \
+        || [[ "$unit_sha" != "$EXPECTED_RECONCILER_UNIT_SHA" ]]; then
+        echo "ERROR: deployed runtime artifacts do not match the approved main revision" >&2
+        return 1
+    fi
+    if ! python3 - "$RECONCILER_SOURCE" <<'PYEOF'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+compile(path.read_bytes(), str(path), "exec")
+PYEOF
+    then
+        echo "ERROR: deployed reconciler does not compile" >&2
+        return 1
+    fi
+    if ! grep -Fq 'User=ec2-user' "$RECONCILER_UNIT_SOURCE" \
+        || ! grep -Fq 'EnvironmentFile=/home/ec2-user/unchained/.env.reconciler' "$RECONCILER_UNIT_SOURCE" \
+        || ! grep -Fq 'ExecStart=/usr/bin/python3 /home/ec2-user/unchained/deploy/terminal_runtime_reconciler.py' "$RECONCILER_UNIT_SOURCE"; then
+        echo "ERROR: reconciler unit does not match the reviewed production identity/path" >&2
+        return 1
+    fi
+    echo "    Runtime artifacts: exact approved hashes verified."
+}
+
+runtime_install_preflight() {
+    if [[ "${USER:-}" != "ec2-user" ]] || [[ "$REMOTE_DIR" != "/home/ec2-user/unchained" ]]; then
+        echo "ERROR: dynamic runtime installation is restricted to the reviewed ec2-user path" >&2
+        return 1
+    fi
+    for command_name in sudo systemctl systemd-analyze sha256sum; do
+        command -v "$command_name" >/dev/null 2>&1 || {
+            echo "ERROR: required host command is unavailable: $command_name" >&2
+            return 1
+        }
+    done
+    sudo -n true >/dev/null 2>&1 || {
+        echo "ERROR: passwordless sudo is required for reviewed systemd installation" >&2
+        return 1
+    }
+    verify_runtime_artifacts || return 1
+    if [[ "$(read_dynamic_mode_enabled)" != "false" ]]; then
+        echo "ERROR: $RUNTIME_FEATURE_FLAG must be false before a fresh runtime activation" >&2
+        return 1
+    fi
+    if [[ -e "$RECONCILER_ENV_FILE" || -L "$RECONCILER_ENV_FILE" \
+        || -e "$RUNTIME_METADATA_FILE" || -L "$RUNTIME_METADATA_FILE" \
+        || -e "$RECONCILER_UNIT_TARGET" || -L "$RECONCILER_UNIT_TARGET" ]]; then
+        echo "ERROR: stale runtime configuration is present; refusing an ambiguous install" >&2
+        return 1
+    fi
+    sudo systemctl daemon-reload >/dev/null
+    if sudo systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null \
+        || sudo systemctl cat terminal-runtime-reconciler >/dev/null 2>&1; then
+        echo "ERROR: terminal-runtime-reconciler is already loaded; disable it before activation" >&2
+        return 1
+    fi
+    echo "    Runtime install preflight: clean host state verified."
+}
+
+write_reconciler_env() {
+    local token_path="$1"
+    python3 - "$RECONCILER_ENV_FILE" "$token_path" "$REMOTE_DIR" <<'PYEOF'
+import os, re, stat, sys, tempfile
+
+target, token_path, compose_dir = sys.argv[1:]
+if os.path.lexists(target):
+    raise ValueError("reconciler env already exists")
+fd = os.open(token_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600:
+        raise ValueError("unsafe token source")
+    if st.st_uid != os.geteuid():
+        raise ValueError("token source owner mismatch")
+    token = os.read(fd, 129).decode("ascii")
+finally:
+    os.close(fd)
+if not re.fullmatch(r"[0-9a-f]{64}", token):
+    raise ValueError("management token must be 256-bit lowercase hex")
+content = (
+    "TERMINAL_RUNTIME_FEATURE_ENABLED=true\n"
+    f"TERMINAL_RUNTIME_MANAGEMENT_TOKEN={token}\n"
+    "TERMINAL_RUNTIME_MANAGEMENT_PORT=8789\n"
+    "TERMINAL_RUNTIME_COMPOSE_PROJECT=unchained\n"
+    f"TERMINAL_RUNTIME_COMPOSE_DIR={compose_dir}\n"
+    "TERMINAL_RUNTIME_RECONCILE_INTERVAL=15\n"
+    "TERMINAL_RUNTIME_IDLE_SCALE_DOWN=300\n"
+    "TERMINAL_RUNTIME_MAX_START_CONCUR=2\n"
+    "TERMINAL_RUNTIME_HOST_MEM_RESERVE_MB=512\n"
+    "TERMINAL_RUNTIME_HOST_MEM_HEADROOM_PCT=15\n"
+    "TERMINAL_RUNTIME_HOST_DISK_MAX_PCT=85\n"
+)
+directory = os.path.dirname(target)
+dir_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+tmp_path = None
+try:
+    fd_tmp, tmp_path = tempfile.mkstemp(prefix=".env.reconciler.", dir=directory)
+    try:
+        os.fchmod(fd_tmp, 0o600)
+        data = content.encode("utf-8")
+        written = 0
+        while written < len(data):
+            count = os.write(fd_tmp, data[written:])
+            if count <= 0:
+                raise OSError("short write")
+            written += count
+        os.fsync(fd_tmp)
+    finally:
+        os.close(fd_tmp)
+    if os.path.lexists(target):
+        raise ValueError("reconciler env appeared before install")
+    os.replace(tmp_path, target)
+    tmp_path = None
+    os.fsync(dir_fd)
+finally:
+    os.close(dir_fd)
+    if tmp_path is not None:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+final = os.stat(target, follow_symlinks=False)
+if not stat.S_ISREG(final.st_mode) or stat.S_IMODE(final.st_mode) != 0o600:
+    raise ValueError("unsafe reconciler env after install")
+PYEOF
+}
+
+write_runtime_metadata() {
+    local started_at="$1"
+    python3 - "$RUNTIME_METADATA_FILE" "$EXPECTED_SHA" \
+        "$EXPECTED_RECONCILER_SHA" "$EXPECTED_RECONCILER_UNIT_SHA" "$started_at" <<'PYEOF'
+import os, re, stat, sys, tempfile
+
+target, revision, reconciler_sha, unit_sha, started_at = sys.argv[1:]
+if os.path.lexists(target):
+    raise ValueError("runtime metadata already exists")
+if not re.fullmatch(r"[0-9a-f]{40}", revision):
+    raise ValueError("invalid revision")
+if not re.fullmatch(r"[0-9a-f]{64}", reconciler_sha) or not re.fullmatch(r"[0-9a-f]{64}", unit_sha):
+    raise ValueError("invalid artifact hash")
+if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", started_at):
+    raise ValueError("invalid activation timestamp")
+data = (
+    f"revision={revision}\n"
+    f"reconciler_sha256={reconciler_sha}\n"
+    f"unit_sha256={unit_sha}\n"
+    f"started_at={started_at}\n"
+).encode("ascii")
+directory = os.path.dirname(target)
+dir_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+tmp_path = None
+try:
+    fd, tmp_path = tempfile.mkstemp(prefix=".terminal-runtime-current.", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp_path, target)
+    tmp_path = None
+    os.fsync(dir_fd)
+finally:
+    os.close(dir_fd)
+    if tmp_path is not None:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+PYEOF
+}
+
+prepare_dynamic_runtime() {
+    runtime_install_preflight || return 1
+    DYNAMIC_SETUP_STARTED=true
+
+    RUNTIME_TOKEN_FILE="$SECURE_WORKDIR/runtime-management-token"
+    umask 077
+    python3 -c 'import secrets; print(secrets.token_hex(32), end="")' > "$RUNTIME_TOKEN_FILE"
+    chmod 600 "$RUNTIME_TOKEN_FILE"
+
+    # Install the token first and flip the master feature flag last. The armed
+    # activation rollback restores the exact pre-activation .env on any error.
+    update_env_flag "$ENV_FILE" "$RUNTIME_MANAGEMENT_TOKEN_KEY" "@$RUNTIME_TOKEN_FILE" || return 1
+    update_env_flag "$ENV_FILE" "$RUNTIME_FEATURE_FLAG" "true" || return 1
+    write_reconciler_env "$RUNTIME_TOKEN_FILE" || return 1
+
+    if ! compose_cmd config --quiet >/dev/null 2>&1; then
+        echo "ERROR: dynamic runtime Compose configuration is invalid" >&2
+        return 1
+    fi
+
+    sudo install -o root -g root -m 0644 "$RECONCILER_UNIT_SOURCE" "$RECONCILER_UNIT_TARGET" || return 1
+    sudo systemd-analyze verify "$RECONCILER_UNIT_TARGET" >/dev/null 2>&1 || {
+        echo "ERROR: systemd rejected the reconciler unit" >&2
+        return 1
+    }
+    sudo systemctl daemon-reload >/dev/null || return 1
+    sudo systemctl enable terminal-runtime-reconciler >/dev/null || return 1
+    write_runtime_metadata "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return 1
+    echo "    Dynamic runtime configuration: installed (token output suppressed)."
+}
+
+runtime_metadata_value() {
+    local key="$1"
+    [[ -f "$RUNTIME_METADATA_FILE" && ! -L "$RUNTIME_METADATA_FILE" ]] || return 1
+    awk -F= -v wanted="$key" '$1 == wanted { print $2; found += 1 } END { if (found != 1) exit 1 }' \
+        "$RUNTIME_METADATA_FILE"
+}
+
+runtime_install_matches_metadata() {
+    local metadata_revision metadata_reconciler metadata_unit actual_reconciler actual_unit deployed_revision
+    metadata_revision="$(runtime_metadata_value revision)" || return 1
+    metadata_reconciler="$(runtime_metadata_value reconciler_sha256)" || return 1
+    metadata_unit="$(runtime_metadata_value unit_sha256)" || return 1
+    [[ "$metadata_revision" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [[ "$metadata_reconciler" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$metadata_unit" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ -f "$RECONCILER_SOURCE" && ! -L "$RECONCILER_SOURCE" ]] || return 1
+    [[ -f "$RECONCILER_UNIT_TARGET" && ! -L "$RECONCILER_UNIT_TARGET" ]] || return 1
+    actual_reconciler="$(sha256sum "$RECONCILER_SOURCE" | cut -d' ' -f1)"
+    actual_unit="$(sudo sha256sum "$RECONCILER_UNIT_TARGET" | cut -d' ' -f1)"
+    deployed_revision="$(awk -F= '/^revision=/ { print $2; exit }' "$DEPLOY_CURRENT")"
+    [[ "$metadata_revision" == "$deployed_revision" \
+        && "$actual_reconciler" == "$metadata_reconciler" \
+        && "$actual_unit" == "$metadata_unit" ]]
+}
+
+verify_runtime_config_consistency() {
+    python3 - "$ENV_FILE" "$RECONCILER_ENV_FILE" "$REMOTE_DIR" <<'PYEOF'
+import os, re, stat, sys
+
+env_path, reconciler_path, compose_dir = sys.argv[1:]
+
+def read(path):
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600:
+            raise ValueError("unsafe runtime environment file")
+        if st.st_uid != os.geteuid():
+            raise ValueError("runtime environment owner mismatch")
+        data = os.read(fd, 1024 * 1024 + 1)
+    finally:
+        os.close(fd)
+    if len(data) > 1024 * 1024:
+        raise ValueError("runtime environment too large")
+    values = {}
+    for line in data.decode("utf-8").splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in values:
+            raise ValueError(f"duplicate runtime key: {key}")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+env = read(env_path)
+reconciler = read(reconciler_path)
+token = env.get("TERMINAL_RUNTIME_MANAGEMENT_TOKEN", "")
+if not re.fullmatch(r"[0-9a-f]{64}", token):
+    raise ValueError("invalid live management token")
+if env.get("TERMINAL_RUNTIME_FEATURE_ENABLED") != "true":
+    raise ValueError("live runtime feature is not enabled")
+expected = {
+    "TERMINAL_RUNTIME_FEATURE_ENABLED": "true",
+    "TERMINAL_RUNTIME_MANAGEMENT_TOKEN": token,
+    "TERMINAL_RUNTIME_MANAGEMENT_PORT": "8789",
+    "TERMINAL_RUNTIME_COMPOSE_PROJECT": "unchained",
+    "TERMINAL_RUNTIME_COMPOSE_DIR": compose_dir,
+    "TERMINAL_RUNTIME_RECONCILE_INTERVAL": "15",
+    "TERMINAL_RUNTIME_IDLE_SCALE_DOWN": "300",
+    "TERMINAL_RUNTIME_MAX_START_CONCUR": "2",
+    "TERMINAL_RUNTIME_HOST_MEM_RESERVE_MB": "512",
+    "TERMINAL_RUNTIME_HOST_MEM_HEADROOM_PCT": "15",
+    "TERMINAL_RUNTIME_HOST_DISK_MAX_PCT": "85",
+}
+for key, value in expected.items():
+    if reconciler.get(key) != value:
+        raise ValueError(f"reconciler runtime mismatch: {key}")
+PYEOF
+}
+
+start_reconciler() {
+    echo "==> Starting host runtime reconciler behind the closed edge..."
+    sudo systemctl start terminal-runtime-reconciler || return 1
+    local attempt active_state sub_state restarts
+    for attempt in $(seq 1 15); do
+        active_state="$(sudo systemctl show terminal-runtime-reconciler -p ActiveState --value 2>/dev/null || true)"
+        sub_state="$(sudo systemctl show terminal-runtime-reconciler -p SubState --value 2>/dev/null || true)"
+        restarts="$(sudo systemctl show terminal-runtime-reconciler -p NRestarts --value 2>/dev/null || true)"
+        if [[ "$active_state" == "active" && "$sub_state" == "running" && "$restarts" == "0" ]]; then
+            sleep 3
+            if sudo systemctl is-active --quiet terminal-runtime-reconciler; then
+                echo "    terminal-runtime-reconciler: active with no restarts."
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    sudo journalctl -u terminal-runtime-reconciler -n 30 --no-pager -o cat >&2 || true
+    echo "ERROR: terminal-runtime-reconciler did not remain active" >&2
+    return 1
+}
+
+verify_reconciler_cycle() {
+    local started_at logs cycle_state restarts
+    started_at="$(runtime_metadata_value started_at)" || {
+        echo "ERROR: runtime activation timestamp is unavailable" >&2
+        return 1
+    }
+    if [[ ! "$started_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+        echo "ERROR: runtime activation timestamp is invalid" >&2
+        return 1
+    fi
+    logs="$(sudo journalctl -u terminal-runtime-reconciler \
+        --since "$started_at" --no-pager -o cat 2>/dev/null || true)"
+    # A transient failed cycle may recover. Require the most recent relevant
+    # journal event to be a successful snapshot; retrying the workflow can then
+    # observe recovery instead of being poisoned by an older error line.
+    if ! cycle_state="$(awk '
+/Snapshot:/ { last_success = NR }
+/Configuration error|Reconcile cycle error|Reconcile snapshot failed|Traceback/ { last_error = NR }
+END {
+    if (last_success == 0 || last_error > last_success) exit 1
+    print "healthy"
+}
+' <<<"$logs")" || [[ "$cycle_state" != "healthy" ]]; then
+        echo "ERROR: no latest successful post-unlock reconciler cycle was observed" >&2
+        return 1
+    fi
+    if ! sudo systemctl is-active --quiet terminal-runtime-reconciler; then
+        echo "ERROR: reconciler is not active after its successful cycle" >&2
+        return 1
+    fi
+    restarts="$(sudo systemctl show terminal-runtime-reconciler -p NRestarts --value 2>/dev/null || true)"
+    if [[ "$restarts" != "0" ]]; then
+        echo "ERROR: reconciler restarted after activation" >&2
+        return 1
+    fi
+    echo "    Reconciler post-unlock cycle: verified."
+}
+
+stop_reconciler() {
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl disable --now terminal-runtime-reconciler >/dev/null 2>&1 || {
+            if sudo systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
+                echo "ERROR: could not stop terminal-runtime-reconciler" >&2
+                return 1
+            fi
+        }
+    fi
+    return 0
+}
+
+remove_managed_runtime_install() {
+    local force_new="${1:-false}"
+    stop_reconciler || return 1
+    if [[ "$force_new" != "true" ]] && ! runtime_install_matches_metadata; then
+        echo "ERROR: runtime install metadata does not authorize automatic removal" >&2
+        return 1
+    fi
+    sudo rm -f "$RECONCILER_UNIT_TARGET" || return 1
+    sudo systemctl daemon-reload >/dev/null || return 1
+    sudo systemctl reset-failed terminal-runtime-reconciler >/dev/null 2>&1 || true
+    rm -f "$RECONCILER_ENV_FILE" "$RUNTIME_METADATA_FILE"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -787,7 +1382,7 @@ verify_deployed_revision() {
 }
 
 verify_current_main_revision() {
-    [[ "$ACTION" == "activate" ]] || return 0
+    [[ "$ACTION" == "activate-runtime" ]] || return 0
     local remote_ref latest_main
     if ! remote_ref="$(git ls-remote --exit-code "$MAIN_REPO_URL" \
             refs/heads/main 2>/dev/null)"; then
@@ -986,10 +1581,11 @@ PYEOF
 prepare_six_worker_state() {
     REDIS_STATE_BACKUP="$SECURE_WORKDIR/redis-state.backup"
     REDIS_STATE_BACKUP_PRESENCE="${REDIS_STATE_BACKUP}.presence"
-    REDIS_STATE_MIGRATED=true
     # Companion workspace Redis (DB 1) keys are snapshotted before any state
     # mutation so activate/rollback/disable can restore or clean them exactly.
     backup_workspace_redis || return 1
+    backup_runtime_redis_state || return 1
+    REDIS_STATE_MIGRATED=true
     if ! transition_redis_worker_set 6 "$REDIS_STATE_BACKUP"; then
         # The transition cannot mutate Redis before writing the presence marker.
         # If the marker is absent there is therefore nothing to restore.
@@ -1003,6 +1599,7 @@ prepare_six_worker_state() {
         return 1
     fi
     load_redis_backup_presence || return 1
+    reset_runtime_redis_state_for_activation || return 1
 }
 
 load_redis_backup_presence() {
@@ -1078,6 +1675,18 @@ activate_rollback_handler() {
 
     echo "==> [ROLLBACK] Activate failed (exit $exit_code); restoring fail-closed state..." >&2
 
+    # Stop the host controller before changing its token/feature configuration.
+    # A fresh runtime activation proves these files were absent beforehand, so
+    # the armed transaction may remove them unambiguously.
+    if $DYNAMIC_SETUP_STARTED; then
+        if ! remove_managed_runtime_install true; then
+            echo "FATAL: could not stop/remove the failed runtime controller" >&2
+            stop_caddy_fail_closed
+            secure_workdir_cleanup
+            exit 1
+        fi
+    fi
+
     # Step 1: Restore exact preactivation .env snapshot atomically (mode 0600).
     if [[ -n "$ROLLBACK_SNAPSHOT" ]] && [[ -f "$ROLLBACK_SNAPSHOT" ]]; then
         printf 'Rollback: restoring preactivation .env snapshot...\n' >&2
@@ -1128,6 +1737,11 @@ activate_rollback_handler() {
     compose_cmd stop fin-terminal-public-gateway 2>/dev/null || true
     if ! restore_redis_state_backup; then
         echo "FATAL: could not restore persisted admission state during rollback" >&2
+        secure_workdir_cleanup
+        exit 1
+    fi
+    if ! restore_runtime_redis_state_backup; then
+        echo "FATAL: could not restore capacity/permit Redis state during rollback" >&2
         secure_workdir_cleanup
         exit 1
     fi
@@ -1613,11 +2227,18 @@ validate_runtime_pilot() {
     local dynamic=false
     if dynamic_mode_enabled; then dynamic=true; fi
 
-    # Verify the exact nine-service set with unambiguous resolved IDs.
-    local svc cid count=0
+    # Account for the exact nine-service definition with unambiguous resolved
+    # IDs. In dynamic mode a seat is validly absent only when no stopped/stale
+    # container for that service remains.
+    local svc cid any_cid count=0 running_seats=0
     for svc in "${PILOT_SERVICES[@]}"; do
         cid="$(resolve_container_id "$svc")"
         if [[ -z "$cid" ]] && $dynamic && [[ "$svc" == fin-terminal-public-seat-0[1-6] ]]; then
+            any_cid="$(compose_cmd ps -aq "$svc" 2>/dev/null || true)"
+            if [[ -n "$any_cid" ]]; then
+                echo "ERROR: $svc has a non-running stale container" >&2
+                return 1
+            fi
             # Reconciler may have drained this seat; absent is valid in dynamic mode.
             count=$((count + 1))
             continue
@@ -1630,14 +2251,22 @@ validate_runtime_pilot() {
             echo "ERROR: $svc is not healthy during runtime verification" >&2
             return 1
         fi
+        if [[ "$svc" == fin-terminal-public-seat-0[1-6] ]]; then
+            running_seats=$((running_seats + 1))
+        fi
         count=$((count + 1))
     done
     if [[ "$count" -ne "$PILOT_SERVICE_COUNT" ]]; then
         echo "ERROR: expected $PILOT_SERVICE_COUNT pilot containers, found $count" >&2
         return 1
     fi
-    echo "    Pilot containers: ${PILOT_SERVICE_COUNT}/${PILOT_SERVICE_COUNT} present"
+    echo "    Pilot services: ${PILOT_SERVICE_COUNT}/${PILOT_SERVICE_COUNT} accounted for"
     if $dynamic; then
+        if [[ "$running_seats" -lt 1 ]]; then
+            echo "ERROR: dynamic runtime has no warm worker" >&2
+            return 1
+        fi
+        echo "    Running warm workers: $running_seats"
         echo "    (dynamic mode: stopped seats are valid; reconciler owns lifecycle)"
     fi
 
@@ -1656,13 +2285,27 @@ validate_runtime_pilot() {
     echo "    Host ports: none published."
 
     # Verify no unexpected public-profile service/container exists.
-    local runtime_public_services expected_public_services
+    local runtime_public_services expected_public_services unexpected_public_services
     runtime_public_services="$(docker ps -a \
         --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" \
         --format '{{.Label "com.docker.compose.service"}}' 2>/dev/null \
         | grep '^fin-terminal-public-' | sort -u || true)"
     expected_public_services="$(printf '%s\n' "${PILOT_SERVICES[@]}" | sort)"
-    if [[ "$runtime_public_services" != "$expected_public_services" ]]; then
+    unexpected_public_services="$(comm -23 \
+        <(printf '%s\n' "$runtime_public_services") \
+        <(printf '%s\n' "$expected_public_services"))"
+    if [[ -n "$unexpected_public_services" ]]; then
+        echo "ERROR: unexpected public-profile service/container exists" >&2
+        return 1
+    fi
+    if $dynamic; then
+        for svc in fin-terminal-public-redis fin-terminal-public-unbrowser-mcp fin-terminal-public-gateway; do
+            if ! grep -Fxq "$svc" <<<"$runtime_public_services"; then
+                echo "ERROR: required shared runtime service is absent: $svc" >&2
+                return 1
+            fi
+        done
+    elif [[ "$runtime_public_services" != "$expected_public_services" ]]; then
         echo "ERROR: runtime public-profile service set is not the reviewed nine-service set" >&2
         return 1
     fi
@@ -1671,6 +2314,9 @@ validate_runtime_pilot() {
     local actual_networks expected_networks
     for svc in "${PILOT_SERVICES[@]}"; do
         cid="$(resolve_container_id "$svc")"
+        if [[ -z "$cid" ]] && $dynamic && [[ "$svc" == fin-terminal-public-seat-0[1-6] ]]; then
+            continue
+        fi
         actual_networks="$(docker inspect \
             --format '{{json .NetworkSettings.Networks}}' "$cid" 2>/dev/null \
             | python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
@@ -1746,6 +2392,9 @@ validate_runtime_pilot() {
             [[ "$target" == "$source" ]] || targets+=("$target")
         done
         cid="$(resolve_container_id "$source")"
+        if [[ -z "$cid" ]] && $dynamic; then
+            continue
+        fi
         if ! docker exec "$cid" node -e '
 const dns = require("dns").promises;
 const targets = process.argv.slice(1);
@@ -2115,9 +2764,15 @@ const getJson = (url) => new Promise((resolve, reject) => {
   req.on("error", reject);
   req.setTimeout(5000, () => req.destroy(new Error("timeout")));
 });
-Promise.all([getJson("http://127.0.0.1:8788/api/ready"), ...endpoints.map(getJson)])
-  .then(([gateway, ...workers]) => {
-    if (gateway.status !== "ready" || gateway.assignedWorkers !== 0 || gateway.queuedVisitors !== 0) process.exit(1);
+Promise.all([
+  getJson("http://127.0.0.1:8788/api/ready"),
+  Promise.allSettled(endpoints.map(getJson)),
+])
+  .then(([gateway, workerResults]) => {
+    if (gateway.status !== "ready") process.exit(1);
+    const workers = workerResults
+      .filter(result => result.status === "fulfilled")
+      .map(result => result.value);
     const healthy = workers.filter(w => w && w.publicWorker === true && typeof w.instanceId === "string" && w.instanceId.length >= 16);
     if (dynamic) {
       // Reconciler owns seat start/stop: accept any consistent warm pool with
@@ -2127,6 +2782,7 @@ Promise.all([getJson("http://127.0.0.1:8788/api/ready"), ...endpoints.map(getJso
       if (new Set(generations).size !== healthy.length) process.exit(1);
       process.exit(0);
     }
+    if (gateway.assignedWorkers !== 0 || gateway.queuedVisitors !== 0) process.exit(1);
     if (gateway.readyWorkers !== 6 || healthy.length !== 6) process.exit(1);
     const generations = healthy.map(w => w.instanceId);
     if (new Set(generations).size !== 6) process.exit(1);
@@ -2145,6 +2801,179 @@ Promise.all([getJson("http://127.0.0.1:8788/api/ready"), ...endpoints.map(getJso
     done
     echo "ERROR: gateway did not report a ready pool internally" >&2
     return 1
+}
+
+# ---------------------------------------------------------------------------
+# Private research-permit gate verification
+# ---------------------------------------------------------------------------
+verify_research_gate_metrics() {
+    local gw_cid result
+    gw_cid="$(resolve_container_id fin-terminal-public-gateway)"
+    [[ "$gw_cid" =~ ^[0-9a-f]{12,64}$ ]] || {
+        echo "ERROR: gateway container is unavailable for permit verification" >&2
+        return 1
+    }
+    result="$(docker exec -i "$gw_cid" node 2>/dev/null <<'NODE'
+const http = require("http");
+const token = process.env.TERMINAL_RUNTIME_MANAGEMENT_TOKEN || "";
+if (process.env.TERMINAL_RUNTIME_FEATURE_ENABLED !== "true" || !/^[0-9a-f]{64}$/.test(token)) process.exit(1);
+const request = (method, path, body, suppliedToken = token) => new Promise((resolve, reject) => {
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  const req = http.request({
+    hostname: "127.0.0.1",
+    port: 8789,
+    path,
+    method,
+    headers: {
+      "X-Management-Token": suppliedToken,
+      ...(payload ? {"Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload)} : {}),
+    },
+    timeout: 5000,
+  }, (res) => {
+    let data = "";
+    res.on("data", chunk => data += chunk);
+    res.on("end", () => {
+      let parsed;
+      try { parsed = data ? JSON.parse(data) : undefined; } catch {}
+      resolve({status: res.statusCode, body: parsed});
+    });
+  });
+  req.on("error", reject);
+  req.on("timeout", () => req.destroy(new Error("timeout")));
+  if (payload) req.write(payload);
+  req.end();
+});
+(async () => {
+  const unauthorized = await request("GET", "/api/management/research", undefined, "");
+  const wrong = await request("GET", "/api/management/research", undefined, "0".repeat(64));
+  const metrics = await request("GET", "/api/management/research");
+  const snapshot = await request("POST", "/api/management/reconcile-snapshot", {});
+  const research = metrics.body && metrics.body.research;
+  if (unauthorized.status !== 401 || wrong.status !== 401 || metrics.status !== 200 || snapshot.status !== 200) process.exit(1);
+  if (!research || research.maxConcurrent !== 2) process.exit(1);
+  if (!Number.isInteger(research.acquired) || research.acquired < 0 || research.acquired > 2) process.exit(1);
+  if (!Number.isInteger(research.queued) || research.queued < 0) process.exit(1);
+  const expectedSeats = Array.from({length: 6}, (_, index) => `seat-${String(index + 1).padStart(2, "0")}`);
+  const seats = snapshot.body && snapshot.body.seats;
+  const actualSeats = seats && typeof seats === "object" ? Object.keys(seats).sort() : [];
+  if (snapshot.body.version !== 1 || JSON.stringify(actualSeats) !== JSON.stringify(expectedSeats)) process.exit(1);
+  if (!snapshot.body.plan || !Number.isInteger(snapshot.body.plan.desiredRunning)
+      || snapshot.body.plan.desiredRunning < 1 || snapshot.body.plan.desiredRunning > 6) process.exit(1);
+  process.stdout.write("RESEARCH_GATE_METRICS_OK");
+})().catch(() => process.exit(1));
+NODE
+)" || true
+    if [[ "$result" != "RESEARCH_GATE_METRICS_OK" ]]; then
+        echo "ERROR: private research-permit metrics/auth verification failed" >&2
+        return 1
+    fi
+    echo "    Research permit coordinator: authenticated maxConcurrent=2."
+}
+
+prove_research_gate_fifo() {
+    local gw_cid result
+    gw_cid="$(resolve_container_id fin-terminal-public-gateway)"
+    [[ "$gw_cid" =~ ^[0-9a-f]{12,64}$ ]] || return 1
+    result="$(docker exec -i "$gw_cid" node 2>/dev/null <<'NODE'
+const http = require("http");
+const token = process.env.TERMINAL_RUNTIME_MANAGEMENT_TOKEN || "";
+const prefix = `activation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const ids = [`${prefix}-a`, `${prefix}-b`, `${prefix}-c`];
+const request = (method, path, body) => new Promise((resolve, reject) => {
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  const req = http.request({
+    hostname: "127.0.0.1", port: 8789, path, method, timeout: 5000,
+    headers: {
+      "X-Management-Token": token,
+      ...(payload ? {"Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload)} : {}),
+    },
+  }, (res) => {
+    let data = "";
+    res.on("data", chunk => data += chunk);
+    res.on("end", () => {
+      let parsed;
+      try { parsed = data ? JSON.parse(data) : undefined; } catch {}
+      resolve({status: res.statusCode, body: parsed});
+    });
+  });
+  req.on("error", reject);
+  req.on("timeout", () => req.destroy(new Error("timeout")));
+  if (payload) req.write(payload);
+  req.end();
+});
+const release = async (requestId) => {
+  try { await request("POST", "/api/management/research-permits/release", {requestId}); } catch {}
+};
+(async () => {
+  if (!/^[0-9a-f]{64}$/.test(token)) process.exit(1);
+  const before = await request("GET", "/api/management/research");
+  const initial = before.body && before.body.research;
+  if (before.status !== 200 || !initial || initial.maxConcurrent !== 2 || initial.acquired !== 0 || initial.queued !== 0) process.exit(1);
+  try {
+    const outcomes = [];
+    for (let index = 0; index < ids.length; index += 1) {
+      outcomes.push(await request("POST", "/api/management/research-permits/acquire", {
+        sessionId: `${prefix}-session-${index}`,
+        workerGeneration: `${prefix}-generation-${index}`,
+        requestId: ids[index],
+      }));
+    }
+    if (outcomes.some(value => value.status !== 200)) throw new Error("acquire status");
+    if (outcomes[0].body.status !== "acquired" || outcomes[1].body.status !== "acquired") throw new Error("first two not acquired");
+    if (outcomes[2].body.status !== "queued" || outcomes[2].body.queuePosition !== 1) throw new Error("third not FIFO queued");
+    await release(ids[0]);
+    const promoted = await request("POST", "/api/management/research-permits/status", {requestId: ids[2]});
+    if (promoted.status !== 200 || promoted.body.status !== "acquired") throw new Error("queued permit not promoted");
+  } finally {
+    await Promise.all(ids.map(release));
+  }
+  const after = await request("GET", "/api/management/research");
+  const final = after.body && after.body.research;
+  if (after.status !== 200 || !final || final.maxConcurrent !== 2 || final.acquired !== 0 || final.queued !== 0) process.exit(1);
+  process.stdout.write("RESEARCH_GATE_FIFO_OK");
+})().catch(async () => {
+  await Promise.all(ids.map(release));
+  process.exit(1);
+});
+NODE
+)" || true
+    if [[ "$result" != "RESEARCH_GATE_FIFO_OK" ]]; then
+        echo "ERROR: research-permit max-two/FIFO proof failed (details scrubbed)" >&2
+        return 1
+    fi
+
+    # Prove each currently running worker has the feature, token, and private
+    # route needed by its real permit client. Stopped dynamic seats are skipped.
+    local seat cid running_count=0
+    for seat in "${PILOT_SEATS[@]}"; do
+        cid="$(resolve_container_id "$seat")"
+        [[ -n "$cid" ]] || continue
+        running_count=$((running_count + 1))
+        if ! docker exec "$cid" node -e '
+const token = process.env.TERMINAL_RUNTIME_MANAGEMENT_TOKEN || "";
+const base = process.env.TERMINAL_RUNTIME_MANAGEMENT_URL || "";
+if (process.env.TERMINAL_RUNTIME_FEATURE_ENABLED !== "true" || !/^[0-9a-f]{64}$/.test(token)) process.exit(1);
+if (base !== "http://fin-terminal-public-gateway:8789") process.exit(1);
+fetch(`${base}/api/management/research-permits/status`, {
+  method: "POST",
+  headers: {"content-type": "application/json", "x-management-token": token},
+  body: JSON.stringify({requestId: "activation-probe-not-found"}),
+  signal: AbortSignal.timeout(5000),
+}).then(async response => {
+  if (!response.ok) process.exit(1);
+  const body = await response.json();
+  process.exit(body.status === "not-found" ? 0 : 1);
+}).catch(() => process.exit(1));
+' >/dev/null 2>&1; then
+            echo "ERROR: $seat cannot reach its authenticated private permit path" >&2
+            return 1
+        fi
+    done
+    if [[ "$running_count" -lt 1 ]]; then
+        echo "ERROR: no running worker was available for permit-path verification" >&2
+        return 1
+    fi
+    echo "    Research permit gate: max-two FIFO and $running_count worker path(s) verified."
 }
 
 # Verify the already-enabled browser surface without changing Caddy or .env.
@@ -2188,10 +3017,16 @@ promote_edge() {
     # therefore rolls the new containers back while the route remains 404.
     verify_current_main_revision || return 1
 
-    # Step 1: Snapshot preactivation .env in secure workdir.
-    ROLLBACK_SNAPSHOT="$SECURE_WORKDIR/preactivate.env"
-    snapshot_env "$ROLLBACK_SNAPSHOT"
-    echo "    Pre-activation .env snapshot saved."
+    # Step 1: Snapshot preactivation .env in secure workdir. Dynamic activation
+    # takes this snapshot before installing its feature/token configuration, so
+    # never overwrite an already-armed transaction snapshot here.
+    if [[ -z "$ROLLBACK_SNAPSHOT" ]]; then
+        ROLLBACK_SNAPSHOT="$SECURE_WORKDIR/preactivate.env"
+        snapshot_env "$ROLLBACK_SNAPSHOT"
+        echo "    Pre-activation .env snapshot saved."
+    else
+        echo "    Pre-activation .env snapshot already secured."
+    fi
 
     # Step 2: Create staged .env with flag=true.
     cp -p "$ENV_FILE" "$STAGED_ENV"
@@ -2404,7 +3239,7 @@ cmd_status() {
 
     local reconciler_state="not-installed"
     if command -v systemctl >/dev/null 2>&1; then
-        if systemctl list-unit-files terminal-runtime-reconciler.service >/dev/null 2>&1; then
+        if systemctl cat terminal-runtime-reconciler >/dev/null 2>&1; then
             if systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
                 reconciler_state="active"
             else
@@ -2413,6 +3248,11 @@ cmd_status() {
         fi
     fi
     echo "    terminal-runtime-reconciler: $reconciler_state"
+    if [[ -f "$RUNTIME_METADATA_FILE" && ! -L "$RUNTIME_METADATA_FILE" ]]; then
+        echo "    terminal-runtime-managed: yes"
+    else
+        echo "    terminal-runtime-managed: no"
+    fi
 
     local svc state
     for svc in "${PILOT_SERVICES[@]}"; do
@@ -2438,45 +3278,94 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------------------
-# Action: activate
+# Action: activate-runtime
 # ---------------------------------------------------------------------------
-cmd_activate() {
-    echo "==> Activating public-terminal pilot..."
+cmd_activate_runtime() {
+    echo "==> Activating public-terminal runtime pilot..."
     echo "    Expected revision: $EXPECTED_SHA"
 
     local enabled
     enabled="$(read_public_enabled)"
     if [[ "$enabled" == "true" ]]; then
-        if validate_runtime_pilot \
-            && mcp_protocol_check \
+        if [[ "$(read_dynamic_mode_enabled)" == "true" ]] \
+            && verify_runtime_artifacts \
+            && runtime_install_matches_metadata \
+            && verify_runtime_config_consistency \
+            && sudo systemctl is-active --quiet terminal-runtime-reconciler \
+            && validate_runtime_pilot \
             && gateway_internal_ready \
+            && verify_research_gate_metrics \
+            && verify_reconciler_cycle \
             && verify_live_edge_surface; then
-            echo "==> Pilot already active and healthy (idempotent success)."
+            echo "==> Runtime pilot already active and healthy (idempotent success)."
             return 0
         fi
-        echo "==> Pilot in degraded state; cleaning up fail-closed..."
+        echo "==> Runtime pilot is degraded; disabling the edge fail-closed..."
         cmd_disable
-        echo "==> Pilot disabled. Re-run activate when ready."
+        echo "==> Pilot disabled. Re-run activate-runtime when ready."
         return 1
     fi
 
-    # Secure workdir.
     secure_workdir_init
-
     run_activate_gates || exit 1
-    clean_partial_pilot
+    clean_partial_pilot || exit 1
+
+    # Secure the exact pre-runtime environment before adding the on-host token
+    # or feature flag. The activation trap owns every mutation from here.
+    ROLLBACK_SNAPSHOT="$SECURE_WORKDIR/preactivate.env"
+    snapshot_env "$ROLLBACK_SNAPSHOT"
     arm_activate_rollback
+    prepare_dynamic_runtime || exit 1
     build_and_start_pilot || exit 1
     mcp_protocol_check || exit 1
     gateway_internal_ready || exit 1
+    prove_research_gate_fifo || exit 1
+    start_reconciler || exit 1
     promote_edge || exit 1
 
     # Disarm rollback — success.
     trap - EXIT INT TERM HUP
     ROLLBACK_ARMED=false
+    DYNAMIC_SETUP_STARTED=false
     secure_workdir_cleanup
-    echo "==> Public-terminal pilot activated successfully."
+    echo "==> Public-terminal runtime pilot activated successfully."
+    echo "    Post-unlock reconciler verification must pass before workflow success."
     echo "    Human Turnstile/session test should follow outside this script."
+}
+
+# ---------------------------------------------------------------------------
+# Action: verify-runtime — post-unlock release gate run by the workflow
+# ---------------------------------------------------------------------------
+cmd_verify_runtime() {
+    echo "==> Verifying active public-terminal runtime..."
+    if [[ "$(read_public_enabled)" != "true" ]] \
+        || [[ "$(read_dynamic_mode_enabled)" != "true" ]]; then
+        echo "ERROR: runtime pilot flags are not both enabled" >&2
+        return 1
+    fi
+    verify_runtime_artifacts || return 1
+    runtime_install_matches_metadata || {
+        echo "ERROR: managed runtime install does not match deployment metadata" >&2
+        return 1
+    }
+    verify_runtime_config_consistency || {
+        echo "ERROR: runtime token/feature configuration is inconsistent" >&2
+        return 1
+    }
+    sudo systemctl is-enabled --quiet terminal-runtime-reconciler || {
+        echo "ERROR: terminal-runtime-reconciler is not enabled" >&2
+        return 1
+    }
+    sudo systemctl is-active --quiet terminal-runtime-reconciler || {
+        echo "ERROR: terminal-runtime-reconciler is not active" >&2
+        return 1
+    }
+    verify_reconciler_cycle || return 1
+    validate_runtime_pilot || return 1
+    gateway_internal_ready || return 1
+    verify_research_gate_metrics || return 1
+    verify_live_edge_surface || return 1
+    echo "==> Runtime pilot verification passed."
 }
 
 # ---------------------------------------------------------------------------
@@ -2486,9 +3375,13 @@ cmd_disable() {
     echo "==> Disabling public-terminal pilot..."
     secure_workdir_init
 
-    local enabled
+    local enabled dynamic_before managed_runtime=false runtime_cleanup_error=false
     if ! enabled="$(read_public_enabled)"; then
         enabled="invalid"
+    fi
+    dynamic_before="$(read_dynamic_mode_enabled)"
+    if [[ -f "$RUNTIME_METADATA_FILE" && ! -L "$RUNTIME_METADATA_FILE" ]]; then
+        managed_runtime=true
     fi
 
     # Step 1: Atomically set flag to false.
@@ -2534,6 +3427,18 @@ cmd_disable() {
     fi
     echo "    Pilot URL: 404 confirmed."
 
+    # The edge is closed before the host lifecycle controller is stopped. Use
+    # disable --now so a reboot cannot resurrect it against absent services.
+    if [[ "$dynamic_before" == "true" ]] || $managed_runtime \
+        || systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
+        echo "    Stopping host runtime reconciler..."
+        stop_reconciler || {
+            echo "ERROR: pilot is 404 but the runtime reconciler could not be stopped" >&2
+            exit 1
+        }
+        echo "    terminal-runtime-reconciler: stopped and disabled."
+    fi
+
     # Step 4: Stop the gateway first, transition persisted state back to the
     # rollback-compatible one-seat shape, then remove the remaining services.
     if pilot_any_container_present; then
@@ -2544,6 +3449,16 @@ cmd_disable() {
         if [[ -n "$redis_cid" ]]; then
             transition_redis_worker_set 1 - || {
                 echo "ERROR: could not restore rollback-compatible admission state" >&2
+                exit 1
+            }
+            # Clean workspace/checkpoint companion keys while Redis is still
+            # running; the retained volume must not carry them across pilots.
+            cleanup_workspace_redis || {
+                echo "ERROR: could not clean companion workspace Redis state" >&2
+                exit 1
+            }
+            delete_runtime_redis_state || {
+                echo "ERROR: could not clean runtime capacity/permit Redis state" >&2
                 exit 1
             }
         fi
@@ -2558,15 +3473,37 @@ cmd_disable() {
     else
         echo "    Pilot containers: already absent (idempotent)."
     fi
-    # Companion workspace Redis (DB 1) keys are always cleaned on disable so no
-    # claim/checkpoint state survives the pilot being taken down.
-    cleanup_workspace_redis
     if pilot_any_container_present; then
         echo "ERROR: pilot containers remain after disable" >&2
         exit 1
     fi
     remove_unused_pilot_networks || {
         echo "ERROR: unused pilot networks remain after disable" >&2
+        exit 1
+    }
+
+    # Remove only an install whose owner-only metadata and hashes prove that it
+    # was created by this activation path. Unknown systemd files remain stopped
+    # for operator inspection instead of being guessed away.
+    if $managed_runtime; then
+        if ! remove_managed_runtime_install false; then
+            runtime_cleanup_error=true
+            echo "ERROR: managed runtime files could not be removed automatically" >&2
+        else
+            echo "    Managed runtime configuration: removed."
+        fi
+    fi
+
+    # Return the production .env to the default-off baseline only after the
+    # reconciler and every token-consuming container have stopped.
+    if [[ "$dynamic_before" != "false" ]]; then
+        update_env_flag "$ENV_FILE" "$RUNTIME_FEATURE_FLAG" "false" || {
+            echo "ERROR: could not reset $RUNTIME_FEATURE_FLAG=false" >&2
+            exit 1
+        }
+    fi
+    update_env_flag "$ENV_FILE" "$RUNTIME_MANAGEMENT_TOKEN_KEY" "" || {
+        echo "ERROR: could not clear the runtime management token" >&2
         exit 1
     }
 
@@ -2580,83 +3517,26 @@ cmd_disable() {
     echo "    Signed terminal: 401."
     check_retired_demo_404 || { secure_workdir_cleanup; exit 1; }
 
+    if $runtime_cleanup_error; then
+        echo "ERROR: pilot is disabled, but managed runtime-file cleanup needs operator attention" >&2
+        secure_workdir_cleanup
+        return 1
+    fi
+
     secure_workdir_cleanup
     echo "==> Public-terminal pilot disabled."
     echo "    Redis volume retained for diagnosis."
 }
 
 # ---------------------------------------------------------------------------
-# Action: rollback — return from dynamic (reconciler) mode to the static
-# six-seat pilot. Starts all six seats, disables the reconciler flag, stops
-# the reconciler systemd service, then validates the static six-seat pool.
+# Action: rollback — compatibility alias for fail-closed disable.
+#
+# A feature-disabled static-six fallback would remove the global max-two
+# research gate and is therefore not an acceptable production rollback.
 # ---------------------------------------------------------------------------
 cmd_rollback() {
-    echo "==> Rolling back public-terminal pilot to static six-seat mode..."
-    secure_workdir_init
-
-    local dynamic=false
-    if dynamic_mode_enabled; then dynamic=true; fi
-    echo "    Dynamic (reconciler) mode: $dynamic"
-
-    # Step 1: Start all six seats so the static six-seat shape is restored
-    # before the reconciler is disabled (rollback starts all six).
-    start_all_seats_for_rollback || return 1
-    echo "    All six seats: started."
-
-    # Step 2: Disable the reconciler flag atomically and stop its systemd unit.
-    if $dynamic; then
-        if update_env_flag "$ENV_FILE" "TERMINAL_RUNTIME_FEATURE_ENABLED" "false"; then
-            echo "    TERMINAL_RUNTIME_FEATURE_ENABLED: atomically set to false."
-        else
-            echo "ERROR: could not disable TERMINAL_RUNTIME_FEATURE_ENABLED" >&2
-            return 1
-        fi
-        if systemctl is-active --quiet terminal-runtime-reconciler 2>/dev/null; then
-            systemctl stop terminal-runtime-reconciler 2>/dev/null || {
-                echo "ERROR: could not stop terminal-runtime-reconciler" >&2
-                return 1
-            }
-            echo "    terminal-runtime-reconciler: stopped."
-        fi
-    fi
-
-    # Step 3: Ensure the static pilot flag is on (rollback returns to the
-    # six-seat static deployment, not to a disabled edge).
-    local enabled
-    enabled="$(read_public_enabled)"
-    if [[ "$enabled" != "true" ]]; then
-        update_env_flag "$ENV_FILE" "$ENV_FLAG" "true" || {
-            echo "ERROR: could not re-enable $ENV_FLAG=true" >&2
-            return 1
-        }
-        echo "    $ENV_FLAG: set to true (static six-seat mode)."
-    fi
-
-    # Step 4: Recreate Caddy with the rolled-back flags.
-    cp -p "$ENV_FILE" "$STAGED_ENV"
-    chmod 600 "$STAGED_ENV"
-    if ! caddy_validate; then
-        echo "ERROR: Caddy validation failed during rollback" >&2
-        return 1
-    fi
-    if ! caddy_force_recreate; then
-        echo "ERROR: Caddy force-recreate failed during rollback" >&2
-        return 1
-    fi
-    if ! wait_caddy_running; then
-        echo "ERROR: Caddy did not reach running during rollback" >&2
-        return 1
-    fi
-
-    # Step 5: Feature-disabled mode still requires six seats — verify them.
-    if ! gateway_internal_ready; then
-        echo "ERROR: static six-seat pool not verified after rollback" >&2
-        return 1
-    fi
-
-    secure_workdir_cleanup
-    echo "==> Public-terminal pilot rolled back to static six-seat mode."
-    return 0
+    echo "==> Rollback is fail-closed: disabling the public-terminal pilot."
+    cmd_disable
 }
 
 # ---------------------------------------------------------------------------
@@ -2669,10 +3549,11 @@ main() {
     verify_current_main_revision
 
     case "$ACTION" in
-        status)   cmd_status ;;
-        activate) cmd_activate ;;
-        disable)  cmd_disable ;;
-        rollback) cmd_rollback ;;
+        status)           cmd_status ;;
+        activate-runtime) cmd_activate_runtime ;;
+        verify-runtime)   cmd_verify_runtime ;;
+        disable)          cmd_disable ;;
+        rollback)         cmd_rollback ;;
     esac
 
     local exit_code=$?

@@ -67,6 +67,7 @@ SECRET_NAMES = [
     "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN",
     "FIN_TERMINAL_PROXY_TOKEN",
     "FIN_TERMINAL_DEMO_PROXY_TOKEN",
+    "TERMINAL_RUNTIME_MANAGEMENT_TOKEN",
 ]
 
 
@@ -195,6 +196,21 @@ class EmbeddedAtomicUpdaterTests(unittest.TestCase):
         self.assertEqual(
             self._read_env(),
             f"OTHER=something\n{ENV_FLAG}=false\n",
+        )
+
+    def test_reads_sensitive_value_from_owner_only_file(self) -> None:
+        self._write_env(f"{ENV_FLAG}=false\n")
+        value_path = self._work / "runtime-token"
+        value_path.write_text("a" * 64, encoding="utf-8")
+        value_path.chmod(0o600)
+        result = self._run_updater(
+            "TERMINAL_RUNTIME_MANAGEMENT_TOKEN",
+            f"@{value_path}",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"TERMINAL_RUNTIME_MANAGEMENT_TOKEN={'a' * 64}",
+            self._read_env(),
         )
 
     def test_restore_replaces_exact_snapshot_atomically(self) -> None:
@@ -866,7 +882,7 @@ class ConfirmationPhraseTests(unittest.TestCase):
             / "public-terminal-pilot.yml"
         )
         wf_text = wf_path.read_text(encoding="utf-8")
-        self.assertIn("ACTIVATE SIX SEATS", wf_text)
+        self.assertIn("ACTIVATE RUNTIME PILOT", wf_text)
         self.assertIn("DISABLE PUBLIC PILOT", wf_text)
         self.assertNotIn("CONFIRM != \"yes\"", wf_text)
 
@@ -896,7 +912,7 @@ class WorkflowSafetyTests(unittest.TestCase):
     def test_workflow_guards_latest_main_and_remote_revision(self) -> None:
         self.assertIn("origin/main", self.workflow)
         self.assertIn("deployed_sha", self.workflow)
-        self.assertIn('if [[ "$ACTION" == "activate" ]]', self.workflow)
+        self.assertIn('if [[ "$ACTION" == "activate-runtime" ]]', self.workflow)
         self.assertIn('expected_sha="$MAIN_SHA"', self.workflow)
         self.assertIn('expected_sha="$deployed_sha"', self.workflow)
         self.assertIn("steps.candidate.outputs.revision", self.workflow)
@@ -906,6 +922,15 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertIn("bash -s --", self.workflow)
         self.assertNotIn("OPENROUTER_API_KEY", self.workflow)
         self.assertNotIn("FIN_TERMINAL_PUBLIC_TURNSTILE_SECRET", self.workflow)
+
+    def test_workflow_verifies_runtime_then_disables_fail_closed(self) -> None:
+        self.assertIn("activate-runtime", self.workflow)
+        self.assertIn("verify-runtime", self.workflow)
+        self.assertIn("Runtime verification failed", self.workflow)
+        self.assertIn("Runtime activation transaction failed", self.workflow)
+        self.assertIn("fail_closed_disable", self.workflow)
+        self.assertIn("run_remote_action disable", self.workflow)
+        self.assertIn("steps.runtime.outputs.reconciler_sha", self.workflow)
 
     def test_ci_runs_pilot_script_syntax_and_contract_tests(self) -> None:
         self.assertIn("bash -n deploy/public_terminal_pilot_remote.sh", self.ci)
@@ -1103,7 +1128,7 @@ class StaticSafetyTests(unittest.TestCase):
                         )
 
     def test_action_validation_rejects_unknown(self) -> None:
-        self.assertIn("activate|disable|status", self.text)
+        self.assertIn("activate-runtime|verify-runtime|disable|status", self.text)
         self.assertIn("must be one of", self.text)
 
     def test_status_output_is_limited_to_booleans_and_states(self) -> None:
@@ -1507,8 +1532,11 @@ class DynamicModeIntegrationTests(unittest.TestCase):
         cls.source = _script_path().read_text()
 
     def test_rollback_action_accepted(self) -> None:
-        self.assertIn("activate|disable|status|rollback", self.source)
-        self.assertIn("rollback) cmd_rollback ;;", self.source)
+        self.assertIn(
+            "activate-runtime|verify-runtime|disable|status|rollback",
+            self.source,
+        )
+        self.assertRegex(self.source, r"rollback\)\s+cmd_rollback\s*;;")
 
     def test_dynamic_mode_helper_present(self) -> None:
         self.assertIn("read_dynamic_mode_enabled()", self.source)
@@ -1532,9 +1560,24 @@ class DynamicModeIntegrationTests(unittest.TestCase):
         # Companion keys live in Redis DB 1 (workspace namespace).
         self.assertIn('redis-cli -n 1 --scan', self.source)
 
-    def test_rollback_starts_all_six_seats(self) -> None:
-        self.assertIn("start_all_seats_for_rollback()", self.source)
-        self.assertIn('for svc in "${PILOT_SEATS[@]}"', self.source)
+    def test_runtime_capacity_and_permits_are_reset_reversibly(self) -> None:
+        self.assertIn("backup_runtime_redis_state()", self.source)
+        self.assertIn("restore_runtime_redis_state_backup()", self.source)
+        self.assertIn("delete_runtime_redis_state()", self.source)
+        self.assertIn("fin-terminal-public:v1:capacity", self.source)
+        self.assertIn("fin-terminal-public:v1:research-permits", self.source)
+        prepare = self.source[self.source.index("prepare_six_worker_state()") :]
+        self.assertLess(
+            prepare.index("backup_runtime_redis_state"),
+            prepare.index("reset_runtime_redis_state_for_activation"),
+        )
+        rollback = self.source[self.source.index("activate_rollback_handler()") :]
+        self.assertIn("restore_runtime_redis_state_backup", rollback)
+
+    def test_rollback_is_fail_closed_not_static_six(self) -> None:
+        rollback = self.source[self.source.index("cmd_rollback()") :]
+        self.assertIn("cmd_disable", rollback)
+        self.assertNotIn("start_all_seats_for_rollback", self.source)
 
     def test_gateway_readiness_relaxed_in_dynamic_mode(self) -> None:
         self.assertIn("const dynamic = process.argv[1] === \"true\";", self.source)
@@ -1551,10 +1594,29 @@ class DynamicModeIntegrationTests(unittest.TestCase):
         self.assertIn("TERMINAL_RUNTIME_FEATURE_ENABLED: $dynamic", self.source)
         self.assertIn("terminal-runtime-reconciler:", self.source)
 
-    def test_cmd_rollback_disables_reconciler_and_starts_six(self) -> None:
+    def test_cmd_rollback_disables_public_edge(self) -> None:
         self.assertIn("cmd_rollback()", self.source)
-        self.assertIn("systemctl stop terminal-runtime-reconciler", self.source)
-        self.assertIn("static six-seat", self.source)
+        self.assertIn("Rollback is fail-closed", self.source)
+        self.assertIn("cmd_disable", self.source)
+
+    def test_runtime_activation_proves_permit_gate_before_edge(self) -> None:
+        activation = self.source[self.source.index("cmd_activate_runtime()") :]
+        permit = activation.index("prove_research_gate_fifo")
+        reconciler = activation.index("start_reconciler")
+        edge = activation.index("promote_edge")
+        self.assertLess(permit, reconciler)
+        self.assertLess(reconciler, edge)
+
+    def test_post_unlock_verification_accepts_recovery_only_after_error(self) -> None:
+        self.assertIn("last_success = NR", self.source)
+        self.assertIn("last_error = NR", self.source)
+        self.assertIn("last_error > last_success", self.source)
+
+    def test_disable_stops_reconciler_after_edge_404(self) -> None:
+        disable = self.source[self.source.index("cmd_disable()") :]
+        edge_404 = disable.index("Pilot URL: 404 confirmed")
+        stop = disable.index("stop_reconciler")
+        self.assertLess(edge_404, stop)
 
 
 # ---------------------------------------------------------------------------
