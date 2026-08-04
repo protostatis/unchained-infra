@@ -65,16 +65,16 @@ COPY unchained/installers/ installers/
 
 # Install all dependencies
 RUN pip install --no-cache-dir \
-    websockets>=16.0 \
-    httpx>=0.28.1 \
-    aiohttp>=3.11 \
-    anthropic>=0.49 \
-    fastmcp>=2.0 \
-    PyJWT>=2.0 \
-    cryptography>=42.0 \
-    boto3>=1.34,<2.0 \
-    pypdf>=4.0 \
-    pyunbrowser==0.0.18
+    "websockets>=16.0" \
+    "httpx>=0.28.1" \
+    "aiohttp>=3.11" \
+    "anthropic>=0.49" \
+    "fastmcp>=2.0" \
+    "PyJWT>=2.0" \
+    "cryptography>=42.0" \
+    "boto3>=1.34,<2.0" \
+    "pypdf>=4.0" \
+    "pyunbrowser==0.0.18"
 
 # Rhythm — event-driven SPA automation (copied by deploy.sh when available)
 COPY --chown=unchained:unchained rhythm/ rhythm/
