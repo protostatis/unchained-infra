@@ -58,6 +58,7 @@ from aiohttp import web
 
 from financial_workspace import (
     FinancialWorkspace,
+    FinancialWorkspaceRuntimeScheduler,
     FinancialWorkspaceError,
     CheckpointValidationError,
     CheckpointNotFoundError,
@@ -816,7 +817,12 @@ async def handle_fin_workspace_runtime_wake(request: web.Request) -> web.Respons
 
 
 async def handle_fin_workspace_runtime_sleep(request: web.Request) -> web.Response:
-    """POST /internal/financial-workspace/runtime/sleep?user_id=..."""
+    """POST /internal/financial-workspace/runtime/sleep?user_id=...
+
+    Durable sleep: the account runtime is stopped ONLY after its current
+    authoritative checkpoint has been flushed to the control plane (S2S). If
+    the flush fails the runtime stays awake (fail closed — no state loss).
+    """
     fw = _resolve_fw()
     if fw is None:
         return _error_response("financial workspace disabled", status=503)
@@ -826,10 +832,11 @@ async def handle_fin_workspace_runtime_sleep(request: web.Request) -> web.Respon
     reason = request.query.get("reason", "")
     if not user_id:
         return _error_response("user_id required", status=400)
-    status = fw.runtime_sleep(user_id, reason=reason)
-    if status is None:
-        return _error_response("no workspace for user", status=404)
-    return _json_response(status)
+    result = fw.runtime_sleep_durable(user_id, reason=reason)
+    if result.get("error"):
+        status = 409 if "flush failed" in str(result.get("error")) else 404
+        return _json_response(result, status=status)
+    return _json_response(result)
 
 
 async def handle_fin_workspace_runtime_status(request: web.Request) -> web.Response:
@@ -892,11 +899,16 @@ async def handle_fin_workspace_runtime_flush(request: web.Request) -> web.Respon
 # ---------------------------------------------------------------------------
 # Private workspace leg — authenticated /fin-terminal/
 # ---------------------------------------------------------------------------
-# Caddy maps /fin-terminal/ to this leg (via /workspace-terminal) only when
-# FIN_TERMINAL_WORKSPACE_ENABLED=true. The leg NEVER renders the marketing
-# index: it authenticates the session, requires an imported workspace, and
-# requires a validated host-side runtime provider before waking the account's
-# isolated runtime. Every failure is a fail-closed page with no CTA.
+# Caddy maps /fin-terminal/ to this leg only when FIN_TERMINAL_WORKSPACE_ENABLED
+# is true: it strips /fin-terminal and rewrites the remainder to /terminal/<rest>
+# before proxying to this control plane. That keeps the app runtime image's own
+# root-relative surface (/ , /assets/*, /ws, /api/ready) reachable unchanged
+# after this handler strips the /terminal marker, while the client's absolute
+# /fin-terminal/* asset and /ws URLs round-trip coherently through Caddy.
+# The leg NEVER renders the marketing index: it authenticates the session,
+# requires an imported workspace, and requires a validated host-side runtime
+# provider before waking the account's isolated runtime. Every failure is a
+# fail-closed page with no CTA.
 
 _TERMINAL_FAIL_CLOSED_TEMPLATE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -918,29 +930,14 @@ p{color:#9aa7b4;font-size:14px;line-height:1.5;margin:0}
 </body></html>
 """
 
-_TERMINAL_ATTACH_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>Workspace</title>
-<style>
-body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e6edf3;
-display:grid;place-items:center;min-height:100vh;margin:0}
-.card{max-width:460px;padding:32px;border:1px solid #2d3748;border-radius:12px;
-background:#11161d;text-align:center}
-h1{font-size:18px;margin:0 0 8px}
-p{color:#9aa7b4;font-size:14px;line-height:1.5;margin:0 0 20px}
-a{display:inline-block;background:#238636;color:#fff;text-decoration:none;
-padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600}
-</style></head><body>
-<div class="card">
-<h1>Workspace ready</h1>
-<p>Your workspace runtime is up. Open the terminal to continue from your
-imported checkpoint.</p>
-<p><a href="{attach_url}">Open workspace</a></p>
-</div>
-</body></html>
-"""
+# Headers the control plane never forwards to the account runtime: the runtime
+# derives its principal and proxy token from the authenticated session ONLY.
+_STRIP_RUNTIME_HEADERS = {
+    "host", "connection", "upgrade",
+    "x-workspace-runtime-token",
+    "x-fin-terminal-user", "x-fin-terminal-proxy-token",
+    "x-fin-terminal-control-token",
+}
 
 
 def _terminal_fail_closed(title: str, message: str, *, status: int) -> web.Response:
@@ -955,6 +952,42 @@ def _terminal_fail_closed(title: str, message: str, *, status: int) -> web.Respo
         status=status,
         headers={**_NO_STORE_HEADERS},
     )
+
+
+def _resolve_runtime_proxy_token() -> str:
+    return os.environ.get("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN", "").strip()
+
+
+def _runtime_upstream_headers(slug: str) -> dict[str, str] | None:
+    """Build the ONLY headers the control plane ever injects toward the
+    account runtime: the shared proxy token and the server-derived principal
+    bound to the authenticated account slug. Returns None (fail closed) when
+    the proxy token is not configured."""
+    proxy_token = _resolve_runtime_proxy_token()
+    if not proxy_token or not slug:
+        return None
+    return {
+        "X-Fin-Terminal-Proxy-Token": proxy_token,
+        "X-Fin-Terminal-User": f"account:{slug}",
+    }
+
+
+def _resolve_runtime_scheduler(core, fw: FinancialWorkspace) -> FinancialWorkspaceRuntimeScheduler:
+    """Lazily resolve the account-runtime idle scheduler (per control-plane
+    process). The proxy handlers attach/detach/touch it; the background sweep
+    loop in web.py drives ``tick()``."""
+    scheduler = getattr(core, "_fin_runtime_scheduler", None)
+    if scheduler is None:
+        import asyncio as _asyncio
+        idle_seconds = max(
+            60, int(os.environ.get("FIN_WORKSPACE_RUNTIME_IDLE_SLEEP_SECONDS", "600"))
+        )
+        scheduler = FinancialWorkspaceRuntimeScheduler(fw, idle_seconds=float(idle_seconds))
+        try:
+            core._fin_runtime_scheduler = scheduler
+        except Exception:
+            pass  # read-only core mock in tests
+    return scheduler
 
 
 async def _wake_account_runtime(fw: FinancialWorkspace, user_id: str) -> dict | None:
@@ -978,15 +1011,21 @@ async def _wake_account_runtime(fw: FinancialWorkspace, user_id: str) -> dict | 
     )
 
 
-async def handle_fin_workspace_terminal(request: web.Request) -> web.Response:
-    """GET /workspace-terminal — the authenticated /fin-terminal/ leg.
+async def handle_fin_workspace_terminal_proxy(request: web.Request) -> web.Response:
+    """GET /terminal/{tail:.*} — the authenticated /fin-terminal/ leg.
+
+    Caddy strips /fin-terminal and rewrites to /terminal/<rest>. This handler
+    authenticates the session, wakes the account runtime (fail closed when no
+    validated provider exists), and proxies EVERY request (HTTP + WebSocket)
+    to ``fin-workspace-<slug>:8787/<rest>`` while injecting the server-side
+    principal and proxy token — never caller-supplied values.
 
     Fail-closed contract:
       1. Feature disabled              → 404 (no CTA)
       2. Not authenticated             → 401 (no CTA)
       3. No imported workspace         → 404 (no CTA)
       4. Provider not validated        → 503, explicit reason, NO CTA
-      5. Provider validated            → wake + attach page (opens the runtime)
+      5. Provider validated            → wake + proxy the runtime surface
     """
     fw = _resolve_fw()
     if fw is None:
@@ -1024,60 +1063,44 @@ async def handle_fin_workspace_terminal(request: web.Request) -> web.Response:
         )
 
     slug = workspace_runtime_slug(user_id)
-    attach_url = f"/fin-terminal/attach/{slug}/"
-    return web.Response(
-        text=_TERMINAL_ATTACH_PAGE.replace("{attach_url}", attach_url),
-        content_type="text/html",
-        headers={**_NO_STORE_HEADERS},
-    )
-
-
-async def handle_fin_workspace_attach_proxy(request: web.Request) -> web.Response:
-    """GET /attach/{slug}/{tail:.*} — proxy HTTP + WebSocket to the account runtime.
-
-    The slug is derived server-side from the authenticated session — a
-    caller-supplied slug that does not match the session's workspace is
-    rejected. The upstream is the per-account container on its private
-    per-account network, reachable only from this control plane (Docker DNS).
-    """
-    fw = _resolve_fw()
-    if fw is None:
-        return _error_response("financial workspace disabled", status=503)
-
-    core = _core()
-    auth_info = core._authenticate(request)
-    if not auth_info:
-        return _error_response("authentication required", status=401)
-    user_id = str(auth_info.get("user_id", "") or "").strip()
-    if not user_id:
-        return _error_response("user identity required", status=401)
-    if fw.get_workspace_for_user(user_id) is None:
-        return _error_response("no workspace for user", status=404)
-
-    # Server-derived slug only; never trust the URL parameter.
-    expected_slug = workspace_runtime_slug(user_id)
-    slug = str(request.match_info.get("slug", "") or "").strip()
-    if slug != expected_slug:
-        return _error_response("slug mismatch", status=403)
-
     if runtime_provider_status(slug) is None:
-        return _error_response("runtime not running", status=409)
+        return _terminal_fail_closed(
+            "Workspace runtime unavailable",
+            "The workspace runtime did not come up. Try again in a moment.",
+            status=503,
+        )
 
     tail = str(request.match_info.get("tail", "") or "").strip()
     upstream = f"http://fin-workspace-{slug}:8787/{tail}"
 
+    scheduler = _resolve_runtime_scheduler(core, fw)
+    scheduler.touch(user_id)
     if request.headers.get("Upgrade", "").lower() == "websocket":
-        return await _proxy_websocket(request, upstream)
-    return await _proxy_http(request, upstream)
+        scheduler.attach(user_id)
+        try:
+            return await _proxy_websocket(request, upstream, slug, scheduler, user_id)
+        finally:
+            scheduler.detach(user_id)
+    return await _proxy_http(request, upstream, slug)
 
 
-async def _proxy_http(request: web.Request, upstream: str) -> web.Response:
-    """Stream a plain HTTP request to the account runtime."""
+async def _proxy_http(request: web.Request, upstream: str, slug: str) -> web.Response:
+    """Stream a plain HTTP request to the account runtime, injecting ONLY the
+    server-derived principal and proxy token (caller-supplied versions are
+    always stripped)."""
+    injected = _runtime_upstream_headers(slug)
+    if injected is None:
+        return _terminal_fail_closed(
+            "Workspace runtime unavailable",
+            "The workspace runtime proxy token is not configured.",
+            status=503,
+        )
     import aiohttp
     headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in {"host", "connection", "upgrade", "x-workspace-runtime-token"}
+        if k.lower() not in _STRIP_RUNTIME_HEADERS
     }
+    headers.update(injected)
     data = await request.read()
     try:
         async with aiohttp.ClientSession() as session:
@@ -1098,7 +1121,7 @@ async def _proxy_http(request: web.Request, upstream: str) -> web.Response:
                     },
                 )
     except Exception as exc:
-        log.error("[fin-workspace] attach proxy failed: %s", exc)
+        log.error("[fin-workspace] terminal proxy failed: %s", exc)
         return _terminal_fail_closed(
             "Workspace runtime unreachable",
             "The workspace runtime did not respond. Try again in a moment.",
@@ -1106,8 +1129,19 @@ async def _proxy_http(request: web.Request, upstream: str) -> web.Response:
         )
 
 
-async def _proxy_websocket(request: web.Request, upstream: str) -> web.Response:
-    """Relay a WebSocket between the browser and the account runtime."""
+async def _proxy_websocket(
+    request: web.Request,
+    upstream: str,
+    slug: str,
+    scheduler: FinancialWorkspaceRuntimeScheduler,
+    user_id: str,
+) -> web.Response:
+    """Relay a WebSocket between the browser and the account runtime, injecting
+    the server-derived principal + proxy token. The principal is bound to the
+    authenticated account/slug — caller-supplied identity headers are stripped."""
+    injected = _runtime_upstream_headers(slug)
+    if injected is None:
+        raise web.HTTPBadGateway(text="workspace runtime proxy token not configured")
     import aiohttp
     try:
         ws_local = web.WebSocketResponse(heartbeat=30.0)
@@ -1115,9 +1149,7 @@ async def _proxy_websocket(request: web.Request, upstream: str) -> web.Response:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 upstream,
-                headers={
-                    "X-Workspace-Runtime-Token": _resolve_fw_token(),
-                },
+                headers=injected,
                 timeout=aiohttp.ClientWSTimeout(ws_close=10.0),
             ) as ws_upstream:
                 async def pump_upstream() -> None:
@@ -1154,10 +1186,5 @@ async def _proxy_websocket(request: web.Request, upstream: str) -> web.Response:
                         pass
         return ws_local
     except Exception as exc:
-        log.error("[fin-workspace] attach WS proxy failed: %s", exc)
+        log.error("[fin-workspace] terminal WS proxy failed: %s", exc)
         raise web.HTTPBadGateway(text="workspace runtime unreachable")
-
-
-def _resolve_fw_token() -> str:
-    from financial_workspace import _resolve_control_token as _token
-    return _token()

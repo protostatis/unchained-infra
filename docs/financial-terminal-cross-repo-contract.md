@@ -250,38 +250,94 @@ Worker-side private route (app, never public):
 
 ## 4b. Private workspace leg — authenticated `/fin-terminal/`
 
-When `FIN_TERMINAL_WORKSPACE_ENABLED=true`, Caddy maps `/fin-terminal/` to the
-control plane's private-workspace leg (`/workspace-terminal` after the prefix
-is stripped; subpaths such as `/fin-terminal/attach/<slug>/` proxy unchanged
-and are routed to the account's isolated runtime). The leg NEVER renders the
-marketing index or the public singleton:
+When `FIN_TERMINAL_WORKSPACE_ENABLED=true`, Caddy maps `/fin-terminal/*` to the
+control plane's private-workspace leg: it strips `/fin-terminal` and rewrites
+the remainder to `/terminal/<rest>` (e.g. `/fin-terminal/ws` →
+`/terminal/ws`). The control plane strips the `/terminal` marker and proxies
+the account runtime's root-relative surface (`/`, `/assets/*`, `/ws`) to
+`fin-workspace-<slug>:8787` — the runtime image is built with
+`PUBLIC_BASE_PATH=/fin-terminal/` so the client's absolute `/fin-terminal/*`
+asset and `/ws` URLs round-trip coherently through Caddy and the proxy. There
+is NO user-supplied slug authority: the slug is always derived server-side
+from the authenticated session. The leg NEVER renders the marketing index or
+the public singleton:
 
 1. Session-authenticated account required (401 fail-closed page otherwise).
 2. Imported workspace required (404 fail-closed page otherwise).
 3. A **validated** host-side runtime provider required — the provider must
-   answer `/v1/health` with `accountRuntime` + `checkpointFile` capabilities.
-   Without it the leg returns 503 with an explicit reason and **no CTA**
-   (activation itself is gated at control-plane boot).
+   answer `/v1/health` with `accountRuntime` + `checkpointFile` capabilities
+   (itself tied to a real image-contract probe). Without it the leg returns
+   503 with an explicit reason and **no CTA** (activation itself is gated at
+   control-plane boot).
 4. On success the leg wakes the account runtime (provisioning the imported
-   checkpoint to the per-account checkpoint file) and serves the attach page;
-   `/fin-terminal/attach/{slug}/*` is proxied (HTTP + WebSocket) to
-   `fin-workspace-<slug>:8787` over the private per-account network. The slug
-   is derived server-side from the session — never trusted from the URL.
+   checkpoint to the per-account checkpoint file) and proxies every
+   `/terminal/*` request (HTTP + WebSocket) to `fin-workspace-<slug>:8787`
+   over the private per-account network.
+
+The proxy injects ONLY server-derived identity — never caller values:
+
+- `X-Fin-Terminal-Proxy-Token: $FIN_WORKSPACE_RUNTIME_PROXY_TOKEN`
+  (also the runtime container's `MARKET_PROXY_TOKEN`)
+- `X-Fin-Terminal-User: account:<slug>` (bound server-side to the
+  authenticated user's derived slug)
+
+Caddy strips caller-supplied `X-Fin-Terminal-User`, `X-Fin-Terminal-Proxy-Token`,
+`X-Fin-Terminal-Control-Token`, `Authorization`, `Proxy-Authorization`, and
+`X-Management-Token` on the surface, and the control-plane proxy strips them
+again (defense in depth).
 
 The account runtime contract (app core, validated via the provider's
-`FIN_WORKSPACE_RUNTIME_APP_CAPABLE` flag):
+image-contract probe):
 
 - Per-account container `fin-workspace-<slug>` on private network
-  `fin_ws_<slug>` (internal) + volume `fin_ws_<slug>_data`; no published host
-  ports; `cap_drop ALL`; no-new-privileges; read-only rootfs; never a Docker
-  socket inside a container (Docker authority is host-side only).
+  `fin_ws_<slug>` (internal: runtime + control plane + shared MCP attached) +
+  per-account NON-internal `fin_ws_<slug>_egress` (runtime only, model/MCP
+  egress) + volume `fin_ws_<slug>_data`; no published host ports;
+  `cap_drop ALL`; no-new-privileges; read-only rootfs; never a Docker socket
+  inside a container (Docker authority is host-side only). Sibling runtimes
+  are never placed on a shared network.
 - Checkpoint-file provisioning: the imported snapshot is written to
   `FIN_WORKSPACE_CHECKPOINT_FILE` (default `/data/checkpoint.json`) on the
-  per-account volume; the app runtime reads it on boot.
-- The control-plane container is attached to the per-account network at wake
-  and detached at sleep so it is the only bridge to the account runtime.
-- Wake/attach/flush/sleep lifecycle is owned by the host-side
-  `fin-workspace-runtime-provider` systemd service.
+  per-account volume; the app runtime reads it on boot
+  (`TERMINAL_RUNTIME_MODE=private-workspace`,
+  `FINANCIAL_WORKSPACE_CHECKPOINTS=1`).
+- The provider hands the container ONLY allowlisted env: the private-workspace
+  contract (`MARKET_PROXY_TOKEN`, `ALLOWED_ORIGINS`, model/OpenRouter config,
+  `UNBROWSER_MCP_URL`, `FIN_WORKSPACE_CONTROL_TOKEN`,
+  `FIN_WORKSPACE_SESSION_ID`, `TERMINAL_RUNTIME_WORKER_GENERATION`) — never a
+  broad env-file injection.
+- Flush contract: before sleep/shutdown the provider exports the CURRENT
+  authoritative checkpoint from the running app (see §6b), then the control
+  plane persists it as a new snapshot and only then stops the runtime. The
+  checkpoint file is used only when durably acknowledged.
+- Wake/attach/flush/sleep/delete lifecycle is owned by the host-side
+  `fin-workspace-runtime-provider` systemd service. Sleep/delete detach the
+  control plane + MCP from the per-account network and remove the per-account
+  networks; delete also removes the volume.
+
+## 6b. Private runtime checkpoint export + flush (S2S)
+
+Worker-side private route (app, never public) — also the flush source for
+account runtimes:
+
+| Route | Purpose |
+|---|---|
+| `POST /internal/financial-workspace/checkpoint-export` | worker exports authoritative checkpoint for the exact `{sessionId, generation}`; headers `X-Fin-Terminal-Proxy-Token` + `X-Fin-Terminal-Control-Token` |
+
+Provider flush (host-side → runtime → control plane):
+
+1. `POST http://fin-workspace-<slug>:8787/internal/financial-workspace/checkpoint-export`
+   with `{sessionId: <slug>, generation: <epoch>}`, headers
+   `X-Fin-Terminal-Proxy-Token: $FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` and
+   `X-Fin-Terminal-Control-Token: $FIN_WORKSPACE_CONTROL_TOKEN`.
+   `generation` is the app's `workerGenerationEpoch(TERMINAL_RUNTIME_WORKER_GENERATION)`
+   — a deterministic hash both sides implement.
+2. On 200, `POST /internal/financial-workspace/runtime/flush` with
+   `{slug, checkpoint}` (Bearer control token) → the control plane persists a
+   new snapshot for the account. This is the ONLY acknowledged-flush path.
+3. If the runtime is not running, the checkpoint file is used ONLY when its
+   content is durably acknowledged (equals the last snapshot written or
+   persisted); otherwise flush fails closed and sleep is refused.
 
 When the workspace flag is OFF the signed-in singleton
 (`fin-terminal:8787` + `forward_auth`) serves `/fin-terminal/*` unchanged —
@@ -301,7 +357,29 @@ so the path can never fall through to the landing page.
 | `FIN_WORKSPACE_S3_BUCKET` / `_REGION` / `KMS_KEY_ID` | envelope-encrypted checkpoint storage | required when enabled |
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_URL` | host-side runtime provider base (hard enablement gate) | `http://host.docker.internal:8793` |
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN` | shared secret with the provider (32+ chars) | required when enabled |
+| `FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` | shared proxy token injected toward account runtimes (also their `MARKET_PROXY_TOKEN`) | required when enabled |
+| `FIN_WORKSPACE_CONTROL_URL` | control-plane base the provider uses for flush/wake callbacks | `http://fin-terminal-workspace-control:8790` |
 | `FIN_TERMINAL_BASE_URL` | public base (`/fin-terminal-workspace`) | `https://unbrowser.unchainedsky.com/fin-terminal-workspace` |
+
+### Host-side runtime provider (`fin-workspace-runtime-provider.service`)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `FIN_WORKSPACE_RUNTIME_TOKEN` | provider HTTP API secret (32+ chars) | required |
+| `FIN_WORKSPACE_RUNTIME_LISTEN` | provider listener | `0.0.0.0:8793` |
+| `FIN_WORKSPACE_RUNTIME_APP_IMAGE` | immutable pinned app image (built at `/fin-terminal/`, `private-workspace` mode) | required |
+| `FIN_WORKSPACE_RUNTIME_APP_PORT` | runtime container port | `8787` |
+| `FIN_WORKSPACE_RUNTIME_APP_CAPABLE` | operator prerequisite; the capability also requires a passing image-contract probe | `false` |
+| `FIN_WORKSPACE_RUNTIME_CONTROL_CONTAINER` / `_MCP_CONTAINER` | shared containers attached to each per-account network | `fin-terminal-workspace-control` / `fin-terminal-workspace-unbrowser-mcp` |
+| `FIN_WORKSPACE_RUNTIME_CHECKPOINT_FILE` | per-account checkpoint path in the runtime | `/data/checkpoint.json` |
+| `FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` | shared runtime proxy token (32+ chars) | required |
+| `FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS` | runtime `ALLOWED_ORIGINS` | `https://unbrowser.unchainedsky.com` |
+| `FIN_WORKSPACE_RUNTIME_MCP_URL` | runtime `UNBROWSER_MCP_URL` | `http://fin-terminal-workspace-unbrowser-mcp:8767/mcp` |
+| `FIN_WORKSPACE_RUNTIME_MODEL_PROVIDER` / `_MODEL_ID` | model config (allowlisted) | `openrouter` / explicit id |
+| `FIN_WORKSPACE_RUNTIME_OPENROUTER_MODEL` / `_API_KEY` | OpenRouter model + key | default model / required key |
+| `FIN_WORKSPACE_RUNTIME_MAX_OUTPUT_TOKENS` | runtime `MARKET_MAX_OUTPUT_TOKENS` | `4096` |
+| `FIN_WORKSPACE_LOCAL_RESEARCH_CONCURRENCY` | per-account local research limit (1–2) | `1` |
+| `FIN_WORKSPACE_RUNTIME_STATE_DIR` | provider durable-hash state dir | `/var/lib/unchained/fin-workspace` |
 
 ### Gateway (app `fin-terminal-public-gateway`)
 
@@ -322,6 +400,24 @@ so the path can never fall through to the landing page.
 |---|---|
 | `TERMINAL_RUNTIME_FEATURE_ENABLED` / `TERMINAL_RUNTIME_MANAGEMENT_TOKEN` | match gateway/reconciler |
 | `TERMINAL_RUNTIME_MANAGEMENT_URL` | `http://fin-terminal-public-gateway:8789` (private seat network) |
+
+### Private workspace runtime (app, per-account container)
+
+| Variable | Purpose |
+|---|---|
+| `TERMINAL_RUNTIME_MODE=private-workspace` | runtime mode |
+| `PUBLIC_BASE_PATH=/fin-terminal/` | image build base (assets + `/ws` under `/fin-terminal/`) |
+| `FINANCIAL_WORKSPACE_CHECKPOINTS=1` | feature flag (required; fail closed at boot) |
+| `FIN_WORKSPACE_CHECKPOINT_FILE` | imported checkpoint file (legacy alias `TERMINAL_WORKSPACE_IMPORT_FILE`) |
+| `FIN_WORKSPACE_CONTROL_TOKEN` | shared control token (32+ chars; required) |
+| `FIN_WORKSPACE_SESSION_ID` | account slug (required; the runtime's stable session id) |
+| `TERMINAL_RUNTIME_WORKER_GENERATION` | runtime generation (required; flush authorizes on its epoch) |
+| `MARKET_PROXY_TOKEN` | shared runtime proxy token (required) |
+| `ALLOWED_ORIGINS` | allowed browser origins (required, non-loopback host) |
+| `UNBROWSER_MCP_URL` / `UNBROWSER_MCP_REQUIRED=1` | MCP egress (required in production) |
+| `MARKET_MODEL_PROVIDER` / `MARKET_MODEL_ID` / `OPENROUTER_MODEL` / `OPENROUTER_API_KEY` | model config (required — research fails closed without it) |
+| `MARKET_RESEARCH_CONCURRENCY=1` | research concurrency |
+| `FIN_WORKSPACE_LOCAL_RESEARCH_CONCURRENCY` | local research permit limit (default 1, max 2) |
 
 ### Reconciler (infra host service)
 

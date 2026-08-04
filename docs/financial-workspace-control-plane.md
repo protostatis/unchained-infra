@@ -26,14 +26,13 @@ auth/credit flows are untouched.
         │   /workspace/oauth/{provider}/callback → state binding verified, claim accepted
         │   /workspace/workspace, /workspace/snapshots, /workspace/runtime/status
         │   /workspace/done             → claim completion (CTA gated on provider)
-        │   /workspace-terminal         → the /fin-terminal/ leg
-        │   /attach/{slug}/*            → account runtime proxy (HTTP + WS)
         │  runtime provider (host-side, no Docker socket in containers):
         v
 [fin-workspace-runtime-provider] (host systemd, Docker authority)
         │  per-account container fin-workspace-<slug> on private fin_ws_<slug>
-        │  network + fin_ws_<slug>_data volume (checkpoint file provisioned)
-        └─ /v1/health | /v1/accounts/{slug}/wake|sleep|flush|status
+        │  network + per-account fin_ws_<slug>_egress (runtime-only egress) +
+        │  fin_ws_<slug>_data volume (checkpoint file provisioned)
+        └─ /v1/health | /v1/accounts/{slug}/wake|flush|sleep|delete|status
 ```
 
 Caddy only ever proxies the exact `/fin-terminal-workspace/*` browser surface
@@ -42,22 +41,31 @@ Internal endpoints are reachable only from the Docker-internal network.
 
 ## Private workspace leg — authenticated `/fin-terminal/`
 
-When the feature is enabled, Caddy maps `/fin-terminal/` to the leg
-(`/workspace-terminal` after stripping the prefix) instead of the marketing
-index or the public singleton. The leg fails closed at every step:
+When the feature is enabled, Caddy maps `/fin-terminal/*` to the leg
+(**strips `/fin-terminal` and rewrites to `/terminal/<rest>`**) instead of the
+marketing index or the public singleton. The control plane proxies the account
+runtime's root-relative surface (`/`, `/assets/*`, `/ws`, `/api/ready`)
+unchanged after stripping the `/terminal` marker, so the runtime image built
+with `PUBLIC_BASE_PATH=/fin-terminal/` stays coherent: the client's absolute
+`/fin-terminal/*` asset and `/ws` URLs round-trip through Caddy and the proxy.
+There is no user-supplied slug authority — the slug is always derived
+server-side from the authenticated session. The leg fails closed at every step:
 
 1. Session-authenticated account required (401, no CTA).
 2. Imported workspace required (404, no CTA).
 3. Validated host-side runtime provider required — the provider must answer
-   `/v1/health` with `accountRuntime` + `checkpointFile` capabilities.
-   Otherwise the leg returns 503 with an explicit reason and no CTA, and
-   **activation itself is gated**: the control plane refuses to boot when the
-   feature is enabled without a validated provider.
+   `/v1/health` with `accountRuntime` + `checkpointFile` capabilities (itself
+   gated on a real image-contract probe). Otherwise the leg returns 503 with
+   an explicit reason and no CTA, and **activation itself is gated**: the
+   control plane refuses to boot when the feature is enabled without a
+   validated provider.
 4. Success → wake the account runtime (provisioning the imported checkpoint
-   to the per-account checkpoint file) → serve the attach page; the browser
-   then reaches the account's isolated runtime via
-   `/fin-terminal/attach/{slug}/` (proxied HTTP + WebSocket by the control
-   plane over the private per-account network).
+   to the per-account checkpoint file) → proxy every `/terminal/*` request
+   (HTTP + WebSocket) to `fin-workspace-<slug>:8787` over the private
+   per-account network, injecting ONLY the server-derived principal
+   (`X-Fin-Terminal-User: account:<slug>`) and the shared proxy token
+   (`X-Fin-Terminal-Proxy-Token`). Caller-supplied identity/service headers are
+   always stripped.
 
 The done page's "Open workspace" CTA renders only while the provider is
 validated; otherwise the page carries no CTA (fail closed, no false route).
@@ -65,6 +73,29 @@ The host-side provider is documented in
 [`docs/terminal-runtime-reconciler.md`](terminal-runtime-reconciler.md) and
 implemented by `deploy/workspace_runtime_provider.py` +
 `deploy/fin-workspace-runtime-provider.service`.
+
+## Runtime flush + idle sleep contract
+
+A private runtime must never stop and lose state without a durable flush:
+
+- **Flush** (`POST /v1/accounts/{slug}/flush`): while the runtime container is
+  running, the provider asks the app for its CURRENT authoritative checkpoint
+  (`POST /internal/financial-workspace/checkpoint-export`, authenticated with
+  the proxy + control tokens, for the exact session/generation), then persists
+  it to the control plane (`POST /internal/financial-workspace/runtime/flush`
+  → new snapshot). The original checkpoint file is used ONLY as a fallback and
+  ONLY when its content is durably acknowledged (equals the last snapshot
+  written/persisted); an unacknowledged file fails closed instead of
+  overwriting good state.
+- **Durable sleep** (`runtime_sleep_durable`): the control plane sleeps an
+  account runtime ONLY after a successful flush. If the flush fails the
+  runtime stays awake — no state loss.
+- **Idle scheduler** (`FinancialWorkspaceRuntimeScheduler`): a background loop
+  (`FIN_WORKSPACE_RUNTIME_SWEEP_INTERVAL_SECONDS`, default 60) sweeps awake
+  runtimes that have no active WebSocket and have been idle for
+  `FIN_WORKSPACE_RUNTIME_IDLE_SLEEP_SECONDS` (default 600), then durable-flush
+  + sleep. Active WebSockets preserve the runtime; a failed flush backs the
+  account off for `FIN_WORKSPACE_RUNTIME_SWEEP_BACKOFF_SECONDS` (default 300).
 
 ## Fail-closed configuration
 
@@ -87,6 +118,7 @@ Required env (see `.env.workspace.example`):
 | `FIN_WORKSPACE_KMS_KEY_ID` | KMS key for envelope DEK wrapping |
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_URL` | host-side runtime provider base (hard enablement gate) |
 | `FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN` | shared secret with the runtime provider (32+ chars) |
+| `FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` | shared proxy token injected toward each account runtime (`X-Fin-Terminal-Proxy-Token`), also the runtime's `MARKET_PROXY_TOKEN` |
 | `FIN_TERMINAL_BASE_URL` | public base (defaults to `https://unbrowser.unchainedsky.com/fin-terminal-workspace`) |
 
 **Hard enablement gate:** enabling the feature without a validated host-side
@@ -94,8 +126,10 @@ runtime provider is a startup error. `validate_fin_workspace_config()`
 requires `FIN_WORKSPACE_RUNTIME_PROVIDER_URL` +
 `FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN`, and `_init_fin_workspace_control_plane`
 requires the provider to answer `/v1/health` with `accountRuntime` +
-`checkpointFile` capabilities before the control plane boots. Until the
-pinned app image's account-runtime support is verified, the operator keeps
+`checkpointFile` capabilities before the control plane boots. The provider's
+capability is tied to a REAL probe of the pinned app image (build mode `live`,
+base path `/fin-terminal/`, `private-workspace` mode, checkpoint-export path);
+until that probe passes the operator keeps
 `FIN_WORKSPACE_RUNTIME_APP_CAPABLE=false` on the provider and activation
 stays failed closed — `/fin-terminal/` is never falsely routed.
 
@@ -196,8 +230,20 @@ toggle `awake|asleep|draining` per account in
 `GET /workspace/runtime/status`. The `/fin-terminal/` leg (see above)
 orchestrates the host-side provider: wake provisions the account's isolated
 container + checkpoint file, and `POST /internal/financial-workspace/runtime/flush`
-persists a checkpoint flushed back from the runtime as a new snapshot. This is
-inert when the feature is off.
+persists a checkpoint flushed back from the runtime as a new snapshot.
+`POST .../runtime/sleep` performs a **durable sleep**: it flushes the current
+authoritative checkpoint first and only stops the runtime when the flush was
+durably acknowledged (fail closed otherwise). This is inert when the feature
+is off.
+
+## Research permits in private runtimes
+
+Account runtimes never reach the public gateway's shared research-permit
+surface. In `TERMINAL_RUNTIME_MODE=private-workspace` the app uses a local
+in-process permit gate (`FIN_WORKSPACE_LOCAL_RESEARCH_CONCURRENCY`, default
+1, max 2) so one account cannot consume the global public research budget
+unless an operator intentionally shares it. Each runtime is provisioned with
+`MARKET_RESEARCH_CONCURRENCY=1`.
 
 ## Deployment
 
@@ -206,8 +252,16 @@ inert when the feature is off.
   `fin-terminal-workspace` compose profile.
 - Networks: `fin_terminal_public` (Caddy), `fin_terminal_public_state`
   (Redis), and `fin_terminal_workspace_egress` (S3/KMS egress only — the only
-  non-internal network the control plane joins). No Docker socket; the
-  host-side `fin-workspace-runtime-provider` service owns Docker.
+  non-internal network the control plane joins). The shared
+  `fin-terminal-workspace-unbrowser-mcp` service (profile
+  `fin-terminal-workspace`) is attached by the provider to every per-account
+  private network at wake. No Docker socket; the host-side
+  `fin-workspace-runtime-provider` service owns Docker.
+- Account runtime topology (provider-owned): per-account internal network
+  `fin_ws_<slug>` (runtime + control plane + shared MCP attached), per-account
+  NON-internal `fin_ws_<slug>_egress` (runtime only, model/MCP egress), volume
+  `fin_ws_<slug>_data`. Sibling runtimes are never placed on a shared network;
+  sleep/delete detach the shared services and remove the per-account networks.
 - `/fin-terminal/` routes to the private-workspace leg **only when**
   `FIN_TERMINAL_WORKSPACE_ENABLED=true` **and** the runtime provider is
   validated; otherwise it fails closed (no CTA) and the signed-in singleton

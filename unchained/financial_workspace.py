@@ -129,6 +129,17 @@ def _runtime_provider_token() -> str:
     return os.environ.get(_FIN_RUNTIME_PROVIDER_TOKEN_ENV, "").strip()
 
 
+def _runtime_control_url() -> str:
+    """Control-plane base URL the provider uses for flush/wake callbacks.
+
+    Defaults to the Docker-internal control-plane service name; an operator
+    (or the local E2E harness) can override with ``FIN_WORKSPACE_CONTROL_URL``.
+    """
+    return os.environ.get("FIN_WORKSPACE_CONTROL_URL", "").strip() or (
+        "http://fin-terminal-workspace-control:8790"
+    )
+
+
 def _runtime_provider_headers() -> dict[str, str]:
     return {
         "X-Workspace-Runtime-Token": _runtime_provider_token(),
@@ -188,7 +199,7 @@ def runtime_provider_wake(
                 f"{url.rstrip('/')}/v1/accounts/{slug}/wake",
                 json={
                     "checkpoint": checkpoint,
-                    "controlUrl": "http://fin-terminal-workspace-control:8790",
+                    "controlUrl": _runtime_control_url(),
                     "controlToken": control_token,
                 },
                 headers=_runtime_provider_headers(),
@@ -237,6 +248,41 @@ def runtime_provider_status(slug: str, timeout: float = 10.0) -> dict | None:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def runtime_provider_flush(slug: str, timeout: float = 45.0) -> dict:
+    """Ask the host-side provider to flush the account runtime's CURRENT
+    authoritative checkpoint to the control plane (S2S).
+
+    The provider exports from the RUNNING app runtime (proxy + control
+    tokens), then posts the snapshot here. It only falls back to the
+    checkpoint file when the file's content is durably acknowledged.
+
+    Returns the provider's flush result dict — ``{"ok": true, ...}`` on
+    success. Callers must treat anything else as fail-closed.
+    """
+    url = _runtime_provider_url()
+    if not url or not _runtime_provider_token() or not slug:
+        return {"ok": False, "reason": "runtime provider not configured"}
+    from financial_workspace import _resolve_control_token
+    control_token = _resolve_control_token()
+    try:
+        import httpx
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{url.rstrip('/')}/v1/accounts/{slug}/flush",
+                json={
+                    "controlUrl": _runtime_control_url(),
+                    "controlToken": control_token,
+                },
+                headers=_runtime_provider_headers(),
+            )
+            if resp.status_code != 200:
+                return {"ok": False, "reason": f"provider returned {resp.status_code}"}
+            data = resp.json()
+        return data if isinstance(data, dict) else {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
 
 
 def workspace_runtime_slug(user_id: str) -> str:
@@ -1673,6 +1719,46 @@ class FinancialWorkspace:
                 "updated_at": row[5],
             }
 
+    def runtime_sleep_durable(self, user_id: str, *, reason: str = "") -> dict:
+        """Sleep the account runtime ONLY after a durable checkpoint flush.
+
+        Fail-closed contract (shared with the idle scheduler):
+          1. The provider must export the runtime's CURRENT authoritative
+             checkpoint (from the running app) and persist it to the control
+             plane (S2S).
+          2. Only after a durably acknowledged flush does the provider stop
+             the container and remove the per-account networks.
+          3. If the flush fails (or the provider is unreachable), the runtime
+             STAYS AWAKE and no state is lost.
+
+        Returns a status-like dict with an extra ``flush`` result and an
+        ``error`` field when the sleep could not proceed.
+        """
+        uid = str(user_id or "").strip()
+        if not uid:
+            return {"error": "invalid user"}
+        status = self.runtime_status(uid)
+        if status is None:
+            return {"error": "no workspace for user"}
+        if status["runtime_state"] != "awake":
+            # Nothing to flush or stop; sleeping is idempotent.
+            return {**status, "flush": {"ok": True, "skipped": True}}
+        slug = workspace_runtime_slug(uid)
+        flush_result = runtime_provider_flush(slug)
+        if not flush_result.get("ok"):
+            return {
+                **status,
+                "flush": flush_result,
+                "error": "flush failed; runtime stays awake",
+            }
+        provider_sleep_ok = runtime_provider_sleep(slug)
+        if not provider_sleep_ok:
+            # The snapshot is durably persisted; a failed stop is retried by
+            # the next sweep. Mark asleep so the idle scheduler stops spinning.
+            pass
+        slept = self.runtime_sleep(uid, reason=reason)
+        return {**(slept or status), "flush": flush_result}
+
     # ==================================================================
     # Sweep — delete expired checkpoints
     # ==================================================================
@@ -1956,6 +2042,93 @@ class FinancialWorkspace:
             "snapshots": snapshots,
             "imports": imports,
         }
+
+
+# ---------------------------------------------------------------------------
+# Account runtime idle scheduler (durable-flush-then-sleep)
+# ---------------------------------------------------------------------------
+class FinancialWorkspaceRuntimeScheduler:
+    """Tracks live WebSocket/HTTP activity per account runtime and sleeps
+    idle runtimes ONLY after a durable checkpoint flush.
+
+    Contract:
+      - ``attach``/``detach`` count live browser connections through the
+        control-plane proxy; a runtime with any active WebSocket is never a
+        sleep candidate.
+      - ``touch`` records the last proxy activity so the idle window only
+        starts once traffic has fully stopped.
+      - ``tick()`` sweeps awake runtimes whose idle window has elapsed: it
+        calls ``runtime_sleep_durable`` (provider flush → S2S persist → stop).
+        If the flush fails the runtime STAYS AWAKE (fail closed) and the
+        account is put on a back-off so the sweeper does not spin.
+    """
+
+    def __init__(
+        self,
+        fw: FinancialWorkspace,
+        *,
+        idle_seconds: float = 600.0,
+        backoff_seconds: float = 300.0,
+        now: "callable | None" = None,
+    ) -> None:
+        self._fw = fw
+        self._idle_seconds = max(30.0, float(idle_seconds))
+        self._backoff_seconds = max(30.0, float(backoff_seconds))
+        self._now = now or time.time
+        self._active_sockets: dict[str, int] = {}
+        self._last_activity: dict[str, float] = {}
+        self._last_failed: dict[str, float] = {}
+
+    def attach(self, user_id: str) -> None:
+        uid = str(user_id or "").strip()
+        self._active_sockets[uid] = self._active_sockets.get(uid, 0) + 1
+        self.touch(uid)
+
+    def detach(self, user_id: str) -> None:
+        uid = str(user_id or "").strip()
+        current = self._active_sockets.get(uid, 0)
+        if current <= 1:
+            self._active_sockets.pop(uid, None)
+        else:
+            self._active_sockets[uid] = current - 1
+        self.touch(uid)
+
+    def touch(self, user_id: str) -> None:
+        uid = str(user_id or "").strip()
+        if uid:
+            self._last_activity[uid] = self._now()
+
+    def active_socket_count(self, user_id: str) -> int:
+        return self._active_sockets.get(str(user_id or "").strip(), 0)
+
+    def idle_candidates(self) -> list[str]:
+        """Awake runtimes with no live WebSocket and an elapsed idle window."""
+        now = self._now()
+        candidates: list[str] = []
+        for row in self._fw._iter_workspace_user_ids():
+            uid = row[0]
+            status = self._fw.runtime_status(uid)
+            if status is None or status.get("runtime_state") != "awake":
+                continue
+            if self._active_sockets.get(uid, 0) > 0:
+                continue
+            if now - self._last_failed.get(uid, 0.0) < self._backoff_seconds:
+                continue
+            last_activity = self._last_activity.get(uid, status.get("last_wake_at") or 0.0)
+            if now - last_activity < self._idle_seconds:
+                continue
+            candidates.append(uid)
+        return sorted(candidates)
+
+    def tick(self) -> list[dict]:
+        """Sweep idle runtimes: durable flush first, stop only on success."""
+        results: list[dict] = []
+        for uid in self.idle_candidates():
+            result = self._fw.runtime_sleep_durable(uid, reason="idle")
+            if result.get("error") or not (result.get("flush") or {}).get("ok"):
+                self._last_failed[uid] = self._now()
+            results.append({"user_id": uid, **result})
+        return results
 
 
 # ---------------------------------------------------------------------------

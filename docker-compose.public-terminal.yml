@@ -12,7 +12,7 @@
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
-    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#ca767a98f566694df53507ae12d399a133c49bc5"
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#e937377b945ed84d721ebd06e22510b5f805e19d"
     args:
       PUBLIC_BASE_PATH: /
       VITE_TERMINAL_BUILD_MODE: live
@@ -149,7 +149,7 @@ services:
 
   fin-terminal-public-gateway:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#ca767a98f566694df53507ae12d399a133c49bc5"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#e937377b945ed84d721ebd06e22510b5f805e19d"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
         VITE_TERMINAL_BUILD_MODE: public-live
@@ -353,6 +353,11 @@ services:
       # /fin-terminal/ never falls back to the marketing index or singleton.
       - FIN_WORKSPACE_RUNTIME_PROVIDER_URL=${FIN_WORKSPACE_RUNTIME_PROVIDER_URL:-http://host.docker.internal:8793}
       - FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN=${FIN_WORKSPACE_RUNTIME_PROVIDER_TOKEN:-}
+      # Shared proxy token the control plane injects toward each account
+      # runtime (X-Fin-Terminal-Proxy-Token) and the provider hands to the
+      # runtime container as MARKET_PROXY_TOKEN. Must match the provider's
+      # FIN_WORKSPACE_RUNTIME_PROXY_TOKEN.
+      - FIN_WORKSPACE_RUNTIME_PROXY_TOKEN=${FIN_WORKSPACE_RUNTIME_PROXY_TOKEN:-}
       - TRIAL_AGENT_KEY=${TRIAL_AGENT_KEY:-}
     logging:
       driver: json-file
@@ -365,6 +370,50 @@ services:
       timeout: 3s
       retries: 5
       start_period: 15s
+
+  # Shared unbrowser MCP service for account workspace runtimes. The host-side
+  # runtime provider attaches this container to every per-account private
+  # network at wake so each isolated runtime can run research against the MCP
+  # while siblings can never reach each other's network or data. Sibling
+  # runtimes are never placed on a shared network.
+  fin-terminal-workspace-unbrowser-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.unbrowser-mcp
+    expose:
+      - "8767"
+    depends_on:
+      unbrowser-egress:
+        condition: service_healthy
+    networks:
+      - fin_terminal_public
+      - unbrowser_egress_proxy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=67108864,mode=1777
+      - /home/unchained:rw,nosuid,nodev,noexec,size=67108864,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 96
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    restart: unless-stopped
+    profiles: ["fin-terminal-workspace"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import http.client; c=http.client.HTTPConnection('localhost',8767,timeout=2); c.request('GET','/status'); r=c.getresponse(); c.close(); assert r.status == 200, r.status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 volumes:
   fin_terminal_public_redis:

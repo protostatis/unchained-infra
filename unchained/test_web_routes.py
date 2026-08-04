@@ -122,8 +122,8 @@ class TestClaimOAuthRouteResolution(unittest.TestCase):
             ("GET", "/workspace/snapshots", "handle_fin_workspace_browser_get_snapshots"),
             ("GET", "/workspace/runtime/status", "handle_fin_workspace_browser_runtime_status"),
             ("GET", "/workspace/done", "handle_claim_done"),
-            ("GET", "/workspace-terminal", "handle_fin_workspace_terminal"),
-            ("GET", "/attach/aaaaaaaaaaaaaaaaaaaaaaaa/", "handle_fin_workspace_attach_proxy"),
+            ("GET", "/terminal", "handle_fin_workspace_terminal_proxy"),
+            ("GET", "/terminal/ws", "handle_fin_workspace_terminal_proxy"),
         ):
             match = self._resolve(method, path)
             self.assertEqual(match.handler.__name__, expected, f"route {method} {path}")

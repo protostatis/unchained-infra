@@ -234,16 +234,15 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
      "web_app.handlers.fin_workspace_auth:handle_claim_oauth_start"),
     ("GET", "/workspace/oauth/{provider}/callback",
      "web_app.handlers.fin_workspace_auth:handle_claim_oauth_callback"),
-    # Private workspace leg: authenticated /fin-terminal/ (Caddy strips the
-    # prefix and rewrites the base to /workspace-terminal). Fails closed when
-    # no validated runtime provider exists — never the marketing index.
-    ("GET", "/workspace-terminal",
-     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal"),
-    # Per-account runtime attach proxy (HTTP + WebSocket) over the private
-    # per-account network. The slug is derived server-side from the session —
-    # never trusted from the URL.
-    ("GET", "/attach/{slug}/{tail:.*}",
-     "web_app.handlers.fin_workspace:handle_fin_workspace_attach_proxy"),
+    # Private workspace leg: authenticated /fin-terminal/. Caddy strips
+    # /fin-terminal and rewrites to /terminal/<rest> so the account runtime's
+    # root-relative surface (/, /assets/*, /ws) is proxied unchanged with the
+    # server-derived principal injected. Fails closed when no validated
+    # runtime provider exists — never the marketing index.
+    ("GET", "/terminal",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal_proxy"),
+    ("GET", "/terminal/{tail:.*}",
+     "web_app.handlers.fin_workspace:handle_fin_workspace_terminal_proxy"),
 )
 
 

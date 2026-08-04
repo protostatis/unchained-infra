@@ -731,14 +731,17 @@ class CaddyHeaderContractTests(unittest.TestCase):
         self.assertIn("@fin_terminal_singleton {", caddyfile)
         self.assertIn("@fin_terminal_base {", caddyfile)
 
-    def test_workspace_terminal_leg_maps_base_to_runtime_leg(self) -> None:
-        """When enabled, /fin-terminal/ is rewritten to the private-workspace
-        leg (/workspace-terminal) on the control plane — never the marketing
-        index; subpaths (attach proxy) proxy unchanged."""
+    def test_workspace_terminal_leg_maps_base_to_terminal_proxy(self) -> None:
+        """When enabled, /fin-terminal/<rest> is stripped and rewritten to
+        /terminal/<rest> on the control plane — never the marketing index; the
+        account runtime's root-relative surface is proxied unchanged."""
         caddyfile = (PROJECT_DIR / "Caddyfile").read_text()
-        self.assertIn("uri strip_prefix /fin-terminal", caddyfile)
-        self.assertIn("rewrite / /workspace-terminal", caddyfile)
+        self.assertIn("rewrite * /terminal{http.request.uri.path}", caddyfile)
         self.assertIn("fin-terminal-workspace-control:8790", caddyfile)
+        # Caller-supplied identity/service headers are always stripped; the
+        # control plane injects the server-derived principal itself.
+        self.assertIn("request_header -X-Fin-Terminal-User", caddyfile)
+        self.assertIn("request_header -X-Fin-Terminal-Control-Token", caddyfile)
 
     def test_management_listener_never_proxied_by_caddy(self) -> None:
         caddyfile = (PROJECT_DIR / "Caddyfile").read_text()

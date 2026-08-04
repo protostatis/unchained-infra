@@ -49,7 +49,7 @@ from web_app.handlers import fin_workspace_auth
 # ---------------------------------------------------------------------------
 class _Request:
     def __init__(self, *, body=None, token="", cookies=None, headers=None,
-                 match_info=None, query=None, path="/"):
+                 match_info=None, query=None, path="/", method="GET"):
         self._body = body
         self._headers = headers or {}
         if token:
@@ -58,6 +58,7 @@ class _Request:
         self.match_info = match_info or {}
         self.query = query or {}
         self.path = path
+        self.method = method
         self.cookies = self._cookies
         self.headers = self._headers
 
@@ -67,6 +68,10 @@ class _Request:
 
 def _payload(response) -> dict:
     return json.loads(response.body.decode())
+
+
+async def _async_read():
+    return b""
 
 
 def _env_cleanup(saved: dict) -> None:
@@ -338,8 +343,8 @@ class HandoffUrlAndCookieTests(unittest.IsolatedAsyncioTestCase):
             ("GET", "/workspace/done"),
             ("GET", "/workspace/oauth/{provider}/start"),
             ("GET", "/workspace/oauth/{provider}/callback"),
-            ("GET", "/workspace-terminal"),
-            ("GET", "/attach/{slug}/{tail:.*}"),
+            ("GET", "/terminal"),
+            ("GET", "/terminal/{tail:.*}"),
         ):
             self.assertIn(expected, public, f"handler route {expected} not registered")
 
@@ -794,7 +799,7 @@ class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
              patch("web_app.handlers.fin_workspace._core",
                    return_value=self._core(user_id=None)):
-            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(_Request())
         self.assertEqual(resp.status, 401)
         self.assertNotIn("/fin-terminal/", resp.text)
 
@@ -802,7 +807,7 @@ class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
              patch("web_app.handlers.fin_workspace._core",
                    return_value=self._core(user_id="u-none")):
-            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(_Request())
         self.assertEqual(resp.status, 404)
         self.assertNotIn("/fin-terminal/", resp.text)
 
@@ -814,23 +819,38 @@ class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
              patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
              patch("web_app.handlers.fin_workspace.runtime_provider_validate",
                    return_value=None):
-            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(_Request())
         self.assertEqual(resp.status, 503)
         self.assertNotIn("/fin-terminal/", resp.text)
         self.assertIn("runtime provider is not validated", resp.text)
 
-    async def test_leg_wakes_and_attaches_when_provider_validated(self):
+    async def test_leg_wakes_runtime_then_proxies_with_server_derived_principal(self):
+        """A validated provider wakes the account runtime and the leg proxies
+        the runtime surface; the principal is derived server-side from the
+        authenticated session (never a caller-supplied slug)."""
         self._create_workspace("u-leg", "leg@example.com")
         slug = workspace_runtime_slug("u-leg")
+        captured: dict = {}
+        async def _fake_proxy_http(request, upstream, s):
+            captured.update({"upstream": upstream, "slug": s})
+            from aiohttp import web as _web
+            return _web.Response(status=200, text="ok")
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
              patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
              patch("web_app.handlers.fin_workspace.runtime_provider_validate",
                    return_value={"status": "ok", "provider": "host-side-v1"}), \
              patch("web_app.handlers.fin_workspace.runtime_provider_wake",
-                   return_value={"slug": slug, "state": "running"}):
-            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+                   return_value={"slug": slug, "state": "running"}), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_status",
+                   return_value={"slug": slug, "state": "running"}), \
+             patch("web_app.handlers.fin_workspace._proxy_http",
+                   side_effect=_fake_proxy_http):
+            req = _Request(match_info={"tail": ""})
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(req)
         self.assertEqual(resp.status, 200)
-        self.assertIn(f"/fin-terminal/attach/{slug}/", resp.text)
+        # Server-derived slug — the handler never asks the caller for one.
+        self.assertEqual(captured["slug"], slug)
+        self.assertIn(f"fin-workspace-{slug}:8787", captured["upstream"])
         self.assertNotIn("Workspace unavailable", resp.text)
 
     async def test_leg_provisions_imported_checkpoint_to_provider(self):
@@ -842,13 +862,22 @@ class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
         def _fake_wake(s, checkpoint, **kwargs):
             captured.update({"slug": s, "checkpoint": checkpoint})
             return {"slug": s, "state": "running"}
+        async def _fake_proxy_http(request, upstream, s):
+            from aiohttp import web as _web
+            return _web.Response(status=200, text="ok")
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
              patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
              patch("web_app.handlers.fin_workspace.runtime_provider_validate",
                    return_value={"status": "ok"}), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_status",
+                   return_value={"slug": slug, "state": "running"}), \
              patch("web_app.handlers.fin_workspace.runtime_provider_wake",
-                   side_effect=_fake_wake):
-            resp = await fin_workspace.handle_fin_workspace_terminal(_Request())
+                   side_effect=_fake_wake), \
+             patch("web_app.handlers.fin_workspace._proxy_http",
+                   side_effect=_fake_proxy_http):
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(
+                _Request(match_info={"tail": ""})
+            )
         self.assertEqual(resp.status, 200)
         self.assertEqual(captured["slug"], slug)
         self.assertEqual(
@@ -856,24 +885,83 @@ class TerminalLegTests(unittest.IsolatedAsyncioTestCase):
             [{"ticker": "AAPL", "qty": 10}],
         )
 
-    async def test_attach_proxy_rejects_slug_mismatch(self):
-        self._create_workspace("u-leg", "leg@example.com")
-        with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
-             patch("web_app.handlers.fin_workspace._core", return_value=self._core()):
-            req = _Request(match_info={"slug": "b" * 24, "tail": ""})
-            resp = await fin_workspace.handle_fin_workspace_attach_proxy(req)
-        self.assertEqual(resp.status, 403)
-
-    async def test_attach_proxy_requires_running_runtime(self):
+    async def test_leg_requires_running_runtime(self):
         self._create_workspace("u-leg", "leg@example.com")
         slug = workspace_runtime_slug("u-leg")
         with patch("web_app.handlers.fin_workspace._resolve_fw", return_value=self.fw), \
              patch("web_app.handlers.fin_workspace._core", return_value=self._core()), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_validate",
+                   return_value={"status": "ok"}), \
+             patch("web_app.handlers.fin_workspace.runtime_provider_wake",
+                   return_value={"slug": slug, "state": "running"}), \
              patch("web_app.handlers.fin_workspace.runtime_provider_status",
                    return_value=None):
-            req = _Request(match_info={"slug": slug, "tail": ""})
-            resp = await fin_workspace.handle_fin_workspace_attach_proxy(req)
-        self.assertEqual(resp.status, 409)
+            resp = await fin_workspace.handle_fin_workspace_terminal_proxy(
+                _Request(match_info={"tail": ""})
+            )
+        self.assertEqual(resp.status, 503)
+
+    async def test_proxy_injects_principal_and_strips_caller_identity(self):
+        """The HTTP proxy injects ONLY the server-derived principal + proxy
+        token and always strips caller-supplied versions."""
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        self._saved_proxy_token = os.environ.get("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN")
+        os.environ["FIN_WORKSPACE_RUNTIME_PROXY_TOKEN"] = "r" * 40
+        try:
+            captured = {}
+            class _FakeResp:
+                status = 200
+                async def read(self):
+                    return b"ok"
+                headers = {"Content-Type": "text/plain"}
+            class _Ctx:
+                async def __aenter__(self):
+                    return _FakeResp()
+                async def __aexit__(self, *a):
+                    return False
+
+            def _fake_request(method, upstream, *, headers, data, timeout):
+                captured.update({"upstream": upstream, "headers": headers, "data": data})
+                return _Ctx()
+            with patch("aiohttp.ClientSession") as m_session:
+                session = m_session.return_value
+                session.__aenter__.return_value = session
+                session.__aexit__.return_value = False
+                session.request.side_effect = _fake_request
+                req = _Request(headers={
+                    "X-Fin-Terminal-User": "forged",
+                    "X-Fin-Terminal-Proxy-Token": "forged-token",
+                    "X-Workspace-Runtime-Token": "internal",
+                })
+                req.read = _async_read  # type: ignore[attr-defined]
+                resp = await fin_workspace._proxy_http(req, f"http://fin-workspace-{slug}:8787/", slug)
+            self.assertEqual(resp.status, 200)
+            self.assertNotIn("forged", captured["headers"].get("X-Fin-Terminal-User", ""))
+            self.assertNotIn("forged-token", captured["headers"].get("X-Fin-Terminal-Proxy-Token", ""))
+            self.assertEqual(captured["headers"]["X-Fin-Terminal-User"], f"account:{slug}")
+            self.assertEqual(captured["headers"]["X-Fin-Terminal-Proxy-Token"], "r" * 40)
+            self.assertNotIn("X-Workspace-Runtime-Token", captured["headers"])
+        finally:
+            _env_cleanup({"FIN_WORKSPACE_RUNTIME_PROXY_TOKEN": self._saved_proxy_token})
+
+    async def test_ws_proxy_headers_inject_principal_and_token(self):
+        """The WebSocket upstream headers carry the server-derived principal +
+        proxy token (identical header set used by both the HTTP and WS
+        proxies), and fail closed when the token is unconfigured."""
+        self._create_workspace("u-leg", "leg@example.com")
+        slug = workspace_runtime_slug("u-leg")
+        self._saved_proxy_token = os.environ.get("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN")
+        try:
+            os.environ.pop("FIN_WORKSPACE_RUNTIME_PROXY_TOKEN", None)
+            self.assertIsNone(fin_workspace._runtime_upstream_headers(slug))
+            os.environ["FIN_WORKSPACE_RUNTIME_PROXY_TOKEN"] = "r" * 40
+            headers = fin_workspace._runtime_upstream_headers(slug)
+            self.assertIsNotNone(headers)
+            self.assertEqual(headers["X-Fin-Terminal-User"], f"account:{slug}")
+            self.assertEqual(headers["X-Fin-Terminal-Proxy-Token"], "r" * 40)
+        finally:
+            _env_cleanup({"FIN_WORKSPACE_RUNTIME_PROXY_TOKEN": self._saved_proxy_token})
 
     async def test_done_page_cta_renders_only_when_provider_validated(self):
         """Done-page 'Open workspace' link must work when the feature is

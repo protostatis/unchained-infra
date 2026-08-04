@@ -1766,9 +1766,9 @@ async def handle_google_verification_current(request: web.Request) -> web.Respon
 async def handle_index(request: web.Request) -> web.Response:
     # When the financial workspace control plane is enabled, "/" must never
     # render the marketing index: /fin-terminal/ is served by the dedicated
-    # /workspace-terminal leg, and a stray direct hit on "/" of the control
-    # plane (Docker-internal only) fails closed instead of falsely routing a
-    # workspace visitor to marketing.
+    # /terminal leg (Caddy rewrites /fin-terminal/* → /terminal/*), and a
+    # stray direct hit on "/" of the control plane (Docker-internal only)
+    # fails closed instead of falsely routing a workspace visitor to marketing.
     try:
         from financial_workspace import is_fin_workspace_enabled
         if is_fin_workspace_enabled():
@@ -2545,6 +2545,36 @@ async def _fin_workspace_sweep_loop() -> None:
             log.warning("[fin-workspace] sweep error: %s", exc)
 
 
+async def _fin_workspace_runtime_sweep_loop() -> None:
+    """Idle-sleep scheduler for account runtimes.
+
+    Every sweep tick resolves the in-process runtime scheduler (same instance
+    the proxy handlers attach/detach/touch) and sleeps idle runtimes ONLY
+    after a durable checkpoint flush. When a flush fails the runtime stays
+    awake (fail closed) and the scheduler backs off.
+    """
+    import os as _os
+    interval = max(15, int(os.environ.get("FIN_WORKSPACE_RUNTIME_SWEEP_INTERVAL_SECONDS", "60")))
+    while True:
+        await asyncio.sleep(interval)
+        if _fin_workspace is None:
+            continue
+        try:
+            from web_app.handlers.fin_workspace import _resolve_runtime_scheduler
+            scheduler = _resolve_runtime_scheduler(_core, _fin_workspace)
+            results = await asyncio.to_thread(scheduler.tick)
+            for result in results:
+                if result.get("error") or not (result.get("flush") or {}).get("ok"):
+                    log.warning(
+                        "[fin-workspace] idle sleep refused for %s (flush not durable): %s",
+                        result.get("user_id"), result.get("error") or "flush failed",
+                    )
+                else:
+                    log.info("[fin-workspace] idle-slept runtime for %s", result.get("user_id"))
+        except Exception as exc:
+            log.warning("[fin-workspace] runtime sweep error: %s", exc)
+
+
 async def _on_startup(app_: web.Application):
     del app_
     global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
@@ -2560,6 +2590,9 @@ async def _on_startup(app_: web.Application):
     if _fin_workspace is not None:
         _state.fin_workspace_effect_task = asyncio.create_task(_fin_workspace_effects_loop())
         _state.fin_workspace_sweep_task = asyncio.create_task(_fin_workspace_sweep_loop())
+        _state.fin_workspace_runtime_task = asyncio.create_task(
+            _fin_workspace_runtime_sweep_loop()
+        )
 
 
 async def _credit_stale_sweep_loop():
@@ -2596,12 +2629,15 @@ async def _on_cleanup(app_: web.Application):
         _state.fin_workspace_effect_task.cancel()
     if getattr(_state, "fin_workspace_sweep_task", None):
         _state.fin_workspace_sweep_task.cancel()
+    if getattr(_state, "fin_workspace_runtime_task", None):
+        _state.fin_workspace_runtime_task.cancel()
     _state.stale_tab_task = None
     _state.gemini_cleanup_task = None
     _state.headless_watchdog_task = None
     _state.credit_sweep_task = None
     _state.fin_workspace_effect_task = None
     _state.fin_workspace_sweep_task = None
+    _state.fin_workspace_runtime_task = None
     _stale_tab_task = None
     _gemini_cleanup_task = None
     _headless_watchdog_task = None

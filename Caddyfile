@@ -174,20 +174,30 @@ unbrowser.unchainedsky.com {
 	# (feature-flagged canary with rollback). The singleton matchers are
 	# negated: they serve exactly when the workspace flag is OFF — never fall
 	# through to the landing page.
+	@fin_workspace_terminal_exact {
+		path /fin-terminal
+		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
+	}
+	redir @fin_workspace_terminal_exact https://unbrowser.unchainedsky.com/fin-terminal/{?query} 308
 	@fin_workspace_terminal {
-		path /fin-terminal /fin-terminal/*
+		path /fin-terminal/*
 		expression `{$FIN_TERMINAL_WORKSPACE_ENABLED:false}`
 	}
 	handle @fin_workspace_terminal {
+		# /fin-terminal/<rest> → /terminal/<rest>. The control plane proxies the
+		# account runtime's root-relative surface (/, /assets/*, /ws) unchanged
+		# after this handler strips the /terminal marker, so the runtime image
+		# built at PUBLIC_BASE_PATH=/fin-terminal/ stays coherent: the client's
+		# absolute /fin-terminal/* asset and /ws URLs round-trip through here.
 		uri strip_prefix /fin-terminal
-		# The private-workspace leg: /fin-terminal/ → /workspace-terminal.
-		# Subpaths (e.g. /fin-terminal/attach/<slug>/…) proxy unchanged to the
-		# control plane, which routes them to the account's isolated runtime.
-		rewrite / /workspace-terminal
+		rewrite * /terminal{http.request.uri.path}
 		route {
 			# Never trust identity or service-auth headers supplied by a client.
+			# The control plane derives the principal from the authenticated
+			# session and injects the proxy token itself.
 			request_header -X-Fin-Terminal-User
 			request_header -X-Fin-Terminal-Proxy-Token
+			request_header -X-Fin-Terminal-Control-Token
 			request_header -Authorization
 			request_header -Proxy-Authorization
 			request_header -X-Management-Token
