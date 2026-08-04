@@ -52,7 +52,7 @@ import workspace_runtime_provider as provider  # noqa: E402
 
 IMAGE = os.environ.get(
     "FIN_WORKSPACE_RUNTIME_APP_IMAGE",
-    "unbrowser-fin-terminal:e937377b945ed84d721ebd06e22510b5f805e19d",
+    "unbrowser-fin-terminal:7872245223842e113fd9fbf805946601129a59ae",
 )
 
 _IMAGE_RE = re.compile(r"^[A-Za-z0-9._:/@-]+$")

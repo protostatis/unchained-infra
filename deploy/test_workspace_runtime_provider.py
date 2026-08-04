@@ -35,7 +35,7 @@ sys.path.insert(0, str(DEPLOY_DIR))
 import workspace_runtime_provider as provider  # noqa: E402
 
 SLUG = "a" * 24  # valid 24-hex slug
-IMAGE = "unbrowser-fin-terminal:e937377b945ed84d721ebd06e22510b5f805e19d"
+IMAGE = "unbrowser-fin-terminal:7872245223842e113fd9fbf805946601129a59ae"
 
 
 def make_cfg(**overrides) -> provider.ProviderConfig:
@@ -121,7 +121,7 @@ class ImmutableImageRefTests(unittest.TestCase):
         self.assertTrue(provider._is_immutable_image_ref(IMAGE))
         self.assertTrue(
             provider._is_immutable_image_ref(
-                "registry.example.com/team/unbrowser-fin-terminal:e937377b945ed84d721ebd06e22510b5f805e19d"
+                "registry.example.com/team/unbrowser-fin-terminal:7872245223842e113fd9fbf805946601129a59ae"
             )
         )
 
@@ -215,7 +215,7 @@ class HealthTests(unittest.TestCase):
     def test_health_reports_pinned_image(self):
         p = provider.WorkspaceRuntimeProvider(make_cfg())
         with mock.patch.object(p, "probe_image_contract", return_value=ok_probe()):
-            self.assertIn("e937377b945ed84d721ebd06e22510b5f805e19d", p.health()["image"])
+            self.assertIn("7872245223842e113fd9fbf805946601129a59ae", p.health()["image"])
 
 
 class ImageContractProbeTests(unittest.TestCase):
