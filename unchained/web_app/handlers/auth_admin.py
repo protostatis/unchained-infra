@@ -1471,6 +1471,8 @@ _AUTH_LOGIN_ALLOWED_ORIGINS_DEV = {
     "http://127.0.0.1:3000",
 }
 _AUTH_LOGIN_IDENTITY_TTL = 24 * 3600  # 24 hours
+_AUTH_LOGIN_PASSIVE_PROMPT = "none"
+_AUTH_LOGIN_STATE_MAX_BYTES = 2048
 
 
 _AUTH_CODE_TTL = 120  # seconds — one-time codes expire after 2 minutes
@@ -1485,7 +1487,11 @@ def _validate_redirect_uri(uri: str, *, allow_dev: bool = False) -> bool:
     allowed = _AUTH_LOGIN_ALLOWED_ORIGINS
     if allow_dev:
         allowed = allowed | _AUTH_LOGIN_ALLOWED_ORIGINS_DEV
-    return origin in allowed and parsed.path == "/auth/callback"
+    return (
+        origin in allowed
+        and parsed.path == "/auth/callback"
+        and not parsed.fragment
+    )
 
 
 def _mint_identity_token(user: dict) -> str:
@@ -1619,27 +1625,70 @@ async def handle_auth_login(request: web.Request) -> web.Response:
     redirect_uri = request.query.get("redirect_uri", "").strip()
     scope = request.query.get("scope", "").strip()
     state = request.query.get("state", "").strip()
+    passive = request.query.get("prompt", "").strip().lower() == _AUTH_LOGIN_PASSIVE_PROMPT
 
     allow_dev = not core.GOOGLE_CLIENT_ID
     if not _validate_redirect_uri(redirect_uri, allow_dev=allow_dev):
         return web.Response(text="Invalid redirect_uri", status=400)
+    if len(state.encode("utf-8")) > _AUTH_LOGIN_STATE_MAX_BYTES:
+        return web.Response(text="state is too large", status=400)
+    if passive and not state:
+        return web.Response(text="state is required for prompt=none", status=400)
 
-    # Check if user is already logged in
+    # Only a browser session can broker external SSO. A Bearer API key must
+    # never be upgraded into a browser cookie or authorization code.
     auth_info = core._authenticate(request)
-    if auth_info is not None:
-        email = auth_info.get("email", "")
-        user = core._auth.find_user_by_email(email) if email else None
+    if auth_info is not None and auth_info.get("auth_method") == "session":
+        user_id = str(auth_info.get("user_id", "")).strip()
+        user = core._auth.find_user_by_id(user_id) if user_id else None
         if user and user.get("status", "approved") == "approved":
             code = _issue_auth_code(user, redirect_uri, scope)
-            sep = "&" if "?" in redirect_uri else "?"
-            location = f"{redirect_uri}{sep}code={code}"
-            if state:
-                location += f"&state={state}"
-            return web.HTTPFound(location)
+            location = _append_query_params(redirect_uri, code=code, state=state)
+            resp = web.HTTPFound(location)
+
+            # Refresh the provider session on successful external SSO while
+            # retaining the original login time and its absolute deadline.
+            now = int(time.time())
+            try:
+                auth_time = int(auth_info.get("session_auth_time") or now)
+            except (TypeError, ValueError):
+                auth_time = now
+            if auth_time <= 0 or auth_time > now:
+                auth_time = now
+            idle_seconds = max(1, int(core.JWT_EXPIRY_HOURS) * 3600)
+            absolute_seconds = max(
+                idle_seconds,
+                int(core.JWT_ABSOLUTE_EXPIRY_HOURS) * 3600,
+            )
+            max_age = max(1, min(idle_seconds, auth_time + absolute_seconds - now))
+            email = str(user.get("email", "") or "")
+            session_token = core.create_session_token(
+                user["user_id"],
+                email,
+                auth_time=auth_time,
+            )
+            core._set_session_cookie(resp, session_token, request, max_age=max_age)
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+
+    if passive:
+        # A passive check must return control without showing unexpected login
+        # UI. Clear stale cookie scopes so a bad cookie cannot loop the client.
+        location = _append_query_params(
+            redirect_uri,
+            error="login_required",
+            state=state,
+        )
+        resp = web.HTTPFound(location)
+        core._clear_session_cookie(resp, request)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     # Not logged in — serve login page
     html = core.inject_google_client_id(_AUTH_LOGIN_PAGE, core.GOOGLE_CLIENT_ID)
-    return web.Response(text=html, content_type="text/html")
+    resp = web.Response(text=html, content_type="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 async def handle_auth_token(request: web.Request) -> web.Response:

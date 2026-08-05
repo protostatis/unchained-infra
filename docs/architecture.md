@@ -124,7 +124,8 @@ grants are not exposed through the worker callback interface.
 ## Agent Authentication
 
 - Users sign in with Google OAuth on the chat page
-- Server issues JWT (HS256, 7-day expiry) stored as HTTP cookie
+- Server issues an HTTP-only session JWT (HS256) with a 30-day lifetime that
+  successful external SSO can refresh, capped at 90 days from the original login
 - Server creates API key (`uc_live_` + 24 hex chars) stored in SQLite
 - Agent ID derived from API key hash: `a-{sha256(key)[:8]}`
 - Agent package (ZIP) ships with pre-filled `.env` containing the API key
