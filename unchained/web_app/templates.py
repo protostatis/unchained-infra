@@ -1115,11 +1115,11 @@ UNBROWSER_PAGE_HTML = r"""<!DOCTYPE html>
   color-scheme:dark;
   --bg:#0b0a10;--bg-elev:#131119;--surface:#16131f;--surface-hover:#1d1928;
   --border:#272335;--border-light:#34304a;
-  --text:#f1ede2;--text-sec:#ada799;--muted:#8a8474;--dim:#3a3650;
+  --text:#f1ede2;--text-sec:#ada799;--muted:#8a8474;
   --accent:#ff6a3d;--accent-dim:rgba(255,106,61,.13);
   --chrome:#7c83f5;--chrome-dim:rgba(124,131,245,.13);
   --agent:#b6f25c;--agent-dim:rgba(182,242,92,.13);
-  --warning:#f5b942;--warning-dim:rgba(245,185,66,.13);
+  --warning:#f5b942;--danger:#f28482;
   --max:1140px;
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -1209,7 +1209,7 @@ a:focus-visible{outline:2px solid var(--agent);outline-offset:3px;border-radius:
 .demo-meta span,.demo-status{font-family:'JetBrains Mono',monospace;font-size:.6rem;border:1px solid var(--border);padding:.22rem .4rem;text-transform:uppercase;border-radius:5px;background:var(--bg);color:var(--text-sec)}
 .demo-status.ok,.demo-live{color:var(--agent)}
 .demo-status.partial{color:var(--warning)}
-.demo-status.blocked,.demo-status.fallback,.demo-status.error{color:var(--accent)}
+.demo-status.blocked,.demo-status.fallback,.demo-status.error{color:var(--danger)}
 .demo-inspector{position:sticky;top:5.5rem;border:1px solid var(--border);background:var(--bg-elev);border-radius:14px;color:var(--text);padding:1.1rem;max-height:calc(100vh - 7rem);overflow:auto}
 .demo-inspector .eyebrow{margin-bottom:.6rem;color:var(--accent)}
 .demo-inspector h3{margin:0 0 .7rem;font-size:1.2rem;line-height:1.2;font-weight:600}
@@ -1245,6 +1245,7 @@ a:focus-visible{outline:2px solid var(--agent);outline-offset:3px;border-radius:
 .footer .motto{color:var(--accent);font-weight:700;letter-spacing:.12em;text-transform:uppercase}
 .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:860px){.hero,.strip,.demo-layout{grid-template-columns:1fr}.grid,.demo-prompts,.demo-metrics{grid-template-columns:1fr 1fr}.demo-inspector{position:static;max-height:none}.demo-head{flex-direction:column}.nav-links{gap:.7rem}}
+@media(max-width:700px){.demo-prompts{grid-template-columns:1fr}}
 @media(max-width:560px){.grid,.demo-prompts,.demo-metrics{grid-template-columns:1fr}.demo-head h2{font-size:1.7rem}.nav{flex-wrap:wrap}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{transition:none!important;animation:none!important}}
 </style>

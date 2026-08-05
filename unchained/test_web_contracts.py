@@ -886,6 +886,10 @@ class TestWebTemplateContracts(unittest.TestCase):
 
     def test_unbrowser_hero_ctas_are_demo_first_with_measured_install(self):
         self.assertIn(
+            '<a class="signin" href="/trial" data-analytics-cta="unbrowser_nav_trial">Open workspace</a>',
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
             '<a class="btn" href="#live-demo">Try the live scan</a>',
             web.UNBROWSER_PAGE_HTML,
         )
@@ -918,6 +922,14 @@ class TestWebTemplateContracts(unittest.TestCase):
     def test_unbrowser_source_cards_are_keyboard_accessible(self):
         self.assertIn(".demo-source:focus-visible", web.UNBROWSER_PAGE_HTML)
         self.assertIn("scroll-margin-top:5rem", web.UNBROWSER_PAGE_HTML)
+        self.assertIn(
+            ".demo-status.blocked,.demo-status.fallback,.demo-status.error{color:var(--danger)}",
+            web.UNBROWSER_PAGE_HTML,
+        )
+        self.assertIn(
+            "@media(max-width:700px){.demo-prompts{grid-template-columns:1fr}}",
+            web.UNBROWSER_PAGE_HTML,
+        )
         self.assertIn("card.setAttribute('role','button')", web.UNBROWSER_PAGE_HTML)
         self.assertIn("card.setAttribute('aria-pressed','false')", web.UNBROWSER_PAGE_HTML)
         self.assertIn("card.addEventListener('keydown'", web.UNBROWSER_PAGE_HTML)
