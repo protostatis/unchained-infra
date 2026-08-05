@@ -930,9 +930,10 @@ class TestWebTemplateContracts(unittest.TestCase):
             "@media(max-width:700px){.demo-prompts{grid-template-columns:1fr}}",
             web.UNBROWSER_PAGE_HTML,
         )
-        self.assertIn("card.setAttribute('role','button')", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("card=document.createElement('button')", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("card.type='button'", web.UNBROWSER_PAGE_HTML)
         self.assertIn("card.setAttribute('aria-pressed','false')", web.UNBROWSER_PAGE_HTML)
-        self.assertIn("card.addEventListener('keydown'", web.UNBROWSER_PAGE_HTML)
+        self.assertNotIn("card.setAttribute('role','button')", web.UNBROWSER_PAGE_HTML)
         self.assertIn(
             "card.setAttribute('aria-pressed',String(k===id))",
             web.UNBROWSER_PAGE_HTML,
