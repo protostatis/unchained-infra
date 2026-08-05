@@ -69,6 +69,7 @@ jobs:
             test_hosted_conversations \
             test_dev_script \
             test_fin_terminal \
+            test_auth_redirect \
             test_fin_workspace \
             test_fin_workspace_integration \
             test_web_routes \

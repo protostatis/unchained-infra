@@ -117,7 +117,10 @@ if not JWT_SECRET:
         "JWT_SECRET env var is required. Refusing to start with an insecure default."
     )
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24 * 7  # 1 week
+# Browser sessions last up to 30 days and successful external SSO can refresh
+# that window, subject to a hard absolute lifetime from the original login.
+JWT_EXPIRY_HOURS = 24 * 30
+JWT_ABSOLUTE_EXPIRY_HOURS = 24 * 90
 ALLOWED_EMAILS = set(
     e.strip().lower()
     for e in os.environ.get("ALLOWED_EMAILS", "").split(",")
@@ -638,9 +641,15 @@ def _cookie_domain(request: web.Request) -> str | None:
     return None
 
 
-def _set_session_cookie(resp: web.Response, token: str, request: web.Request):
+def _set_session_cookie(
+    resp: web.Response,
+    token: str,
+    request: web.Request,
+    *,
+    max_age: int | None = None,
+):
     kwargs = {
-        "max_age": JWT_EXPIRY_HOURS * 3600,
+        "max_age": JWT_EXPIRY_HOURS * 3600 if max_age is None else max(0, int(max_age)),
         "httponly": True,
         "secure": _cookie_secure(request),
         "samesite": "Lax",
@@ -656,6 +665,11 @@ def _clear_session_cookie(resp: web.Response, request: web.Request):
     resp.del_cookie("uc_session", path="/")
     domain = _cookie_domain(request)
     if domain:
+        # aiohttp stores one morsel per cookie name, so a second del_cookie()
+        # would otherwise replace the host-only deletion. Preserve that header
+        # before adding the parent-domain deletion used in production.
+        host_only = resp.cookies["uc_session"].output(header="").lstrip()
+        resp.headers.add("Set-Cookie", host_only)
         resp.del_cookie("uc_session", path="/", domain=domain)
 
 
@@ -1437,33 +1451,53 @@ async def verify_google_token(id_token: str) -> dict | None:
         return None
 
 
-def create_session_token(user_id: str, email: str) -> str:
-    """Create a signed JWT session token."""
+def create_session_token(
+    user_id: str,
+    email: str,
+    *,
+    auth_time: int | None = None,
+) -> str:
+    """Create a refreshable session JWT bounded by the original login."""
+    now = int(time.time())
+    try:
+        original_auth_time = int(auth_time) if auth_time is not None else now
+    except (TypeError, ValueError):
+        original_auth_time = now
+    if original_auth_time <= 0 or original_auth_time > now:
+        original_auth_time = now
+    expires_at = min(
+        now + JWT_EXPIRY_HOURS * 3600,
+        original_auth_time + JWT_ABSOLUTE_EXPIRY_HOURS * 3600,
+    )
     return jwt.encode(
         {"user_id": user_id, "email": email,
-         "iat": int(time.time()),
-         "exp": int(time.time()) + JWT_EXPIRY_HOURS * 3600},
+         "iat": now,
+         "auth_time": original_auth_time,
+         "exp": expires_at},
         JWT_SECRET, algorithm=JWT_ALGORITHM,
     )
 
 
 def verify_session_token(token: str) -> dict | None:
-    """Verify a session JWT. Returns {user_id, email} or None."""
+    """Verify a session JWT and retain its refresh-bound timestamps."""
     try:
         p = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return {
             "user_id": p["user_id"],
             "email": p["email"],
             "iat": int(p.get("iat", 0)),
+            # Legacy sessions predate auth_time. Their original iat is the
+            # safest migration fallback and avoids a forced logout on deploy.
+            "auth_time": int(p.get("auth_time", p.get("iat", 0))),
         }
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, TypeError, ValueError):
         return None
 
 
 def _authenticate(request: web.Request) -> dict | None:
     """Authenticate via session cookie OR Bearer token.
 
-    Returns {user_id, key, agent_id, email, status, user_type} or None.
+    Returns authenticated identity data including auth_method, or None.
     """
     # 1. Session cookie (web UI)
     sessions: list[dict] = []
@@ -1493,6 +1527,8 @@ def _authenticate(request: web.Request) -> dict | None:
                 "user_id": session["user_id"], "key": api_key,
                 "agent_id": agent_id, "key_hash": key_hash,
                 "email": session["email"],
+                "auth_method": "session",
+                "session_auth_time": session.get("auth_time", session.get("iat", 0)),
                 "status": status,
                 "user_type": user.get("user_type", "claude"),
             }
@@ -1506,7 +1542,8 @@ def _authenticate(request: web.Request) -> dict | None:
             key_hash = _key_hash(key)
             agent_id = f"claude-{key_hash}"
             result = {"user_id": info["user_id"], "key": key,
-                      "agent_id": agent_id, "key_hash": key_hash}
+                      "agent_id": agent_id, "key_hash": key_hash,
+                      "auth_method": "bearer"}
             # Hydrate by validated user_id (NOT by api_key) so secondary
             # keys cannot bypass rejected/pending status.
             user = _auth.find_user_by_id(info["user_id"])
