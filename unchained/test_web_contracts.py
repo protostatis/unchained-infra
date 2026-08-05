@@ -915,6 +915,17 @@ class TestWebTemplateContracts(unittest.TestCase):
         self.assertIn("No arbitrary URLs", web.UNBROWSER_PAGE_HTML)
         self.assertIn("Try: ", web.UNBROWSER_PAGE_HTML)
 
+    def test_unbrowser_source_cards_are_keyboard_accessible(self):
+        self.assertIn(".demo-source:focus-visible", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("scroll-margin-top:5rem", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("card.setAttribute('role','button')", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("card.setAttribute('aria-pressed','false')", web.UNBROWSER_PAGE_HTML)
+        self.assertIn("card.addEventListener('keydown'", web.UNBROWSER_PAGE_HTML)
+        self.assertIn(
+            "card.setAttribute('aria-pressed',String(k===id))",
+            web.UNBROWSER_PAGE_HTML,
+        )
+
     def test_unbrowser_completed_demo_reveals_measured_activation_handoff(self):
         self.assertIn(
             '<div id="ub-complete" class="demo-complete" hidden>',
