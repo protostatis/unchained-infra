@@ -38,7 +38,7 @@ replay at `/fin-terminal-demo/` is retired and returns 404.
   traffic can address only Caddy, never a worker container.
 
 The gateway and worker are pinned to application commit
-`7872245223842e113fd9fbf805946601129a59ae`. Redis is also pinned by its
+`58564014cdd9e80c872699144832e28f414a3d4f`. Redis is also pinned by its
 multi-platform image digest. Changes to either pin require a reviewed
 infrastructure PR.
 
@@ -50,7 +50,7 @@ Do not build or start the profile until all of these gates pass:
    [`protostatis/unbrowser-fin-terminal#13`](https://github.com/protostatis/unbrowser-fin-terminal/pull/13)
    and
    [`protostatis/unbrowser-fin-terminal#14`](https://github.com/protostatis/unbrowser-fin-terminal/pull/14)
-   are merged, and commit `7872245223842e113fd9fbf805946601129a59ae`
+   are merged, and commit `58564014cdd9e80c872699144832e28f414a3d4f`
    remains reachable from a protected branch or release tag. Any application
    release change requires a reviewed immutable-pin update.
 2. The operator accepts that anonymous pilot research and the trial agent share
