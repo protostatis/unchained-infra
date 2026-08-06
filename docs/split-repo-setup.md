@@ -40,8 +40,10 @@ key rotation.
 
 3. A passing `main` revision enters the `production` Environment gate. Once
    approved, the same CI workflow checks that the candidate is still current
-   `main`, overlays private core, and invokes `./deploy.sh`.
-4. `deploy.sh` holds a remote deployment lock, snapshots the previous release,
+   `main` and invokes `./deploy.sh` with that explicit revision and the private
+   checkout as overlay input.
+4. `deploy.sh` rejects dirty or stale public source, applies the private-core
+   overlay, holds a remote deployment lock, snapshots the previous release,
    validates container and public HTTP health, and rolls back source plus
    containers if the health gate fails.
 

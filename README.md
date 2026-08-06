@@ -102,17 +102,21 @@ enable it must set a dedicated `HOSTED_AGENT_SERVICE_TOKEN`; it must not reuse
 ### Production deploy
 
 ```bash
-cd ~/Projects/unchainedsky_com
-./unchained-infra/tools/install_private_core.sh \
-  unchained-core-private/unchained \
-  unchained-infra/unchained
+cd ~/Projects/unchainedsky_com/unchained-infra
+git switch main
+git pull --ff-only origin main
 
-cd unchained-infra
+DEPLOY_REVISION="$(git rev-parse HEAD)" \
+PRIVATE_CORE_SRC=../unchained-core-private/unchained \
 KEY_PATH=~/.ssh/unchained-key.pem \
 EC2_HOST=<host> \
-EC2_USER=ubuntu \
+EC2_USER=<deploy-user> \
 ./deploy.sh
 ```
+
+`deploy.sh` rejects dirty worktrees and any revision other than the freshly
+fetched `origin/main`. It applies and restores the private-core overlay only
+after that source check succeeds.
 
 ## Verification
 

@@ -49,7 +49,8 @@ uv run python tools/oss_guard/check_public_doc_leaks.py
 - describe deploy steps generically, for example:
 
 ```bash
-KEY_PATH=~/.ssh/<deploy-key>.pem EC2_HOST=<prod-host> ./deploy.sh
+DEPLOY_REVISION="$(git rev-parse HEAD)" \
+  KEY_PATH=~/.ssh/<deploy-key>.pem EC2_HOST=<prod-host> ./deploy.sh
 ssh -i ~/.ssh/<deploy-key>.pem <deploy-user>@<prod-host> \
   "docker compose -f /home/<deploy-user>/unchained/docker-compose.yml ps"
 ```
