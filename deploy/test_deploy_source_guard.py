@@ -119,6 +119,9 @@ class DeploySourceGuardTests(unittest.TestCase):
         self.assertIn("is not the current origin/main revision", result.stderr)
 
     def test_refreshes_origin_main_before_comparing(self) -> None:
+        tracking_before = self._git(
+            "rev-parse", "refs/remotes/origin/main"
+        ).stdout.strip()
         peer = Path(self._temp.name) / "peer"
         subprocess.run(
             ["git", "clone", "--branch", "main", str(self.remote), str(peer)],
@@ -156,10 +159,16 @@ class DeploySourceGuardTests(unittest.TestCase):
         result = self._guard(self.revision)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not the current origin/main revision", result.stderr)
+        tracking_after = self._git(
+            "rev-parse", "refs/remotes/origin/main"
+        ).stdout.strip()
+        self.assertEqual(tracking_after, tracking_before)
 
     def test_deploy_invokes_guard_before_private_overlay(self) -> None:
         deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
-        guard_call = deploy.index('verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION"')
+        guard_call = deploy.index(
+            'verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION" || exit 1'
+        )
         overlay = deploy.index("# Auto-install private core overlay when available.")
 
         self.assertLess(guard_call, overlay)

@@ -33,7 +33,7 @@ source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
 source "$SCRIPT_DIR/deploy/deploy_source_guard.sh"
 
 DEPLOY_REVISION="${DEPLOY_REVISION-}"
-verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION"
+verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION" || exit 1
 
 INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"

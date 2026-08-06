@@ -114,9 +114,10 @@ EC2_USER=<deploy-user> \
 ./deploy.sh
 ```
 
-`deploy.sh` rejects dirty worktrees and any revision other than the freshly
-fetched `origin/main`. It applies and restores the private-core overlay only
-after that source check succeeds.
+`deploy.sh` rejects dirty worktrees and any revision other than the current
+`origin/main`. It applies and restores the private-core overlay only after that
+source check succeeds. The guard requires `origin` to be reachable and fails
+closed if it cannot query the current `main` revision.
 
 ## Verification
 

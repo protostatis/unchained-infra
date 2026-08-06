@@ -6,7 +6,7 @@
 verify_deploy_source() {
     local repo_dir="$1"
     local deploy_revision="${2:-}"
-    local worktree_status head_revision origin_main_revision
+    local worktree_status head_revision origin_main_result origin_main_revision
 
     if [[ ! "$deploy_revision" =~ ^[0-9a-f]{40}$ ]]; then
         echo "ERROR: DEPLOY_REVISION must be set to an explicit 40-character lowercase Git SHA" >&2
@@ -33,12 +33,17 @@ verify_deploy_source() {
         return 1
     fi
 
-    if ! git -C "$repo_dir" fetch --no-tags --depth=1 origin \
-        +refs/heads/main:refs/remotes/origin/main; then
-        echo "ERROR: could not refresh origin/main for deployment verification" >&2
+    if ! origin_main_result="$(
+        git -C "$repo_dir" ls-remote --exit-code origin refs/heads/main
+    )"; then
+        echo "ERROR: could not query origin/main for deployment verification" >&2
         return 1
     fi
-    origin_main_revision="$(git -C "$repo_dir" rev-parse refs/remotes/origin/main)"
+    read -r origin_main_revision _ <<<"$origin_main_result"
+    if [[ ! "$origin_main_revision" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "ERROR: origin/main did not report a valid 40-character Git SHA" >&2
+        return 1
+    fi
     if [[ "$deploy_revision" != "$origin_main_revision" ]]; then
         echo "ERROR: DEPLOY_REVISION is not the current origin/main revision" >&2
         echo "    DEPLOY_REVISION: $deploy_revision" >&2
