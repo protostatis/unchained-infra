@@ -18,14 +18,22 @@ verify_deploy_source() {
         return 1
     fi
 
-    worktree_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)"
+    if ! worktree_status="$(
+        git -C "$repo_dir" status --porcelain=v1 --untracked-files=all
+    )"; then
+        echo "ERROR: could not inspect deployment source worktree status" >&2
+        return 1
+    fi
     if [[ -n "$worktree_status" ]]; then
         echo "ERROR: deployment source worktree is dirty; commit or remove every change before deploying" >&2
         printf '%s\n' "$worktree_status" >&2
         return 1
     fi
 
-    head_revision="$(git -C "$repo_dir" rev-parse HEAD)"
+    if ! head_revision="$(git -C "$repo_dir" rev-parse HEAD)"; then
+        echo "ERROR: could not resolve deployment worktree HEAD" >&2
+        return 1
+    fi
     if [[ "$deploy_revision" != "$head_revision" ]]; then
         echo "ERROR: DEPLOY_REVISION does not match the deployment worktree HEAD" >&2
         echo "    DEPLOY_REVISION: $deploy_revision" >&2
@@ -39,7 +47,10 @@ verify_deploy_source() {
         echo "ERROR: could not query origin/main for deployment verification" >&2
         return 1
     fi
-    read -r origin_main_revision _ <<<"$origin_main_result"
+    if ! read -r origin_main_revision _ <<<"$origin_main_result"; then
+        echo "ERROR: could not parse origin/main revision" >&2
+        return 1
+    fi
     if [[ ! "$origin_main_revision" =~ ^[0-9a-f]{40}$ ]]; then
         echo "ERROR: origin/main did not report a valid 40-character Git SHA" >&2
         return 1

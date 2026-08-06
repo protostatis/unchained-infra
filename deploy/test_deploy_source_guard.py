@@ -53,7 +53,9 @@ class DeploySourceGuardTests(unittest.TestCase):
             text=True,
         )
 
-    def _guard(self, revision: str) -> subprocess.CompletedProcess[str]:
+    def _guard(
+        self, revision: str, repo: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 "bash",
@@ -61,7 +63,7 @@ class DeploySourceGuardTests(unittest.TestCase):
                 'source "$1"; verify_deploy_source "$2" "$3"',
                 "deploy-source-guard-test",
                 str(GUARD),
-                str(self.repo),
+                str(repo or self.repo),
                 revision,
             ],
             capture_output=True,
@@ -107,6 +109,27 @@ class DeploySourceGuardTests(unittest.TestCase):
         result = self._guard("0" * 40)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not match the deployment worktree HEAD", result.stderr)
+
+    def test_rejects_non_git_source_directory(self) -> None:
+        non_repo = Path(self._temp.name) / "not-a-repo"
+        non_repo.mkdir()
+
+        result = self._guard(self.revision, non_repo)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not a Git worktree", result.stderr)
+
+    def test_rejects_worktree_without_head(self) -> None:
+        unborn = Path(self._temp.name) / "unborn"
+        subprocess.run(
+            ["git", "init", "-b", "main", str(unborn)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        result = self._guard(self.revision, unborn)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not resolve deployment worktree HEAD", result.stderr)
 
     def test_rejects_clean_head_that_is_not_current_origin_main(self) -> None:
         (self.repo / "tracked.txt").write_text("local commit\n", encoding="utf-8")
