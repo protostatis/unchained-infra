@@ -180,13 +180,19 @@ grants are not exposed through the worker callback interface.
 
 ### Manual Deploy
 ```bash
-./deploy.sh              # Deploy with defaults
-./deploy.sh --build      # Force rebuild (no cache)
+git switch main
+git pull --ff-only origin main
+DEPLOY_REVISION="$(git rev-parse HEAD)" EC2_HOST=<prod-host> ./deploy.sh
+DEPLOY_REVISION="$(git rev-parse HEAD)" EC2_HOST=<prod-host> ./deploy.sh --build
 ```
 
 Manual deploys use the same remote lock, health gate, and rollback behavior as
-CI deploys. Provide `DEPLOY_SSH_KNOWN_HOSTS_FILE` to require a pinned SSH host
-key for a manual deployment.
+CI deploys. They require a clean worktree and an explicit revision matching the
+current `origin/main`; the private-core overlay is applied only after that guard
+succeeds. The source check requires network access to `origin` and fails closed
+when current `main` cannot be queried. Provide
+`DEPLOY_SSH_KNOWN_HOSTS_FILE` to require a pinned SSH host key for a manual
+deployment.
 
 ### Dedicated Headless Trial Worker (separate EC2)
 

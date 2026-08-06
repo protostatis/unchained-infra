@@ -32,6 +32,9 @@ unchained/.playwright-cli/
 # Rhythm build context (copied by deploy.sh, cleaned up after)
 rhythm/
 
+# Trusted private-core checkout used as deploy overlay input in CI
+/private-core/
+
 # Secrets
 .env
 .env.*

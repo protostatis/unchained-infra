@@ -2,11 +2,11 @@
 # Deploy unchained to EC2 production instance.
 #
 # Usage:
-#   ./deploy.sh                    # Deploy with defaults
-#   ./deploy.sh --build            # Force rebuild containers
-#   EC2_HOST=1.2.3.4 ./deploy.sh   # Override host
+#   DEPLOY_REVISION=<current-main-sha> EC2_HOST=1.2.3.4 ./deploy.sh
+#   DEPLOY_REVISION=<current-main-sha> EC2_HOST=1.2.3.4 ./deploy.sh --build
 #
 # Prerequisites:
+#   - A clean worktree at the freshly fetched origin/main revision
 #   - SSH agent access or KEY_PATH pointing to your SSH private key
 #   - EC2 instance running with Docker
 
@@ -30,6 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/deploy/runtime_context_files.sh"
+source "$SCRIPT_DIR/deploy/deploy_source_guard.sh"
+
+DEPLOY_REVISION="${DEPLOY_REVISION-}"
+verify_deploy_source "$SCRIPT_DIR" "$DEPLOY_REVISION" || exit 1
 
 INSTALL_PRIVATE_CORE_SCRIPT="$SCRIPT_DIR/tools/install_private_core.sh"
 PRIVATE_CORE_SRC="${PRIVATE_CORE_SRC:-$SCRIPT_DIR/../unchained-core-private/unchained}"
@@ -103,7 +107,6 @@ DEPLOY_SUCCEEDED=false
 DEPLOY_ROLLBACK_ATTEMPTED=false
 DEPLOY_OVERLAY_APPLIED=false
 DEPLOY_ROLLBACK_ON_FAILURE="${DEPLOY_ROLLBACK_ON_FAILURE:-1}"
-DEPLOY_REVISION="${DEPLOY_REVISION:-$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
 DEPLOY_ID="${DEPLOY_ID:-$(python3 -c 'import secrets; print(secrets.token_hex(12))')}"
 if [[ ! "$DEPLOY_ID" =~ ^[0-9a-f]{24}$ ]]; then
     echo "ERROR: DEPLOY_ID must be a 24-character lowercase hexadecimal value" >&2
