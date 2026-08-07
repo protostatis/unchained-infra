@@ -460,6 +460,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
+        self.assertIn("MARKET_RESEARCH_PROMPT=compact", service)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
             service,
