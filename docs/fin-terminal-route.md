@@ -39,6 +39,11 @@ FIN_TERMINAL_OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 FIN_TERMINAL_MAX_OUTPUT_TOKENS=4096
 ```
 
+The authenticated singleton pins `MARKET_RESEARCH_PROMPT=compact` in Compose.
+That reviewed variant applies the hard BRIEF output contract used by the
+quality-gated research-cache pre-warm; changing it requires an infrastructure
+release rather than an unreviewed host override.
+
 ## Request and network boundaries
 
 1. Caddy deletes any client-provided terminal identity and proxy-token headers.
