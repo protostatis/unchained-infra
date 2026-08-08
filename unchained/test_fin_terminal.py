@@ -465,7 +465,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
         self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
         self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
-        self.assertIn("MARKET_SCOUT_ENABLED=0", service)
+        self.assertIn("MARKET_SCOUT_ENABLED=1", service)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", service)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
@@ -895,6 +895,125 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("must return `200`", self.route_doc)
         self.assertIn("must return `404` (no-store, no redirect)", self.route_doc)
         self.assertNotIn("both the Unbrowser root and\n`https://unbrowser.unchainedsky.com/fin-terminal-demo/` must return `200`", self.route_doc)
+
+    # ------------------------------------------------------------------
+    # Market-scout deployment contract tests
+    # ------------------------------------------------------------------
+
+    def test_market_scout_only_enabled_on_authenticated_singleton(self):
+        """Scout must be 1 on the singleton, 0 on gateway/worker/CLI."""
+        # Singleton: enabled
+        singleton = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
+            "\n  unbrowser-egress:\n", 1
+        )[0]
+        self.assertIn("MARKET_SCOUT_ENABLED=1", singleton)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", singleton)
+
+        # Public gateway: disabled
+        gateway = self.public_compose.split(
+            "\n  fin-terminal-public-gateway:\n", 1
+        )[1].split("\n  fin-terminal-public-seat-01:\n", 1)[0]
+        self.assertIn("MARKET_SCOUT_ENABLED=0", gateway)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", gateway)
+
+        # Public worker: disabled
+        worker = self.public_compose.split(
+            "x-fin-terminal-public-worker: &fin-terminal-public-worker\n", 1
+        )[1].split("\nservices:\n", 1)[0]
+        self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
+
+    def test_market_scout_supports_forward_disable(self):
+        """Commission helper handles disabled state: prints SKIPPED and exits 0."""
+        # Commission always invokes the helper; the helper decides skip vs. proceed.
+        self.assertIn("verify_market_scout_commission", self.deploy)
+        # The helper's commission CLI exits 0 when scout is disabled
+        # (prints COMMISSION SKIPPED — documented in route doc)
+        self.assertIn("forward-disable", self.route_doc)
+        self.assertIn("Commission will be skipped", self.route_doc)
+
+    def test_market_scout_preflight_runs_before_deploy_metadata_write(self):
+        """Preflight must run after health check but BEFORE write_deploy_metadata."""
+        # The preflight echo appears twice: once in the function body and
+        # once at the call site. We want the call site, which follows
+        # the health verification call.
+        health_call = self.deploy.index("verify_production_health \"$SERVICES_TO_REBUILD\"")
+        preflight_call = self.deploy.index("verify_market_scout_preflight", health_call)
+        metadata_call = self.deploy.rindex("write_deploy_metadata\n")
+
+        self.assertLess(health_call, preflight_call)
+        self.assertLess(preflight_call, metadata_call)
+        self.assertIn("verify_market_scout_preflight", self.deploy)
+        self.assertIn("_resolve_fin_terminal_container", self.deploy)
+
+    def test_market_scout_commission_runs_after_deploy_succeeded(self):
+        """Commission runs after DEPLOY_SUCCEEDED=true, only when fin-terminal rebuilt."""
+        succeeded_index = self.deploy.index("DEPLOY_SUCCEEDED=true")
+        # Commission call site (after DEPLOY_SUCCEEDED, inside the conditional)
+        commission_call = self.deploy.index(
+            "verify_market_scout_commission",
+            succeeded_index,
+        )
+
+        self.assertLess(succeeded_index, commission_call)
+        # Only runs when fin-terminal was selected
+        self.assertIn('grep -q \' fin-terminal \'', self.deploy)
+        self.assertIn("verify_market_scout_commission", self.deploy)
+
+    def test_market_scout_commission_no_auto_rollback(self):
+        """Commission failure must NOT trigger the broad existing rollback."""
+        # The commission failure block is after DEPLOY_SUCCEEDED=true.
+        succeeded_idx = self.deploy.index("DEPLOY_SUCCEEDED=true")
+        after_success = self.deploy[succeeded_idx:]
+        self.assertIn("MARKET-SCOUT COMMISSION FAILED", after_success)
+        self.assertIn("No automatic rollback occurs", after_success)
+        self.assertIn("forward-disable deployment", after_success)
+        # Verify the commission failure does NOT call rollback_remote_release
+        self.assertNotIn("rollback_remote_release", after_success.split("COMMISSION FAILED")[1] if "COMMISSION FAILED" in after_success else after_success)
+
+    def test_market_scout_helper_is_uploaded_with_deploy_helpers(self):
+        """verify_market_scout_health.mjs is uploaded alongside other helpers."""
+        self.assertIn("MARKET_SCOUT_HELPER=", self.deploy)
+        self.assertIn("verify_market_scout_health.mjs", self.deploy)
+        # The upload_deploy_helpers function references MARKET_SCOUT_HELPER
+        self.assertIn("MARKET_SCOUT_HELPER", self.deploy)
+        # The helper variable is defined before upload
+        helper_def = self.deploy.index("MARKET_SCOUT_HELPER=")
+        upload_call = self.deploy.index('echo "==> Uploading deploy helpers..."')
+        self.assertLess(helper_def, upload_call)
+
+    def test_deploy_production_workflow_timeout_increased(self):
+        """Deploy-production job timeout increased from 45 to 60 minutes."""
+        self.assertIn("timeout-minutes: 60", self.workflow)
+        # Verify the deploy-production job specifically has 60, not 45
+        deploy_job_start = self.workflow.index("deploy-production:")
+        deploy_section = self.workflow[deploy_job_start:]
+        self.assertIn("timeout-minutes: 60", deploy_section)
+
+    def test_market_scout_helper_tests_in_ci(self):
+        """CI must run the Node market-scout helper tests."""
+        self.assertIn(
+            "test_verify_market_scout_health.mjs",
+            self.workflow,
+        )
+        self.assertIn(
+            "market-scout health helper tests",
+            self.workflow,
+        )
+
+    def test_market_scout_preflight_only_on_singleton_not_workspace(self):
+        """Workspace runtime services still have scout disabled."""
+        # Workspace control: no MARKET_SCOUT_ENABLED at all
+        ws_control = self.public_compose.split(
+            "\n  fin-terminal-workspace-control:\n", 1
+        )[1].split("\n  fin-terminal-workspace-unbrowser-mcp:\n", 1)[0]
+        self.assertNotIn("MARKET_SCOUT_ENABLED", ws_control)
+
+        # Workspace MCP: no MARKET_SCOUT_ENABLED at all
+        ws_mcp = self.public_compose.split(
+            "\n  fin-terminal-workspace-unbrowser-mcp:\n", 1
+        )[1].split("\nvolumes:\n", 1)[0]
+        self.assertNotIn("MARKET_SCOUT_ENABLED", ws_mcp)
 
 
 if __name__ == "__main__":

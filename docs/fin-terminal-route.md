@@ -108,3 +108,99 @@ From a logged-out browser or client:
 When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
 `docker-compose.yml`.
+
+## Market-event scout (singleton-only shadow mode)
+
+The authenticated singleton runs a shadow-only market-event scout that
+periodically retrieves public financial-event feeds via the internal
+Unbrowser MCP and persists a journal to
+`/data/market-terminal/market-event-scout.json`. It does not dispatch
+model inference, precache writes, or canvas writes. It never runs on
+public gateways, public session workers, workspace runtimes, or the local
+CLI.
+
+### Preflight (automated, pre-commit)
+
+Every deployment runs a preflight verification **after** production health
+checks and **before** writing deploy metadata (the commit point). The
+preflight validates deterministic invariants:
+
+- `NODE_ENV` is `production`, `PUBLIC_DEMO` is `0`.
+- The container is the authenticated singleton (no public-gateway,
+  public-session-worker, private-workspace, or financial-workspace-checkpoints
+  markers).
+- `MARKET_SCOUT_LOCAL_CLI` is `0`.
+- `MARKET_SCOUT_ENABLED` is exactly `1` or `0`. When `0` (forward-disable),
+  all enabled-only checks below are skipped and preflight passes cleanly.
+- When enabled (`1`), additional invariants:
+  - `UNBROWSER_MCP_REQUIRED` is `1`, `UNBROWSER_MCP_URL` is exactly
+    `http://unbrowser-mcp:8767/mcp`.
+  - `MARKET_DATA_DIR` is `/data/market-terminal`.
+  - The computed journal path is `/data/market-terminal/market-event-scout.json`.
+  - Exactly seven reviewed default sources are exported.
+  - The data directory is truly writable (verified by unique temp-file create
+    and remove).
+  - If a journal already exists, the app's strict reader accepts it and it
+    has no unknown source IDs.
+
+A preflight failure prevents the deployment from committing metadata.
+No secrets, URLs, symbols, titles, or journal contents appear in error
+output — only safe aggregate values.
+
+### Commissioning (automated, post-commit, enabled-only)
+
+When the fin-terminal service was selected or recreated by the deployment
+and the running container has `MARKET_SCOUT_ENABLED=1`, a commissioning
+check runs **after** `DEPLOY_SUCCEEDED=true`. If the container has scout
+disabled, commissioning is skipped cleanly. External feed success is
+**not** part of the rollback transaction. The core deployment is already
+committed; commissioning failure signals that a forward-disable deployment
+is needed.
+
+Commissioning polls the journal file read-only (via the app's strict reader)
+for up to 20 minutes and requires:
+
+1. Exactly seven known source IDs present in the journal (exact expected set).
+2. All seven have a fresh `lastAttemptAt` timestamp from the current
+   container lifetime (numeric epoch ms; ~2 seconds tolerance for
+   host/container clock precision).
+3. At least four sources have `baselineComplete: true` and a fresh
+   `lastSuccessAt` within the container lifetime.
+4. Those successful sources span at least three distinct source origin hosts.
+5. A later persisted journal where `updatedAt` advances **and** at least one
+   source `lastAttemptAt` advances, proving the scheduler re-armed.
+
+The check never invokes the scout or sync, never prints journal JSON,
+decision fields, source errors, URLs, symbols, titles, or env values.
+It prints only aggregate counts and timestamps. Malformed state (strict
+reader rejection) fails immediately. A missing journal during initial
+commission is treated as pending (polls until timeout). Timeout errors
+include aggregates only.
+
+### Degraded / failure response
+
+If commissioning fails the deployment job exits nonzero with a clear message:
+
+```
+MARKET-SCOUT COMMISSION FAILED
+The core deployment is committed.
+No automatic rollback occurs.
+A forward-disable deployment (MARKET_SCOUT_ENABLED=0) is required.
+```
+
+Zero or low success across sources makes the deployment job red. The
+response is a **forward-disable** deployment — setting `MARKET_SCOUT_ENABLED=0`
+in `docker-compose.yml` — not a broad rollback. Third-party feed failure
+does not trigger the existing rollback mechanism.
+
+### Forward-disable runbook
+
+To disable the scout:
+
+1. Edit `docker-compose.yml` and change `MARKET_SCOUT_ENABLED=1` to
+   `MARKET_SCOUT_ENABLED=0` in the `fin-terminal` service environment.
+   Keep `MARKET_SCOUT_LOCAL_CLI=0`.
+2. Commit, push, and run the normal deployment workflow.
+3. Preflight will recognize the disabled state, skip enabled-only checks,
+   and pass. Commission will be skipped because the running container has
+   scout disabled. The deploy completes normally.
