@@ -339,11 +339,9 @@ class NudgeState:
     # ------------------------------------------------------------------
 
     def page_url_for_tab(self, tab_id: object) -> str:
-        """Return the most recently confirmed page URL for one browser tab."""
+        """Return the confirmed URL for one tab without cross-tab fallback."""
         key = _tab_key(tab_id)
-        if key in self.page_urls_by_tab:
-            return self.page_urls_by_tab[key]
-        return self.last_nav_url if key == "auto" else ""
+        return self.page_urls_by_tab.get(key, "")
 
     def observe_page(self, url: str, *, tab_id: object = "auto") -> tuple[bool, bool]:
         """Record a confirmed page URL and return ``(changed, new_to_tab)``."""

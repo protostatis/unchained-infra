@@ -95,6 +95,15 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertEqual(bounded["malformed_text_data_type"], "NoneType")
         self.assertEqual(json.loads(payload)["data"], MALFORMED_TEXT_EVENT_MESSAGE)
 
+    def test_structured_text_event_uses_safe_text_contract(self):
+        bounded = bound_agent_event(
+            {"type": "text", "data": {"answer": "unexpected structure"}},
+            encoded_size=MAX_AGENT_EVENT_BYTES + 1,
+        )
+
+        self.assertEqual(bounded["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+        self.assertEqual(bounded["malformed_text_data_type"], "dict")
+
     def test_oversized_file_is_rejected_before_open(self):
         with patch("chat_event_transport.os.path.getsize", return_value=MAX_INLINE_SCREENSHOT_BASE64_BYTES + 1), \
              patch("builtins.open", mock_open()) as mocked_open:
@@ -363,6 +372,14 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
         self.assertFalse(state.record_navigation("https://www.cnbc.com/markets"))
         self.assertTrue(state.record_navigation("https://www.cnbc.com/markets/bonds/"))
 
+    def test_page_url_tracking_never_falls_back_to_another_tab(self):
+        state = NudgeState()
+        state.observe_page("https://example.test/one", tab_id="tab-one")
+
+        self.assertEqual(state.page_url_for_tab("tab-one"), "https://example.test/one")
+        self.assertEqual(state.page_url_for_tab("tab-two"), "")
+        self.assertEqual(state.page_url_for_tab("auto"), "")
+
     def test_not_found_navigation_is_explicitly_detected(self):
         self.assertTrue(
             chat_agent_openrouter._navigation_result_is_not_found(
@@ -422,6 +439,13 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
                 "Clicked A\n--- changed ---\nurl: https://example.test/challenge\n"
                 "[challenge cleared] Now on: https://example.test/article\n\n"
                 "=== Page Layout ===\nURL: https://example.test/article"
+            ),
+            "https://example.test/article",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Navigated to: https://example.test/article\nTitle: Article\n\n"
+                "=== Page Layout ===\nURL: https://example.test/untrusted-page-text"
             ),
             "https://example.test/article",
         )

@@ -598,15 +598,20 @@ _NOT_FOUND_STATUS_RE = re.compile(
 )
 
 
+def _tool_result_metadata(result: str) -> str:
+    """Return browser-tool metadata without arbitrary page-layout text."""
+    return (result or "").split("=== Page Layout ===", 1)[0]
+
+
 def _page_url_from_tool_result(result: str) -> str:
     """Extract the confirmed current URL emitted by a page-changing browser tool."""
-    matches = _RESULT_PAGE_URL_RE.findall(result or "")
+    matches = _RESULT_PAGE_URL_RE.findall(_tool_result_metadata(result))
     return matches[-1].rstrip(".,;") if matches else ""
 
 
 def _navigation_result_is_not_found(result: str) -> bool:
     """Identify a missing-page navigation without inspecting arbitrary page text."""
-    summary = (result or "").split("=== Page Layout ===", 1)[0]
+    summary = _tool_result_metadata(result)
     title_match = _NAVIGATION_TITLE_RE.search(summary)
     return bool(
         # Title-only detection is deliberately conservative: accept canonical

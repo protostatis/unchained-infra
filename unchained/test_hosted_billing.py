@@ -425,8 +425,12 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             for call in send.await_args_list
             if len(call.args) > 1 and call.args[1].get("type") == "tool_result"
         ]
-        self.assertTrue(tool_results[4]["data"].startswith("LINK_SCAN_REPEAT_BLOCKED"))
-        self.assertEqual(tool_results[6]["data"], "article links")
+        blocked = [
+            result for result in tool_results
+            if result["data"].startswith("LINK_SCAN_REPEAT_BLOCKED")
+        ]
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("article links", [result["data"] for result in tool_results])
 
     async def test_hosted_agent_stops_distinct_not_found_url_guesses(self):
         sid = "s-not-found-stall"

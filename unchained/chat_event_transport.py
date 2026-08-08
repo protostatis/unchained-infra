@@ -36,8 +36,10 @@ def normalize_text_event(event: dict[str, Any]) -> dict[str, Any]:
 
     Browser clients append ``event.data`` directly to the chat transcript. A
     missing or structured value otherwise becomes the literal ``undefined`` or
-    ``[object Object]`` in JavaScript. Keep valid event shapes unchanged and
-    attach only non-sensitive diagnostics when a payload is malformed.
+    ``[object Object]`` in JavaScript. Text events are string-only protocol
+    messages; structured results use their own event shapes. Keep valid event
+    shapes unchanged and attach only non-sensitive diagnostics when a payload
+    is malformed.
     """
     if str(event.get("type") or "") != "text" or isinstance(event.get("data"), str):
         return event
@@ -106,7 +108,7 @@ def bound_agent_event(
     if bounded.get("screenshot_omitted"):
         return bounded
 
-    if encoded_size is None or normalized is not event:
+    if encoded_size is None or normalized != event:
         payload = json.dumps(bounded, separators=(",", ":"), ensure_ascii=False)
         encoded_size = _utf8_size(payload)
     if encoded_size <= MAX_AGENT_EVENT_BYTES:

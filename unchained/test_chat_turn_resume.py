@@ -1004,13 +1004,15 @@ class TestChatTurnState(unittest.TestCase):
         self.assertTrue(event["malformed_text_event"])
         self.assertEqual(event["malformed_text_data_type"], "NoneType")
 
-    def test_publish_replaces_oversized_replay_text_with_safe_message(self):
+    def test_publish_replaces_oversized_replay_text_after_body_omission(self):
         turn = self._turn()
 
         event = turn.publish({"type": "text", "data": "x" * (13 * 1024)})
 
         self.assertEqual(event["data"], MALFORMED_TEXT_EVENT_MESSAGE)
         self.assertTrue(event["malformed_text_event"])
+        # The replay cap omits the original string before the second text-event
+        # normalization, so this diagnostic describes that omitted value.
         self.assertEqual(event["malformed_text_data_type"], "NoneType")
         self.assertTrue(event["replay_body_omitted"])
 
