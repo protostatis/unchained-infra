@@ -229,7 +229,9 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `HOSTED_MAX_ACTIVE_TURNS` | web | Optional global hosted-turn limit (default: `16`) |
 | `HOSTED_MAX_ACTIVE_TURNS_PER_USER` | web | Optional per-account hosted-turn limit (default: `3`) |
 | `HOSTED_TURN_DEADLINE_SECONDS` | web | Optional absolute hosted-turn deadline (default: `600`); `/schedule` grants remain valid for the deadline plus a one-minute setup margin |
-| `HOSTED_MAX_INPUT_CHARS` | trial-agent | Optional per-attempt serialized context bound (default: `200000`) |
+| `HOSTED_MAX_USER_PROMPT_CHARS` | web | Optional inbound hosted-user prompt cap (default: `20000`) |
+| `HOSTED_MAX_INTERNAL_CONTEXT_CHARS` | trial-agent | Optional per-attempt serialized internal agent-context budget (default: `400000`) |
+| `HOSTED_MAX_INPUT_CHARS` | trial-agent | Deprecated fallback for `HOSTED_MAX_INTERNAL_CONTEXT_CHARS`; used only when the new setting is unset |
 | `CREDIT_STALE_RUN_TTL_SECONDS` | web | Optional crash-recovery sweep age (default: `7200`) |
 | `CREDIT_ADMIN_ALLOWLIST` | web | Optional comma-separated additional hosted model IDs; unknown models use the conservative default hold |
 | `CREDIT_DEFAULT_RESERVATION_MICRO_USD` | web | Optional per-attempt hold for explicitly allowlisted models not in the built-in catalog (default: `1000000`, or $1) |

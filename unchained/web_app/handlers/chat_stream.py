@@ -71,6 +71,9 @@ _HOSTED_MAX_ACTIVE_TURNS_PER_USER = max(
 _HOSTED_TURN_DEADLINE_S = max(
     30, int(os.environ.get("HOSTED_TURN_DEADLINE_SECONDS", "600"))
 )
+_HOSTED_MAX_USER_PROMPT_CHARS = max(
+    1_000, int(os.environ.get("HOSTED_MAX_USER_PROMPT_CHARS", "20000"))
+)
 
 _FIRST_LOOK_SEARCH_REF = "searchagentsky-result"
 _FIRST_LOOK_SEARCH_TASK = "search-result"
@@ -1344,6 +1347,20 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_cli = core._is_codex_cli_model(model)
     is_opencode_cli = core._is_opencode_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
+    if is_openrouter and len(message) > _HOSTED_MAX_USER_PROMPT_CHARS:
+        return reject_first_look(
+            web.json_response(
+                {
+                    "error": "hosted_user_prompt_too_large",
+                    "message": (
+                        "Your message is too long for hosted chat. "
+                        f"Keep it under {_HOSTED_MAX_USER_PROMPT_CHARS:,} characters."
+                    ),
+                },
+                status=413,
+            ),
+            "hosted_user_prompt_too_large",
+        )
     if guest_mode and not is_openrouter:
         return reject_first_look(
             web.json_response(

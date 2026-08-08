@@ -115,9 +115,20 @@ SESSION_DIR = os.environ.get(
 )
 MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
-HOSTED_MAX_INPUT_CHARS = max(
-    10_000, int(os.environ.get("HOSTED_MAX_INPUT_CHARS", "200000"))
+HOSTED_MAX_INTERNAL_CONTEXT_CHARS = max(
+    10_000,
+    int(
+        os.environ.get(
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS",
+            # Preserve existing deployments until they explicitly adopt the
+            # split setting. This is an internal agent working-context budget,
+            # not a limit on the user's submitted prompt.
+            os.environ.get("HOSTED_MAX_INPUT_CHARS", "400000"),
+        )
+    ),
 )
+# Backwards-compatible module name for integrations importing the old symbol.
+HOSTED_MAX_INPUT_CHARS = HOSTED_MAX_INTERNAL_CONTEXT_CHARS
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
@@ -683,7 +694,7 @@ def _prepare_hosted_context(
     messages: list[dict],
     *,
     max_messages: int = MAX_SESSION_MESSAGES,
-    max_chars: int = HOSTED_MAX_INPUT_CHARS,
+    max_chars: int = HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     emergency_keep: int = TRIM_ON_ERROR,
 ) -> dict:
     """Bound and compact one hosted context before its first provider call.
@@ -2047,10 +2058,22 @@ class TrialAgent:
                 raise RuntimeError(
                     "Hosted credit authorization is unavailable. Please try again later."
                 )
-            input_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
-            if input_chars > HOSTED_MAX_INPUT_CHARS:
+            input_chars = _serialized_context_chars(messages)
+            tool_call_count = sum(
+                len(message.get("tool_calls") or [])
+                for message in messages
+                if isinstance(message, dict)
+            )
+            print(
+                f"[{session_id}] Hosted context: model={effective_model} "
+                f"messages={len(messages)} tool_calls={tool_call_count} "
+                f"chars={input_chars} estimated_tokens={_estimate_tokens(messages)} "
+                f"limit={HOSTED_MAX_INTERNAL_CONTEXT_CHARS}"
+            )
+            if input_chars > HOSTED_MAX_INTERNAL_CONTEXT_CHARS:
                 raise RuntimeError(
-                    "Hosted conversation context is too large. Start a new chat or archive this thread."
+                    "Hosted agent context exceeded its internal working limit. "
+                    "Start a new chat or archive this thread."
                 )
             credit_client = httpx.AsyncClient()
             idem_key = f"or-call-{_uuid_hex()[:16]}-{int(time.time())}"

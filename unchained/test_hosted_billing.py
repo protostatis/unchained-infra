@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from chat_agent_openrouter import (
-    HOSTED_MAX_INPUT_CHARS,
+    HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     MAX_SESSION_MESSAGES,
     TrialAgent,
     _openrouter_user_error,
@@ -207,6 +207,42 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         provider.assert_not_awaited()
         release.assert_awaited_once()
+
+    async def test_expanded_internal_context_budget_reaches_provider(self):
+        """The 400k working-context budget must not retain the legacy 200k cap."""
+        provider = AsyncMock(return_value={
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.001},
+        })
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+        messages = [{"role": "user", "content": "x" * 250_000}]
+
+        self.assertGreater(HOSTED_MAX_INTERNAL_CONTEXT_CHARS, 250_000)
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(
+                self.agent,
+                "_credit_reserve",
+                new=AsyncMock(return_value={"call_id": "call-expanded-context"}),
+            ),
+            patch.object(
+                self.agent,
+                "_credit_mark_submitted",
+                new=AsyncMock(return_value={"status": "submitted"}),
+            ),
+            patch.object(
+                self.agent,
+                "_credit_settle",
+                new=AsyncMock(return_value={"status": "settled"}),
+            ),
+            patch.object(self.agent, "_do_openrouter_call", new=provider),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                SimpleNamespace(), messages, session_id="s-test"
+            )
+
+        provider.assert_awaited_once()
 
     async def test_hosted_task_navigations_stay_in_background(self):
         self.agent.sessions["s-focus"] = []
@@ -577,7 +613,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         provider_messages = captured[0]
         self.assertLessEqual(
             len(json.dumps(provider_messages, ensure_ascii=False, default=str)),
-            HOSTED_MAX_INPUT_CHARS,
+            HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
         )
         self.assertEqual(
             provider_messages[-1],

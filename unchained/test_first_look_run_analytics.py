@@ -439,6 +439,47 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(self.REQUEST_ID, json.dumps(rejected))
 
+    async def test_hosted_user_prompt_limit_rejects_before_agent_dispatch(self):
+        core = self._core()
+        prompt = "x" * 21
+
+        with patch.object(chat_stream, "_HOSTED_MAX_USER_PROMPT_CHARS", 20):
+            response = await self._run(core, body=self._body(message=prompt))
+
+        self.assertEqual(response.status, 413)
+        self.assertFalse(core.socket.messages)
+        rejected = self._events(core, "first_look_run_rejected")
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["error_code"], "hosted_user_prompt_too_large")
+        self.assertNotIn(prompt, json.dumps(rejected))
+
+    async def test_authenticated_hosted_user_prompt_limit_rejects_before_dispatch(self):
+        core = self._core()
+        core._authenticate = lambda _request: {
+            "user_id": "u-prompt-limit",
+            "key_hash": "abc12345",
+            "agent_id": "claude-abc12345",
+            "email": "",
+            "user_type": "claude",
+        }
+        prompt = "x" * 21
+
+        with patch.object(chat_stream, "_HOSTED_MAX_USER_PROMPT_CHARS", 20):
+            response = await self._run(
+                core,
+                body=self._body(
+                    message=prompt,
+                    first_look_guest=False,
+                    headless=False,
+                    agent_id="claude-abc12345",
+                    session_id="s-claude-abc12345-prompt-limit",
+                ),
+            )
+
+        self.assertEqual(response.status, 413)
+        self.assertFalse(core.socket.messages)
+        self.assertFalse(core.track_calls)
+
     async def test_invalid_attribution_triad_is_dropped_by_handler(self):
         core = self._core(headless_agent_id="")
 

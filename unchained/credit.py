@@ -97,7 +97,7 @@ def credit_service_token() -> str:
 
 HOSTED_MODEL_CATALOG: dict[str, int] = {
     # Paid models — conservative per-attempt holds for a request bounded to
-    # HOSTED_MAX_INPUT_CHARS and 4096 output tokens by the hosted worker.
+    # HOSTED_MAX_INTERNAL_CONTEXT_CHARS and 4096 output tokens by the hosted worker.
     "google/gemini-3.1-flash-lite": 100_000,   # $0.10
     # OpenRouter pricing snapshot: $0.30/M input + $2.50/M output. The hosted
     # request bounds keep a $0.10 hold conservative without treating it as an
