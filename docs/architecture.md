@@ -240,7 +240,8 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 > **Migration:** A trial-agent deployment with neither context variable set now
 > uses the `400000` internal-context default. Set
 > `HOSTED_MAX_INTERNAL_CONTEXT_CHARS` explicitly before rollout; the legacy
-> `HOSTED_MAX_INPUT_CHARS` remains a fallback only.
+> `HOSTED_MAX_INPUT_CHARS` remains a fallback only. Production deployment
+> rejects a missing, duplicate, or out-of-range canonical value.
 
 ### Client-side (agent .env)
 | Variable | Purpose |

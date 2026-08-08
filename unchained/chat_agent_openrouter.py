@@ -2104,6 +2104,8 @@ class TrialAgent:
                 for message in messages
                 if isinstance(message, dict)
             )
+            # Retain count-only diagnostics for rejected contexts; never log
+            # prompt or tool-result content here.
             print(
                 f"[{session_id}] Hosted context: model={effective_model} "
                 f"messages={len(messages)} tool_calls={tool_call_count} "

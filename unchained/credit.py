@@ -100,16 +100,50 @@ def credit_service_token() -> str:
 # serialized-message budget plus provider/tool-schema headroom), 4,096 output
 # tokens, and a 25% margin. This deliberately certifies the fixed catalog only;
 # it is not a universal character-to-token proof for arbitrary custom models.
+#
+# Rates are micro-USD per million tokens. Where a model has input-size tiers,
+# the fixture uses the highest tier reachable by the certified envelope. Update
+# this fixture and re-run its regression test whenever catalog pricing changes.
 HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS = 400_000
+HOSTED_HOLD_CERTIFIED_INPUT_TOKENS = 425_000
+HOSTED_HOLD_CERTIFIED_OUTPUT_TOKENS = 4_096
+HOSTED_HOLD_CERTIFIED_MARGIN_NUMERATOR = 125
+HOSTED_HOLD_CERTIFIED_MARGIN_DENOMINATOR = 100
+HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS: dict[str, tuple[int, int]] = {
+    "google/gemini-3.1-flash-lite": (250_000, 1_500_000),
+    "google/gemini-3.5-flash-lite": (300_000, 2_500_000),
+    "google/gemini-2.5-flash-lite": (100_000, 400_000),
+    "google/gemini-2.5-flash": (300_000, 2_500_000),
+    # >=200k input-token tier
+    "google/gemini-2.5-pro": (2_500_000, 15_000_000),
+    "google/gemini-3-flash-preview": (500_000, 3_000_000),
+    # >=256k input-token tier
+    "qwen/qwen3.6-plus": (1_300_000, 3_900_000),
+    "qwen/qwen3.5-flash-02-23": (65_000, 260_000),
+}
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    return (numerator + denominator - 1) // denominator
+
+
+def _certified_min_reservation_micro_usd(
+    input_rate_micro_usd_per_million: int,
+    output_rate_micro_usd_per_million: int,
+) -> int:
+    usage_numerator = (
+        HOSTED_HOLD_CERTIFIED_INPUT_TOKENS * input_rate_micro_usd_per_million
+        + HOSTED_HOLD_CERTIFIED_OUTPUT_TOKENS * output_rate_micro_usd_per_million
+    )
+    return _ceil_div(
+        usage_numerator * HOSTED_HOLD_CERTIFIED_MARGIN_NUMERATOR,
+        MICRO_USD_PER_USD * HOSTED_HOLD_CERTIFIED_MARGIN_DENOMINATOR,
+    )
+
+
 HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD: dict[str, int] = {
-    "google/gemini-3.1-flash-lite": 150_000,
-    "google/gemini-3.5-flash-lite": 200_000,
-    "google/gemini-2.5-flash-lite": 100_000,
-    "google/gemini-2.5-flash": 250_000,
-    "google/gemini-2.5-pro": 750_000,
-    "google/gemini-3-flash-preview": 300_000,
-    "qwen/qwen3.6-plus": 500_000,
-    "qwen/qwen3.5-flash-02-23": 250_000,
+    model: _certified_min_reservation_micro_usd(*rates)
+    for model, rates in HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS.items()
 }
 
 HOSTED_MODEL_CATALOG: dict[str, int] = {
@@ -118,9 +152,9 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "google/gemini-3.5-flash-lite": 200_000,
     "google/gemini-2.5-flash-lite": 100_000,
     "google/gemini-2.5-flash": 250_000,
-    "google/gemini-2.5-pro": 750_000,
+    "google/gemini-2.5-pro": 1_500_000,
     "google/gemini-3-flash-preview": 300_000,
-    "qwen/qwen3.6-plus": 500_000,
+    "qwen/qwen3.6-plus": 750_000,
     "qwen/qwen3.5-flash-02-23": 250_000,
     # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,

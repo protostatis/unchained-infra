@@ -633,6 +633,21 @@ class TestCreditLedger(unittest.TestCase):
             set(HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD),
             {model for model, hold in HOSTED_MODEL_CATALOG.items() if hold > 0},
         )
+        self.assertEqual(
+            HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD,
+            {
+                "google/gemini-3.1-flash-lite": 140_493,
+                "google/gemini-3.5-flash-lite": 172_175,
+                "google/gemini-2.5-flash-lite": 55_173,
+                "google/gemini-2.5-flash": 172_175,
+                "google/gemini-2.5-pro": 1_404_925,
+                "google/gemini-3-flash-preview": 280_985,
+                "qwen/qwen3.6-plus": 710_593,
+                "qwen/qwen3.5-flash-02-23": 35_863,
+            },
+        )
+        self.assertEqual(HOSTED_MODEL_CATALOG["google/gemini-2.5-pro"], 1_500_000)
+        self.assertEqual(HOSTED_MODEL_CATALOG["qwen/qwen3.6-plus"], 750_000)
 
     def test_default_reservation_for_free_model(self):
         res = _default_reservation("google/gemma-3-27b-it:free")
