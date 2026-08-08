@@ -112,6 +112,10 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             _load_hosted_internal_context_configuration(
                 {"HOSTED_MAX_INTERNAL_CONTEXT_CHARS": "400001"}
             )
+        with self.assertRaisesRegex(RuntimeError, "must be at least 10000"):
+            _load_hosted_internal_context_configuration(
+                {"HOSTED_MAX_INTERNAL_CONTEXT_CHARS": "5000"}
+            )
 
     async def test_reserve_submit_provider_settle_order(self):
         order: list[str] = []

@@ -17,6 +17,8 @@ MAX_CONTEXT_CHARS = 400_000
 
 
 def _read_regular_env(env_path: Path) -> str:
+    # Production accepts the staged regular file only; never follow a symlink
+    # that could be swapped after staging.
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(env_path, flags)
@@ -39,7 +41,12 @@ def _read_regular_env(env_path: Path) -> str:
 
 def _values_for_name(content: str, name: str) -> list[str]:
     prefix = f"{name}="
-    values = [line[len(prefix) :].strip() for line in content.splitlines() if line.startswith(prefix)]
+    values = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or not line.startswith(prefix):
+            continue
+        values.append(line[len(prefix) :].strip())
     return [
         value[1:-1]
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}

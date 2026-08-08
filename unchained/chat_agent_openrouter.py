@@ -116,6 +116,7 @@ SESSION_DIR = os.environ.get(
 )
 MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
+_MIN_HOSTED_INTERNAL_CONTEXT_CHARS = 10_000
 
 
 def _resolve_hosted_internal_context_chars(
@@ -135,8 +136,12 @@ def _resolve_hosted_internal_context_chars(
     try:
         budget = int(raw)
     except ValueError as exc:
-        raise ValueError(f"{setting} must be an integer (got {raw!r})") from exc
-    return max(10_000, budget), source
+        raise ValueError(f"{setting} must be an integer") from exc
+    if budget < _MIN_HOSTED_INTERNAL_CONTEXT_CHARS:
+        raise ValueError(
+            f"{setting} must be at least {_MIN_HOSTED_INTERNAL_CONTEXT_CHARS}"
+        )
+    return budget, source
 
 
 def _load_hosted_internal_context_configuration(

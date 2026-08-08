@@ -49,7 +49,10 @@ class HostedContextRolloutTests(unittest.TestCase):
             validate_hosted_context_rollout(self.env_path)
 
     def test_accepts_an_explicit_reviewed_context_budget(self):
-        self._write("HOSTED_MAX_INTERNAL_CONTEXT_CHARS=400000\n")
+        self._write(
+            "# HOSTED_MAX_INTERNAL_CONTEXT_CHARS=5000\n"
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS=400000\n"
+        )
 
         self.assertEqual(validate_hosted_context_rollout(self.env_path), 400_000)
 
