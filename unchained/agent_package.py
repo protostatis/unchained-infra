@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 import zipfile
 
-VERSION = "0.3.124"  # add bounded real-CDP liveness probes for headless workers
+VERSION = "0.3.125"  # remove Chrome's unsupported AutomationControlled launch flag
 # 0.3.49-0.3.52 were consumed by earlier iterations of the startup-tab
 # fix during PR review; keep the version monotonic for packaged clients.
 # 0.3.57 is the first packaged client version that advertises the

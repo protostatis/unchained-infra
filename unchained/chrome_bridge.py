@@ -2877,9 +2877,10 @@ def _ensure_chrome(
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             cmd.append("--no-sandbox")
     if stealth:
-        # AutomationControlled flag is safe on all platforms — defense-in-depth
-        # alongside the JS navigator.webdriver override.
-        cmd.append("--disable-blink-features=AutomationControlled")
+        # Do not pass --disable-blink-features=AutomationControlled: Chrome
+        # surfaces it as an unsupported command-line flag, which is itself a
+        # detectable signal. The default webdriver evasion is injected via
+        # Page.addScriptToEvaluateOnNewDocument before agent navigation.
         # UA override only in headless — on real browsers the native macOS/
         # Windows UA is already clean and a Linux UA would be a mismatch.
         if headless:
