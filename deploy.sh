@@ -117,6 +117,7 @@ REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
 FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
 CADDY_CONFIG_PREFLIGHT_TOOL="$SCRIPT_DIR/deploy/caddy_config_preflight.sh"
+HOSTED_CONTEXT_ROLLOUT_TOOL="$SCRIPT_DIR/deploy/validate_hosted_context_rollout.py"
 MARKET_SCOUT_HELPER="$SCRIPT_DIR/deploy/verify_market_scout_health.mjs"
 REMOTE_CONFIG_STAGE="$REMOTE_DIR/.deploy-staging/$DEPLOY_ID"
 REMOTE_CONFIG_STAGE_ACTIVE=false
@@ -451,9 +452,10 @@ EOF
 
 create_remote_config_stage() {
     local helper
-    for helper in "$CADDY_CONFIG_PREFLIGHT_TOOL" "$FIN_TERMINAL_SECRETS_TOOL"; do
+    for helper in "$CADDY_CONFIG_PREFLIGHT_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" \
+        "$HOSTED_CONTEXT_ROLLOUT_TOOL"; do
         if [[ ! -f "$helper" ]]; then
-            echo "ERROR: missing Caddy preflight helper: $helper" >&2
+            echo "ERROR: missing configuration preflight helper: $helper" >&2
             return 1
         fi
     done
@@ -497,6 +499,7 @@ EOF
         "${TOP_LEVEL_CONTEXT_FILES[@]}" \
         "$CADDY_CONFIG_PREFLIGHT_TOOL" \
         "$FIN_TERMINAL_SECRETS_TOOL" \
+        "$HOSTED_CONTEXT_ROLLOUT_TOOL" \
         "$EC2_USER@$EC2_HOST:$REMOTE_CONFIG_STAGE/"
 }
 
@@ -559,6 +562,15 @@ EOF
             return 1
             ;;
     esac
+}
+
+validate_staged_hosted_context_rollout() {
+    remote_bash "$REMOTE_CONFIG_STAGE" <<'EOF'
+set -euo pipefail
+stage_dir="$1"
+test -f "$stage_dir/validate_hosted_context_rollout.py"
+python3 "$stage_dir/validate_hosted_context_rollout.py" "$stage_dir/.env"
+EOF
 }
 
 validate_staged_caddy_config() {
@@ -1386,6 +1398,8 @@ echo "==> Provisioning staged Turnstile values..."
 install_staged_public_turnstile_values
 echo "==> Validating staged fin-terminal production secrets..."
 ensure_staged_fin_terminal_secrets
+echo "==> Validating explicit hosted context rollout..."
+validate_staged_hosted_context_rollout
 echo "==> Validating staged Caddyfile..."
 validate_staged_caddy_config
 

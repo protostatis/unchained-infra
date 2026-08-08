@@ -47,6 +47,7 @@ jobs:
           python deploy/test_deploy_source_guard.py
           python deploy/test_compose_service_diff.py
           python deploy/test_fin_terminal_secrets.py
+          python deploy/test_hosted_context_rollout.py
           python deploy/test_public_terminal_pilot.py
           python deploy/test_terminal_runtime_reconciler.py
           python deploy/test_workspace_runtime_provider.py
@@ -66,6 +67,7 @@ jobs:
             test_credit_handlers \
             test_hosted_billing \
             test_hosted_admission \
+            test_first_look_run_analytics \
             test_scheduler_agent_access \
             test_scheduled_tasks \
             test_hosted_conversations \
