@@ -470,7 +470,8 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
             await legacy_ws.close()
 
             capable_ws = await self.client.ws_connect(
-                "/ws?session_id=s-claude-abc12345-demo&capabilities=salient-v1"
+                "/ws?session_id=s-claude-abc12345-demo"
+                "&capabilities=unknown-v1&capabilities=salient-v1"
             )
             capable_attached = await capable_ws.receive_json()
             await capable_ws.receive_json()

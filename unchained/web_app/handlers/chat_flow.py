@@ -1301,7 +1301,8 @@ async def _handle_preview_ws(
     )
     preview_capabilities = {
         token
-        for token in request.query.get("capabilities", "").split(",")
+        for value in request.query.getall("capabilities", [])
+        for token in value.split(",")
         if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,31}", token)
     }
     salient_style_projection = (
