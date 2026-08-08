@@ -170,14 +170,13 @@ services:
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_RESEARCH_PROMPT=compact
-      # Phase one: ship the paired cache with a bounded first-day ceiling.
-      # Shadow scouting is activated separately after the code rollout so MCP
-      # and provider load can be attributed to one change at a time.
+      # Phase two: shadow scouting is now commissioned on the singleton.
+      # Local CLI, public gateway, and workspace runtimes remain disabled.
       - MARKET_PRECACHE_ENABLED=1
       - MARKET_PRECACHE_QUALITY_GATE=1
       - MARKET_PRECACHE_BUDGET=500000
       - MARKET_PRECACHE_RUN_LIMIT=100000
-      - MARKET_SCOUT_ENABLED=0
+      - MARKET_SCOUT_ENABLED=1
       - MARKET_SCOUT_LOCAL_CLI=0
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
       - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com

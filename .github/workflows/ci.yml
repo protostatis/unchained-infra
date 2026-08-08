@@ -83,6 +83,9 @@ jobs:
           cd unchained
           node test_sse_recovery_render.js
 
+      - name: Run market-scout health helper tests
+        run: node deploy/test_verify_market_scout_health.mjs
+
       - name: Run OSS boundary guards
         run: |
           python tools/oss_guard/check_private_imports.py
@@ -145,7 +148,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.deploy))
     needs: [public-tests, private-integrated-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     concurrency:
       group: production-deploy
       cancel-in-progress: false
