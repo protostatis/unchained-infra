@@ -1299,6 +1299,14 @@ async def _handle_preview_ws(
         _FIRST_LOOK_PREVIEW_HEIGHT_DEFAULT,
         min_value=240,
     )
+    preview_capabilities = {
+        token
+        for token in request.query.get("capabilities", "").split(",")
+        if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,31}", token)
+    }
+    salient_style_projection = (
+        authenticated_chat and "salient-v1" in preview_capabilities
+    )
 
     import cloud_tools
 
@@ -1481,6 +1489,11 @@ async def _handle_preview_ws(
             "height": height,
             "mode": "semantic" if semantic_requested else "frames",
             "interaction": "interactive" if semantic_requested else "observer",
+            "style_projection": (
+                "salient-v1"
+                if semantic_requested and salient_style_projection
+                else ("legacy-inline" if semantic_requested else "none")
+            ),
         }
     )
 
@@ -1746,6 +1759,7 @@ async def _handle_preview_ws(
                 stop_requested=semantic_target_changed,
                 operation_lock=source_lock,
                 mirror_key=mirror_key,
+                salient_style_projection=salient_style_projection,
             ):
                 semantic_seq += 1
                 if mirror_event["type"] == "snapshot":

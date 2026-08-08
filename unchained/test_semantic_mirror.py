@@ -35,7 +35,7 @@ class TestSemanticMirrorParsing(unittest.TestCase):
     def test_capture_expressions_match_reviewed_semantic_protocol(self):
         self.assertEqual(
             hashlib.sha256(INSTALL_MIRROR_EXPRESSION.encode()).hexdigest(),
-            "ad65365948f154b07f5e71311f1b6764749e1cd464dd503322aca342797a9ce6",
+            "eaa8895915df9154eab6ccb15a226d01b86e25c41ee56e7c812380e5f1dd2c2a",
         )
         self.assertEqual(
             hashlib.sha256(DRAIN_MIRROR_EXPRESSION.encode()).hexdigest(),
@@ -56,6 +56,10 @@ class TestSemanticMirrorParsing(unittest.TestCase):
         self.assertIn("canvas|video|iframe|frame|object|embed", INSTALL_MIRROR_EXPRESSION)
 
     def test_capture_protocol_preserves_bounded_viewport_critical_styles(self):
+        self.assertIn(
+            "const USE_SALIENT_STYLE_PROJECTION = true",
+            INSTALL_MIRROR_EXPRESSION,
+        )
         self.assertIn("MAX_CRITICAL_STYLE_BYTES = 512 * 1024", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("MAX_CRITICAL_STYLE_BYTES_PER_NODE = 1280", INSTALL_MIRROR_EXPRESSION)
         self.assertIn("function applyCriticalComputedStyle", INSTALL_MIRROR_EXPRESSION)
@@ -508,6 +512,25 @@ class TestPerConnectionMirrorKey(unittest.TestCase):
             custom_expr,
         )
 
+    def test_build_install_can_retain_legacy_inline_styles(self):
+        current_expr = build_install_mirror_expression()
+        legacy_expr = build_install_mirror_expression(
+            salient_style_projection=False,
+        )
+
+        self.assertIn(
+            "const USE_SALIENT_STYLE_PROJECTION = true",
+            current_expr,
+        )
+        self.assertIn(
+            "const USE_SALIENT_STYLE_PROJECTION = false",
+            legacy_expr,
+        )
+        self.assertNotIn(
+            "__UNCHAINED_SALIENT_STYLE_PROJECTION__",
+            legacy_expr,
+        )
+
     def test_build_drain_replaces_symbol_key(self):
         default_expr = build_drain_mirror_expression()
         custom_expr = build_drain_mirror_expression("unchained.mirror.capture.v1.keyB")
@@ -581,6 +604,24 @@ class TestPerConnectionMirrorKeyStream(unittest.IsolatedAsyncioTestCase):
         install_expr = run_js.await_args_list[0].args[2]
         self.assertIn(custom_key, install_expr)
         self.assertNotIn(f"Symbol.for('{DEFAULT_MIRROR_KEY}')", install_expr)
+
+    @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
+    async def test_stream_uses_legacy_install_for_incapable_renderer(self, run_js):
+        run_js.return_value = _encoded({"url": "https://example.test"})
+        stream = stream_semantic_mirror(
+            "agent",
+            "tab",
+            salient_style_projection=False,
+        )
+
+        await anext(stream)
+        await stream.aclose()
+
+        install_expr = run_js.await_args_list[0].args[2]
+        self.assertIn(
+            "const USE_SALIENT_STYLE_PROJECTION = false",
+            install_expr,
+        )
 
     @patch("web_app.semantic_mirror.cloud_tools.run_js", new_callable=AsyncMock)
     async def test_action_passes_custom_key(self, run_js):

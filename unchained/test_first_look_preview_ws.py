@@ -440,6 +440,48 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         self.assertEqual(ended["from_tab_id"], "TAB" * 10 + "AA")
         self.assertEqual(ended["to_tab_id"], "NEW" * 10 + "BB")
 
+    async def test_salient_style_projection_requires_explicit_client_capability(self):
+        """An already-open pre-deploy page reconnects without salient-v1."""
+        from web_app import semantic_mirror
+
+        original_stream = semantic_mirror.stream_semantic_mirror
+        projection_modes = []
+
+        async def fake_semantic_stream(_agent_id, _tab_id, **kwargs):
+            projection_modes.append(kwargs["salient_style_projection"])
+            yield {
+                "type": "snapshot",
+                "snapshot": {
+                    "captureEpoch": "epoch-capability-test",
+                    "url": "https://example.test",
+                    "body": '<main data-ucm-id="ucm-1">Observed</main>',
+                    "fidelity": {"truncated": False},
+                },
+                "resync": False,
+            }
+
+        semantic_mirror.stream_semantic_mirror = fake_semantic_stream
+        try:
+            legacy_ws = await self.client.ws_connect(
+                "/ws?session_id=s-claude-abc12345-demo"
+            )
+            legacy_attached = await legacy_ws.receive_json()
+            await legacy_ws.receive_json()
+            await legacy_ws.close()
+
+            capable_ws = await self.client.ws_connect(
+                "/ws?session_id=s-claude-abc12345-demo&capabilities=salient-v1"
+            )
+            capable_attached = await capable_ws.receive_json()
+            await capable_ws.receive_json()
+            await capable_ws.close()
+        finally:
+            semantic_mirror.stream_semantic_mirror = original_stream
+
+        self.assertEqual(projection_modes, [False, True])
+        self.assertEqual(legacy_attached["style_projection"], "legacy-inline")
+        self.assertEqual(capable_attached["style_projection"], "salient-v1")
+
     async def test_owned_profile_workspace_follows_manually_activated_tab(self):
         from web_app import semantic_mirror
         from web_state import profile_session_caller_tag

@@ -82,6 +82,8 @@ class SemanticActionInput(TypedDict, total=False):
 _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   'use strict';
 
+  const USE_SALIENT_STYLE_PROJECTION = __UNCHAINED_SALIENT_STYLE_PROJECTION__;
+
   const STATE_KEY = Symbol.for('unchained.mirror.capture.v1');
   const previous = window[STATE_KEY];
   if (previous && typeof previous.dispose === 'function') previous.dispose();
@@ -493,7 +495,9 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     // A document stylesheet cannot cross a shadow boundary. Keep the legacy
     // inline fallback inside open shadow roots, while compacting light-DOM
     // declarations into a shared style table for the common case.
-    const useRegistry = Boolean(registry && sourceRoot === document);
+    const useRegistry = Boolean(
+      USE_SALIENT_STYLE_PROJECTION && registry && sourceRoot === document
+    );
     let nodeBytes = 0;
     for (const property of CRITICAL_STYLE_PROPERTIES) {
       let value = '';
@@ -1637,9 +1641,23 @@ def _with_mirror_key(template: str, mirror_key: str) -> str:
     return template.replace(f"'{DEFAULT_MIRROR_KEY}'", f"'{key}'")
 
 
-def build_install_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
-    """Return the mirror installation JS for a specific connection's symbol key."""
-    return _with_mirror_key(_INSTALL_MIRROR_TEMPLATE, mirror_key)
+def build_install_mirror_expression(
+    mirror_key: str = DEFAULT_MIRROR_KEY,
+    *,
+    salient_style_projection: bool = True,
+) -> str:
+    """Return mirror installation JS for a connection and renderer capability.
+
+    Browser pages opened before the salient-v1 renderer shipped reconnect to a
+    newly deployed server without reloading their JavaScript. Those clients must
+    keep receiving inline resolved styles; otherwise they see ``data-ucm-cs``
+    references without the corresponding ``salientStyles`` replay support.
+    """
+    expression = _INSTALL_MIRROR_TEMPLATE.replace(
+        "__UNCHAINED_SALIENT_STYLE_PROJECTION__",
+        "true" if salient_style_projection else "false",
+    )
+    return _with_mirror_key(expression, mirror_key)
 
 
 def build_drain_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
@@ -1663,8 +1681,10 @@ def build_dispose_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str
     )
 
 
-# Backward-compatible aliases (default key).
-INSTALL_MIRROR_EXPRESSION = _INSTALL_MIRROR_TEMPLATE
+# Backward-compatible aliases (default key). Direct capture callers use the
+# current renderer; the WebSocket protocol boundary explicitly opts legacy
+# clients out based on their advertised capability.
+INSTALL_MIRROR_EXPRESSION = build_install_mirror_expression()
 DRAIN_MIRROR_EXPRESSION = _DRAIN_MIRROR_TEMPLATE
 
 
@@ -2020,6 +2040,7 @@ async def _capture_initial_snapshot(
     relay_port: int,
     operation_lock: asyncio.Lock | None,
     mirror_key: str = DEFAULT_MIRROR_KEY,
+    salient_style_projection: bool = True,
 ) -> dict[str, Any]:
     """Retry a full mirror install after transient relay or chunk failures."""
     for attempt in range(1, INITIAL_CAPTURE_ATTEMPTS + 1):
@@ -2027,7 +2048,10 @@ async def _capture_initial_snapshot(
             return await evaluate_mirror_payload(
                 agent_id,
                 tab_id,
-                build_install_mirror_expression(mirror_key),
+                build_install_mirror_expression(
+                    mirror_key,
+                    salient_style_projection=salient_style_projection,
+                ),
                 relay_host,
                 relay_port,
                 operation_lock=operation_lock,
@@ -2052,6 +2076,7 @@ async def stream_semantic_mirror(
     stop_requested: Callable[[], bool] | None = None,
     operation_lock: asyncio.Lock | None = None,
     mirror_key: str = DEFAULT_MIRROR_KEY,
+    salient_style_projection: bool = True,
 ) -> AsyncIterator[SemanticMirrorEvent]:
     """Yield an initial snapshot and non-empty patches from an attached tab.
 
@@ -2062,6 +2087,10 @@ async def stream_semantic_mirror(
     ``mirror_key`` isolates this stream's capture state from other concurrent
     streams on the same tab (e.g. phone + desktop Agent View). Each key maps to
     a distinct ``Symbol.for(...)`` in the source Chrome tab.
+
+    ``salient_style_projection`` must only be true when the connected browser
+    advertises replay support. False retains bounded legacy inline styles for
+    already-open pages that reconnect after a server deployment.
     """
     if poll_interval <= 0:
         raise ValueError("poll_interval must be greater than zero")
@@ -2075,6 +2104,7 @@ async def stream_semantic_mirror(
         relay_port=relay_port,
         operation_lock=operation_lock,
         mirror_key=mirror_key,
+        salient_style_projection=salient_style_projection,
     )
     yield {"type": "snapshot", "snapshot": snapshot, "resync": False}
 
@@ -2114,6 +2144,7 @@ async def stream_semantic_mirror(
                 relay_port=relay_port,
                 operation_lock=operation_lock,
                 mirror_key=mirror_key,
+                salient_style_projection=salient_style_projection,
             )
             empty_polls = 0
             yield {"type": "snapshot", "snapshot": snapshot, "resync": True}

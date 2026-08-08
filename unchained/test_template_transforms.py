@@ -796,6 +796,16 @@ expect(fidelityElement.title.includes('resolved styles 8 KB projected into 1 KB'
             snapshot_source.index('<style data-ucm-observer>'),
         )
 
+    def test_agent_view_advertises_salient_style_replay_capability(self):
+        from web_app import templates
+
+        source = templates._AGENT_VIEW_JS
+        start = source.index("function agentViewSocketUrl")
+        end = source.index("function agentViewEscapeAttribute", start)
+        socket_source = source[start:end]
+
+        self.assertIn("capabilities: 'salient-v1'", socket_source)
+
     def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
         from web_app import templates
 

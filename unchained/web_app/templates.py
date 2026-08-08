@@ -21642,7 +21642,12 @@ function agentViewViewport() {
 
 function agentViewSocketUrl() {
   const viewport = agentViewViewport();
-  const query = new URLSearchParams({session_id: sessionId, width: String(viewport.width), height: String(viewport.height)});
+  const query = new URLSearchParams({
+    session_id: sessionId,
+    width: String(viewport.width),
+    height: String(viewport.height),
+    capabilities: 'salient-v1',
+  });
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return scheme + '://' + window.location.host + '/web/chat/preview/ws?' + query.toString();
 }
