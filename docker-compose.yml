@@ -149,7 +149,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#849e86be48420a8b2b58311cc9e1ddb05182619a"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#48b569afa76fdd15e1881a0f6745c98ab9d473ee"
       args:
         PUBLIC_BASE_PATH: /fin-terminal/
     expose:
