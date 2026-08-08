@@ -147,7 +147,12 @@ _COLLECTION_MATERIALIZE_RE = re.compile(
 
 
 def _is_broad_link_scan(expression: object) -> bool:
-    """Identify extraction-style JavaScript scans over every anchor on a page."""
+    """Best-effort cost guardrail for common all-anchor JavaScript scans.
+
+    This is intentionally not a security or policy boundary: arbitrary
+    JavaScript can express equivalent scans in forms this lightweight heuristic
+    does not recognize.
+    """
     if not isinstance(expression, str):
         return False
     scans_all_links = bool(

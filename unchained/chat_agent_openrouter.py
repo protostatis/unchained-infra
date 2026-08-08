@@ -581,7 +581,16 @@ _RESULT_PAGE_URL_RE = re.compile(
 )
 _NAVIGATION_TITLE_RE = re.compile(r"(?im)^\s*title\s*:\s*(.+?)\s*$")
 _NOT_FOUND_TITLE_RE = re.compile(
-    r"\b404\b|\b(?:page\s+)?not\s+found\b", re.IGNORECASE
+    r"""(?ix)
+    ^\s*
+    (?:
+        404(?:\s*(?:[-|:]\s*)?(?:(?:page\s+)?not\s+found|error))?
+        |
+        (?:[a-z0-9][\w.-]*\s+)?(?:page\s+)?not\s+found
+    )
+    (?:\s*[-–—|]\s*[a-z0-9][\w.-]*)?
+    \s*$
+    """
 )
 _NOT_FOUND_STATUS_RE = re.compile(
     r"(?im)^\s*(?:status|page|http(?:\s+status)?)\s*:\s*"
@@ -600,7 +609,10 @@ def _navigation_result_is_not_found(result: str) -> bool:
     summary = (result or "").split("=== Page Layout ===", 1)[0]
     title_match = _NAVIGATION_TITLE_RE.search(summary)
     return bool(
-        (title_match and _NOT_FOUND_TITLE_RE.search(title_match.group(1)))
+        # Title-only detection is deliberately conservative: accept canonical
+        # error titles with a short site-brand prefix/suffix, but not article
+        # prose that happens to mention "not found".
+        (title_match and _NOT_FOUND_TITLE_RE.fullmatch(title_match.group(1)))
         or _NOT_FOUND_STATUS_RE.search(summary)
     )
 

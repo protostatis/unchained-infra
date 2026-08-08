@@ -393,6 +393,12 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
         )
         self.assertFalse(
             chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/article\n"
+                "Title: Page Not Found: An Archaeology of Error Pages"
+            )
+        )
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_is_not_found(
                 "Navigated to: https://example.test/article\nTitle: Article\n\n"
                 "=== Page Layout ===\nArticle body mentions 404 not found in its source text"
             )
@@ -408,6 +414,14 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
         self.assertEqual(
             chat_agent_openrouter._page_url_from_tool_result(
                 "Clicked A\n--- changed ---\nurl: https://example.test/article"
+            ),
+            "https://example.test/article",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Clicked A\n--- changed ---\nurl: https://example.test/challenge\n"
+                "[challenge cleared] Now on: https://example.test/article\n\n"
+                "=== Page Layout ===\nURL: https://example.test/article"
             ),
             "https://example.test/article",
         )
