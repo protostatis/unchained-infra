@@ -325,7 +325,7 @@ class _PollingProc:
 
 
 class TestEnsureChrome(unittest.TestCase):
-    def test_launches_with_branded_tab_for_local_relay(self):
+    def test_stealth_launch_uses_branded_tab_without_automation_controlled_flag(self):
         launched = {}
 
         def _fake_popen(cmd, stdout=None, stderr=None):
@@ -361,13 +361,14 @@ class TestEnsureChrome(unittest.TestCase):
                 9222,
                 "default",
                 False,
-                False,
+                True,
                 "",
                 "ws://127.0.0.1:8765/tunnel",
             )
 
         self.assertTrue(ok)
         self.assertEqual(launched["cmd"][-1], "http://127.0.0.1:9090/tab")
+        self.assertNotIn("--disable-blink-features=AutomationControlled", launched["cmd"])
 
     def test_fails_fast_when_startup_tab_creation_fails_after_chrome_is_ready(self):
         proc = _TrackedProc()

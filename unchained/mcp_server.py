@@ -654,7 +654,7 @@ async def cdp_provision_launch(profile_path: str, agent_id: str = "", stealth: b
         agent_id: Agent to provision on (default: auto-detected).
         stealth: Inject fingerprint overrides to evade bot detection.
             Patches navigator.webdriver, outerWidth/outerHeight, WebGL,
-            chrome.runtime, and disables automation-controlled blink features.
+            and chrome.runtime.
 
     Returns the provisioned slot ID and initial tab ID. Use the returned
     prov-prefixed tab_id with ddm, cdp_click, cdp_type, etc.
