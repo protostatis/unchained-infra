@@ -117,6 +117,7 @@ REMOTE_DEPLOY_TOOLS_DIR="$REMOTE_DIR/.deploy-tools"
 COMPOSE_DIFF_TOOL="$SCRIPT_DIR/deploy/compose_service_diff.py"
 FIN_TERMINAL_SECRETS_TOOL="$SCRIPT_DIR/deploy/ensure_fin_terminal_secrets.py"
 CADDY_CONFIG_PREFLIGHT_TOOL="$SCRIPT_DIR/deploy/caddy_config_preflight.sh"
+MARKET_SCOUT_HELPER="$SCRIPT_DIR/deploy/verify_market_scout_health.mjs"
 REMOTE_CONFIG_STAGE="$REMOTE_DIR/.deploy-staging/$DEPLOY_ID"
 REMOTE_CONFIG_STAGE_ACTIVE=false
 FIN_TERMINAL_SECRETS_CHANGED=false
@@ -611,7 +612,7 @@ EOF
 
 upload_deploy_helpers() {
     local helper
-    for helper in "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL"; do
+    for helper in "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" "$MARKET_SCOUT_HELPER"; do
         if [[ ! -f "$helper" ]]; then
             echo "ERROR: missing deploy helper: $helper" >&2
             return 1
@@ -621,7 +622,7 @@ upload_deploy_helpers() {
 set -euo pipefail
 mkdir -p "$1"
 EOF
-    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" \
+    "${SCP_CMD[@]}" "$COMPOSE_DIFF_TOOL" "$FIN_TERMINAL_SECRETS_TOOL" "$MARKET_SCOUT_HELPER" \
         "$EC2_USER@$EC2_HOST:$REMOTE_DEPLOY_TOOLS_DIR/"
 }
 
@@ -643,6 +644,119 @@ EOF
     done
     "${SCP_CMD[@]}" "${upload_files[@]}" \
         "$EC2_USER@$EC2_HOST:$REMOTE_DIR/deploy/"
+}
+
+# ---------------------------------------------------------------------------
+# Market-scout health verification — streamed through docker exec.
+# ---------------------------------------------------------------------------
+
+# Resolve exactly one running fin-terminal container, return its ID and
+# StartedAt timestamp. Fails if zero or multiple containers are running.
+_resolve_fin_terminal_container() {
+    remote_bash "$REMOTE_DIR" <<'EOF'
+set -euo pipefail
+cd "$1"
+container="$(docker compose ps -q fin-terminal)"
+if [[ -z "$container" ]]; then
+    echo "ERROR: no fin-terminal container found" >&2
+    exit 1
+fi
+if [[ "$(echo "$container" | wc -l | tr -d ' ')" -ne 1 ]]; then
+    echo "ERROR: expected exactly one fin-terminal container, got multiple" >&2
+    exit 1
+fi
+[[ "$container" =~ ^[0-9a-f]{12,64}$ ]] || {
+    echo "ERROR: unexpected fin-terminal container ID format" >&2
+    exit 1
+}
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "$container")"
+if [[ -z "$started_at" ]]; then
+    echo "ERROR: could not read fin-terminal container StartedAt" >&2
+    exit 1
+fi
+printf '%s\n%s\n' "$container" "$started_at"
+EOF
+}
+
+# Stream the market-scout health helper into the fin-terminal container and
+# run it in the given mode. The container ID is captured before and after
+# execution to confirm the container was not replaced during the check.
+_verify_market_scout_in_container() {
+    local mode="$1"
+    local container_id started_at result
+    # Read exactly two lines: container_id first, then started_at.
+    # Use explicit read-once per line — Bash 3 compatible, no short-circuit.
+    IFS= read -r container_id || { echo "ERROR: could not read fin-terminal container ID for market-scout $mode" >&2; return 1; }
+    IFS= read -r started_at  || { echo "ERROR: could not read fin-terminal started-at for market-scout $mode" >&2; return 1; }
+    [[ -n "$container_id" && -n "$started_at" ]]
+    echo "    Fin-terminal container: $container_id (started $started_at)"
+
+    # Reject a replacement or restart between discovery and docker exec. A
+    # Docker restart preserves the container ID but changes StartedAt.
+    if ! remote_bash "$container_id" "$started_at" <<'EOF'
+set -euo pipefail
+container_id="$1"
+expected_started_at="$2"
+running="$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)"
+actual_started_at="$(docker inspect --format '{{.State.StartedAt}}' "$container_id" 2>/dev/null || true)"
+[[ "$running" == "true" && "$actual_started_at" == "$expected_started_at" ]]
+EOF
+    then
+        echo "ERROR: fin-terminal container identity changed before market-scout $mode" >&2
+        return 1
+    fi
+
+    local quoted_helper quoted_mode quoted_started
+    printf -v quoted_helper '%q' "$REMOTE_DEPLOY_TOOLS_DIR/verify_market_scout_health.mjs"
+    printf -v quoted_mode '%q' "$mode"
+    printf -v quoted_started '%q' "$started_at"
+    if ! result="$(
+        "${SSH_CMD[@]}" \
+            "docker exec -i \
+                -e MARKET_SCOUT_VERIFY_MODE=$quoted_mode \
+                -e MARKET_SCOUT_CANDIDATE_STARTED_AT=$quoted_started \
+                $container_id node --input-type=module - < $quoted_helper"
+    )"; then
+        echo "ERROR: market-scout $mode failed" >&2
+        echo "$result" >&2
+        return 1
+    fi
+    # Print safe aggregate proof to production logs.
+    echo "$result"
+
+    # Confirm container ID unchanged after the check.
+    local post_container
+    post_container="$(remote_bash "$REMOTE_DIR" "$container_id" "$started_at" <<'EOF'
+set -euo pipefail
+cd "$1"
+post="$(docker compose ps -q fin-terminal)"
+post_started_at="$(docker inspect --format '{{.State.StartedAt}}' "$post" 2>/dev/null || true)"
+if [[ "$post" != "$2" || "$post_started_at" != "$3" ]]; then
+    echo "ERROR: fin-terminal container identity changed during market-scout check" >&2
+    exit 1
+fi
+printf '%s\n' "$post"
+EOF
+)" || {
+        echo "ERROR: fin-terminal container changed during market-scout $mode" >&2
+        return 1
+    }
+    echo "    Market-scout $mode OK"
+    return 0
+}
+
+verify_market_scout_preflight() {
+    echo "==> Running market-scout preflight verification..."
+    local container_info
+    container_info="$(_resolve_fin_terminal_container)" || return 1
+    _verify_market_scout_in_container preflight <<< "$container_info" || return 1
+}
+
+verify_market_scout_commission() {
+    echo "==> Running market-scout commission verification..."
+    local container_info
+    container_info="$(_resolve_fin_terminal_container)" || return 1
+    _verify_market_scout_in_container commission <<< "$container_info" || return 1
 }
 
 compare_compose_services() {
@@ -1798,10 +1912,13 @@ retire_fin_terminal_demo
 
 echo "==> Verifying production health..."
 verify_production_health "$SERVICES_TO_REBUILD"
+
+verify_market_scout_preflight
+
 write_deploy_metadata
-# Metadata is the transaction commit point. From here onward only best-effort
-# cleanup remains, so an interrupted cleanup must not roll back a healthy,
-# revision-stamped release after its retained images have begun to be removed.
+# Metadata is the transaction commit point. Nothing after this line may invoke
+# the broad release rollback. Post-commit scout commissioning can still make
+# the job red, but its recovery is a forward-disable deployment.
 DEPLOY_SUCCEEDED=true
 release_remote_rollback_images \
     || echo "    (could not release retained rollback image tags; keeping them for recovery)"
@@ -1842,6 +1959,27 @@ set +e
 docker image prune -f --filter "until=168h" 2>&1 | tail -1
 docker builder prune -f --filter "until=24h" 2>&1 | tail -1
 EOF
+fi
+
+# Market-scout commission: only when fin-terminal was selected/recreated.
+# External feed success is NOT part of the rollback transaction. The core
+# deployment is committed; a commission failure signals that a forward-disable
+# deployment (MARKET_SCOUT_ENABLED=0) is needed — not a broad rollback. Status
+# and disk cleanup run first so a failed commission still leaves diagnostics
+# and the small production root disk in a safe state.
+if echo " $SERVICES_TO_REBUILD " | grep -q ' fin-terminal '; then
+    if ! verify_market_scout_commission; then
+        echo "" >&2
+        echo "============================================" >&2
+        echo "  MARKET-SCOUT COMMISSION FAILED" >&2
+        echo "  The core deployment is committed." >&2
+        echo "  No automatic rollback occurs." >&2
+        echo "  A forward-disable deployment" >&2
+        echo "  (MARKET_SCOUT_ENABLED=0) is required." >&2
+        echo "============================================" >&2
+        echo "" >&2
+        exit 1
+    fi
 fi
 
 echo ""
