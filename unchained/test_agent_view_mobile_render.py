@@ -56,6 +56,13 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _chrome_stderr_tail(path: Path, *, max_chars: int = 8_000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-max_chars:]
+    except OSError:
+        return ""
+
+
 def _render_harness_html() -> str:
     from web_app.templates import _AGENT_VIEW_JS, _AGENT_VIEW_PANEL, _AGENT_VIEW_STYLE
 
@@ -86,10 +93,21 @@ function largeSnapshot(index) {
 }
 
 class FakePreviewSocket {
+  // This mirrors the WebSocket surface currently exercised by Agent View:
+  // ready-state constants, readyState, send(), close(), and lifecycle callbacks.
+  static CONNECTING = 0;
   static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
   constructor(url) {
     this.url = url;
-    this.readyState = 0;
+    this.readyState = FakePreviewSocket.CONNECTING;
+    this.binaryType = 'blob';
+    this.bufferedAmount = 0;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
     this.closed = false;
     this.timer = 0;
     window.__previewRequest = url;
@@ -102,6 +120,7 @@ class FakePreviewSocket {
   start() {
     if (this.closed) return;
     this.readyState = FakePreviewSocket.OPEN;
+    if (this.onopen) this.onopen();
     this.emit({type:'preview.attached', mode:'semantic'});
     let sequence = 0;
     this.timer = setInterval(() => {
@@ -122,13 +141,16 @@ class FakePreviewSocket {
   }
   send() {}
   close() {
+    this.readyState = FakePreviewSocket.CLOSING;
     this.closed = true;
     clearInterval(this.timer);
-    this.readyState = 3;
+    this.readyState = FakePreviewSocket.CLOSED;
     if (this.onclose) this.onclose();
   }
 }
 window.WebSocket = FakePreviewSocket;
+// No chat turn runs in this harness, but the assembled template references
+// these chat helpers during initialization.
 function addUserBubble() {}
 function appendText() {}
 function updateAgentStatusUI() {}
@@ -230,89 +252,100 @@ class TestAgentViewMobileRender(unittest.TestCase):
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
-        server = site._server
-        assert server is not None and server.sockets
-        page_port = int(server.sockets[0].getsockname()[1])
+        addresses = runner.addresses
+        assert addresses
+        page_port = int(addresses[0][1])
 
         debug_port = _free_port()
         with tempfile.TemporaryDirectory(prefix="unchained-mobile-agent-view-") as profile_dir:
-            process = subprocess.Popen(
-                [
-                    chrome,
-                    "--headless=new",
-                    f"--remote-debugging-port={debug_port}",
-                    "--remote-allow-origins=*",
-                    f"--user-data-dir={profile_dir}",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            try:
-                ws_url = await _chrome_ws_url(debug_port)
-                async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as socket_client:
-                    cdp = _Cdp(socket_client)
-                    await cdp.command("Page.enable")
-                    await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
-                    await cdp.command("Emulation.setTouchEmulationEnabled", {
-                        "enabled": True,
-                        "maxTouchPoints": 5,
-                    })
-                    await cdp.command(
-                        "Page.navigate",
-                        {"url": f"http://127.0.0.1:{page_port}/"},
+            stderr_path = Path(profile_dir) / "chrome.stderr.log"
+            with stderr_path.open("w", encoding="utf-8") as chrome_stderr:
+                process: subprocess.Popen | None = None
+                try:
+                    process = subprocess.Popen(
+                        [
+                            chrome,
+                            "--headless=new",
+                            f"--remote-debugging-port={debug_port}",
+                            "--remote-allow-origins=*",
+                            f"--user-data-dir={profile_dir}",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=chrome_stderr,
                     )
-                    await _wait_for(cdp, "window.__previewSocketCount === 1")
-
-                    landscape = dict(_IPHONE_16_PRO_MAX)
-                    landscape.update({
-                        "width": 956,
-                        "height": 440,
-                        "screenWidth": 956,
-                        "screenHeight": 440,
-                    })
-                    keyboard = dict(_IPHONE_16_PRO_MAX)
-                    keyboard["height"] = 560
-                    for _ in range(4):
-                        await cdp.command("Emulation.setDeviceMetricsOverride", landscape)
-                        await asyncio.sleep(0.1)
-                        await cdp.command("Emulation.setDeviceMetricsOverride", keyboard)
-                        await asyncio.sleep(0.1)
+                    ws_url = await _chrome_ws_url(debug_port)
+                    async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as socket_client:
+                        cdp = _Cdp(socket_client)
+                        await cdp.command("Page.enable")
                         await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
-                        await asyncio.sleep(0.1)
+                        await cdp.command("Emulation.setTouchEmulationEnabled", {
+                            "enabled": True,
+                            "maxTouchPoints": 5,
+                        })
+                        await cdp.command(
+                            "Page.navigate",
+                            {"url": f"http://127.0.0.1:{page_port}/"},
+                        )
+                        await _wait_for(cdp, "window.__previewSocketCount === 1")
 
-                    final_state = await _wait_for(cdp, """(() => {
-                      const canvas = document.getElementById('agent-view-canvas');
-                      const activeFrames = [...document.querySelectorAll('.agent-view-semantic-frame')]
-                        .filter(frame => frame.classList.contains('active') && frame.hasAttribute('srcdoc'));
-                      const renderedCards = activeFrames[0] && activeFrames[0].contentDocument
-                        ? activeFrames[0].contentDocument.querySelectorAll('.card').length : 0;
-                      return canvas && canvas.classList.contains('has-semantic') &&
-                        window.__previewSnapshots >= 8 && activeFrames.length && renderedCards >= 2600 ? {
-                        snapshots: window.__previewSnapshots,
-                        sockets: window.__previewSocketCount,
-                        activeFrames: activeFrames.length,
-                        renderedCards: renderedCards,
-                      } : null;
-                    })()""")
-                    self.assertGreaterEqual(final_state["snapshots"], 8)
-                    self.assertEqual(final_state["sockets"], 1)
-                    self.assertEqual(final_state["activeFrames"], 1)
-                    self.assertEqual(final_state["renderedCards"], 2_600)
-                    screenshot = await cdp.command("Page.captureScreenshot", {"format": "png"})
-                    self.assertGreater(len(str(screenshot.get("data", ""))), 1_000)
-                    self.assertIsNone(process.poll(), "desktop Chrome renderer exited during the stress run")
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        await asyncio.to_thread(process.wait, 5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        await asyncio.to_thread(process.wait, 5)
-                with contextlib.suppress(Exception):
-                    await runner.cleanup()
+                        landscape = dict(_IPHONE_16_PRO_MAX)
+                        landscape.update({
+                            "width": 956,
+                            "height": 440,
+                            "screenWidth": 956,
+                            "screenHeight": 440,
+                        })
+                        keyboard = dict(_IPHONE_16_PRO_MAX)
+                        keyboard["height"] = 560
+                        for _ in range(4):
+                            await cdp.command("Emulation.setDeviceMetricsOverride", landscape)
+                            await asyncio.sleep(0.1)
+                            await cdp.command("Emulation.setDeviceMetricsOverride", keyboard)
+                            await asyncio.sleep(0.1)
+                            await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
+                            await asyncio.sleep(0.1)
+
+                        final_state = await _wait_for(cdp, """(() => {
+                          const canvas = document.getElementById('agent-view-canvas');
+                          const activeFrames = [...document.querySelectorAll('.agent-view-semantic-frame')]
+                            .filter(frame => frame.classList.contains('active') && frame.hasAttribute('srcdoc'));
+                          const renderedCards = activeFrames[0] && activeFrames[0].contentDocument
+                            ? activeFrames[0].contentDocument.querySelectorAll('.card').length : 0;
+                          return canvas && canvas.classList.contains('has-semantic') &&
+                            window.__previewSnapshots >= 8 && activeFrames.length && renderedCards >= 2600 ? {
+                            snapshots: window.__previewSnapshots,
+                            sockets: window.__previewSocketCount,
+                            activeFrames: activeFrames.length,
+                            renderedCards: renderedCards,
+                          } : null;
+                        })()""")
+                        self.assertGreaterEqual(final_state["snapshots"], 8)
+                        self.assertEqual(final_state["sockets"], 1)
+                        self.assertEqual(final_state["activeFrames"], 1)
+                        self.assertEqual(final_state["renderedCards"], 2_600)
+                        screenshot = await cdp.command("Page.captureScreenshot", {"format": "png"})
+                        self.assertGreater(len(str(screenshot.get("data", ""))), 1_000)
+                        self.assertIsNone(process.poll(), "desktop Chrome renderer exited during the stress run")
+                except Exception as exc:
+                    chrome_stderr.flush()
+                    diagnostics = _chrome_stderr_tail(stderr_path)
+                    if diagnostics:
+                        raise AssertionError(
+                            f"{exc}\n\nChrome stderr tail:\n{diagnostics}"
+                        ) from exc
+                    raise
+                finally:
+                    if process is not None and process.poll() is None:
+                        process.terminate()
+                        try:
+                            await asyncio.to_thread(process.wait, 5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            await asyncio.to_thread(process.wait, 5)
+                    with contextlib.suppress(Exception):
+                        await runner.cleanup()
 
 
 if __name__ == "__main__":
