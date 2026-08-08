@@ -22096,11 +22096,12 @@ function agentViewSnapshotHtml(snapshot, renderToken) {
   const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const adopted = Array.isArray(source.adoptedStyles) ? source.adoptedStyles : [];
   const documentCss = adopted.filter(function(entry) { return entry && entry.hostId === 'document'; }).map(function(entry) { return String(entry.css || ''); }).join('\\n');
+  const salientCss = String(source.salientStyles || '');
   const doctype = /^<!DOCTYPE\\s/i.test(String(source.doctype || '')) ? String(source.doctype) : '<!DOCTYPE html>';
   const observerCss = 'html{scroll-behavior:auto!important}';
   return doctype + '<html' + agentViewSerializeAttributes(source.htmlAttrs) + '><head>' +
     '<meta charset="utf-8"><base href="' + agentViewEscapeAttribute(agentViewSafeBase(source.url)) + '"><meta name="unchained-render-token" content="' + Number(renderToken || 0) + '">' + String(source.head || '') +
-    '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
+    '<style data-ucm-adopted="document">' + documentCss + '<\\/style><style data-ucm-critical>' + salientCss + '<\\/style><style data-ucm-observer>' + observerCss + '<\\/style>' +
     '<\\/head><body' + agentViewSerializeAttributes(source.bodyAttrs) + '>' + String(source.body || '') + '<\\/body><\\/html>';
 }
 
@@ -22160,6 +22161,9 @@ function agentViewUpdateFidelity(snapshot, frame, loadSettled) {
     details.push('head ' + agentViewFormatBytes(fidelity.capturedHeadBytes));
     details.push('body ' + agentViewFormatBytes(fidelity.capturedBodyBytes));
     details.push('computed fallback ' + agentViewFormatBytes(fidelity.criticalStyleBytes));
+    if (Number(fidelity.criticalStyleExpandedBytes || 0) > Number(fidelity.criticalStyleBytes || 0)) {
+      details.push('resolved styles ' + agentViewFormatBytes(fidelity.criticalStyleExpandedBytes) + ' projected into ' + agentViewFormatBytes(fidelity.criticalStyleBytes));
+    }
     if (fidelity.truncationStage) details.push('stage ' + fidelity.truncationStage);
     fidelityEl.title = details.join(' | ');
   }
