@@ -344,6 +344,163 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_hosted_agent_tracks_actual_pages_after_redirects_and_clicks(self):
+        sid = "s-page-tracking"
+        self.agent.sessions[sid] = []
+        expression = (
+            "Array.from(document.querySelectorAll('a'))"
+            ".filter(a => a.href).map(a => a.href)"
+        )
+        expressions = [f"{expression}.slice(0, {limit})" for limit in (25, 50, 75, 100)]
+        redirected_url = "https://example.test/redirected"
+        article_url = "https://example.test/article"
+
+        def tool_call(call_id, name, args):
+            return {
+                "id": call_id,
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
+
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        tool_call("nav-start", "navigate", {"url": "https://example.test/start"}),
+                        tool_call("links-1", "js_eval", {"expression": expressions[0]}),
+                        tool_call("nav-canonical", "navigate", {"url": redirected_url}),
+                        tool_call("links-2", "js_eval", {"expression": expressions[1]}),
+                        tool_call("links-3", "js_eval", {"expression": expressions[2]}),
+                        tool_call("open-article", "click", {"x": 100, "y": 200}),
+                        tool_call("article-links", "js_eval", {"expression": expressions[3]}),
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        execute_tool = AsyncMock(side_effect=[
+            f"Navigated to: {redirected_url}\nTitle: Redirect destination",
+            "redirected links one",
+            f"Navigated to: {redirected_url}\nTitle: Redirect destination",
+            "redirected links two",
+            f"Clicked A\n--- changed ---\nurl: {article_url}",
+            "article links",
+        ])
+        send = AsyncMock()
+
+        with (
+            patch.object(
+                self.agent,
+                "_call_openrouter",
+                new=AsyncMock(side_effect=[tool_response, final_response]),
+            ),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(self.agent, "_emit_live_preview", new=AsyncMock()),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+            patch.object(self.agent, "_send", new=send),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "tab_id": "tab-1",
+                "user_id": "u-page-tracking",
+                "message": "find articles",
+            })
+
+        self.assertEqual(execute_tool.await_count, 6)
+        tool_results = [
+            call.args[1]
+            for call in send.await_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "tool_result"
+        ]
+        self.assertTrue(tool_results[4]["data"].startswith("LINK_SCAN_REPEAT_BLOCKED"))
+        self.assertEqual(tool_results[6]["data"], "article links")
+
+    async def test_hosted_agent_stops_distinct_not_found_url_guesses(self):
+        sid = "s-not-found-stall"
+        self.agent.sessions[sid] = []
+
+        def navigation_response(call_id, url):
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": call_id,
+                            "function": {
+                                "name": "navigate",
+                                "arguments": json.dumps({"url": url}),
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            }
+
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "I could not verify an article."},
+                "finish_reason": "stop",
+            }],
+        }
+        urls = [
+            "https://example.test/guessed-one",
+            "https://example.test/guessed-two",
+            "https://example.test/guessed-three",
+        ]
+        execute_tool = AsyncMock(side_effect=[
+            f"Navigated to: {url}\nTitle: Page Not Found" for url in urls
+        ])
+        provider = AsyncMock(side_effect=[
+            *(navigation_response(f"missing-{index}", url) for index, url in enumerate(urls, 1)),
+            final_response,
+        ])
+        send = AsyncMock()
+
+        with (
+            patch.object(self.agent, "_call_openrouter", new=provider),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="I could not verify an article."),
+            ),
+            patch.object(self.agent, "_send", new=send),
+            patch.object(self.agent, "_save_session"),
+            patch("nudge.intervention_runtime_available", return_value=False),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "tab_id": "tab-1",
+                "user_id": "u-not-found-stall",
+                "message": "find the article",
+            })
+
+        self.assertEqual(execute_tool.await_count, 3)
+        self.assertEqual(provider.await_count, 4)
+        self.assertEqual(provider.await_args_list[-1].kwargs["tool_choice"], "none")
+        tool_results = [
+            call.args[1]
+            for call in send.await_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "tool_result"
+        ]
+        self.assertEqual(len(tool_results), 3)
+        self.assertTrue(all("NAVIGATION_NOT_FOUND" in result["data"] for result in tool_results))
+
     def test_prepare_hosted_context_bounds_messages_and_chars_in_place(self):
         messages = [{"role": "system", "content": "system" * 100}]
         for index in range(20):

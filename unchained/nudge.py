@@ -32,6 +32,9 @@ STALL_FIND_DISTINCT_MAX = int(os.environ.get("STALL_FIND_DISTINCT_MAX", "2"))
 MAX_SAME_PAGE_LINK_SCANS = max(
     1, int(os.environ.get("MAX_SAME_PAGE_LINK_SCANS", "2"))
 )
+FAILED_NAVIGATION_STALL_PENALTY = max(
+    1, int(os.environ.get("FAILED_NAVIGATION_STALL_PENALTY", "3"))
+)
 
 INTERVENTION_ENABLED = os.environ.get("INTERVENTION_ENABLED", "1").lower() not in (
     "0", "false", "no", "off",
@@ -127,10 +130,19 @@ def _extract_domain(url: str) -> str:
 
 
 _ANCHOR_QUERY_RE = re.compile(
-    r"querySelectorAll\(\s*(['\"])a\1\s*\)", re.IGNORECASE
+    r"querySelectorAll\(\s*(['\"])a(?:\[\s*href\s*\])?\1\s*\)",
+    re.IGNORECASE,
 )
+_ANCHOR_TAG_RE = re.compile(
+    r"getElementsByTagName\(\s*(['\"])a\1\s*\)", re.IGNORECASE
+)
+_DOCUMENT_LINKS_RE = re.compile(r"\bdocument\s*\.\s*links\b", re.IGNORECASE)
 _COLLECTION_TRANSFORM_RE = re.compile(
-    r"\.\s*(?:filter|map|forEach|reduce)\s*\(", re.IGNORECASE
+    r"\.\s*(?:filter|map|forEach|reduce|slice)\s*\(", re.IGNORECASE
+)
+_COLLECTION_MATERIALIZE_RE = re.compile(
+    r"\bArray\s*\.\s*from\s*\(|\[\s*\.\.\.|\bfor\s*\(\s*(?:const|let|var)\s+\w+\s+of\s+",
+    re.IGNORECASE,
 )
 
 
@@ -138,9 +150,17 @@ def _is_broad_link_scan(expression: object) -> bool:
     """Identify extraction-style JavaScript scans over every anchor on a page."""
     if not isinstance(expression, str):
         return False
-    return bool(
+    scans_all_links = bool(
         _ANCHOR_QUERY_RE.search(expression)
-        and _COLLECTION_TRANSFORM_RE.search(expression)
+        or _ANCHOR_TAG_RE.search(expression)
+        or _DOCUMENT_LINKS_RE.search(expression)
+    )
+    return bool(
+        scans_all_links
+        and (
+            _COLLECTION_TRANSFORM_RE.search(expression)
+            or _COLLECTION_MATERIALIZE_RE.search(expression)
+        )
     )
 
 
@@ -161,6 +181,11 @@ def _canonical_page_key(url: str) -> str:
     path = parsed.path.rstrip("/") or "/"
     query = f"?{parsed.query}" if parsed.query else ""
     return f"{host}{path}{query}"
+
+
+def _tab_key(tab_id: object) -> str:
+    """Normalize the browser tab identifier used for per-tab guardrails."""
+    return str(tab_id or "auto")
 
 
 def _safe_label(value: object) -> str:
@@ -291,9 +316,11 @@ class NudgeState:
         default_factory=lambda: deque(maxlen=max(1, STALL_NAV_GRACE_TURNS))
     )
     recent_domains: deque = field(default_factory=lambda: deque(maxlen=8))
-    recent_page_keys: deque = field(default_factory=lambda: deque(maxlen=12))
+    recent_page_keys_by_tab: dict[str, deque] = field(default_factory=dict)
+    page_urls_by_tab: dict[str, str] = field(default_factory=dict)
     link_scan_counts: dict[str, int] = field(default_factory=dict)
     last_nav_url: str = ""
+    last_failed_navigation_count: int = 0
 
     live_tool_log: list = field(default_factory=list)
     stall_force_strikes: int = 0
@@ -306,13 +333,33 @@ class NudgeState:
     # Loop detection
     # ------------------------------------------------------------------
 
-    def record_navigation(self, url: str) -> bool:
-        """Record a successful navigation and return whether it reached a new page."""
+    def page_url_for_tab(self, tab_id: object) -> str:
+        """Return the most recently confirmed page URL for one browser tab."""
+        key = _tab_key(tab_id)
+        if key in self.page_urls_by_tab:
+            return self.page_urls_by_tab[key]
+        return self.last_nav_url if key == "auto" else ""
+
+    def observe_page(self, url: str, *, tab_id: object = "auto") -> tuple[bool, bool]:
+        """Record a confirmed page URL and return ``(changed, new_to_tab)``."""
         page_key = _canonical_page_key(url)
         if not page_key:
-            return False
-        is_new_page = page_key not in self.recent_page_keys
-        self.recent_page_keys.append(page_key)
+            return False, False
+        key = _tab_key(tab_id)
+        previous_page_key = _canonical_page_key(self.page_url_for_tab(key))
+        history = self.recent_page_keys_by_tab.get(key)
+        if history is None:
+            history = deque(maxlen=12)
+            self.recent_page_keys_by_tab[key] = history
+        is_new_page = page_key not in history
+        history.append(page_key)
+        self.page_urls_by_tab[key] = url
+        self.last_nav_url = url
+        return page_key != previous_page_key, is_new_page
+
+    def record_navigation(self, url: str, *, tab_id: object = "auto") -> bool:
+        """Record a successful navigation and return whether it reached a new page."""
+        _, is_new_page = self.observe_page(url, tab_id=tab_id)
         return is_new_page
 
     def allow_broad_link_scan(
@@ -326,7 +373,7 @@ class NudgeState:
         if not _is_broad_link_scan(expression):
             return True
         page_key = _canonical_page_key(page_url) or "current-page"
-        key = f"{tab_id or 'auto'}:{page_key}"
+        key = f"{_tab_key(tab_id)}:{page_key}"
         count = self.link_scan_counts.get(key, 0)
         if count >= MAX_SAME_PAGE_LINK_SCANS:
             return False
@@ -399,10 +446,13 @@ class NudgeState:
         turn_had_navigation: bool,
         turn_domain_switch: bool,
         turn_had_interaction: bool,
+        failed_navigation_count: int = 0,
     ):
         """Update stagnation score based on a completed tool turn."""
         if not turn_step_sigs:
             return
+
+        self.last_failed_navigation_count = max(0, int(failed_navigation_count))
 
         self.recent_nav_turns.append(turn_had_navigation or turn_domain_switch)
 
@@ -430,6 +480,16 @@ class NudgeState:
             self.stall_force_strikes = 0
         elif turn_had_interaction and not low_novelty:
             self.stagnation_score = max(0, self.stagnation_score - 1)
+
+        # Unique guessed URLs would otherwise look like novelty because their
+        # arguments and result bodies differ. A Not Found page supplies no
+        # usable research evidence, so make repeated failures accumulate toward
+        # a forced answer rather than resetting the loop detector.
+        if self.last_failed_navigation_count:
+            self.stagnation_score += min(
+                9,
+                self.last_failed_navigation_count * FAILED_NAVIGATION_STALL_PENALTY,
+            )
 
         self.recent_turn_sigs.append(turn_sig)
         self.recent_step_sigs.extend(turn_step_sigs)
@@ -478,6 +538,12 @@ class NudgeState:
         self.stall_force_strikes += 1
         if self.stall_force_strikes < max(1, STALL_FORCE_FINAL_STRIKES):
             self.stagnation_score = max(0, STALL_SCORE_THRESHOLD - 1)
+            if self.last_failed_navigation_count:
+                return "guidance", (
+                    "Your recent navigation reached a Not Found page. Stop guessing "
+                    "article URLs; use an href already returned by the browser, the "
+                    "site's search, or answer from the evidence you already collected."
+                )
             return "guidance", (
                 "Continue exploring, but prioritize steps that extract concrete "
                 "results (prices, dates, airlines, booking details) and avoid "
@@ -485,6 +551,12 @@ class NudgeState:
             )
 
         self.loop_events += 1
+        if self.last_failed_navigation_count:
+            return "force", (
+                "Several navigation attempts reached Not Found pages. I stopped "
+                "rather than guessing more URLs; please ask me to continue from a "
+                "specific page or search result."
+            )
         return "force", (
             "I kept using browser tools but stopped making meaningful progress. "
             "Please let me try a different approach or rephrase the request."

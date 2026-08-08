@@ -309,6 +309,53 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
                 expression="document.querySelector('.headline').textContent",
             )
         )
+        self.assertTrue(
+            state.allow_broad_link_scan(
+                page_url="https://www.cnbc.com/markets/",
+                tab_id="tab-2",
+                expression=expression,
+            )
+        )
+
+    def test_all_anchor_scan_variants_are_limited(self):
+        expressions = (
+            "document.querySelectorAll('a[href]').map(a => a.href)",
+            "Array.from(document.links, link => link.href)",
+            "[...document.getElementsByTagName('a')].filter(a => a.href)",
+            "for (const link of document.querySelectorAll('a')) { urls.push(link.href) }",
+        )
+
+        for expression in expressions:
+            with self.subTest(expression=expression):
+                state = NudgeState()
+                for _ in range(MAX_SAME_PAGE_LINK_SCANS):
+                    self.assertTrue(
+                        state.allow_broad_link_scan(
+                            page_url="https://example.test/markets",
+                            tab_id="tab-1",
+                            expression=expression,
+                        )
+                    )
+                self.assertFalse(
+                    state.allow_broad_link_scan(
+                        page_url="https://example.test/markets",
+                        tab_id="tab-1",
+                        expression=expression,
+                    )
+                )
+
+    def test_targeted_anchor_selector_is_not_treated_as_full_page_scan(self):
+        state = NudgeState()
+        expression = "Array.from(document.querySelectorAll('a[href*=\"/article/\"]'))"
+
+        for _ in range(MAX_SAME_PAGE_LINK_SCANS + 1):
+            self.assertTrue(
+                state.allow_broad_link_scan(
+                    page_url="https://example.test/markets",
+                    tab_id="tab-1",
+                    expression=expression,
+                )
+            )
 
     def test_revisited_navigation_does_not_count_as_new_progress(self):
         state = NudgeState()
@@ -326,6 +373,43 @@ class TestWorkspaceHarnessGuardrails(unittest.TestCase):
             chat_agent_openrouter._navigation_result_is_not_found(
                 "Navigated to: https://example.test/article\nTitle: Article"
             )
+        )
+
+    def test_not_found_detection_uses_navigation_metadata_not_page_text(self):
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: CNBC Page Not Found"
+            )
+        )
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: 404 Error"
+            )
+        )
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: Error\nHTTP Status: 404"
+            )
+        )
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/article\nTitle: Article\n\n"
+                "=== Page Layout ===\nArticle body mentions 404 not found in its source text"
+            )
+        )
+
+    def test_page_url_parser_uses_confirmed_navigation_and_click_urls(self):
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Navigated to: https://example.test/redirected\nTitle: Landing"
+            ),
+            "https://example.test/redirected",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Clicked A\n--- changed ---\nurl: https://example.test/article"
+            ),
+            "https://example.test/article",
         )
 
     def test_navigation_progress_requires_nonempty_nonerror_page_state(self):

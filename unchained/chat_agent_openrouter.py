@@ -575,13 +575,33 @@ def _ui_tool_input(tool_name: str, args: dict) -> str:
     return json.dumps(args, sort_keys=True)
 
 
+_RESULT_PAGE_URL_RE = re.compile(
+    r"(?im)^\s*(?:\[[^\]\n]+\]\s*)?"
+    r"(?:navigated\s+to|url|now\s+on)\s*:\s*(https?://[^\s]+)"
+)
+_NAVIGATION_TITLE_RE = re.compile(r"(?im)^\s*title\s*:\s*(.+?)\s*$")
+_NOT_FOUND_TITLE_RE = re.compile(
+    r"\b404\b|\b(?:page\s+)?not\s+found\b", re.IGNORECASE
+)
+_NOT_FOUND_STATUS_RE = re.compile(
+    r"(?im)^\s*(?:status|page|http(?:\s+status)?)\s*:\s*"
+    r"(?:404\b|.*\bnot\s+found\b)"
+)
+
+
+def _page_url_from_tool_result(result: str) -> str:
+    """Extract the confirmed current URL emitted by a page-changing browser tool."""
+    matches = _RESULT_PAGE_URL_RE.findall(result or "")
+    return matches[-1].rstrip(".,;") if matches else ""
+
+
 def _navigation_result_is_not_found(result: str) -> bool:
-    """Identify a browser navigation that landed on a site's missing-page view."""
-    normalized = (result or "").lower()
-    return (
-        "title: not found" in normalized
-        or "page: not found" in normalized
-        or "404 not found" in normalized
+    """Identify a missing-page navigation without inspecting arbitrary page text."""
+    summary = (result or "").split("=== Page Layout ===", 1)[0]
+    title_match = _NAVIGATION_TITLE_RE.search(summary)
+    return bool(
+        (title_match and _NOT_FOUND_TITLE_RE.search(title_match.group(1)))
+        or _NOT_FOUND_STATUS_RE.search(summary)
     )
 
 
@@ -1606,6 +1626,7 @@ class TrialAgent:
                     turn_had_navigation = False
                     turn_had_interaction = False
                     turn_domain_switch = False
+                    turn_failed_navigation_count = 0
                     for idx, tc in enumerate(tool_calls):
                         fn = tc.get("function", {})
                         name = fn.get("name", "")
@@ -1639,6 +1660,7 @@ class TrialAgent:
                         flags_str = args.get("flags", "")
                         if name == "ddm" and any(f in flags_str for f in ("--new", "--tabs", "--close")):
                             preview_tab = ""
+                        tracking_tab_id = preview_tab or tab_id
 
                         tool_start_evt = {
                             "type": "tool_start",
@@ -1662,8 +1684,8 @@ class TrialAgent:
                             expr = str(args.get("expression", "")).strip()
                             if expr:
                                 if not ns.allow_broad_link_scan(
-                                    page_url=ns.last_nav_url,
-                                    tab_id=tab_id,
+                                    page_url=ns.page_url_for_tab(tracking_tab_id),
+                                    tab_id=tracking_tab_id,
                                     expression=expr,
                                 ):
                                     link_scan_blocked = True
@@ -1729,18 +1751,51 @@ class TrialAgent:
                                     }
                         if not isinstance(result, str):
                             result = str(result)
+                        page_url = (
+                            _page_url_from_tool_result(result)
+                            if name in {"navigate", "click", "type_text", "press_enter", "submit_form"}
+                            else ""
+                        )
+                        navigation_not_found = False
                         if name == "navigate":
-                            if _navigation_result_is_not_found(result):
+                            navigation_not_found = _navigation_result_is_not_found(result)
+                            if navigation_not_found:
+                                turn_failed_navigation_count += 1
+                                # Track the actual missing page for subsequent
+                                # per-page guardrails, but never treat it as
+                                # successful research progress.
+                                if page_url or nav_url:
+                                    ns.observe_page(
+                                        page_url or nav_url,
+                                        tab_id=tracking_tab_id,
+                                    )
                                 result += (
                                     "\n\nNAVIGATION_NOT_FOUND: This URL did not resolve. Do not guess "
                                     "another article URL; use a discovered href, the site's search, or "
                                     "summarize the evidence already collected."
                                 )
                             elif nav_url and _navigation_result_succeeded(result):
-                                ns.last_nav_url = nav_url
-                                if ns.record_navigation(nav_url):
+                                confirmed_page_url = page_url or nav_url
+                                if ns.record_navigation(
+                                    confirmed_page_url,
+                                    tab_id=tracking_tab_id,
+                                ):
                                     turn_had_navigation = True
-                                domain = _extract_domain(nav_url)
+                                domain = _extract_domain(confirmed_page_url)
+                                if domain:
+                                    if ns.recent_domains and domain != ns.recent_domains[-1]:
+                                        turn_domain_switch = True
+                                    ns.recent_domains.append(domain)
+                            elif page_url:
+                                ns.observe_page(page_url, tab_id=tracking_tab_id)
+                        elif page_url:
+                            page_changed, page_is_new = ns.observe_page(
+                                page_url,
+                                tab_id=tracking_tab_id,
+                            )
+                            if page_changed and page_is_new:
+                                turn_had_navigation = True
+                                domain = _extract_domain(page_url)
                                 if domain:
                                     if ns.recent_domains and domain != ns.recent_domains[-1]:
                                         turn_domain_switch = True
@@ -1750,7 +1805,18 @@ class TrialAgent:
                             f"{name}{' [cache-hit]' if cache_hit else ''} ({tool_ms:.1f}ms) -> "
                             f"{_truncate(result.replace(chr(10), ' '), 180)}"
                         )
-                        turn_step_sigs.append(_tool_progress_sig(name, args, result))
+                        if navigation_not_found:
+                            # Different guessed URLs must not masquerade as novel
+                            # research progress just because their 404 pages differ.
+                            turn_step_sigs.append(
+                                _tool_progress_sig(
+                                    "navigate",
+                                    {"outcome": "not_found"},
+                                    "not_found",
+                                )
+                            )
+                        else:
+                            turn_step_sigs.append(_tool_progress_sig(name, args, result))
                         if name == "ddm":
                             flags = str(args.get("flags", "")).strip()
                             if flags.startswith("--text --find"):
@@ -1775,7 +1841,11 @@ class TrialAgent:
                                 tool_result_evt["new_tab_id"] = _tab_m.group(1)
                         await self._send(session_id, tool_result_evt)
 
-                        tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
+                        tool_failed = (
+                            navigation_not_found
+                            or result.startswith("BROWSER_UNAVAILABLE")
+                            or result.startswith("Tool error (")
+                        )
                         # Headless sessions have a live screencast — screenshot
                         # backup opens a competing CDP connection that captures
                         # blank/stale state.  Only use screenshot backup for
@@ -1834,6 +1904,7 @@ class TrialAgent:
                         turn_step_sigs, turn_find_queries,
                         turn_had_navigation, turn_domain_switch,
                         turn_had_interaction,
+                        failed_navigation_count=turn_failed_navigation_count,
                     )
 
                     # Run progress-based intervention
