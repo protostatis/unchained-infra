@@ -95,18 +95,31 @@ def credit_service_token() -> str:
 # Model catalog / allowlist
 # ---------------------------------------------------------------------------
 
-HOSTED_MODEL_CATALOG: dict[str, int] = {
-    # Paid models — conservative per-attempt holds for a request bounded to
-    # HOSTED_MAX_INTERNAL_CONTEXT_CHARS and 4096 output tokens by the hosted worker.
-    "google/gemini-3.1-flash-lite": 100_000,   # $0.10
-    # OpenRouter pricing snapshot: $0.30/M input + $2.50/M output. The hosted
-    # request bounds keep a $0.10 hold conservative without treating it as an
-    # unknown $1.00 model.
-    "google/gemini-3.5-flash-lite": 100_000,
+# Operational pricing/usage certification reviewed 2026-08-08 against the
+# published OpenRouter rates. It assumes a 425k input-token envelope (the 400k
+# serialized-message budget plus provider/tool-schema headroom), 4,096 output
+# tokens, and a 25% margin. This deliberately certifies the fixed catalog only;
+# it is not a universal character-to-token proof for arbitrary custom models.
+HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS = 400_000
+HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD: dict[str, int] = {
+    "google/gemini-3.1-flash-lite": 150_000,
+    "google/gemini-3.5-flash-lite": 200_000,
     "google/gemini-2.5-flash-lite": 100_000,
     "google/gemini-2.5-flash": 250_000,
     "google/gemini-2.5-pro": 750_000,
-    "google/gemini-3-flash-preview": 250_000,
+    "google/gemini-3-flash-preview": 300_000,
+    "qwen/qwen3.6-plus": 500_000,
+    "qwen/qwen3.5-flash-02-23": 250_000,
+}
+
+HOSTED_MODEL_CATALOG: dict[str, int] = {
+    # Paid models — fixed holds certified for the context budget above.
+    "google/gemini-3.1-flash-lite": 150_000,
+    "google/gemini-3.5-flash-lite": 200_000,
+    "google/gemini-2.5-flash-lite": 100_000,
+    "google/gemini-2.5-flash": 250_000,
+    "google/gemini-2.5-pro": 750_000,
+    "google/gemini-3-flash-preview": 300_000,
     "qwen/qwen3.6-plus": 500_000,
     "qwen/qwen3.5-flash-02-23": 250_000,
     # Free models — zero hold (no reservation needed)
@@ -119,6 +132,42 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "deepseek/deepseek-r1:free": 0,
     "nvidia/nemotron-3-super-120b-a12b:free": 0,
 }
+
+
+def validate_hosted_context_budget(max_internal_context_chars: int) -> None:
+    """Fail closed when the worker budget exceeds reviewed catalog holds."""
+    try:
+        budget = int(max_internal_context_chars)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("hosted internal context budget must be an integer") from exc
+    if budget > HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS:
+        raise ValueError(
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS exceeds the credit-hold "
+            f"certification of {HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS}"
+        )
+
+    paid_catalog = {
+        model for model, hold in HOSTED_MODEL_CATALOG.items() if int(hold) > 0
+    }
+    certified_models = set(HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD)
+    if paid_catalog != certified_models:
+        missing = sorted(paid_catalog - certified_models)
+        stale = sorted(certified_models - paid_catalog)
+        raise RuntimeError(
+            "hosted credit certification does not match the paid catalog "
+            f"(missing={missing}, stale={stale})"
+        )
+
+    underfunded = {
+        model: (HOSTED_MODEL_CATALOG[model], minimum)
+        for model, minimum in HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD.items()
+        if HOSTED_MODEL_CATALOG[model] < minimum
+    }
+    if underfunded:
+        raise RuntimeError(
+            "hosted credit holds are below their certified minimums: "
+            f"{underfunded}"
+        )
 
 HOSTED_MODEL_POLICY_SETTING_KEY = "hosted_openrouter_models"
 HOSTED_MODEL_POLICY_VERSION = 1

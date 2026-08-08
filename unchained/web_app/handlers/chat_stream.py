@@ -74,6 +74,9 @@ _HOSTED_TURN_DEADLINE_S = max(
 _HOSTED_MAX_USER_PROMPT_CHARS = max(
     1_000, int(os.environ.get("HOSTED_MAX_USER_PROMPT_CHARS", "20000"))
 )
+# This bounds effective user text. The trial worker separately measures the
+# serialized OpenAI message history, which includes system, assistant, tool-call,
+# and tool-result context.
 
 _FIRST_LOOK_SEARCH_REF = "searchagentsky-result"
 _FIRST_LOOK_SEARCH_TASK = "search-result"

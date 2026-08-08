@@ -24,10 +24,13 @@ import time
 import unittest
 from contextlib import closing
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from auth import Auth
 from credit import (
     CreditLedger,
+    HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS,
+    HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD,
     HOSTED_MODEL_CATALOG,
     HOSTED_MODEL_POLICY_SETTING_KEY,
     HOSTED_MODEL_POLICY_VERSION,
@@ -43,6 +46,7 @@ from credit import (
     is_hosted_model_allowed_for_identity,
     is_openrouter_model_id,
     normalize_hosted_model_ids,
+    validate_hosted_context_budget,
 )
 
 
@@ -605,6 +609,31 @@ class TestCreditLedger(unittest.TestCase):
         res = _default_reservation("nonexistent-model")
         self.assertGreater(res, 0)
 
+    def test_hosted_context_budget_requires_current_hold_certification(self):
+        validate_hosted_context_budget(HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS)
+        with self.assertRaisesRegex(ValueError, "exceeds the credit-hold"):
+            validate_hosted_context_budget(
+                HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS + 1
+            )
+
+        model = "google/gemini-3.1-flash-lite"
+        with patch.dict(HOSTED_MODEL_CATALOG, {model: 1}):
+            with self.assertRaisesRegex(RuntimeError, "below their certified"):
+                validate_hosted_context_budget(
+                    HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS
+                )
+
+        with patch.dict(HOSTED_MODEL_CATALOG, {"vendor/new-paid-model": 1}):
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                validate_hosted_context_budget(
+                    HOSTED_HOLD_CERTIFIED_MAX_INTERNAL_CONTEXT_CHARS
+                )
+
+        self.assertEqual(
+            set(HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD),
+            {model for model, hold in HOSTED_MODEL_CATALOG.items() if hold > 0},
+        )
+
     def test_default_reservation_for_free_model(self):
         res = _default_reservation("google/gemma-3-27b-it:free")
         self.assertEqual(res, 0)  # free models have zero reservation
@@ -635,7 +664,10 @@ class TestCreditLedger(unittest.TestCase):
         self.assertTrue(hosted_model_credit_allows(admin_custom, 939_400))
         self.assertFalse(non_admin_custom["cap_to_available"])
         self.assertFalse(hosted_model_credit_allows(non_admin_custom, 939_400))
-        self.assertEqual(known_admin_model["reservation_micro_usd"], 100_000)
+        self.assertEqual(
+            known_admin_model["reservation_micro_usd"],
+            HOSTED_MODEL_CATALOG["google/gemini-3.5-flash-lite"],
+        )
         self.assertFalse(known_admin_model["cap_to_available"])
 
     def test_admin_custom_reservation_atomically_uses_remaining_balance(self):

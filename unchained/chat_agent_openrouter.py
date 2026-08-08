@@ -45,6 +45,7 @@ import httpx
 import websockets
 
 import cloud_tools
+from credit import validate_hosted_context_budget
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
 from scheduler_agent import (
@@ -115,20 +116,36 @@ SESSION_DIR = os.environ.get(
 )
 MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
-HOSTED_MAX_INTERNAL_CONTEXT_CHARS = max(
-    10_000,
-    int(
-        os.environ.get(
-            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS",
-            # Preserve existing deployments until they explicitly adopt the
-            # split setting. This is an internal agent working-context budget,
-            # not a limit on the user's submitted prompt.
-            os.environ.get("HOSTED_MAX_INPUT_CHARS", "400000"),
-        )
-    ),
+
+
+def _resolve_hosted_internal_context_chars(
+    env: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    """Resolve the canonical context budget, preserving the legacy setting."""
+    values = os.environ if env is None else env
+    canonical = str(values.get("HOSTED_MAX_INTERNAL_CONTEXT_CHARS", "") or "").strip()
+    legacy = str(values.get("HOSTED_MAX_INPUT_CHARS", "") or "").strip()
+    raw = canonical or legacy or "400000"
+    source = "canonical" if canonical else "legacy" if legacy else "default"
+    return max(10_000, int(raw)), source
+
+
+HOSTED_MAX_INTERNAL_CONTEXT_CHARS, _HOSTED_CONTEXT_LIMIT_SOURCE = (
+    _resolve_hosted_internal_context_chars()
 )
 # Backwards-compatible module name for integrations importing the old symbol.
 HOSTED_MAX_INPUT_CHARS = HOSTED_MAX_INTERNAL_CONTEXT_CHARS
+if _HOSTED_CONTEXT_LIMIT_SOURCE == "legacy":
+    print(
+        "[openrouter] WARNING: HOSTED_MAX_INPUT_CHARS is deprecated; "
+        "use HOSTED_MAX_INTERNAL_CONTEXT_CHARS instead."
+    )
+print(
+    "[openrouter] Hosted internal context limit: "
+    f"{HOSTED_MAX_INTERNAL_CONTEXT_CHARS} "
+    f"(source={_HOSTED_CONTEXT_LIMIT_SOURCE})"
+)
+validate_hosted_context_budget(HOSTED_MAX_INTERNAL_CONTEXT_CHARS)
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))

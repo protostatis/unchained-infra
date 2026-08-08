@@ -350,7 +350,10 @@ services:
       - PRIVATE_CORE_URL=http://private-core:8770
       - PRIVATE_CORE_TOKEN=${PRIVATE_CORE_TOKEN:?PRIVATE_CORE_TOKEN_required}
       - HOSTED_AGENT_SERVICE_TOKEN=${HOSTED_AGENT_SERVICE_TOKEN:?HOSTED_AGENT_SERVICE_TOKEN_required}
-      - HOSTED_MAX_INTERNAL_CONTEXT_CHARS=${HOSTED_MAX_INTERNAL_CONTEXT_CHARS:-${HOSTED_MAX_INPUT_CHARS:-400000}}
+      # The worker resolves canonical → legacy → 400000. Keep both values
+      # independent here; nested Compose interpolation is not portable.
+      - HOSTED_MAX_INTERNAL_CONTEXT_CHARS=${HOSTED_MAX_INTERNAL_CONTEXT_CHARS:-}
+      - HOSTED_MAX_INPUT_CHARS=${HOSTED_MAX_INPUT_CHARS:-}
     depends_on:
       - relay
       - web

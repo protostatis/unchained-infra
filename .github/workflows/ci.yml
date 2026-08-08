@@ -66,6 +66,7 @@ jobs:
             test_credit_handlers \
             test_hosted_billing \
             test_hosted_admission \
+            test_first_look_run_analytics \
             test_scheduler_agent_access \
             test_scheduled_tasks \
             test_hosted_conversations \

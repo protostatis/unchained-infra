@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,6 +18,7 @@ from chat_agent_openrouter import (
     TrialAgent,
     _openrouter_user_error,
     _prepare_hosted_context,
+    _resolve_hosted_internal_context_chars,
 )
 
 
@@ -36,6 +39,62 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         else:
             os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = self._saved_token
+
+    def _render_compose(self, overrides: dict[str, str] | None = None) -> dict:
+        repo_root = Path(__file__).resolve().parent.parent
+        env = os.environ.copy()
+        for name in (
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS",
+            "HOSTED_MAX_INPUT_CHARS",
+            "HOSTED_MAX_USER_PROMPT_CHARS",
+        ):
+            env.pop(name, None)
+        env.update({
+            "FIN_TERMINAL_PROXY_TOKEN": "test",
+            "FIN_TERMINAL_PUBLIC_EDGE_PROXY_TOKEN": "test",
+            "PRIVATE_CORE_TOKEN": "test",
+            "TRIAL_AGENT_KEY": "test",
+            "HOSTED_AGENT_SERVICE_TOKEN": "test",
+            "OPENROUTER_API_KEY": "test",
+        })
+        env.update(overrides or {})
+        result = subprocess.run(
+            ["docker", "compose", "config", "--format", "json"],
+            cwd=repo_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_compose_and_worker_resolve_hosted_limits_without_nesting(self):
+        rendered = self._render_compose()
+        web_env = rendered["services"]["web"]["environment"]
+        trial_env = rendered["services"]["trial-agent"]["environment"]
+        self.assertEqual(web_env["HOSTED_MAX_USER_PROMPT_CHARS"], "20000")
+        self.assertEqual(trial_env["HOSTED_MAX_INTERNAL_CONTEXT_CHARS"], "")
+        self.assertEqual(trial_env["HOSTED_MAX_INPUT_CHARS"], "")
+        self.assertEqual(_resolve_hosted_internal_context_chars({}), (400_000, "default"))
+
+        legacy_rendered = self._render_compose({"HOSTED_MAX_INPUT_CHARS": "250000"})
+        legacy_env = legacy_rendered["services"]["trial-agent"]["environment"]
+        self.assertEqual(legacy_env["HOSTED_MAX_INPUT_CHARS"], "250000")
+        self.assertEqual(
+            _resolve_hosted_internal_context_chars(legacy_env), (250_000, "legacy")
+        )
+
+        canonical_rendered = self._render_compose({
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS": "400000",
+            "HOSTED_MAX_INPUT_CHARS": "250000",
+        })
+        canonical_env = canonical_rendered["services"]["trial-agent"]["environment"]
+        self.assertEqual(canonical_env["HOSTED_MAX_INTERNAL_CONTEXT_CHARS"], "400000")
+        self.assertEqual(
+            _resolve_hosted_internal_context_chars(canonical_env),
+            (400_000, "canonical"),
+        )
 
     async def test_reserve_submit_provider_settle_order(self):
         order: list[str] = []
