@@ -1345,9 +1345,6 @@ class TrialAgent:
         reflex.set_user_goal(user_text)
 
         js_eval_cache: dict[tuple[str, str], dict] = {}
-        # Surface Chrome once when a hosted task starts browsing. Later
-        # navigations stay behind the chat window instead of stealing focus.
-        focus_next_navigation = True
 
         def _invalidate_js_eval_cache(tab_id: str):
             """Clear cached js_eval outputs after actions that may change page state."""
@@ -1668,8 +1665,9 @@ class TrialAgent:
                             try:
                                 execute_kwargs = {}
                                 if name == "navigate":
-                                    execute_kwargs["bring_to_front"] = focus_next_navigation
-                                    focus_next_navigation = False
+                                    # Agent View reflects workspace navigation, so
+                                    # the headed Chrome must remain in the background.
+                                    execute_kwargs["bring_to_front"] = False
                                 result = await asyncio.wait_for(
                                     self._execute_tool(
                                         agent_id,

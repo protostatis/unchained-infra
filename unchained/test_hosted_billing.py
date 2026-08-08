@@ -208,7 +208,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         provider.assert_not_awaited()
         release.assert_awaited_once()
 
-    async def test_only_first_navigate_in_hosted_task_focuses_client_browser(self):
+    async def test_hosted_task_navigations_stay_in_background(self):
         self.agent.sessions["s-focus"] = []
         tool_response = {
             "choices": [{
@@ -269,7 +269,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(execute_tool.await_count, 2)
         first, second = execute_tool.await_args_list
-        self.assertTrue(first.kwargs["bring_to_front"])
+        self.assertFalse(first.kwargs["bring_to_front"])
         self.assertFalse(second.kwargs["bring_to_front"])
 
     def test_prepare_hosted_context_bounds_messages_and_chars_in_place(self):
