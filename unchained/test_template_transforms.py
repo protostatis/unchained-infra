@@ -760,12 +760,14 @@ agentViewUpdateFidelity({fidelity:{
   capturedHeadBytes:2048,
   capturedBodyBytes:4096,
   criticalStyleBytes:1024,
+  criticalStyleExpandedBytes:8192,
   headTruncated:true,
   truncationStage:'head-budget',
 }}, frame, true);
 expect(fidelityElement.textContent.includes('stylesheet replays failed'), 'replay failure was not surfaced');
 expect(fidelityElement.title.includes('inline styles 3/4'), 'style counts were not included in diagnostics');
 expect(fidelityElement.title.includes('computed fallback 1 KB'), 'computed fallback bytes were not included');
+expect(fidelityElement.title.includes('resolved styles 8 KB projected into 1 KB'), 'style projection savings were not included');
 """
         result = subprocess.run(
             [node],
@@ -774,6 +776,35 @@ expect(fidelityElement.title.includes('computed fallback 1 KB'), 'computed fallb
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_agent_view_replays_salient_style_table_after_author_css(self):
+        from web_app import templates
+
+        source = templates._AGENT_VIEW_JS
+        start = source.index("function agentViewSnapshotHtml")
+        end = source.index("function agentViewStylesheetReplayStatus", start)
+        snapshot_source = source[start:end]
+
+        self.assertIn("const salientCss = String(source.salientStyles || '')", snapshot_source)
+        self.assertIn('<style data-ucm-critical>', snapshot_source)
+        self.assertLess(
+            snapshot_source.index('<style data-ucm-adopted="document">'),
+            snapshot_source.index('<style data-ucm-critical>'),
+        )
+        self.assertLess(
+            snapshot_source.index('<style data-ucm-critical>'),
+            snapshot_source.index('<style data-ucm-observer>'),
+        )
+
+    def test_agent_view_advertises_salient_style_replay_capability(self):
+        from web_app import templates
+
+        source = templates._AGENT_VIEW_JS
+        start = source.index("function agentViewSocketUrl")
+        end = source.index("function agentViewEscapeAttribute", start)
+        socket_source = source[start:end]
+
+        self.assertIn("capabilities: 'salient-v1'", socket_source)
 
     def test_trial_uses_full_width_shell_without_removing_other_sidebars(self):
         from web_app import templates

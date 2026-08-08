@@ -82,6 +82,8 @@ class SemanticActionInput(TypedDict, total=False):
 _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   'use strict';
 
+  const USE_SALIENT_STYLE_PROJECTION = __UNCHAINED_SALIENT_STYLE_PROJECTION__;
+
   const STATE_KEY = Symbol.for('unchained.mirror.capture.v1');
   const previous = window[STATE_KEY];
   if (previous && typeof previous.dispose === 'function') previous.dispose();
@@ -100,7 +102,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   const VIEWPORT_BUDGET_RESERVE = 0.4;
   const MAX_HEAD_CAPTURE_BYTES = 384 * 1024;
   const MAX_CRITICAL_STYLE_BYTES = 512 * 1024;
-  // Each visible viewport element gets up to this many bytes of inline
+  // Each visible viewport element gets up to this many bytes of resolved
   // critical styles.  1280 bytes is enough for ~25 CSS declarations —
   // display, position, box-sizing, typography, paint colors, geometry
   // (width/height/margin/padding), and flex/grid layout properties.
@@ -110,7 +112,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   // so CSS-heavy pages retain their basic visual identity even when their
   // largest author stylesheet cannot fit in the snapshot.
   const CRITICAL_STYLE_PROPERTIES = [
-    'display', 'position', 'box-sizing',
+    'display', 'visibility', 'position', 'box-sizing',
     'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
     'letter-spacing', 'white-space', 'text-align',
     'color', 'background-color',
@@ -121,7 +123,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     'flex', 'flex-flow', 'align-items', 'align-self', 'justify-content', 'justify-self', 'gap',
     'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
     'overflow-x', 'overflow-y', 'object-fit', 'object-position',
-    'transform', 'transform-origin', 'opacity', 'visibility', 'z-index',
+    'transform', 'transform-origin', 'opacity', 'z-index',
     'background-image', 'background-size', 'background-position',
     'aspect-ratio'
   ];
@@ -161,6 +163,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     allowedValueIds: new Set(),
     observer: null,
     observedRoots: new WeakSet(),
+    pendingStyleSheetCleanups: [],
     recordCount: 0,
     overflow: false,
     disposed: false,
@@ -387,7 +390,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   function populateSafeAttributes(source, clone, budget, priority) {
     for (const attribute of Array.from(source.attributes || [])) {
       const name = attribute.name.toLowerCase();
-      if (name === 'data-ucm-id' || name.startsWith('on') || ACTIVE_ATTRIBUTES.has(name)) continue;
+      if (name === 'data-ucm-id' || name === 'data-ucm-cs' || name.startsWith('on') || ACTIVE_ATTRIBUTES.has(name)) continue;
       if (name === 'value' && (source.localName === 'input' || source.localName === 'option')) continue;
       if ((name === 'checked' && source.localName === 'input') ||
           (name === 'selected' && source.localName === 'option')) continue;
@@ -420,11 +423,42 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     }
   }
 
+  function createCriticalStyleRegistry() {
+    return {
+      declarations: new Map(),
+      rules: [],
+      nextToken: 1,
+      ruleBytes: 0,
+      referenceBytes: 0,
+      reuseCount: 0
+    };
+  }
+
+  function criticalStyleCandidate(registry, declaration) {
+    const existing = registry.declarations.get(declaration);
+    if (existing) {
+      return { token: existing, rule: '', ruleBytes: 0, isNew: false };
+    }
+    const token = 'c' + registry.nextToken.toString(36);
+    const rule = '[data-ucm-cs~="' + token + '"]{' + declaration + '}';
+    return { token, rule, ruleBytes: byteLength(rule), isNew: true };
+  }
+
+  function commitCriticalStyleCandidate(registry, declaration, candidate) {
+    if (!candidate.isNew) {
+      registry.reuseCount += 1;
+      return;
+    }
+    registry.nextToken += 1;
+    registry.declarations.set(declaration, candidate.token);
+    registry.rules.push(candidate.rule);
+    registry.ruleBytes += candidate.ruleBytes;
+  }
+
   function applyCriticalComputedStyle(source, clone, budget, priority) {
     if (!priority || !source || source.nodeType !== Node.ELEMENT_NODE) return;
     if (!budget || !Number.isFinite(budget.criticalStyleLimit)) return;
     if (/^(?:html|head|style|link|meta|title|script|noscript)$/.test(source.localName)) return;
-    if (!isInViewport(source)) return;
 
     let computed;
     try {
@@ -432,14 +466,43 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     } catch (_error) {
       return;
     }
-    if (!computed || computed.display === 'none' || computed.visibility === 'hidden') return;
+    // priorityNodes contains both viewport elements and the layout ancestors
+    // required to position them. Do not re-check geometry here: zero-height or
+    // visibility:hidden ancestors often implement collapsed panels, and losing
+    // those resolved states exposes content that is hidden in the source page.
+    if (!computed) return;
+    if (computed.display === 'none') {
+      const declaration = 'display:none!important;';
+      const cost = byteLength(declaration);
+      if (budget.criticalStyleBytes + cost > budget.criticalStyleLimit ||
+          budget.bytes + cost > budget.limit) {
+        budget.criticalStyleTruncated = true;
+        return;
+      }
+      const existing = safeCss(clone.getAttribute('style') || '');
+      clone.setAttribute('style', existing + (existing && !existing.trim().endsWith(';') ? ';' : '') + declaration);
+      budget.criticalStyleBytes += cost;
+      budget.criticalStyleExpandedBytes = (budget.criticalStyleExpandedBytes || 0) + cost;
+      budget.criticalStyleDeclarationCount = (budget.criticalStyleDeclarationCount || 0) + 1;
+      budget.bytes += cost;
+      return;
+    }
 
     const declarations = [];
+    const tokens = [];
+    const registry = budget.criticalStyleRegistry;
+    const sourceRoot = typeof source.getRootNode === 'function' ? source.getRootNode() : null;
+    // A document stylesheet cannot cross a shadow boundary. Keep the legacy
+    // inline fallback inside open shadow roots, while compacting light-DOM
+    // declarations into a shared style table for the common case.
+    const useRegistry = Boolean(
+      USE_SALIENT_STYLE_PROJECTION && registry && sourceRoot === document
+    );
     let nodeBytes = 0;
     for (const property of CRITICAL_STYLE_PROPERTIES) {
       let value = '';
       try {
-        value = safeCss(computed.getPropertyValue(property));
+        value = safeCss(computed.getPropertyValue(property)).replace(/</g, ' ');
       } catch (_error) {
         value = '';
       }
@@ -447,19 +510,39 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
       const declaration = property + ':' + value + '!important;';
       const cost = byteLength(declaration);
       if (nodeBytes + cost > MAX_CRITICAL_STYLE_BYTES_PER_NODE) break;
-      if (budget.criticalStyleBytes + cost > budget.criticalStyleLimit ||
-          budget.bytes + cost > budget.limit) {
+
+      let transportCost = cost;
+      let candidate = null;
+      let referenceCost = 0;
+      if (useRegistry) {
+        candidate = criticalStyleCandidate(registry, declaration);
+        referenceCost = byteLength(candidate.token) + (tokens.length ? 1 : byteLength(' data-ucm-cs=""'));
+        transportCost = candidate.ruleBytes + referenceCost;
+      }
+      if (budget.criticalStyleBytes + transportCost > budget.criticalStyleLimit ||
+          budget.bytes + transportCost > budget.limit) {
         budget.criticalStyleTruncated = true;
         break;
       }
-      declarations.push(declaration);
+
+      if (useRegistry) {
+        commitCriticalStyleCandidate(registry, declaration, candidate);
+        tokens.push(candidate.token);
+        registry.referenceBytes += referenceCost;
+      } else {
+        declarations.push(declaration);
+      }
       nodeBytes += cost;
-      budget.criticalStyleBytes += cost;
-      budget.bytes += cost;
+      budget.criticalStyleBytes += transportCost;
+      budget.criticalStyleExpandedBytes = (budget.criticalStyleExpandedBytes || 0) + cost;
+      budget.criticalStyleDeclarationCount = (budget.criticalStyleDeclarationCount || 0) + 1;
+      budget.bytes += transportCost;
     }
-    if (!declarations.length) return;
-    const existing = safeCss(clone.getAttribute('style') || '');
-    clone.setAttribute('style', existing + (existing && !existing.trim().endsWith(';') ? ';' : '') + declarations.join(''));
+    if (tokens.length) clone.setAttribute('data-ucm-cs', tokens.join(' '));
+    if (declarations.length) {
+      const existing = safeCss(clone.getAttribute('style') || '');
+      clone.setAttribute('style', existing + (existing && !existing.trim().endsWith(';') ? ';' : '') + declarations.join(''));
+    }
   }
 
   // ── CSS rule filtering for over-budget style blocks ──────────────────────
@@ -678,7 +761,21 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     }
     for (const attribute of Array.from(clone.attributes || [])) clone.removeAttributeNode(attribute);
     populateSafeAttributes(source, clone, budget, priority);
-    applyCriticalComputedStyle(source, clone, budget, priority);
+    let stylePriority = priority;
+    if (!stylePriority && budget.priorityNodes) {
+      const parent = parentElementAcrossShadow(source);
+      if (parent && budget.priorityNodes.has(parent)) {
+        try {
+          // Preserve the root of a CSS-hidden subtree adjacent to the visible
+          // layout. Its descendants stay available for a later class-driven
+          // reveal, but cannot leak into the static mirror before then.
+          stylePriority = getComputedStyle(source).display === 'none';
+        } catch (_error) {
+          stylePriority = false;
+        }
+      }
+    }
+    applyCriticalComputedStyle(source, clone, budget, stylePriority);
     const id = idFor(source);
     if (!id) return null;
     clone.setAttribute('data-ucm-id', id);
@@ -918,6 +1015,15 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
       result.sourceStyleSheetLinks += 1;
       if (!element.sheet) {
         result.pendingStyleSheetLinks += 1;
+        const settled = () => {
+          if (!state.disposed) state.overflow = true;
+        };
+        element.addEventListener('load', settled, { once: true });
+        element.addEventListener('error', settled, { once: true });
+        state.pendingStyleSheetCleanups.push(() => {
+          element.removeEventListener('load', settled);
+          element.removeEventListener('error', settled);
+        });
         return;
       }
       try {
@@ -1010,6 +1116,11 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     bodyTruncated: false,
     truncationStage: '',
     criticalStyleBytes: 0,
+    criticalStyleExpandedBytes: 0,
+    criticalStyleRuleBytes: 0,
+    criticalStyleReferenceBytes: 0,
+    criticalStyleDeclarationCount: 0,
+    criticalStyleReuseCount: 0,
     criticalStylesTruncated: false,
     truncated: false
   };
@@ -1031,6 +1142,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     criticalStyleTruncated: false,
     truncated: false
   };
+  const criticalStyleRegistry = createCriticalStyleRegistry();
   const bodyBudget = {
     bytes: 0,
     limit: bodyLimit,
@@ -1041,6 +1153,9 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     styleBytes: 0,
     styleLimit: 256 * 1024,
     criticalStyleBytes: 0,
+    criticalStyleExpandedBytes: 0,
+    criticalStyleDeclarationCount: 0,
+    criticalStyleRegistry,
     criticalStyleLimit: Math.min(MAX_CRITICAL_STYLE_BYTES, Math.floor(bodyLimit * 0.55)),
     criticalStyleTruncated: false,
     truncated: false
@@ -1077,6 +1192,11 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     ? 'body-budget'
     : (headBudget.truncated ? 'head-budget' : (shellBudget.truncated ? 'shell-budget' : ''));
   fidelity.criticalStyleBytes = bodyBudget.criticalStyleBytes;
+  fidelity.criticalStyleExpandedBytes = bodyBudget.criticalStyleExpandedBytes;
+  fidelity.criticalStyleRuleBytes = criticalStyleRegistry.ruleBytes;
+  fidelity.criticalStyleReferenceBytes = criticalStyleRegistry.referenceBytes;
+  fidelity.criticalStyleDeclarationCount = bodyBudget.criticalStyleDeclarationCount;
+  fidelity.criticalStyleReuseCount = criticalStyleRegistry.reuseCount;
   fidelity.criticalStylesTruncated = bodyBudget.criticalStyleTruncated;
 
   const adoptedResult = serializeAdoptedStyleSheets(priorityNodes);
@@ -1092,6 +1212,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     body: bodyClone ? bodyClone.innerHTML : '',
     htmlAttrs: htmlClone ? attributesObject(htmlClone) : {},
     bodyAttrs: bodyClone ? attributesObject(bodyClone) : {},
+    salientStyles: criticalStyleRegistry.rules.join('').replace(/</g, ' '),
     viewport: {
       width: Math.max(0, Math.round(window.innerWidth || 0)),
       height: Math.max(0, Math.round(window.innerHeight || 0)),
@@ -1111,7 +1232,8 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   function refreshSnapshotHash() {
     snapshot.hash = hashString(JSON.stringify([
       snapshot.url, snapshot.title, snapshot.doctype, snapshot.head, snapshot.body,
-      snapshot.htmlAttrs, snapshot.bodyAttrs, snapshot.viewport, snapshot.scrollPositions, snapshot.adoptedStyles
+      snapshot.htmlAttrs, snapshot.bodyAttrs, snapshot.salientStyles, snapshot.viewport,
+      snapshot.scrollPositions, snapshot.adoptedStyles
     ]));
   }
 
@@ -1140,6 +1262,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
   }
   if (byteLength(snapshotJson) > MAX_CAPTURE_BYTES) {
     snapshot.body = '<div data-ucm-capture-truncated="output-limit"></div>';
+    snapshot.salientStyles = '';
     snapshot.fidelity.capturedBodyBytes = byteLength(snapshot.body);
     snapshot.fidelity.bodyTruncated = true;
     snapshot.fidelity.truncationStage = 'output-body';
@@ -1463,6 +1586,7 @@ _INSTALL_MIRROR_TEMPLATE = r"""(() => {
     if (state.disposed) return;
     state.disposed = true;
     if (state.observer) state.observer.disconnect();
+    for (const cleanup of state.pendingStyleSheetCleanups.splice(0)) cleanup();
     document.removeEventListener('input', onStateEvent, true);
     document.removeEventListener('change', onStateEvent, true);
     document.removeEventListener('scroll', onScrollEvent, true);
@@ -1517,9 +1641,23 @@ def _with_mirror_key(template: str, mirror_key: str) -> str:
     return template.replace(f"'{DEFAULT_MIRROR_KEY}'", f"'{key}'")
 
 
-def build_install_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
-    """Return the mirror installation JS for a specific connection's symbol key."""
-    return _with_mirror_key(_INSTALL_MIRROR_TEMPLATE, mirror_key)
+def build_install_mirror_expression(
+    mirror_key: str = DEFAULT_MIRROR_KEY,
+    *,
+    salient_style_projection: bool = True,
+) -> str:
+    """Return mirror installation JS for a connection and renderer capability.
+
+    Browser pages opened before the salient-v1 renderer shipped reconnect to a
+    newly deployed server without reloading their JavaScript. Those clients must
+    keep receiving inline resolved styles; otherwise they see ``data-ucm-cs``
+    references without the corresponding ``salientStyles`` replay support.
+    """
+    expression = _INSTALL_MIRROR_TEMPLATE.replace(
+        "__UNCHAINED_SALIENT_STYLE_PROJECTION__",
+        "true" if salient_style_projection else "false",
+    )
+    return _with_mirror_key(expression, mirror_key)
 
 
 def build_drain_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str:
@@ -1543,8 +1681,10 @@ def build_dispose_mirror_expression(mirror_key: str = DEFAULT_MIRROR_KEY) -> str
     )
 
 
-# Backward-compatible aliases (default key).
-INSTALL_MIRROR_EXPRESSION = _INSTALL_MIRROR_TEMPLATE
+# Backward-compatible aliases (default key). Direct capture callers use the
+# current renderer; the WebSocket protocol boundary explicitly opts legacy
+# clients out based on their advertised capability.
+INSTALL_MIRROR_EXPRESSION = build_install_mirror_expression()
 DRAIN_MIRROR_EXPRESSION = _DRAIN_MIRROR_TEMPLATE
 
 
@@ -1900,6 +2040,7 @@ async def _capture_initial_snapshot(
     relay_port: int,
     operation_lock: asyncio.Lock | None,
     mirror_key: str = DEFAULT_MIRROR_KEY,
+    salient_style_projection: bool = True,
 ) -> dict[str, Any]:
     """Retry a full mirror install after transient relay or chunk failures."""
     for attempt in range(1, INITIAL_CAPTURE_ATTEMPTS + 1):
@@ -1907,7 +2048,10 @@ async def _capture_initial_snapshot(
             return await evaluate_mirror_payload(
                 agent_id,
                 tab_id,
-                build_install_mirror_expression(mirror_key),
+                build_install_mirror_expression(
+                    mirror_key,
+                    salient_style_projection=salient_style_projection,
+                ),
                 relay_host,
                 relay_port,
                 operation_lock=operation_lock,
@@ -1932,6 +2076,7 @@ async def stream_semantic_mirror(
     stop_requested: Callable[[], bool] | None = None,
     operation_lock: asyncio.Lock | None = None,
     mirror_key: str = DEFAULT_MIRROR_KEY,
+    salient_style_projection: bool = True,
 ) -> AsyncIterator[SemanticMirrorEvent]:
     """Yield an initial snapshot and non-empty patches from an attached tab.
 
@@ -1942,6 +2087,10 @@ async def stream_semantic_mirror(
     ``mirror_key`` isolates this stream's capture state from other concurrent
     streams on the same tab (e.g. phone + desktop Agent View). Each key maps to
     a distinct ``Symbol.for(...)`` in the source Chrome tab.
+
+    ``salient_style_projection`` must only be true when the connected browser
+    advertises replay support. False retains bounded legacy inline styles for
+    already-open pages that reconnect after a server deployment.
     """
     if poll_interval <= 0:
         raise ValueError("poll_interval must be greater than zero")
@@ -1955,6 +2104,7 @@ async def stream_semantic_mirror(
         relay_port=relay_port,
         operation_lock=operation_lock,
         mirror_key=mirror_key,
+        salient_style_projection=salient_style_projection,
     )
     yield {"type": "snapshot", "snapshot": snapshot, "resync": False}
 
@@ -1994,6 +2144,7 @@ async def stream_semantic_mirror(
                 relay_port=relay_port,
                 operation_lock=operation_lock,
                 mirror_key=mirror_key,
+                salient_style_projection=salient_style_projection,
             )
             empty_polls = 0
             yield {"type": "snapshot", "snapshot": snapshot, "resync": True}

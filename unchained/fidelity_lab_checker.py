@@ -21,6 +21,7 @@ Usage:
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -72,6 +73,9 @@ TEST_SITES = [
 ]
 
 KEY_PAINT_PROPS = ["font-family", "color", "background-color", "display", "position"]
+SALIENT_STYLE_RULE_RE = re.compile(
+    r'\[data-ucm-cs~="([^"]+)"\]\{([^{}]*)\}'
+)
 
 
 def style_property_names(style: str) -> set[str]:
@@ -81,6 +85,17 @@ def style_property_names(style: str) -> set[str]:
         if ":" in decl:
             names.add(decl.split(":", 1)[0].strip().lower())
     return names
+
+
+def resolved_style_for_attributes(attributes: dict, salient_styles: str) -> str:
+    """Combine source inline style with projected computed-style tokens."""
+    tokens = set(str(attributes.get("data-ucm-cs", "")).split())
+    projected = [
+        declarations
+        for token, declarations in SALIENT_STYLE_RULE_RE.findall(salient_styles or "")
+        if token in tokens
+    ]
+    return ";".join(filter(None, [str(attributes.get("style", "")), *projected]))
 
 
 async def set_viewport(tab_id: str, width: int, height: int = 900):
@@ -178,7 +193,10 @@ async def test_site(site_id: str, url: str, viewport_width: int, category: str) 
         # Fidelity diagnostics
         fidelity = snapshot.get("fidelity", {})
         body_attrs = snapshot.get("bodyAttrs", {})
-        body_style = body_attrs.get("style", "")
+        body_style = resolved_style_for_attributes(
+            body_attrs,
+            snapshot.get("salientStyles", ""),
+        )
 
         # Use rawBytes from the snapshot itself
         result["snapshot_bytes"] = snapshot.get("rawBytes", 0) or len(json.dumps(snapshot).encode("utf-8"))
@@ -193,6 +211,9 @@ async def test_site(site_id: str, url: str, viewport_width: int, category: str) 
         diagnostics = {
             "criticalStylesTruncated": fidelity.get("criticalStylesTruncated", False),
             "criticalStyleBytes": fidelity.get("criticalStyleBytes", 0),
+            "criticalStyleExpandedBytes": fidelity.get("criticalStyleExpandedBytes", 0),
+            "criticalStyleRuleBytes": fidelity.get("criticalStyleRuleBytes", 0),
+            "criticalStyleReferenceBytes": fidelity.get("criticalStyleReferenceBytes", 0),
             "bodyTruncated": fidelity.get("bodyTruncated", False),
             "bodyStyleString": body_style[:300] if body_style else "(empty)",
             "paintPropertiesInBodyStyle": paint_found,
