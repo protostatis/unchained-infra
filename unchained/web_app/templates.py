@@ -11449,12 +11449,13 @@ function ensureMarkedConfigured() {
 __SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
+  const safeText = typeof text === 'string' ? text : '';
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
 
   if (!bubble._rawText) bubble._rawText = '';
-  bubble._rawText += text;
+  bubble._rawText += safeText;
 
   let span = bubble.querySelector('.text');
   if (!span) {
@@ -11612,7 +11613,7 @@ async function doSend() {
               currentTool = null;
             }
           } else if (evt.type === 'text') {
-            appendText(bubble, evt.data);
+            appendText(bubble, typeof evt.data === 'string' ? evt.data : '');
           } else if (evt.type === 'model_forced') {
             if (Array.isArray(evt.allowed_models) && evt.allowed_models.length > 0) {
               _POST_CAP_ALLOWED_MODELS = evt.allowed_models
@@ -12911,11 +12912,12 @@ function ensureMarkedConfigured() {
 __SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
+  const safeText = typeof text === 'string' ? text : '';
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
 
   if (!bubble._rawText) bubble._rawText = '';
-  bubble._rawText += text;
+  bubble._rawText += safeText;
 
   let span = bubble.querySelector('.text');
   if (!span) {
@@ -13038,7 +13040,7 @@ async function doSend() {
               currentTool = null;
             }
           } else if (evt.type === 'text') {
-            appendText(bubble, evt.data);
+            appendText(bubble, typeof evt.data === 'string' ? evt.data : '');
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {
@@ -15411,11 +15413,12 @@ function ensureMarkedConfigured() {
 __SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
+  const safeText = typeof text === 'string' ? text : '';
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
 
   if (!bubble._rawText) bubble._rawText = '';
-  bubble._rawText += text;
+  bubble._rawText += safeText;
 
   let span = bubble.querySelector('.text');
   if (!span) {
@@ -15580,7 +15583,7 @@ async function doSend() {
           } else if (evt.type === 'live_preview') {
             updateLivePreview(evt.data, evt.note || 'Page loaded');
           } else if (evt.type === 'text') {
-            appendText(bubble, evt.data);
+            appendText(bubble, typeof evt.data === 'string' ? evt.data : '');
           } else if (evt.type === 'model_forced') {
             if (evt.model) {
               _forcedFirstLookModel = evt.model;
@@ -18065,12 +18068,13 @@ function ensureMarkedConfigured() {
 __SAFE_MARKDOWN_RENDERER_JS__
 
 function appendText(bubble, text) {
+  const safeText = typeof text === 'string' ? text : '';
   // Remove thinking indicator if present
   const thinking = bubble.querySelector('.thinking');
   if (thinking) thinking.remove();
 
   if (!bubble._rawText) bubble._rawText = '';
-  bubble._rawText += text;
+  bubble._rawText += safeText;
 
   let span = bubble.querySelector('.text');
   if (!span) {
@@ -18216,7 +18220,7 @@ async function doSend() {
               currentTool = null;
             }
           } else if (evt.type === 'text') {
-            appendText(bubble, evt.data);
+            appendText(bubble, typeof evt.data === 'string' ? evt.data : '');
           } else if (evt.type === 'cancelled') {
             appendText(bubble, '[Cancelled by user]');
           } else if (evt.type === 'error') {

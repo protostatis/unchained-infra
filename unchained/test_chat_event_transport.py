@@ -21,6 +21,7 @@ import chat_agent_sdk
 from chat_event_transport import (
     CHAT_WS_MAX_MESSAGE_BYTES,
     EVENT_OMITTED_MESSAGE,
+    MALFORMED_TEXT_EVENT_MESSAGE,
     MAX_AGENT_EVENT_BYTES,
     MAX_INLINE_SCREENSHOT_BASE64_BYTES,
     SCREENSHOT_OMITTED_MESSAGE,
@@ -29,6 +30,7 @@ from chat_event_transport import (
     read_inline_screenshot,
     serialize_agent_event,
 )
+from nudge import MAX_SAME_PAGE_LINK_SCANS, NudgeState
 from web_app.handlers import chat_stream
 
 
@@ -77,6 +79,30 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertEqual(bounded["data"], EVENT_OMITTED_MESSAGE)
         self.assertEqual(bounded["session_id"], "s-test")
         self.assertEqual(bounded["req_id"], "r-test")
+
+    def test_malformed_text_event_becomes_safe_user_message(self):
+        event = {
+            "type": "text",
+            "data": None,
+            "session_id": "s-test",
+            "req_id": "r-test",
+        }
+
+        bounded, payload = serialize_agent_event(event)
+
+        self.assertEqual(bounded["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+        self.assertTrue(bounded["malformed_text_event"])
+        self.assertEqual(bounded["malformed_text_data_type"], "NoneType")
+        self.assertEqual(json.loads(payload)["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+
+    def test_structured_text_event_uses_safe_text_contract(self):
+        bounded = bound_agent_event(
+            {"type": "text", "data": {"answer": "unexpected structure"}},
+            encoded_size=MAX_AGENT_EVENT_BYTES + 1,
+        )
+
+        self.assertEqual(bounded["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+        self.assertEqual(bounded["malformed_text_data_type"], "dict")
 
     def test_oversized_file_is_rejected_before_open(self):
         with patch("chat_event_transport.os.path.getsize", return_value=MAX_INLINE_SCREENSHOT_BASE64_BYTES + 1), \
@@ -128,6 +154,7 @@ class TestChatEventTransport(unittest.TestCase):
         self.assertEqual(CHAT_WS_MAX_MESSAGE_BYTES, 16 * 1024 * 1024)
         self.assertIn("max_msg_size=CHAT_WS_MAX_MESSAGE_BYTES", source)
         self.assertIn("data = bound_agent_event(data, encoded_size=", source)
+        self.assertIn("replaced malformed text event", source)
         self.assertIn("event = overlay_event(event)", overlay_source)
 
     def test_every_agent_sender_uses_bounded_serialization(self):
@@ -245,13 +272,215 @@ class TestChatEventTransport(unittest.TestCase):
         )
 
     def test_packaged_agent_includes_transport_and_version_bump(self):
-        self.assertEqual(agent_package.VERSION, "0.3.125")
+        self.assertEqual(agent_package.VERSION, "0.3.126")
         self.assertEqual(
             agent_package._PACKAGE_FILES["unchained/chat_event_transport.py"],
             "chat_event_transport.py",
         )
         pyproject = Path(__file__).with_name("pyproject.toml").read_text()
         self.assertIn('"chat_event_transport"', pyproject)
+
+
+class TestWorkspaceHarnessGuardrails(unittest.TestCase):
+    def test_broad_link_scans_are_limited_per_page_and_tab(self):
+        state = NudgeState()
+        expression = (
+            "Array.from(document.querySelectorAll('a'))"
+            ".filter(a => a.href).map(a => a.href)"
+        )
+
+        for _ in range(MAX_SAME_PAGE_LINK_SCANS):
+            self.assertTrue(
+                state.allow_broad_link_scan(
+                    page_url="https://www.cnbc.com/markets/",
+                    tab_id="tab-1",
+                    expression=expression,
+                )
+            )
+        self.assertFalse(
+            state.allow_broad_link_scan(
+                page_url="https://www.cnbc.com/markets",
+                tab_id="tab-1",
+                expression=expression,
+            )
+        )
+        self.assertTrue(
+            state.allow_broad_link_scan(
+                page_url="https://www.cnbc.com/search/?query=market",
+                tab_id="tab-1",
+                expression=expression,
+            )
+        )
+        self.assertTrue(
+            state.allow_broad_link_scan(
+                page_url="https://www.cnbc.com/markets/",
+                tab_id="tab-1",
+                expression="document.querySelector('.headline').textContent",
+            )
+        )
+        self.assertTrue(
+            state.allow_broad_link_scan(
+                page_url="https://www.cnbc.com/markets/",
+                tab_id="tab-2",
+                expression=expression,
+            )
+        )
+
+    def test_all_anchor_scan_variants_are_limited(self):
+        expressions = (
+            "document.querySelectorAll('a[href]').map(a => a.href)",
+            "Array.from(document.links, link => link.href)",
+            "[...document.getElementsByTagName('a')].filter(a => a.href)",
+            "for (const link of document.querySelectorAll('a')) { urls.push(link.href) }",
+        )
+
+        for expression in expressions:
+            with self.subTest(expression=expression):
+                state = NudgeState()
+                for _ in range(MAX_SAME_PAGE_LINK_SCANS):
+                    self.assertTrue(
+                        state.allow_broad_link_scan(
+                            page_url="https://example.test/markets",
+                            tab_id="tab-1",
+                            expression=expression,
+                        )
+                    )
+                self.assertFalse(
+                    state.allow_broad_link_scan(
+                        page_url="https://example.test/markets",
+                        tab_id="tab-1",
+                        expression=expression,
+                    )
+                )
+
+    def test_targeted_anchor_selector_is_not_treated_as_full_page_scan(self):
+        state = NudgeState()
+        expression = "Array.from(document.querySelectorAll('a[href*=\"/article/\"]'))"
+
+        for _ in range(MAX_SAME_PAGE_LINK_SCANS + 1):
+            self.assertTrue(
+                state.allow_broad_link_scan(
+                    page_url="https://example.test/markets",
+                    tab_id="tab-1",
+                    expression=expression,
+                )
+            )
+
+    def test_revisited_navigation_does_not_count_as_new_progress(self):
+        state = NudgeState()
+        self.assertTrue(state.record_navigation("https://www.CNBC.com/markets/"))
+        self.assertFalse(state.record_navigation("https://www.cnbc.com/markets"))
+        self.assertTrue(state.record_navigation("https://www.cnbc.com/markets/bonds/"))
+
+    def test_page_url_tracking_never_falls_back_to_another_tab(self):
+        state = NudgeState()
+        state.observe_page("https://example.test/one", tab_id="tab-one")
+
+        self.assertEqual(state.page_url_for_tab("tab-one"), "https://example.test/one")
+        self.assertEqual(state.page_url_for_tab("tab-two"), "")
+        self.assertEqual(state.page_url_for_tab("auto"), "")
+
+    def test_not_found_navigation_is_explicitly_detected(self):
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: Not Found"
+            )
+        )
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/article\nTitle: Article"
+            )
+        )
+
+    def test_not_found_detection_uses_navigation_metadata_not_page_text(self):
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: CNBC Page Not Found"
+            )
+        )
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: 404 Error"
+            )
+        )
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/missing\nTitle: Error\nHTTP Status: 404"
+            )
+        )
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/article\n"
+                "Title: Page Not Found: An Archaeology of Error Pages"
+            )
+        )
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_is_not_found(
+                "Navigated to: https://example.test/article\nTitle: Article\n\n"
+                "=== Page Layout ===\nArticle body mentions 404 not found in its source text"
+            )
+        )
+
+    def test_page_url_parser_uses_confirmed_navigation_and_click_urls(self):
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Navigated to: https://example.test/redirected\nTitle: Landing"
+            ),
+            "https://example.test/redirected",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Clicked A\n--- changed ---\nurl: https://example.test/article"
+            ),
+            "https://example.test/article",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Clicked A\n--- changed ---\nurl: https://example.test/challenge\n"
+                "[challenge cleared] Now on: https://example.test/article\n\n"
+                "=== Page Layout ===\nURL: https://example.test/article"
+            ),
+            "https://example.test/article",
+        )
+        self.assertEqual(
+            chat_agent_openrouter._page_url_from_tool_result(
+                "Navigated to: https://example.test/article\nTitle: Article\n\n"
+                "=== Page Layout ===\nURL: https://example.test/untrusted-page-text"
+            ),
+            "https://example.test/article",
+        )
+
+    def test_navigation_progress_requires_nonempty_nonerror_page_state(self):
+        self.assertTrue(
+            chat_agent_openrouter._navigation_result_succeeded(
+                "Navigated to: https://example.test/article\nTitle: Article"
+            )
+        )
+        self.assertFalse(chat_agent_openrouter._navigation_result_succeeded(""))
+        self.assertFalse(
+            chat_agent_openrouter._navigation_result_succeeded(
+                "BROWSER_UNAVAILABLE: Chrome connector is not running."
+            )
+        )
+
+    def test_hosted_templates_never_coerce_missing_text_to_undefined(self):
+        from web_app import templates
+
+        for html in (
+            templates.TRIAL_CHAT_HTML,
+            templates.CLAUDE_CHAT_HTML,
+            templates.CHAT_CLAUDE_SDK_HTML,
+            templates.CHAT_CODEX_HTML,
+        ):
+            with self.subTest(template=html[:80]):
+                self.assertIn(
+                    "const safeText = typeof text === 'string' ? text : '';",
+                    html,
+                )
+                self.assertIn(
+                    "appendText(bubble, typeof evt.data === 'string' ? evt.data : '');",
+                    html,
+                )
 
 
 class TestLargeChatWebSocket(unittest.IsolatedAsyncioTestCase):

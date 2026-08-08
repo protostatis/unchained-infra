@@ -81,7 +81,12 @@ class TestTemplateTransforms(unittest.TestCase):
                 self.assertEqual(html.count('id="chat-card-minimize"'), 1)
                 self.assertEqual(html.count('id="agent-view-chat-restore"'), 1)
                 self.assertEqual(html.count('id="msginput"'), 1)
-                self.assertEqual(html.count("appendText(bubble, evt.data)"), 1)
+                self.assertEqual(
+                    html.count(
+                        "appendText(bubble, typeof evt.data === 'string' ? evt.data : '');"
+                    ),
+                    1,
+                )
                 self.assertIn("function setAgentViewChatState(mode, surface)", html)
                 self.assertIn("function maybeRevealAgentResponse()", html)
                 self.assertIn("beginAgentViewResponseTurn()", html)

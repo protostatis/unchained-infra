@@ -13,6 +13,8 @@ from unittest.mock import patch
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import TestClient, TestServer
 
+from chat_event_transport import MALFORMED_TEXT_EVENT_MESSAGE
+
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 from web_app.handlers import chat_stream
@@ -992,6 +994,27 @@ class TestChatTurnState(unittest.TestCase):
         self.assertEqual(turn.last_seq, 3)
         self.assertTrue(turn.stream_finished)
         self.assertEqual(turn.status, "done")
+
+    def test_publish_normalizes_malformed_text_before_replay(self):
+        turn = self._turn()
+
+        event = turn.publish({"type": "text", "data": None})
+
+        self.assertEqual(event["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+        self.assertTrue(event["malformed_text_event"])
+        self.assertEqual(event["malformed_text_data_type"], "NoneType")
+
+    def test_publish_replaces_oversized_replay_text_after_body_omission(self):
+        turn = self._turn()
+
+        event = turn.publish({"type": "text", "data": "x" * (13 * 1024)})
+
+        self.assertEqual(event["data"], MALFORMED_TEXT_EVENT_MESSAGE)
+        self.assertTrue(event["malformed_text_event"])
+        # The replay cap omits the original string before the second text-event
+        # normalization, so this diagnostic describes that omitted value.
+        self.assertEqual(event["malformed_text_data_type"], "NoneType")
+        self.assertTrue(event["replay_body_omitted"])
 
     def test_tool_event_updates_current_action_in_snapshot(self):
         turn = self._turn()

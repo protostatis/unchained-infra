@@ -234,20 +234,24 @@ Chrome connector is not running. When this happens:
 | `screenshot()` | Internal screenshot — CAPTCHA/verification only, NOT shown to user |
 | `screenshot(show_user=true)` | Show screenshot to user — ONLY when user literally asked "show me" or "take a screenshot" |
 
-## CRITICAL: Prefer Direct URL Navigation Over Search Forms
+## Direct URLs and Source Discipline
 
-Many sites have predictable URL patterns. ALWAYS try navigating directly before using search forms:
+Use a direct URL only when its canonical format is known or an href was returned by a browser tool. These are safe, documented patterns:
 - Wikipedia: navigate to https://en.wikipedia.org/wiki/TOPIC (replace spaces with _)
 - Cambridge Dictionary: navigate to https://dictionary.cambridge.org/dictionary/english/WORD
 - ArXiv: navigate to https://arxiv.org/search/?query=QUERY (replace spaces with +)
 - GitHub: navigate to https://github.com/OWNER/REPO/issues for issues
 
+Never invent a news/article URL from a title, date, or guessed slug. Follow an href returned by a tool or use the site's search page.
+After a Not Found page, do not guess another article URL; use a discovered link, site search, or summarize the evidence already gathered.
+On one page, make at most two broad `document.querySelectorAll('a')` extraction scans. Refine the results you already have or navigate a discovered href instead of repeatedly rescanning all links.
+
 If you must use a search form: click the input → type_text → press_enter or submit_form → run ddm to check results.
-If the form doesn't work after ONE attempt, navigate directly to the URL instead.
+If the form doesn't work after ONE attempt, navigate to a documented or discovered canonical URL instead.
 
 ## Key Gotchas
 - Arrow functions in js_eval: Use `el => expr` syntax (NOT `el > expr`).
-- Search forms: Many modern sites use JS-based search that doesn't respond to synthetic events. Navigate directly to the URL instead.
+- Search forms: Many modern sites use JS-based search that doesn't respond to synthetic events. Use a known canonical URL instead.
 """
 
 
@@ -569,6 +573,66 @@ def _ui_tool_input(tool_name: str, args: dict) -> str:
     if tool_name == "screenshot":
         return ""
     return json.dumps(args, sort_keys=True)
+
+
+_RESULT_PAGE_URL_RE = re.compile(
+    r"(?im)^\s*(?:\[[^\]\n]+\]\s*)?"
+    r"(?:navigated\s+to|url|now\s+on)\s*:\s*(https?://[^\s]+)"
+)
+_NAVIGATION_TITLE_RE = re.compile(r"(?im)^\s*title\s*:\s*(.+?)\s*$")
+_NOT_FOUND_TITLE_RE = re.compile(
+    r"""(?ix)
+    ^\s*
+    (?:
+        404(?:\s*(?:[-|:]\s*)?(?:(?:page\s+)?not\s+found|error))?
+        |
+        (?:[a-z0-9][\w.-]*\s+)?(?:page\s+)?not\s+found
+    )
+    (?:\s*[-–—|]\s*[a-z0-9][\w.-]*)?
+    \s*$
+    """
+)
+_NOT_FOUND_STATUS_RE = re.compile(
+    r"(?im)^\s*(?:status|page|http(?:\s+status)?)\s*:\s*"
+    r"(?:404\b|.*\bnot\s+found\b)"
+)
+
+
+def _tool_result_metadata(result: str) -> str:
+    """Return browser-tool metadata without arbitrary page-layout text."""
+    return (result or "").split("=== Page Layout ===", 1)[0]
+
+
+def _page_url_from_tool_result(result: str) -> str:
+    """Extract the confirmed current URL emitted by a page-changing browser tool."""
+    matches = _RESULT_PAGE_URL_RE.findall(_tool_result_metadata(result))
+    return matches[-1].rstrip(".,;") if matches else ""
+
+
+def _navigation_result_is_not_found(result: str) -> bool:
+    """Identify a missing-page navigation without inspecting arbitrary page text."""
+    summary = _tool_result_metadata(result)
+    title_match = _NAVIGATION_TITLE_RE.search(summary)
+    return bool(
+        # Title-only detection is deliberately conservative: accept canonical
+        # error titles with a short site-brand prefix/suffix, but not article
+        # prose that happens to mention "not found".
+        (title_match and _NOT_FOUND_TITLE_RE.fullmatch(title_match.group(1)))
+        or _NOT_FOUND_STATUS_RE.search(summary)
+    )
+
+
+def _navigation_result_succeeded(result: str) -> bool:
+    """Return whether a navigation supplied usable page state for progress tracking."""
+    normalized = (result or "").lower()
+    if not normalized.strip():
+        return False
+    return not (
+        normalized.startswith("browser_unavailable")
+        or normalized.startswith("tool error (")
+        or normalized.startswith("error:")
+        or _navigation_result_is_not_found(result)
+    )
 
 
 def _message_content_as_text(message: dict) -> str:
@@ -1579,6 +1643,7 @@ class TrialAgent:
                     turn_had_navigation = False
                     turn_had_interaction = False
                     turn_domain_switch = False
+                    turn_failed_navigation_count = 0
                     for idx, tc in enumerate(tool_calls):
                         fn = tc.get("function", {})
                         name = fn.get("name", "")
@@ -1586,21 +1651,13 @@ class TrialAgent:
                         # Keep arguments canonical when echoed back to OpenRouter.
                         fn["arguments"] = json.dumps(args, separators=(",", ":"))
                         tab_id = str(args.get("tab_id", "auto"))
+                        nav_url = ""
 
                         if name in {"navigate", "click", "type_text", "press_enter", "submit_form"}:
                             _invalidate_js_eval_cache(tab_id)
 
                         if name == "navigate":
                             nav_url = str(args.get("url", "")).strip()
-                            # Only count as real navigation if URL actually changed
-                            if nav_url and nav_url != ns.last_nav_url:
-                                turn_had_navigation = True
-                            ns.last_nav_url = nav_url
-                            domain = _extract_domain(nav_url)
-                            if domain:
-                                if ns.recent_domains and domain != ns.recent_domains[-1]:
-                                    turn_domain_switch = True
-                                ns.recent_domains.append(domain)
                         elif name in {"click", "type_text", "press_enter", "submit_form"}:
                             turn_had_interaction = True
 
@@ -1620,6 +1677,7 @@ class TrialAgent:
                         flags_str = args.get("flags", "")
                         if name == "ddm" and any(f in flags_str for f in ("--new", "--tabs", "--close")):
                             preview_tab = ""
+                        tracking_tab_id = preview_tab or tab_id
 
                         tool_start_evt = {
                             "type": "tool_start",
@@ -1636,31 +1694,44 @@ class TrialAgent:
                         )
                         tool_ms = 0.0
                         cache_hit = False
+                        link_scan_blocked = False
                         expr = ""
                         cache_key = None
                         if name == "js_eval":
                             expr = str(args.get("expression", "")).strip()
                             if expr:
-                                cache_key = (tab_id, expr)
-                                cached = js_eval_cache.get(cache_key)
-                                if cached:
-                                    cache_hit = True
-                                    cached["reuse_count"] = int(cached.get("reuse_count", 0)) + 1
-                                    cached_output = str(cached.get("result", ""))
-                                    if cached["reuse_count"] == 1:
-                                        result = (
-                                            f"{cached_output}\n\n"
-                                            "[cache] Reused identical js_eval result on the same tab. "
-                                            "If this isn't enough, switch strategy."
-                                        )
-                                    else:
-                                        result = (
-                                            "JS_EVAL_REPEAT_BLOCKED: Same js_eval expression repeated on "
-                                            "the same tab. Switch strategy (different selector, "
-                                            "ddm --text --find, ddm --at, or direct navigate)."
-                                        )
+                                if not ns.allow_broad_link_scan(
+                                    page_url=ns.page_url_for_tab(tracking_tab_id),
+                                    tab_id=tracking_tab_id,
+                                    expression=expr,
+                                ):
+                                    link_scan_blocked = True
+                                    result = (
+                                        "LINK_SCAN_REPEAT_BLOCKED: You have already scanned all page links "
+                                        "twice here. Use an href already returned, use the site's search, "
+                                        "or answer from the evidence collected so far."
+                                    )
+                                else:
+                                    cache_key = (tab_id, expr)
+                                    cached = js_eval_cache.get(cache_key)
+                                    if cached:
+                                        cache_hit = True
+                                        cached["reuse_count"] = int(cached.get("reuse_count", 0)) + 1
+                                        cached_output = str(cached.get("result", ""))
+                                        if cached["reuse_count"] == 1:
+                                            result = (
+                                                f"{cached_output}\n\n"
+                                                "[cache] Reused identical js_eval result on the same tab. "
+                                                "If this isn't enough, switch strategy."
+                                            )
+                                        else:
+                                            result = (
+                                                "JS_EVAL_REPEAT_BLOCKED: Same js_eval expression repeated on "
+                                                "the same tab. Switch strategy (different selector, "
+                                                "ddm --text --find, ddm --at, or direct navigate)."
+                                            )
 
-                        if not cache_hit:
+                        if not cache_hit and not link_scan_blocked:
                             tool_t0 = time.monotonic()
                             try:
                                 execute_kwargs = {}
@@ -1697,12 +1768,72 @@ class TrialAgent:
                                     }
                         if not isinstance(result, str):
                             result = str(result)
+                        page_url = (
+                            _page_url_from_tool_result(result)
+                            if name in {"navigate", "click", "type_text", "press_enter", "submit_form"}
+                            else ""
+                        )
+                        navigation_not_found = False
+                        if name == "navigate":
+                            navigation_not_found = _navigation_result_is_not_found(result)
+                            if navigation_not_found:
+                                turn_failed_navigation_count += 1
+                                # Track the actual missing page for subsequent
+                                # per-page guardrails, but never treat it as
+                                # successful research progress.
+                                if page_url or nav_url:
+                                    ns.observe_page(
+                                        page_url or nav_url,
+                                        tab_id=tracking_tab_id,
+                                    )
+                                result += (
+                                    "\n\nNAVIGATION_NOT_FOUND: This URL did not resolve. Do not guess "
+                                    "another article URL; use a discovered href, the site's search, or "
+                                    "summarize the evidence already collected."
+                                )
+                            elif nav_url and _navigation_result_succeeded(result):
+                                confirmed_page_url = page_url or nav_url
+                                if ns.record_navigation(
+                                    confirmed_page_url,
+                                    tab_id=tracking_tab_id,
+                                ):
+                                    turn_had_navigation = True
+                                domain = _extract_domain(confirmed_page_url)
+                                if domain:
+                                    if ns.recent_domains and domain != ns.recent_domains[-1]:
+                                        turn_domain_switch = True
+                                    ns.recent_domains.append(domain)
+                            elif page_url:
+                                ns.observe_page(page_url, tab_id=tracking_tab_id)
+                        elif page_url:
+                            page_changed, page_is_new = ns.observe_page(
+                                page_url,
+                                tab_id=tracking_tab_id,
+                            )
+                            if page_changed and page_is_new:
+                                turn_had_navigation = True
+                                domain = _extract_domain(page_url)
+                                if domain:
+                                    if ns.recent_domains and domain != ns.recent_domains[-1]:
+                                        turn_domain_switch = True
+                                    ns.recent_domains.append(domain)
                         print(
                             f"[{session_id}] Tool {turn + 1}.{idx + 1} done: "
                             f"{name}{' [cache-hit]' if cache_hit else ''} ({tool_ms:.1f}ms) -> "
                             f"{_truncate(result.replace(chr(10), ' '), 180)}"
                         )
-                        turn_step_sigs.append(_tool_progress_sig(name, args, result))
+                        if navigation_not_found:
+                            # Different guessed URLs must not masquerade as novel
+                            # research progress just because their 404 pages differ.
+                            turn_step_sigs.append(
+                                _tool_progress_sig(
+                                    "navigate",
+                                    {"outcome": "not_found"},
+                                    "not_found",
+                                )
+                            )
+                        else:
+                            turn_step_sigs.append(_tool_progress_sig(name, args, result))
                         if name == "ddm":
                             flags = str(args.get("flags", "")).strip()
                             if flags.startswith("--text --find"):
@@ -1727,7 +1858,11 @@ class TrialAgent:
                                 tool_result_evt["new_tab_id"] = _tab_m.group(1)
                         await self._send(session_id, tool_result_evt)
 
-                        tool_failed = result.startswith("BROWSER_UNAVAILABLE") or result.startswith("Tool error (")
+                        tool_failed = (
+                            navigation_not_found
+                            or result.startswith("BROWSER_UNAVAILABLE")
+                            or result.startswith("Tool error (")
+                        )
                         # Headless sessions have a live screencast — screenshot
                         # backup opens a competing CDP connection that captures
                         # blank/stale state.  Only use screenshot backup for
@@ -1786,6 +1921,7 @@ class TrialAgent:
                         turn_step_sigs, turn_find_queries,
                         turn_had_navigation, turn_domain_switch,
                         turn_had_interaction,
+                        failed_navigation_count=turn_failed_navigation_count,
                     )
 
                     # Run progress-based intervention

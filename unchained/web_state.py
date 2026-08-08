@@ -19,6 +19,8 @@ from _thread import LockType
 from dataclasses import dataclass, field
 from typing import Deque, TextIO
 
+from chat_event_transport import normalize_text_event
+
 
 @dataclass
 class OverlaySessionState:
@@ -290,7 +292,7 @@ class ChatTurnState:
 
     def publish(self, event: dict) -> dict | None:
         """Append one event and wake subscribers without awaiting their I/O."""
-        event = dict(event)
+        event = normalize_text_event(dict(event))
         event_type = str(event.get("type", "") or "")
         if self.stream_finished and event_type in {"done", "cancelled", "error"}:
             return None
@@ -312,7 +314,10 @@ class ChatTurnState:
                 except ValueError:
                     pass
 
-        replay = _chat_turn_replay_event(event)
+        # The replay size cap can remove an oversized text ``data`` field after
+        # ingress normalization. Normalize again so reconnecting clients never
+        # receive a text event without a renderable payload.
+        replay = normalize_text_event(_chat_turn_replay_event(event))
         replay["session_id"] = self.session_id
         replay["req_id"] = self.req_id
         self.last_seq += 1
