@@ -283,6 +283,14 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("@media(min-width:761px) and (hover:none)", html)
         self.assertIn("transition:none!important", html)
 
+    def test_hosted_mobile_thread_picker_centers_options(self):
+        from web_app import templates
+
+        self.assertIn(
+            "#slotbar.agent-lane-picker-open>button:not(#lane-picker-toggle){display:grid!important;place-items:center!important}",
+            templates.TRIAL_CHAT_HTML,
+        )
+
     def test_default_task_shell_arranges_thread_toolbar_and_keeps_legacy_override(self):
         node = shutil.which("node")
         if not node:
