@@ -998,6 +998,15 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                 if not isinstance(data, dict):
                     continue
                 data = bound_agent_event(data, encoded_size=len(msg.data.encode("utf-8")))
+                if data.get("malformed_text_event"):
+                    log.warning(
+                        "[chat] replaced malformed text event session=%s req_id=%s "
+                        "agent=%s data_type=%s",
+                        str(data.get("session_id", "") or ""),
+                        str(data.get("req_id", "") or ""),
+                        agent_id,
+                        str(data.get("malformed_text_data_type", "") or ""),
+                    )
 
                 msg_type = data.get("type", "")
 

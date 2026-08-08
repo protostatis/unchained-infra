@@ -14,6 +14,9 @@ SCREENSHOT_OMITTED_MESSAGE = (
     "Screenshot preview omitted because the image exceeded the 8 MiB inline preview limit."
 )
 EVENT_OMITTED_MESSAGE = "Agent event omitted because it exceeded the transport limit."
+MALFORMED_TEXT_EVENT_MESSAGE = (
+    "The agent returned an unreadable response update. Please ask it to continue."
+)
 
 
 def _utf8_size(value: str) -> int:
@@ -26,6 +29,23 @@ def _identity_fields(event: dict[str, Any]) -> dict[str, Any]:
         for key in ("session_id", "req_id")
         if isinstance(event.get(key), str) and event[key]
     }
+
+
+def normalize_text_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Ensure every text event has a safe, renderable string payload.
+
+    Browser clients append ``event.data`` directly to the chat transcript. A
+    missing or structured value otherwise becomes the literal ``undefined`` or
+    ``[object Object]`` in JavaScript. Keep valid event shapes unchanged and
+    attach only non-sensitive diagnostics when a payload is malformed.
+    """
+    if str(event.get("type") or "") != "text" or isinstance(event.get("data"), str):
+        return event
+    normalized = dict(event)
+    normalized["data"] = MALFORMED_TEXT_EVENT_MESSAGE
+    normalized["malformed_text_event"] = True
+    normalized["malformed_text_data_type"] = type(event.get("data")).__name__
+    return normalized
 
 
 def _bound_image_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -81,11 +101,12 @@ def bound_agent_event(
     encoded_size: int | None = None,
 ) -> dict[str, Any]:
     """Return an event that is safe to pass through WS, SSE, and the browser."""
-    bounded = _bound_image_event(event)
+    normalized = normalize_text_event(event)
+    bounded = _bound_image_event(normalized)
     if bounded.get("screenshot_omitted"):
         return bounded
 
-    if encoded_size is None:
+    if encoded_size is None or normalized is not event:
         payload = json.dumps(bounded, separators=(",", ":"), ensure_ascii=False)
         encoded_size = _utf8_size(payload)
     if encoded_size <= MAX_AGENT_EVENT_BYTES:
@@ -95,7 +116,7 @@ def bound_agent_event(
 
 def serialize_agent_event(event: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Bound an event and serialize it once for a WebSocket send."""
-    bounded = _bound_image_event(event)
+    bounded = _bound_image_event(normalize_text_event(event))
     payload = json.dumps(bounded, separators=(",", ":"), ensure_ascii=False)
     if _utf8_size(payload) > MAX_AGENT_EVENT_BYTES:
         bounded = _oversized_event_fallback(bounded)

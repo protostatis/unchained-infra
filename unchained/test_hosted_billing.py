@@ -272,6 +272,78 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(first.kwargs["bring_to_front"])
         self.assertFalse(second.kwargs["bring_to_front"])
 
+    async def test_hosted_agent_blocks_third_broad_link_scan_on_page(self):
+        sid = "s-link-scan"
+        self.agent.sessions[sid] = []
+        expression = (
+            "Array.from(document.querySelectorAll('a'))"
+            ".filter(a => a.href).map(a => a.href)"
+        )
+        expressions = [f"{expression}.slice(0, {limit})" for limit in (25, 50, 75)]
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"links-{index}",
+                            "function": {
+                                "name": "js_eval",
+                                "arguments": json.dumps({"expression": expressions[index]}),
+                            },
+                        }
+                        for index in range(3)
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        execute_tool = AsyncMock(return_value="https://example.test/article")
+        send = AsyncMock()
+
+        with (
+            patch.object(
+                self.agent,
+                "_call_openrouter",
+                new=AsyncMock(side_effect=[tool_response, final_response]),
+            ),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+            patch.object(self.agent, "_send", new=send),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "tab_id": "tab-1",
+                "user_id": "u-link-scan",
+                "message": "find articles",
+            })
+
+        self.assertEqual(execute_tool.await_count, 2)
+        tool_results = [
+            call.args[1]
+            for call in send.await_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "tool_result"
+        ]
+        self.assertTrue(
+            any(
+                result["data"].startswith("LINK_SCAN_REPEAT_BLOCKED")
+                for result in tool_results
+            )
+        )
+
     def test_prepare_hosted_context_bounds_messages_and_chars_in_place(self):
         messages = [{"role": "system", "content": "system" * 100}]
         for index in range(20):

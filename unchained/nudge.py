@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -28,6 +29,9 @@ LOOP_SHORT_CIRCUIT_REPEAT_THRESHOLD = int(
 STALL_VARIETY_WINDOW = int(os.environ.get("STALL_VARIETY_WINDOW", "8"))
 STALL_FIND_WINDOW = int(os.environ.get("STALL_FIND_WINDOW", "6"))
 STALL_FIND_DISTINCT_MAX = int(os.environ.get("STALL_FIND_DISTINCT_MAX", "2"))
+MAX_SAME_PAGE_LINK_SCANS = max(
+    1, int(os.environ.get("MAX_SAME_PAGE_LINK_SCANS", "2"))
+)
 
 INTERVENTION_ENABLED = os.environ.get("INTERVENTION_ENABLED", "1").lower() not in (
     "0", "false", "no", "off",
@@ -120,6 +124,43 @@ def _extract_domain(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+_ANCHOR_QUERY_RE = re.compile(
+    r"querySelectorAll\(\s*(['\"])a\1\s*\)", re.IGNORECASE
+)
+_COLLECTION_TRANSFORM_RE = re.compile(
+    r"\.\s*(?:filter|map|forEach|reduce)\s*\(", re.IGNORECASE
+)
+
+
+def _is_broad_link_scan(expression: object) -> bool:
+    """Identify extraction-style JavaScript scans over every anchor on a page."""
+    if not isinstance(expression, str):
+        return False
+    return bool(
+        _ANCHOR_QUERY_RE.search(expression)
+        and _COLLECTION_TRANSFORM_RE.search(expression)
+    )
+
+
+def _canonical_page_key(url: str) -> str:
+    """Return a stable page key without a fragment for per-page guardrails."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return ""
+    path = parsed.path.rstrip("/") or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{host}{path}{query}"
 
 
 def _safe_label(value: object) -> str:
@@ -250,6 +291,8 @@ class NudgeState:
         default_factory=lambda: deque(maxlen=max(1, STALL_NAV_GRACE_TURNS))
     )
     recent_domains: deque = field(default_factory=lambda: deque(maxlen=8))
+    recent_page_keys: deque = field(default_factory=lambda: deque(maxlen=12))
+    link_scan_counts: dict[str, int] = field(default_factory=dict)
     last_nav_url: str = ""
 
     live_tool_log: list = field(default_factory=list)
@@ -262,6 +305,33 @@ class NudgeState:
     # ------------------------------------------------------------------
     # Loop detection
     # ------------------------------------------------------------------
+
+    def record_navigation(self, url: str) -> bool:
+        """Record a successful navigation and return whether it reached a new page."""
+        page_key = _canonical_page_key(url)
+        if not page_key:
+            return False
+        is_new_page = page_key not in self.recent_page_keys
+        self.recent_page_keys.append(page_key)
+        return is_new_page
+
+    def allow_broad_link_scan(
+        self,
+        *,
+        page_url: str,
+        tab_id: str,
+        expression: object,
+    ) -> bool:
+        """Limit repeated all-anchor extraction on one page without blocking targeted JS."""
+        if not _is_broad_link_scan(expression):
+            return True
+        page_key = _canonical_page_key(page_url) or "current-page"
+        key = f"{tab_id or 'auto'}:{page_key}"
+        count = self.link_scan_counts.get(key, 0)
+        if count >= MAX_SAME_PAGE_LINK_SCANS:
+            return False
+        self.link_scan_counts[key] = count + 1
+        return True
 
     def check_loop(self, tool_calls_sig: str) -> tuple[bool, str, object]:
         """Check if tool calls are repeating.

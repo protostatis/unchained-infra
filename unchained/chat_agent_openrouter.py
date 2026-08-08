@@ -234,20 +234,24 @@ Chrome connector is not running. When this happens:
 | `screenshot()` | Internal screenshot — CAPTCHA/verification only, NOT shown to user |
 | `screenshot(show_user=true)` | Show screenshot to user — ONLY when user literally asked "show me" or "take a screenshot" |
 
-## CRITICAL: Prefer Direct URL Navigation Over Search Forms
+## Direct URLs and Source Discipline
 
-Many sites have predictable URL patterns. ALWAYS try navigating directly before using search forms:
+Use a direct URL only when its canonical format is known or an href was returned by a browser tool. These are safe, documented patterns:
 - Wikipedia: navigate to https://en.wikipedia.org/wiki/TOPIC (replace spaces with _)
 - Cambridge Dictionary: navigate to https://dictionary.cambridge.org/dictionary/english/WORD
 - ArXiv: navigate to https://arxiv.org/search/?query=QUERY (replace spaces with +)
 - GitHub: navigate to https://github.com/OWNER/REPO/issues for issues
 
+Never invent a news/article URL from a title, date, or guessed slug. Follow an href returned by a tool or use the site's search page.
+After a Not Found page, do not guess another article URL; use a discovered link, site search, or summarize the evidence already gathered.
+On one page, make at most two broad `document.querySelectorAll('a')` extraction scans. Refine the results you already have or navigate a discovered href instead of repeatedly rescanning all links.
+
 If you must use a search form: click the input → type_text → press_enter or submit_form → run ddm to check results.
-If the form doesn't work after ONE attempt, navigate directly to the URL instead.
+If the form doesn't work after ONE attempt, navigate to a documented or discovered canonical URL instead.
 
 ## Key Gotchas
 - Arrow functions in js_eval: Use `el => expr` syntax (NOT `el > expr`).
-- Search forms: Many modern sites use JS-based search that doesn't respond to synthetic events. Navigate directly to the URL instead.
+- Search forms: Many modern sites use JS-based search that doesn't respond to synthetic events. Use a known canonical URL instead.
 """
 
 
@@ -569,6 +573,29 @@ def _ui_tool_input(tool_name: str, args: dict) -> str:
     if tool_name == "screenshot":
         return ""
     return json.dumps(args, sort_keys=True)
+
+
+def _navigation_result_is_not_found(result: str) -> bool:
+    """Identify a browser navigation that landed on a site's missing-page view."""
+    normalized = (result or "").lower()
+    return (
+        "title: not found" in normalized
+        or "page: not found" in normalized
+        or "404 not found" in normalized
+    )
+
+
+def _navigation_result_succeeded(result: str) -> bool:
+    """Return whether a navigation supplied usable page state for progress tracking."""
+    normalized = (result or "").lower()
+    if not normalized.strip():
+        return False
+    return not (
+        normalized.startswith("browser_unavailable")
+        or normalized.startswith("tool error (")
+        or normalized.startswith("error:")
+        or _navigation_result_is_not_found(result)
+    )
 
 
 def _message_content_as_text(message: dict) -> str:
@@ -1586,21 +1613,13 @@ class TrialAgent:
                         # Keep arguments canonical when echoed back to OpenRouter.
                         fn["arguments"] = json.dumps(args, separators=(",", ":"))
                         tab_id = str(args.get("tab_id", "auto"))
+                        nav_url = ""
 
                         if name in {"navigate", "click", "type_text", "press_enter", "submit_form"}:
                             _invalidate_js_eval_cache(tab_id)
 
                         if name == "navigate":
                             nav_url = str(args.get("url", "")).strip()
-                            # Only count as real navigation if URL actually changed
-                            if nav_url and nav_url != ns.last_nav_url:
-                                turn_had_navigation = True
-                            ns.last_nav_url = nav_url
-                            domain = _extract_domain(nav_url)
-                            if domain:
-                                if ns.recent_domains and domain != ns.recent_domains[-1]:
-                                    turn_domain_switch = True
-                                ns.recent_domains.append(domain)
                         elif name in {"click", "type_text", "press_enter", "submit_form"}:
                             turn_had_interaction = True
 
@@ -1636,31 +1655,44 @@ class TrialAgent:
                         )
                         tool_ms = 0.0
                         cache_hit = False
+                        link_scan_blocked = False
                         expr = ""
                         cache_key = None
                         if name == "js_eval":
                             expr = str(args.get("expression", "")).strip()
                             if expr:
-                                cache_key = (tab_id, expr)
-                                cached = js_eval_cache.get(cache_key)
-                                if cached:
-                                    cache_hit = True
-                                    cached["reuse_count"] = int(cached.get("reuse_count", 0)) + 1
-                                    cached_output = str(cached.get("result", ""))
-                                    if cached["reuse_count"] == 1:
-                                        result = (
-                                            f"{cached_output}\n\n"
-                                            "[cache] Reused identical js_eval result on the same tab. "
-                                            "If this isn't enough, switch strategy."
-                                        )
-                                    else:
-                                        result = (
-                                            "JS_EVAL_REPEAT_BLOCKED: Same js_eval expression repeated on "
-                                            "the same tab. Switch strategy (different selector, "
-                                            "ddm --text --find, ddm --at, or direct navigate)."
-                                        )
+                                if not ns.allow_broad_link_scan(
+                                    page_url=ns.last_nav_url,
+                                    tab_id=tab_id,
+                                    expression=expr,
+                                ):
+                                    link_scan_blocked = True
+                                    result = (
+                                        "LINK_SCAN_REPEAT_BLOCKED: You have already scanned all page links "
+                                        "twice here. Use an href already returned, use the site's search, "
+                                        "or answer from the evidence collected so far."
+                                    )
+                                else:
+                                    cache_key = (tab_id, expr)
+                                    cached = js_eval_cache.get(cache_key)
+                                    if cached:
+                                        cache_hit = True
+                                        cached["reuse_count"] = int(cached.get("reuse_count", 0)) + 1
+                                        cached_output = str(cached.get("result", ""))
+                                        if cached["reuse_count"] == 1:
+                                            result = (
+                                                f"{cached_output}\n\n"
+                                                "[cache] Reused identical js_eval result on the same tab. "
+                                                "If this isn't enough, switch strategy."
+                                            )
+                                        else:
+                                            result = (
+                                                "JS_EVAL_REPEAT_BLOCKED: Same js_eval expression repeated on "
+                                                "the same tab. Switch strategy (different selector, "
+                                                "ddm --text --find, ddm --at, or direct navigate)."
+                                            )
 
-                        if not cache_hit:
+                        if not cache_hit and not link_scan_blocked:
                             tool_t0 = time.monotonic()
                             try:
                                 execute_kwargs = {}
@@ -1697,6 +1729,22 @@ class TrialAgent:
                                     }
                         if not isinstance(result, str):
                             result = str(result)
+                        if name == "navigate":
+                            if _navigation_result_is_not_found(result):
+                                result += (
+                                    "\n\nNAVIGATION_NOT_FOUND: This URL did not resolve. Do not guess "
+                                    "another article URL; use a discovered href, the site's search, or "
+                                    "summarize the evidence already collected."
+                                )
+                            elif nav_url and _navigation_result_succeeded(result):
+                                ns.last_nav_url = nav_url
+                                if ns.record_navigation(nav_url):
+                                    turn_had_navigation = True
+                                domain = _extract_domain(nav_url)
+                                if domain:
+                                    if ns.recent_domains and domain != ns.recent_domains[-1]:
+                                        turn_domain_switch = True
+                                    ns.recent_domains.append(domain)
                         print(
                             f"[{session_id}] Tool {turn + 1}.{idx + 1} done: "
                             f"{name}{' [cache-hit]' if cache_hit else ''} ({tool_ms:.1f}ms) -> "
