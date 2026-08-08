@@ -456,7 +456,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "f9d1855b45cec61cf2e8e2495fba830178ec1263",
+            "20377f97d8dab19540ce88aefa4210612a691088",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -510,7 +510,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "f9d1855b45cec61cf2e8e2495fba830178ec1263"
+        app_revision = "20377f97d8dab19540ce88aefa4210612a691088"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
