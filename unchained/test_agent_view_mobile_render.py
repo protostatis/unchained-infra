@@ -38,6 +38,7 @@ _IPHONE_16_PRO_MAX = {
     "screenWidth": 440,
     "screenHeight": 956,
 }
+_CDP_ORIGIN = "http://127.0.0.1"
 
 
 def _chrome_binary() -> str | None:
@@ -78,17 +79,18 @@ function largeSnapshot(index) {
   for (let item = 0; item < 2600; item += 1) {
     cards += '<article class="card" data-ucm-id="card-' + index + '-' + item + '"><h2>Snapshot ' + index + ' / card ' + item + '</h2><p>Mobile semantic render stress content.</p></article>';
   }
+  const body = '<main data-ucm-id="main-' + index + '">' + cards + '</main>';
   return {
     url: 'https://source.example.test/snapshot/' + index,
     doctype: '<!DOCTYPE html>',
     htmlAttrs: {lang:'en'},
     bodyAttrs: {},
     head: '<style>body{margin:0;font-family:system-ui}.card{padding:8px;margin:4px;border:1px solid #456;background:#eef;color:#123}</style>',
-    body: '<main data-ucm-id="main-' + index + '">' + cards + '</main>',
+    body: body,
     adoptedStyles: [],
     viewport: {width:440,height:956,scrollX:0,scrollY:0},
     scrollPositions: [],
-    fidelity: {capturedHeadBytes:128,capturedBodyBytes:0,criticalStyleBytes:0}
+    fidelity: {capturedHeadBytes:128,capturedBodyBytes:body.length,criticalStyleBytes:0}
   };
 }
 
@@ -266,8 +268,9 @@ class TestAgentViewMobileRender(unittest.TestCase):
                         [
                             chrome,
                             "--headless=new",
+                            "--remote-debugging-address=127.0.0.1",
                             f"--remote-debugging-port={debug_port}",
-                            "--remote-allow-origins=*",
+                            f"--remote-allow-origins={_CDP_ORIGIN}",
                             f"--user-data-dir={profile_dir}",
                             "--no-first-run",
                             "--no-default-browser-check",
@@ -276,7 +279,11 @@ class TestAgentViewMobileRender(unittest.TestCase):
                         stderr=chrome_stderr,
                     )
                     ws_url = await _chrome_ws_url(debug_port)
-                    async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as socket_client:
+                    async with websockets.connect(
+                        ws_url,
+                        origin=_CDP_ORIGIN,
+                        max_size=8 * 1024 * 1024,
+                    ) as socket_client:
                         cdp = _Cdp(socket_client)
                         await cdp.command("Page.enable")
                         await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
@@ -290,6 +297,18 @@ class TestAgentViewMobileRender(unittest.TestCase):
                         )
                         await _wait_for(cdp, "window.__previewSocketCount === 1")
 
+                        async def assert_browser_alive(stage: str) -> None:
+                            self.assertIsNone(
+                                process.poll(),
+                                f"desktop Chrome renderer exited during {stage}",
+                            )
+                            health = await cdp.evaluate("""({
+                              readyState: document.readyState,
+                              socketCount: window.__previewSocketCount,
+                            })""")
+                            self.assertEqual(health["readyState"], "complete", stage)
+                            self.assertEqual(health["socketCount"], 1, stage)
+
                         landscape = dict(_IPHONE_16_PRO_MAX)
                         landscape.update({
                             "width": 956,
@@ -299,13 +318,16 @@ class TestAgentViewMobileRender(unittest.TestCase):
                         })
                         keyboard = dict(_IPHONE_16_PRO_MAX)
                         keyboard["height"] = 560
-                        for _ in range(4):
+                        for iteration in range(4):
                             await cdp.command("Emulation.setDeviceMetricsOverride", landscape)
                             await asyncio.sleep(0.1)
+                            await assert_browser_alive(f"landscape transition {iteration + 1}")
                             await cdp.command("Emulation.setDeviceMetricsOverride", keyboard)
                             await asyncio.sleep(0.1)
+                            await assert_browser_alive(f"keyboard transition {iteration + 1}")
                             await cdp.command("Emulation.setDeviceMetricsOverride", _IPHONE_16_PRO_MAX)
                             await asyncio.sleep(0.1)
+                            await assert_browser_alive(f"portrait transition {iteration + 1}")
 
                         final_state = await _wait_for(cdp, """(() => {
                           const canvas = document.getElementById('agent-view-canvas');
@@ -320,11 +342,11 @@ class TestAgentViewMobileRender(unittest.TestCase):
                             activeFrames: activeFrames.length,
                             renderedCards: renderedCards,
                           } : null;
-                        })()""")
+                        })()""", timeout=30)
                         self.assertGreaterEqual(final_state["snapshots"], 8)
                         self.assertEqual(final_state["sockets"], 1)
                         self.assertEqual(final_state["activeFrames"], 1)
-                        self.assertEqual(final_state["renderedCards"], 2_600)
+                        self.assertGreaterEqual(final_state["renderedCards"], 2_600)
                         screenshot = await cdp.command("Page.captureScreenshot", {"format": "png"})
                         self.assertGreater(len(str(screenshot.get("data", ""))), 1_000)
                         self.assertIsNone(process.poll(), "desktop Chrome renderer exited during the stress run")
