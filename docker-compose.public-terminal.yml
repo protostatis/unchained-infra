@@ -12,7 +12,7 @@
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
-    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#3a8447d3826ca719a4a6d229557c9e969b66db87"
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#c03155010938bd934f0e9db4dc92acb8d2af07e1"
     args:
       PUBLIC_BASE_PATH: /
       VITE_TERMINAL_BUILD_MODE: live
@@ -31,6 +31,9 @@ x-fin-terminal-public-worker: &fin-terminal-public-worker
     - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
     - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
     - MARKET_RESEARCH_CONCURRENCY=1
+    - MARKET_PRECACHE_ENABLED=0
+    - MARKET_SCOUT_ENABLED=0
+    - MARKET_SCOUT_LOCAL_CLI=0
     - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN:?FIN_TERMINAL_PUBLIC_WORKER_PROXY_TOKEN_required}
     - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
     - PUBLIC_DEMO=0
@@ -149,7 +152,7 @@ services:
 
   fin-terminal-public-gateway:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#3a8447d3826ca719a4a6d229557c9e969b66db87"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#c03155010938bd934f0e9db4dc92acb8d2af07e1"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
         VITE_TERMINAL_BUILD_MODE: public-live
@@ -177,6 +180,9 @@ services:
       - PUBLIC_IDLE_TIMEOUT_SECONDS=300
       - PUBLIC_SESSION_MAX_SECONDS=900
       - PUBLIC_MAX_RESEARCH_RUNS=5
+      - MARKET_PRECACHE_ENABLED=0
+      - MARKET_SCOUT_ENABLED=0
+      - MARKET_SCOUT_LOCAL_CLI=0
       - PUBLIC_DAILY_RESEARCH_BUDGET_MICRO_USD=10000000
       - PUBLIC_RESEARCH_RUN_RESERVATION_MICRO_USD=200000
       - PUBLIC_ADMISSION_ATTEMPTS=5

@@ -456,11 +456,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "3a8447d3826ca719a4a6d229557c9e969b66db87",
+            "c03155010938bd934f0e9db4dc92acb8d2af07e1",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
         self.assertIn("MARKET_RESEARCH_PROMPT=compact", service)
+        self.assertIn("MARKET_PRECACHE_ENABLED=1", service)
+        self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
+        self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
+        self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
+        self.assertIn("MARKET_SCOUT_ENABLED=0", service)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", service)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
             service,
@@ -504,7 +510,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "3a8447d3826ca719a4a6d229557c9e969b66db87"
+        app_revision = "c03155010938bd934f0e9db4dc92acb8d2af07e1"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
@@ -536,6 +542,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn("PUBLIC_TURNSTILE_EXPECTED_HOSTNAME=unbrowser.unchainedsky.com", gateway)
         self.assertIn("PUBLIC_MAX_SESSIONS=6", gateway)
+        self.assertIn("MARKET_PRECACHE_ENABLED=0", gateway)
+        self.assertIn("MARKET_SCOUT_ENABLED=0", gateway)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", gateway)
         expected_endpoints = ",".join(
             f"seat-{value:02d}=http://fin-terminal-public-seat-{value:02d}:8787"
             for value in range(1, 7)
@@ -568,6 +577,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("VITE_TERMINAL_BUILD_MODE: live", worker)
         self.assertIn("PUBLIC_SESSION_WORKER=1", worker)
         self.assertIn("MARKET_RESEARCH_CONCURRENCY=1", worker)
+        self.assertIn("MARKET_PRECACHE_ENABLED=0", worker)
+        self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
+        self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:",
             worker,
