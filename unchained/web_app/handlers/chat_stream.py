@@ -1357,7 +1357,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     "error": "hosted_user_prompt_too_large",
                     "message": (
                         "Your message is too long for hosted chat. "
-                        f"Keep it under {_HOSTED_MAX_USER_PROMPT_CHARS:,} characters."
+                        f"Keep it under {_HOSTED_MAX_USER_PROMPT_CHARS:,} Unicode characters."
                     ),
                 },
                 status=413,

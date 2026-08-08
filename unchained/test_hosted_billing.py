@@ -16,6 +16,7 @@ from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     MAX_SESSION_MESSAGES,
     TrialAgent,
+    _load_hosted_internal_context_configuration,
     _openrouter_user_error,
     _prepare_hosted_context,
     _resolve_hosted_internal_context_chars,
@@ -95,6 +96,22 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             _resolve_hosted_internal_context_chars(canonical_env),
             (400_000, "canonical"),
         )
+
+    def test_invalid_hosted_context_configuration_has_actionable_error(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "HOSTED_MAX_INTERNAL_CONTEXT_CHARS must be an integer",
+        ):
+            _load_hosted_internal_context_configuration(
+                {"HOSTED_MAX_INTERNAL_CONTEXT_CHARS": "not-a-number"}
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "exceeds the credit-hold certification",
+        ):
+            _load_hosted_internal_context_configuration(
+                {"HOSTED_MAX_INTERNAL_CONTEXT_CHARS": "400001"}
+            )
 
     async def test_reserve_submit_provider_settle_order(self):
         order: list[str] = []

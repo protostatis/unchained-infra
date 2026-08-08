@@ -127,11 +127,35 @@ def _resolve_hosted_internal_context_chars(
     legacy = str(values.get("HOSTED_MAX_INPUT_CHARS", "") or "").strip()
     raw = canonical or legacy or "400000"
     source = "canonical" if canonical else "legacy" if legacy else "default"
-    return max(10_000, int(raw)), source
+    setting = (
+        "HOSTED_MAX_INTERNAL_CONTEXT_CHARS" if canonical
+        else "HOSTED_MAX_INPUT_CHARS" if legacy
+        else "default hosted internal context limit"
+    )
+    try:
+        budget = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{setting} must be an integer (got {raw!r})") from exc
+    return max(10_000, budget), source
+
+
+def _load_hosted_internal_context_configuration(
+    env: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    """Load and fail clearly when the worker context configuration is unsafe."""
+    try:
+        budget, source = _resolve_hosted_internal_context_chars(env)
+        validate_hosted_context_budget(budget)
+    except (ValueError, RuntimeError) as exc:
+        raise RuntimeError(
+            "Hosted agent context configuration is invalid: "
+            f"{exc}. Set HOSTED_MAX_INTERNAL_CONTEXT_CHARS to a reviewed value."
+        ) from exc
+    return budget, source
 
 
 HOSTED_MAX_INTERNAL_CONTEXT_CHARS, _HOSTED_CONTEXT_LIMIT_SOURCE = (
-    _resolve_hosted_internal_context_chars()
+    _load_hosted_internal_context_configuration()
 )
 # Backwards-compatible module name for integrations importing the old symbol.
 HOSTED_MAX_INPUT_CHARS = HOSTED_MAX_INTERNAL_CONTEXT_CHARS
@@ -145,7 +169,6 @@ print(
     f"{HOSTED_MAX_INTERNAL_CONTEXT_CHARS} "
     f"(source={_HOSTED_CONTEXT_LIMIT_SOURCE})"
 )
-validate_hosted_context_budget(HOSTED_MAX_INTERNAL_CONTEXT_CHARS)
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))

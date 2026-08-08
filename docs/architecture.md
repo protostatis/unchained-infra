@@ -237,6 +237,11 @@ to a separate remote directory (`/home/ec2-user/unchained-headless` by default).
 | `CREDIT_DEFAULT_RESERVATION_MICRO_USD` | web | Optional per-attempt hold for explicitly allowlisted models not in the built-in catalog (default: `1000000`, or $1) |
 | `UNCHAINED_SESSIONS_DIR` | web, trial-agent | Shared active hosted-conversation directory (default: `/data/sessions`) |
 
+> **Migration:** A trial-agent deployment with neither context variable set now
+> uses the `400000` internal-context default. Set
+> `HOSTED_MAX_INTERNAL_CONTEXT_CHARS` explicitly before rollout; the legacy
+> `HOSTED_MAX_INPUT_CHARS` remains a fallback only.
+
 ### Client-side (agent .env)
 | Variable | Purpose |
 |----------|---------|
