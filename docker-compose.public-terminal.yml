@@ -12,7 +12,7 @@
 
 x-fin-terminal-public-worker: &fin-terminal-public-worker
   build:
-    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#20377f97d8dab19540ce88aefa4210612a691088"
+    context: "https://github.com/protostatis/unbrowser-fin-terminal.git#849e86be48420a8b2b58311cc9e1ddb05182619a"
     args:
       PUBLIC_BASE_PATH: /
       VITE_TERMINAL_BUILD_MODE: live
@@ -152,7 +152,7 @@ services:
 
   fin-terminal-public-gateway:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#20377f97d8dab19540ce88aefa4210612a691088"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#849e86be48420a8b2b58311cc9e1ddb05182619a"
       args:
         PUBLIC_BASE_PATH: /fin-terminal-live-pilot/
         VITE_TERMINAL_BUILD_MODE: public-live
