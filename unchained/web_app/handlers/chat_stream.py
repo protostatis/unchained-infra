@@ -26,9 +26,14 @@ from web_app.core import get_core as _core
 from web_app.handlers.chat_flow import _hosted_repo
 from web_state import (
     ChatTurnState,
+    ProfileTabMonitorHandoff,
     canonical_session_tab,
+    clear_profile_tab_monitor_handoff,
     profile_session_caller_tag,
     profile_session_guard,
+    profile_tab_handoff_blocks_observed_tab,
+    profile_tab_monitor_handoffs,
+    profile_tab_monitor_observed_tabs,
     select_profile_slot_active_tab,
 )
 
@@ -258,6 +263,14 @@ def _sync_hosted_agent_new_tab(core, turn, event: dict) -> str:
             allowed_tabs[session_id] = {tab_id}
     session_tabs[session_id] = tab_id
     session_last_active[session_id] = time.time()
+    if previous_tab_id.startswith("prov-") and tab_id.startswith("prov-"):
+        observed_tabs = profile_tab_monitor_observed_tabs(core)
+        observed_tab = str(observed_tabs.get(session_id) or previous_tab_id)
+        observed_tabs[session_id] = observed_tab
+        profile_tab_monitor_handoffs(core)[session_id] = ProfileTabMonitorHandoff(
+            target_tab=tab_id,
+            baseline_observed_tab=observed_tab,
+        )
     update_routing = getattr(turn, "update_routing", None)
     if callable(update_routing):
         update_routing(tab_id=tab_id)
@@ -801,6 +814,8 @@ def _bind_profile_tab(
     core._session_last_active[session_id] = time.time()
     core._session_profile_paths[session_id] = profile_path
     getattr(core, "_expired_profile_sessions", {}).pop(session_id, None)
+    clear_profile_tab_monitor_handoff(core, session_id)
+    profile_tab_monitor_observed_tabs(core).pop(session_id, None)
 
 
 async def _live_profile_tab(
@@ -838,6 +853,8 @@ def _detach_profile_target(
     getattr(core, "_chat_preview_generations", {}).pop(session_id, None)
     core._session_profile_paths[session_id] = profile_path
     core._session_agent_map[session_id] = cdp_agent_id
+    clear_profile_tab_monitor_handoff(core, session_id)
+    profile_tab_monitor_observed_tabs(core).pop(session_id, None)
 
 
 async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
@@ -859,6 +876,23 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
                     current_tab,
                 )
                 if live_tab:
+                    current_after_status = str(
+                        core._session_tabs.get(session_id, "") or ""
+                    )
+                    if current_after_status != str(current_tab):
+                        if current_after_status:
+                            return current_after_status
+                        raise RuntimeError(
+                            "Profile browser target changed while checking liveness"
+                        )
+                    profile_tab_monitor_observed_tabs(core)[session_id] = live_tab
+                    if profile_tab_handoff_blocks_observed_tab(
+                        core,
+                        session_id,
+                        str(current_tab),
+                        live_tab,
+                    ):
+                        return str(current_tab)
                     _bind_profile_tab(core, session_id, cdp_agent_id, profile_path, live_tab)
                     return live_tab
             print(

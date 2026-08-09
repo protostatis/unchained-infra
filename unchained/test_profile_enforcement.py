@@ -170,6 +170,105 @@ class TestEnsureProfileTabPendingClose(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core._session_allowed_tabs[sid], {active_tab})
         mock_launch.assert_not_awaited()
 
+    async def test_agent_handoff_keeps_background_tab_when_status_reports_old_active_tab(self):
+        """A stale `/json` ordering cannot undo a hosted agent tab handoff."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+        from web_state import (
+            ProfileTabMonitorHandoff,
+            profile_tab_monitor_handoffs,
+            profile_tab_monitor_observed_tabs,
+        )
+
+        core = _FakeCore()
+        sid = "s-test-agent-handoff"
+        profile = "/chrome/Profile 3"
+        old_tab = "prov-ab12-OLD"
+        agent_tab = "prov-ab12-NEW"
+        core._session_tabs[sid] = agent_tab
+        core._session_allowed_tabs[sid] = {old_tab, agent_tab}
+        core._session_profile_paths[sid] = profile
+        profile_tab_monitor_observed_tabs(core)[sid] = old_tab
+        profile_tab_monitor_handoffs(core)[sid] = ProfileTabMonitorHandoff(
+            target_tab=agent_tab,
+            baseline_observed_tab=old_tab,
+        )
+        status = {
+            "slots": {"ab12": {
+                "profile": "Profile 3",
+                "caller_tag": profile_session_caller_tag(sid),
+                "tabs": [
+                    {"tab_id": old_tab},
+                    {"tab_id": agent_tab},
+                ],
+            }}
+        }
+
+        with (
+            patch("cloud_tools.provision_status", AsyncMock(return_value=status)),
+            patch("cloud_tools.provision_launch", AsyncMock()) as mock_launch,
+        ):
+            tab_id = await _ensure_profile_tab(core, sid, "claude-test", profile)
+
+        self.assertEqual(tab_id, agent_tab)
+        self.assertEqual(core._session_tabs[sid], agent_tab)
+        self.assertEqual(core._session_allowed_tabs[sid], {old_tab, agent_tab})
+        mock_launch.assert_not_awaited()
+
+    async def test_liveness_poll_does_not_overwrite_a_newer_agent_handoff(self):
+        """An in-flight profile poll returns the target installed by the agent."""
+        from web_app.handlers.chat_stream import _ensure_profile_tab
+        from web_state import (
+            ProfileTabMonitorHandoff,
+            profile_tab_monitor_handoffs,
+            profile_tab_monitor_observed_tabs,
+        )
+
+        core = _FakeCore()
+        sid = "s-test-agent-handoff-race"
+        profile = "/chrome/Profile 3"
+        old_tab = "prov-ab12-OLD"
+        agent_tab = "prov-ab12-NEW"
+        core._session_tabs[sid] = old_tab
+        core._session_allowed_tabs[sid] = {old_tab}
+        core._session_profile_paths[sid] = profile
+        poll_started = asyncio.Event()
+        release_poll = asyncio.Event()
+        status = {
+            "slots": {"ab12": {
+                "profile": "Profile 3",
+                "caller_tag": profile_session_caller_tag(sid),
+                "tabs": [{"tab_id": old_tab}],
+            }}
+        }
+
+        async def delayed_status(*_args, **_kwargs):
+            poll_started.set()
+            await release_poll.wait()
+            return status
+
+        with (
+            patch("cloud_tools.provision_status", delayed_status),
+            patch("cloud_tools.provision_launch", AsyncMock()) as mock_launch,
+        ):
+            ensure_task = asyncio.create_task(
+                _ensure_profile_tab(core, sid, "claude-test", profile)
+            )
+            await asyncio.wait_for(poll_started.wait(), timeout=1)
+            core._session_tabs[sid] = agent_tab
+            core._session_allowed_tabs[sid] = {old_tab, agent_tab}
+            profile_tab_monitor_observed_tabs(core)[sid] = old_tab
+            profile_tab_monitor_handoffs(core)[sid] = ProfileTabMonitorHandoff(
+                target_tab=agent_tab,
+                baseline_observed_tab=old_tab,
+            )
+            release_poll.set()
+            tab_id = await ensure_task
+
+        self.assertEqual(tab_id, agent_tab)
+        self.assertEqual(core._session_tabs[sid], agent_tab)
+        self.assertEqual(core._session_allowed_tabs[sid], {old_tab, agent_tab})
+        mock_launch.assert_not_awaited()
+
     async def test_legacy_untagged_workspace_does_not_adopt_another_live_tab(self):
         """Legacy slots may retain their exact tab but cannot follow another one."""
         from web_app.handlers.chat_stream import _ensure_profile_tab

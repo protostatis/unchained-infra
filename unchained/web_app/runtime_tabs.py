@@ -82,6 +82,13 @@ async def close_session_tab(
     tab_id = core._session_tabs.pop(session_id, None)
     if hasattr(core, "_session_allowed_tabs"):
         core._session_allowed_tabs.pop(session_id, None)
+    for attr in (
+        "_profile_tab_monitor_observed_tabs",
+        "_profile_tab_monitor_handoffs",
+    ):
+        state = getattr(core, attr, None)
+        if isinstance(state, dict):
+            state.pop(session_id, None)
     agent_id = core._session_agent_map.pop(session_id, None)
     core._session_last_active.pop(session_id, None)
     profile_path = ""

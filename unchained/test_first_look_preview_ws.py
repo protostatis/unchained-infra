@@ -672,6 +672,100 @@ class TestAuthenticatedChatPreviewWebSocket(AioHTTPTestCase):
         )
         await asyncio.sleep(0)
 
+    async def test_profile_monitor_keeps_agent_background_tab_until_manual_transition(self):
+        from web_app.handlers import chat_stream
+        from web_state import ChatTurnState, profile_session_caller_tag
+
+        sid = "s-claude-abc12345-demo"
+        old_tab = "prov-ab12-" + ("A" * 32)
+        agent_tab = "prov-ab12-" + ("B" * 32)
+        manual_tab = "prov-ab12-" + ("C" * 32)
+        profile = "/chrome/Profile 3"
+        self.fake_core.TRIAL_AGENT_ID = "trial-agent"
+        self.fake_core._session_tabs[sid] = old_tab
+        self.fake_core._session_allowed_tabs[sid] = {old_tab}
+        self.fake_core._session_profile_paths[sid] = profile
+        chat_flow._PROFILE_ACTIVE_TAB_POLL_INTERVAL_S = 0.01
+        observed_initial = asyncio.Event()
+        delayed_poll_started = asyncio.Event()
+        release_delayed_poll = asyncio.Event()
+        active_tab = old_tab
+        polls = 0
+
+        def status_for(tab):
+            return {
+                "slots": {"ab12": {
+                    "profile": "Profile 3",
+                    "caller_tag": profile_session_caller_tag(sid),
+                    "tabs": [{"tab_id": tab}],
+                }}
+            }
+
+        async def fake_status(*_args, **_kwargs):
+            nonlocal polls
+            polls += 1
+            if polls == 1:
+                observed_initial.set()
+            elif polls == 2:
+                delayed_poll_started.set()
+                await release_delayed_poll.wait()
+            return status_for(active_tab)
+
+        async def wait_for_target(expected):
+            for _ in range(100):
+                if self.fake_core._session_tabs.get(sid) == expected:
+                    return
+                await asyncio.sleep(0.01)
+            self.fail(f"profile monitor did not adopt {expected}")
+
+        cloud_tools.provision_status = fake_status
+        token = chat_flow._register_profile_tab_monitor(
+            self.fake_core,
+            "claude-abc12345",
+            sid,
+        )
+        try:
+            await asyncio.wait_for(observed_initial.wait(), timeout=1)
+            await asyncio.wait_for(delayed_poll_started.wait(), timeout=1)
+            turn = ChatTurnState(
+                owner_user_id="user-1",
+                owner_key_hash="key-1",
+                session_id=sid,
+                req_id="r-agent-new-tab",
+                routing_agent_id="trial-agent",
+                cdp_agent_id="claude-abc12345",
+                tab_id=old_tab,
+            )
+
+            self.assertEqual(
+                chat_stream._sync_hosted_agent_new_tab(
+                    self.fake_core,
+                    turn,
+                    {
+                        "type": "tool_result",
+                        "name": "ddm",
+                        "new_tab_id": "B" * 32,
+                    },
+                ),
+                agent_tab,
+            )
+            release_delayed_poll.set()
+            await asyncio.sleep(0.05)
+            self.assertEqual(self.fake_core._session_tabs[sid], agent_tab)
+            self.assertEqual(self.fake_core._session_allowed_tabs[sid], {old_tab, agent_tab})
+
+            active_tab = manual_tab
+            await wait_for_target(manual_tab)
+            self.assertEqual(self.fake_core._session_allowed_tabs[sid], {manual_tab})
+        finally:
+            chat_flow._unregister_profile_tab_monitor(
+                self.fake_core,
+                "claude-abc12345",
+                sid,
+                token,
+            )
+            await asyncio.sleep(0)
+
     async def test_concurrent_connections_coexist_without_generation_war(self):
         """Two Agent View clients on the same session must coexist.
 
