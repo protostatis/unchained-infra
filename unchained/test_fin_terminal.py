@@ -920,6 +920,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
         self.assertIn("MARKET_SCOUT_ENABLED=1", singleton)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", singleton)
+        self.assertEqual(self.compose.count("MARKET_SCOUT_ENABLED=1"), 1)
 
         # Public gateway: disabled
         gateway = self.public_compose.split(
@@ -934,6 +935,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[1].split("\nservices:\n", 1)[0]
         self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
+        self.assertNotIn("MARKET_SCOUT_ENABLED=1", self.public_compose)
 
     def test_market_scout_trigger_dry_run_contract_is_pinned(self):
         self.assertIn("EXPECTED_JOURNAL_VERSION = 2", self.market_scout_helper)
