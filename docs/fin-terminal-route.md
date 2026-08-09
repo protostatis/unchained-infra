@@ -109,15 +109,18 @@ When updating the terminal, review its Dockerfile and dependency changes, run
 its container smoke tests, then replace the full Git commit SHA in
 `docker-compose.yml`.
 
-## Market-event scout (singleton-only shadow mode)
+## Market-event scout (singleton-only trigger dry run)
 
-The authenticated singleton runs a shadow-only market-event scout that
-periodically retrieves public financial-event feeds via the internal
-Unbrowser MCP and persists a journal to
-`/data/market-terminal/market-event-scout.json`. It does not dispatch
-model inference, precache writes, or canvas writes. It never runs on
-public gateways, public session workers, workspace runtimes, or the local
-CLI.
+The authenticated singleton retrieves public financial-event feeds via the
+internal Unbrowser MCP and evaluates a no-dispatch trigger dry run. Validated
+targets map to ticker BRIEF, macro EVENTS BRIEF, or SIGNALS/Market Story BRIEF
+proposals. The fixed policy requires P80, a two-hour publication TTL, a six-hour
+target cooldown, and no more than eight `would-trigger` outcomes per UTC day.
+It persists decisions, candidates, gate reasons, and safe aggregates to
+`/data/market-terminal/market-event-scout.json`, but does not dispatch model
+inference, reserve tokens, write precache entries, or mutate canvases. It never
+runs on public gateways, public session workers, workspace runtimes, or the
+local CLI.
 
 ### Preflight (automated, pre-commit)
 
@@ -138,10 +141,16 @@ preflight validates deterministic invariants:
   - `MARKET_DATA_DIR` is `/data/market-terminal`.
   - The computed journal path is `/data/market-terminal/market-event-scout.json`.
   - Exactly seven reviewed default sources are exported.
+  - The app exports the reviewed trigger mapper/evaluator and exact simulation
+    policy (`v1`, P80, 2h TTL, 6h target cooldown, eight/day).
   - The data directory is truly writable (verified by unique temp-file create
     and remove).
   - If a journal already exists, the app's strict reader accepts it and it
-    has no unknown source IDs.
+    has no unknown source IDs. A valid persisted journal v1 is accepted only
+    through the candidate app's in-memory v2 migration; retained decisions are
+    not backfilled as candidates.
+  - The strict reader returns the v2 trigger-dry-run envelope, exact policy,
+    bounded record arrays, and internally consistent aggregate counters.
 
 A preflight failure prevents the deployment from committing metadata.
 No secrets, URLs, symbols, titles, or journal contents appear in error
@@ -160,22 +169,26 @@ is needed.
 Commissioning polls the journal file read-only (via the app's strict reader)
 for up to 20 minutes and requires:
 
-1. Exactly seven known source IDs present in the journal (exact expected set).
-2. All seven have a fresh `lastAttemptAt` timestamp from the current
+1. The on-disk journal has been atomically persisted as raw schema v2 with a
+   `triggerDryRun` envelope. A still-persisted v1 journal is pending, not a
+   success, until the scheduler writes v2.
+2. The strict reader verifies the exact dry-run policy and aggregate contract.
+3. Exactly seven known source IDs present in the journal (exact expected set).
+4. All seven have a fresh `lastAttemptAt` timestamp from the current
    container lifetime (numeric epoch ms; ~2 seconds tolerance for
    host/container clock precision).
-3. At least four sources have `baselineComplete: true` and a fresh
+5. At least four sources have `baselineComplete: true` and a fresh
    `lastSuccessAt` within the container lifetime.
-4. Those successful sources span at least three distinct source origin hosts.
-5. A later persisted journal where `updatedAt` advances **and** at least one
+6. Those successful sources span at least three distinct source origin hosts.
+7. A later persisted journal where `updatedAt` advances **and** at least one
    source `lastAttemptAt` advances, proving the scheduler re-armed.
 
 The check never invokes the scout or sync, never prints journal JSON,
 decision fields, source errors, URLs, symbols, titles, or env values.
-It prints only aggregate counts and timestamps. Malformed state (strict
-reader rejection) fails immediately. A missing journal during initial
-commission is treated as pending (polls until timeout). Timeout errors
-include aggregates only.
+It prints only aggregate counts, journal version, policy-verification status,
+and timestamps. Malformed state (strict reader rejection) fails immediately.
+A missing journal or valid persisted v1 during initial commission is treated as
+pending (polls until timeout). Timeout errors include aggregates only.
 
 ### Degraded / failure response
 
@@ -192,6 +205,13 @@ Zero or low success across sources makes the deployment job red. The
 response is a **forward-disable** deployment — setting `MARKET_SCOUT_ENABLED=0`
 in `docker-compose.yml` — not a broad rollback. Third-party feed failure
 does not trigger the existing rollback mechanism.
+
+Journal v2 is intentionally fail-closed for application versions that predate
+the trigger dry run. For a planned rollback to a pre-v2 app, forward-disable
+the scout first. If an unrelated pre-commit deployment failure automatically
+restores a pre-v2 image after v2 was already written, the core terminal remains
+available but that old scout cannot resume; deploy `MARKET_SCOUT_ENABLED=0` or
+restore a v2-compatible app rather than modifying the journal by hand.
 
 ### Forward-disable runbook
 

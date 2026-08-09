@@ -374,6 +374,9 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.route_doc = cls.repo_root.joinpath(
             "docs", "fin-terminal-route.md"
         ).read_text()
+        cls.market_scout_helper = cls.repo_root.joinpath(
+            "deploy", "verify_market_scout_health.mjs"
+        ).read_text()
 
     def test_internal_auth_route_is_registered_and_publicly_denied(self):
         self.assertIn(
@@ -456,7 +459,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "2d571c874150d6d319a274db67fbdf09ea070ec8",
+            "c88f0ec14ede4ee067fb9d7d557017dc2856a8cc",
             service,
         )
         self.assertIn("deepseek/deepseek-v4-flash-0731", service)
@@ -510,7 +513,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("respond \"Not found\" 404", main_site)
 
     def test_public_live_overlay_uses_reviewed_immutable_images(self):
-        app_revision = "2d571c874150d6d319a274db67fbdf09ea070ec8"
+        app_revision = "c88f0ec14ede4ee067fb9d7d557017dc2856a8cc"
         redis_revision = (
             "redis:7.4.2-alpine@sha256:"
             "02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
@@ -922,6 +925,18 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[1].split("\nservices:\n", 1)[0]
         self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
+
+    def test_market_scout_trigger_dry_run_contract_is_pinned(self):
+        self.assertIn("EXPECTED_JOURNAL_VERSION = 2", self.market_scout_helper)
+        self.assertIn("minPriority: 80", self.market_scout_helper)
+        self.assertIn("ttlMs: 2 * 60 * 60 * 1000", self.market_scout_helper)
+        self.assertIn("targetCooldownMs: 6 * 60 * 60 * 1000", self.market_scout_helper)
+        self.assertIn("dailyCap: 8", self.market_scout_helper)
+        self.assertIn("evaluateMarketEventTriggerCandidate", self.market_scout_helper)
+        self.assertIn("proposeMarketEventTriggerRoute", self.market_scout_helper)
+        self.assertIn("valid persisted v1", self.route_doc)
+        self.assertIn("raw schema v2", self.route_doc)
+        self.assertIn("does not dispatch model", self.route_doc)
 
     def test_market_scout_supports_forward_disable(self):
         """Commission helper handles disabled state: prints SKIPPED and exits 0."""
