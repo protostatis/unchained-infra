@@ -149,7 +149,7 @@ services:
 
   fin-terminal:
     build:
-      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#2d571c874150d6d319a274db67fbdf09ea070ec8"
+      context: "https://github.com/protostatis/unbrowser-fin-terminal.git#c88f0ec14ede4ee067fb9d7d557017dc2856a8cc"
       args:
         PUBLIC_BASE_PATH: /fin-terminal/
     expose:
@@ -170,8 +170,8 @@ services:
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_RESEARCH_PROMPT=compact
-      # Phase two: shadow scouting is now commissioned on the singleton.
-      # Local CLI, public gateway, and workspace runtimes remain disabled.
+      # Phase three: trigger admission runs as a no-dispatch dry run on the
+      # singleton. Local CLI, public gateway, and workspace runtimes stay off.
       - MARKET_PRECACHE_ENABLED=1
       - MARKET_PRECACHE_QUALITY_GATE=1
       - MARKET_PRECACHE_BUDGET=500000

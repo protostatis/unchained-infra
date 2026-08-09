@@ -25,22 +25,65 @@ const PINNED_SOURCES = [
   { id:"doj-news",                 url:"https://www.justice.gov/feeds/justice-news.xml" },
 ];
 
+const EXPECTED_TRIGGER_POLICY = {
+  version: 1,
+  minPriority: 80,
+  ttlMs: 2 * 60 * 60 * 1000,
+  targetCooldownMs: 6 * 60 * 60 * 1000,
+  dailyCap: 8,
+};
+
+function emptyAggregate() {
+  return {
+    evaluated: 0, mapped: 0, wouldTrigger: 0, gated: 0, missingPublishedAt: 0,
+    routes: { tickerBrief: 0, macroEventBrief: 0, marketStoryBrief: 0, unsupported: 0 },
+    associations: { structuredSymbol: 0, explicitSymbol: 0, marketWide: 0, unresolved: 0 },
+    gates: { notAdmitted: 0, unsupportedRoute: 0, belowPriority: 0, expired: 0, targetCooldown: 0, dailyCap: 0 },
+  };
+}
+
+function makeTriggerDryRun(overrides = {}) {
+  return {
+    policy: { ...EXPECTED_TRIGGER_POLICY },
+    candidates: [],
+    totals: emptyAggregate(),
+    days: [],
+    cooldowns: [],
+    ...overrides,
+  };
+}
+
+function makeV2Journal(sources = [], overrides = {}) {
+  return {
+    version: 2,
+    updatedAt: Date.now(),
+    decisions: [],
+    sources,
+    triggerDryRun: makeTriggerDryRun(),
+    ...overrides,
+  };
+}
+
 const TEMPLATE_READER = `
 import fs from "node:fs";
+const EMPTY_TRIGGER_DRY_RUN = ${JSON.stringify(makeTriggerDryRun())};
+function emptyTriggerDryRun() { return JSON.parse(JSON.stringify(EMPTY_TRIGGER_DRY_RUN)); }
 export async function readMarketEventScoutState(p) {
   let raw;
   try { raw = fs.readFileSync(p, "utf-8"); } catch(e) {
-    if (e.code === "ENOENT") return { version:1, updatedAt:Date.now(), sources:[], decisions:[] };
+    if (e.code === "ENOENT") return { version:2, updatedAt:Date.now(), sources:[], decisions:[], triggerDryRun:emptyTriggerDryRun() };
     throw e;
   }
   const data = JSON.parse(raw);
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("bad root");
-  if (data.version !== 1) throw new Error("bad version");
+  if (data.version !== 1 && data.version !== 2) throw new Error("bad version");
   if (!Array.isArray(data.sources)) throw new Error("sources not array");
   for (const s of data.sources) {
     if (!s || typeof s.sourceId !== "string") throw new Error("missing sourceId");
-    if (typeof s.lastAttemptAt !== "number") throw new Error("lastAttemptAt not numeric");
+    if (s.lastAttemptAt !== undefined && typeof s.lastAttemptAt !== "number") throw new Error("lastAttemptAt not numeric");
   }
+  if (data.version === 1) return { ...data, version:2, triggerDryRun:emptyTriggerDryRun() };
+  if (!data.triggerDryRun || typeof data.triggerDryRun !== "object") throw new Error("missing triggerDryRun");
   return data;
 }
 `;
@@ -52,6 +95,13 @@ async function createMockApp(overrides = {}) {
   const jpath    = overrides.filePath || "/data/market-terminal/market-event-scout.json";
   const lines = [];
   lines.push(`export const DEFAULT_MARKET_EVENT_SOURCES = ${JSON.stringify(sources)};`);
+  const triggerPolicy = Object.hasOwn(overrides, "triggerPolicy")
+    ? overrides.triggerPolicy : EXPECTED_TRIGGER_POLICY;
+  lines.push(`export const DEFAULT_MARKET_EVENT_TRIGGER_POLICY = ${JSON.stringify(triggerPolicy)};`);
+  if (overrides.mappingExports !== false) {
+    lines.push(`export function evaluateMarketEventTriggerCandidate(){ return {}; }`);
+    lines.push(`export function proposeMarketEventTriggerRoute(){ return undefined; }`);
+  }
 
   // marketEventScoutFilePath as function
   if (overrides.pathFn !== undefined) {
@@ -112,6 +162,33 @@ test("invariant: pinned IDs exact match", async () => {
     const r = await mod.validateInvariants();
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     assert.equal(r.scoutEnabled, true);
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("invariant: exact trigger dry-run policy and mapping exports required", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const save = setEnv(baseEnv(appPath));
+  delete process.env.TERMINAL_RUNTIME_MODE;
+  try {
+    const mod = await importHelper();
+    const r = await mod.validateInvariants();
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("invariant: trigger policy drift and missing mapping exports fail closed", async () => {
+  const { tmpDir, appPath } = await createMockApp({
+    triggerPolicy: { ...EXPECTED_TRIGGER_POLICY, dailyCap: 9 },
+    mappingExports: false,
+  });
+  const save = setEnv(baseEnv(appPath));
+  delete process.env.TERMINAL_RUNTIME_MODE;
+  try {
+    const mod = await importHelper();
+    const r = await mod.validateInvariants();
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.includes("trigger dry-run policy contract mismatch"), JSON.stringify(r.errors));
+    assert.ok(r.errors.includes("trigger dry-run mapping exports missing"), JSON.stringify(r.errors));
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
@@ -237,6 +314,56 @@ test("journal: ENOENT → reader returns empty state → ok", async () => {
     const r = await mod.checkJournalSanity();
     assert.equal(r.ok, true);
     assert.equal(r.journalExists, false);
+    assert.equal(r.journalVersion, 2);
+    assert.equal(r.triggerPolicyVerified, true);
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("journal: valid persisted v1 is migration-compatible in preflight", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
+  const state = { version: 1, updatedAt: Date.now(), decisions: [], sources: [] };
+  await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(state), "utf8");
+  try {
+    const mod = await importHelper();
+    const r = await mod.checkJournalSanity();
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.journalExists, true);
+    assert.equal(r.journalVersion, 2, "candidate reader must migrate v1 in memory");
+    assert.equal(r.triggerPolicyVerified, true);
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("journal: v2 trigger policy drift is rejected", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
+  const state = makeV2Journal([], {
+    triggerDryRun: makeTriggerDryRun({ policy: { ...EXPECTED_TRIGGER_POLICY, dailyCap: 9 } }),
+  });
+  await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(state), "utf8");
+  try {
+    const mod = await importHelper();
+    const r = await mod.checkJournalSanity();
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.includes("trigger dry-run policy mismatch"), JSON.stringify(r.errors));
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("journal: v2 trigger aggregate drift is rejected", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const save = setEnv({ ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir });
+  const totals = emptyAggregate();
+  totals.evaluated = 1;
+  totals.wouldTrigger = 1;
+  const state = makeV2Journal([], {
+    triggerDryRun: makeTriggerDryRun({ totals }),
+  });
+  await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(state), "utf8");
+  try {
+    const mod = await importHelper();
+    const r = await mod.checkJournalSanity();
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.includes("trigger aggregate invariants failed"), JSON.stringify(r.errors));
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
@@ -245,7 +372,7 @@ test("journal: concurrent first write after ENOENT is accepted", async () => {
 import fs from "node:fs";
 export async function readMarketEventScoutState(p) {
   const now = Date.now();
-  const state = { version:1, updatedAt:now, decisions:[], sources:${JSON.stringify(PINNED_SOURCES.map(source => ({
+  const state = { version:2, updatedAt:now, decisions:[], sources:${JSON.stringify(PINNED_SOURCES.map(source => ({
     sourceId: source.id,
     baselineComplete: true,
     seenEventIds: [],
@@ -257,7 +384,7 @@ export async function readMarketEventScoutState(p) {
     admitted: 0,
     watched: 0,
     suppressed: 0,
-  })))} };
+  })))}, triggerDryRun:${JSON.stringify(makeTriggerDryRun())} };
   fs.writeFileSync(p, JSON.stringify(state));
   return state;
 }`;
@@ -377,7 +504,7 @@ test("commission: stale lastSuccessAt → 0 successes", async () => {
   const sources = makeSources(
     PINNED_SOURCES.map(() => ({ lastSuccessAt: stale, baselineComplete: true })),
   );
-  const j = { version:1, updatedAt: now, decisions:[], sources };
+  const j = makeV2Journal(sources, { updatedAt: now });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(j), "utf-8");
   try {
     const mod = await importHelper();
@@ -400,7 +527,7 @@ test("commission: wrong count (5≠7) → allAttempted false", async () => {
     MARKET_SCOUT_COMMISSION_POLL_MS: "200",
   });
   const src5 = makeSources().slice(0, 5);
-  const j = { version:1, updatedAt: now, decisions:[], sources: src5 };
+  const j = makeV2Journal(src5, { updatedAt: now });
   await fs.writeFile(path.join(tmpDir, "market-event-scout.json"), JSON.stringify(j), "utf-8");
   try {
     const mod = await importHelper();
@@ -409,6 +536,47 @@ test("commission: wrong count (5≠7) → allAttempted false", async () => {
     assert.equal(r.stage, "timeout");
     assert.equal(r.sourceCount, 5);
     assert.equal(r.successCount, 0);
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
+});
+
+test("commission: persisted v1 stays pending until a scheduler write commits v2", async () => {
+  const { tmpDir, appPath } = await createMockApp();
+  const now = Date.now();
+  const save = setEnv({
+    ...baseEnv(appPath), MARKET_DATA_DIR: tmpDir,
+    MARKET_SCOUT_CANDIDATE_STARTED_AT: new Date(now - 10000).toISOString(),
+    MARKET_SCOUT_COMMISSION_TIMEOUT_MS: "5000",
+    MARKET_SCOUT_COMMISSION_POLL_MS: "50",
+  });
+  const overrides = [
+    { baselineComplete: true },
+    { baselineComplete: true },
+    { baselineComplete: true },
+    { baselineComplete: true },
+    { baselineComplete: false },
+    { baselineComplete: false },
+    { baselineComplete: false },
+  ];
+  const initialSources = makeSources(overrides);
+  const jpath = path.join(tmpDir, "market-event-scout.json");
+  await fs.writeFile(jpath, JSON.stringify({
+    version: 1, updatedAt: now, decisions: [], sources: initialSources,
+  }), "utf8");
+  setTimeout(async () => {
+    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(initialSources, { updatedAt: now + 1000 })), "utf8");
+  }, 150);
+  setTimeout(async () => {
+    const advanced = makeSources(overrides).map(source => source.sourceId === "nasdaq-trade-halts"
+      ? { ...source, lastAttemptAt: now + 2000 } : source);
+    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(advanced, { updatedAt: now + 2000 })), "utf8");
+  }, 350);
+  try {
+    const mod = await importHelper();
+    const r = await mod.commissionPoll();
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.journalVersion, 2);
+    assert.equal(r.triggerPolicyVerified, true);
+    assert.equal(r.schedulerAdvanced, true);
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });
 
@@ -431,7 +599,7 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     { baselineComplete: false },  //
     { baselineComplete: false },  //
   ];
-  const r1 = { version:1, updatedAt: now, decisions:[], sources: makeSources(overrides) };
+  const r1 = makeV2Journal(makeSources(overrides), { updatedAt: now });
   const jpath = path.join(tmpDir, "market-event-scout.json");
   await fs.writeFile(jpath, JSON.stringify(r1), "utf-8");
   // Round 2 after delay
@@ -439,7 +607,7 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     const t2 = Date.now() + 4000;
     const r2s = makeSources(overrides).map(s =>
       s.sourceId === "nasdaq-trade-halts" ? { ...s, lastAttemptAt: t2 } : s);
-    await fs.writeFile(jpath, JSON.stringify({ version:1, updatedAt: t2, decisions:[], sources: r2s }), "utf-8");
+    await fs.writeFile(jpath, JSON.stringify(makeV2Journal(r2s, { updatedAt: t2 })), "utf-8");
   }, 1500);
   try {
     const mod = await importHelper();
@@ -450,6 +618,8 @@ test("commission: passes with real schema (sourceId, async reader)", async () =>
     assert.equal(r.successCount, 4);
     assert.equal(r.hostCount, 3);
     assert.equal(r.schedulerAdvanced, true);
+    assert.equal(r.journalVersion, 2);
+    assert.equal(r.triggerPolicyVerified, true);
     assert.ok(!JSON.stringify(r).includes("SENTINEL"));
   } finally { await fs.rm(tmpDir, { recursive: true, force: true }); restoreEnv(save); }
 });

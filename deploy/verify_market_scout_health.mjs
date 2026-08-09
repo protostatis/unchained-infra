@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 //
 // verify_market_scout_health.mjs — production commissioning proof for the
-// shadow-only market-event scout on the authenticated singleton.
+// no-dispatch market-event trigger dry run on the authenticated singleton.
 //
 // Streamed through `docker exec -i -e ... <container> node --input-type=module -`.
 // Supports MARKET_SCOUT_VERIFY_MODE = preflight | commission. Exports functions
@@ -54,6 +54,14 @@ const PINNED_SOURCE_MAP = Object.freeze({
 });
 const PINNED_SOURCE_IDS = Object.keys(PINNED_SOURCE_MAP);
 const EXPECTED_SOURCE_COUNT = PINNED_SOURCE_IDS.length;
+const EXPECTED_JOURNAL_VERSION = 2;
+const EXPECTED_TRIGGER_POLICY = Object.freeze({
+  version: 1,
+  minPriority: 80,
+  ttlMs: 2 * 60 * 60 * 1000,
+  targetCooldownMs: 6 * 60 * 60 * 1000,
+  dailyCap: 8,
+});
 
 const SINGLETON_MARKER_SETS = [
   { TERMINAL_RUNTIME_MODE: "public-gateway" },
@@ -78,6 +86,79 @@ function scoutIsEnabled()       { return safeEnv("MARKET_SCOUT_ENABLED") === EXP
 function getDataDir()           { return safeEnv("MARKET_DATA_DIR") || EXPECTED_DATA_DIR; }
 function getJournalPath()       { return path.normalize(path.join(getDataDir(), "market-event-scout.json")); }
 function sleep(ms)              { return new Promise(r => setTimeout(r, ms)); }
+
+function hasExactKeys(raw, keys) {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    && Object.keys(raw).length === keys.length
+    && keys.every(key => Object.hasOwn(raw, key));
+}
+
+function triggerPolicyMatches(raw) {
+  const keys = ["version", "minPriority", "ttlMs", "targetCooldownMs", "dailyCap"];
+  return hasExactKeys(raw, keys)
+    && keys.every(key => raw[key] === EXPECTED_TRIGGER_POLICY[key]);
+}
+
+function nonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function counterGroupMatches(raw, keys) {
+  return hasExactKeys(raw, keys) && keys.every(key => nonnegativeInteger(raw[key]));
+}
+
+/** Validate only the safe aggregate dry-run envelope; the app reader owns the full schema. */
+export function assessTriggerDryRunContract(state) {
+  const errors = [];
+  const add = message => errors.push(message);
+  const dryRun = state?.triggerDryRun;
+  let policyVerified = false;
+  let aggregateVerified = false;
+
+  if (state?.version !== EXPECTED_JOURNAL_VERSION) add("journal reader version mismatch");
+  if (!dryRun || typeof dryRun !== "object" || Array.isArray(dryRun)) {
+    add("trigger dry-run state missing");
+  } else {
+    policyVerified = triggerPolicyMatches(dryRun.policy);
+    if (!policyVerified) add("trigger dry-run policy mismatch");
+    if (!Array.isArray(dryRun.candidates)) add("trigger candidate records missing");
+    if (!Array.isArray(dryRun.days)) add("trigger daily aggregates missing");
+    if (!Array.isArray(dryRun.cooldowns)) add("trigger cooldown state missing");
+
+    const totals = dryRun.totals;
+    const topKeys = ["evaluated", "mapped", "wouldTrigger", "gated", "missingPublishedAt", "routes", "associations", "gates"];
+    if (!hasExactKeys(totals, topKeys)
+      || !["evaluated", "mapped", "wouldTrigger", "gated", "missingPublishedAt"].every(key => nonnegativeInteger(totals[key]))
+      || !counterGroupMatches(totals.routes, ["tickerBrief", "macroEventBrief", "marketStoryBrief", "unsupported"])
+      || !counterGroupMatches(totals.associations, ["structuredSymbol", "explicitSymbol", "marketWide", "unresolved"])
+      || !counterGroupMatches(totals.gates, ["notAdmitted", "unsupportedRoute", "belowPriority", "expired", "targetCooldown", "dailyCap"])) {
+      add("trigger aggregate contract mismatch");
+    } else {
+      const mappedRoutes = totals.routes.tickerBrief + totals.routes.macroEventBrief + totals.routes.marketStoryBrief;
+      const associationTotal = totals.associations.structuredSymbol + totals.associations.explicitSymbol
+        + totals.associations.marketWide + totals.associations.unresolved;
+      if (totals.evaluated !== totals.wouldTrigger + totals.gated
+        || totals.mapped !== mappedRoutes
+        || totals.evaluated !== totals.mapped + totals.routes.unsupported
+        || totals.evaluated !== associationTotal
+        || totals.missingPublishedAt > totals.evaluated
+        || Object.values(totals.gates).some(count => count > totals.gated)) {
+        add("trigger aggregate invariants failed");
+      } else {
+        aggregateVerified = true;
+      }
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    journalVersion: state?.version === EXPECTED_JOURNAL_VERSION ? EXPECTED_JOURNAL_VERSION : 0,
+    policyVerified,
+    aggregateVerified,
+    candidateCount: Array.isArray(dryRun?.candidates) ? dryRun.candidates.length : 0,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Invariant validation
@@ -148,6 +229,12 @@ export async function validateInvariants() {
   // Verify app exports the required strict reader
   if (typeof mod.readMarketEventScoutState !== "function")
     add(`readMarketEventScoutState not exported`);
+
+  if (!triggerPolicyMatches(mod.DEFAULT_MARKET_EVENT_TRIGGER_POLICY))
+    add(`trigger dry-run policy contract mismatch`);
+  if (typeof mod.evaluateMarketEventTriggerCandidate !== "function"
+    || typeof mod.proposeMarketEventTriggerRoute !== "function")
+    add(`trigger dry-run mapping exports missing`);
 
   // Pinned source contract: app must export exactly the expected IDs
   const appSources = mod.DEFAULT_MARKET_EVENT_SOURCES;
@@ -231,20 +318,26 @@ export async function checkJournalSanity() {
     return { ok: false, errors: ["strict reader rejected journal"], journalExists: true };
   }
 
+  if (!state || typeof state !== "object" || !Array.isArray(state.sources))
+    return { ok: false, errors: ["strict reader returned unexpected shape"], journalExists: true };
+  const triggerContract = assessTriggerDryRunContract(state);
+  if (!triggerContract.ok) {
+    return { ok: false, errors: triggerContract.errors, journalExists: !missingBeforeRead,
+      journalVersion: triggerContract.journalVersion, triggerPolicyVerified: triggerContract.policyVerified };
+  }
+
   if (missingBeforeRead && Array.isArray(state?.sources) && state.sources.length === 0) {
     // Recheck to close the creation race. A still-missing journal is a valid
     // initial state; an empty journal created concurrently is validated below.
     try { await fs.access(jpath, constants.R_OK); }
     catch (error) {
       if (error?.code === "ENOENT") {
-        return { ok: true, errors, journalExists: false };
+        return { ok: true, errors, journalExists: false,
+          journalVersion: triggerContract.journalVersion, triggerPolicyVerified: true };
       }
       return { ok: false, errors: ["journal is not readable"], journalExists: true };
     }
   }
-
-  if (!state || typeof state !== "object" || !Array.isArray(state.sources))
-    return { ok: false, errors: ["strict reader returned unexpected shape"], journalExists: true };
 
   const sources = state.sources;
   const srcCount = sources.length;
@@ -258,12 +351,32 @@ export async function checkJournalSanity() {
   }
   if (unknownCount) errors.push(`journal contains unknown source IDs (count=${unknownCount} of ${srcCount})`);
 
-  return { ok: errors.length === 0, errors, journalExists: true, sourceCount: srcCount };
+  return { ok: errors.length === 0, errors, journalExists: true, sourceCount: srcCount,
+    journalVersion: triggerContract.journalVersion, triggerPolicyVerified: true,
+    triggerCandidateCount: triggerContract.candidateCount };
 }
 
 // ---------------------------------------------------------------------------
 // Commission
 // ---------------------------------------------------------------------------
+
+async function inspectPersistedJournalEnvelope(jpath) {
+  let raw;
+  try {
+    raw = JSON.parse(await fs.readFile(jpath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return { ok: false, missing: true, pendingMigration: false, malformed: false };
+    return { ok: false, missing: false, pendingMigration: false, malformed: true };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return { ok: false, missing: false, pendingMigration: false, malformed: true };
+  if (raw.version === 1)
+    return { ok: false, missing: false, pendingMigration: true, malformed: false };
+  if (raw.version !== EXPECTED_JOURNAL_VERSION || !Object.hasOwn(raw, "triggerDryRun"))
+    return { ok: false, missing: false, pendingMigration: false, malformed: true };
+  return { ok: true, missing: false, pendingMigration: false, malformed: false,
+    journalVersion: EXPECTED_JOURNAL_VERSION };
+}
 
 export async function commissionPoll() {
   if (!scoutIsEnabled()) {
@@ -287,7 +400,7 @@ export async function commissionPoll() {
   while (Date.now() < deadline) {
     const res = await readJournalForCommission(mod);
     if (res.malformed) return { ok: false, errors: res.errors, stage:"malformed", sourceCount:0, successCount:0, hostCount:0, schedulerAdvanced:false };
-    if (res.missing) { await sleep(commissionIntervalMs()); continue; }
+    if (res.missing || res.pendingMigration) { await sleep(commissionIntervalMs()); continue; }
 
     // Round 1
     if (firstRound === null) {
@@ -304,7 +417,8 @@ export async function commissionPoll() {
         if (hasAdvancedSource(res.lastAttempts || {}, firstRound.lastAttempts || {})) {
           return { ok: true, errors:[], stage:"commissioned",
             sourceCount: firstRound.sourceCount, successCount: firstRound.successCount,
-            hostCount: firstRound.hostCount, schedulerAdvanced: true };
+            hostCount: firstRound.hostCount, schedulerAdvanced: true,
+            journalVersion: EXPECTED_JOURNAL_VERSION, triggerPolicyVerified: true };
         }
       }
       firstRound.lastAttempts = { ...res.lastAttempts };
@@ -320,7 +434,8 @@ export async function commissionPoll() {
 
 /**
  * Read via strict async reader.
- * Returns { ok, missing, malformed, sources, sourceIds, lastAttempts, updatedAtMs }
+ * Returns { ok, missing, pendingMigration, malformed, sources, sourceIds,
+ * lastAttempts, updatedAtMs, journalVersion, triggerPolicyVerified }
  */
 async function readJournalForCommission(mod) {
   const jpath = getJournalPath();
@@ -355,6 +470,19 @@ async function readJournalForCommission(mod) {
   if (!state || typeof state !== "object" || !Array.isArray(state.sources))
     return { ok: false, missing: false, malformed: true, errors: ["malformed: unexpected reader output"] };
 
+  const triggerContract = assessTriggerDryRunContract(state);
+  if (!triggerContract.ok) {
+    return { ok: false, missing: false, pendingMigration: false, malformed: true,
+      errors: triggerContract.errors };
+  }
+  const envelope = await inspectPersistedJournalEnvelope(jpath);
+  if (envelope.missing) return { ok: false, missing: true, pendingMigration: false, malformed: false };
+  if (envelope.pendingMigration) return { ok: false, missing: false, pendingMigration: true, malformed: false };
+  if (!envelope.ok) {
+    return { ok: false, missing: false, pendingMigration: false, malformed: true,
+      errors: ["persisted trigger dry-run journal envelope is invalid"] };
+  }
+
   const sources   = state.sources;
   const sourceIds = [];
   const lastAttempts = {};
@@ -368,7 +496,9 @@ async function readJournalForCommission(mod) {
     lastAttempts[sid] = typeof s.lastAttemptAt === "number" ? s.lastAttemptAt : 0;
   }
 
-  return { ok: true, missing: false, malformed: false, sources, sourceIds, lastAttempts, updatedAtMs };
+  return { ok: true, missing: false, pendingMigration: false, malformed: false,
+    sources, sourceIds, lastAttempts, updatedAtMs,
+    journalVersion: envelope.journalVersion, triggerPolicyVerified: true };
 }
 
 /**
@@ -445,6 +575,8 @@ if (mode === "preflight") {
     console.log("PREFLIGHT OK (scout enabled)");
     console.log(`  journalExists=${j.journalExists}`);
     if (j.sourceCount != null) console.log(`  journalSourceCount=${j.sourceCount}`);
+    console.log(`  journalReaderVersion=${j.journalVersion}`);
+    console.log(`  triggerDryRunPolicyVerified=${j.triggerPolicyVerified === true}`);
   } else {
     console.log("PREFLIGHT OK (scout disabled)");
   }
@@ -470,6 +602,8 @@ if (mode === "commission") {
     console.error(`  successCount=${result.successCount}`);
     console.error(`  hostCount=${result.hostCount}`);
     console.error(`  schedulerAdvanced=${result.schedulerAdvanced}`);
+    console.error(`  journalVersion=${result.journalVersion || 0}`);
+    console.error(`  triggerDryRunPolicyVerified=${result.triggerPolicyVerified === true}`);
     for (const e of result.errors) console.error("  error:", e);
     process.exit(1);
   }
@@ -478,5 +612,7 @@ if (mode === "commission") {
   console.log(`  successCount=${result.successCount}`);
   console.log(`  hostCount=${result.hostCount}`);
   console.log(`  schedulerAdvanced=${result.schedulerAdvanced}`);
+  console.log(`  journalVersion=${result.journalVersion}`);
+  console.log(`  triggerDryRunPolicyVerified=${result.triggerPolicyVerified}`);
   process.exit(0);
 }
