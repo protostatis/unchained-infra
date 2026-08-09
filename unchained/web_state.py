@@ -54,6 +54,19 @@ def profile_session_caller_tag(session_id: str) -> str:
     return f"chat-{digest}"
 
 
+def canonical_session_tab(raw_tab_id: str, active_tab_id: str) -> str:
+    """Keep a newly-created tab in the active provision slot, when present."""
+    raw = str(raw_tab_id or "").strip()
+    active = str(active_tab_id or "").strip()
+    if not raw or raw == "auto" or raw.startswith("prov-"):
+        return raw
+    if active.startswith("prov-"):
+        parts = active.split("-", 2)
+        if len(parts) == 3 and parts[1]:
+            return f"prov-{parts[1]}-{raw}"
+    return raw
+
+
 def select_profile_slot_active_tab(
     status: dict,
     *,
