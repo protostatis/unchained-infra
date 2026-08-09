@@ -252,6 +252,40 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core._session_allowed_tabs[turn.session_id], {newer_tab})
         self.assertEqual(turn.tab_id, "prov-slot-old-tab")
 
+    def test_hosted_new_tab_binds_an_unbound_turn_to_its_raw_target(self):
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+        )
+        raw_tab_id = "A" * 32
+        core = SimpleNamespace(
+            TRIAL_AGENT_ID="agent-1",
+            _session_tabs={turn.session_id: ""},
+            _session_allowed_tabs={},
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_last_active={},
+        )
+
+        updated = chat_stream._sync_hosted_agent_new_tab(
+            core,
+            turn,
+            {
+                "type": "tool_result",
+                "name": "ddm",
+                "new_tab_id": raw_tab_id,
+            },
+        )
+
+        self.assertEqual(updated, raw_tab_id)
+        self.assertEqual(core._session_tabs[turn.session_id], raw_tab_id)
+        self.assertEqual(core._session_allowed_tabs[turn.session_id], {raw_tab_id})
+        self.assertEqual(turn.tab_id, raw_tab_id)
+        self.assertIn(turn.session_id, core._session_last_active)
+
     async def test_dispatch_socket_events_survive_agent_supersession(self):
         class ControlledWebSocket:
             _STOP = object()

@@ -1400,9 +1400,9 @@ class TrialAgent:
         session_id = msg["session_id"]
         # agent_id from the message routes to the right user's Chrome
         agent_id = msg.get("agent_id", self.agent_id)
-        # Per-turn tab target; ``ddm --new`` reassigns this local below so
-        # follow-up tools use the created tab even when a turn starts unbound.
-        session_tab_id = str(msg.get("tab_id") or "")
+        # Per-turn tab target. ``ddm --new`` reassigns this same local below
+        # so follow-up tools use the created tab even when a turn starts unbound.
+        session_tab_id = msg.get("tab_id")
         user_id = str(msg.get("user_id", "")).strip()
         user_text = msg["message"]
 
@@ -1919,7 +1919,7 @@ class TrialAgent:
                                 raw_new_tab_id = _tab_m.group(1)
                                 session_tab_id = canonical_session_tab(
                                     raw_new_tab_id,
-                                    session_tab_id,
+                                    session_tab_id or "",
                                 )
                                 tool_result_evt["new_tab_id"] = raw_new_tab_id
                         await self._send(session_id, tool_result_evt)

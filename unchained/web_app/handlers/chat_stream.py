@@ -1128,6 +1128,8 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     # from a session alone. A matching event reaches the journal
                     # before control-response compatibility handling below.
                     if _agent_event_matches_turn(core, turn, agent_id, ws, req_id):
+                        # handle_chat_ws runs on the server event loop, which
+                        # keeps this synchronous compare-and-swap atomic here.
                         _sync_hosted_agent_new_tab(core, turn, data)
                         _publish_turn_event(core, turn, data)
                         continue
