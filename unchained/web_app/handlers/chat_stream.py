@@ -214,6 +214,8 @@ def _sync_hosted_agent_new_tab(core, turn, event: dict) -> str:
     which go through ``/web/cmd``. Keep the server's preview target in sync
     only when the still-current session target and CDP bridge match the turn
     that produced the event; a manual profile-tab change must win this race.
+    This synchronous compare-and-swap runs only on the web server's asyncio
+    event loop and must not be called from an executor or worker thread.
     """
     if (
         str(event.get("type", "") or "") != "tool_result"
