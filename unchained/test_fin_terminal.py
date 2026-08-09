@@ -477,7 +477,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
         self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
         self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
-        self.assertIn("MARKET_SCOUT_ENABLED=0", service)
+        self.assertIn("MARKET_SCOUT_ENABLED=1", service)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", service)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
@@ -912,14 +912,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     # Market-scout deployment contract tests
     # ------------------------------------------------------------------
 
-    def test_market_scout_is_forward_disabled_across_all_runtimes(self):
-        """Containment keeps the scout and local CLI disabled everywhere."""
-        # Authenticated singleton: forward-disabled
+    def test_market_scout_only_enabled_on_authenticated_singleton(self):
+        """Scout must be 1 on the singleton, 0 on gateway/worker/CLI."""
+        # Authenticated singleton: enabled
         singleton = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
             "\n  unbrowser-egress:\n", 1
         )[0]
-        self.assertIn("MARKET_SCOUT_ENABLED=0", singleton)
+        self.assertIn("MARKET_SCOUT_ENABLED=1", singleton)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", singleton)
+        self.assertEqual(self.compose.count("MARKET_SCOUT_ENABLED=1"), 1)
 
         # Public gateway: disabled
         gateway = self.public_compose.split(
@@ -934,6 +935,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         )[1].split("\nservices:\n", 1)[0]
         self.assertIn("MARKET_SCOUT_ENABLED=0", worker)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", worker)
+        self.assertNotIn("MARKET_SCOUT_ENABLED=1", self.public_compose)
 
     def test_market_scout_trigger_dry_run_contract_is_pinned(self):
         self.assertIn("EXPECTED_JOURNAL_VERSION = 2", self.market_scout_helper)

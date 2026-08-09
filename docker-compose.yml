@@ -170,13 +170,13 @@ services:
       - OPENROUTER_MODEL=${FIN_TERMINAL_OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       - MARKET_MAX_OUTPUT_TOKENS=${FIN_TERMINAL_MAX_OUTPUT_TOKENS:-4096}
       - MARKET_RESEARCH_PROMPT=compact
-      # Forward-disabled after production commissioning did not complete.
-      # Local CLI, public gateway, and workspace runtimes stay off.
+      # Enable singleton scout polling; the pinned app only records trigger
+      # admission outcomes and has no dispatch path. Other runtimes stay off.
       - MARKET_PRECACHE_ENABLED=1
       - MARKET_PRECACHE_QUALITY_GATE=1
       - MARKET_PRECACHE_BUDGET=500000
       - MARKET_PRECACHE_RUN_LIMIT=100000
-      - MARKET_SCOUT_ENABLED=0
+      - MARKET_SCOUT_ENABLED=1
       - MARKET_SCOUT_LOCAL_CLI=0
       - MARKET_PROXY_TOKEN=${FIN_TERMINAL_PROXY_TOKEN:?FIN_TERMINAL_PROXY_TOKEN_required}
       - ALLOWED_ORIGINS=https://unbrowser.unchainedsky.com
