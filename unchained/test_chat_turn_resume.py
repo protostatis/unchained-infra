@@ -286,6 +286,47 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn.tab_id, raw_tab_id)
         self.assertIn(turn.session_id, core._session_last_active)
 
+    def test_hosted_default_profile_keeps_new_tab_compare_and_swap_baseline(self):
+        previous_tab_id = "C" * 32
+        self.assertEqual(
+            chat_stream._resolve_profile_intent(
+                {"profile_path": ""}, previous_tab_id, ""
+            ),
+            ("unchanged", ""),
+        )
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+            # handle_chat_msg retains this value for an unchanged profile.
+            tab_id=previous_tab_id,
+        )
+        raw_tab_id = "A" * 32
+        core = SimpleNamespace(
+            TRIAL_AGENT_ID="agent-1",
+            _session_tabs={turn.session_id: previous_tab_id},
+            _session_allowed_tabs={turn.session_id: {previous_tab_id}},
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_last_active={},
+        )
+
+        updated = chat_stream._sync_hosted_agent_new_tab(
+            core,
+            turn,
+            {
+                "type": "tool_result",
+                "name": "ddm",
+                "new_tab_id": raw_tab_id,
+            },
+        )
+
+        self.assertEqual(updated, raw_tab_id)
+        self.assertEqual(core._session_tabs[turn.session_id], raw_tab_id)
+        self.assertEqual(turn.tab_id, raw_tab_id)
+
     async def test_dispatch_socket_events_survive_agent_supersession(self):
         class ControlledWebSocket:
             _STOP = object()

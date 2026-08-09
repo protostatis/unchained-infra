@@ -846,6 +846,10 @@ class TestProfileSessionRoutingContract(unittest.TestCase):
             ("default", ""),
         )
         self.assertEqual(
+            _resolve_profile_intent({"profile_path": ""}, "C" * 32, ""),
+            ("unchanged", ""),
+        )
+        self.assertEqual(
             _resolve_profile_intent(
                 {"profile_path": "/Profile 3"},
                 "prov-ab12-TAB",
