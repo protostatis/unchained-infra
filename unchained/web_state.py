@@ -54,6 +54,83 @@ def profile_session_caller_tag(session_id: str) -> str:
     return f"chat-{digest}"
 
 
+def canonical_session_tab(raw_tab_id: str, active_tab_id: str) -> str:
+    """Keep a newly-created tab in the active provision slot, when present."""
+    raw = str(raw_tab_id or "").strip()
+    active = str(active_tab_id or "").strip()
+    if not raw or raw == "auto" or raw.startswith("prov-"):
+        return raw
+    if active.startswith("prov-"):
+        parts = active.split("-", 2)
+        if len(parts) == 3 and parts[1]:
+            return f"prov-{parts[1]}-{raw}"
+    return raw
+
+
+@dataclass(frozen=True)
+class ProfileTabMonitorHandoff:
+    """An agent target protected from stale provision-tab ordering."""
+
+    target_tab: str
+    baseline_observed_tab: str
+
+
+def profile_tab_monitor_observed_tabs(core) -> dict[str, str]:
+    """Return the last `/json` active-tab candidate per profile session."""
+    observed = getattr(core, "_profile_tab_monitor_observed_tabs", None)
+    if not isinstance(observed, dict):
+        observed = {}
+        core._profile_tab_monitor_observed_tabs = observed
+    return observed
+
+
+def profile_tab_monitor_handoffs(core) -> dict[str, ProfileTabMonitorHandoff]:
+    """Return active agent-to-monitor handoffs keyed by profile session."""
+    handoffs = getattr(core, "_profile_tab_monitor_handoffs", None)
+    if not isinstance(handoffs, dict):
+        handoffs = {}
+        core._profile_tab_monitor_handoffs = handoffs
+    return handoffs
+
+
+def clear_profile_tab_monitor_handoff(core, session_id: str) -> None:
+    """Clear monitor arbitration after an authoritative target replacement."""
+    profile_tab_monitor_handoffs(core).pop(session_id, None)
+
+
+def profile_tab_handoff_blocks_observed_tab(
+    core,
+    session_id: str,
+    current_tab: str,
+    observed_tab: str,
+) -> bool:
+    """Keep an agent target when `/json` has not observed a new manual tab.
+
+    A background ``ddm --new`` often leaves the old physical tab first in
+    Chrome's `/json` response. That old ordering is not evidence that a user
+    switched back, so it cannot replace the agent's authoritative target.
+    """
+    handoffs = profile_tab_monitor_handoffs(core)
+    handoff = handoffs.get(session_id)
+    if handoff is None:
+        return False
+    session_tabs = getattr(core, "_session_tabs", None)
+    authoritative_tab = (
+        str(session_tabs.get(session_id, "") or "")
+        if isinstance(session_tabs, dict)
+        else str(current_tab or "")
+    )
+    if handoff.target_tab != authoritative_tab:
+        # Another authoritative path already moved the session target.
+        handoffs.pop(session_id, None)
+        return False
+    if str(current_tab or "") != authoritative_tab:
+        # This caller observed an older snapshot while the agent handoff won.
+        return True
+    candidate = str(observed_tab or "")
+    return candidate in {handoff.target_tab, handoff.baseline_observed_tab}
+
+
 def select_profile_slot_active_tab(
     status: dict,
     *,

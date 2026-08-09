@@ -388,6 +388,117 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(first.kwargs["bring_to_front"])
         self.assertFalse(second.kwargs["bring_to_front"])
 
+    async def test_hosted_agent_keeps_followup_tools_on_new_provisioned_tab(self):
+        sid = "s-new-tab"
+        raw_new_tab_id = "A" * 32
+        initial_tab_id = "prov-slot-original-tab"
+        self.agent.sessions[sid] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "new-tab",
+                            "function": {
+                                "name": "ddm",
+                                "arguments": json.dumps(
+                                    {"flags": "--new https://example.test"}
+                                ),
+                            },
+                        },
+                        {
+                            "id": "inspect-new-tab",
+                            "function": {
+                                "name": "js_eval",
+                                "arguments": json.dumps(
+                                    {"expression": "document.title"}
+                                ),
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        execute_tool = AsyncMock(side_effect=[
+            f"Tab: {raw_new_tab_id}\nCreated tab",
+            "new tab title",
+        ])
+        send = AsyncMock()
+
+        with (
+            patch.object(
+                self.agent,
+                "_call_openrouter",
+                new=AsyncMock(side_effect=[tool_response, final_response]),
+            ),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+            patch.object(self.agent, "_send", new=send),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "tab_id": initial_tab_id,
+                "user_id": "u-new-tab",
+                "message": "open a new tab and inspect it",
+            })
+
+        self.assertEqual(execute_tool.await_count, 2)
+        first, second = execute_tool.await_args_list
+        self.assertEqual(first.kwargs["tab_id"], initial_tab_id)
+        self.assertEqual(
+            second.kwargs["tab_id"],
+            f"prov-slot-{raw_new_tab_id}",
+        )
+        tool_results = [
+            call.args[1]
+            for call in send.await_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "tool_result"
+        ]
+        self.assertEqual(tool_results[0]["new_tab_id"], raw_new_tab_id)
+
+    async def test_hosted_provisioned_ddm_new_keeps_its_slot_target(self):
+        dispatch = AsyncMock(return_value="ok")
+
+        with patch.object(self.agent, "_dispatch_tool", new=dispatch):
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--new https://example.test"},
+                tab_id="prov-slot-original-tab",
+            )
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--tabs"},
+                tab_id="prov-slot-original-tab",
+            )
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--new https://example.test"},
+                tab_id="regular-tab",
+            )
+
+        provisioned_new, provisioned_tabs, default_new = dispatch.await_args_list
+        self.assertEqual(provisioned_new.args[1], "prov-slot-original-tab")
+        self.assertEqual(provisioned_tabs.args[1], "auto")
+        self.assertEqual(default_new.args[1], "auto")
+
     async def test_hosted_agent_blocks_third_broad_link_scan_on_page(self):
         sid = "s-link-scan"
         self.agent.sessions[sid] = []

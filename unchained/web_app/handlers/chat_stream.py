@@ -26,8 +26,14 @@ from web_app.core import get_core as _core
 from web_app.handlers.chat_flow import _hosted_repo
 from web_state import (
     ChatTurnState,
+    ProfileTabMonitorHandoff,
+    canonical_session_tab,
+    clear_profile_tab_monitor_handoff,
     profile_session_caller_tag,
     profile_session_guard,
+    profile_tab_handoff_blocks_observed_tab,
+    profile_tab_monitor_handoffs,
+    profile_tab_monitor_observed_tabs,
     select_profile_slot_active_tab,
 )
 
@@ -85,6 +91,7 @@ _FIRST_LOOK_TERMINAL_EVENT_TYPES = frozenset({"done", "error", "cancelled"})
 _FIRST_LOOK_TERMINAL_OUTCOMES = frozenset(
     {"completed", "error", "cancelled", "client_disconnected"}
 )
+_HOSTED_NEW_TAB_ID_RE = re.compile(r"^[A-Fa-f0-9]{8,64}$")
 
 # Opt-in verbose SSE tracing. Off by default so production logs stay quiet;
 # set UNCHAINED_SSE_DEBUG=1 to log every event forwarded to the browser (this
@@ -203,6 +210,73 @@ def _agent_event_matches_turn(core, turn, agent_id: str, ws, req_id: str) -> boo
         and turn.routing_agent_id == agent_id
         and getattr(turn, "dispatch_ws", None) is ws
     )
+
+
+def _sync_hosted_agent_new_tab(core, turn, event: dict) -> str:
+    """Advance one hosted turn after its verified ``ddm --new`` result.
+
+    The hosted worker talks to ``cloud_tools`` directly, unlike local clients
+    which go through ``/web/cmd``. Keep the server's preview target in sync
+    only when the still-current session target and CDP bridge match the turn
+    that produced the event; a manual profile-tab change must win this race.
+    This synchronous compare-and-swap runs only on the web server's asyncio
+    event loop and must not be called from an executor or worker thread.
+    """
+    if (
+        str(event.get("type", "") or "") != "tool_result"
+        or str(event.get("name", "") or "") != "ddm"
+    ):
+        return ""
+    raw_tab_id = str(event.get("new_tab_id", "") or "").strip()
+    if not _HOSTED_NEW_TAB_ID_RE.fullmatch(raw_tab_id):
+        return ""
+
+    session_id = str(getattr(turn, "session_id", "") or "").strip()
+    previous_tab_id = str(getattr(turn, "tab_id", "") or "").strip()
+    cdp_agent_id = str(getattr(turn, "cdp_agent_id", "") or "").strip()
+    trial_agent_id = str(getattr(core, "TRIAL_AGENT_ID", "") or "").strip()
+    session_tabs = getattr(core, "_session_tabs", None)
+    session_agents = getattr(core, "_session_agent_map", None)
+    session_last_active = getattr(core, "_session_last_active", None)
+    if (
+        not session_id
+        or not cdp_agent_id
+        or not trial_agent_id
+        or str(getattr(turn, "routing_agent_id", "") or "") != trial_agent_id
+        or not isinstance(session_tabs, dict)
+        or not isinstance(session_agents, dict)
+        or not isinstance(session_last_active, dict)
+        # Compare-and-swap against the target this exact turn was dispatched
+        # to. Do not overwrite a newer manual/profile target.
+        or str(session_tabs.get(session_id, "") or "").strip() != previous_tab_id
+        or str(session_agents.get(session_id, "") or "").strip() != cdp_agent_id
+    ):
+        return ""
+
+    tab_id = canonical_session_tab(raw_tab_id, previous_tab_id)
+    allowed_tabs = getattr(core, "_session_allowed_tabs", None)
+    if isinstance(allowed_tabs, dict):
+        existing_allowed = allowed_tabs.get(session_id)
+        if isinstance(existing_allowed, set):
+            existing_allowed.add(tab_id)
+        else:
+            allowed_tabs[session_id] = {tab_id}
+    session_tabs[session_id] = tab_id
+    session_last_active[session_id] = time.time()
+    if previous_tab_id.startswith("prov-") and tab_id.startswith("prov-"):
+        observed_tabs = profile_tab_monitor_observed_tabs(core)
+        observed_tab = str(observed_tabs.get(session_id) or previous_tab_id)
+        observed_tabs[session_id] = observed_tab
+        profile_tab_monitor_handoffs(core)[session_id] = ProfileTabMonitorHandoff(
+            target_tab=tab_id,
+            baseline_observed_tab=observed_tab,
+        )
+    update_routing = getattr(turn, "update_routing", None)
+    if callable(update_routing):
+        update_routing(tab_id=tab_id)
+    else:
+        turn.tab_id = tab_id
+    return tab_id
 
 
 def _revoke_turn_grant(core, turn) -> None:
@@ -740,6 +814,8 @@ def _bind_profile_tab(
     core._session_last_active[session_id] = time.time()
     core._session_profile_paths[session_id] = profile_path
     getattr(core, "_expired_profile_sessions", {}).pop(session_id, None)
+    clear_profile_tab_monitor_handoff(core, session_id)
+    profile_tab_monitor_observed_tabs(core).pop(session_id, None)
 
 
 async def _live_profile_tab(
@@ -777,6 +853,8 @@ def _detach_profile_target(
     getattr(core, "_chat_preview_generations", {}).pop(session_id, None)
     core._session_profile_paths[session_id] = profile_path
     core._session_agent_map[session_id] = cdp_agent_id
+    clear_profile_tab_monitor_handoff(core, session_id)
+    profile_tab_monitor_observed_tabs(core).pop(session_id, None)
 
 
 async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_path: str) -> str:
@@ -798,6 +876,23 @@ async def _ensure_profile_tab(core, session_id: str, cdp_agent_id: str, profile_
                     current_tab,
                 )
                 if live_tab:
+                    current_after_status = str(
+                        core._session_tabs.get(session_id, "") or ""
+                    )
+                    if current_after_status != str(current_tab):
+                        if current_after_status:
+                            return current_after_status
+                        raise RuntimeError(
+                            "Profile browser target changed while checking liveness"
+                        )
+                    profile_tab_monitor_observed_tabs(core)[session_id] = live_tab
+                    if profile_tab_handoff_blocks_observed_tab(
+                        core,
+                        session_id,
+                        str(current_tab),
+                        live_tab,
+                    ):
+                        return str(current_tab)
                     _bind_profile_tab(core, session_id, cdp_agent_id, profile_path, live_tab)
                     return live_tab
             print(
@@ -1067,6 +1162,9 @@ async def handle_chat_ws(request: web.Request) -> web.WebSocketResponse:
                     # from a session alone. A matching event reaches the journal
                     # before control-response compatibility handling below.
                     if _agent_event_matches_turn(core, turn, agent_id, ws, req_id):
+                        # handle_chat_ws runs on the server event loop, which
+                        # keeps this synchronous compare-and-swap atomic here.
+                        _sync_hosted_agent_new_tab(core, turn, data)
                         _publish_turn_event(core, turn, data)
                         continue
                     if msg_type in {"done", "error", "cancelled"}:

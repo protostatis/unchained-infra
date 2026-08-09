@@ -218,6 +218,74 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
             chat_stream._agent_event_matches_turn(core, turn, "agent-1", replacement_ws, "r-1")
         )
 
+    def test_hosted_new_tab_does_not_replace_a_newer_session_target(self):
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+            tab_id="prov-slot-old-tab",
+        )
+        newer_tab = "prov-slot-user-selected-tab"
+        core = SimpleNamespace(
+            TRIAL_AGENT_ID="agent-1",
+            _session_tabs={turn.session_id: newer_tab},
+            _session_allowed_tabs={turn.session_id: {newer_tab}},
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_last_active={},
+        )
+
+        updated = chat_stream._sync_hosted_agent_new_tab(
+            core,
+            turn,
+            {
+                "type": "tool_result",
+                "name": "ddm",
+                "new_tab_id": "A" * 32,
+            },
+        )
+
+        self.assertEqual(updated, "")
+        self.assertEqual(core._session_tabs[turn.session_id], newer_tab)
+        self.assertEqual(core._session_allowed_tabs[turn.session_id], {newer_tab})
+        self.assertEqual(turn.tab_id, "prov-slot-old-tab")
+
+    def test_hosted_new_tab_binds_an_unbound_turn_to_its_raw_target(self):
+        turn = ChatTurnState(
+            owner_user_id="user-1",
+            owner_key_hash="key-1",
+            session_id="s-agent-key-1",
+            req_id="r-1",
+            routing_agent_id="agent-1",
+            cdp_agent_id="bridge-1",
+        )
+        raw_tab_id = "A" * 32
+        core = SimpleNamespace(
+            TRIAL_AGENT_ID="agent-1",
+            _session_tabs={turn.session_id: ""},
+            _session_allowed_tabs={},
+            _session_agent_map={turn.session_id: "bridge-1"},
+            _session_last_active={},
+        )
+
+        updated = chat_stream._sync_hosted_agent_new_tab(
+            core,
+            turn,
+            {
+                "type": "tool_result",
+                "name": "ddm",
+                "new_tab_id": raw_tab_id,
+            },
+        )
+
+        self.assertEqual(updated, raw_tab_id)
+        self.assertEqual(core._session_tabs[turn.session_id], raw_tab_id)
+        self.assertEqual(core._session_allowed_tabs[turn.session_id], {raw_tab_id})
+        self.assertEqual(turn.tab_id, raw_tab_id)
+        self.assertIn(turn.session_id, core._session_last_active)
+
     async def test_dispatch_socket_events_survive_agent_supersession(self):
         class ControlledWebSocket:
             _STOP = object()
@@ -288,6 +356,8 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
             _chat_turns=registry,
             _session_agent_map={},
             _session_tabs={},
+            _session_allowed_tabs={},
+            _session_last_active={},
             _session_profile_paths={},
             _scheduler_turn_grants={},
             _overlay_sessions={},
@@ -315,9 +385,14 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
                 req_id="r-1",
                 chat_agent_id="agent-1",
                 routing_agent_id="agent-1",
+                cdp_agent_id="bridge-1",
+                tab_id="prov-slot-original-tab",
                 dispatch_ws=original_ws,
             )
             await registry.start(turn)
+            core._session_agent_map[turn.session_id] = turn.cdp_agent_id
+            core._session_tabs[turn.session_id] = turn.tab_id
+            core._session_allowed_tabs[turn.session_id] = {turn.tab_id}
 
             replacement_task = asyncio.create_task(chat_stream.handle_chat_ws(SimpleNamespace()))
             await wait_until_current(replacement_ws)
@@ -326,9 +401,16 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
                 # dispatch_ws was migrated on reconnect.  The original transport
                 # is superseded and its events would be dropped — this is the
                 # intended fix for reconnect response loss.
+                new_tab_id = "A" * 32
+                canonical_new_tab = f"prov-slot-{new_tab_id}"
                 for event in (
                     {"type": "tool_start", "name": "ddm"},
-                    {"type": "tool_result", "name": "ddm", "data": "layout"},
+                    {
+                        "type": "tool_result",
+                        "name": "ddm",
+                        "data": "layout",
+                        "new_tab_id": new_tab_id,
+                    },
                     {"type": "text", "data": "Final answer"},
                     {"type": "done"},
                 ):
@@ -343,12 +425,24 @@ class TestChatTurnResumeContracts(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([event["seq"] for event in turn.journal], [1, 2, 3, 4])
                 self.assertTrue(turn.stream_finished)
                 self.assertIs(core._chat_agents["agent-1"], replacement_ws)
+                self.assertEqual(core._session_tabs[turn.session_id], canonical_new_tab)
+                self.assertEqual(
+                    core._session_allowed_tabs[turn.session_id],
+                    {"prov-slot-original-tab", canonical_new_tab},
+                )
+                self.assertEqual(turn.tab_id, canonical_new_tab)
+                self.assertIn(turn.session_id, core._session_last_active)
 
                 # Events from the original (stale) transport are rejected after
                 # dispatch_ws migration.  This prevents old-socket events from
                 # being silently dropped and never re-sent.
                 for event in (
-                    {"type": "text", "data": "stale event"},
+                    {
+                        "type": "tool_result",
+                        "name": "ddm",
+                        "data": "stale event",
+                        "new_tab_id": "B" * 32,
+                    },
                 ):
                     await original_ws.push_json(
                         {**event, "session_id": turn.session_id, "req_id": turn.req_id}

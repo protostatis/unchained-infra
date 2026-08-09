@@ -34,7 +34,7 @@ from analytics import AnalyticsStore, _safe_event_name
 from auth import Auth
 import provision_helpers
 from template_utils import inject_google_client_id
-from web_state import ChatRuntimeState
+from web_state import ChatRuntimeState, canonical_session_tab as _canonical_session_tab
 from web_app.cmd_dispatch import (
     CmdInputError,
     UnknownCmdActionError,
@@ -2001,19 +2001,6 @@ def _chat_session_owned_by_auth(session_id: str, auth_info: dict) -> bool:
         and parts[0] == "s"
         and parts[2] == key_hash
     )
-
-
-def _canonical_session_tab(raw_tab_id: str, active_tab_id: str) -> str:
-    """Keep newly-created tabs in the active provision slot, when present."""
-    raw = str(raw_tab_id or "").strip()
-    active = str(active_tab_id or "").strip()
-    if not raw or raw == "auto" or raw.startswith("prov-"):
-        return raw
-    if active.startswith("prov-"):
-        parts = active.split("-", 2)
-        if len(parts) == 3 and parts[1]:
-            return f"prov-{parts[1]}-{raw}"
-    return raw
 
 
 def _resolve_authorized_session_tab(requested_tab: str, allowed_tabs: set[str]) -> str | None:

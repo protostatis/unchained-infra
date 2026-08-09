@@ -25,7 +25,13 @@ from rate_limit import SlidingWindowRateLimiter
 
 from hosted_conversations import HostedConversationRepo
 from web_app.core import get_core as _core
-from web_state import profile_session_guard, select_profile_slot_active_tab
+from web_state import (
+    clear_profile_tab_monitor_handoff,
+    profile_session_guard,
+    profile_tab_handoff_blocks_observed_tab,
+    profile_tab_monitor_observed_tabs,
+    select_profile_slot_active_tab,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1020,7 +1026,17 @@ async def _run_profile_tab_monitor(core, agent_id: str) -> None:
                 except RuntimeError as exc:
                     log.debug("profile tab monitor ignored invalid status for %s: %r", session_id, exc)
                     continue
-                if not active_tab or active_tab == expected_tab:
+                if not active_tab:
+                    continue
+                profile_tab_monitor_observed_tabs(core)[session_id] = active_tab
+                if profile_tab_handoff_blocks_observed_tab(
+                    core,
+                    session_id,
+                    expected_tab,
+                    active_tab,
+                ):
+                    continue
+                if active_tab == expected_tab:
                     continue
 
                 async with profile_session_guard(core, session_id):
@@ -1033,9 +1049,17 @@ async def _run_profile_tab_monitor(core, agent_id: str) -> None:
                         or str(core._session_agent_map.get(session_id, "") or "") != agent_id
                     ):
                         continue
+                    if profile_tab_handoff_blocks_observed_tab(
+                        core,
+                        session_id,
+                        expected_tab,
+                        active_tab,
+                    ):
+                        continue
                     core._session_tabs[session_id] = active_tab
                     core._session_allowed_tabs[session_id] = {active_tab}
                     core._session_last_active[session_id] = time.time()
+                    clear_profile_tab_monitor_handoff(core, session_id)
                     print(
                         f"[preview-fsm] sid={session_id} workspace active tab changed "
                         f"from={expected_tab[:18]} to={active_tab[:18]}",

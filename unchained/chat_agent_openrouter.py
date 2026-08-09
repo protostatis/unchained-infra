@@ -48,6 +48,7 @@ import cloud_tools
 from credit import validate_hosted_context_budget
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
+from web_state import canonical_session_tab
 from scheduler_agent import (
     OPENAI_SCHEDULER_TOOLS,
     SCHEDULER_TOOL_NAMES,
@@ -1399,7 +1400,9 @@ class TrialAgent:
         session_id = msg["session_id"]
         # agent_id from the message routes to the right user's Chrome
         agent_id = msg.get("agent_id", self.agent_id)
-        session_tab_id = msg.get("tab_id")  # per-session tab isolation
+        # Per-turn tab target. ``ddm --new`` reassigns this same local below
+        # so follow-up tools use the created tab even when a turn starts unbound.
+        session_tab_id = msg.get("tab_id")
         user_id = str(msg.get("user_id", "")).strip()
         user_text = msg["message"]
 
@@ -1907,11 +1910,18 @@ class TrialAgent:
                             "visible": is_screenshot and bool(show_user),
                         }
                         # Emit structured new_tab_id for ddm --new so clients
-                        # don't need to regex-parse the result text.
+                        # don't need to regex-parse the result text. Keep later
+                        # tool calls pinned to this new tab as well; provisioned
+                        # sessions need their slot prefix restored first.
                         if name == "ddm" and "--new" in str(args.get("flags", "")):
                             _tab_m = re.search(r"^Tab:\s*([A-Fa-f0-9]{8,64})", result, re.MULTILINE)
                             if _tab_m:
-                                tool_result_evt["new_tab_id"] = _tab_m.group(1)
+                                raw_new_tab_id = _tab_m.group(1)
+                                session_tab_id = canonical_session_tab(
+                                    raw_new_tab_id,
+                                    session_tab_id or "",
+                                )
+                                tool_result_evt["new_tab_id"] = raw_new_tab_id
                         await self._send(session_id, tool_result_evt)
 
                         tool_failed = (
@@ -2402,9 +2412,20 @@ class TrialAgent:
         else:
             effective_tab = "auto"         # Fallback when no session tab
 
-        # Browser-level DDM ops (--new, --tabs, --close) work on any alive tab
+        # Browser-level DDM ops use an automatic target. The sole exception is
+        # ``ddm --new`` in a provisioned profile: private core derives the new
+        # tab's provision slot from the target used to create it.
         flags_str = args.get("flags", "")
-        if name == "ddm" and any(f in flags_str for f in ("--new", "--tabs", "--close")):
+        keep_provisioned_new_target = (
+            name == "ddm"
+            and "--new" in flags_str
+            and str(effective_tab).startswith("prov-")
+        )
+        if (
+            name == "ddm"
+            and any(f in flags_str for f in ("--new", "--tabs", "--close"))
+            and not keep_provisioned_new_target
+        ):
             effective_tab = "auto"
 
         result = await self._dispatch_tool(
