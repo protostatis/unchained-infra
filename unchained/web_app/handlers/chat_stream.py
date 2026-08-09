@@ -712,7 +712,19 @@ def _resolve_profile_intent(
     """Resolve explicit default, exact profile, preserved profile, or expiry."""
     if "profile_path" in body:
         selected = _normalize_profile_path(body.get("profile_path"))
-        return ("profile", selected) if selected else ("default", "")
+        if selected:
+            return "profile", selected
+        # Workspace requests explicitly include an empty profile path while
+        # using the normal browser.  That is already the effective mode, so
+        # preserve its session target rather than clearing the turn's CAS
+        # baseline for a hosted ``ddm --new`` result.
+        if (
+            not expired_profile
+            and not _normalize_profile_path(remembered_profile_path)
+            and not str(current_tab or "").startswith("prov-")
+        ):
+            return "unchanged", ""
+        return "default", ""
     if expired_profile:
         return "expired", ""
     remembered = _normalize_profile_path(remembered_profile_path)
