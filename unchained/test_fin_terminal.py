@@ -431,6 +431,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn('"https://$public_host/fin-terminal/"', self.deploy)
         self.assertIn('[[ "$terminal_status" == "401" ]]', self.deploy)
 
+    def test_deploy_ssh_keeps_long_running_checks_alive(self):
+        for option in (
+            "BatchMode=yes",
+            "ConnectTimeout=15",
+            "ServerAliveInterval=30",
+            "ServerAliveCountMax=4",
+        ):
+            self.assertIn(option, self.deploy)
+
     def test_caddyfile_is_staged_and_validated_before_live_mutation(self):
         stage_index = self.deploy.index('echo "==> Staging prospective configuration..."')
         validate_index = self.deploy.index('echo "==> Validating staged Caddyfile..."')

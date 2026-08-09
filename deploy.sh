@@ -43,7 +43,12 @@ RHYTHM_SRC="${RHYTHM_SRC:-$SCRIPT_DIR/../rhythm}"
 EC2_HOST="${EC2_HOST:?EC2_HOST env var is required (e.g. EC2_HOST=1.2.3.4 ./deploy.sh)}"
 EC2_USER="${EC2_USER:-ec2-user}"
 REMOTE_DIR="/home/$EC2_USER/unchained"
-SSH_OPTS=()
+SSH_OPTS=(
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -o ServerAliveInterval=30
+    -o ServerAliveCountMax=4
+)
 if [[ -n "${KEY_PATH:-}" ]]; then
     SSH_OPTS+=(-i "$KEY_PATH")
 fi
