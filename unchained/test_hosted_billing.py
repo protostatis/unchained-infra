@@ -484,13 +484,20 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             await self.agent._execute_tool(
                 "client-browser",
                 "ddm",
+                {"flags": "--tabs"},
+                tab_id="prov-slot-original-tab",
+            )
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
                 {"flags": "--new https://example.test"},
                 tab_id="regular-tab",
             )
 
-        provisioned, default = dispatch.await_args_list
-        self.assertEqual(provisioned.args[1], "prov-slot-original-tab")
-        self.assertEqual(default.args[1], "auto")
+        provisioned_new, provisioned_tabs, default_new = dispatch.await_args_list
+        self.assertEqual(provisioned_new.args[1], "prov-slot-original-tab")
+        self.assertEqual(provisioned_tabs.args[1], "auto")
+        self.assertEqual(default_new.args[1], "auto")
 
     async def test_hosted_agent_blocks_third_broad_link_scan_on_page(self):
         sid = "s-link-scan"

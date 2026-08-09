@@ -2412,14 +2412,19 @@ class TrialAgent:
         else:
             effective_tab = "auto"         # Fallback when no session tab
 
-        # Browser-level DDM ops use an automatic target in default Chrome, but
-        # provisioned profile tabs must keep their slot routing. In particular,
-        # ``ddm --new`` derives the new tab's provision slot from this target.
+        # Browser-level DDM ops use an automatic target. The sole exception is
+        # ``ddm --new`` in a provisioned profile: private core derives the new
+        # tab's provision slot from the target used to create it.
         flags_str = args.get("flags", "")
+        keep_provisioned_new_target = (
+            name == "ddm"
+            and "--new" in flags_str
+            and str(effective_tab).startswith("prov-")
+        )
         if (
             name == "ddm"
             and any(f in flags_str for f in ("--new", "--tabs", "--close"))
-            and not str(effective_tab).startswith("prov-")
+            and not keep_provisioned_new_target
         ):
             effective_tab = "auto"
 
