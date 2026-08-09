@@ -477,7 +477,7 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("MARKET_PRECACHE_QUALITY_GATE=1", service)
         self.assertIn("MARKET_PRECACHE_BUDGET=500000", service)
         self.assertIn("MARKET_PRECACHE_RUN_LIMIT=100000", service)
-        self.assertIn("MARKET_SCOUT_ENABLED=0", service)
+        self.assertIn("MARKET_SCOUT_ENABLED=1", service)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", service)
         self.assertIn(
             "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY_required}",
@@ -912,13 +912,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
     # Market-scout deployment contract tests
     # ------------------------------------------------------------------
 
-    def test_market_scout_is_forward_disabled_across_all_runtimes(self):
-        """Containment keeps the scout and local CLI disabled everywhere."""
-        # Authenticated singleton: forward-disabled
+    def test_market_scout_only_enabled_on_authenticated_singleton(self):
+        """Scout must be 1 on the singleton, 0 on gateway/worker/CLI."""
+        # Authenticated singleton: enabled
         singleton = self.compose.split("\n  fin-terminal:\n", 1)[1].split(
             "\n  unbrowser-egress:\n", 1
         )[0]
-        self.assertIn("MARKET_SCOUT_ENABLED=0", singleton)
+        self.assertIn("MARKET_SCOUT_ENABLED=1", singleton)
         self.assertIn("MARKET_SCOUT_LOCAL_CLI=0", singleton)
 
         # Public gateway: disabled
