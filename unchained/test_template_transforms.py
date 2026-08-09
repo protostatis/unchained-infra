@@ -283,11 +283,11 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("@media(min-width:761px) and (hover:none)", html)
         self.assertIn("transition:none!important", html)
 
-    def test_hosted_mobile_thread_picker_centers_options(self):
+    def test_hosted_mobile_thread_picker_centers_every_visible_option_state(self):
         from web_app import templates
 
         self.assertIn(
-            "#slotbar.agent-lane-picker-open>button:not(#lane-picker-toggle){display:grid!important;place-items:center!important}",
+            "#slotbar:hover>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar:focus-within>button:not(#lane-picker-toggle),body.agent-shell-task.agent-view-open #main #slotbar.agent-lane-picker-open>button:not(#lane-picker-toggle){display:grid!important;place-items:center!important}",
             templates.TRIAL_CHAT_HTML,
         )
 
