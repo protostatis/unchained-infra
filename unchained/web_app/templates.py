@@ -10029,9 +10029,16 @@ function _applyHostedModelPolicy(policy) {
     sel.value = '__custom_openrouter__';
     if (customInput) customInput.value = desired;
   } else {
-    const next = seen.has(desired)
-      ? desired
-      : (seen.has(policy.default_model) ? policy.default_model : models[0]);
+    let next;
+    if (!_isAdmin && !_hasReceivedHostedCredit() && seen.has(policy.fallback_model)) {
+      // Guests/pending users must start on the free fallback lane — the paid
+      // default (e.g. DeepSeek V4 Flash Direct) would be rejected server-side.
+      next = policy.fallback_model;
+    } else {
+      next = seen.has(desired)
+        ? desired
+        : (seen.has(policy.default_model) ? policy.default_model : models[0]);
+    }
     sel.value = next;
     if (_userId) _persistTrialModel(next);
   }
