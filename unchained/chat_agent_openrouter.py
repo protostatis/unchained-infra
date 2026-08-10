@@ -277,10 +277,12 @@ def _uuid_hex() -> str:
     return _uuid_module.uuid4().hex
 
 
-def _openrouter_error_message(response: httpx.Response | None) -> str:
+def _provider_error_message(
+    response: httpx.Response | None, provider_name: str
+) -> str:
     """Extract a bounded provider message without leaking a raw request URL."""
     if response is None:
-        return "OpenRouter rejected the request."
+        return f"{provider_name} rejected the request."
     try:
         payload = response.json()
     except Exception:
@@ -292,19 +294,53 @@ def _openrouter_error_message(response: httpx.Response | None) -> str:
         message = str(error or "").strip()
     if not message:
         message = str(getattr(response, "text", "") or "").strip()
-    return message[:400] or "OpenRouter rejected the request."
+    return message[:400] or f"{provider_name} rejected the request."
+
+
+def _openrouter_error_message(response: httpx.Response | None) -> str:
+    """Backward-compatible OpenRouter-specific error extraction."""
+    return _provider_error_message(response, "OpenRouter")
+
+
+def _provider_user_error(
+    exc: httpx.HTTPStatusError, model: str, provider_name: str
+) -> str:
+    """Return a provider-accurate rejection without httpx URL boilerplate."""
+    status = int(getattr(exc.response, "status_code", 0) or 0)
+    message = _provider_error_message(exc.response, provider_name)
+    if status == 404:
+        return f"{provider_name} model {model} is currently unavailable: {message}"
+    if status == 400:
+        return f"{provider_name} rejected model {model}: {message}"
+    status_label = str(status) if status else "provider error"
+    return f"{provider_name} request failed ({status_label}): {message}"
 
 
 def _openrouter_user_error(exc: httpx.HTTPStatusError, model: str) -> str:
     """Return a useful user-facing provider rejection without httpx boilerplate."""
-    status = int(getattr(exc.response, "status_code", 0) or 0)
-    message = _openrouter_error_message(exc.response)
-    if status == 404:
-        return f"OpenRouter model {model} is currently unavailable: {message}"
-    if status == 400:
-        return f"OpenRouter rejected model {model}: {message}"
-    status_label = str(status) if status else "provider error"
-    return f"OpenRouter request failed ({status_label}): {message}"
+    return _provider_user_error(exc, model, "OpenRouter")
+
+
+def _hosted_user_error(exc: httpx.HTTPStatusError, model: str) -> str:
+    """Format a hosted-provider error using the provider selected by *model*."""
+    provider_name = "DeepSeek" if _is_deepseek_model(model) else "OpenRouter"
+    return _provider_user_error(exc, model, provider_name)
+
+
+def _append_tool_followup_guidance(
+    messages: list[dict], model: str, prompt: str
+) -> bool:
+    """Append internal guidance only when it cannot break a tool-call block.
+
+    DeepSeek requires every assistant ``tool_calls`` message to be followed
+    directly by its ``tool`` responses. Its direct API rejects injected
+    ``system`` messages in that sequence, so retain the browser result but
+    skip optional reflex/intervention guidance for that provider.
+    """
+    if _is_deepseek_model(model):
+        return False
+    messages.append({"role": "system", "content": prompt})
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1350,7 @@ class TrialAgent:
         prompt: str,
         messages: list | None = None,
         tab_id: str | None = None,
+        model: str = "",
     ):
         """Emit intervention event and optional screenshot context for nudge severity."""
         await self._send(
@@ -1374,7 +1411,10 @@ class TrialAgent:
 
         if is_screenshot:
             print(f"[{session_id}] Intervention screenshot captured")
-            if messages is not None:
+            # A DeepSeek tool-call block may contain only the assistant call
+            # followed by its tool responses. Do not inject the optional
+            # screenshot system note into that strict protocol sequence.
+            if messages is not None and not _is_deepseek_model(model):
                 messages.append(
                     {
                         "role": "system",
@@ -1825,7 +1865,7 @@ class TrialAgent:
                                 )
                             except httpx.HTTPStatusError as retry_error:
                                 raise RuntimeError(
-                                    _openrouter_user_error(retry_error, model)
+                                    _hosted_user_error(retry_error, model)
                                 ) from retry_error
                         elif e.response.status_code == 400 and len(messages) > TRIM_ON_ERROR + 1:
                             messages = emergency_trim(messages, fmt="openai", keep_tail=TRIM_ON_ERROR)
@@ -1841,10 +1881,10 @@ class TrialAgent:
                                 )
                             except httpx.HTTPStatusError as retry_error:
                                 raise RuntimeError(
-                                    _openrouter_user_error(retry_error, model)
+                                    _hosted_user_error(retry_error, model)
                                 ) from retry_error
                         else:
-                            raise RuntimeError(_openrouter_user_error(e, model)) from e
+                            raise RuntimeError(_hosted_user_error(e, model)) from e
                     choice = response["choices"][0]
                     message = choice["message"]
                     finish_reason = choice.get("finish_reason", "")
@@ -1875,6 +1915,7 @@ class TrialAgent:
                                     prompt=nudge_text,
                                     messages=messages,
                                     tab_id=session_tab_id,
+                                    model=model,
                                 )
                             for tc in tool_calls:
                                 messages.append({
@@ -2209,7 +2250,7 @@ class TrialAgent:
 
                     # Inject reflex hints after all tool results
                     for _rh in reflex_hints:
-                        messages.append({"role": "system", "content": _rh})
+                        _append_tool_followup_guidance(messages, model, _rh)
 
                     # Update stagnation via NudgeState
                     ns.update_stagnation(
@@ -2224,7 +2265,7 @@ class TrialAgent:
                     if _should_emit and feedback:
                         prompt = (feedback.feedback_prompt or "").strip()
                         if prompt:
-                            messages.append({"role": "system", "content": prompt})
+                            _append_tool_followup_guidance(messages, model, prompt)
                             ns.intervention_events += 1
                             ns.last_intervention_model_turn = turn + 1
                             print(
@@ -2238,6 +2279,7 @@ class TrialAgent:
                                 prompt=prompt,
                                 messages=messages,
                                 tab_id=session_tab_id,
+                                model=model,
                             )
                             if feedback.severity == "nudge":
                                 prev_stagnation = ns.stagnation_score
@@ -2264,7 +2306,7 @@ class TrialAgent:
                             f"{ns.stall_force_strikes} "
                             f"(score={ns.stagnation_score}) — continuing with guidance"
                         )
-                        messages.append({"role": "system", "content": guidance})
+                        _append_tool_followup_guidance(messages, model, guidance)
                     elif action == "force":
                         await _force_final_response(
                             f"Progress stalled (score={ns.stagnation_score}) — forcing final response",

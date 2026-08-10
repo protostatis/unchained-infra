@@ -16,6 +16,8 @@ from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     MAX_SESSION_MESSAGES,
     TrialAgent,
+    _append_tool_followup_guidance,
+    _hosted_user_error,
     _load_hosted_internal_context_configuration,
     _openrouter_user_error,
     _prepare_hosted_context,
@@ -1096,6 +1098,96 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         args, _ = client.post.call_args
         self.assertEqual(args[0], DEEPSEEK_URL)
         self.assertIn("choices", data)
+
+    def test_deepseek_http_errors_are_not_labeled_as_openrouter(self):
+        request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "tool message ordering is invalid"}},
+        )
+        error = httpx.HTTPStatusError("400", request=request, response=response)
+
+        message = _hosted_user_error(error, "deepseek-v4-flash")
+
+        self.assertEqual(
+            message,
+            "DeepSeek rejected model deepseek-v4-flash: tool message ordering is invalid",
+        )
+        self.assertNotIn("OpenRouter", message)
+
+    def test_direct_deepseek_skips_optional_tool_followup_system_guidance(self):
+        messages = [{"role": "tool", "tool_call_id": "call-1", "content": "done"}]
+
+        appended = _append_tool_followup_guidance(
+            messages, "deepseek-v4-flash", "internal nudge"
+        )
+
+        self.assertFalse(appended)
+        self.assertEqual(len(messages), 1)
+
+    async def test_direct_deepseek_nudge_screenshot_preserves_tool_adjacency(self):
+        session_id = "s-deepseek-loop"
+        self.agent.sessions[session_id] = []
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "Need browser evidence.",
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": '{"flags":"--text"}'},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        loop_feedback = SimpleNamespace(
+            should_intervene=True,
+            severity="nudge",
+            reason_codes=[],
+        )
+        loop_state = SimpleNamespace(
+            hard_stop_guard=False,
+            hard_stop_recovery_used=0,
+            check_loop=lambda _signature: (True, "Stop retrying.", loop_feedback),
+        )
+        call_model = AsyncMock(side_effect=[tool_response, final_response])
+
+        with (
+            patch("chat_agent_openrouter.NudgeState", return_value=loop_state),
+            patch("chat_agent_openrouter.INTERVENTION_SCREENSHOT_ON_NUDGE", True),
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_execute_tool", new=AsyncMock(return_value="iVBOR" + "A" * 64)),
+            patch.object(self.agent, "_sanitize_user_output", new=AsyncMock(return_value="done")),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": session_id,
+                "agent_id": "client-browser",
+                "message": "inspect this page",
+                "model": "deepseek-v4-flash",
+            })
+
+        forced_final_messages = call_model.await_args_list[1].args[1]
+        tool_call_index = next(
+            index
+            for index, message in enumerate(forced_final_messages)
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        self.assertEqual(forced_final_messages[tool_call_index + 1]["role"], "tool")
+        self.assertEqual(
+            forced_final_messages[tool_call_index + 1]["tool_call_id"], "call-1"
+        )
 
     async def test_deepseek_body_keeps_thinking_consistent(self):
         """DeepSeek thinking mode must be enabled for EVERY turn (including the
