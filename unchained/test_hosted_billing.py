@@ -1097,33 +1097,38 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[0], DEEPSEEK_URL)
         self.assertIn("choices", data)
 
-    async def test_deepseek_body_uses_thinking_not_reasoning(self):
-        client = SimpleNamespace(post=AsyncMock())
-        client.post.return_value = SimpleNamespace(
-            is_success=True,
-            status_code=200,
-            json=lambda: {"choices": [{"message": {"role": "assistant", "content": "ok"}}],
-                          "usage": {"prompt_tokens": 1, "completion_tokens": 1,
-                                    "total_tokens": 2}},
-        )
-        with (
-            patch.object(self.agent, "_do_deepseek_call", new=AsyncMock(return_value={
-                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            })),
-            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
-        ):
-            await self.agent._call_openrouter(
-                client,
-                [{"role": "user", "content": "hi"}],
-                model="deepseek-v4-flash",
-                session_id="s-test",
-                user_id="u-test",
-                reasoning=False,
-            )
-            sent = self.agent._do_deepseek_call.call_args[0][1]
-            self.assertEqual(sent["thinking"], {"type": "disabled"})
-            self.assertNotIn("reasoning", sent)
+    async def test_deepseek_body_keeps_thinking_consistent(self):
+        """DeepSeek thinking mode must be enabled for EVERY turn (including the
+        fast first turn) so the reasoning_content echo requirement stays
+        consistent and follow-ups do not 400."""
+        for reasoning in (False, True):
+            with self.subTest(reasoning=reasoning):
+                client = SimpleNamespace(post=AsyncMock())
+                client.post.return_value = SimpleNamespace(
+                    is_success=True,
+                    status_code=200,
+                    json=lambda: {"choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                                            "total_tokens": 2}},
+                )
+                with (
+                    patch.object(self.agent, "_do_deepseek_call", new=AsyncMock(return_value={
+                        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    })),
+                    patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+                ):
+                    await self.agent._call_openrouter(
+                        client,
+                        [{"role": "user", "content": "hi"}],
+                        model="deepseek-v4-flash",
+                        session_id="s-test",
+                        user_id="u-test",
+                        reasoning=reasoning,
+                    )
+                    sent = self.agent._do_deepseek_call.call_args[0][1]
+                    self.assertEqual(sent["thinking"], {"type": "enabled"})
+                    self.assertNotIn("reasoning", sent)
 
 
 if __name__ == "__main__":

@@ -2318,9 +2318,14 @@ class TrialAgent:
             "temperature": 0.2,
         }
         if provider == "deepseek":
-            # DeepSeek uses `thinking` (not OpenRouter's `reasoning`).
-            if not reasoning:
-                body["thinking"] = {"type": "disabled"}
+            # DeepSeek thinking mode is enabled by default and must stay
+            # CONSISTENT across turns: thinking responses carry
+            # `reasoning_content`, which DeepSeek requires echoing back verbatim
+            # on follow-ups, and mixing a non-thinking first turn (fast path)
+            # with thinking follow-ups triggers a 400. The worker appends the
+            # full assistant message (including reasoning_content), so the echo
+            # is preserved — explicitly enable thinking for every turn.
+            body["thinking"] = {"type": "enabled"}
         elif not reasoning and effective_model not in _REASONING_REQUIRED_MODELS:
             body["reasoning"] = {"enabled": False}
         if tool_choice == "none":
