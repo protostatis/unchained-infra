@@ -2102,7 +2102,16 @@ class CreditLedger:
         if not rows:
             return {"provider": provider, "stale": True, "reason": "no_snapshots"}
         currencies = [str(r[0]) for r in rows]
-        preferred = "USD" if "USD" in currencies else currencies[0]
+        if "USD" not in currencies:
+            # Ledger spend is USD-denominated (micro-USD); a CNY-only balance
+            # cannot be compared without FX, so skip reconciliation.
+            return {
+                "provider": provider,
+                "stale": True,
+                "reason": "reconciliation_requires_usd_balance",
+                "currencies": currencies,
+            }
+        preferred = "USD"
         snaps = [r for r in rows if str(r[0]) == preferred]
         if len(snaps) < 2:
             return {
