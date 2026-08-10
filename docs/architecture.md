@@ -59,7 +59,7 @@
 | **Caddy** | 80, 443 | TLS termination (Let's Encrypt auto-cert), reverse proxy, path routing |
 | **Relay** | 8765 | WebSocket relay: agent tunnel (`/tunnel`), CDP proxy (`/cdp/*`), REST API (`/api/*`), health check |
 | **MCP** | 8766 | FastMCP server exposing DDM/intel tools for MCP-compatible clients |
-| **unbrowser MCP** | 8767 | Hosted `unbrowser --mcp` bridged to HTTP with `mcp-proxy`; routed under `/unbrowser-mcp` on isolated networks |
+| **unbrowser MCP** | 8767 | Session-isolating HTTP broker: one loopback `mcp-proxy` → `unbrowser --mcp` worker per MCP session, routed under `/unbrowser-mcp` on isolated networks |
 | **Financial terminal** | 8787 | Authenticated singleton market-research UI; uses OpenRouter and the internal unbrowser MCP service |
 | **Web** | 8080 | Chat UI, OAuth, SSE bridge, hosted-credit authority, and agent-package downloads |
 | **Trial agent** | internal | Hosted OpenRouter tool-use worker; inference is server-side while browser actions route through the selected bridge |

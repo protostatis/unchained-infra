@@ -7,6 +7,7 @@ RUN useradd -m -u 10001 -s /bin/bash unchained \
     && chown -R unchained:unchained /app /data
 
 COPY unchained/unbrowser_ssrf_proxy.py .
+COPY unchained/unbrowser_mcp_router.py .
 
 RUN pip install --no-cache-dir \
     "mcp-proxy==0.12.0" \
@@ -14,6 +15,7 @@ RUN pip install --no-cache-dir \
     "pyunbrowser==0.0.18"
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV HOME=/home/unchained
 ENV HTTP_PROXY=http://unbrowser-egress:8888
 ENV HTTPS_PROXY=http://unbrowser-egress:8888
@@ -28,4 +30,4 @@ EXPOSE 8767
 
 USER 10001:10001
 
-CMD ["mcp-proxy", "--host", "0.0.0.0", "--port", "8767", "--pass-environment", "--", "unbrowser", "--mcp"]
+CMD ["python3", "unbrowser_mcp_router.py", "--host", "0.0.0.0", "--port", "8767"]

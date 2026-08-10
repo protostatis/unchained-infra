@@ -6,8 +6,9 @@ service owns the Docker authority and provisions ONE isolated runtime
 container per workspace account:
 
 - per-account private Docker network (internal: true) that carries the runtime,
-  the control-plane container, and the shared unbrowser MCP container
-  (``fin_ws_<slug>``); a separate per-account NON-internal egress network
+  the control-plane container, and the session-isolating unbrowser MCP broker
+  (``fin_ws_<slug>``). The broker starts a distinct worker for each MCP
+  session; a separate per-account NON-internal egress network
   (``fin_ws_<slug>_egress``) carries ONLY the runtime so model/MCP traffic can
   leave the host while no sibling runtime can ever reach another account's
   network or data. Sibling runtimes never share a network.

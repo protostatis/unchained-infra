@@ -354,6 +354,12 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         cls.unbrowser_mcp_dockerfile = cls.repo_root.joinpath(
             "Dockerfile.unbrowser-mcp"
         ).read_text()
+        cls.unbrowser_mcp_router = cls.repo_root.joinpath(
+            "unchained", "unbrowser_mcp_router.py"
+        ).read_text()
+        cls.unbrowser_mcp_doc = cls.repo_root.joinpath(
+            "docs", "unbrowser-mcp-route.md"
+        ).read_text()
         cls.caddy = cls.repo_root.joinpath("Caddyfile").read_text()
         cls.deploy = cls.repo_root.joinpath("deploy.sh").read_text()
         cls.runtime_context = cls.repo_root.joinpath(
@@ -620,6 +626,23 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("mcp-proxy==0.12.0", self.unbrowser_mcp_dockerfile)
         self.assertIn("mcp==1.29.0", self.unbrowser_mcp_dockerfile)
         self.assertIn("pyunbrowser==0.0.18", self.unbrowser_mcp_dockerfile)
+
+    def test_unbrowser_mcp_uses_per_session_workers_with_bounded_idle_cleanup(self):
+        self.assertIn("COPY unchained/unbrowser_mcp_router.py .", self.unbrowser_mcp_dockerfile)
+        self.assertIn('CMD ["python3", "unbrowser_mcp_router.py"', self.unbrowser_mcp_dockerfile)
+        self.assertIn("mcp-proxy", self.unbrowser_mcp_router)
+        self.assertIn('"127.0.0.1"', self.unbrowser_mcp_router)
+        self.assertIn("secrets.token_urlsafe(32)", self.unbrowser_mcp_router)
+        self.assertIn("UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS", self.compose)
+        self.assertIn("UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS:-120", self.compose)
+        self.assertEqual(
+            self.public_compose.count("UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS=120"),
+            2,
+        )
+        self.assertIn("request>headers>Mcp-Session-Id delete", self.caddy)
+        self.assertIn("@unbrowser_legacy_callbacks", self.caddy)
+        self.assertIn("/unbrowser-mcp/messages/*", self.caddy)
+        self.assertIn("120 seconds of idle time", self.unbrowser_mcp_doc)
 
     def test_public_live_edge_route_is_authenticated_and_fail_closed(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
