@@ -16,7 +16,14 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	# Docker's json-file driver.
 	log {
 		output stderr
-		format json
+		# Hosted Unbrowser's MCP session ID is an opaque bearer identifier.
+		# Keep it out of access logs along with the otherwise useful request data.
+		format filter {
+			wrap json
+			fields {
+				request>headers>Mcp-Session-Id delete
+			}
+		}
 	}
 
 	request_body {
@@ -39,12 +46,13 @@ unchainedsky.com, www.unchainedsky.com, api.unchainedsky.com {
 	}
 
 	# unbrowser MCP server — separate from Unchained's FastMCP /mcp endpoint.
-	# Streamable HTTP only; SSE's /messages callback cannot live safely under this prefix.
+	# Streamable HTTP only; legacy SSE callback paths must never reach a worker.
 	handle /unbrowser-mcp {
 		rewrite * /mcp
 		reverse_proxy unbrowser-mcp:8767
 	}
-	handle /unbrowser-mcp/sse {
+	@unbrowser_legacy_callbacks path /unbrowser-mcp/sse /unbrowser-mcp/sse/* /unbrowser-mcp/messages /unbrowser-mcp/messages/*
+	handle @unbrowser_legacy_callbacks {
 		respond "Use Streamable HTTP at /unbrowser-mcp or /unbrowser-mcp/mcp." 404
 	}
 	handle_path /unbrowser-mcp/* {

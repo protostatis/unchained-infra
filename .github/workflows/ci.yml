@@ -70,6 +70,7 @@ jobs:
             test_first_look_run_analytics \
             test_scheduler_agent_access \
             test_scheduled_tasks \
+            test_unbrowser_mcp_router \
             test_hosted_conversations \
             test_dev_script \
             test_fin_terminal \

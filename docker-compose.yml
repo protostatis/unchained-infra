@@ -131,9 +131,26 @@ services:
     depends_on:
       unbrowser-egress:
         condition: service_healthy
+    environment:
+      - UNBROWSER_MCP_MAX_SESSIONS=${UNBROWSER_MCP_MAX_SESSIONS:-8}
+      - UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS=${UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS:-120}
+      - UNBROWSER_MCP_MAX_SESSION_SECONDS=${UNBROWSER_MCP_MAX_SESSION_SECONDS:-900}
     networks:
       - unbrowser_mcp
       - unbrowser_egress_proxy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=134217728,mode=1777
+      - /home/unchained:rw,nosuid,nodev,noexec,size=134217728,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 64
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 128m
     restart: unless-stopped
     logging:
       driver: json-file

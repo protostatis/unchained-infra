@@ -379,7 +379,7 @@ so the path can never fall through to the landing page.
 | `FIN_WORKSPACE_RUNTIME_APP_IMAGE` | immutable pinned app image (built at `/fin-terminal/`, `private-workspace` mode) | required |
 | `FIN_WORKSPACE_RUNTIME_APP_PORT` | runtime container port | `8787` |
 | `FIN_WORKSPACE_RUNTIME_APP_CAPABLE` | operator prerequisite; the capability also requires a passing image-contract probe | `false` |
-| `FIN_WORKSPACE_RUNTIME_CONTROL_CONTAINER` / `_MCP_CONTAINER` | shared containers attached to each per-account network | `fin-terminal-workspace-control` / `fin-terminal-workspace-unbrowser-mcp` |
+| `FIN_WORKSPACE_RUNTIME_CONTROL_CONTAINER` / `_MCP_CONTAINER` | shared control-plane and session-isolating MCP broker attached to each per-account network | `fin-terminal-workspace-control` / `fin-terminal-workspace-unbrowser-mcp` |
 | `FIN_WORKSPACE_RUNTIME_CHECKPOINT_FILE` | per-account checkpoint path in the runtime | `/data/checkpoint.json` |
 | `FIN_WORKSPACE_RUNTIME_PROXY_TOKEN` | shared runtime proxy token (32+ chars) | required |
 | `FIN_WORKSPACE_RUNTIME_ALLOWED_ORIGINS` | runtime `ALLOWED_ORIGINS` | `https://unbrowser.unchainedsky.com` |

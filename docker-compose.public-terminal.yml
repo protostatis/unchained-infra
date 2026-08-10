@@ -115,6 +115,10 @@ services:
     depends_on:
       unbrowser-egress:
         condition: service_healthy
+    environment:
+      - UNBROWSER_MCP_MAX_SESSIONS=6
+      - UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS=120
+      - UNBROWSER_MCP_MAX_SESSION_SECONDS=900
     networks:
       - fin_terminal_public_mcp_01
       - fin_terminal_public_mcp_02
@@ -397,6 +401,10 @@ services:
     depends_on:
       unbrowser-egress:
         condition: service_healthy
+    environment:
+      - UNBROWSER_MCP_MAX_SESSIONS=6
+      - UNBROWSER_MCP_IDLE_TIMEOUT_SECONDS=120
+      - UNBROWSER_MCP_MAX_SESSION_SECONDS=900
     networks:
       - fin_terminal_public
       - unbrowser_egress_proxy
