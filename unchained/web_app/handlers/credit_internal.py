@@ -20,6 +20,7 @@ from credit import (
     CreditLedger,
     InsufficientBalanceError,
     RunNotActiveError,
+    _PROVIDER_MODEL_PREFIXES,
     credit_service_token,
     hosted_model_reservation_policy,
     is_hosted_model_allowed_for_identity,
@@ -272,6 +273,10 @@ async def handle_credit_provider_balance(request: web.Request) -> web.Response:
         currency = str(raw.get("currency", "")).strip()
         total_balance_raw = raw.get("total_balance")
         if not provider or not currency:
+            continue
+        # Only accept known providers (reconciliation scopes by this set);
+        # a typo'd/garbled provider would otherwise pollute the snapshots table.
+        if provider not in _PROVIDER_MODEL_PREFIXES:
             continue
         try:
             total_balance = float(total_balance_raw)

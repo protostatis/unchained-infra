@@ -2130,6 +2130,13 @@ class CreditLedger:
                 continue
             actual_spend_usd += delta
             usable_segments += 1
+            # The estimate window [prev_ts, cur_ts] aligns with the balance
+            # snapshots. A call submitted just before cur_ts but settled just
+            # after it is already reflected in the balance delta yet excluded
+            # here — so the estimate slightly undercounts and drift is biased
+            # toward a *warning*. That is the fail-safe direction for a
+            # stale-price detector (better to over-flag than silently under-
+            # charge the operator).
             with self._conn() as conn:
                 if scope is not None:
                     est = conn.execute(

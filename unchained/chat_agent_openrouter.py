@@ -1462,7 +1462,9 @@ class TrialAgent:
 
     async def run(self):
         # Periodic DeepSeek account-balance snapshot for cost reconciliation.
-        self._balance_task = asyncio.create_task(self._deepseek_balance_loop())
+        self._balance_task = None
+        if self.deepseek_key:
+            self._balance_task = asyncio.create_task(self._deepseek_balance_loop())
         try:
             while True:
                 try:

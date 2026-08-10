@@ -1010,6 +1010,23 @@ class DeepSeekCostTests(unittest.TestCase):
         expected = 1.0 * 0.004 + 0.0 + 1.0 * 0.90
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
 
+    def test_unknown_deepseek_model_reports_no_cost(self):
+        """A model with no price entry reports cost_present=False so the
+        ledger falls back to the conservative full-reservation settle."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 1_000_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v9-unknown")
+        self.assertEqual(usage["cost_usd"], 0.0)
+        self.assertFalse(usage["cost_present"])
+
 
 class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
     """DeepSeek direct API call routing (URL/key/headers, body mapping)."""
