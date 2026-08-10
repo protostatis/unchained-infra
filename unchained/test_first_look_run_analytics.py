@@ -546,8 +546,12 @@ class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(
             HEADLESS_AGENT_ID="headless-1",
             TRIAL_AGENT_ID="trial-agent",
+            ADMIN_EMAILS=[],
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
             _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
+            _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
+                "nvidia/nemotron-3-super-120b-a12b:free",
+            ),
             _authenticate=lambda r: None,
             _first_look_guest_auth=lambda r: (
                 {
@@ -574,6 +578,21 @@ class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
             # Mimics the real web.py predicate: deepseek-* counts as hosted.
             _is_openrouter_model=lambda m: "/" in m or m.startswith("deepseek-"),
             _is_deepseek_model=lambda m: m.startswith("deepseek-"),
+            _resolve_chat_agent_id=lambda auth, _model: auth["agent_id"],
+            _mint_scheduler_turn_grant=lambda *_args: "",
+            _response_queues={},
+            _response_req_ids={},
+            _session_tabs={},
+            _session_profile_paths={},
+            _expired_profile_sessions={},
+            _session_agent_map={},
+            _session_last_active={},
+            _session_agents={},
+            _overlay_sessions={},
+            _scheduler_turn_grants={},
+            _chat_turns=None,
+            _chat_agents={},  # no trial ws → hosted branch returns 503 cleanly
+            _auth=SimpleNamespace(db_path=""),
         )
 
     async def _run(self, core, body: dict):
@@ -614,6 +633,32 @@ class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
             json.loads(resp.body).get("error"),
             "guest_mode_requires_openrouter_model",
         )
+
+    async def test_guest_openrouter_deepseek_is_not_gated_as_direct(self):
+        """deepseek/deepseek-v4-flash (OpenRouter form, with slash) must NOT be
+        treated as the paid direct lane by the guest gate — it routes through
+        OpenRouter and proceeds (the guest branch then forces the free
+        fallback, which is a different code path than the rejection)."""
+        core = self._core()
+        resp = await self._run(
+            core,
+            {
+                "first_look_guest": True,
+                "headless": True,
+                "message": "hi",
+                "model": "deepseek/deepseek-v4-flash",
+            },
+        )
+        body_text = ""
+        if hasattr(resp, "body"):
+            body_text = resp.body or b""
+            if isinstance(body_text, bytes):
+                body_text = body_text.decode("utf-8", "replace")
+        self.assertNotIn("guest_mode_requires_openrouter_model", body_text)
+        # Positive path: it proceeds into the hosted branch (guest forced to the
+        # free fallback) and fails only because no trial ws exists in the mock.
+        self.assertEqual(resp.status, 503)
+        self.assertIn("Trial agent is not available", body_text)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,12 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.ledger = CreditLedger(self.db_path)
         self._saved_token = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN")
         os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "hosted-callback-test"
+        # The authenticated default now comes from HOSTED_DEFAULT_MODEL (the
+        # _OPENROUTER_TRIAL_DEFAULT_MODEL attr no longer drives the policy).
+        # enterContext keeps the env self-cleaning even if a test raises.
+        self.enterContext(
+            patch.dict(os.environ, {"HOSTED_DEFAULT_MODEL": "google/gemini-3.1-flash-lite"})
+        )
         self.settings = {}
         self.setting_records = {}
 
