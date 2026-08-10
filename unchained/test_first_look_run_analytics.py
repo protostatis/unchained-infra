@@ -538,5 +538,83 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(core.track_calls)
 
 
+class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
+    """Guests selecting paid DeepSeek models must be rejected, never silently
+    rerouted to the free OpenRouter fallback."""
+
+    def _core(self):
+        return SimpleNamespace(
+            HEADLESS_AGENT_ID="headless-1",
+            TRIAL_AGENT_ID="trial-agent",
+            _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
+            _authenticate=lambda r: None,
+            _first_look_guest_auth=lambda r: (
+                {
+                    "user_id": "",
+                    "key_hash": "abc123",
+                    "agent_id": "guest-abc123",
+                    "email": "",
+                    "user_type": "guest",
+                },
+                "guest-id",
+                0,
+            ),
+            _attach_first_look_guest_cookies=lambda *a, **k: None,
+            _trace=lambda *a, **k: None,
+            _track_event=lambda *a, **k: True,
+            _analytics_session_id_from_request=lambda r: "s",
+            _analytics_page_view_id_from_request=lambda r: "p",
+            _analytics_route_from_request=lambda r: "/trial",
+            _is_pending_user=lambda a: False,
+            _is_claude_sdk_model=lambda m: False,
+            _is_codex_sdk_model=lambda m: False,
+            _is_codex_cli_model=lambda m: False,
+            _is_opencode_cli_model=lambda m: False,
+            # Mimics the real web.py predicate: deepseek-* counts as hosted.
+            _is_openrouter_model=lambda m: "/" in m or m.startswith("deepseek-"),
+            _is_deepseek_model=lambda m: m.startswith("deepseek-"),
+        )
+
+    async def _run(self, core, body: dict):
+        request = _Request(body)
+        with patch.object(chat_stream, "_core", return_value=core):
+            return await chat_stream.handle_chat_msg(request)
+
+    async def test_guest_selecting_deepseek_is_rejected(self):
+        core = self._core()
+        resp = await self._run(
+            core,
+            {
+                "first_look_guest": True,
+                "headless": True,
+                "message": "hi",
+                "model": "deepseek-v4-flash",
+            },
+        )
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(
+            json.loads(resp.body).get("error"),
+            "guest_mode_requires_openrouter_model",
+        )
+
+    async def test_guest_selecting_deepseek_pro_is_rejected(self):
+        core = self._core()
+        resp = await self._run(
+            core,
+            {
+                "first_look_guest": True,
+                "headless": True,
+                "message": "hi",
+                "model": "deepseek-v4-pro",
+            },
+        )
+        self.assertEqual(resp.status, 400)
+        self.assertEqual(
+            json.loads(resp.body).get("error"),
+            "guest_mode_requires_openrouter_model",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

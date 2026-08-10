@@ -1465,6 +1465,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     _deepseek_check = getattr(core, "_is_deepseek_model", None)
     is_deepseek = bool(_deepseek_check and _deepseek_check(model))
     is_hosted = is_openrouter or is_deepseek
+    # _is_openrouter_model also matches deepseek-* (they share the hosted
+    # lane), so guest/pending gating must use a true-OpenRouter-only check:
+    # anonymous and pending users may only use the free OpenRouter lane.
+    is_openrouter_only = is_openrouter and not is_deepseek
     if is_hosted and len(message) > _HOSTED_MAX_USER_PROMPT_CHARS:
         return reject_first_look(
             web.json_response(
@@ -1479,7 +1483,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             ),
             "hosted_user_prompt_too_large",
         )
-    if guest_mode and not is_openrouter:
+    if guest_mode and not is_openrouter_only:
         return reject_first_look(
             web.json_response(
                 {"error": "guest_mode_requires_openrouter_model"},
@@ -1487,7 +1491,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             ),
             "guest_model_invalid",
         )
-    if core._is_pending_user(auth_info) and not is_openrouter:
+    if core._is_pending_user(auth_info) and not is_openrouter_only:
         return core._pending_limited_response()
     if scheduler_armed and not _scheduler_trigger_supported(
         guest_mode=guest_mode,
