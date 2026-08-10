@@ -57,6 +57,7 @@ UNCHAINED_RUNTIME_FILES=(
     "chat_agent_codex.py"
     "chat_agent_sdk.py"
     "context_compact.py"
+    "tool_payloads.py"
     "scheduler_agent.py"
     "scheduler_tool.py"
     "signup_agent.py"

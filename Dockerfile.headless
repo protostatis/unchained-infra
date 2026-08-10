@@ -43,6 +43,7 @@ COPY unchained/chat_event_transport.py .
 COPY unchained/chrome_bridge.py .
 COPY unchained/cloud_tools.py .
 COPY unchained/context_compact.py .
+COPY unchained/tool_payloads.py .
 COPY unchained/cdp.py .
 COPY unchained/ddm.py .
 COPY unchained/intel.py .

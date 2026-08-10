@@ -17,6 +17,8 @@ import threading
 import time
 from html import escape
 
+from tool_payloads import contains_tool_call_wrapper, strip_tool_call_wrappers
+
 log = logging.getLogger(__name__)
 
 
@@ -231,10 +233,8 @@ def _extract_visible_messages(session_data: dict) -> list[dict]:
             content = m.get("content") or ""
             if not content:
                 continue
-            # Strip leaked tool-call XML tags
-            content = re.sub(
-                r"(?is)<tool_call\b.*?</tool_call>", "", content
-            )
+            # Strip leaked raw or HTML-escaped tool-call wrappers.
+            content = strip_tool_call_wrappers(content)
             # Strip raw JSON tool-call payloads (nested braces possible)
             content = re.sub(
                 r'\{[^{}]*"(?:name|function)"\s*:[^{}]*"arguments"\s*:[^}]*\}',
@@ -246,6 +246,8 @@ def _extract_visible_messages(session_data: dict) -> list[dict]:
                 "", content, flags=re.DOTALL
             )
             content = re.sub(r"\n{3,}", "\n\n", content).strip()
+            if contains_tool_call_wrapper(content):
+                continue
             if content:
                 msgs.append({"role": "assistant", "content": content})
     return msgs

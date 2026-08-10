@@ -128,6 +128,73 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
         self.assertIn("x" * 8000, classifier_input)
         self.assertNotIn("x" * 8001, classifier_input)
 
+    def test_escaped_tool_call_xml_is_hidden_from_history_and_results(self):
+        payload = '{"name":"navigate","arguments":{"url":"https://example.test"}}'
+        for opening, closing in (
+            ("<tool_call>", "</tool_call>"),
+            ("&lt;tool_call&gt;", "&lt;/tool_call&gt;"),
+            ("&amp;lt;tool_call&amp;gt;", "&amp;lt;/tool_call&amp;gt;"),
+        ):
+            with self.subTest(opening=opening):
+                content = f"Useful answer. {opening}{payload}{closing}"
+                self.assertTrue(web._looks_like_tool_payload(content))
+                history_content = web._strip_tool_payloads(content)
+                self.assertIn("Useful answer.", history_content)
+                self.assertNotIn("tool_call", history_content.lower())
+
+                messages = published_results._extract_visible_messages({
+                    "messages": [{"role": "assistant", "content": content}]
+                })
+                self.assertEqual(len(messages), 1)
+                self.assertIn("Useful answer.", messages[0]["content"])
+                self.assertNotIn("tool_call", messages[0]["content"].lower())
+
+        dsml = (
+            "Useful answer. "
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+            "document.body.innerText"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+        )
+        self.assertTrue(web._looks_like_tool_payload(dsml))
+        history_content = web._strip_tool_payloads(dsml)
+        self.assertEqual(history_content, "Useful answer.")
+
+        messages = published_results._extract_visible_messages({
+            "messages": [{"role": "assistant", "content": dsml}]
+        })
+        self.assertEqual(messages, [{"role": "assistant", "content": "Useful answer."}])
+
+    def test_unclosed_tool_call_keeps_only_the_safe_prefix(self):
+        for index, opening in enumerate((
+            "<tool_call>",
+            "&lt;tool_call&gt;",
+            "&amp;lt;tool_call&amp;gt;",
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>",
+        )):
+            with self.subTest(opening=opening):
+                session_id = f"s-unclosed-tool-call-{index}"
+                content = f"Useful answer. {opening}{{\"name\":\"navigate\"}}"
+                session_path = Path(self.temp_dir.name) / f"{session_id}.json"
+                session_path.write_text(json.dumps({
+                    "messages": [{"role": "assistant", "content": content}]
+                }))
+
+                with patch.dict(os.environ, {"UNCHAINED_SESSIONS_DIR": self.temp_dir.name}):
+                    history, found = web._read_trial_history(session_id)
+
+                self.assertTrue(found)
+                self.assertEqual(history, [{"role": "assistant", "content": "Useful answer."}])
+                self.assertEqual(
+                    published_results._extract_visible_messages({
+                        "messages": [{"role": "assistant", "content": content}]
+                    }),
+                    [{"role": "assistant", "content": "Useful answer."}],
+                )
+
 
 class TestPublishedResultRouteAuthorization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
