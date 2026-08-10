@@ -378,11 +378,11 @@ def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]
     if not post_cap:
         post_cap = HOSTED_FREE_MODEL_DEFAULTS
     # The authenticated /workspace default is decoupled from the guest/trial
-    # fallback (`_OPENROUTER_TRIAL_DEFAULT_MODEL` stays a free OpenRouter model
-    # so anonymous traffic never lands on a paid lane). HOSTED_DEFAULT_MODEL is
-    # the canonical paid-lane default; when unset it falls back to
-    # HOSTED_USER_MODEL_DEFAULTS[0] (deepseek-v4-flash) so local runs match
-    # production.
+    # lane: `_OPENROUTER_TRIAL_DEFAULT_MODEL` (a free OpenRouter model) remains
+    # the no-model fallback for guest/pending traffic in chat_stream/chat_flow,
+    # while HOSTED_DEFAULT_MODEL is the canonical paid-lane default. When unset
+    # it falls back to HOSTED_USER_MODEL_DEFAULTS[0] (deepseek-v4-flash) so
+    # local runs match production.
     default_model = str(
         os.environ.get("HOSTED_DEFAULT_MODEL", "")
         or HOSTED_USER_MODEL_DEFAULTS[0]
