@@ -301,6 +301,25 @@ def is_hosted_model_id(model: str) -> bool:
     return is_openrouter_model_id(model) or is_deepseek_model_id(model)
 
 
+# Provider → model-ID prefix used to scope metering/reconciliation rows.
+_PROVIDER_MODEL_PREFIXES: dict[str, str] = {
+    "deepseek": "deepseek-",
+}
+
+
+def _provider_model_scope(provider: str) -> tuple[str | None, list]:
+    """Return (SQL LIKE pattern, params) scoping usage rows to a provider.
+
+    Providers with a deterministic model-ID prefix (e.g. ``deepseek-``) get a
+    LIKE filter so reconciliation never mixes providers; unknown providers get
+    ``(None, [])`` meaning "all rows".
+    """
+    prefix = _PROVIDER_MODEL_PREFIXES.get(str(provider or "").strip())
+    if prefix:
+        return f"{prefix}%", []
+    return None, []
+
+
 def normalize_hosted_model_ids(
     models,
     *,
@@ -1935,13 +1954,21 @@ class CreditLedger:
     # Provider usage metering + balance reconciliation
     # ------------------------------------------------------------------
 
-    def provider_usage_since(self, since_ts: float) -> dict:
+    def provider_usage_since(self, since_ts: float, provider: str = "") -> dict:
         """Aggregate provider token usage + estimated cost since a timestamp.
 
         This is the per-interval "meter" used for near-realtime cost tracking:
         sum the cache-aware token breakdown and the settled estimated cost
-        across all users since *since_ts*.
+        across all users since *since_ts*. When *provider* is given (e.g.
+        ``"deepseek"``), only that provider's rows are counted.
         """
+        scope, params = _provider_model_scope(provider)
+        where = " WHERE created_at >= ?"
+        if scope is not None:
+            where += " AND model LIKE ?"
+            params = [max(0.0, float(since_ts)), scope]
+        else:
+            params = [max(0.0, float(since_ts))]
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT "
@@ -1950,8 +1977,8 @@ class CreditLedger:
                 "COALESCE(SUM(completion_tokens), 0), "
                 "COALESCE(SUM(total_tokens), 0), "
                 "COALESCE(SUM(provider_cost_micro_usd), 0) "
-                "FROM credit_provider_usage WHERE created_at >= ?",
-                (max(0.0, float(since_ts)),),
+                "FROM credit_provider_usage" + where,
+                params,
             ).fetchone()
         return {
             "prompt_cache_hit_tokens": int(row[0] or 0),
@@ -1962,15 +1989,26 @@ class CreditLedger:
         }
 
     def provider_usage_series(
-        self, window_seconds: int = 600, since_ts: float = 0.0
+        self,
+        window_seconds: int = 600,
+        since_ts: float = 0.0,
+        provider: str = "",
     ) -> list[dict]:
         """Bucketed provider usage (default 10-minute windows, since *since_ts*).
 
         Each bucket carries the cache-aware token breakdown and the settled
         estimated cost, so the operator can compute cost per 10-minute window
-        (lagged by one window) across all users.
+        (lagged by one window) across all users. When *provider* is given, only
+        that provider's rows are counted.
         """
         window_seconds = max(60, int(window_seconds))
+        scope, params = _provider_model_scope(provider)
+        where = " WHERE created_at >= ?"
+        if scope is not None:
+            where += " AND model LIKE ?"
+            params = [window_seconds, max(0.0, float(since_ts)), scope]
+        else:
+            params = [window_seconds, max(0.0, float(since_ts))]
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT CAST(created_at / ? AS INTEGER) AS bucket, "
@@ -1979,9 +2017,9 @@ class CreditLedger:
                 "COALESCE(SUM(completion_tokens), 0), "
                 "COALESCE(SUM(total_tokens), 0), "
                 "COALESCE(SUM(provider_cost_micro_usd), 0) "
-                "FROM credit_provider_usage WHERE created_at >= ? "
+                "FROM credit_provider_usage" + where + " "
                 "GROUP BY bucket ORDER BY bucket",
-                (window_seconds, max(0.0, float(since_ts))),
+                params,
             ).fetchall()
         return [
             {
@@ -2045,74 +2083,91 @@ class CreditLedger:
     def provider_cost_reconciliation(self, provider: str) -> dict:
         """Compare realized balance delta vs ledger-estimated spend.
 
-        Ground truth: the provider account balance dropped by (first - last)
-        over the observation window (top-ups make the delta unusable, reported
-        via ``balance_increased``). Expected: the sum of per-call estimated
-        costs settled into ``credit_provider_usage`` over the same window.
-        ``drift_percent`` is positive when the provider charged us MORE than
-        our price table estimated (a stale/too-low price table).
+        Ground truth: provider account balance drops between *adjacent*
+        snapshots in one currency (prefer USD). Segments where the balance
+        increased (top-up / grant) are skipped — they would contaminate the
+        window. Expected: the sum of per-call estimated costs settled into
+        ``credit_provider_usage`` for this provider's models over the same
+        segments. ``drift_percent`` is positive when the provider charged us
+        MORE than our price table estimated (a stale/too-low price table).
         """
         provider = str(provider or "").strip()[:64]
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT MIN(created_at), MAX(created_at) "
-                "FROM provider_balance_snapshots WHERE provider = ?",
+            rows = conn.execute(
+                "SELECT currency, total_balance, created_at "
+                "FROM provider_balance_snapshots WHERE provider = ? "
+                "ORDER BY created_at ASC, snapshot_id ASC",
                 (provider,),
-            ).fetchone()
-        if not row or row[0] is None or row[1] is None:
+            ).fetchall()
+        if not rows:
             return {"provider": provider, "stale": True, "reason": "no_snapshots"}
-        first_ts, last_ts = float(row[0]), float(row[1])
-        first = self._balance_snapshot_at(provider, first_ts)
-        last = self._balance_snapshot_at(provider, last_ts)
-        if not first or not last or first["currency"] != last["currency"]:
-            return {"provider": provider, "stale": True, "reason": "snapshot_currency_mismatch"}
-        actual_spend_usd = first["total_balance"] - last["total_balance"]
-        balance_increased = actual_spend_usd < 0
-        with self._conn() as conn:
-            est = conn.execute(
-                "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
-                "FROM credit_provider_usage WHERE created_at >= ? AND created_at <= ?",
-                (first_ts, last_ts),
-            ).fetchone()
-        estimated_spend_usd = round((int(est[0] or 0) / 1_000_000.0), 6)
+        currencies = [str(r[0]) for r in rows]
+        preferred = "USD" if "USD" in currencies else currencies[0]
+        snaps = [r for r in rows if str(r[0]) == preferred]
+        if len(snaps) < 2:
+            return {
+                "provider": provider,
+                "stale": True,
+                "reason": "insufficient_snapshots",
+                "currency": preferred,
+            }
+
+        scope, _ = _provider_model_scope(provider)
+        actual_spend_usd = 0.0
+        estimated_spend_micro = 0
+        usable_segments = 0
+        topup_segments = 0
+        for prev, cur in zip(snaps, snaps[1:]):
+            prev_ts, prev_bal = float(prev[2]), float(prev[1])
+            cur_ts, cur_bal = float(cur[2]), float(cur[1])
+            delta = prev_bal - cur_bal
+            if delta <= 0:
+                # Balance increased (top-up / grant) or unchanged: the segment
+                # is unusable for spend measurement.
+                topup_segments += 1
+                continue
+            actual_spend_usd += delta
+            usable_segments += 1
+            with self._conn() as conn:
+                if scope is not None:
+                    est = conn.execute(
+                        "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
+                        "FROM credit_provider_usage "
+                        "WHERE created_at >= ? AND created_at <= ? AND model LIKE ?",
+                        (prev_ts, cur_ts, scope),
+                    ).fetchone()
+                else:
+                    est = conn.execute(
+                        "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
+                        "FROM credit_provider_usage "
+                        "WHERE created_at >= ? AND created_at <= ?",
+                        (prev_ts, cur_ts),
+                    ).fetchone()
+            estimated_spend_micro += int(est[0] or 0)
+
         actual_spend_usd = round(max(0.0, actual_spend_usd), 6)
+        estimated_spend_usd = round((estimated_spend_micro / 1_000_000.0), 6)
         drift_percent = 0.0
         if actual_spend_usd > 0 and estimated_spend_usd > 0:
             drift_percent = round(
-                ((actual_spend_usd - estimated_spend_usd) / actual_spend_usd) * 100.0, 2
+                ((actual_spend_usd - estimated_spend_usd) / actual_spend_usd) * 100.0,
+                2,
             )
         return {
             "provider": provider,
             "stale": False,
-            "first_snapshot_at": first_ts,
-            "last_snapshot_at": last_ts,
-            "currency": first["currency"],
-            "first_balance_usd": first["total_balance"],
-            "last_balance_usd": last["total_balance"],
+            "currency": preferred,
+            "snapshot_count": len(snaps),
+            "usable_segments": usable_segments,
+            "topup_segments": topup_segments,
+            "first_snapshot_at": float(snaps[0][2]),
+            "last_snapshot_at": float(snaps[-1][2]),
+            "first_balance_usd": float(snaps[0][1]),
+            "last_balance_usd": float(snaps[-1][1]),
             "actual_spend_usd": actual_spend_usd,
             "estimated_spend_usd": estimated_spend_usd,
             "drift_percent": drift_percent,
-            "balance_increased": balance_increased,
-        }
-
-    def _balance_snapshot_at(self, provider: str, ts: float) -> dict | None:
-        """Return the newest snapshot at-or-before *ts* for a provider."""
-        provider = str(provider or "").strip()[:64]
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT currency, total_balance, is_available, created_at "
-                "FROM provider_balance_snapshots "
-                "WHERE provider = ? AND created_at <= ? "
-                "ORDER BY created_at DESC, snapshot_id DESC LIMIT 1",
-                (provider, ts),
-            ).fetchone()
-        if row is None:
-            return None
-        return {
-            "currency": row[0],
-            "total_balance": float(row[1] or 0),
-            "is_available": bool(row[2]),
-            "snapshot_at": float(row[3]),
+            "balance_increased": topup_segments > 0,
         }
 
 

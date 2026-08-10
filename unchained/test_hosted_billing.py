@@ -957,6 +957,44 @@ class DeepSeekCostTests(unittest.TestCase):
         expected = 0.5 * 0.01 + 0.5 * 1.00 + 0.1 * 2.00
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
 
+    def test_price_json_partial_override_keeps_other_rates(self):
+        """A partial override must not silently zero out unset prices."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        os.environ["DEEPSEEK_PRICE_JSON"] = json.dumps({
+            "deepseek-v4-flash": {"output_usd_per_1m": 2.00}
+        })
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 500_000,
+                "prompt_cache_miss_tokens": 500_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # Defaults for hit/miss are retained: 0.003 / 0.15.
+        expected = 0.5 * 0.003 + 0.5 * 0.15 + 0.1 * 2.00
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+
+    def test_extract_deepseek_usage_prices_unaccounted_remainder_as_miss(self):
+        """If hit+miss < prompt_tokens, the remainder is billed as cache miss."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 400_000,
+                "prompt_cache_miss_tokens": 400_000,
+                "completion_tokens": 0,
+                "total_tokens": 1_000_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # 400k hit, 600k miss (200k unaccounted priced as miss).
+        expected = 0.4 * 0.003 + 0.6 * 0.15
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["prompt_cache_miss_tokens"], 600_000)
+
     def test_pro_uses_pro_price_tier(self):
         from chat_agent_openrouter import _extract_deepseek_usage
         payload = {
@@ -1069,3 +1107,7 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
             sent = self.agent._do_deepseek_call.call_args[0][1]
             self.assertEqual(sent["thinking"], {"type": "disabled"})
             self.assertNotIn("reasoning", sent)
+
+
+if __name__ == "__main__":
+    unittest.main()

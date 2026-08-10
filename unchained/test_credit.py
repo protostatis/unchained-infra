@@ -1829,3 +1829,95 @@ class TestDeepSeekProvider(unittest.TestCase):
     def test_reconciliation_stale_without_snapshots(self):
         report = self.ledger.provider_cost_reconciliation("deepseek")
         self.assertTrue(report["stale"])
+
+    def test_reconciliation_skips_topup_segments(self):
+        """A balance increase (top-up/grant) must not contaminate spend math."""
+        now = time.time()
+        # Segment 1: real spend 11.32 -> 10.02 ($1.30) at now-100..now-90.
+        # Segment 2: top-up back up to 15.00 (skipped).
+        # Segment 3: spend 15.00 -> 14.50 ($0.50) at now-10..now+10.
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=11.32, is_available=True, snapshot_at=now - 100.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=10.02, is_available=True, snapshot_at=now - 90.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=15.00, is_available=True, snapshot_at=now - 50.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=14.50, is_available=True, snapshot_at=now + 10.0,
+        )
+        # Ledger spend in the two spend segments: $0.30 + $0.10 = $0.40.
+        for i, (amt, lo, hi) in enumerate([
+            (300_000, now - 100.0, now - 90.0),
+            (100_000, now - 10.0, now + 10.0),
+        ]):
+            self.ledger.grant(f"u-ds-{i}", _usd_to_micro(5.0), idempotency_key=f"g-ds-t{i}")
+            run = self.ledger.create_run(f"u-ds-{i}", idempotency_key=f"r-ds-t{i}")
+            call = self.ledger.reserve_call(
+                run["run_id"], model="deepseek-v4-flash", idempotency_key=f"c-ds-t{i}",
+            )
+            self.ledger.settle_call(
+                call["call_id"],
+                actual_cost_micro_usd=amt,
+                prompt_tokens=10_000,
+                completion_tokens=0,
+                total_tokens=10_000,
+                provider_cost_micro_usd=amt,
+            )
+        # Force the settle created_at into the intended windows.
+        with self.ledger._conn() as conn:
+            rows = conn.execute(
+                "SELECT usage_id FROM credit_provider_usage ORDER BY usage_id ASC"
+            ).fetchall()
+            timestamps = [lo, hi]
+            for j, (usage_id,) in enumerate(rows):
+                conn.execute(
+                    "UPDATE credit_provider_usage SET created_at = ? WHERE usage_id = ?",
+                    (timestamps[j], usage_id),
+                )
+        report = self.ledger.provider_cost_reconciliation("deepseek")
+        self.assertFalse(report["stale"])
+        self.assertEqual(report["usable_segments"], 2)
+        self.assertEqual(report["topup_segments"], 1)
+        self.assertTrue(report["balance_increased"])
+        # Actual spend only from spend segments: 1.30 + 0.50 = $1.80.
+        self.assertAlmostEqual(report["actual_spend_usd"], 1.80, places=6)
+        self.assertAlmostEqual(report["estimated_spend_usd"], 0.40, places=6)
+
+    def test_reconciliation_scopes_to_deepseek_rows(self):
+        """OpenRouter settlements must not inflate the DeepSeek estimate."""
+        now = time.time()
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=10.00, is_available=True, snapshot_at=now - 100.0,
+        )
+        self.ledger.grant("u-ds-3", _usd_to_micro(5.0), idempotency_key="g-ds-3")
+        run = self.ledger.create_run("u-ds-3", idempotency_key="r-ds-3")
+        # A DeepSeek call ($0.10) and an unrelated OpenRouter call ($0.90).
+        for model, amt, key in [
+            ("deepseek-v4-flash", 100_000, "c-ds-scope-ds"),
+            ("google/gemini-3.1-flash-lite", 900_000, "c-ds-scope-or"),
+        ]:
+            call = self.ledger.reserve_call(
+                run["run_id"], model=model, idempotency_key=key,
+            )
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=amt,
+                prompt_tokens=1, completion_tokens=1, total_tokens=2,
+                provider_cost_micro_usd=amt,
+            )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.60, is_available=True, snapshot_at=now + 10.0,
+        )
+        report = self.ledger.provider_cost_reconciliation("deepseek")
+        self.assertFalse(report["stale"])
+        self.assertAlmostEqual(report["actual_spend_usd"], 0.40, places=6)
+        # Only the DeepSeek row counts toward the estimate.
+        self.assertAlmostEqual(report["estimated_spend_usd"], 0.10, places=6)

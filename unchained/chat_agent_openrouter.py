@@ -33,6 +33,7 @@ import argparse
 import asyncio
 from contextvars import ContextVar
 import json
+import math
 import os
 import re
 import signal
@@ -128,7 +129,13 @@ def _is_deepseek_model(model: str) -> bool:
 
 
 def _parse_deepseek_price_json(raw: str) -> dict[str, dict[str, float]]:
-    """Parse the optional DEEPSEEK_PRICE_JSON env override (partial allowed)."""
+    """Parse the optional DEEPSEEK_PRICE_JSON env override.
+
+    Per-model overrides are deep-merged over the defaults (partial overrides
+    never zero out unset prices). Prices must be finite, non-negative numbers;
+    invalid entries fall back to the model default rather than silently
+    under-pricing the estimate.
+    """
     if not raw:
         return {}
     try:
@@ -138,18 +145,26 @@ def _parse_deepseek_price_json(raw: str) -> dict[str, dict[str, float]]:
     if not isinstance(data, dict):
         return {}
     table: dict[str, dict[str, float]] = {}
+    defaults = _DEEPSEEK_PRICE_DEFAULTS
     for model, prices in data.items():
         if not isinstance(prices, dict):
             continue
-        hit = _coerce_float(prices.get("input_cache_hit_usd_per_1m", 0), 0.0)
-        miss = _coerce_float(prices.get("input_cache_miss_usd_per_1m", 0), 0.0)
-        out = _coerce_float(prices.get("output_usd_per_1m", 0), 0.0)
-        if hit > 0 or miss > 0 or out > 0:
-            table[str(model)] = {
-                "input_cache_hit_usd_per_1m": hit,
-                "input_cache_miss_usd_per_1m": miss,
-                "output_usd_per_1m": out,
-            }
+        base = dict(defaults.get(str(model), {}))
+        changed = False
+        for key in ("input_cache_hit_usd_per_1m", "input_cache_miss_usd_per_1m",
+                    "output_usd_per_1m"):
+            if key not in prices:
+                continue
+            try:
+                value = float(prices[key])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value) or value < 0:
+                continue
+            base[key] = value
+            changed = True
+        if changed:
+            table[str(model)] = base
     return table
 
 
@@ -933,15 +948,26 @@ def _extract_deepseek_usage(payload: dict, model: str = "") -> dict:
     if not isinstance(usage, dict):
         usage = {}
 
-    prompt_tokens = _coerce_int(usage.get("prompt_tokens", 0), 0)
-    hit_tokens = _coerce_int(usage.get("prompt_cache_hit_tokens", 0), 0)
-    miss_tokens = _coerce_int(usage.get("prompt_cache_miss_tokens", 0), 0)
+    prompt_tokens = max(0, _coerce_int(usage.get("prompt_tokens", 0), 0))
+    hit_tokens = max(0, _coerce_int(usage.get("prompt_cache_hit_tokens", 0), 0))
+    miss_tokens = max(0, _coerce_int(usage.get("prompt_cache_miss_tokens", 0), 0))
+    completion_tokens = max(0, _coerce_int(usage.get("completion_tokens", 0), 0))
     if hit_tokens <= 0 and miss_tokens <= 0:
-        miss_tokens = max(0, prompt_tokens)
-    completion_tokens = _coerce_int(usage.get("completion_tokens", 0), 0)
-    total_tokens = _coerce_int(
-        usage.get("total_tokens", 0),
-        prompt_tokens + completion_tokens,
+        # Older responses without the breakdown: attribute all prompt tokens as
+        # cache misses (conservative).
+        miss_tokens = prompt_tokens
+    if hit_tokens + miss_tokens > prompt_tokens:
+        # Defensive: never bill more prompt tokens than were reported.
+        hit_tokens = min(hit_tokens, prompt_tokens)
+        miss_tokens = min(miss_tokens, prompt_tokens)
+        if hit_tokens + miss_tokens > prompt_tokens:
+            excess = hit_tokens + miss_tokens - prompt_tokens
+            hit_tokens = max(0, hit_tokens - excess)
+    if hit_tokens + miss_tokens < prompt_tokens:
+        # Unaccounted prompt tokens are priced as cache misses (conservative).
+        miss_tokens += prompt_tokens - (hit_tokens + miss_tokens)
+    total_tokens = max(
+        0, _coerce_int(usage.get("total_tokens", 0), 0)
     )
     if total_tokens <= 0:
         total_tokens = prompt_tokens + completion_tokens
@@ -1060,6 +1086,8 @@ class TrialAgent:
         self.active_req_ids: dict[str, str] = {}
         # Per-session billing run IDs (set from ws_msg["billing_run_id"])
         self._session_billing_runs: dict[str, str] = {}
+        # DeepSeek balance snapshot reporter (owned by run())
+        self._balance_task: asyncio.Task | None = None
 
     @property
     def _credit_base_url(self) -> str:
@@ -1434,54 +1462,59 @@ class TrialAgent:
 
     async def run(self):
         # Periodic DeepSeek account-balance snapshot for cost reconciliation.
-        balance_task = asyncio.create_task(self._deepseek_balance_loop())
-        while True:
-            try:
-                await self.connect()
-                async for raw in self.ws:
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if msg.get("type") == "user_message":
-                        sid = msg.get("session_id", "")
-                        # Store billing run ID for credit accounting
-                        billing_rid = str(msg.get("billing_run_id", "")).strip()
-                        if billing_rid:
-                            self._session_billing_runs[sid] = billing_rid
-                        req_id = ""
-                        # Cancel any existing task for this session before starting a new one
-                        if sid:
-                            old_task = self.active_tasks.get(sid)
-                            if old_task and not old_task.done():
-                                old_task.cancel()
-                                print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
-                            req_id = str(msg.get("req_id", "") or "")
-                            self.active_req_ids[sid] = req_id
-                        token = _task_req_id.set(req_id)
+        self._balance_task = asyncio.create_task(self._deepseek_balance_loop())
+        try:
+            while True:
+                try:
+                    await self.connect()
+                    async for raw in self.ws:
                         try:
-                            task = asyncio.create_task(self._handle_message(msg))
-                        finally:
-                            _task_req_id.reset(token)
-                        if sid:
-                            self.active_tasks[sid] = task
-                            task.add_done_callback(
-                                lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
-                            )
-                    elif msg.get("type") == "cancel":
-                        sid = msg.get("session_id", "")
-                        task = self.active_tasks.get(sid)
-                        if task and not task.done():
-                            req_id = self.active_req_ids.get(sid, "")
-                            task.cancel()
-                            print(f"[{sid}] Cancelled")
-                            await self._send(sid, {"type": "cancelled", "req_id": req_id})
-                            await self._send(sid, {"type": "done", "req_id": req_id})
-            except websockets.ConnectionClosed:
-                print("Connection lost. Reconnecting in 3s...")
-                await asyncio.sleep(3)
-            except Exception as e:
-                print(f"Error: {e}. Reconnecting in 5s...")
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if msg.get("type") == "user_message":
+                            sid = msg.get("session_id", "")
+                            # Store billing run ID for credit accounting
+                            billing_rid = str(msg.get("billing_run_id", "")).strip()
+                            if billing_rid:
+                                self._session_billing_runs[sid] = billing_rid
+                            req_id = ""
+                            # Cancel any existing task for this session before starting a new one
+                            if sid:
+                                old_task = self.active_tasks.get(sid)
+                                if old_task and not old_task.done():
+                                    old_task.cancel()
+                                    print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
+                                req_id = str(msg.get("req_id", "") or "")
+                                self.active_req_ids[sid] = req_id
+                            token = _task_req_id.set(req_id)
+                            try:
+                                task = asyncio.create_task(self._handle_message(msg))
+                            finally:
+                                _task_req_id.reset(token)
+                            if sid:
+                                self.active_tasks[sid] = task
+                                task.add_done_callback(
+                                    lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
+                                )
+                        elif msg.get("type") == "cancel":
+                            sid = msg.get("session_id", "")
+                            task = self.active_tasks.get(sid)
+                            if task and not task.done():
+                                req_id = self.active_req_ids.get(sid, "")
+                                task.cancel()
+                                print(f"[{sid}] Cancelled")
+                                await self._send(sid, {"type": "cancelled", "req_id": req_id})
+                                await self._send(sid, {"type": "done", "req_id": req_id})
+                except websockets.ConnectionClosed:
+                    print("Connection lost. Reconnecting in 3s...")
+                    await asyncio.sleep(3)
+                except Exception as e:
+                    print(f"Error: {e}. Reconnecting in 5s...")
+        finally:
+            task = getattr(self, "_balance_task", None)
+            if task and not task.done():
+                task.cancel()
                 await asyncio.sleep(5)
 
     def _finish_task(self, session_id: str, req_id: str, task: asyncio.Task):
