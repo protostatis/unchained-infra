@@ -1206,6 +1206,16 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(cleaned, "Navigation complete.")
                 self.assertNotIn("tool_call", cleaned.lower())
 
+        for opening in ("<tool_call>", "&lt;tool_call&gt;", "&amp;lt;tool_call&amp;gt;"):
+            with self.subTest(opening=opening, unclosed=True):
+                text = f"Navigation complete. {opening}{payload}"
+                cleaned = await self.agent._sanitize_user_output(
+                    SimpleNamespace(), "deepseek-v4-flash", text
+                )
+
+                self.assertEqual(cleaned, "Navigation complete.")
+                self.assertNotIn("tool_call", cleaned.lower())
+
         dsml = (
             "Still at step 11. "
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"

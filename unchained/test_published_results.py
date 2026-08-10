@@ -168,25 +168,32 @@ class TestPublishedResultDisclosureContracts(unittest.TestCase):
         })
         self.assertEqual(messages, [{"role": "assistant", "content": "Useful answer."}])
 
-    def test_unclosed_escaped_tool_call_is_not_shown(self):
-        session_id = "s-escaped-tool-call"
-        content = "Useful answer. &lt;tool_call&gt;{\"name\":\"navigate\"}"
-        session_path = Path(self.temp_dir.name) / f"{session_id}.json"
-        session_path.write_text(json.dumps({
-            "messages": [{"role": "assistant", "content": content}]
-        }))
+    def test_unclosed_tool_call_keeps_only_the_safe_prefix(self):
+        for index, opening in enumerate((
+            "<tool_call>",
+            "&lt;tool_call&gt;",
+            "&amp;lt;tool_call&amp;gt;",
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>",
+        )):
+            with self.subTest(opening=opening):
+                session_id = f"s-unclosed-tool-call-{index}"
+                content = f"Useful answer. {opening}{{\"name\":\"navigate\"}}"
+                session_path = Path(self.temp_dir.name) / f"{session_id}.json"
+                session_path.write_text(json.dumps({
+                    "messages": [{"role": "assistant", "content": content}]
+                }))
 
-        with patch.dict(os.environ, {"UNCHAINED_SESSIONS_DIR": self.temp_dir.name}):
-            history, found = web._read_trial_history(session_id)
+                with patch.dict(os.environ, {"UNCHAINED_SESSIONS_DIR": self.temp_dir.name}):
+                    history, found = web._read_trial_history(session_id)
 
-        self.assertTrue(found)
-        self.assertEqual(history, [])
-        self.assertEqual(
-            published_results._extract_visible_messages({
-                "messages": [{"role": "assistant", "content": content}]
-            }),
-            [],
-        )
+                self.assertTrue(found)
+                self.assertEqual(history, [{"role": "assistant", "content": "Useful answer."}])
+                self.assertEqual(
+                    published_results._extract_visible_messages({
+                        "messages": [{"role": "assistant", "content": content}]
+                    }),
+                    [{"role": "assistant", "content": "Useful answer."}],
+                )
 
 
 class TestPublishedResultRouteAuthorization(unittest.IsolatedAsyncioTestCase):

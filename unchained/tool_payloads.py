@@ -25,6 +25,10 @@ _TOOL_CALL_BLOCK_RE = re.compile(
     rf"{_TOOL_CALL_OPEN}.*?{_TOOL_CALL_CLOSE}",
     re.IGNORECASE | re.DOTALL,
 )
+_TOOL_CALL_DANGLING_RE = re.compile(
+    rf"{_XML_LT}\s*/?\s*tool_call\b.*$",
+    re.IGNORECASE | re.DOTALL,
+)
 # DeepSeek can fall back to DSML tool-call markup rather than returning the
 # OpenAI-compatible ``tool_calls`` field. Keep the literal delimiter escaped in
 # source so this matcher remains readable in every editor.
@@ -36,6 +40,10 @@ _DSML_TOOL_CALLS_OPEN = rf"{_XML_LT}\s*{_DSML_PREFIX}tool_calls\b.*?{_XML_GT}"
 _DSML_TOOL_CALLS_CLOSE = rf"{_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_XML_GT}"
 _DSML_TOOL_CALLS_BLOCK_RE = re.compile(
     rf"{_DSML_TOOL_CALLS_OPEN}.*?{_DSML_TOOL_CALLS_CLOSE}",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_TOOL_CALLS_DANGLING_RE = re.compile(
+    rf"{_XML_LT}\s*/?\s*{_DSML_PREFIX}tool_calls\b.*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -50,6 +58,8 @@ def contains_tool_call_wrapper(text: str) -> bool:
 
 
 def strip_tool_call_wrappers(text: str) -> str:
-    """Remove complete raw or escaped XML/DSML tool-call blocks from text."""
+    """Remove complete blocks and truncate text at a dangling tool wrapper."""
     cleaned = _TOOL_CALL_BLOCK_RE.sub(" ", text or "")
-    return _DSML_TOOL_CALLS_BLOCK_RE.sub(" ", cleaned)
+    cleaned = _DSML_TOOL_CALLS_BLOCK_RE.sub(" ", cleaned)
+    cleaned = _TOOL_CALL_DANGLING_RE.sub(" ", cleaned)
+    return _DSML_TOOL_CALLS_DANGLING_RE.sub(" ", cleaned)
