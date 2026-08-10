@@ -21,6 +21,7 @@ from chat_agent_openrouter import (
     _load_hosted_internal_context_configuration,
     _openrouter_user_error,
     _prepare_hosted_context,
+    _recover_deepseek_dsml_tool_calls,
     _resolve_hosted_internal_context_chars,
 )
 
@@ -1188,6 +1189,122 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             forced_final_messages[tool_call_index + 1]["tool_call_id"], "call-1"
         )
+
+    async def test_direct_deepseek_strips_escaped_tool_call_xml(self):
+        payload = '{"name":"navigate","arguments":{"url":"https://example.test"}}'
+        for opening, closing in (
+            ("<tool_call>", "</tool_call>"),
+            ("&lt;tool_call&gt;", "&lt;/tool_call&gt;"),
+            ("&amp;lt;tool_call&amp;gt;", "&amp;lt;/tool_call&amp;gt;"),
+        ):
+            with self.subTest(opening=opening):
+                text = f"Navigation complete. {opening}{payload}{closing}"
+                cleaned = await self.agent._sanitize_user_output(
+                    SimpleNamespace(), "deepseek-v4-flash", text
+                )
+
+                self.assertEqual(cleaned, "Navigation complete.")
+                self.assertNotIn("tool_call", cleaned.lower())
+
+        dsml = (
+            "Still at step 11. "
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+            "document.body.innerText"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+        )
+        cleaned = await self.agent._sanitize_user_output(
+            SimpleNamespace(), "deepseek-v4-flash", dsml
+        )
+
+        self.assertEqual(cleaned, "Still at step 11.")
+        self.assertNotIn("dsml", cleaned.lower())
+        self.assertNotIn("tool_call", cleaned.lower())
+
+    async def test_direct_deepseek_recovers_dsml_tool_call_for_execution(self):
+        session_id = "s-deepseek-dsml"
+        self.agent.sessions[session_id] = []
+        dsml = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+            "document.body.innerText"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"tab_id\" string=\"true\">"
+            "tab-1"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+        )
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": dsml,
+                    "reasoning_content": "Inspect the page.",
+                },
+                "finish_reason": "stop",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        call_model = AsyncMock(side_effect=[tool_response, final_response])
+        execute_tool = AsyncMock(return_value="page text")
+
+        with (
+            patch.object(self.agent, "_call_openrouter", new=call_model),
+            patch.object(self.agent, "_execute_tool", new=execute_tool),
+            patch.object(self.agent, "_sanitize_user_output", new=AsyncMock(return_value="done")),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": session_id,
+                "agent_id": "client-browser",
+                "message": "inspect the page",
+                "model": "deepseek-v4-flash",
+            })
+
+        self.assertEqual(execute_tool.await_count, 1)
+        execute_call = execute_tool.await_args_list[0]
+        self.assertEqual(execute_call.args[1], "js_eval")
+        self.assertEqual(
+            execute_call.args[2],
+            {"expression": "document.body.innerText", "tab_id": "tab-1"},
+        )
+        followup_messages = call_model.await_args_list[1].args[1]
+        recovered = next(
+            message
+            for message in followup_messages
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        self.assertIsNone(recovered["content"])
+        self.assertEqual(recovered["reasoning_content"], "Inspect the page.")
+        self.assertEqual(recovered["tool_calls"][0]["function"]["name"], "js_eval")
+        self.assertEqual(
+            json.loads(recovered["tool_calls"][0]["function"]["arguments"]),
+            {"expression": "document.body.innerText", "tab_id": "tab-1"},
+        )
+
+    def test_dsml_recovery_rejects_unknown_tools(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"unknown_tool\">"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
 
     async def test_deepseek_body_keeps_thinking_consistent(self):
         """DeepSeek thinking mode must be enabled for EVERY turn (including the

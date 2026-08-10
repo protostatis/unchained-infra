@@ -32,6 +32,7 @@ Model options (free tier):
 import argparse
 import asyncio
 from contextvars import ContextVar
+from html import unescape as _html_unescape
 import json
 import math
 import os
@@ -49,6 +50,7 @@ import cloud_tools
 from credit import validate_hosted_context_budget
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
+from tool_payloads import contains_tool_call_wrapper, strip_tool_call_wrappers
 from web_state import canonical_session_tab
 from scheduler_agent import (
     OPENAI_SCHEDULER_TOOLS,
@@ -689,6 +691,133 @@ def _decode_tool_arguments(raw_args) -> dict:
     return {}
 
 
+_DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
+_DSML_TOOL_CALLS_RE = re.compile(
+    rf"<\s*{_DSML_PREFIX}tool_calls\b[^>]*>(?P<body>.*?)"
+    rf"<\s*/\s*{_DSML_PREFIX}tool_calls\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_INVOKE_RE = re.compile(
+    rf"<\s*{_DSML_PREFIX}invoke\b(?P<attrs>[^>]*)>(?P<body>.*?)"
+    rf"<\s*/\s*{_DSML_PREFIX}invoke\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_PARAMETER_RE = re.compile(
+    rf"<\s*{_DSML_PREFIX}parameter\b(?P<attrs>[^>]*)>(?P<value>.*?)"
+    rf"<\s*/\s*{_DSML_PREFIX}parameter\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_ATTRIBUTE_RE = re.compile(
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*"
+    r"(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)')"
+)
+_DSML_INVALID_VALUE = object()
+
+
+def _dsml_attributes(raw: str) -> dict[str, str] | None:
+    """Parse quoted DSML attributes without applying XML parsing to model text."""
+    attrs: dict[str, str] = {}
+    for match in _DSML_ATTRIBUTE_RE.finditer(raw or ""):
+        name = match.group("name").lower()
+        if name in attrs:
+            return None
+        attrs[name] = _html_unescape(match.group("double") or match.group("single") or "")
+    return attrs
+
+
+def _decode_dsml_parameter(attrs: dict[str, str], raw_value: str):
+    """Convert a typed DSML parameter into its JSON-compatible value."""
+    value = _html_unescape(raw_value or "").strip()
+    if attrs.get("string", "").lower() == "true":
+        return value
+    for kind, expected_type in (
+        ("boolean", bool),
+        ("integer", int),
+        ("number", (int, float)),
+        ("object", dict),
+        ("array", list),
+        ("json", object),
+    ):
+        if attrs.get(kind, "").lower() != "true":
+            continue
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return _DSML_INVALID_VALUE
+        if kind == "integer" and isinstance(decoded, bool):
+            return _DSML_INVALID_VALUE
+        if kind == "number" and (isinstance(decoded, bool) or not isinstance(decoded, expected_type)):
+            return _DSML_INVALID_VALUE
+        if kind != "number" and not isinstance(decoded, expected_type):
+            return _DSML_INVALID_VALUE
+        return decoded
+    return value
+
+
+def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
+    """Recover a direct-DeepSeek DSML tool block into OpenAI-style calls.
+
+    DeepSeek documents OpenAI-compatible ``tool_calls``, but V4 Flash can emit
+    its internal DSML form in ``content``. Only known base tools and complete,
+    unambiguous blocks are recovered; everything else remains ordinary content
+    for the existing safe-output sanitizer.
+    """
+    if not isinstance(message, dict) or message.get("tool_calls"):
+        return message
+    content = message.get("content")
+    if not isinstance(content, str):
+        return message
+
+    blocks = list(_DSML_TOOL_CALLS_RE.finditer(content))
+    if not blocks:
+        return message
+    allowed_names = {
+        str(spec.get("function", {}).get("name", ""))
+        for spec in TOOLS
+        if isinstance(spec, dict)
+    }
+    calls: list[dict] = []
+    for block in blocks:
+        invokes = list(_DSML_INVOKE_RE.finditer(block.group("body")))
+        if not invokes:
+            return message
+        for invoke in invokes:
+            invoke_attrs = _dsml_attributes(invoke.group("attrs"))
+            tool_name = (invoke_attrs or {}).get("name", "").strip()
+            if not invoke_attrs or tool_name not in allowed_names:
+                return message
+            args: dict[str, object] = {}
+            for parameter in _DSML_PARAMETER_RE.finditer(invoke.group("body")):
+                parameter_attrs = _dsml_attributes(parameter.group("attrs"))
+                parameter_name = (parameter_attrs or {}).get("name", "").strip()
+                if not parameter_attrs or not parameter_name or parameter_name in args:
+                    return message
+                value = _decode_dsml_parameter(parameter_attrs, parameter.group("value"))
+                if value is _DSML_INVALID_VALUE:
+                    return message
+                args[parameter_name] = value
+            calls.append(
+                {
+                    "id": f"call_dsml_{_uuid_hex()[:24]}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(args, separators=(",", ":")),
+                    },
+                }
+            )
+            if len(calls) > 16:
+                return message
+
+    if not calls:
+        return message
+    recovered = dict(message)
+    # The DSML content is an internal transport payload, not assistant prose.
+    recovered["content"] = None
+    recovered["tool_calls"] = calls
+    return recovered
+
+
 def _ui_tool_name(tool_name: str) -> str:
     """Map function-call tool names to the same UI categories as chat_agent_cli.py."""
     if tool_name.startswith("intel_"):
@@ -1041,8 +1170,7 @@ def _looks_like_internal_tool_payload(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return False
-    lowered = raw.lower()
-    if "<tool_call" in lowered or "</tool_call>" in lowered:
+    if contains_tool_call_wrapper(raw):
         return True
     if re.search(
         r'^\s*\{\s*"?name"?\s*:\s*[^,\n]+,\s*"?arguments"?\s*:\s*\{',
@@ -1061,7 +1189,7 @@ def _strip_internal_tool_payload(text: str) -> str:
     """Best-effort local cleanup of leaked tool-call payload text."""
     cleaned = text or ""
     # Remove explicit tool-call wrappers and JSON fenced blocks first.
-    cleaned = re.sub(r"(?is)<tool_call\b.*?</tool_call>", " ", cleaned)
+    cleaned = strip_tool_call_wrappers(cleaned)
     cleaned = re.sub(r"(?is)```(?:json)?\s*.*?```", " ", cleaned)
     # Remove inline function-call style JSON objects.
     cleaned = re.sub(
@@ -1081,7 +1209,7 @@ def _strip_internal_tool_payload(text: str) -> str:
         if not s:
             continue
         low = s.lower()
-        if "<tool_call" in low or "</tool_call>" in low:
+        if contains_tool_call_wrapper(s):
             continue
         if s in {"{", "}", "[", "]", ",", "```", "```json"}:
             continue
@@ -1888,6 +2016,11 @@ class TrialAgent:
                     choice = response["choices"][0]
                     message = choice["message"]
                     finish_reason = choice.get("finish_reason", "")
+                    if _is_deepseek_model(model) and next_tool_choice != "none":
+                        recovered = _recover_deepseek_dsml_tool_calls(message)
+                        if recovered is not message:
+                            print(f"[{session_id}] Recovered DSML tool call(s) from DeepSeek response")
+                            message = recovered
                     tool_calls = message.get("tool_calls") or []
 
                     messages.append(message)
@@ -3247,6 +3380,11 @@ class LocalOpenRouterCLI:
             choice = response["choices"][0]
             message = choice["message"]
             finish_reason = choice.get("finish_reason", "")
+            if _is_deepseek_model(self.model) and tool_choice != "none":
+                recovered = _recover_deepseek_dsml_tool_calls(message)
+                if recovered is not message:
+                    print("[deepseek] Recovered DSML tool call(s) from response")
+                    message = recovered
             tool_calls = message.get("tool_calls") or []
             self.messages.append(message)
 
