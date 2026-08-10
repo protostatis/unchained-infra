@@ -174,6 +174,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     ("POST", "/internal/credit/submitted", "web_app.handlers.credit_internal:handle_credit_mark_submitted"),
     ("POST", "/internal/credit/settle", "web_app.handlers.credit_internal:handle_credit_settle"),
     ("POST", "/internal/credit/release", "web_app.handlers.credit_internal:handle_credit_release"),
+    ("POST", "/internal/credit/provider-balance", "web_app.handlers.credit_internal:handle_credit_provider_balance"),
     # User-facing credit status
     ("GET", "/web/credit/status", "web_app.handlers.auth_admin:handle_credit_status"),
     ("GET", "/web/credit/status/history", "web_app.handlers.auth_admin:handle_credit_history"),

@@ -33,6 +33,7 @@ import argparse
 import asyncio
 from contextvars import ContextVar
 import json
+import math
 import os
 import re
 import signal
@@ -89,10 +90,88 @@ from reflex import ReflexState, REFLEX_ENABLED
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
 DEFAULT_SERVER = "wss://api.unchainedsky.com"
 _REASONING_REQUIRED_MODELS = frozenset({"google/gemini-3.5-flash-lite"})
 _DEFINITIVE_UNBILLED_HTTP_STATUSES = frozenset({400, 404})
+
+# DeepSeek direct provider
+DEEPSEEK_MODEL_PREFIX = "deepseek-"
+
+# Cache-aware DeepSeek pricing (USD per 1M tokens), from the DeepSeek pricing
+# page (CNY list converted to USD at ~7.1). DeepSeek does not return a dollar
+# cost field, so per-call cost is estimated from the usage token breakdown:
+#   prompt_cache_hit_tokens × hit_price + prompt_cache_miss_tokens × miss_price
+#   + completion_tokens × output_price
+# DeepSeek has announced a price increase, so these defaults include a small
+# margin and can be overridden without a code change via DEEPSEEK_PRICE_JSON:
+#   {"deepseek-v4-flash": {"input_cache_hit_usd_per_1m": 0.003,
+#                          "input_cache_miss_usd_per_1m": 0.15,
+#                          "output_usd_per_1m": 0.30}, ...}
+_DEEPSEEK_PRICE_DEFAULTS: dict[str, dict[str, float]] = {
+    "deepseek-v4-flash": {
+        "input_cache_hit_usd_per_1m": 0.003,
+        "input_cache_miss_usd_per_1m": 0.15,
+        "output_usd_per_1m": 0.30,
+    },
+    "deepseek-v4-pro": {
+        "input_cache_hit_usd_per_1m": 0.004,
+        "input_cache_miss_usd_per_1m": 0.45,
+        "output_usd_per_1m": 0.90,
+    },
+}
+
+
+def _is_deepseek_model(model: str) -> bool:
+    """Return whether a model ID routes through the DeepSeek direct API."""
+    return (model or "").strip().startswith(DEEPSEEK_MODEL_PREFIX)
+
+
+def _parse_deepseek_price_json(raw: str) -> dict[str, dict[str, float]]:
+    """Parse the optional DEEPSEEK_PRICE_JSON env override.
+
+    Per-model overrides are deep-merged over the defaults (partial overrides
+    never zero out unset prices). Prices must be finite, non-negative numbers;
+    invalid entries fall back to the model default rather than silently
+    under-pricing the estimate.
+    """
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    table: dict[str, dict[str, float]] = {}
+    defaults = _DEEPSEEK_PRICE_DEFAULTS
+    for model, prices in data.items():
+        if not isinstance(prices, dict):
+            continue
+        base = dict(defaults.get(str(model), {}))
+        changed = False
+        for key in ("input_cache_hit_usd_per_1m", "input_cache_miss_usd_per_1m",
+                    "output_usd_per_1m"):
+            if key not in prices:
+                continue
+            try:
+                value = float(prices[key])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value) or value < 0:
+                continue
+            base[key] = value
+            changed = True
+        if changed:
+            table[str(model)] = base
+    return table
+
+
+def _deepseek_price_table() -> dict[str, dict[str, float]]:
+    table = dict(_DEEPSEEK_PRICE_DEFAULTS)
+    table.update(_parse_deepseek_price_json(os.environ.get("DEEPSEEK_PRICE_JSON", "")))
+    return table
 
 # When running inside Docker, override these via env vars:
 #   RELAY_HOST=relay  RELAY_PORT=8765
@@ -856,6 +935,71 @@ def _extract_openrouter_usage(payload: dict) -> dict:
     }
 
 
+def _extract_deepseek_usage(payload: dict, model: str = "") -> dict:
+    """Extract cache-aware usage + estimated cost from a DeepSeek response.
+
+    DeepSeek never returns a dollar cost field, only tokens. The prompt token
+    breakdown (``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``) is
+    priced differently, so the estimate uses the per-model price table from
+    ``_deepseek_price_table()``. When the breakdown is absent (older responses),
+    all prompt tokens are treated as cache misses (conservative).
+    """
+    usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+
+    prompt_tokens = max(0, _coerce_int(usage.get("prompt_tokens", 0), 0))
+    hit_tokens = max(0, _coerce_int(usage.get("prompt_cache_hit_tokens", 0), 0))
+    miss_tokens = max(0, _coerce_int(usage.get("prompt_cache_miss_tokens", 0), 0))
+    completion_tokens = max(0, _coerce_int(usage.get("completion_tokens", 0), 0))
+    if hit_tokens <= 0 and miss_tokens <= 0:
+        # Older responses without the breakdown: attribute all prompt tokens as
+        # cache misses (conservative).
+        miss_tokens = prompt_tokens
+    if hit_tokens + miss_tokens > prompt_tokens:
+        # Defensive: never bill more prompt tokens than were reported.
+        hit_tokens = min(hit_tokens, prompt_tokens)
+        miss_tokens = min(miss_tokens, prompt_tokens)
+        if hit_tokens + miss_tokens > prompt_tokens:
+            excess = hit_tokens + miss_tokens - prompt_tokens
+            hit_tokens = max(0, hit_tokens - excess)
+    if hit_tokens + miss_tokens < prompt_tokens:
+        # Unaccounted prompt tokens are priced as cache misses (conservative).
+        miss_tokens += prompt_tokens - (hit_tokens + miss_tokens)
+    total_tokens = max(
+        0, _coerce_int(usage.get("total_tokens", 0), 0)
+    )
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+
+    prices = _deepseek_price_table().get((model or "").strip(), {})
+    hit_price = _coerce_float(prices.get("input_cache_hit_usd_per_1m", 0.0), 0.0)
+    miss_price = _coerce_float(prices.get("input_cache_miss_usd_per_1m", 0.0), 0.0)
+    out_price = _coerce_float(prices.get("output_usd_per_1m", 0.0), 0.0)
+
+    cost_usd = 0.0
+    if (hit_price or miss_price or out_price) and (
+        hit_tokens or miss_tokens or completion_tokens
+    ):
+        cost_usd = (
+            (hit_tokens / 1_000_000.0) * hit_price
+            + (miss_tokens / 1_000_000.0) * miss_price
+            + (completion_tokens / 1_000_000.0) * out_price
+        )
+
+    return {
+        "openrouter_id": str(payload.get("id", "")),
+        "prompt_tokens": max(0, prompt_tokens),
+        "completion_tokens": max(0, completion_tokens),
+        "total_tokens": max(0, total_tokens),
+        "prompt_cache_hit_tokens": max(0, hit_tokens),
+        "prompt_cache_miss_tokens": max(0, miss_tokens),
+        "cost_usd": round(max(0.0, cost_usd), 9),
+        "estimated_cost_usd": round(max(0.0, cost_usd), 9),
+        "cost_present": cost_usd > 0.0,
+    }
+
+
 def _looks_like_internal_tool_payload(text: str) -> bool:
     """Detect accidental user-visible tool-call payloads."""
     raw = (text or "").strip()
@@ -933,6 +1077,7 @@ class TrialAgent:
         self.server = server
         self.model = model
         self.openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        self.deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
         self.ws = None
         # session_id → list of messages (in-memory cache; backed by disk)
         self.sessions: dict[str, list] = {}
@@ -941,6 +1086,8 @@ class TrialAgent:
         self.active_req_ids: dict[str, str] = {}
         # Per-session billing run IDs (set from ws_msg["billing_run_id"])
         self._session_billing_runs: dict[str, str] = {}
+        # DeepSeek balance snapshot reporter (owned by run())
+        self._balance_task: asyncio.Task | None = None
 
     @property
     def _credit_base_url(self) -> str:
@@ -1042,6 +1189,8 @@ class TrialAgent:
         total_tokens: int = 0,
         cost_absent: bool = False,
         provider_cost_micro_usd: int = 0,
+        prompt_cache_hit_tokens: int = 0,
+        prompt_cache_miss_tokens: int = 0,
     ) -> dict | None:
         """Call the credit settle endpoint. Returns settlement dict or None."""
         token = self._credit_service_token()
@@ -1056,6 +1205,8 @@ class TrialAgent:
             "total_tokens": total_tokens,
             "cost_absent": cost_absent,
             "provider_cost_micro_usd": provider_cost_micro_usd,
+            "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
+            "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
         }
         try:
             resp = await client.post(
@@ -1310,53 +1461,62 @@ class TrialAgent:
             print(f"Intervention runtime: disabled ({reason})")
 
     async def run(self):
-        while True:
-            try:
-                await self.connect()
-                async for raw in self.ws:
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if msg.get("type") == "user_message":
-                        sid = msg.get("session_id", "")
-                        # Store billing run ID for credit accounting
-                        billing_rid = str(msg.get("billing_run_id", "")).strip()
-                        if billing_rid:
-                            self._session_billing_runs[sid] = billing_rid
-                        req_id = ""
-                        # Cancel any existing task for this session before starting a new one
-                        if sid:
-                            old_task = self.active_tasks.get(sid)
-                            if old_task and not old_task.done():
-                                old_task.cancel()
-                                print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
-                            req_id = str(msg.get("req_id", "") or "")
-                            self.active_req_ids[sid] = req_id
-                        token = _task_req_id.set(req_id)
+        # Periodic DeepSeek account-balance snapshot for cost reconciliation.
+        self._balance_task = None
+        if self.deepseek_key:
+            self._balance_task = asyncio.create_task(self._deepseek_balance_loop())
+        try:
+            while True:
+                try:
+                    await self.connect()
+                    async for raw in self.ws:
                         try:
-                            task = asyncio.create_task(self._handle_message(msg))
-                        finally:
-                            _task_req_id.reset(token)
-                        if sid:
-                            self.active_tasks[sid] = task
-                            task.add_done_callback(
-                                lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
-                            )
-                    elif msg.get("type") == "cancel":
-                        sid = msg.get("session_id", "")
-                        task = self.active_tasks.get(sid)
-                        if task and not task.done():
-                            req_id = self.active_req_ids.get(sid, "")
-                            task.cancel()
-                            print(f"[{sid}] Cancelled")
-                            await self._send(sid, {"type": "cancelled", "req_id": req_id})
-                            await self._send(sid, {"type": "done", "req_id": req_id})
-            except websockets.ConnectionClosed:
-                print("Connection lost. Reconnecting in 3s...")
-                await asyncio.sleep(3)
-            except Exception as e:
-                print(f"Error: {e}. Reconnecting in 5s...")
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if msg.get("type") == "user_message":
+                            sid = msg.get("session_id", "")
+                            # Store billing run ID for credit accounting
+                            billing_rid = str(msg.get("billing_run_id", "")).strip()
+                            if billing_rid:
+                                self._session_billing_runs[sid] = billing_rid
+                            req_id = ""
+                            # Cancel any existing task for this session before starting a new one
+                            if sid:
+                                old_task = self.active_tasks.get(sid)
+                                if old_task and not old_task.done():
+                                    old_task.cancel()
+                                    print(f"[{sid}] Auto-cancelled previous task (new message arrived)")
+                                req_id = str(msg.get("req_id", "") or "")
+                                self.active_req_ids[sid] = req_id
+                            token = _task_req_id.set(req_id)
+                            try:
+                                task = asyncio.create_task(self._handle_message(msg))
+                            finally:
+                                _task_req_id.reset(token)
+                            if sid:
+                                self.active_tasks[sid] = task
+                                task.add_done_callback(
+                                    lambda t, s=sid, r=req_id: self._finish_task(s, r, t)
+                                )
+                        elif msg.get("type") == "cancel":
+                            sid = msg.get("session_id", "")
+                            task = self.active_tasks.get(sid)
+                            if task and not task.done():
+                                req_id = self.active_req_ids.get(sid, "")
+                                task.cancel()
+                                print(f"[{sid}] Cancelled")
+                                await self._send(sid, {"type": "cancelled", "req_id": req_id})
+                                await self._send(sid, {"type": "done", "req_id": req_id})
+                except websockets.ConnectionClosed:
+                    print("Connection lost. Reconnecting in 3s...")
+                    await asyncio.sleep(3)
+                except Exception as e:
+                    print(f"Error: {e}. Reconnecting in 5s...")
+        finally:
+            task = getattr(self, "_balance_task", None)
+            if task and not task.done():
+                task.cancel()
                 await asyncio.sleep(5)
 
     def _finish_task(self, session_id: str, req_id: str, task: asyncio.Task):
@@ -1366,6 +1526,70 @@ class TrialAgent:
             getattr(self, "_session_billing_runs", {}).pop(session_id, None)
             if self.active_req_ids.get(session_id) == req_id:
                 self.active_req_ids.pop(session_id, None)
+
+    async def _deepseek_balance_loop(self):
+        """Periodically snapshot the DeepSeek account balance to the server.
+
+        The server stores these snapshots and reconciles the realized balance
+        delta against ledger-estimated spend to detect price drift. No-op when
+        the DeepSeek key is not configured.
+        """
+        if not self.deepseek_key:
+            return
+        interval = max(
+            60, int(os.environ.get("DEEPSEEK_BALANCE_REPORT_INTERVAL_SECONDS", "600"))
+        )
+        consecutive_failures = 0
+        while True:
+            try:
+                await self._report_deepseek_balance()
+                consecutive_failures = 0
+            except Exception as e:
+                consecutive_failures += 1
+                print(f"[deepseek] balance report failed: {e}")
+            # Back off up to 8x on persistent failures (DeepSeek unreachable)
+            # so the reporter does not hammer a down endpoint every interval.
+            delay = interval * min(2 ** consecutive_failures, 8)
+            await asyncio.sleep(delay)
+
+    async def _report_deepseek_balance(self):
+        """Query GET /user/balance and POST the snapshot to the server."""
+        token = self._hosted_service_token()
+        if not token:
+            return
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://api.deepseek.com/user/balance",
+                headers={"Authorization": f"Bearer {self.deepseek_key}"},
+                timeout=httpx.Timeout(15.0),
+            )
+            if not resp.is_success:
+                print(f"[deepseek] balance query failed: {resp.status_code}")
+                return
+            data = resp.json()
+            if not isinstance(data, dict):
+                return
+            snapshots = [
+                {
+                    "provider": "deepseek",
+                    "currency": str(info.get("currency", "")),
+                    "total_balance": str(info.get("total_balance", "")),
+                    "is_available": bool(data.get("is_available", False)),
+                    "snapshot_at": time.time(),
+                }
+                for info in (data.get("balance_infos") or [])
+                if isinstance(info, dict) and info.get("currency")
+            ]
+            if not snapshots:
+                return
+            post = await client.post(
+                f"{self._credit_base_url}/internal/credit/provider-balance",
+                json={"snapshots": snapshots},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx.Timeout(10.0),
+            )
+            if not post.is_success:
+                print(f"[deepseek] balance snapshot POST failed: {post.status_code}")
 
     async def _send(self, session_id: str, event: dict):
         event["session_id"] = session_id
@@ -1382,10 +1606,15 @@ class TrialAgent:
         user_id: str,
         model: str,
         payload: dict,
+        usage: dict | None = None,
     ):
         if not session_id or not user_id:
             return
-        usage = _extract_openrouter_usage(payload)
+        if usage is None:
+            if _is_deepseek_model(model):
+                usage = _extract_deepseek_usage(payload, model)
+            else:
+                usage = _extract_openrouter_usage(payload)
         await self._send(
             session_id,
             {
@@ -2081,13 +2310,18 @@ class TrialAgent:
         reasoning: bool = True,
     ) -> dict:
         effective_model = model or self.model
+        provider = "deepseek" if _is_deepseek_model(effective_model) else "openrouter"
         body: dict = {
             "model": effective_model,
             "messages": messages,
             "max_tokens": 4096,
             "temperature": 0.2,
         }
-        if not reasoning and effective_model not in _REASONING_REQUIRED_MODELS:
+        if provider == "deepseek":
+            # DeepSeek uses `thinking` (not OpenRouter's `reasoning`).
+            if not reasoning:
+                body["thinking"] = {"type": "disabled"}
+        elif not reasoning and effective_model not in _REASONING_REQUIRED_MODELS:
             body["reasoning"] = {"enabled": False}
         if tool_choice == "none":
             body["tool_choice"] = "none"
@@ -2225,7 +2459,10 @@ class TrialAgent:
                 raise
             # --- Credit settle after success ---
             if reserved_call_id and credit_client:
-                usage_data = _extract_openrouter_usage(data)
+                if provider == "deepseek":
+                    usage_data = _extract_deepseek_usage(data, effective_model)
+                else:
+                    usage_data = _extract_openrouter_usage(data)
                 cost_usd = usage_data.get("cost_usd", 0)
                 cost_present = bool(usage_data.get("cost_present", False))
                 est_cost_usd = usage_data.get("estimated_cost_usd", 0)
@@ -2260,6 +2497,12 @@ class TrialAgent:
                         total_tokens=usage_data.get("total_tokens", 0),
                         cost_absent=cost_absent,
                         provider_cost_micro_usd=provider_cost_micro,
+                        prompt_cache_hit_tokens=usage_data.get(
+                            "prompt_cache_hit_tokens", 0,
+                        ),
+                        prompt_cache_miss_tokens=usage_data.get(
+                            "prompt_cache_miss_tokens", 0,
+                        ),
                     )
                     if settlement:
                         break
@@ -2288,31 +2531,38 @@ class TrialAgent:
                 except Exception:
                     pass
 
-        usage = _extract_openrouter_usage(data)
+        if provider == "deepseek":
+            usage = _extract_deepseek_usage(data, effective_model)
+        else:
+            usage = _extract_openrouter_usage(data)
         usage_log = (
             f"model={body.get('model', self.model)} "
             f"prompt_tokens={usage.get('prompt_tokens', 0)} "
             f"completion_tokens={usage.get('completion_tokens', 0)} "
             f"total_tokens={usage.get('total_tokens', 0)} "
+            f"cache_hit={usage.get('prompt_cache_hit_tokens', 0)} "
+            f"cache_miss={usage.get('prompt_cache_miss_tokens', 0)} "
             f"cost_usd={float(usage.get('cost_usd', 0.0)):.9f} "
             f"estimated_cost_usd={float(usage.get('estimated_cost_usd', 0.0)):.9f}"
         )
+        provider_label = "deepseek" if provider == "deepseek" else "openrouter"
         if session_id:
-            print(f"[{session_id}] OpenRouter usage: {usage_log}")
+            print(f"[{session_id}] {provider_label} usage: {usage_log}")
         else:
-            print(f"[openrouter] usage: {usage_log}")
+            print(f"[{provider_label}] usage: {usage_log}")
         try:
             await self._emit_openrouter_usage_event(
                 session_id=session_id,
                 user_id=user_id,
                 model=body.get("model", self.model),
                 payload=data,
+                usage=usage,
             )
         except Exception as e:
             if session_id:
-                print(f"[{session_id}] Failed to emit OpenRouter usage event: {e}")
+                print(f"[{session_id}] Failed to emit {provider_label} usage event: {e}")
             else:
-                print(f"[openrouter] Failed to emit usage event: {e}")
+                print(f"[{provider_label}] Failed to emit usage event: {e}")
         return data
 
     async def _do_openrouter_call(
@@ -2324,6 +2574,14 @@ class TrialAgent:
         *,
         allow_unmetered_retries: bool = False,
     ) -> dict:
+        if _is_deepseek_model(effective_model):
+            return await self._do_deepseek_call(
+                client,
+                body,
+                effective_model,
+                session_id,
+                allow_unmetered_retries=allow_unmetered_retries,
+            )
         _FALLBACK_MODEL = os.environ.get(
             "OPENROUTER_RATE_RAMP_FALLBACK_MODEL",
             self.model,
@@ -2391,6 +2649,53 @@ class TrialAgent:
                     data = resp.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter provider error: {err_msg}")
+        return data
+
+    async def _do_deepseek_call(
+        self,
+        client: httpx.AsyncClient,
+        body: dict,
+        effective_model: str,
+        session_id: str = "",
+        *,
+        allow_unmetered_retries: bool = False,
+    ) -> dict:
+        """Call the DeepSeek direct API (OpenAI-compatible chat completions)."""
+        if not self.deepseek_key:
+            raise RuntimeError(
+                "DeepSeek API key is not configured (set DEEPSEEK_API_KEY)."
+            )
+        _RETRY_CODES = (500, 502, 503)
+        headers = {
+            "Authorization": f"Bearer {self.deepseek_key}",
+            "Content-Type": "application/json",
+        }
+        resp = await client.post(
+            DEEPSEEK_URL, json=body, headers=headers,
+            timeout=httpx.Timeout(10.0, read=300.0),
+        )
+        # Retry on 500/502/503 for unbilled (local CLI) requests. Hosted
+        # requests never reuse one reservation for multiple provider attempts.
+        if allow_unmetered_retries and resp.status_code in _RETRY_CODES:
+            for attempt in range(1, 4):
+                delay = 2 * attempt
+                print(f"[deepseek] {resp.status_code} — retry {attempt}/3 after {delay}s")
+                await asyncio.sleep(delay)
+                resp = await client.post(
+                    DEEPSEEK_URL, json=body, headers=headers,
+                    timeout=httpx.Timeout(10.0, read=300.0),
+                )
+                if resp.status_code not in _RETRY_CODES:
+                    break
+        if not resp.is_success:
+            print(f"[deepseek] {resp.status_code} error: {resp.text[:400]}")
+            resp.raise_for_status()
+        data = resp.json()
+        if "choices" not in data:
+            err_msg = data.get("error", {})
+            if isinstance(err_msg, dict):
+                err_msg = err_msg.get("message", str(data)[:200])
+            raise RuntimeError(f"DeepSeek provider error: {err_msg}")
         return data
 
     async def _execute_tool(
@@ -3087,8 +3392,11 @@ def main():
     )
     args = parser.parse_args()
 
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        print("ERROR: OPENROUTER_API_KEY env var not set.", file=sys.stderr)
+    if not os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("DEEPSEEK_API_KEY"):
+        print(
+            "ERROR: neither OPENROUTER_API_KEY nor DEEPSEEK_API_KEY env var is set.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.local_cli:

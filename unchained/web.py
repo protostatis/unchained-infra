@@ -1239,9 +1239,28 @@ _LOCAL_AGENT_MODEL_PREFIXES = (
 
 
 def _is_openrouter_model(model: str) -> bool:
-    """Return whether a model ID routes through the OpenRouter trial agent."""
+    """Return whether a model ID routes through the hosted trial agent.
+
+    Covers the OpenRouter lane (slash-form IDs) and the DeepSeek direct lane
+    (slash-free ``deepseek-*`` IDs), which share the same trial agent + credit
+    ledger. Kept as one predicate so status/preview/restore paths treat both
+    providers as hosted; use ``_is_deepseek_model`` for provider-specific
+    behavior (e.g. no silent free-model switch).
+    """
     value = (model or "").strip()
-    return "/" in value and not value.startswith(_LOCAL_AGENT_MODEL_PREFIXES)
+    return ("/" in value or value.startswith("deepseek-")) and not value.startswith(
+        _LOCAL_AGENT_MODEL_PREFIXES
+    )
+
+
+def _is_deepseek_model(model: str) -> bool:
+    """Return whether a model ID routes through the DeepSeek direct API."""
+    return (model or "").strip().startswith("deepseek-")
+
+
+def _is_hosted_model(model: str) -> bool:
+    """Return whether a model ID routes through the hosted trial agent."""
+    return _is_openrouter_model(model) or _is_deepseek_model(model)
 
 
 def _coerce_float(value, default: float = 0.0) -> float:
@@ -2615,6 +2634,8 @@ async def _on_startup(app_: web.Application):
     _headless_watchdog_task = _state.headless_watchdog_task
     # Credit stale-run sweep finalizes unresolved reservations after crashes.
     _state.credit_sweep_task = asyncio.create_task(_credit_stale_sweep_loop())
+    # Provider cost metering + pricing-drift reconciliation.
+    _state.credit_meter_task = asyncio.create_task(_provider_cost_metering_loop())
     # Financial workspace outbox consumer + sweeper (feature-flagged).
     if _fin_workspace is not None:
         _state.fin_workspace_effect_task = asyncio.create_task(_fin_workspace_effects_loop())
@@ -2643,6 +2664,129 @@ async def _credit_stale_sweep_loop():
         pass
 
 
+async def _provider_cost_metering_loop():
+    """Near-realtime provider cost metering + pricing-drift reconciliation.
+
+    Metering: every check interval, log the aggregate cache-aware token usage
+    and settled estimated cost from the credit ledger (10-minute window lag).
+
+    Reconciliation: compare the realized provider balance delta (snapshots
+    posted by the hosted worker from GET /user/balance) against the ledger's
+    summed estimated spend, throttled to a configurable interval. When the
+    provider charged us more than our price table estimated, log a warning —
+    the signal that DEEPSEEK_PRICE_JSON (or the OpenRouter estimate) is stale.
+    """
+    import os as _os
+    check_interval = max(
+        60, int(_os.environ.get("CREDIT_METER_INTERVAL_SECONDS", "600"))
+    )
+    reconcile_min_interval = max(
+        300, int(_os.environ.get("CREDIT_RECONCILE_MIN_INTERVAL_SECONDS", "21600"))
+    )
+    drift_threshold = max(
+        0.0,
+        float(_os.environ.get("CREDIT_RECONCILE_DRIFT_THRESHOLD_PERCENT", "10")),
+    )
+    providers = tuple(
+        p.strip()
+        for p in _os.environ.get("CREDIT_RECONCILE_PROVIDERS", "deepseek").split(",")
+        if p.strip()
+    )
+    if not providers:
+        return
+    last_reconciled: dict[str, float] = {}
+    last_meter_ts = time.time()
+    try:
+        from credit import CreditLedger
+        ledger = await asyncio.to_thread(CreditLedger, db_path=_auth.db_path)
+        while True:
+            await asyncio.sleep(check_interval)
+            now = time.time()
+            try:
+                for provider in providers:
+                    meter = await asyncio.to_thread(
+                        ledger.provider_usage_since, last_meter_ts, provider
+                    )
+                    if meter.get("total_tokens", 0) > 0:
+                        log.info(
+                            "[credit-meter] %s last %ds: cache_miss=%d cache_hit=%d "
+                            "completion=%d total=%d est_cost_usd=%.4f",
+                            provider,
+                            int(now - last_meter_ts),
+                            meter.get("prompt_cache_miss_tokens", 0),
+                            meter.get("prompt_cache_hit_tokens", 0),
+                            meter.get("completion_tokens", 0),
+                            meter.get("total_tokens", 0),
+                            (meter.get("estimated_cost_micro_usd", 0) / 1_000_000.0),
+                        )
+                last_meter_ts = now
+            except Exception as e:
+                log.warning("[credit-meter] metering error: %s", e)
+            for provider in providers:
+                try:
+                    latest = await asyncio.to_thread(
+                        ledger.latest_provider_balance_snapshot, provider
+                    )
+                    if not latest:
+                        continue
+                    if now - float(latest.get("snapshot_at", 0)) > 48 * 3600:
+                        # Snapshots are stale — the worker is likely not
+                        # reporting. Skip rather than reconcile stale data.
+                        continue
+                    if now - last_reconciled.get(provider, 0) < reconcile_min_interval:
+                        continue
+                    report = await asyncio.to_thread(
+                        ledger.provider_cost_reconciliation, provider
+                    )
+                    last_reconciled[provider] = now
+                    if report.get("stale"):
+                        log.info(
+                            "[credit-reconcile] %s: %s",
+                            provider, report.get("reason", "stale"),
+                        )
+                        continue
+                    if not report.get("usable_segments"):
+                        # Every snapshot segment was a top-up/grant (or no
+                        # spend). A 0.00% drift here is meaningless — do not
+                        # let it mask a stale price table.
+                        log.warning(
+                            "[credit-reconcile] %s: no usable spend window "
+                            "(all segments top-ups/grants, topup_segments=%d); "
+                            "estimates could not be verified this window.",
+                            provider, report.get("topup_segments", 0),
+                        )
+                        continue
+                    drift = report.get("drift_percent", 0.0)
+                    log.info(
+                        "[credit-reconcile] %s: actual_spend=$%.4f "
+                        "estimated_spend=$%.4f drift=%.2f%% (balance %.2f -> %.2f)",
+                        provider,
+                        report.get("actual_spend_usd", 0.0),
+                        report.get("estimated_spend_usd", 0.0),
+                        drift,
+                        report.get("first_balance_usd", 0.0),
+                        report.get("last_balance_usd", 0.0),
+                    )
+                    if report.get("balance_increased"):
+                        log.warning(
+                            "[credit-reconcile] %s balance increased between "
+                            "snapshots; delta unusable (possible top-up) — "
+                            "estimates cannot be verified this window.",
+                            provider,
+                        )
+                    elif drift > drift_threshold:
+                        log.warning(
+                            "[credit-reconcile] %s drift %.2f%% exceeds "
+                            "threshold %.2f%% — provider price table may be "
+                            "stale; update the price config for %s.",
+                            provider, drift, drift_threshold, provider,
+                        )
+                except Exception as e:
+                    log.warning("[credit-reconcile] %s error: %s", provider, e)
+    except asyncio.CancelledError:
+        pass
+
+
 async def _on_cleanup(app_: web.Application):
     del app_
     global _stale_tab_task, _gemini_cleanup_task, _headless_watchdog_task
@@ -2654,6 +2798,8 @@ async def _on_cleanup(app_: web.Application):
         _state.headless_watchdog_task.cancel()
     if getattr(_state, "credit_sweep_task", None):
         _state.credit_sweep_task.cancel()
+    if getattr(_state, "credit_meter_task", None):
+        _state.credit_meter_task.cancel()
     if getattr(_state, "fin_workspace_effect_task", None):
         _state.fin_workspace_effect_task.cancel()
     if getattr(_state, "fin_workspace_sweep_task", None):
@@ -2664,6 +2810,7 @@ async def _on_cleanup(app_: web.Application):
     _state.gemini_cleanup_task = None
     _state.headless_watchdog_task = None
     _state.credit_sweep_task = None
+    _state.credit_meter_task = None
     _state.fin_workspace_effect_task = None
     _state.fin_workspace_sweep_task = None
     _state.fin_workspace_runtime_task = None

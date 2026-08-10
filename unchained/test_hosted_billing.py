@@ -875,5 +875,256 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent._hosted_service_token(), "")
 
 
+class DeepSeekCostTests(unittest.TestCase):
+    """DeepSeek direct provider detection + cache-aware cost estimation."""
+
+    def setUp(self):
+        self._saved_env = {
+            k: os.environ.get(k, "__UNSET__")
+            for k in ("DEEPSEEK_API_KEY", "DEEPSEEK_PRICE_JSON")
+        }
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v == "__UNSET__":
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_deepseek_model_detection(self):
+        from chat_agent_openrouter import _is_deepseek_model
+        self.assertTrue(_is_deepseek_model("deepseek-v4-flash"))
+        self.assertTrue(_is_deepseek_model("deepseek-v4-pro"))
+        self.assertFalse(_is_deepseek_model("google/gemini-3.1-flash-lite"))
+        self.assertFalse(_is_deepseek_model(""))
+
+    def test_extract_deepseek_usage_cache_aware(self):
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "id": "ds-1",
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 900_000,
+                "prompt_cache_miss_tokens": 100_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            },
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # 0.9M×$0.003 + 0.1M×$0.15 + 0.1M×$0.30 per 1M tokens
+        expected = (
+            0.9 * 0.003 + 0.1 * 0.15 + 0.1 * 0.30
+        )
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["prompt_cache_hit_tokens"], 900_000)
+        self.assertEqual(usage["prompt_cache_miss_tokens"], 100_000)
+        self.assertTrue(usage["cost_present"])
+
+    def test_extract_deepseek_usage_falls_back_to_all_miss(self):
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # No breakdown → all prompt tokens billed as cache miss (conservative).
+        expected = 1.0 * 0.15 + 0.1 * 0.30
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["prompt_cache_miss_tokens"], 1_000_000)
+
+    def test_extract_deepseek_usage_price_json_override(self):
+        from chat_agent_openrouter import _extract_deepseek_usage
+        os.environ["DEEPSEEK_PRICE_JSON"] = json.dumps({
+            "deepseek-v4-flash": {
+                "input_cache_hit_usd_per_1m": 0.01,
+                "input_cache_miss_usd_per_1m": 1.00,
+                "output_usd_per_1m": 2.00,
+            }
+        })
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 500_000,
+                "prompt_cache_miss_tokens": 500_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        expected = 0.5 * 0.01 + 0.5 * 1.00 + 0.1 * 2.00
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+
+    def test_price_json_partial_override_keeps_other_rates(self):
+        """A partial override must not silently zero out unset prices."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        os.environ["DEEPSEEK_PRICE_JSON"] = json.dumps({
+            "deepseek-v4-flash": {"output_usd_per_1m": 2.00}
+        })
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 500_000,
+                "prompt_cache_miss_tokens": 500_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # Defaults for hit/miss are retained: 0.003 / 0.15.
+        expected = 0.5 * 0.003 + 0.5 * 0.15 + 0.1 * 2.00
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+
+    def test_extract_deepseek_usage_prices_unaccounted_remainder_as_miss(self):
+        """If hit+miss < prompt_tokens, the remainder is billed as cache miss."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 400_000,
+                "prompt_cache_miss_tokens": 400_000,
+                "completion_tokens": 0,
+                "total_tokens": 1_000_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        # 400k hit, 600k miss (200k unaccounted priced as miss).
+        expected = 0.4 * 0.003 + 0.6 * 0.15
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["prompt_cache_miss_tokens"], 600_000)
+
+    def test_pro_uses_pro_price_tier(self):
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 1_000_000,
+                "prompt_cache_miss_tokens": 0,
+                "completion_tokens": 1_000_000,
+                "total_tokens": 2_000_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v4-pro")
+        expected = 1.0 * 0.004 + 0.0 + 1.0 * 0.90
+        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+
+    def test_unknown_deepseek_model_reports_no_cost(self):
+        """A model with no price entry reports cost_present=False so the
+        ledger falls back to the conservative full-reservation settle."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 1_000_000,
+                "completion_tokens": 100_000,
+                "total_tokens": 1_100_000,
+            }
+        }
+        usage = _extract_deepseek_usage(payload, "deepseek-v9-unknown")
+        self.assertEqual(usage["cost_usd"], 0.0)
+        self.assertFalse(usage["cost_present"])
+
+
+class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
+    """DeepSeek direct API call routing (URL/key/headers, body mapping)."""
+
+    def setUp(self):
+        self._saved = {
+            k: os.environ.get(k, "__UNSET__")
+            for k in ("DEEPSEEK_API_KEY", "HOSTED_AGENT_SERVICE_TOKEN")
+        }
+        os.environ["DEEPSEEK_API_KEY"] = "sk-ds-test"
+        os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "hosted-worker-test-token"
+        self.agent = TrialAgent(
+            api_key="trial-websocket-key",
+            agent_id="trial-agent",
+            server="ws://web:8080",
+            model="deepseek-v4-flash",
+        )
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v == "__UNSET__":
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    async def test_do_deepseek_call_hits_deepseek_url_with_key(self):
+        from chat_agent_openrouter import DEEPSEEK_URL
+        client = SimpleNamespace(post=AsyncMock())
+        client.post.return_value = SimpleNamespace(
+            is_success=True,
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+        data = await self.agent._do_deepseek_call(
+            client, {"model": "deepseek-v4-flash", "messages": []}, "deepseek-v4-flash"
+        )
+        self.assertIn("choices", data)
+        args, kwargs = client.post.call_args
+        self.assertEqual(args[0], DEEPSEEK_URL)
+        self.assertEqual(
+            kwargs["headers"]["Authorization"], "Bearer sk-ds-test"
+        )
+        self.assertNotIn("HTTP-Referer", kwargs["headers"])
+
+    async def test_do_deepseek_call_requires_key(self):
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        self.agent = TrialAgent(
+            api_key="k", agent_id="a", server="ws://web:8080", model="deepseek-v4-flash"
+        )
+        client = SimpleNamespace(post=AsyncMock())
+        with self.assertRaises(RuntimeError):
+            await self.agent._do_deepseek_call(
+                client, {"model": "deepseek-v4-flash"}, "deepseek-v4-flash"
+            )
+
+    async def test_do_openrouter_call_dispatches_to_deepseek(self):
+        client = SimpleNamespace(post=AsyncMock())
+        client.post.return_value = SimpleNamespace(
+            is_success=True,
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+        data = await self.agent._do_openrouter_call(
+            client, {"model": "deepseek-v4-flash"}, "deepseek-v4-flash"
+        )
+        from chat_agent_openrouter import DEEPSEEK_URL
+        args, _ = client.post.call_args
+        self.assertEqual(args[0], DEEPSEEK_URL)
+        self.assertIn("choices", data)
+
+    async def test_deepseek_body_uses_thinking_not_reasoning(self):
+        client = SimpleNamespace(post=AsyncMock())
+        client.post.return_value = SimpleNamespace(
+            is_success=True,
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                          "usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                                    "total_tokens": 2}},
+        )
+        with (
+            patch.object(self.agent, "_do_deepseek_call", new=AsyncMock(return_value={
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            })),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                client,
+                [{"role": "user", "content": "hi"}],
+                model="deepseek-v4-flash",
+                session_id="s-test",
+                user_id="u-test",
+                reasoning=False,
+            )
+            sent = self.agent._do_deepseek_call.call_args[0][1]
+            self.assertEqual(sent["thinking"], {"type": "disabled"})
+            self.assertNotIn("reasoning", sent)
+
+
 if __name__ == "__main__":
     unittest.main()

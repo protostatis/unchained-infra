@@ -120,6 +120,10 @@ HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS: dict[str, tuple[int, i
     # >=256k input-token tier
     "qwen/qwen3.6-plus": (1_300_000, 3_900_000),
     "qwen/qwen3.5-flash-02-23": (65_000, 260_000),
+    # DeepSeek direct — cache-miss input tier (worst case for the hold) and
+    # output rates from the DeepSeek price table (USD per 1M tokens).
+    "deepseek-v4-flash": (150_000, 300_000),
+    "deepseek-v4-pro": (450_000, 900_000),
 }
 
 
@@ -156,6 +160,10 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "google/gemini-3-flash-preview": 300_000,
     "qwen/qwen3.6-plus": 750_000,
     "qwen/qwen3.5-flash-02-23": 250_000,
+    # DeepSeek direct API — paid hosted models. Conservative per-attempt holds
+    # (the worker settles actual cost estimated from cache-aware token usage).
+    "deepseek-v4-flash": 250_000,   # $0.25 hold
+    "deepseek-v4-pro": 1_000_000,   # $1.00 hold (reasoning model, 3x output price)
     # Free models — zero hold (no reservation needed)
     "google/gemma-3-27b-it:free": 0,
     "nvidia/nemotron-3-nano-30b-a3b:free": 0,
@@ -217,6 +225,8 @@ HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
     "qwen/qwen3.6-plus",
     "qwen/qwen3.5-flash-02-23",
     "google/gemini-3-flash-preview",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
     *HOSTED_FREE_MODEL_DEFAULTS,
 )
 _MODEL_ID_EXTRA_CHARS = frozenset("._-/:+@")
@@ -264,6 +274,52 @@ def is_openrouter_model_id(model: str) -> bool:
     return all(ch.isalnum() or ch in _MODEL_ID_EXTRA_CHARS for ch in value)
 
 
+_DEEPSEEK_MODEL_PREFIX = "deepseek-"
+
+
+def is_deepseek_model_id(model: str) -> bool:
+    """Return whether *model* is a bounded, syntactically safe DeepSeek direct ID.
+
+    DeepSeek model IDs are slash-free (e.g. ``deepseek-v4-flash``,
+    ``deepseek-v4-pro``) and route through the DeepSeek direct API rather than
+    OpenRouter.
+    """
+    value = str(model or "").strip()
+    if (
+        not value
+        or not value.isascii()
+        or len(value) > HOSTED_MODEL_POLICY_MAX_ID_LENGTH
+        or not value.startswith(_DEEPSEEK_MODEL_PREFIX)
+    ):
+        return False
+    rest = value[len(_DEEPSEEK_MODEL_PREFIX):]
+    return bool(rest) and all(ch.isalnum() or ch in "._-" for ch in rest)
+
+
+def is_hosted_model_id(model: str) -> bool:
+    """Return whether *model* is a valid hosted (OpenRouter or DeepSeek) ID."""
+    return is_openrouter_model_id(model) or is_deepseek_model_id(model)
+
+
+# Provider → model-ID prefix used to scope metering/reconciliation rows.
+_PROVIDER_MODEL_PREFIXES: dict[str, str] = {
+    "deepseek": "deepseek-",
+}
+
+
+def _provider_model_scope(provider: str) -> tuple[str | None, list]:
+    """Return (SQL LIKE pattern, params) scoping usage rows to a provider.
+
+    Providers with a deterministic model-ID prefix (e.g. ``deepseek-``) get a
+    LIKE filter so reconciliation never mixes providers; unknown providers get
+    ``(None, [])`` meaning "all rows".
+    """
+    prefix = _PROVIDER_MODEL_PREFIXES.get(str(provider or "").strip())
+    if prefix:
+        return f"{prefix}%", []
+    return None, []
+
+
 def normalize_hosted_model_ids(
     models,
     *,
@@ -284,8 +340,8 @@ def normalize_hosted_model_ids(
     seen: set[str] = set()
     for raw in models:
         model = str(raw or "").strip()
-        if not is_openrouter_model_id(model):
-            raise ValueError(f"invalid OpenRouter model ID: {model or '<empty>'}")
+        if not is_hosted_model_id(model):
+            raise ValueError(f"invalid hosted model ID: {model or '<empty>'}")
         if model in seen:
             if reject_duplicates:
                 raise ValueError(f"duplicate model ID: {model}")
@@ -298,10 +354,10 @@ def normalize_hosted_model_ids(
         model = str(raw or "").strip()
         if model and model not in required:
             required.append(model)
-    invalid_required = [model for model in required if not is_openrouter_model_id(model)]
+    invalid_required = [model for model in required if not is_hosted_model_id(model)]
     if invalid_required:
         raise ValueError(
-            "invalid required OpenRouter model ID: " + ", ".join(invalid_required)
+            "invalid required hosted model ID: " + ", ".join(invalid_required)
         )
     missing = [model for model in required if model not in seen]
     if missing:
@@ -452,7 +508,7 @@ def is_hosted_model_allowed_for_identity(
 ) -> bool:
     """Apply current admin/non-admin hosted model availability policy."""
     value = str(model or "").strip()
-    if not is_openrouter_model_id(value):
+    if not is_hosted_model_id(value):
         return False
     if is_hosted_admin_identity(core, user_id=user_id, email=email):
         return True
@@ -478,7 +534,7 @@ def is_hosted_model_allowed(
     # production configuration cannot wildcard every provider/model. Unknown
     # hosted models must be named in CREDIT_ADMIN_ALLOWLIST and receive the
     # conservative $1 default hold.
-    if allow_slash_models is True and is_openrouter_model_id(m):
+    if allow_slash_models is True and is_hosted_model_id(m):
         return True
     return False
 
@@ -676,6 +732,8 @@ class CreditLedger:
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     completion_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
+                    prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+                    prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
                     provider_cost_micro_usd INTEGER NOT NULL DEFAULT 0,
                     provider_response_json TEXT DEFAULT '{}',
                     created_at REAL NOT NULL,
@@ -684,6 +742,26 @@ class CreditLedger:
                     FOREIGN KEY (account_id) REFERENCES credit_accounts(account_id)
                 )
             """)
+
+            # Cache-aware token breakdown (DeepSeek direct) — added via ALTER
+            # for pre-existing databases; the CREATE TABLE above includes them
+            # only for fresh installs, so keep the ALTER path authoritative.
+            provider_usage_columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(credit_provider_usage)"
+                ).fetchall()
+            }
+            if "prompt_cache_hit_tokens" not in provider_usage_columns:
+                conn.execute(
+                    "ALTER TABLE credit_provider_usage "
+                    "ADD COLUMN prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0"
+                )
+            if "prompt_cache_miss_tokens" not in provider_usage_columns:
+                conn.execute(
+                    "ALTER TABLE credit_provider_usage "
+                    "ADD COLUMN prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0"
+                )
 
             # Indexes — including created_at for stale-run sweep + audit
             conn.execute(
@@ -709,6 +787,29 @@ class CreditLedger:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_credit_call_reservations_created "
                 "ON credit_call_reservations(created_at, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_credit_provider_usage_created "
+                "ON credit_provider_usage(created_at)"
+            )
+
+            # Provider account-balance snapshots (cost reconciliation). Written
+            # by the hosted worker (which holds the provider key) and read by
+            # the server-side reconciliation job to compare realized balance
+            # deltas against ledger-estimated spend.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS provider_balance_snapshots (
+                    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    total_balance REAL NOT NULL DEFAULT 0,
+                    is_available INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_provider_balance_snapshots_provider "
+                "ON provider_balance_snapshots(provider, created_at)"
             )
 
             conn.execute("COMMIT")
@@ -1325,6 +1426,8 @@ class CreditLedger:
         provider_response: dict | None = None,
         cost_absent: bool = False,
         provider_cost_micro_usd: int = 0,
+        prompt_cache_hit_tokens: int = 0,
+        prompt_cache_miss_tokens: int = 0,
     ) -> dict:
         """Settle a reserved call.
 
@@ -1437,16 +1540,19 @@ class CreditLedger:
             pt = max(0, int(prompt_tokens or 0))
             ct = max(0, int(completion_tokens or 0))
             tt = max(0, int(total_tokens or 0))
+            hit_t = max(0, int(prompt_cache_hit_tokens or 0))
+            miss_t = max(0, int(prompt_cache_miss_tokens or 0))
             if tt <= 0:
                 tt = pt + ct
             conn.execute(
                 "INSERT INTO credit_provider_usage "
                 "(call_id, run_id, account_id, model, prompt_tokens, "
-                "completion_tokens, total_tokens, provider_cost_micro_usd, "
+                "completion_tokens, total_tokens, prompt_cache_hit_tokens, "
+                "prompt_cache_miss_tokens, provider_cost_micro_usd, "
                 "provider_response_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (call_id, run_id, account_id, model_name,
-                 pt, ct, tt, recorded_provider,
+                 pt, ct, tt, hit_t, miss_t, recorded_provider,
                  _json_meta(provider_response or {}), now),
             )
             conn.execute(
@@ -1472,6 +1578,8 @@ class CreditLedger:
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "total_tokens": tt,
+                "prompt_cache_hit_tokens": hit_t,
+                "prompt_cache_miss_tokens": miss_t,
                 "provider_cost_micro_usd": recorded_provider,
                 "discrepancy_micro_usd": discrepancy,
                 "cost_absent": cost_absent,
@@ -1745,7 +1853,8 @@ class CreditLedger:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT usage_id, call_id, model, prompt_tokens, completion_tokens, "
-                "total_tokens, provider_cost_micro_usd, created_at "
+                "total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
+                "provider_cost_micro_usd, created_at "
                 "FROM credit_provider_usage WHERE run_id = ? "
                 "ORDER BY created_at ASC",
                 (run_id,),
@@ -1758,9 +1867,11 @@ class CreditLedger:
                 "prompt_tokens": int(r[3]),
                 "completion_tokens": int(r[4]),
                 "total_tokens": int(r[5]),
-                "provider_cost_micro_usd": int(r[6]),
-                "provider_cost_usd": _micro_to_usd(int(r[6])),
-                "created_at": r[7],
+                "prompt_cache_hit_tokens": int(r[6]),
+                "prompt_cache_miss_tokens": int(r[7]),
+                "provider_cost_micro_usd": int(r[8]),
+                "provider_cost_usd": _micro_to_usd(int(r[8])),
+                "created_at": r[9],
             }
             for r in rows
         ]
@@ -1838,6 +1949,244 @@ class CreditLedger:
                     "reason": "already_granted_or_constraint",
                 }
             return {"granted_micro_usd": 0, "reason": "error"}
+
+    # ------------------------------------------------------------------
+    # Provider usage metering + balance reconciliation
+    # ------------------------------------------------------------------
+
+    def provider_usage_since(self, since_ts: float, provider: str = "") -> dict:
+        """Aggregate provider token usage + estimated cost since a timestamp.
+
+        This is the per-interval "meter" used for near-realtime cost tracking:
+        sum the cache-aware token breakdown and the settled estimated cost
+        across all users since *since_ts*. When *provider* is given (e.g.
+        ``"deepseek"``), only that provider's rows are counted.
+        """
+        scope, params = _provider_model_scope(provider)
+        where = " WHERE created_at >= ?"
+        if scope is not None:
+            where += " AND model LIKE ?"
+            params = [max(0.0, float(since_ts)), scope]
+        else:
+            params = [max(0.0, float(since_ts))]
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT "
+                "COALESCE(SUM(prompt_cache_hit_tokens), 0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens), 0), "
+                "COALESCE(SUM(completion_tokens), 0), "
+                "COALESCE(SUM(total_tokens), 0), "
+                "COALESCE(SUM(provider_cost_micro_usd), 0) "
+                "FROM credit_provider_usage" + where,
+                params,
+            ).fetchone()
+        return {
+            "prompt_cache_hit_tokens": int(row[0] or 0),
+            "prompt_cache_miss_tokens": int(row[1] or 0),
+            "completion_tokens": int(row[2] or 0),
+            "total_tokens": int(row[3] or 0),
+            "estimated_cost_micro_usd": int(row[4] or 0),
+        }
+
+    def provider_usage_series(
+        self,
+        window_seconds: int = 600,
+        since_ts: float = 0.0,
+        provider: str = "",
+    ) -> list[dict]:
+        """Bucketed provider usage (default 10-minute windows, since *since_ts*).
+
+        Each bucket carries the cache-aware token breakdown and the settled
+        estimated cost, so the operator can compute cost per 10-minute window
+        (lagged by one window) across all users. When *provider* is given, only
+        that provider's rows are counted.
+        """
+        window_seconds = max(60, int(window_seconds))
+        scope, params = _provider_model_scope(provider)
+        where = " WHERE created_at >= ?"
+        if scope is not None:
+            where += " AND model LIKE ?"
+            params = [window_seconds, max(0.0, float(since_ts)), scope]
+        else:
+            params = [window_seconds, max(0.0, float(since_ts))]
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT CAST(created_at / ? AS INTEGER) AS bucket, "
+                "COALESCE(SUM(prompt_cache_hit_tokens), 0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens), 0), "
+                "COALESCE(SUM(completion_tokens), 0), "
+                "COALESCE(SUM(total_tokens), 0), "
+                "COALESCE(SUM(provider_cost_micro_usd), 0) "
+                "FROM credit_provider_usage" + where + " "
+                "GROUP BY bucket ORDER BY bucket",
+                params,
+            ).fetchall()
+        return [
+            {
+                "bucket_start": int(r[0]) * window_seconds,
+                "prompt_cache_hit_tokens": int(r[1] or 0),
+                "prompt_cache_miss_tokens": int(r[2] or 0),
+                "completion_tokens": int(r[3] or 0),
+                "total_tokens": int(r[4] or 0),
+                "estimated_cost_micro_usd": int(r[5] or 0),
+            }
+            for r in rows
+        ]
+
+    def record_provider_balance_snapshot(
+        self,
+        *,
+        provider: str,
+        currency: str,
+        total_balance: float,
+        is_available: bool,
+        snapshot_at: float | None = None,
+    ) -> None:
+        """Persist one provider account-balance snapshot (from the worker)."""
+        provider = str(provider or "").strip()[:64]
+        currency = str(currency or "").strip()[:16]
+        if not provider or not currency:
+            raise ValueError("provider and currency are required")
+        now = _now_ts() if snapshot_at is None else float(snapshot_at)
+        with self._conn() as conn:
+            _begin_immediate(conn)
+            conn.execute(
+                "INSERT INTO provider_balance_snapshots "
+                "(provider, currency, total_balance, is_available, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (provider, currency, max(0.0, float(total_balance)),
+                 int(bool(is_available)), now),
+            )
+            conn.execute("COMMIT")
+
+    def latest_provider_balance_snapshot(self, provider: str) -> dict | None:
+        """Return the most recent balance snapshot for a provider (per currency)."""
+        provider = str(provider or "").strip()[:64]
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT currency, total_balance, is_available, created_at "
+                "FROM provider_balance_snapshots "
+                "WHERE provider = ? "
+                "ORDER BY created_at DESC, snapshot_id DESC LIMIT 1",
+                (provider,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "provider": provider,
+            "currency": row[0],
+            "total_balance": float(row[1] or 0),
+            "is_available": bool(row[2]),
+            "snapshot_at": float(row[3]),
+        }
+
+    def provider_cost_reconciliation(self, provider: str) -> dict:
+        """Compare realized balance delta vs ledger-estimated spend.
+
+        Ground truth: provider account balance drops between *adjacent*
+        snapshots in one currency (prefer USD). Segments where the balance
+        increased (top-up / grant) are skipped — they would contaminate the
+        window. Expected: the sum of per-call estimated costs settled into
+        ``credit_provider_usage`` for this provider's models over the same
+        segments. ``drift_percent`` is positive when the provider charged us
+        MORE than our price table estimated (a stale/too-low price table).
+        """
+        provider = str(provider or "").strip()[:64]
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT currency, total_balance, created_at "
+                "FROM provider_balance_snapshots WHERE provider = ? "
+                "ORDER BY created_at ASC, snapshot_id ASC",
+                (provider,),
+            ).fetchall()
+        if not rows:
+            return {"provider": provider, "stale": True, "reason": "no_snapshots"}
+        currencies = [str(r[0]) for r in rows]
+        if "USD" not in currencies:
+            # Ledger spend is USD-denominated (micro-USD); a CNY-only balance
+            # cannot be compared without FX, so skip reconciliation.
+            return {
+                "provider": provider,
+                "stale": True,
+                "reason": "reconciliation_requires_usd_balance",
+                "currencies": currencies,
+            }
+        preferred = "USD"
+        snaps = [r for r in rows if str(r[0]) == preferred]
+        if len(snaps) < 2:
+            return {
+                "provider": provider,
+                "stale": True,
+                "reason": "insufficient_snapshots",
+                "currency": preferred,
+            }
+
+        scope, _ = _provider_model_scope(provider)
+        actual_spend_usd = 0.0
+        estimated_spend_micro = 0
+        usable_segments = 0
+        topup_segments = 0
+        for prev, cur in zip(snaps, snaps[1:]):
+            prev_ts, prev_bal = float(prev[2]), float(prev[1])
+            cur_ts, cur_bal = float(cur[2]), float(cur[1])
+            delta = prev_bal - cur_bal
+            # FP tolerance: a truly unchanged balance ("11.32" stored as REAL)
+            # must never look like a spend or a top-up.
+            if delta <= 1e-6:
+                # Balance increased or unchanged (top-up / grant): the segment
+                # is unusable for spend measurement.
+                topup_segments += 1
+                continue
+            actual_spend_usd += delta
+            usable_segments += 1
+            # The estimate window [prev_ts, cur_ts] aligns with the balance
+            # snapshots. A call submitted just before cur_ts but settled just
+            # after it is already reflected in the balance delta yet excluded
+            # here — so the estimate slightly undercounts and drift is biased
+            # toward a *warning*. That is the fail-safe direction for a
+            # stale-price detector (better to over-flag than silently under-
+            # charge the operator).
+            with self._conn() as conn:
+                if scope is not None:
+                    est = conn.execute(
+                        "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
+                        "FROM credit_provider_usage "
+                        "WHERE created_at >= ? AND created_at <= ? AND model LIKE ?",
+                        (prev_ts, cur_ts, scope),
+                    ).fetchone()
+                else:
+                    est = conn.execute(
+                        "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
+                        "FROM credit_provider_usage "
+                        "WHERE created_at >= ? AND created_at <= ?",
+                        (prev_ts, cur_ts),
+                    ).fetchone()
+            estimated_spend_micro += int(est[0] or 0)
+
+        actual_spend_usd = round(max(0.0, actual_spend_usd), 6)
+        estimated_spend_usd = round((estimated_spend_micro / 1_000_000.0), 6)
+        drift_percent = 0.0
+        if actual_spend_usd > 0 and estimated_spend_usd > 0:
+            drift_percent = round(
+                ((actual_spend_usd - estimated_spend_usd) / actual_spend_usd) * 100.0,
+                2,
+            )
+        return {
+            "provider": provider,
+            "stale": False,
+            "currency": preferred,
+            "snapshot_count": len(snaps),
+            "usable_segments": usable_segments,
+            "topup_segments": topup_segments,
+            "first_snapshot_at": float(snaps[0][2]),
+            "last_snapshot_at": float(snaps[-1][2]),
+            "first_balance_usd": float(snaps[0][1]),
+            "last_balance_usd": float(snaps[-1][1]),
+            "actual_spend_usd": actual_spend_usd,
+            "estimated_spend_usd": estimated_spend_usd,
+            "drift_percent": drift_percent,
+            "balance_increased": topup_segments > 0,
+        }
 
 
 # ---------------------------------------------------------------------------
