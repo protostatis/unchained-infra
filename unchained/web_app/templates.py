@@ -10033,10 +10033,14 @@ function _applyHostedModelPolicy(policy) {
     if (!_isAdmin && !_hasReceivedHostedCredit()) {
       // Guests/pending users must start on the free lane and must NEVER land
       // on the paid default (it would be rejected server-side). Prefer the
-      // free fallback model; otherwise the first post-cap (free) model.
-      next = seen.has(policy.fallback_model)
+      // free fallback model, then the first post-cap (free) model, then any
+      // non-default model — the paid default is excluded outright.
+      const notDefault = (m) => m !== policy.default_model;
+      next = (seen.has(policy.fallback_model) && policy.fallback_model !== policy.default_model)
         ? policy.fallback_model
-        : (models.find((m) => _isPostCapAllowedModel(m)) || models[0]);
+        : (models.find((m) => notDefault(m) && _isPostCapAllowedModel(m))
+           || models.find(notDefault)
+           || models[0]);
     } else {
       next = seen.has(desired)
         ? desired

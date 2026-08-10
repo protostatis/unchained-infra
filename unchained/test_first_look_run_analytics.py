@@ -655,6 +655,10 @@ class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
             if isinstance(body_text, bytes):
                 body_text = body_text.decode("utf-8", "replace")
         self.assertNotIn("guest_mode_requires_openrouter_model", body_text)
+        # Positive path: it proceeds into the hosted branch (guest forced to the
+        # free fallback) and fails only because no trial ws exists in the mock.
+        self.assertEqual(resp.status, 503)
+        self.assertIn("Trial agent is not available", body_text)
 
 
 if __name__ == "__main__":

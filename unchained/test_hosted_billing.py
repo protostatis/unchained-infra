@@ -1172,6 +1172,10 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
                 user_id="u-test",
             )
             sent = self.agent._do_deepseek_call.call_args[0][1]
+            # The full conversation (including the assistant message with
+            # content:None, reasoning_content, tool_calls) must be forwarded
+            # verbatim and in order — that is the echo guarantee.
+            self.assertEqual(sent["messages"], history)
             assistant_msgs = [
                 m for m in sent["messages"]
                 if m.get("role") == "assistant" and m.get("tool_calls")
