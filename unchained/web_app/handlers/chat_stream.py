@@ -1460,7 +1460,10 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_cli = core._is_codex_cli_model(model)
     is_opencode_cli = core._is_opencode_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
-    is_deepseek = core._is_deepseek_model(model)
+    # getattr fallback keeps partial test mocks (which predate DeepSeek)
+    # working; the real web.py core always provides _is_deepseek_model.
+    _deepseek_check = getattr(core, "_is_deepseek_model", None)
+    is_deepseek = bool(_deepseek_check and _deepseek_check(model))
     is_hosted = is_openrouter or is_deepseek
     if is_hosted and len(message) > _HOSTED_MAX_USER_PROMPT_CHARS:
         return reject_first_look(
