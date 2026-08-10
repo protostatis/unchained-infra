@@ -221,11 +221,11 @@ HOSTED_FREE_MODEL_DEFAULTS: tuple[str, ...] = (
     "poolside/laguna-xs-2.1:free",
 )
 HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
+    "deepseek-v4-flash",
     "google/gemini-3.1-flash-lite",
     "qwen/qwen3.6-plus",
     "qwen/qwen3.5-flash-02-23",
     "google/gemini-3-flash-preview",
-    "deepseek-v4-flash",
     "deepseek-v4-pro",
     *HOSTED_FREE_MODEL_DEFAULTS,
 )

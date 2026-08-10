@@ -212,8 +212,8 @@ _OPENROUTER_TRIAL_BUDGET_USD = max(
     float(os.environ.get("OPENROUTER_TRIAL_BUDGET_USD", "1.0")),
 )
 _OPENROUTER_TRIAL_DEFAULT_MODEL = (
-    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "google/gemini-3.1-flash-lite").strip()
-    or "google/gemini-3.1-flash-lite"
+    os.environ.get("OPENROUTER_TRIAL_DEFAULT_MODEL", "deepseek-v4-flash").strip()
+    or "deepseek-v4-flash"
 )
 _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS = tuple(
     m.strip()

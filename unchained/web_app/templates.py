@@ -9302,12 +9302,12 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
   <div id="modelrow">
     <label for="modelsel">Model</label>
     <select id="modelsel" onchange="onModelChange(this.value)">
-      <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite &mdash; Default</option>
+      <option value="deepseek-v4-flash">DeepSeek V4 Flash (Direct) &mdash; Default</option>
+      <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+      <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash (OpenRouter)</option>
       <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
-      <option value="deepseek-v4-flash">DeepSeek V4 Flash (Direct)</option>
-      <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash (OpenRouter)</option>
       <option value="deepseek-v4-pro">DeepSeek V4 Pro (Direct)</option>
       <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro (OpenRouter)</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
@@ -9360,6 +9360,7 @@ let _hostedModelPolicy = null;
 let _POST_CAP_ALLOWED_MODELS = ['nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-nano-30b-a3b:free', 'poolside/laguna-xs-2.1:free'];
 const _HOSTED_MODEL_LABELS = Object.freeze({
   'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+  'google/gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
   'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
   'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
   'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -9368,7 +9369,16 @@ const _HOSTED_MODEL_LABELS = Object.freeze({
   'qwen/qwen3.5-flash-02-23': 'Qwen 3.5 Flash',
   'nvidia/nemotron-3-super-120b-a12b:free': 'NVIDIA Nemotron — Super 120B',
   'nvidia/nemotron-3-nano-30b-a3b:free': 'NVIDIA Nemotron Nano — Free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 'NVIDIA Nemotron 3 Ultra — Free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 'NVIDIA Nemotron Nano Omni — Free',
   'poolside/laguna-xs-2.1:free': 'Poolside Laguna XS — Free',
+  'openai/gpt-5.6-luna': 'OpenAI GPT 5.6 Luna',
+  'meta/muse-spark-1.1': 'Meta Muse Spark 1.1',
+  'meta/muse-spark-1.2': 'Meta Muse Spark 1.2',
+  'thinkingmachines/inkling': 'Thinking Machines Inkling',
+  'thinkingmachines/inkling-small': 'Thinking Machines Inkling Small',
+  'cohere/north-mini-code:free': 'Cohere North Mini Code — Free',
+  'inclusionai/ling-3.0-flash:free': 'InclusionAI Ling 3.0 Flash — Free',
   'deepseek-v4-flash': 'DeepSeek V4 Flash (Direct)',
   'deepseek-v4-pro': 'DeepSeek V4 Pro (Direct)',
   'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash (OpenRouter)',
@@ -9963,7 +9973,18 @@ async function loadHostedProfiles() {
 }
 
 function _hostedModelLabel(model) {
-  return _HOSTED_MODEL_LABELS[model] || model;
+  const known = _HOSTED_MODEL_LABELS[model];
+  if (known) return known;
+  // Derive a readable selector label from the raw model ID so every option is
+  // consistent (OpenRouter IDs are vendor/model:free, DeepSeek direct are
+  // model-name): strip the vendor prefix + :free suffix, hyphenate, capitalize.
+  let name = String(model || '').trim();
+  if (!name) return '';
+  name = name.replace(/:free$/, '');
+  const slash = name.lastIndexOf('/');
+  if (slash >= 0) name = name.slice(slash + 1);
+  name = name.replace(/[-_]+/g, ' ').trim();
+  return name.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function _applyHostedModelPolicy(policy) {
