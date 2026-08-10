@@ -287,8 +287,14 @@ async def handle_credit_provider_balance(request: web.Request) -> web.Response:
                 snapshot_at=float(raw.get("snapshot_at") or 0) or None,
             )
             stored += 1
-        except Exception:
-            pass
+        except Exception as e:
+            # A dropped snapshot silently widens the reconciliation gap; log it
+            # so operators see the balance verification is degrading.
+            import logging as _logging
+            _logging.getLogger("credit_internal").warning(
+                "provider balance snapshot store failed (provider=%s currency=%s): %s",
+                raw.get("provider"), raw.get("currency"), e,
+            )
     if stored <= 0:
         return _json_error(400, "no valid snapshots stored")
     return web.json_response({"stored": stored})

@@ -1537,12 +1537,18 @@ class TrialAgent:
         interval = max(
             60, int(os.environ.get("DEEPSEEK_BALANCE_REPORT_INTERVAL_SECONDS", "600"))
         )
+        consecutive_failures = 0
         while True:
             try:
                 await self._report_deepseek_balance()
+                consecutive_failures = 0
             except Exception as e:
+                consecutive_failures += 1
                 print(f"[deepseek] balance report failed: {e}")
-            await asyncio.sleep(interval)
+            # Back off up to 8x on persistent failures (DeepSeek unreachable)
+            # so the reporter does not hammer a down endpoint every interval.
+            delay = interval * min(2 ** consecutive_failures, 8)
+            await asyncio.sleep(delay)
 
     async def _report_deepseek_balance(self):
         """Query GET /user/balance and POST the snapshot to the server."""

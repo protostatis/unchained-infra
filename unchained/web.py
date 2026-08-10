@@ -2703,18 +2703,22 @@ async def _provider_cost_metering_loop():
             await asyncio.sleep(check_interval)
             now = time.time()
             try:
-                meter = await asyncio.to_thread(ledger.provider_usage_since, last_meter_ts)
-                if meter.get("total_tokens", 0) > 0:
-                    log.info(
-                        "[credit-meter] last %ds: cache_miss=%d cache_hit=%d "
-                        "completion=%d total=%d est_cost_usd=%.4f",
-                        int(now - last_meter_ts),
-                        meter.get("prompt_cache_miss_tokens", 0),
-                        meter.get("prompt_cache_hit_tokens", 0),
-                        meter.get("completion_tokens", 0),
-                        meter.get("total_tokens", 0),
-                        (meter.get("estimated_cost_micro_usd", 0) / 1_000_000.0),
+                for provider in providers:
+                    meter = await asyncio.to_thread(
+                        ledger.provider_usage_since, last_meter_ts, provider
                     )
+                    if meter.get("total_tokens", 0) > 0:
+                        log.info(
+                            "[credit-meter] %s last %ds: cache_miss=%d cache_hit=%d "
+                            "completion=%d total=%d est_cost_usd=%.4f",
+                            provider,
+                            int(now - last_meter_ts),
+                            meter.get("prompt_cache_miss_tokens", 0),
+                            meter.get("prompt_cache_hit_tokens", 0),
+                            meter.get("completion_tokens", 0),
+                            meter.get("total_tokens", 0),
+                            (meter.get("estimated_cost_micro_usd", 0) / 1_000_000.0),
+                        )
                 last_meter_ts = now
             except Exception as e:
                 log.warning("[credit-meter] metering error: %s", e)
@@ -2741,6 +2745,17 @@ async def _provider_cost_metering_loop():
                             provider, report.get("reason", "stale"),
                         )
                         continue
+                    if not report.get("usable_segments"):
+                        # Every snapshot segment was a top-up/grant (or no
+                        # spend). A 0.00% drift here is meaningless — do not
+                        # let it mask a stale price table.
+                        log.warning(
+                            "[credit-reconcile] %s: no usable spend window "
+                            "(all segments top-ups/grants, topup_segments=%d); "
+                            "estimates could not be verified this window.",
+                            provider, report.get("topup_segments", 0),
+                        )
+                        continue
                     drift = report.get("drift_percent", 0.0)
                     log.info(
                         "[credit-reconcile] %s: actual_spend=$%.4f "
@@ -2763,8 +2778,8 @@ async def _provider_cost_metering_loop():
                         log.warning(
                             "[credit-reconcile] %s drift %.2f%% exceeds "
                             "threshold %.2f%% — provider price table may be "
-                            "stale; update DEEPSEEK_PRICE_JSON.",
-                            provider, drift, drift_threshold,
+                            "stale; update the price config for %s.",
+                            provider, drift, drift_threshold, provider,
                         )
                 except Exception as e:
                     log.warning("[credit-reconcile] %s error: %s", provider, e)

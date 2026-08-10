@@ -2121,8 +2121,10 @@ class CreditLedger:
             prev_ts, prev_bal = float(prev[2]), float(prev[1])
             cur_ts, cur_bal = float(cur[2]), float(cur[1])
             delta = prev_bal - cur_bal
-            if delta <= 0:
-                # Balance increased (top-up / grant) or unchanged: the segment
+            # FP tolerance: a truly unchanged balance ("11.32" stored as REAL)
+            # must never look like a spend or a top-up.
+            if delta <= 1e-6:
+                # Balance increased or unchanged (top-up / grant): the segment
                 # is unusable for spend measurement.
                 topup_segments += 1
                 continue
