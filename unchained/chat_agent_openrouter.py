@@ -695,7 +695,7 @@ _DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
 _DSML_XML_LT = r"(?:&amp;lt;|&lt;|<)"
 _DSML_XML_GT = r"(?:&amp;gt;|&gt;|>)"
 _DSML_TOOL_CALLS_RE = re.compile(
-    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}tool_calls\b.*?{_DSML_XML_GT}(?P<body>.*?)"
+    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}tool_calls\b(?P<attrs>.*?){_DSML_XML_GT}(?P<body>.*?)"
     rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
@@ -710,6 +710,10 @@ _DSML_PARAMETER_RE = re.compile(
     rf"{_DSML_XML_GT}(?P<value>.*?)"
     rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}parameter\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
+)
+_DSML_TAG_MARKER_RE = re.compile(
+    rf"{_DSML_XML_LT}\s*/?\s*{_DSML_PREFIX}[A-Za-z_][A-Za-z0-9_.:-]*\b",
+    re.IGNORECASE,
 )
 _DSML_ATTRIBUTE_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*"
@@ -726,11 +730,17 @@ def _unescape_dsml_text(value: str) -> str:
 def _dsml_attributes(raw: str) -> dict[str, str] | None:
     """Parse quoted DSML attributes without applying XML parsing to model text."""
     attrs: dict[str, str] = {}
+    cursor = 0
     for match in _DSML_ATTRIBUTE_RE.finditer(raw or ""):
+        if raw[cursor:match.start()].strip():
+            return None
         name = match.group("name").lower()
         if name in attrs:
             return None
         attrs[name] = _unescape_dsml_text(match.group("double") or match.group("single") or "")
+        cursor = match.end()
+    if raw[cursor:].strip():
+        return None
     return attrs
 
 
@@ -763,14 +773,32 @@ def _decode_dsml_parameter(attrs: dict[str, str], raw_value: str):
     return value
 
 
+def _complete_dsml_matches(pattern, raw: str):
+    """Return element matches only when they consume all non-whitespace text."""
+    matches = list(pattern.finditer(raw))
+    cursor = 0
+    for match in matches:
+        if raw[cursor:match.start()].strip():
+            return None
+        cursor = match.end()
+    if raw[cursor:].strip():
+        return None
+    return matches
+
+
+def _has_dsml_markup(raw: str) -> bool:
+    """Detect residual DSML tags that strict recovery must not ignore."""
+    return bool(_DSML_TAG_MARKER_RE.search(raw or ""))
+
+
 def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
     """Recover a direct-DeepSeek DSML tool block into OpenAI-style calls.
 
     DeepSeek documents OpenAI-compatible ``tool_calls``, but V4 Flash can emit
     its internal DSML form in ``content``, including entity-escaped wrappers.
-    Only known base tools and complete, unambiguous blocks are recovered. A
-    malformed or unknown block leaves the whole payload for the safe-output
-    sanitizer rather than executing a partial call sequence.
+    Only known base tools and fully consumed, unambiguous blocks are recovered.
+    Any malformed, unknown, or residual DSML markup leaves the whole payload
+    for the safe-output sanitizer rather than executing a partial call sequence.
     """
     if not isinstance(message, dict) or message.get("tool_calls"):
         return message
@@ -787,8 +815,14 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
         if isinstance(spec, dict)
     }
     calls: list[dict] = []
+    content_cursor = 0
     for block in blocks:
-        invokes = list(_DSML_INVOKE_RE.finditer(block.group("body")))
+        if _has_dsml_markup(content[content_cursor:block.start()]):
+            return message
+        content_cursor = block.end()
+        if block.group("attrs").strip():
+            return message
+        invokes = _complete_dsml_matches(_DSML_INVOKE_RE, block.group("body"))
         if not invokes:
             return message
         for invoke in invokes:
@@ -797,7 +831,12 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
             if not invoke_attrs or tool_name not in allowed_names:
                 return message
             args: dict[str, object] = {}
-            for parameter in _DSML_PARAMETER_RE.finditer(invoke.group("body")):
+            parameters = _complete_dsml_matches(_DSML_PARAMETER_RE, invoke.group("body"))
+            if parameters is None:
+                return message
+            for parameter in parameters:
+                if _has_dsml_markup(parameter.group("value")):
+                    return message
                 parameter_attrs = _dsml_attributes(parameter.group("attrs"))
                 parameter_name = (parameter_attrs or {}).get("name", "").strip()
                 if not parameter_attrs or not parameter_name or parameter_name in args:
@@ -816,6 +855,8 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
                     },
                 }
             )
+    if _has_dsml_markup(content[content_cursor:]):
+        return message
     if not calls:
         return message
     recovered = dict(message)

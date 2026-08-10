@@ -1307,6 +1307,83 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
 
+    def test_dsml_recovery_rejects_malformed_trailing_invoke(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"navigate\">"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
+    def test_dsml_recovery_rejects_residual_markup_outside_a_valid_block(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"navigate\">"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
+    def test_dsml_recovery_rejects_malformed_trailing_parameter(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+                "document.title"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"tab_id\" string=\"true\">"
+                "tab-1"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
+    def test_dsml_recovery_rejects_nested_markup_inside_a_parameter(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+                "document.title"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"tab_id\" string=\"true\">"
+                "tab-1"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
+    def test_dsml_recovery_rejects_unparseable_attributes(self):
+        message = {
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\" unexpected>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        }
+
+        self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
+
     def test_dsml_recovery_accepts_entity_escaped_wrappers(self):
         raw = (
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"

@@ -44,6 +44,7 @@ COPY unchained/chat_agent_gemini.py .
 COPY unchained/chat_agent_codex.py .
 COPY unchained/chat_agent_sdk.py .
 COPY unchained/context_compact.py .
+COPY unchained/tool_payloads.py .
 COPY unchained/scheduler_agent.py .
 COPY unchained/scheduler_tool.py .
 COPY unchained/signup_agent.py .
