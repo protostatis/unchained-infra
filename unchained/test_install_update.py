@@ -1686,7 +1686,9 @@ def test_trial_chat_has_deepseek_direct_models():
     from web import TRIAL_CHAT_HTML
     assert 'value="deepseek-v4-flash"' in TRIAL_CHAT_HTML, "DeepSeek V4 Flash option missing"
     assert 'value="deepseek-v4-pro"' in TRIAL_CHAT_HTML, "DeepSeek V4 Pro option missing"
-    assert "'deepseek-v4-flash': 'DeepSeek V4 Flash'" in TRIAL_CHAT_HTML, "DeepSeek label map missing"
+    assert "'deepseek-v4-flash': 'DeepSeek V4 Flash (Direct)'" in TRIAL_CHAT_HTML, "DeepSeek label map missing"
+    assert "'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash (OpenRouter)'" in TRIAL_CHAT_HTML, \
+        "OpenRouter DeepSeek label map missing"
     # Hosted model ID check must accept slash-free DeepSeek IDs.
     assert "v.startsWith('deepseek-')" in TRIAL_CHAT_HTML, \
         "JS hosted-model check should accept DeepSeek direct IDs"

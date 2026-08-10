@@ -221,11 +221,11 @@ HOSTED_FREE_MODEL_DEFAULTS: tuple[str, ...] = (
     "poolside/laguna-xs-2.1:free",
 )
 HOSTED_USER_MODEL_DEFAULTS: tuple[str, ...] = (
+    "deepseek-v4-flash",
     "google/gemini-3.1-flash-lite",
     "qwen/qwen3.6-plus",
     "qwen/qwen3.5-flash-02-23",
     "google/gemini-3-flash-preview",
-    "deepseek-v4-flash",
     "deepseek-v4-pro",
     *HOSTED_FREE_MODEL_DEFAULTS,
 )
@@ -377,8 +377,17 @@ def _runtime_hosted_model_requirements(core) -> tuple[str, tuple[str, ...], str]
     )
     if not post_cap:
         post_cap = HOSTED_FREE_MODEL_DEFAULTS
+    # The authenticated /workspace default is decoupled from the guest/trial
+    # fallback (`_OPENROUTER_TRIAL_DEFAULT_MODEL` stays a free OpenRouter model
+    # so anonymous traffic never lands on a paid lane). HOSTED_DEFAULT_MODEL
+    # (or HOSTED_USER_MODEL_DEFAULTS[0]) is the paid-lane default instead.
     default_model = str(
-        getattr(core, "_OPENROUTER_TRIAL_DEFAULT_MODEL", HOSTED_USER_MODEL_DEFAULTS[0])
+        os.environ.get("HOSTED_DEFAULT_MODEL", "")
+        or getattr(
+            core,
+            "_OPENROUTER_TRIAL_DEFAULT_MODEL",
+            HOSTED_USER_MODEL_DEFAULTS[0],
+        )
         or HOSTED_USER_MODEL_DEFAULTS[0]
     ).strip()
     fallback_model = str(
