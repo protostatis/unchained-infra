@@ -11,8 +11,9 @@ import re
 
 
 # Models can emit raw XML, HTML-escaped XML, or text that was escaped twice by
-# an upstream transport/UI layer.  Longer entity forms come first so each tag
-# boundary is consumed as one unit.
+# an upstream transport/UI layer.  Direct-DeepSeek recovery imports these
+# boundaries too; longer entity forms must stay first so each tag is consumed
+# as one unit.
 _XML_LT = r"(?:&amp;lt;|&lt;|<)"
 _XML_GT = r"(?:&amp;gt;|&gt;|>)"
 _TOOL_CALL_MARKER_RE = re.compile(

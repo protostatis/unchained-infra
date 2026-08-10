@@ -50,7 +50,13 @@ import cloud_tools
 from credit import validate_hosted_context_budget
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
-from tool_payloads import contains_tool_call_wrapper, strip_tool_call_wrappers
+from tool_payloads import (
+    _DSML_PREFIX,
+    _XML_GT as _DSML_XML_GT,
+    _XML_LT as _DSML_XML_LT,
+    contains_tool_call_wrapper,
+    strip_tool_call_wrappers,
+)
 from web_state import canonical_session_tab
 from scheduler_agent import (
     OPENAI_SCHEDULER_TOOLS,
@@ -691,9 +697,6 @@ def _decode_tool_arguments(raw_args) -> dict:
     return {}
 
 
-_DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
-_DSML_XML_LT = r"(?:&amp;lt;|&lt;|<)"
-_DSML_XML_GT = r"(?:&amp;gt;|&gt;|>)"
 _DSML_TOOL_CALLS_RE = re.compile(
     rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}tool_calls\b(?P<attrs>.*?){_DSML_XML_GT}(?P<body>.*?)"
     rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_DSML_XML_GT}",
