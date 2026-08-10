@@ -9306,6 +9306,8 @@ body.hosted-workspace #modelrow{flex-wrap:wrap}
       <option value="qwen/qwen3.6-plus">Qwen 3.6 Plus</option>
       <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
       <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview</option>
+      <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+      <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
       <option value="nvidia/nemotron-3-super-120b-a12b:free">NVIDIA Nemotron &mdash; Super 120B</option>
       <option value="nvidia/nemotron-3-nano-30b-a3b:free">NVIDIA Nemotron Nano &mdash; Free</option>
       <option value="poolside/laguna-xs-2.1:free">Poolside Laguna XS &mdash; Free</option>
@@ -9365,6 +9367,8 @@ const _HOSTED_MODEL_LABELS = Object.freeze({
   'nvidia/nemotron-3-super-120b-a12b:free': 'NVIDIA Nemotron — Super 120B',
   'nvidia/nemotron-3-nano-30b-a3b:free': 'NVIDIA Nemotron Nano — Free',
   'poolside/laguna-xs-2.1:free': 'Poolside Laguna XS — Free',
+  'deepseek-v4-flash': 'DeepSeek V4 Flash',
+  'deepseek-v4-pro': 'DeepSeek V4 Pro',
 });
 const devAuthEnabled = __DEV_AUTH_ENABLED__;
 const isLocalDevHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
@@ -10028,7 +10032,10 @@ function _modelOptionExists(value) {
 }
 
 function _isOpenRouterModelId(value) {
-  return (value || '').includes('/');
+  // Hosted model IDs: OpenRouter (slash form, e.g. qwen/qwen3.6-plus) or
+  // DeepSeek direct (slash-free, e.g. deepseek-v4-flash).
+  const v = String(value || '').trim();
+  return v.includes('/') || v.startsWith('deepseek-');
 }
 
 function _isPostCapAllowedModel(value) {

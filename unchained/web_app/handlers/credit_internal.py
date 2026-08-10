@@ -159,7 +159,9 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
             "actual_cost_micro_usd": 7,
             "prompt_tokens": 100,
             "completion_tokens": 200,
-            "total_tokens": 300
+            "total_tokens": 300,
+            "prompt_cache_hit_tokens": 90,
+            "prompt_cache_miss_tokens": 10
         }
     """
     if not _validate_service_auth(request):
@@ -181,6 +183,12 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
         provider_cost_micro_usd = max(
             0, int(body.get("provider_cost_micro_usd", 0) or 0)
         )
+        prompt_cache_hit_tokens = max(
+            0, int(body.get("prompt_cache_hit_tokens", 0) or 0)
+        )
+        prompt_cache_miss_tokens = max(
+            0, int(body.get("prompt_cache_miss_tokens", 0) or 0)
+        )
     except (TypeError, ValueError):
         return _json_error(400, "cost and token fields must be integers")
     cost_absent = bool(body.get("cost_absent", False))
@@ -196,6 +204,8 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
             total_tokens=total_tokens,
             cost_absent=cost_absent,
             provider_cost_micro_usd=provider_cost_micro_usd,
+            prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=prompt_cache_miss_tokens,
         )
         return web.json_response(result)
     except ValueError as e:
@@ -224,3 +234,61 @@ async def handle_credit_release(request: web.Request) -> web.Response:
         return web.json_response(result)
     except ValueError as e:
         return _json_error(400, str(e))
+
+
+async def handle_credit_provider_balance(request: web.Request) -> web.Response:
+    """POST /internal/credit/provider-balance — store provider balance snapshots.
+
+    Called periodically by the hosted worker (which holds the provider key).
+    The reconciliation job later compares realized balance deltas against
+    ledger-estimated spend to detect pricing drift.
+
+    JSON body:
+        {
+            "snapshots": [
+                {"provider": "deepseek", "currency": "USD",
+                 "total_balance": "11.32", "is_available": true,
+                 "snapshot_at": 1720000000.0}
+            ]
+        }
+    """
+    if not _validate_service_auth(request):
+        return _json_error(401, "Service auth required")
+
+    body, body_error = await _json_object(request)
+    if body_error is not None:
+        return body_error
+
+    snapshots = body.get("snapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        return _json_error(400, "snapshots array required")
+
+    ledger = _get_ledger()
+    stored = 0
+    for raw in snapshots:
+        if not isinstance(raw, dict):
+            continue
+        provider = str(raw.get("provider", "")).strip()
+        currency = str(raw.get("currency", "")).strip()
+        total_balance_raw = raw.get("total_balance")
+        if not provider or not currency:
+            continue
+        try:
+            total_balance = float(total_balance_raw)
+        except (TypeError, ValueError):
+            continue
+        try:
+            await asyncio.to_thread(
+                ledger.record_provider_balance_snapshot,
+                provider=provider,
+                currency=currency,
+                total_balance=total_balance,
+                is_available=bool(raw.get("is_available", False)),
+                snapshot_at=float(raw.get("snapshot_at") or 0) or None,
+            )
+            stored += 1
+        except Exception:
+            pass
+    if stored <= 0:
+        return _json_error(400, "no valid snapshots stored")
+    return web.json_response({"stored": stored})

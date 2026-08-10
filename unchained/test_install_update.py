@@ -1681,6 +1681,18 @@ def test_trial_chat_has_admin_custom_openrouter_model():
     print("  Trial chat has admin custom OpenRouter model input")
 
 
+def test_trial_chat_has_deepseek_direct_models():
+    """Verify the hosted /workspace dropdown exposes DeepSeek direct models."""
+    from web import TRIAL_CHAT_HTML
+    assert 'value="deepseek-v4-flash"' in TRIAL_CHAT_HTML, "DeepSeek V4 Flash option missing"
+    assert 'value="deepseek-v4-pro"' in TRIAL_CHAT_HTML, "DeepSeek V4 Pro option missing"
+    assert "'deepseek-v4-flash': 'DeepSeek V4 Flash'" in TRIAL_CHAT_HTML, "DeepSeek label map missing"
+    # Hosted model ID check must accept slash-free DeepSeek IDs.
+    assert "v.startsWith('deepseek-')" in TRIAL_CHAT_HTML, \
+        "JS hosted-model check should accept DeepSeek direct IDs"
+    print("  Trial chat dropdown exposes DeepSeek direct models")
+
+
 def test_codex_chat_has_three_slot_ui():
     """Verify Codex chat page includes the same 3-slot controls as local CLI chat."""
     from web import CHAT_CODEX_HTML
@@ -1847,7 +1859,7 @@ def test_handle_chat_msg_openrouter_budget_force_logic():
     assert "_is_openrouter_post_cap_allowed_model" in source and "requested_model" in source, \
         "handle_chat_msg should only force fallback for disallowed post-cap models"
     assert "_OPENROUTER_TRIAL_FALLBACK_MODEL" in source, "handle_chat_msg should apply fallback model when capped"
-    assert 'if is_openrouter and auth_info.get("user_id")' in source, "OpenRouter ws payload should include user_id"
+    assert 'if is_hosted and auth_info.get("user_id")' in source, "hosted (OpenRouter/DeepSeek) ws payload should include user_id"
     assert '"model_forced"' in source, "forced model SSE event should be emitted"
     print("  handle_chat_msg enforces OpenRouter budget + emits forced-model event")
 
@@ -1872,7 +1884,7 @@ def test_openrouter_agent_emits_usage_event():
     assert '"type": "openrouter_usage"' in source, "OpenRouter agent should emit openrouter_usage event"
     assert ('msg.get("user_id"' in source or "msg.get('user_id'" in source), \
         "OpenRouter agent should read user_id from inbound WS message"
-    assert "OpenRouter usage:" in source, "OpenRouter agent should log per-request token/cost usage"
+    assert "usage: {" in source, "OpenRouter agent should log per-request token/cost usage"
     assert '"OPENROUTER_RATE_RAMP_FALLBACK_MODEL",\n            self.model,' in source, \
         "OpenRouter rate-ramp fallback should default to the configured trial model"
     print("  OpenRouter trial agent emits usage event with user context")
@@ -2088,6 +2100,7 @@ if __name__ == "__main__":
         ("web: ADMIN_HTML shows OpenRouter spend column", test_admin_page_shows_openrouter_spend_column),
         ("web: CHAT_HTML has model dropdown", test_chat_html_has_model_dropdown),
         ("web: TRIAL_CHAT_HTML has admin custom model input", test_trial_chat_has_admin_custom_openrouter_model),
+        ("web: TRIAL_CHAT_HTML has DeepSeek direct models", test_trial_chat_has_deepseek_direct_models),
         ("web: CHAT_CODEX_HTML has 3-slot UI", test_codex_chat_has_three_slot_ui),
         ("web: Codex CLI local chat has guided setup UX", test_codex_cli_local_chat_has_guided_setup_ux),
         ("web: OpenCode CLI local chat has guided setup UX", test_opencode_cli_local_chat_has_guided_setup_ux),

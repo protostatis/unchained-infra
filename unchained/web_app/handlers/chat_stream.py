@@ -1460,7 +1460,9 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     is_codex_cli = core._is_codex_cli_model(model)
     is_opencode_cli = core._is_opencode_cli_model(model)
     is_openrouter = core._is_openrouter_model(model)
-    if is_openrouter and len(message) > _HOSTED_MAX_USER_PROMPT_CHARS:
+    is_deepseek = core._is_deepseek_model(model)
+    is_hosted = is_openrouter or is_deepseek
+    if is_hosted and len(message) > _HOSTED_MAX_USER_PROMPT_CHARS:
         return reject_first_look(
             web.json_response(
                 {
@@ -1525,7 +1527,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
     # turns intentionally omit it and must not claim or conflict with a UI
     # conversation slot.
     if (
-        is_openrouter
+        is_hosted
         and not guest_mode
         and auth_info.get("user_id")
         and body.get("slot") is not None
@@ -1713,7 +1715,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                 },
                 status=426,
             )
-    elif is_openrouter:
+    elif is_hosted:
         if not core.TRIAL_AGENT_ID:
             return reject_first_look(
                 web.json_response(
@@ -1775,7 +1777,8 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             email=auth_info.get("email", ""),
         )
         if user_id:
-            openrouter_budget_state = core._openrouter_budget_state_for_user(user_id)
+            if is_openrouter:
+                openrouter_budget_state = core._openrouter_budget_state_for_user(user_id)
             # --- Use credit balance as authority for paid model access ---
             # If the user has credit grants, they get paid models even when
             # the legacy openrouter_spend_usd counter is capped.
@@ -1789,13 +1792,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         CreditLedger, db_path=core._auth.db_path
                     )
                     core._credit_ledger = credit_ledger
-                # Ensure trial grant from legacy budget (one-time migration)
-                await asyncio.to_thread(
-                    credit_ledger.ensure_trial_grant_from_openrouter_budget,
-                    user_id,
-                    current_spend_usd=openrouter_budget_state.get("spent_usd", 0),
-                    budget_usd=openrouter_budget_state.get("budget_usd", 0),
-                )
+                if is_openrouter:
+                    # Ensure trial grant from legacy budget (one-time migration)
+                    await asyncio.to_thread(
+                        credit_ledger.ensure_trial_grant_from_openrouter_budget,
+                        user_id,
+                        current_spend_usd=openrouter_budget_state.get("spent_usd", 0),
+                        budget_usd=openrouter_budget_state.get("budget_usd", 0),
+                    )
                 acct = await asyncio.to_thread(credit_ledger.get_account, user_id)
                 if acct:
                     credit_authority_ready = True
@@ -1817,11 +1821,27 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                     (credit_authority_ready and not credit_allows_requested_model)
                     or (
                         not credit_authority_ready
-                        and openrouter_budget_state.get("capped")
+                        and bool(
+                            openrouter_budget_state
+                            and openrouter_budget_state.get("capped")
+                        )
                     )
                 )
                 and not core._is_openrouter_post_cap_allowed_model(requested_model)
             )
+            if should_force_free_model and is_deepseek:
+                # DeepSeek models are paid-only: never silently switch to a
+                # free OpenRouter model when credit is insufficient.
+                return web.json_response(
+                    {
+                        "error": (
+                            "No hosted credit remains for this DeepSeek model. "
+                            "Add credit or select a free model."
+                        ),
+                        "code": "insufficient_hosted_credit",
+                    },
+                    status=402,
+                )
             if should_force_free_model and reservation_policy["admin_custom"]:
                 if credit_authority_ready:
                     return web.json_response(
@@ -1936,14 +1956,14 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             session_id=session_id,
             req_id=req_id,
             chat_agent_id=chat_agent_id,
-            routing_agent_id=core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id,
+            routing_agent_id=core.TRIAL_AGENT_ID if is_hosted else chat_agent_id,
         )
         turn, turn_created, turn_conflict, admission_limit = await _start_registered_turn(
             core,
             registry,
             candidate,
             turn_auth_info,
-            hosted=bool(is_openrouter),
+            hosted=bool(is_hosted),
         )
         if admission_limit:
             return web.json_response(
@@ -2112,13 +2132,13 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             "profile_session_expired",
         )
 
-    routing_agent_id = core.TRIAL_AGENT_ID if is_openrouter else chat_agent_id
+    routing_agent_id = core.TRIAL_AGENT_ID if is_hosted else chat_agent_id
 
     # --- Credit run creation (at dispatch point, after all pre-flight checks) ---
     billing_user_id = str(auth_info.get("user_id", "") or "")
     if guest_mode:
         billing_user_id = "system:first-look"
-    if is_openrouter and billing_user_id and not billing_run_id:
+    if is_hosted and billing_user_id and not billing_run_id:
         user_id = billing_user_id
         try:
             from credit import CreditLedger
@@ -2168,7 +2188,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
             ws_msg["scheduler_grant_id"] = scheduler_grant_id
         if model:
             ws_msg["model"] = model
-        if is_openrouter and auth_info.get("user_id"):
+        if is_hosted and auth_info.get("user_id"):
             ws_msg["user_id"] = auth_info["user_id"]
         if billing_run_id:
             ws_msg["billing_run_id"] = billing_run_id
@@ -2201,7 +2221,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
         # disconnect can resolve this exact turn without a response queue.
         core._session_agents[session_id] = routing_agent_id
         await ws.send_json(ws_msg)
-        if turn and is_openrouter:
+        if turn and is_hosted:
             _hosted_turn_deadline_task(core, turn, _HOSTED_TURN_DEADLINE_S)
         if guest_mode:
             first_look_accepted = True
@@ -2245,7 +2265,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
 
     # --- Inject overlay copilot into the task browser ---
     overlay_tab = tab_id or "auto"
-    if not guest_mode and not is_openrouter:
+    if not guest_mode and not is_hosted:
         _inject_overlay(core, session_id, cdp_agent_id, overlay_tab, message,
                         user_id=auth_info.get("user_id", ""), model=model, slot=slot)
 
@@ -2375,7 +2395,7 @@ async def handle_chat_msg(request: web.Request) -> web.StreamResponse:
                         "session_id": session_id,
                         "req_id": req_id,
                     }
-                elif not use_headless and not is_openrouter and not guest_mode:
+                elif not use_headless and not is_hosted and not guest_mode:
                     current_ws = core._chat_agents.get(chat_agent_id)
                     if current_ws is not ws or getattr(ws, "closed", False):
                         evt = {
