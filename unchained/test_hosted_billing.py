@@ -1224,10 +1224,11 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("dsml", cleaned.lower())
         self.assertNotIn("tool_call", cleaned.lower())
 
-    async def test_direct_deepseek_recovers_dsml_tool_call_for_execution(self):
+    async def test_direct_deepseek_recovers_dsml_tool_call_and_drops_pre_tool_prose(self):
         session_id = "s-deepseek-dsml"
         self.agent.sessions[session_id] = []
         dsml = (
+            "I'll inspect the page first. "
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
             "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
@@ -1352,6 +1353,25 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             json.loads(recovered["tool_calls"][-1]["function"]["arguments"]),
             {"expression": "document.title + 16"},
+        )
+
+    def test_dsml_recovery_decodes_parameter_entities_once(self):
+        recovered = _recover_deepseek_dsml_tool_calls({
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+                "document.querySelector(\'&amp;lt;sample&amp;gt;\')"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        })
+
+        self.assertEqual(
+            json.loads(recovered["tool_calls"][0]["function"]["arguments"]),
+            {"expression": "document.querySelector('&lt;sample&gt;')"},
         )
 
     async def test_deepseek_body_keeps_thinking_consistent(self):

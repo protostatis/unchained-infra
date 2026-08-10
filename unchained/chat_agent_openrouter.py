@@ -719,14 +719,8 @@ _DSML_INVALID_VALUE = object()
 
 
 def _unescape_dsml_text(value: str) -> str:
-    """Decode at most two entity layers inside recognized DSML payloads."""
-    decoded = value or ""
-    for _ in range(2):
-        unescaped = _html_unescape(decoded)
-        if unescaped == decoded:
-            break
-        decoded = unescaped
-    return decoded
+    """Decode one XML entity layer inside a recognized DSML payload."""
+    return _html_unescape(value or "")
 
 
 def _dsml_attributes(raw: str) -> dict[str, str] | None:
@@ -825,7 +819,8 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
     if not calls:
         return message
     recovered = dict(message)
-    # The DSML content is an internal transport payload, not assistant prose.
+    # Tool-bearing assistant messages do not stream content to the user. Drop
+    # pre-tool planning prose rather than treating it as a final response.
     recovered["content"] = None
     recovered["tool_calls"] = calls
     return recovered
