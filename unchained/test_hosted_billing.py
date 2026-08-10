@@ -1306,6 +1306,54 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(_recover_deepseek_dsml_tool_calls(message), message)
 
+    def test_dsml_recovery_accepts_entity_escaped_wrappers(self):
+        raw = (
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+            "document.title"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+        )
+        for opening, closing in (("&lt;", "&gt;"), ("&amp;lt;", "&amp;gt;")):
+            with self.subTest(opening=opening):
+                escaped = raw.replace("<", opening).replace(">", closing)
+                recovered = _recover_deepseek_dsml_tool_calls(
+                    {"role": "assistant", "content": escaped}
+                )
+
+                self.assertIsNone(recovered["content"])
+                self.assertEqual(recovered["tool_calls"][0]["function"]["name"], "js_eval")
+                self.assertEqual(
+                    json.loads(recovered["tool_calls"][0]["function"]["arguments"]),
+                    {"expression": "document.title"},
+                )
+
+    def test_dsml_recovery_keeps_a_valid_large_batch(self):
+        invokes = "".join(
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke name=\"js_eval\">"
+            "<\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter name=\"expression\" string=\"true\">"
+            f"document.title + {index}"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cparameter>"
+            "</\uFF5C\uFF5CDSML\uFF5C\uFF5Cinvoke>"
+            for index in range(17)
+        )
+        recovered = _recover_deepseek_dsml_tool_calls({
+            "role": "assistant",
+            "content": (
+                "<\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+                f"{invokes}"
+                "</\uFF5C\uFF5CDSML\uFF5C\uFF5Ctool_calls>"
+            ),
+        })
+
+        self.assertEqual(len(recovered["tool_calls"]), 17)
+        self.assertEqual(
+            json.loads(recovered["tool_calls"][-1]["function"]["arguments"]),
+            {"expression": "document.title + 16"},
+        )
+
     async def test_deepseek_body_keeps_thinking_consistent(self):
         """DeepSeek thinking mode must be enabled for EVERY turn (including the
         fast first turn) so the reasoning_content echo requirement stays

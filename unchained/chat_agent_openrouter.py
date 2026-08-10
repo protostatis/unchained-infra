@@ -692,19 +692,23 @@ def _decode_tool_arguments(raw_args) -> dict:
 
 
 _DSML_PREFIX = r"\uFF5C\uFF5CDSML\uFF5C\uFF5C"
+_DSML_XML_LT = r"(?:&amp;lt;|&lt;|<)"
+_DSML_XML_GT = r"(?:&amp;gt;|&gt;|>)"
 _DSML_TOOL_CALLS_RE = re.compile(
-    rf"<\s*{_DSML_PREFIX}tool_calls\b[^>]*>(?P<body>.*?)"
-    rf"<\s*/\s*{_DSML_PREFIX}tool_calls\s*>",
+    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}tool_calls\b.*?{_DSML_XML_GT}(?P<body>.*?)"
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}tool_calls\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_INVOKE_RE = re.compile(
-    rf"<\s*{_DSML_PREFIX}invoke\b(?P<attrs>[^>]*)>(?P<body>.*?)"
-    rf"<\s*/\s*{_DSML_PREFIX}invoke\s*>",
+    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}invoke\b(?P<attrs>.*?)"
+    rf"{_DSML_XML_GT}(?P<body>.*?)"
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}invoke\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_PARAMETER_RE = re.compile(
-    rf"<\s*{_DSML_PREFIX}parameter\b(?P<attrs>[^>]*)>(?P<value>.*?)"
-    rf"<\s*/\s*{_DSML_PREFIX}parameter\s*>",
+    rf"{_DSML_XML_LT}\s*{_DSML_PREFIX}parameter\b(?P<attrs>.*?)"
+    rf"{_DSML_XML_GT}(?P<value>.*?)"
+    rf"{_DSML_XML_LT}\s*/\s*{_DSML_PREFIX}parameter\s*{_DSML_XML_GT}",
     re.IGNORECASE | re.DOTALL,
 )
 _DSML_ATTRIBUTE_RE = re.compile(
@@ -714,6 +718,17 @@ _DSML_ATTRIBUTE_RE = re.compile(
 _DSML_INVALID_VALUE = object()
 
 
+def _unescape_dsml_text(value: str) -> str:
+    """Decode at most two entity layers inside recognized DSML payloads."""
+    decoded = value or ""
+    for _ in range(2):
+        unescaped = _html_unescape(decoded)
+        if unescaped == decoded:
+            break
+        decoded = unescaped
+    return decoded
+
+
 def _dsml_attributes(raw: str) -> dict[str, str] | None:
     """Parse quoted DSML attributes without applying XML parsing to model text."""
     attrs: dict[str, str] = {}
@@ -721,13 +736,13 @@ def _dsml_attributes(raw: str) -> dict[str, str] | None:
         name = match.group("name").lower()
         if name in attrs:
             return None
-        attrs[name] = _html_unescape(match.group("double") or match.group("single") or "")
+        attrs[name] = _unescape_dsml_text(match.group("double") or match.group("single") or "")
     return attrs
 
 
 def _decode_dsml_parameter(attrs: dict[str, str], raw_value: str):
     """Convert a typed DSML parameter into its JSON-compatible value."""
-    value = _html_unescape(raw_value or "").strip()
+    value = _unescape_dsml_text(raw_value).strip()
     if attrs.get("string", "").lower() == "true":
         return value
     for kind, expected_type in (
@@ -758,9 +773,10 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
     """Recover a direct-DeepSeek DSML tool block into OpenAI-style calls.
 
     DeepSeek documents OpenAI-compatible ``tool_calls``, but V4 Flash can emit
-    its internal DSML form in ``content``. Only known base tools and complete,
-    unambiguous blocks are recovered; everything else remains ordinary content
-    for the existing safe-output sanitizer.
+    its internal DSML form in ``content``, including entity-escaped wrappers.
+    Only known base tools and complete, unambiguous blocks are recovered. A
+    malformed or unknown block leaves the whole payload for the safe-output
+    sanitizer rather than executing a partial call sequence.
     """
     if not isinstance(message, dict) or message.get("tool_calls"):
         return message
@@ -806,9 +822,6 @@ def _recover_deepseek_dsml_tool_calls(message: dict) -> dict:
                     },
                 }
             )
-            if len(calls) > 16:
-                return message
-
     if not calls:
         return message
     recovered = dict(message)
