@@ -481,6 +481,7 @@ class TestCreditLedger(unittest.TestCase):
             "arcee-ai/trinity-large-preview:free",
             "stepfun/step-3.5-flash:free",
             "openai/gpt-5.2",
+            "deepseek-v4-flash",  # required as the authenticated default
         ]
         auth.set_app_setting(
             HOSTED_MODEL_POLICY_SETTING_KEY,

@@ -1130,6 +1130,58 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(sent["thinking"], {"type": "enabled"})
                     self.assertNotIn("reasoning", sent)
 
+    async def test_deepseek_echoes_reasoning_content_verbatim(self):
+        """A prior thinking-mode assistant message must be passed to the
+        follow-up request unchanged (including reasoning_content) — this is the
+        guarantee that prevents the DeepSeek 400 on multi-turn conversations."""
+        reasoning_content = "Need to check the market data before answering."
+        history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "Why is oil up?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": reasoning_content,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "navigate", "arguments": "{\"url\":\"x\"}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+            {"role": "user", "content": "continue"},
+        ]
+        client = SimpleNamespace(post=AsyncMock())
+        client.post.return_value = SimpleNamespace(
+            is_success=True,
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"role": "assistant", "content": "done"}}],
+                          "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        )
+        with (
+            patch.object(self.agent, "_do_deepseek_call", new=AsyncMock(return_value={
+                "choices": [{"message": {"role": "assistant", "content": "done"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            })),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                client,
+                history,
+                model="deepseek-v4-flash",
+                session_id="s-test",
+                user_id="u-test",
+            )
+            sent = self.agent._do_deepseek_call.call_args[0][1]
+            assistant_msgs = [
+                m for m in sent["messages"]
+                if m.get("role") == "assistant" and m.get("tool_calls")
+            ]
+            self.assertTrue(assistant_msgs, "assistant tool-call message should be in the request")
+            self.assertEqual(
+                assistant_msgs[0].get("reasoning_content"), reasoning_content
+            )
+            self.assertEqual(assistant_msgs[0]["tool_calls"], history[2]["tool_calls"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,10 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.ledger = CreditLedger(self.db_path)
         self._saved_token = os.environ.get("HOSTED_AGENT_SERVICE_TOKEN")
         os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = "hosted-callback-test"
+        # The authenticated default now comes from HOSTED_DEFAULT_MODEL (the
+        # _OPENROUTER_TRIAL_DEFAULT_MODEL attr no longer drives the policy).
+        self._saved_default = os.environ.get("HOSTED_DEFAULT_MODEL")
+        os.environ["HOSTED_DEFAULT_MODEL"] = "google/gemini-3.1-flash-lite"
         self.settings = {}
         self.setting_records = {}
 
@@ -96,6 +100,10 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("HOSTED_AGENT_SERVICE_TOKEN", None)
         else:
             os.environ["HOSTED_AGENT_SERVICE_TOKEN"] = self._saved_token
+        if self._saved_default is None:
+            os.environ.pop("HOSTED_DEFAULT_MODEL", None)
+        else:
+            os.environ["HOSTED_DEFAULT_MODEL"] = self._saved_default
 
     async def test_internal_submission_is_irreversible_then_settles(self):
         self.ledger.grant("u-target", 1_000_000, idempotency_key="seed")

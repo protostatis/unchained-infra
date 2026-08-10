@@ -10030,10 +10030,13 @@ function _applyHostedModelPolicy(policy) {
     if (customInput) customInput.value = desired;
   } else {
     let next;
-    if (!_isAdmin && !_hasReceivedHostedCredit() && seen.has(policy.fallback_model)) {
-      // Guests/pending users must start on the free fallback lane — the paid
-      // default (e.g. DeepSeek V4 Flash Direct) would be rejected server-side.
-      next = policy.fallback_model;
+    if (!_isAdmin && !_hasReceivedHostedCredit()) {
+      // Guests/pending users must start on the free lane and must NEVER land
+      // on the paid default (it would be rejected server-side). Prefer the
+      // free fallback model; otherwise the first post-cap (free) model.
+      next = seen.has(policy.fallback_model)
+        ? policy.fallback_model
+        : (models.find((m) => _isPostCapAllowedModel(m)) || models[0]);
     } else {
       next = seen.has(desired)
         ? desired
