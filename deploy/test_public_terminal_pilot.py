@@ -79,20 +79,20 @@ def _script_text() -> str:
     return _script_path().read_text(encoding="utf-8")
 
 
-def _extract_embedded_python(text: str, marker: str) -> str:
+def _extract_embedded_python(text: str, marker: str, terminator: str = "PYEOF") -> str:
     """Extract the first heredoc Python block starting after marker."""
     idx = text.find(marker)
     if idx < 0:
         return ""
-    # Find <<'PYEOF' or <<PYEOF
-    heredoc_start = text.find("<<'PYEOF'", idx)
+    # Find <<'TERMINATOR' or <<TERMINATOR.
+    heredoc_start = text.find(f"<<'{terminator}'", idx)
     if heredoc_start < 0:
-        heredoc_start = text.find("<<PYEOF", idx)
+        heredoc_start = text.find(f"<<{terminator}", idx)
     if heredoc_start < 0:
         return ""
-    # Find the PYEOF terminator on its own line after the heredoc start.
+    # Find the terminator on its own line after the heredoc start.
     body_start = text.index("\n", heredoc_start) + 1
-    py_end = text.find("\nPYEOF\n", body_start)
+    py_end = text.find(f"\n{terminator}\n", body_start)
     if py_end < 0:
         return ""
     return text[body_start:py_end]
@@ -549,10 +549,32 @@ class MCPProtocolRequirementsTests(unittest.TestCase):
     def test_mcp_checks_six_concurrent_unique_sessions(self) -> None:
         mcp_func_start = self.text.find("mcp_protocol_check()")
         mcp_func = self.text[mcp_func_start:] if mcp_func_start >= 0 else self.text
-        self.assertIn("ThreadPoolExecutor(max_workers=6)", mcp_func)
-        self.assertIn("range(1, 7)", mcp_func)
-        self.assertIn("len(set(session_ids)) != 6", mcp_func)
+        self.assertIn("ThreadPoolExecutor(max_workers=SEAT_COUNT)", mcp_func)
+        self.assertIn("range(1, SEAT_COUNT + 1)", mcp_func)
+        self.assertIn("len(set(session_ids)) != SEAT_COUNT", mcp_func)
         self.assertIn("MCP_SIX_OK", mcp_func)
+
+    def test_mcp_holds_all_six_sessions_before_navigation_and_checks_cleanup(self) -> None:
+        mcp_func_start = self.text.find("mcp_protocol_check()")
+        mcp_func = self.text[mcp_func_start:] if mcp_func_start >= 0 else self.text
+        self.assertIn("Barrier(SEAT_COUNT + 1", mcp_func)
+        self.assertIn("run_navigation = Event()", mcp_func)
+        self.assertIn('snapshot.get("active_sessions") != SEAT_COUNT', mcp_func)
+        self.assertIn('snapshot.get("active_sessions") != 0', mcp_func)
+
+    def test_mcp_six_check_emits_only_allowlisted_diagnostics(self) -> None:
+        mcp_func_start = self.text.find("mcp_protocol_check()")
+        mcp_func = self.text[mcp_func_start:] if mcp_func_start >= 0 else self.text
+        self.assertIn("MCP_SIX_FAIL", mcp_func)
+        self.assertIn("cpu.stat", mcp_func)
+        self.assertIn("memory.events", mcp_func)
+        self.assertIn("pids.events", mcp_func)
+        self.assertIn("diagnostic_pattern", mcp_func)
+
+    def test_mcp_six_check_python_compiles(self) -> None:
+        source = _extract_embedded_python(self.text, "concurrent_result=", "PYMCP")
+        self.assertTrue(source)
+        compile(source, "<mcp-six-check>", "exec")
 
 
 # ---------------------------------------------------------------------------

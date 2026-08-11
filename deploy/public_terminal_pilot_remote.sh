@@ -2696,14 +2696,52 @@ print("MCP_OK")
     fi
 
     # Prove the shared MCP process can isolate six simultaneous logical
-    # sessions. Never print session identifiers or protocol bodies.
+    # sessions. The only failure output is an allowlisted stage/status/resource
+    # summary; never print session identifiers, response bodies, headers, or
+    # raw exceptions.
     local concurrent_result
     concurrent_result="$(docker exec -i "$mcp_cid" python3 - 2>/dev/null <<'PYMCP'
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, BrokenBarrierError, Event, Lock
 import http.client
 import json
+import time
 
 PROTOCOL = "2025-06-18"
+SEAT_COUNT = 6
+CHECK_TIMEOUT = 45
+ALLOWED_STAGES = frozenset({
+    "initialize", "initialized", "tools_list", "barrier", "status_live",
+    "navigate", "cleanup", "status_cleanup", "unique", "exception",
+})
+
+def cgroup_counters(path, names):
+    values = {name: 0 for name in names}
+    try:
+        with open(path, encoding="ascii") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) != 2 or parts[0] not in values:
+                    continue
+                values[parts[0]] = max(0, int(parts[1]))
+    except (OSError, ValueError):
+        pass
+    return values
+
+def resource_counters():
+    cpu = cgroup_counters("/sys/fs/cgroup/cpu.stat", ("nr_throttled", "throttled_usec"))
+    memory = cgroup_counters("/sys/fs/cgroup/memory.events", ("oom", "oom_kill"))
+    pids = cgroup_counters("/sys/fs/cgroup/pids.events", ("max",))
+    return {
+        "cpu_nr_throttled": cpu["nr_throttled"],
+        "cpu_throttled_usec": cpu["throttled_usec"],
+        "memory_oom": memory["oom"],
+        "memory_oom_kill": memory["oom_kill"],
+        "pids_max": pids["max"],
+    }
+
+def resource_delta(before, after):
+    return {name: max(0, after.get(name, 0) - before.get(name, 0)) for name in before}
 
 def decode(data, content_type):
     if "text/event-stream" in content_type:
@@ -2722,30 +2760,75 @@ def post(payload, session_id=""):
         headers["MCP-Session-Id"] = session_id
         headers["MCP-Protocol-Version"] = PROTOCOL
     connection = http.client.HTTPConnection("localhost", 8767, timeout=30)
-    connection.request("POST", "/mcp", json.dumps(payload), headers)
-    response = connection.getresponse()
-    data = response.read().decode("utf-8")
-    result = (
-        response.status,
-        response.getheader("MCP-Session-Id", ""),
-        decode(data, response.getheader("Content-Type", "")),
-    )
-    connection.close()
-    return result
+    try:
+        connection.request("POST", "/mcp", json.dumps(payload), headers)
+        response = connection.getresponse()
+        data = response.read().decode("utf-8")
+        return (
+            response.status,
+            response.getheader("MCP-Session-Id", ""),
+            decode(data, response.getheader("Content-Type", "")),
+        )
+    finally:
+        connection.close()
 
 def close_session(session_id):
+    try:
+        connection = http.client.HTTPConnection("localhost", 8767, timeout=5)
+        try:
+            connection.request("DELETE", "/mcp", headers={
+                "MCP-Session-Id": session_id,
+                "MCP-Protocol-Version": PROTOCOL,
+            })
+            response = connection.getresponse()
+            response.read()
+            return response.status
+        finally:
+            connection.close()
+    except Exception:
+        return 0
+
+def router_status():
     connection = http.client.HTTPConnection("localhost", 8767, timeout=5)
-    connection.request("DELETE", "/mcp", headers={
-        "MCP-Session-Id": session_id,
-        "MCP-Protocol-Version": PROTOCOL,
-    })
-    response = connection.getresponse()
-    response.read()
-    connection.close()
-    return response.status in {200, 202, 204}
+    try:
+        connection.request("GET", "/status")
+        response = connection.getresponse()
+        data = response.read().decode("utf-8")
+        if response.status != 200:
+            return response.status, None
+        return response.status, json.loads(data)
+    finally:
+        connection.close()
+
+failure = {"stage": "", "status": 0}
+failure_lock = Lock()
+cleanup = {"complete": True}
+cleanup_lock = Lock()
+sessions_ready = Barrier(SEAT_COUNT + 1, timeout=CHECK_TIMEOUT)
+run_navigation = Event()
+
+def first_failure():
+    with failure_lock:
+        return failure["stage"], failure["status"]
+
+def fail(stage, status=0):
+    if stage not in ALLOWED_STAGES:
+        stage = "exception"
+    if not isinstance(status, int) or not 0 <= status <= 599:
+        status = 0
+    with failure_lock:
+        if not failure["stage"]:
+            failure["stage"] = stage
+            failure["status"] = status
+    run_navigation.set()
+    try:
+        sessions_ready.abort()
+    except Exception:
+        pass
 
 def check_session(index):
     session_id = ""
+    stage = "initialize"
     try:
         status, session_id, initialized = post({
             "jsonrpc": "2.0",
@@ -2757,14 +2840,18 @@ def check_session(index):
                 "clientInfo": {"name": "six-seat-check", "version": "1.0"},
             },
         })
-        if status != 200 or not session_id or "result" not in initialized:
-            raise ValueError("initialize failed")
+        if status != 200 or not session_id or not isinstance(initialized, dict) or "result" not in initialized:
+            fail(stage, status)
+            return ""
+        stage = "initialized"
         status, _, _ = post({
             "jsonrpc": "2.0",
             "method": "notifications/initialized",
         }, session_id)
         if status not in {200, 202, 204}:
-            raise ValueError("initialized notification failed")
+            fail(stage, status)
+            return ""
+        stage = "tools_list"
         status, _, tools = post({
             "jsonrpc": "2.0",
             "id": index * 10 + 2,
@@ -2773,7 +2860,21 @@ def check_session(index):
         }, session_id)
         names = [tool.get("name") for tool in tools.get("result", {}).get("tools", [])]
         if status != 200 or "navigate" not in names:
-            raise ValueError("navigate tool missing")
+            fail(stage, status)
+            return ""
+        stage = "barrier"
+        try:
+            sessions_ready.wait()
+        except BrokenBarrierError:
+            if not first_failure()[0]:
+                fail(stage, 0)
+            return ""
+        if not run_navigation.wait(CHECK_TIMEOUT):
+            fail(stage, 0)
+            return ""
+        if first_failure()[0]:
+            return ""
+        stage = "navigate"
         status, _, navigation = post({
             "jsonrpc": "2.0",
             "id": index * 10 + 3,
@@ -2782,21 +2883,97 @@ def check_session(index):
         }, session_id)
         result = navigation.get("result", {})
         if status != 200 or result.get("isError") is True or not result.get("content"):
-            raise ValueError("public navigation failed")
+            fail(stage, status)
+            return ""
         return session_id
+    except Exception:
+        fail(stage, 0)
+        return ""
     finally:
-        if session_id and not close_session(session_id):
-            raise ValueError("session cleanup failed")
+        if session_id:
+            cleanup_status = close_session(session_id)
+            if cleanup_status not in {200, 202, 204}:
+                with cleanup_lock:
+                    cleanup["complete"] = False
+                fail("cleanup", cleanup_status)
 
-with ThreadPoolExecutor(max_workers=6) as executor:
-    session_ids = list(executor.map(check_session, range(1, 7)))
-if len(set(session_ids)) != 6:
-    raise SystemExit(1)
-print("MCP_SIX_OK")
+started_at = time.monotonic()
+before = resource_counters()
+session_ids = []
+try:
+    with ThreadPoolExecutor(max_workers=SEAT_COUNT) as executor:
+        futures = [executor.submit(check_session, index) for index in range(1, SEAT_COUNT + 1)]
+        try:
+            sessions_ready.wait()
+        except BrokenBarrierError:
+            if not first_failure()[0]:
+                fail("barrier", 0)
+        if not first_failure()[0]:
+            try:
+                status, snapshot = router_status()
+                if (
+                    status != 200
+                    or not isinstance(snapshot, dict)
+                    or snapshot.get("active_sessions") != SEAT_COUNT
+                ):
+                    fail("status_live", status)
+            except Exception:
+                fail("status_live", 0)
+        run_navigation.set()
+        for future in futures:
+            try:
+                session_ids.append(future.result())
+            except Exception:
+                fail("exception", 0)
+finally:
+    run_navigation.set()
+    try:
+        sessions_ready.abort()
+    except Exception:
+        pass
+
+if not first_failure()[0] and (len(session_ids) != SEAT_COUNT or len(set(session_ids)) != SEAT_COUNT):
+    fail("unique", 0)
+if not first_failure()[0]:
+    try:
+        status, snapshot = router_status()
+        if (
+            status != 200
+            or not isinstance(snapshot, dict)
+            or snapshot.get("active_sessions") != 0
+        ):
+            fail("status_cleanup", status)
+    except Exception:
+        fail("status_cleanup", 0)
+
+after = resource_counters()
+delta = resource_delta(before, after)
+stage, status = first_failure()
+if not stage:
+    print("MCP_SIX_OK")
+else:
+    elapsed_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    print(
+        "MCP_SIX_FAIL "
+        f"stage={stage} status={status} elapsed_ms={elapsed_ms} "
+        f"cpu_nr_throttled_delta={delta['cpu_nr_throttled']} "
+        f"cpu_throttled_usec_delta={delta['cpu_throttled_usec']} "
+        f"memory_oom_delta={delta['memory_oom']} "
+        f"memory_oom_kill_delta={delta['memory_oom_kill']} "
+        f"pids_max_delta={delta['pids_max']} "
+        f"cleanup={'complete' if cleanup['complete'] else 'failed'}"
+    )
 PYMCP
     )" || true
     if [[ "$concurrent_result" != "MCP_SIX_OK" ]]; then
         echo "ERROR: six-session MCP concurrency check failed (scrubbed)" >&2
+        local diagnostic_pattern
+        diagnostic_pattern='^MCP_SIX_FAIL stage=(initialize|initialized|tools_list|barrier|status_live|navigate|cleanup|status_cleanup|unique|exception) status=[0-9]{1,3} elapsed_ms=[0-9]+ cpu_nr_throttled_delta=[0-9]+ cpu_throttled_usec_delta=[0-9]+ memory_oom_delta=[0-9]+ memory_oom_kill_delta=[0-9]+ pids_max_delta=[0-9]+ cleanup=(complete|failed)$'
+        if [[ "$concurrent_result" =~ $diagnostic_pattern ]]; then
+            printf '    MCP concurrency diagnostic: %s\n' "$concurrent_result" >&2
+        else
+            printf '    (concurrency output scrubbed for security)\n' >&2
+        fi
         return 1
     fi
 
