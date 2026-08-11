@@ -1719,7 +1719,7 @@ def test_codex_cli_local_chat_has_guided_setup_ux():
     assert "Do not run both" in CHAT_CODEX_HTML, "Codex CLI either/or install guidance missing"
     assert "Requires Codex CLI to be installed and logged in." in CHAT_CODEX_HTML, "Codex CLI prerequisite copy missing"
     assert "providerDefault = provider === 'codex-cli'" in CHAT_CODEX_HTML, "codex-cli provider should select Codex CLI default model"
-    assert "codex-cli:gpt-5.5" in CHAT_CODEX_HTML, "Codex CLI default model missing"
+    assert "codex-cli:gpt-5.6-sol" in CHAT_CODEX_HTML, "Codex CLI default model missing"
     assert 'document.querySelectorAll(\'#modelsel option[value^="codex-sdk:"]\').forEach(o => o.remove())' in CHAT_CODEX_HTML, \
         "Codex CLI lane should hide SDK model options after CLI selection"
     assert "maybeAutoOpenInstallModal" in CHAT_CODEX_HTML, "Codex CLI auto-open install behavior missing"

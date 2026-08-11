@@ -271,7 +271,7 @@ class TestCodexProvisioningHooks(unittest.TestCase):
             "codexsdk-abc12345",
         )
         self.assertEqual(
-            _resolve_chat_agent_id(auth_info, "codex-cli:gpt-5.5"),
+            _resolve_chat_agent_id(auth_info, "codex-cli:gpt-5.6-sol"),
             "claude-abc12345",
         )
         self.assertEqual(
@@ -290,8 +290,15 @@ class TestCodexProvisioningHooks(unittest.TestCase):
     def test_chat_codex_html_has_codex_model_prefixes(self):
         from web import CHAT_CODEX_HTML
         self.assertIn("codex-sdk:codex-mini-latest", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.6-sol", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.6-terra", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.6-luna", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.3-codex-spark", CHAT_CODEX_HTML)
         self.assertIn("codex-cli:gpt-5.5", CHAT_CODEX_HTML)
+        self.assertIn("codex-sdk:gpt-5.6-sol", CHAT_CODEX_HTML)
+        self.assertIn("codex-sdk:gpt-5.6-luna", CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:gpt-5.5", CHAT_CODEX_HTML)
+        self.assertNotIn("codex-cli:gpt-5.4-mini", CHAT_CODEX_HTML)
         self.assertIn("/web/chat/status?codex=1", CHAT_CODEX_HTML)
         self.assertNotIn("geminiProvisioned", CHAT_CODEX_HTML)
 
