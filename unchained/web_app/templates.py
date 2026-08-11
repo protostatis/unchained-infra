@@ -13278,9 +13278,13 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
     TemplateReplacement(
         _API_CHAT_GEMINI_MODEL_OPTIONS_HTML,
         """      <option value="codex-sdk:codex-mini-latest">Codex API · codex-mini-latest</option>
-      <option value="codex-sdk:gpt-5.5">Codex API · gpt-5.5</option>
-      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5</option>
-      <option value="codex-cli:gpt-5.4-mini">Codex CLI · gpt-5.4-mini (fast)</option>""",
+      <option value="codex-sdk:gpt-5.6-sol">Codex API · gpt-5.6-sol</option>
+      <option value="codex-sdk:gpt-5.6-luna">Codex API · gpt-5.6-luna (fast)</option>
+      <option value="codex-sdk:gpt-5.5">Codex API · gpt-5.5 (previous gen)</option>
+      <option value="codex-cli:gpt-5.6-sol">Codex CLI · gpt-5.6-sol</option>
+      <option value="codex-cli:gpt-5.6-terra">Codex CLI · gpt-5.6-terra</option>
+      <option value="codex-cli:gpt-5.6-luna">Codex CLI · gpt-5.6-luna (fast)</option>
+      <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5 (previous gen)</option>""",
         "Codex model options",
     ),
     TemplateReplacement("let geminiProvisioned = false;", "let codexProvisioned = false;", "Codex provisioned flag"),
@@ -13324,7 +13328,7 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
   const provider = (params.get('provider') || '').trim().toLowerCase();
   const fromQuery = (params.get('model') || '').trim();
   const providerDefault = provider === 'codex-cli'
-    ? 'codex-cli:gpt-5.5'
+    ? 'codex-cli:gpt-5.6-sol'
     : (provider === 'codex-sdk' ? 'codex-sdk:codex-mini-latest' : '');
   if (fromQuery && document.querySelector('#modelsel option[value="' + CSS.escape(fromQuery) + '"]')) {
     document.getElementById('modelsel').value = fromQuery;
@@ -26299,8 +26303,10 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
           <option value="claude-sdk:claude-opus-4-7">Claude API: Opus 4.7</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
-          <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5</option>
-          <option value="codex-cli:gpt-5.4-mini">Codex CLI: GPT-5.4 Mini (fast)</option>
+          <option value="codex-cli:gpt-5.6-sol">Codex CLI: GPT-5.6 Sol</option>
+          <option value="codex-cli:gpt-5.6-terra">Codex CLI: GPT-5.6 Terra</option>
+          <option value="codex-cli:gpt-5.6-luna">Codex CLI: GPT-5.6 Luna (fast)</option>
+          <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5 (previous gen)</option>
           <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
@@ -26316,7 +26322,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
       </div>
       <div class="field" id="f-model-custom-wrap" style="display:none">
         <label for="f-model-custom">Custom Model ID</label>
-        <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.5">
+        <input type="text" id="f-model-custom" placeholder="e.g. anthropic/claude-sonnet-4.5 or codex-cli:gpt-5.6-sol">
       </div>
       <div class="field" style="margin-top:10px">
         <label for="f-profile">Chrome Profile</label>
@@ -26460,8 +26466,10 @@ function formatSchedulerModel(model){
     'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
     'claude-sdk:claude-opus-4-7':'Claude API: Opus 4.7',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
-    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5',
-    'codex-cli:gpt-5.4-mini':'Codex CLI: GPT-5.4 Mini (fast)',
+    'codex-cli:gpt-5.6-sol':'Codex CLI: GPT-5.6 Sol',
+    'codex-cli:gpt-5.6-terra':'Codex CLI: GPT-5.6 Terra',
+    'codex-cli:gpt-5.6-luna':'Codex CLI: GPT-5.6 Luna (fast)',
+    'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (previous gen)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',
     'nvidia/nemotron-3-nano-30b-a3b:free':'OpenRouter: NVIDIA Nemotron Nano',
