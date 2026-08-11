@@ -13284,6 +13284,7 @@ _API_CHAT_CODEX_BASE_REPLACEMENTS = (
       <option value="codex-cli:gpt-5.6-sol">Codex CLI · gpt-5.6-sol</option>
       <option value="codex-cli:gpt-5.6-terra">Codex CLI · gpt-5.6-terra</option>
       <option value="codex-cli:gpt-5.6-luna">Codex CLI · gpt-5.6-luna (fast)</option>
+      <option value="codex-cli:gpt-5.3-codex-spark">Codex CLI · gpt-5.3-codex-spark (fast preview)</option>
       <option value="codex-cli:gpt-5.5">Codex CLI · gpt-5.5 (previous gen)</option>""",
         "Codex model options",
     ),
@@ -26306,6 +26307,7 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="codex-cli:gpt-5.6-sol">Codex CLI: GPT-5.6 Sol</option>
           <option value="codex-cli:gpt-5.6-terra">Codex CLI: GPT-5.6 Terra</option>
           <option value="codex-cli:gpt-5.6-luna">Codex CLI: GPT-5.6 Luna (fast)</option>
+          <option value="codex-cli:gpt-5.3-codex-spark">Codex CLI: GPT-5.3 Codex Spark (fast preview)</option>
           <option value="codex-cli:gpt-5.5">Codex CLI: GPT-5.5 (previous gen)</option>
           <option value="opencode-cli:" data-opencode-model="1">OpenCode CLI: configured default</option>
           <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
@@ -26469,6 +26471,7 @@ function formatSchedulerModel(model){
     'codex-cli:gpt-5.6-sol':'Codex CLI: GPT-5.6 Sol',
     'codex-cli:gpt-5.6-terra':'Codex CLI: GPT-5.6 Terra',
     'codex-cli:gpt-5.6-luna':'Codex CLI: GPT-5.6 Luna (fast)',
+    'codex-cli:gpt-5.3-codex-spark':'Codex CLI: GPT-5.3 Codex Spark (fast preview)',
     'codex-cli:gpt-5.5':'Codex CLI: GPT-5.5 (previous gen)',
     'gemini-2.5-flash':'Gemini 2.5 Flash',
     'gemini-2.5-pro':'Gemini 2.5 Pro',

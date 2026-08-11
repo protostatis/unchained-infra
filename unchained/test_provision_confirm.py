@@ -293,6 +293,7 @@ class TestCodexProvisioningHooks(unittest.TestCase):
         self.assertIn("codex-cli:gpt-5.6-sol", CHAT_CODEX_HTML)
         self.assertIn("codex-cli:gpt-5.6-terra", CHAT_CODEX_HTML)
         self.assertIn("codex-cli:gpt-5.6-luna", CHAT_CODEX_HTML)
+        self.assertIn("codex-cli:gpt-5.3-codex-spark", CHAT_CODEX_HTML)
         self.assertIn("codex-sdk:gpt-5.6-sol", CHAT_CODEX_HTML)
         self.assertIn("/web/chat/status?codex=1", CHAT_CODEX_HTML)
         self.assertNotIn("geminiProvisioned", CHAT_CODEX_HTML)
