@@ -26304,6 +26304,10 @@ main{max-width:680px;margin:0 auto;padding:20px 16px}
           <option value="claude-sdk:claude-sonnet-4-6">Claude API: Sonnet 4.6</option>
           <option value="claude-sdk:claude-opus-4-7">Claude API: Opus 4.7</option>
           <option value="claude-sdk:claude-haiku-4-5-20251001">Claude API: Haiku 4.5</option>
+          <option value="codex-sdk:codex-mini-latest">Codex API: codex-mini-latest</option>
+          <option value="codex-sdk:gpt-5.6-sol">Codex API: GPT-5.6 Sol</option>
+          <option value="codex-sdk:gpt-5.6-luna">Codex API: GPT-5.6 Luna (fast)</option>
+          <option value="codex-sdk:gpt-5.5">Codex API: GPT-5.5 (previous gen)</option>
           <option value="codex-cli:gpt-5.6-sol">Codex CLI: GPT-5.6 Sol</option>
           <option value="codex-cli:gpt-5.6-terra">Codex CLI: GPT-5.6 Terra</option>
           <option value="codex-cli:gpt-5.6-luna">Codex CLI: GPT-5.6 Luna (fast)</option>
@@ -26468,6 +26472,10 @@ function formatSchedulerModel(model){
     'claude-sdk:claude-sonnet-4-6':'Claude API: Sonnet 4.6',
     'claude-sdk:claude-opus-4-7':'Claude API: Opus 4.7',
     'claude-sdk:claude-haiku-4-5-20251001':'Claude API: Haiku 4.5',
+    'codex-sdk:codex-mini-latest':'Codex API: codex-mini-latest',
+    'codex-sdk:gpt-5.6-sol':'Codex API: GPT-5.6 Sol',
+    'codex-sdk:gpt-5.6-luna':'Codex API: GPT-5.6 Luna (fast)',
+    'codex-sdk:gpt-5.5':'Codex API: GPT-5.5 (previous gen)',
     'codex-cli:gpt-5.6-sol':'Codex CLI: GPT-5.6 Sol',
     'codex-cli:gpt-5.6-terra':'Codex CLI: GPT-5.6 Terra',
     'codex-cli:gpt-5.6-luna':'Codex CLI: GPT-5.6 Luna (fast)',
