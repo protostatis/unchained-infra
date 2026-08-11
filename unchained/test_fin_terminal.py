@@ -644,6 +644,17 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("/unbrowser-mcp/messages/*", self.caddy)
         self.assertIn("120 seconds of idle time", self.unbrowser_mcp_doc)
 
+    def test_public_mcp_has_capacity_for_six_concurrent_cold_starts(self):
+        public_mcp = self.public_compose.split(
+            "\n  fin-terminal-public-unbrowser-mcp:\n", 1
+        )[1].split("\n  fin-terminal-public-gateway:\n", 1)[0]
+
+        self.assertIn("UNBROWSER_MCP_MAX_SESSIONS=6", public_mcp)
+        self.assertIn("UNBROWSER_MCP_WORKER_STARTUP_TIMEOUT_SECONDS=20", public_mcp)
+        self.assertIn("pids_limit: 96", public_mcp)
+        self.assertIn("mem_limit: 512m", public_mcp)
+        self.assertIn("cpus: 1.0", public_mcp)
+
     def test_public_live_edge_route_is_authenticated_and_fail_closed(self):
         subdomain = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
         route = subdomain.split("# Opt-in live-session pilot.", 1)[1].split(
