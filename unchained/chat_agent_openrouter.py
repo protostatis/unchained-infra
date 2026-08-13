@@ -202,7 +202,11 @@ SESSION_DIR = os.environ.get(
         ),
     ),
 )
-MAX_SESSION_MESSAGES = 30  # keep last 30 messages (excluding system prompt)
+# Hosted working-context/resume guard. The hard serialized-context and billing
+# boundary remains HOSTED_MAX_INTERNAL_CONTEXT_CHARS (400k by default).
+HOSTED_MAX_SESSION_MESSAGES = 64
+# Keep local CLI compaction behavior independent from the hosted worker.
+LOCAL_MAX_SESSION_MESSAGES = 30
 TRIM_ON_ERROR = 10         # messages to keep on context-too-large retry
 _MIN_HOSTED_INTERNAL_CONTEXT_CHARS = 10_000
 
@@ -1035,7 +1039,7 @@ def _cap_openai_history(messages: list[dict], max_non_system: int) -> list[dict]
 def _prepare_hosted_context(
     messages: list[dict],
     *,
-    max_messages: int = MAX_SESSION_MESSAGES,
+    max_messages: int = HOSTED_MAX_SESSION_MESSAGES,
     max_chars: int = HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     emergency_keep: int = TRIM_ON_ERROR,
 ) -> dict:
@@ -1050,11 +1054,12 @@ def _prepare_hosted_context(
 
     bounded = _cap_openai_history(messages, max_messages)
     messages[:] = bounded
+    count_trimmed = len(messages) < before_messages
     messages, compact_stats = compact_messages(messages, fmt="openai")
 
-    after_chars = _serialized_context_chars(messages)
+    after_count_cap_chars = _serialized_context_chars(messages)
     emergency_trimmed = False
-    if after_chars > max_chars and len(messages) > 1:
+    if after_count_cap_chars > max_chars and len(messages) > 1:
         max_tail = min(max(1, int(emergency_keep or 1)), len(messages) - 1)
         for keep_tail in range(max_tail, 0, -1):
             candidate = emergency_trim(
@@ -1066,7 +1071,6 @@ def _prepare_hosted_context(
             if len(candidate) < len(messages):
                 messages[:] = candidate
                 emergency_trimmed = True
-                after_chars = candidate_chars
             if candidate_chars <= max_chars:
                 break
 
@@ -1076,6 +1080,8 @@ def _prepare_hosted_context(
         "chars_before": before_chars,
         "chars_after": _serialized_context_chars(messages),
         "message_trimmed": max(0, before_messages - len(messages)),
+        "count_trimmed": count_trimmed,
+        "message_limit": max_messages,
         "tool_results_compacted": int(compact_stats.get("compacted", 0) or 0),
         "emergency_trimmed": emergency_trimmed,
     }
@@ -1484,7 +1490,11 @@ class TrialAgent:
     def _save_session(self, session_id: str, messages: list, max_messages: int | None = None):
         """Persist session messages to disk (system prompt excluded, capped)."""
         path = self._session_path(session_id)
-        cap = max_messages if isinstance(max_messages, int) and max_messages > 0 else MAX_SESSION_MESSAGES
+        cap = (
+            max_messages
+            if isinstance(max_messages, int) and max_messages > 0
+            else HOSTED_MAX_SESSION_MESSAGES
+        )
         bounded = _cap_openai_history(messages, cap)
         non_system = [m for m in bounded if m.get("role") != "system"]
         try:
@@ -1908,6 +1918,8 @@ class TrialAgent:
                 f"[{session_id}] Prepared hosted context: "
                 f"messages {context_stats['messages_before']}→{context_stats['messages_after']}, "
                 f"chars {context_stats['chars_before']}→{context_stats['chars_after']}, "
+                f"count_trimmed={context_stats['count_trimmed']}, "
+                f"message_limit={context_stats['message_limit']}, "
                 f"tool_results_compacted={context_stats['tool_results_compacted']}, "
                 f"emergency_trimmed={context_stats['emergency_trimmed']}"
             )
@@ -3113,7 +3125,7 @@ class LocalOpenRouterCLI:
         session_id: str = LOCAL_SESSION_ID,
         enable_tools: bool = True,
         max_turns: int = MAX_TURNS,
-        max_history_messages: int = MAX_SESSION_MESSAGES,
+        max_history_messages: int = LOCAL_MAX_SESSION_MESSAGES,
     ):
         self.agent = agent
         self.model = model
@@ -3624,8 +3636,11 @@ def main():
     parser.add_argument(
         "--max-history-messages",
         type=int,
-        default=MAX_SESSION_MESSAGES,
-        help=f"Trigger local compaction after this many non-system messages (default: {MAX_SESSION_MESSAGES})",
+        default=LOCAL_MAX_SESSION_MESSAGES,
+        help=(
+            "Trigger local compaction after this many non-system messages "
+            f"(default: {LOCAL_MAX_SESSION_MESSAGES})"
+        ),
     )
     args = parser.parse_args()
 
