@@ -23679,18 +23679,18 @@ _WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
   function blockWorkspaceZoom(event) { event.preventDefault(); }
   document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});
   document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});
-  function blockWorkspaceMultiTouchMove(event) { blockWorkspaceZoom(event); }
   function stopWorkspaceMultiTouchMove() {
-    document.removeEventListener('touchmove', blockWorkspaceMultiTouchMove);
+    document.removeEventListener('touchmove', blockWorkspaceZoom);
   }
   document.addEventListener('touchstart', function(event) {
     if (!event.touches || event.touches.length <= 1) return;
-    document.addEventListener('touchmove', blockWorkspaceMultiTouchMove, {passive:false});
+    document.addEventListener('touchmove', blockWorkspaceZoom, {passive:false});
   }, {passive:true});
-  document.addEventListener('touchend', function(event) {
+  function settleWorkspaceMultiTouch(event) {
     if (!event.touches || event.touches.length <= 1) stopWorkspaceMultiTouchMove();
-  }, {passive:true});
-  document.addEventListener('touchcancel', stopWorkspaceMultiTouchMove, {passive:true});
+  }
+  document.addEventListener('touchend', settleWorkspaceMultiTouch, {passive:true});
+  document.addEventListener('touchcancel', settleWorkspaceMultiTouch, {passive:true});
 })();
 </script>"""
 
