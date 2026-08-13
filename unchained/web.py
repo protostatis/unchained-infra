@@ -1760,7 +1760,6 @@ async def handle_sitemap_xml(request: web.Request) -> web.Response:
         published = []
     pages = [
         ("https://unchainedsky.com/", "1.0", "weekly"),
-        ("https://unchainedsky.com/unbrowser", "0.9", "weekly"),
         ("https://unchainedsky.com/first-look", "0.9", "weekly"),
         ("https://unchainedsky.com/browserbase-alternative", "0.8", "monthly"),
         ("https://unchainedsky.com/browser-mcp-alternative", "0.8", "monthly"),

@@ -1150,6 +1150,28 @@ if [[ "${unbrowser_page_ready:-false}" != "true" ]]; then
     exit 1
 fi
 
+# The dedicated host must advertise and serve its own canonical sitemap. This
+# keeps discovery aligned after the landing page moved off the primary host.
+for attempt in $(seq 1 20); do
+    robots_body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+        --resolve "$public_host:443:127.0.0.1" \
+        "https://$public_host/robots.txt" || true)"
+    sitemap_body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+        --resolve "$public_host:443:127.0.0.1" \
+        "https://$public_host/sitemap.xml" || true)"
+    if grep -Fq "Sitemap: https://$public_host/sitemap.xml" <<<"$robots_body" \
+        && grep -Fq "<loc>https://$public_host/</loc>" <<<"$sitemap_body"; then
+        unbrowser_discovery_ready=true
+        break
+    fi
+    sleep 2
+done
+if [[ "${unbrowser_discovery_ready:-false}" != "true" ]]; then
+    echo "public Unbrowser discovery-contract health check failed" >&2
+    docker compose logs --tail 80 caddy >&2 || true
+    exit 1
+fi
+
 # A logged-out request to the persistent terminal must reach forward_auth;
 # it must never silently become the anonymous kiosk session.
 for attempt in $(seq 1 20); do
