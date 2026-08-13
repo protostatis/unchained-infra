@@ -23668,11 +23668,14 @@ _WORKSPACE_VIEWPORT = (
     'maximum-scale=1, user-scalable=no, viewport-fit=cover">'
 )
 # Temporary crash containment. Remove this zoom restriction after physical-iPhone
-# validation shows the semantic Agent View can safely keep accessibility zoom.
+# validation shows the semantic Agent View can safely keep accessibility zoom
+# (tracked in GitHub issue #531). Current workspace pages already require inline
+# scripts; a future strict CSP must nonce/hash this guard with those runtimes.
 _WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
 (function() {
   // Modern iOS may ignore viewport zoom limits. These non-passive handlers are
   // the load-bearing guard; the viewport metadata is only complementary.
+  // gesture* is WebKit-specific; touchmove provides the cross-browser fallback.
   function blockWorkspaceZoom(event) { event.preventDefault(); }
   document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});
   document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});
