@@ -64,6 +64,61 @@ class TestTemplateTransforms(unittest.TestCase):
         self.assertIn("codex-sdk:codex-mini-latest", templates.CHAT_CODEX_HTML)
         self.assertIn("claude-sdk:claude-sonnet-4-6", templates.CHAT_CLAUDE_SDK_HTML)
 
+    def test_agent_view_workspaces_disable_page_pinch_zoom(self):
+        from web_app import templates
+
+        workspaces = {
+            "Trial": templates.TRIAL_CHAT_HTML,
+            "Claude CLI": templates.CLAUDE_CHAT_HTML,
+            "Gemini": templates.CHAT_GEMINI_HTML,
+            "Claude SDK": templates.CHAT_CLAUDE_SDK_HTML,
+            "Codex": templates.CHAT_CODEX_HTML,
+        }
+        expected_viewport = (
+            '<meta name="viewport" content="width=device-width, initial-scale=1, '
+            'maximum-scale=1, user-scalable=no, viewport-fit=cover">'
+        )
+        for workspace, html in workspaces.items():
+            with self.subTest(workspace=workspace):
+                self.assertEqual(html.count(expected_viewport), 1)
+                self.assertEqual(html.count('id="workspace-zoom-guard"'), 1)
+                self.assertIn(
+                    "document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});",
+                    html,
+                )
+                self.assertIn(
+                    "document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});",
+                    html,
+                )
+                self.assertIn(
+                    "document.addEventListener('touchmove', function(event)",
+                    html,
+                )
+                self.assertIn("event.touches.length > 1", html)
+
+    def test_workspace_zoom_guard_is_idempotent_and_requires_viewport(self):
+        from web_app import templates
+
+        source = (
+            '<html><head><meta name="viewport" content="width=device-width, initial-scale=1">'
+            '</head><body></body></html>'
+        )
+        guarded = templates._disable_workspace_zoom(source, template_name="sample")
+        self.assertEqual(
+            templates._disable_workspace_zoom(guarded, template_name="sample"),
+            guarded,
+        )
+        with self.assertRaises(TemplateTransformError):
+            templates._disable_workspace_zoom(
+                "<html><head></head><body></body></html>",
+                template_name="missing viewport",
+            )
+        with self.assertRaises(TemplateTransformError):
+            templates._disable_workspace_zoom(
+                source.replace("</head>", '<meta name="viewport" content="initial-scale=1"></head>'),
+                template_name="duplicate viewport",
+            )
+
     def test_agent_view_chat_state_and_response_reveal_across_lanes(self):
         from web_app import templates
 
