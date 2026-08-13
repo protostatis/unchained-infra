@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -14,7 +15,7 @@ import httpx
 
 from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
-    MAX_SESSION_MESSAGES,
+    HOSTED_MAX_SESSION_MESSAGES,
     TrialAgent,
     _append_tool_followup_guidance,
     _hosted_user_error,
@@ -762,6 +763,71 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(stats["message_trimmed"], 0)
         self.assertTrue(stats["emergency_trimmed"])
 
+    def test_prepare_hosted_context_uses_default_count_cap_before_char_trim(self):
+        messages = [{"role": "system", "content": "system"}]
+        for index in range(HOSTED_MAX_SESSION_MESSAGES + 20):
+            messages.extend([
+                {"role": "user", "content": f"request {index}"},
+                {"role": "assistant", "content": f"answer {index}"},
+            ])
+        messages.append({"role": "user", "content": "current request"})
+
+        stats = _prepare_hosted_context(messages, max_chars=400_000)
+
+        self.assertTrue(stats["count_trimmed"])
+        self.assertEqual(stats["message_limit"], HOSTED_MAX_SESSION_MESSAGES)
+        self.assertLess(stats["chars_after"], stats["chars_before"])
+        self.assertLessEqual(
+            sum(1 for message in messages if message.get("role") != "system"),
+            HOSTED_MAX_SESSION_MESSAGES,
+        )
+        self.assertEqual(messages[-1], {"role": "user", "content": "current request"})
+        self.assertFalse(stats["emergency_trimmed"])
+
+    def test_prepare_hosted_context_reports_char_only_trim(self):
+        messages = [{"role": "system", "content": "system"}]
+        for index in range(10):
+            messages.extend([
+                {"role": "user", "content": f"request {index}"},
+                {"role": "assistant", "content": "x" * 20_000},
+            ])
+        messages.append({"role": "user", "content": "current request"})
+
+        stats = _prepare_hosted_context(
+            messages,
+            max_messages=HOSTED_MAX_SESSION_MESSAGES,
+            max_chars=50_000,
+            emergency_keep=10,
+        )
+
+        self.assertFalse(stats["count_trimmed"])
+        self.assertEqual(stats["message_limit"], HOSTED_MAX_SESSION_MESSAGES)
+        self.assertTrue(stats["emergency_trimmed"])
+        self.assertLessEqual(
+            len(json.dumps(messages, ensure_ascii=False, default=str)), 50_000
+        )
+
+    def test_session_save_uses_default_count_cap(self):
+        sid = "s-default-context-cap"
+        messages = [{"role": "system", "content": "system"}]
+        for index in range(HOSTED_MAX_SESSION_MESSAGES + 20):
+            messages.append({"role": "user", "content": f"request {index}"})
+
+        with tempfile.TemporaryDirectory() as session_dir:
+            with patch("chat_agent_openrouter.SESSION_DIR", session_dir):
+                self.agent._save_session(sid, messages)
+                with open(os.path.join(session_dir, f"{sid}.json")) as f:
+                    saved = json.load(f)
+
+        self.assertEqual(len(saved["messages"]), HOSTED_MAX_SESSION_MESSAGES)
+        self.assertEqual(
+            saved["messages"][-1],
+            {
+                "role": "user",
+                "content": f"request {HOSTED_MAX_SESSION_MESSAGES + 19}",
+            },
+        )
+
     async def test_handle_message_bounds_oversized_live_session_before_provider(self):
         sid = "s-context-bound"
         cached = [{"role": "system", "content": "old system"}]
@@ -815,7 +881,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertLessEqual(
             sum(1 for message in provider_messages if message.get("role") != "system"),
-            MAX_SESSION_MESSAGES,
+            HOSTED_MAX_SESSION_MESSAGES,
         )
 
     async def test_background_navigation_policy_reaches_cloud_tools(self):
