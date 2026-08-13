@@ -23669,10 +23669,11 @@ _WORKSPACE_VIEWPORT = (
 )
 _WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
 (function() {
+  // Modern iOS may ignore viewport zoom limits. These non-passive handlers are
+  // the load-bearing guard; the viewport metadata is only complementary.
   function blockWorkspaceZoom(event) { event.preventDefault(); }
   document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});
   document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});
-  document.addEventListener('gestureend', blockWorkspaceZoom, {passive:false});
   document.addEventListener('touchmove', function(event) {
     if (event.touches && event.touches.length > 1) blockWorkspaceZoom(event);
   }, {passive:false});
@@ -23684,7 +23685,7 @@ def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
     """Disable page-level pinch zoom on Agent View chat workspaces."""
     if 'id="workspace-zoom-guard"' in html:
         return html
-    viewport_pattern = re.compile(r'<meta name="viewport" content="[^"]+">')
+    viewport_pattern = re.compile(r'<meta name="viewport" content="[^"]+"\s*/?>')
     matches = viewport_pattern.findall(html)
     if len(matches) != 1:
         raise TemplateTransformError(
