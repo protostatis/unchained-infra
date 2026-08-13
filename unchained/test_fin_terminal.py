@@ -774,6 +774,13 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         route = self.caddy.split("unbrowser.unchainedsky.com {", 1)[1]
 
         self.assertIn("rewrite * /unbrowser", route)
+        self.assertIn("handle /robots.txt", route)
+        self.assertIn("handle /sitemap.xml", route)
+        self.assertIn(
+            "Sitemap: https://unbrowser.unchainedsky.com/sitemap.xml",
+            route,
+        )
+        self.assertIn("<loc>https://unbrowser.unchainedsky.com/</loc>", route)
         self.assertIn(
             "@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*",
             route,
@@ -798,6 +805,15 @@ class FinTerminalDeploymentContractTests(unittest.TestCase):
         self.assertIn("handle /web/analytics/*", route)
         self.assertIn("handle /favicon.svg", route)
         self.assertIn('respond "Not found" 404', route)
+
+    def test_deploy_verifies_unbrowser_discovery_contract(self):
+        self.assertIn('"https://$public_host/robots.txt"', self.deploy)
+        self.assertIn(
+            "Sitemap: https://$public_host/sitemap.xml",
+            self.deploy,
+        )
+        self.assertIn('"https://$public_host/sitemap.xml"', self.deploy)
+        self.assertIn("<loc>https://$public_host/</loc>", self.deploy)
 
     def test_demo_service_and_network_are_absent(self):
         """fin-terminal-demo service and its dedicated network must not exist."""

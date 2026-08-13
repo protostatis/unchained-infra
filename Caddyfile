@@ -168,6 +168,33 @@ unbrowser.unchainedsky.com {
 		max_size 10MB
 	}
 
+	# Keep search discovery on the dedicated canonical host. The primary-site
+	# sitemap must not be the only discovery path for this subdomain.
+	handle /robots.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=86400"
+		respond <<ROBOTS
+			User-agent: *
+			Allow: /
+
+			Sitemap: https://unbrowser.unchainedsky.com/sitemap.xml
+			ROBOTS 200
+	}
+	handle /sitemap.xml {
+		header Content-Type "application/xml; charset=utf-8"
+		header Cache-Control "public, max-age=86400"
+		respond <<SITEMAP
+			<?xml version="1.0" encoding="UTF-8"?>
+			<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+			  <url>
+			    <loc>https://unbrowser.unchainedsky.com/</loc>
+			    <priority>1.0</priority>
+			    <changefreq>weekly</changefreq>
+			  </url>
+			</urlset>
+			SITEMAP 200
+	}
+
 	# Keep primary-product destinations on their existing canonical host.
 	@primary_site_paths path /mcp /mcp/* /first-look /chrome-tax /install /install/*
 	redir @primary_site_paths https://unchainedsky.com{uri} 308
