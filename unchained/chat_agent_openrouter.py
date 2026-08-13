@@ -47,7 +47,10 @@ import httpx
 import websockets
 
 import cloud_tools
-from credit import validate_hosted_context_budget
+from credit import (
+    deepseek_cost_for_tokens,
+    validate_hosted_context_budget,
+)
 from chat_event_transport import CHAT_WS_MAX_MESSAGE_BYTES, send_agent_event
 from context_compact import compact_messages, emergency_trim
 from tool_payloads import (
@@ -107,79 +110,17 @@ _DEFINITIVE_UNBILLED_HTTP_STATUSES = frozenset({400, 404})
 # DeepSeek direct provider
 DEEPSEEK_MODEL_PREFIX = "deepseek-"
 
-# Cache-aware DeepSeek pricing (USD per 1M tokens), from the DeepSeek pricing
-# page (CNY list converted to USD at ~7.1). DeepSeek does not return a dollar
-# cost field, so per-call cost is estimated from the usage token breakdown:
-#   prompt_cache_hit_tokens × hit_price + prompt_cache_miss_tokens × miss_price
-#   + completion_tokens × output_price
-# DeepSeek has announced a price increase, so these defaults include a small
-# margin and can be overridden without a code change via DEEPSEEK_PRICE_JSON:
-#   {"deepseek-v4-flash": {"input_cache_hit_usd_per_1m": 0.003,
-#                          "input_cache_miss_usd_per_1m": 0.15,
-#                          "output_usd_per_1m": 0.30}, ...}
-_DEEPSEEK_PRICE_DEFAULTS: dict[str, dict[str, float]] = {
-    "deepseek-v4-flash": {
-        "input_cache_hit_usd_per_1m": 0.003,
-        "input_cache_miss_usd_per_1m": 0.15,
-        "output_usd_per_1m": 0.30,
-    },
-    "deepseek-v4-pro": {
-        "input_cache_hit_usd_per_1m": 0.004,
-        "input_cache_miss_usd_per_1m": 0.45,
-        "output_usd_per_1m": 0.90,
-    },
-}
+# Cache-aware DeepSeek pricing is now immutable and time-versioned (see
+# ``credit.deepseek_pricing_for_timestamp``). The legacy ``DEEPSEEK_PRICE_JSON``
+# env override was removed: official models are priced by a code schedule keyed
+# on the local provider-submission timestamp, with an exact cutoff of
+# 2026-08-16T16:00:00Z between the legacy and time-of-use schedules. Unknown
+# models keep the conservative no-cost → full-reservation fallback.
 
 
 def _is_deepseek_model(model: str) -> bool:
     """Return whether a model ID routes through the DeepSeek direct API."""
     return (model or "").strip().startswith(DEEPSEEK_MODEL_PREFIX)
-
-
-def _parse_deepseek_price_json(raw: str) -> dict[str, dict[str, float]]:
-    """Parse the optional DEEPSEEK_PRICE_JSON env override.
-
-    Per-model overrides are deep-merged over the defaults (partial overrides
-    never zero out unset prices). Prices must be finite, non-negative numbers;
-    invalid entries fall back to the model default rather than silently
-    under-pricing the estimate.
-    """
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    table: dict[str, dict[str, float]] = {}
-    defaults = _DEEPSEEK_PRICE_DEFAULTS
-    for model, prices in data.items():
-        if not isinstance(prices, dict):
-            continue
-        base = dict(defaults.get(str(model), {}))
-        changed = False
-        for key in ("input_cache_hit_usd_per_1m", "input_cache_miss_usd_per_1m",
-                    "output_usd_per_1m"):
-            if key not in prices:
-                continue
-            try:
-                value = float(prices[key])
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(value) or value < 0:
-                continue
-            base[key] = value
-            changed = True
-        if changed:
-            table[str(model)] = base
-    return table
-
-
-def _deepseek_price_table() -> dict[str, dict[str, float]]:
-    table = dict(_DEEPSEEK_PRICE_DEFAULTS)
-    table.update(_parse_deepseek_price_json(os.environ.get("DEEPSEEK_PRICE_JSON", "")))
-    return table
 
 # When running inside Docker, override these via env vars:
 #   RELAY_HOST=relay  RELAY_PORT=8765
@@ -1147,6 +1088,8 @@ def _extract_openrouter_usage(payload: dict) -> dict:
     if cost_usd <= 0 and est_cost_per_1k > 0 and total_tokens > 0:
         estimated_cost_usd = (total_tokens / 1000.0) * est_cost_per_1k
 
+    cost_micro = max(0, round(cost_usd * 1_000_000)) if cost_present else 0
+    estimated_cost_micro = max(0, round(estimated_cost_usd * 1_000_000))
     return {
         "openrouter_id": str(payload.get("id", "")),
         "prompt_tokens": max(0, prompt_tokens),
@@ -1154,18 +1097,25 @@ def _extract_openrouter_usage(payload: dict) -> dict:
         "total_tokens": max(0, total_tokens),
         "cost_usd": round(max(0.0, cost_usd), 9),
         "estimated_cost_usd": round(max(0.0, estimated_cost_usd), 9),
+        "cost_micro_usd": cost_micro,
+        "estimated_cost_micro_usd": estimated_cost_micro,
         "cost_present": cost_present,
     }
 
 
-def _extract_deepseek_usage(payload: dict, model: str = "") -> dict:
+def _extract_deepseek_usage(
+    payload: dict,
+    model: str = "",
+    submitted_at_ts: float | None = None,
+) -> dict:
     """Extract cache-aware usage + estimated cost from a DeepSeek response.
 
     DeepSeek never returns a dollar cost field, only tokens. The prompt token
     breakdown (``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``) is
-    priced differently, so the estimate uses the per-model price table from
-    ``_deepseek_price_table()``. When the breakdown is absent (older responses),
-    all prompt tokens are treated as cache misses (conservative).
+    priced differently, so the estimate delegates to the shared control-plane
+    helper ``credit.deepseek_cost_for_tokens`` keyed on ``submitted_at_ts``
+    (the provider-submission timestamp) so the worker and the settlement
+    recomputation derive identical token/cost values.
     """
     usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
     if not isinstance(usage, dict):
@@ -1175,51 +1125,30 @@ def _extract_deepseek_usage(payload: dict, model: str = "") -> dict:
     hit_tokens = max(0, _coerce_int(usage.get("prompt_cache_hit_tokens", 0), 0))
     miss_tokens = max(0, _coerce_int(usage.get("prompt_cache_miss_tokens", 0), 0))
     completion_tokens = max(0, _coerce_int(usage.get("completion_tokens", 0), 0))
-    if hit_tokens <= 0 and miss_tokens <= 0:
-        # Older responses without the breakdown: attribute all prompt tokens as
-        # cache misses (conservative).
-        miss_tokens = prompt_tokens
-    if hit_tokens + miss_tokens > prompt_tokens:
-        # Defensive: never bill more prompt tokens than were reported.
-        hit_tokens = min(hit_tokens, prompt_tokens)
-        miss_tokens = min(miss_tokens, prompt_tokens)
-        if hit_tokens + miss_tokens > prompt_tokens:
-            excess = hit_tokens + miss_tokens - prompt_tokens
-            hit_tokens = max(0, hit_tokens - excess)
-    if hit_tokens + miss_tokens < prompt_tokens:
-        # Unaccounted prompt tokens are priced as cache misses (conservative).
-        miss_tokens += prompt_tokens - (hit_tokens + miss_tokens)
-    total_tokens = max(
-        0, _coerce_int(usage.get("total_tokens", 0), 0)
+    total_tokens = max(0, _coerce_int(usage.get("total_tokens", 0), 0))
+
+    # Unbilled/local calls have no submission callback; price them at the
+    # current wall clock so the same schedule applies deterministically.
+    basis_ts = time.time() if submitted_at_ts is None else float(submitted_at_ts)
+    result = deepseek_cost_for_tokens(
+        model, basis_ts, prompt_tokens, hit_tokens, miss_tokens,
+        completion_tokens, total_tokens,
     )
-    if total_tokens <= 0:
-        total_tokens = prompt_tokens + completion_tokens
-
-    prices = _deepseek_price_table().get((model or "").strip(), {})
-    hit_price = _coerce_float(prices.get("input_cache_hit_usd_per_1m", 0.0), 0.0)
-    miss_price = _coerce_float(prices.get("input_cache_miss_usd_per_1m", 0.0), 0.0)
-    out_price = _coerce_float(prices.get("output_usd_per_1m", 0.0), 0.0)
-
-    cost_usd = 0.0
-    if (hit_price or miss_price or out_price) and (
-        hit_tokens or miss_tokens or completion_tokens
-    ):
-        cost_usd = (
-            (hit_tokens / 1_000_000.0) * hit_price
-            + (miss_tokens / 1_000_000.0) * miss_price
-            + (completion_tokens / 1_000_000.0) * out_price
-        )
-
+    cost_micro = result["cost_micro_usd"]
+    cost_usd = cost_micro / 1_000_000.0
     return {
         "openrouter_id": str(payload.get("id", "")),
-        "prompt_tokens": max(0, prompt_tokens),
-        "completion_tokens": max(0, completion_tokens),
-        "total_tokens": max(0, total_tokens),
-        "prompt_cache_hit_tokens": max(0, hit_tokens),
-        "prompt_cache_miss_tokens": max(0, miss_tokens),
-        "cost_usd": round(max(0.0, cost_usd), 9),
-        "estimated_cost_usd": round(max(0.0, cost_usd), 9),
-        "cost_present": cost_usd > 0.0,
+        "prompt_tokens": result["prompt_tokens"],
+        "completion_tokens": result["completion_tokens"],
+        "total_tokens": result["total_tokens"],
+        "prompt_cache_hit_tokens": result["prompt_cache_hit_tokens"],
+        "prompt_cache_miss_tokens": result["prompt_cache_miss_tokens"],
+        "cost_usd": round(cost_usd, 9),
+        "estimated_cost_usd": round(cost_usd, 9),
+        "cost_micro_usd": cost_micro,
+        "estimated_cost_micro_usd": cost_micro,
+        "cost_present": result["cost_present"],
+        "pricing": result["pricing"],
     }
 
 
@@ -1413,6 +1342,12 @@ class TrialAgent:
         provider_cost_micro_usd: int = 0,
         prompt_cache_hit_tokens: int = 0,
         prompt_cache_miss_tokens: int = 0,
+        pricing_schedule_version: str = "",
+        pricing_tier: str = "",
+        pricing_basis_ts: float | None = None,
+        input_cache_hit_rate_micro_usd_per_million: int = 0,
+        input_cache_miss_rate_micro_usd_per_million: int = 0,
+        output_rate_micro_usd_per_million: int = 0,
     ) -> dict | None:
         """Call the credit settle endpoint. Returns settlement dict or None."""
         token = self._credit_service_token()
@@ -1429,6 +1364,12 @@ class TrialAgent:
             "provider_cost_micro_usd": provider_cost_micro_usd,
             "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
             "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+            "pricing_schedule_version": pricing_schedule_version,
+            "pricing_tier": pricing_tier,
+            "pricing_basis_ts": pricing_basis_ts,
+            "input_cache_hit_rate_micro_usd_per_million": input_cache_hit_rate_micro_usd_per_million,
+            "input_cache_miss_rate_micro_usd_per_million": input_cache_miss_rate_micro_usd_per_million,
+            "output_rate_micro_usd_per_million": output_rate_micro_usd_per_million,
         }
         try:
             resp = await client.post(
@@ -1804,6 +1745,8 @@ class TrialAgent:
                     "provider": "deepseek",
                     "currency": str(info.get("currency", "")),
                     "total_balance": str(info.get("total_balance", "")),
+                    "granted_balance": info.get("granted_balance"),
+                    "topped_up_balance": info.get("topped_up_balance"),
                     "is_available": bool(data.get("is_available", False)),
                     "snapshot_at": time.time(),
                 }
@@ -2640,6 +2583,11 @@ class TrialAgent:
                     "Hosted credit authorization failed. Add credit or try a free model."
                 )
 
+        # Safe default pricing basis for unbilled/local calls (no submission
+        # callback). Billed calls overwrite this immediately after the
+        # submitted callback succeeds, before the outbound provider request.
+        provider_submission_ts = time.time()
+
         try:
             if reserved_call_id and credit_client:
                 submitted = None
@@ -2660,6 +2608,24 @@ class TrialAgent:
                         "Hosted credit submission authorization failed. Please try again."
                     )
                 provider_submitted = True
+                # Authoritative pricing basis: the control plane records
+                # ``submitted_at`` in mark_call_submitted and returns it here.
+                # Use that (not the worker clock) so tier boundaries match the
+                # server's authoritative timestamp; fall back to local time if
+                # the callback response is missing/non-finite.
+                submitted_at_raw = (submitted or {}).get("submitted_at")
+                try:
+                    submitted_at_candidate = float(submitted_at_raw)
+                except (TypeError, ValueError):
+                    submitted_at_candidate = None
+                if (
+                    submitted_at_candidate is not None
+                    and math.isfinite(submitted_at_candidate)
+                    and submitted_at_candidate >= 0
+                ):
+                    provider_submission_ts = submitted_at_candidate
+                else:
+                    provider_submission_ts = time.time()
 
             try:
                 data = await self._do_openrouter_call(
@@ -2704,19 +2670,23 @@ class TrialAgent:
             # --- Credit settle after success ---
             if reserved_call_id and credit_client:
                 if provider == "deepseek":
-                    usage_data = _extract_deepseek_usage(data, effective_model)
+                    usage_data = _extract_deepseek_usage(
+                        data, effective_model,
+                        submitted_at_ts=provider_submission_ts,
+                    )
                 else:
                     usage_data = _extract_openrouter_usage(data)
-                cost_usd = usage_data.get("cost_usd", 0)
+                cost_micro = int(usage_data.get("cost_micro_usd", 0) or 0)
                 cost_present = bool(usage_data.get("cost_present", False))
-                est_cost_usd = usage_data.get("estimated_cost_usd", 0)
+                est_cost_micro = int(usage_data.get("estimated_cost_micro_usd", 0) or 0)
+                pricing = usage_data.get("pricing") or {}
 
                 # Determine actual settlement cost
                 if cost_present:
-                    actual_cost_micro = max(0, round(cost_usd * 1_000_000))
+                    actual_cost_micro = max(0, cost_micro)
                     cost_absent = False
-                elif est_cost_usd > 0:
-                    actual_cost_micro = max(1, round(est_cost_usd * 1_000_000))
+                elif est_cost_micro > 0:
+                    actual_cost_micro = max(1, est_cost_micro)
                     cost_absent = False
                 else:
                     # No cost info at all — let settle_call handle the
@@ -2725,7 +2695,7 @@ class TrialAgent:
                     cost_absent = True
 
                 # Provider-reported cost for reconciliation (may exceed reserve)
-                provider_cost_micro = max(0, round(cost_usd * 1_000_000)) if cost_present else 0
+                provider_cost_micro = max(0, cost_micro) if cost_present else 0
 
                 # Retry transient settle failures
                 settlement = None
@@ -2746,6 +2716,20 @@ class TrialAgent:
                         ),
                         prompt_cache_miss_tokens=usage_data.get(
                             "prompt_cache_miss_tokens", 0,
+                        ),
+                        pricing_schedule_version=pricing.get(
+                            "schedule_version", ""
+                        ),
+                        pricing_tier=pricing.get("tier", ""),
+                        pricing_basis_ts=pricing.get("pricing_basis_ts"),
+                        input_cache_hit_rate_micro_usd_per_million=pricing.get(
+                            "input_cache_hit_micro_usd_per_million", 0
+                        ),
+                        input_cache_miss_rate_micro_usd_per_million=pricing.get(
+                            "input_cache_miss_micro_usd_per_million", 0
+                        ),
+                        output_rate_micro_usd_per_million=pricing.get(
+                            "output_micro_usd_per_million", 0
                         ),
                     )
                     if settlement:
@@ -2776,7 +2760,9 @@ class TrialAgent:
                     pass
 
         if provider == "deepseek":
-            usage = _extract_deepseek_usage(data, effective_model)
+            usage = _extract_deepseek_usage(
+                data, effective_model, submitted_at_ts=provider_submission_ts
+            )
         else:
             usage = _extract_openrouter_usage(data)
         usage_log = (

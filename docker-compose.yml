@@ -364,7 +364,6 @@ services:
       # DeepSeek lane is optional: omit DEEPSEEK_API_KEY to keep the container
       # OpenRouter-only (DeepSeek requests then fail closed at call time).
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_PRICE_JSON=${DEEPSEEK_PRICE_JSON:-}
       - UNCHAINED_API_KEY=${TRIAL_AGENT_KEY:?TRIAL_AGENT_KEY_required}
       - UNCHAINED_SERVER=ws://web:8080
       - RELAY_HOST=relay
