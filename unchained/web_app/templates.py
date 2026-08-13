@@ -23667,6 +23667,8 @@ _WORKSPACE_VIEWPORT = (
     '<meta name="viewport" content="width=device-width, initial-scale=1, '
     'maximum-scale=1, user-scalable=no, viewport-fit=cover">'
 )
+# Temporary crash containment. Remove this zoom restriction after physical-iPhone
+# validation shows the semantic Agent View can safely keep accessibility zoom.
 _WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
 (function() {
   // Modern iOS may ignore viewport zoom limits. These non-passive handlers are
@@ -23685,7 +23687,10 @@ def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
     """Disable page-level pinch zoom on Agent View chat workspaces."""
     if 'id="workspace-zoom-guard"' in html:
         return html
-    viewport_pattern = re.compile(r'<meta name="viewport" content="[^"]+"\s*/?>')
+    viewport_pattern = re.compile(
+        r'<meta name=(?P<name_quote>["\'])viewport(?P=name_quote)\s+'
+        r'content=(?P<content_quote>["\'])[^"\']+(?P=content_quote)\s*/?>'
+    )
     matches = viewport_pattern.findall(html)
     if len(matches) != 1:
         raise TemplateTransformError(

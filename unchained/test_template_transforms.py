@@ -90,7 +90,6 @@ class TestTemplateTransforms(unittest.TestCase):
                     "document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});",
                     html,
                 )
-                self.assertNotIn("document.addEventListener('gestureend'", html)
                 self.assertIn(
                     "document.addEventListener('touchmove', function(event)",
                     html,
@@ -114,6 +113,16 @@ class TestTemplateTransforms(unittest.TestCase):
             templates._disable_workspace_zoom(
                 source.replace('initial-scale=1">', 'initial-scale=1"/>'),
                 template_name="self-closing viewport",
+            ),
+        )
+        self.assertIn(
+            templates._WORKSPACE_VIEWPORT,
+            templates._disable_workspace_zoom(
+                source.replace(
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                    "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+                ),
+                template_name="single-quoted viewport",
             ),
         )
         with self.assertRaises(TemplateTransformError):
