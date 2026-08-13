@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -92,6 +93,275 @@ def credit_service_token() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Immutable, time-versioned DeepSeek pricing schedule
+# ---------------------------------------------------------------------------
+# DeepSeek's published per-model rates, stored as integer micro-USD per million
+# tokens to avoid float drift. Pricing is time-versioned: each successful
+# request is priced by its local provider-submission timestamp (captured by the
+# worker immediately after the submitted callback), never by a response field
+# or a manual env flip. Unknown models keep their conservative fallback.
+#
+# Legacy schedule — in effect until the time-of-use change below:
+#   Flash: hit $0.0028, miss $0.14, output $0.28
+#   Pro:   hit $0.003625, miss $0.435, output $0.87
+#
+# New schedule — effective exactly 2026-08-16T16:00:00Z (unix 1786896000):
+#   Peak windows recur daily in UTC: [01:00, 04:00) and [06:00, 10:00).
+#   All other hours are off-peak.
+#   Flash off $0.007 / $0.22 / $0.66,  peak $0.014 / $0.44 / $1.32
+#   Pro   off $0.022 / $0.66 / $1.98, peak $0.044 / $1.32 / $3.96
+
+DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP = 1_786_896_000  # 2026-08-16T16:00:00Z
+DEEPSEEK_PRICING_SCHEDULE_VERSION = "2026-08-16T16:00:00Z"
+DEEPSEEK_PEAK_WINDOWS_UTC: tuple[tuple[int, int], ...] = ((1, 4), (6, 10))
+
+# (input_cache_hit, input_cache_miss, output) integer micro-USD per million
+# tokens.
+DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
+    "deepseek-v4-flash": (2_800, 140_000, 280_000),
+    "deepseek-v4-pro": (3_625, 435_000, 870_000),
+}
+DEEPSEEK_OFFPEAK_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
+    "deepseek-v4-flash": (7_000, 220_000, 660_000),
+    "deepseek-v4-pro": (22_000, 660_000, 1_980_000),
+}
+DEEPSEEK_PEAK_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
+    "deepseek-v4-flash": (14_000, 440_000, 1_320_000),
+    "deepseek-v4-pro": (44_000, 1_320_000, 3_960_000),
+}
+
+
+def deepseek_pricing_for_timestamp(model: str, ts: float) -> dict | None:
+    """Return the immutable time-versioned DeepSeek price for *model* at *ts*.
+
+    ``ts`` is the local provider-submission timestamp (unix seconds). Returns a
+    dict carrying the schedule version, tier (``legacy``/``peak``/``offpeak``),
+    the pricing basis timestamp, and the applied hit/miss/output rates as
+    integer micro-USD per million tokens. Unknown models return ``None`` so
+    callers keep their conservative fallback behavior.
+    """
+    m = str(model or "").strip()
+    if m not in DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION:
+        return None
+    basis = float(ts)
+    if basis < DEEPSEEK_PRICING_EFFECTIVE_TIMESTAMP:
+        tier = "legacy"
+        hit, miss, output = DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION[m]
+    else:
+        hour = time.gmtime(basis).tm_hour
+        if any(lo <= hour < hi for lo, hi in DEEPSEEK_PEAK_WINDOWS_UTC):
+            tier = "peak"
+            hit, miss, output = DEEPSEEK_PEAK_RATES_MICRO_USD_PER_MILLION[m]
+        else:
+            tier = "offpeak"
+            hit, miss, output = DEEPSEEK_OFFPEAK_RATES_MICRO_USD_PER_MILLION[m]
+    return {
+        "model": m,
+        "schedule_version": DEEPSEEK_PRICING_SCHEDULE_VERSION,
+        "tier": tier,
+        "pricing_basis_ts": basis,
+        "input_cache_hit_micro_usd_per_million": hit,
+        "input_cache_miss_micro_usd_per_million": miss,
+        "output_micro_usd_per_million": output,
+    }
+
+
+def normalize_deepseek_tokens(
+    prompt_tokens: int,
+    prompt_cache_hit_tokens: int,
+    prompt_cache_miss_tokens: int,
+    completion_tokens: int,
+    total_tokens: int = 0,
+) -> tuple[int, int, int, int, int]:
+    """Apply the conservative DeepSeek token-normalization rules.
+
+    Shared by the worker estimator and the control-plane settlement
+    recomputation so both derive identical token breakdowns. Returns
+    ``(prompt, hit, miss, completion, total)``:
+    - absent cache breakdown → all prompt tokens billed as cache miss;
+    - hit+miss is never allowed to exceed prompt tokens;
+    - any unaccounted remainder is billed as cache miss.
+    """
+    prompt = max(0, int(prompt_tokens or 0))
+    hit = max(0, int(prompt_cache_hit_tokens or 0))
+    miss = max(0, int(prompt_cache_miss_tokens or 0))
+    completion = max(0, int(completion_tokens or 0))
+    if hit <= 0 and miss <= 0:
+        miss = prompt
+    if hit + miss > prompt:
+        hit = min(hit, prompt)
+        miss = min(miss, prompt)
+        if hit + miss > prompt:
+            excess = hit + miss - prompt
+            hit = max(0, hit - excess)
+    if hit + miss < prompt:
+        miss += prompt - (hit + miss)
+    total = max(0, int(total_tokens or 0))
+    if total <= 0:
+        total = prompt + completion
+    return prompt, hit, miss, completion, total
+
+
+def round_cost_micro(numerator: int) -> int:
+    """Round a token×rate numerator to nearest integer micro-USD (half-up)."""
+    return (max(0, numerator) + 500_000) // 1_000_000
+
+
+def deepseek_cost_for_tokens(
+    model: str,
+    basis_ts: float,
+    prompt_tokens: int,
+    prompt_cache_hit_tokens: int,
+    prompt_cache_miss_tokens: int,
+    completion_tokens: int,
+    total_tokens: int = 0,
+) -> dict:
+    """Authoritative DeepSeek cost estimate from a token breakdown.
+
+    Normalizes tokens with the shared conservative rules, looks up the
+    immutable time-of-use schedule for *model* at *basis_ts*, and computes
+    integer micro-USD with deterministic half-up rounding. Returns a dict with
+    the normalized tokens, ``cost_micro_usd``, ``cost_present`` (known-priced
+    model with nonzero usage), and the pricing audit metadata (``None`` when
+    the model is not in the schedule).
+    """
+    pricing = deepseek_pricing_for_timestamp(model, basis_ts)
+    prompt, hit, miss, completion, total = normalize_deepseek_tokens(
+        prompt_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens,
+        completion_tokens, total_tokens,
+    )
+    has_usage = bool(hit or miss or completion)
+    cost_micro = 0
+    if pricing is not None and has_usage:
+        numerator = (
+            hit * pricing["input_cache_hit_micro_usd_per_million"]
+            + miss * pricing["input_cache_miss_micro_usd_per_million"]
+            + completion * pricing["output_micro_usd_per_million"]
+        )
+        cost_micro = round_cost_micro(numerator)
+    return {
+        "pricing": pricing,
+        "cost_micro_usd": cost_micro,
+        "cost_present": pricing is not None and has_usage,
+        "prompt_tokens": prompt,
+        "prompt_cache_hit_tokens": hit,
+        "prompt_cache_miss_tokens": miss,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+
+
+def _validate_pricing_against_authoritative(
+    authoritative: dict,
+    schedule_version: str,
+    tier: str,
+    basis_ts: float | None,
+    hit_rate: int,
+    miss_rate: int,
+    out_rate: int,
+) -> None:
+    """Validate worker pricing metadata against the authoritative schedule.
+
+    ``authoritative`` is the schedule derived from the reservation's recorded
+    ``submitted_at``. Absent metadata is allowed (an old worker) and is simply
+    not validated; any supplied metadata must match the authoritative version,
+    tier, basis timestamp (within a tiny tolerance), and rates, otherwise
+    ``ValueError`` is raised.
+    """
+    sv = str(schedule_version or "").strip()
+    t = str(tier or "").strip()
+    has_any = bool(sv or t or basis_ts is not None or hit_rate or miss_rate or out_rate)
+    if not has_any:
+        return
+
+    if sv != authoritative["schedule_version"]:
+        raise ValueError("pricing schedule version is not recognized")
+    if t != authoritative["tier"]:
+        raise ValueError("pricing tier does not match the authoritative submitted_at")
+    try:
+        basis = float(basis_ts)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pricing basis timestamp must be numeric") from exc
+    if not math.isfinite(basis):
+        raise ValueError("pricing basis timestamp must be finite")
+    if abs(basis - authoritative["pricing_basis_ts"]) > 1.0:
+        raise ValueError("pricing basis timestamp does not match reservation submitted_at")
+    try:
+        supplied = (int(hit_rate or 0), int(miss_rate or 0), int(out_rate or 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pricing rates must be integers") from exc
+    expected_rates = (
+        authoritative["input_cache_hit_micro_usd_per_million"],
+        authoritative["input_cache_miss_micro_usd_per_million"],
+        authoritative["output_micro_usd_per_million"],
+    )
+    if supplied != expected_rates:
+        raise ValueError("pricing rates do not match the authoritative schedule")
+
+
+def _validate_pricing_audit_metadata(
+    model: str,
+    schedule_version: str,
+    tier: str,
+    basis_ts: float | None,
+    hit_rate: int,
+    miss_rate: int,
+    out_rate: int,
+) -> tuple[str | None, str | None, float | None, int | None, int | None, int | None]:
+    """Validate and normalize worker-supplied time-of-use pricing metadata.
+
+    The worker is not fully trusted, so its claims are reconciled against the
+    immutable schedule for *model* at *basis_ts*. Returns the sanitized fields
+    (all ``None`` when no pricing metadata was supplied — non-DeepSeek or
+    unpriced calls), or raises ``ValueError`` (surfaced as HTTP 400) when
+    metadata is present but inconsistent with the schedule.
+    """
+    sv = str(schedule_version or "").strip()
+    t = str(tier or "").strip()
+    has_any = bool(
+        sv or t or basis_ts is not None or hit_rate or miss_rate or out_rate
+    )
+    if not has_any:
+        return None, None, None, None, None, None
+
+    if sv != DEEPSEEK_PRICING_SCHEDULE_VERSION:
+        raise ValueError("pricing schedule version is not recognized")
+    if t not in ("legacy", "peak", "offpeak"):
+        raise ValueError("pricing tier must be one of legacy/peak/offpeak")
+    try:
+        basis = float(basis_ts)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pricing basis timestamp must be numeric") from exc
+    if not math.isfinite(basis) or basis < 0:
+        raise ValueError("pricing basis timestamp must be finite and nonnegative")
+
+    expected = deepseek_pricing_for_timestamp(model, basis)
+    if expected is None:
+        raise ValueError("pricing metadata supplied for an unpriced model")
+    if expected["tier"] != t:
+        raise ValueError("pricing tier does not match the schedule for this timestamp")
+    try:
+        supplied = (int(hit_rate or 0), int(miss_rate or 0), int(out_rate or 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pricing rates must be integers") from exc
+    expected_rates = (
+        expected["input_cache_hit_micro_usd_per_million"],
+        expected["input_cache_miss_micro_usd_per_million"],
+        expected["output_micro_usd_per_million"],
+    )
+    if supplied != expected_rates:
+        raise ValueError("pricing rates do not match the schedule for this timestamp")
+    return (
+        expected["schedule_version"],
+        expected["tier"],
+        basis,
+        expected_rates[0],
+        expected_rates[1],
+        expected_rates[2],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Model catalog / allowlist
 # ---------------------------------------------------------------------------
 
@@ -120,10 +390,12 @@ HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS: dict[str, tuple[int, i
     # >=256k input-token tier
     "qwen/qwen3.6-plus": (1_300_000, 3_900_000),
     "qwen/qwen3.5-flash-02-23": (65_000, 260_000),
-    # DeepSeek direct — cache-miss input tier (worst case for the hold) and
-    # output rates from the DeepSeek price table (USD per 1M tokens).
-    "deepseek-v4-flash": (150_000, 300_000),
-    "deepseek-v4-pro": (450_000, 900_000),
+    # DeepSeek direct — cache-miss input tier and output rate use the NEW
+    # time-of-use PEAK worst-case schedule so the fixed hold covers the most
+    # expensive hour of the day. Flash hold $0.25 and Pro hold $1.00 remain
+    # certified sufficient against these peak rates.
+    "deepseek-v4-flash": (440_000, 1_320_000),   # peak miss $0.44 / output $1.32
+    "deepseek-v4-pro": (1_320_000, 3_960_000),   # peak miss $1.32 / output $3.96
 }
 
 
@@ -742,6 +1014,12 @@ class CreditLedger:
                     prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
                     provider_cost_micro_usd INTEGER NOT NULL DEFAULT 0,
                     provider_response_json TEXT DEFAULT '{}',
+                    pricing_schedule_version TEXT,
+                    pricing_tier TEXT,
+                    pricing_basis_ts REAL,
+                    input_cache_hit_rate_micro_usd_per_million INTEGER,
+                    input_cache_miss_rate_micro_usd_per_million INTEGER,
+                    output_rate_micro_usd_per_million INTEGER,
                     created_at REAL NOT NULL,
                     FOREIGN KEY (call_id) REFERENCES credit_call_reservations(call_id),
                     FOREIGN KEY (run_id) REFERENCES credit_runs(run_id),
@@ -768,6 +1046,24 @@ class CreditLedger:
                     "ALTER TABLE credit_provider_usage "
                     "ADD COLUMN prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0"
                 )
+
+            # Time-versioned DeepSeek pricing audit metadata (nullable so
+            # pre-existing usage rows are never repriced — they simply lack a
+            # pricing tier/rates rather than claiming a fabricated one).
+            pricing_audit_columns = {
+                "pricing_schedule_version": "TEXT",
+                "pricing_tier": "TEXT",
+                "pricing_basis_ts": "REAL",
+                "input_cache_hit_rate_micro_usd_per_million": "INTEGER",
+                "input_cache_miss_rate_micro_usd_per_million": "INTEGER",
+                "output_rate_micro_usd_per_million": "INTEGER",
+            }
+            for column, sql_type in pricing_audit_columns.items():
+                if column not in provider_usage_columns:
+                    conn.execute(
+                        f"ALTER TABLE credit_provider_usage "
+                        f"ADD COLUMN {column} {sql_type}"
+                    )
 
             # Indexes — including created_at for stale-run sweep + audit
             conn.execute(
@@ -809,10 +1105,31 @@ class CreditLedger:
                     provider TEXT NOT NULL,
                     currency TEXT NOT NULL,
                     total_balance REAL NOT NULL DEFAULT 0,
+                    granted_balance REAL,
+                    topped_up_balance REAL,
                     is_available INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL
                 )
             """)
+            # Component balance columns (granted/topped-up) — added via ALTER
+            # for pre-existing databases so balance snapshots can distinguish
+            # grant expiry from genuine top-ups without repricing old rows.
+            snapshot_columns = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(provider_balance_snapshots)"
+                ).fetchall()
+            }
+            if "granted_balance" not in snapshot_columns:
+                conn.execute(
+                    "ALTER TABLE provider_balance_snapshots "
+                    "ADD COLUMN granted_balance REAL"
+                )
+            if "topped_up_balance" not in snapshot_columns:
+                conn.execute(
+                    "ALTER TABLE provider_balance_snapshots "
+                    "ADD COLUMN topped_up_balance REAL"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_provider_balance_snapshots_provider "
                 "ON provider_balance_snapshots(provider, created_at)"
@@ -1434,6 +1751,12 @@ class CreditLedger:
         provider_cost_micro_usd: int = 0,
         prompt_cache_hit_tokens: int = 0,
         prompt_cache_miss_tokens: int = 0,
+        pricing_schedule_version: str = "",
+        pricing_tier: str = "",
+        pricing_basis_ts: float | None = None,
+        input_cache_hit_rate_micro_usd_per_million: int = 0,
+        input_cache_miss_rate_micro_usd_per_million: int = 0,
+        output_rate_micro_usd_per_million: int = 0,
     ) -> dict:
         """Settle a reserved call.
 
@@ -1457,7 +1780,7 @@ class CreditLedger:
 
             row = conn.execute(
                 "SELECT call_id, run_id, account_id, user_id, model, status, "
-                "reserved_micro_usd, settled_micro_usd "
+                "reserved_micro_usd, settled_micro_usd, submitted_at "
                 "FROM credit_call_reservations WHERE call_id = ?",
                 (call_id,),
             ).fetchone()
@@ -1476,19 +1799,104 @@ class CreditLedger:
             user_id = row[3]
             model_name = row[4]
             reserved = int(row[6])
+            submitted_at = row[8]
 
-            if cost_absent and actual_cost_micro_usd <= 0:
-                # Provider reported no cost — settle the full conservative
-                # reservation so the hold isn't silently released.
-                requested_actual = reserved
+            # ------------------------------------------------------------------
+            # Authoritative DeepSeek pricing. For a known scheduled DeepSeek
+            # model the control plane derives the schedule from the recorded
+            # reservation ``submitted_at`` (not the worker clock), validates any
+            # worker-supplied metadata against it, and recomputes cost from the
+            # normalized token breakdown. A buggy worker that sends correct
+            # tier/rates but a wrong cost is overridden, not trusted.
+            # ------------------------------------------------------------------
+            scheduled_deepseek = model_name in DEEPSEEK_LEGACY_RATES_MICRO_USD_PER_MILLION
+            authoritative_cost_micro: int | None = None
+            schedule_version: str | None
+            tier: str | None
+            validated_basis_ts: float | None
+            hit_rate: int | None
+            miss_rate: int | None
+            out_rate: int | None
+
+            if scheduled_deepseek and submitted_at is not None:
+                authoritative = deepseek_pricing_for_timestamp(model_name, submitted_at)
+                _validate_pricing_against_authoritative(
+                    authoritative,
+                    pricing_schedule_version,
+                    pricing_tier,
+                    pricing_basis_ts,
+                    input_cache_hit_rate_micro_usd_per_million,
+                    input_cache_miss_rate_micro_usd_per_million,
+                    output_rate_micro_usd_per_million,
+                )
+                schedule_version = authoritative["schedule_version"]
+                tier = authoritative["tier"]
+                validated_basis_ts = float(submitted_at)
+                hit_rate = authoritative["input_cache_hit_micro_usd_per_million"]
+                miss_rate = authoritative["input_cache_miss_micro_usd_per_million"]
+                out_rate = authoritative["output_micro_usd_per_million"]
+
+                pt, hit_t, miss_t, ct, tt = normalize_deepseek_tokens(
+                    prompt_tokens,
+                    prompt_cache_hit_tokens,
+                    prompt_cache_miss_tokens,
+                    completion_tokens,
+                    total_tokens,
+                )
+                numerator = hit_t * hit_rate + miss_t * miss_rate + ct * out_rate
+                authoritative_cost_micro = round_cost_micro(numerator)
             else:
-                requested_actual = max(0, int(actual_cost_micro_usd or 0))
+                # Fallback (non-DeepSeek, unpriced, or a direct ledger settle
+                # without a recorded submission): validate any worker-supplied
+                # metadata against the worker's own basis and keep the worker
+                # cost unchanged.
+                schedule_version, tier, validated_basis_ts, hit_rate, miss_rate, out_rate = (
+                    _validate_pricing_audit_metadata(
+                        model_name,
+                        pricing_schedule_version,
+                        pricing_tier,
+                        pricing_basis_ts,
+                        input_cache_hit_rate_micro_usd_per_million,
+                        input_cache_miss_rate_micro_usd_per_million,
+                        output_rate_micro_usd_per_million,
+                    )
+                )
+                pt = max(0, int(prompt_tokens or 0))
+                ct = max(0, int(completion_tokens or 0))
+                tt = max(0, int(total_tokens or 0))
+                hit_t = max(0, int(prompt_cache_hit_tokens or 0))
+                miss_t = max(0, int(prompt_cache_miss_tokens or 0))
+                if tt <= 0:
+                    tt = pt + ct
 
-            # Record provider cost independently from the amount the account can
-            # fund. Exclude other active holds from this call's charge capacity.
-            recorded_provider = max(0, int(provider_cost_micro_usd or 0))
-            if recorded_provider <= 0 and not cost_absent:
-                recorded_provider = requested_actual
+            # --- Cost determination ---
+            if authoritative_cost_micro is not None:
+                # Authoritative recomputed cost overrides worker-supplied
+                # actual/provider cost for a successful (cost_absent=False)
+                # known-priced request. A definitive zero-token rejection still
+                # recomputes to zero; a known-priced nonzero request rounding to
+                # zero stays zero (never a full-hold fallback). cost_absent
+                # keeps the full-hold fallback.
+                if cost_absent:
+                    requested_actual = reserved
+                    recorded_provider = 0
+                else:
+                    requested_actual = authoritative_cost_micro
+                    recorded_provider = authoritative_cost_micro
+            else:
+                if cost_absent and actual_cost_micro_usd <= 0:
+                    # Provider reported no cost — settle the full conservative
+                    # reservation so the hold isn't silently released.
+                    requested_actual = reserved
+                else:
+                    requested_actual = max(0, int(actual_cost_micro_usd or 0))
+
+                # Record provider cost independently from the amount the account
+                # can fund. Exclude other active holds from this call's charge
+                # capacity.
+                recorded_provider = max(0, int(provider_cost_micro_usd or 0))
+                if recorded_provider <= 0 and not cost_absent:
+                    recorded_provider = requested_actual
 
             acct_row = conn.execute(
                 "SELECT balance_micro_usd FROM credit_accounts WHERE account_id = ?",
@@ -1543,23 +1951,20 @@ class CreditLedger:
                  }), now),
             )
 
-            pt = max(0, int(prompt_tokens or 0))
-            ct = max(0, int(completion_tokens or 0))
-            tt = max(0, int(total_tokens or 0))
-            hit_t = max(0, int(prompt_cache_hit_tokens or 0))
-            miss_t = max(0, int(prompt_cache_miss_tokens or 0))
-            if tt <= 0:
-                tt = pt + ct
             conn.execute(
                 "INSERT INTO credit_provider_usage "
                 "(call_id, run_id, account_id, model, prompt_tokens, "
                 "completion_tokens, total_tokens, prompt_cache_hit_tokens, "
                 "prompt_cache_miss_tokens, provider_cost_micro_usd, "
-                "provider_response_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "provider_response_json, pricing_schedule_version, pricing_tier, "
+                "pricing_basis_ts, input_cache_hit_rate_micro_usd_per_million, "
+                "input_cache_miss_rate_micro_usd_per_million, "
+                "output_rate_micro_usd_per_million, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (call_id, run_id, account_id, model_name,
                  pt, ct, tt, hit_t, miss_t, recorded_provider,
-                 _json_meta(provider_response or {}), now),
+                 _json_meta(provider_response or {}), schedule_version, tier,
+                 validated_basis_ts, hit_rate, miss_rate, out_rate, now),
             )
             conn.execute(
                 "UPDATE credit_runs SET settled_micro_usd = settled_micro_usd + ? "
@@ -1588,6 +1993,12 @@ class CreditLedger:
                 "prompt_cache_miss_tokens": miss_t,
                 "provider_cost_micro_usd": recorded_provider,
                 "discrepancy_micro_usd": discrepancy,
+                "pricing_schedule_version": schedule_version or "",
+                "pricing_tier": tier or "",
+                "pricing_basis_ts": validated_basis_ts,
+                "input_cache_hit_rate_micro_usd_per_million": hit_rate or 0,
+                "input_cache_miss_rate_micro_usd_per_million": miss_rate or 0,
+                "output_rate_micro_usd_per_million": out_rate or 0,
                 "cost_absent": cost_absent,
                 "already_settled": False,
             }
@@ -1860,7 +2271,11 @@ class CreditLedger:
             rows = conn.execute(
                 "SELECT usage_id, call_id, model, prompt_tokens, completion_tokens, "
                 "total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, "
-                "provider_cost_micro_usd, created_at "
+                "provider_cost_micro_usd, created_at, pricing_schedule_version, "
+                "pricing_tier, pricing_basis_ts, "
+                "input_cache_hit_rate_micro_usd_per_million, "
+                "input_cache_miss_rate_micro_usd_per_million, "
+                "output_rate_micro_usd_per_million "
                 "FROM credit_provider_usage WHERE run_id = ? "
                 "ORDER BY created_at ASC",
                 (run_id,),
@@ -1878,6 +2293,12 @@ class CreditLedger:
                 "provider_cost_micro_usd": int(r[8]),
                 "provider_cost_usd": _micro_to_usd(int(r[8])),
                 "created_at": r[9],
+                "pricing_schedule_version": r[10] or "",
+                "pricing_tier": r[11] or "",
+                "pricing_basis_ts": r[12],
+                "input_cache_hit_rate_micro_usd_per_million": int(r[13] or 0),
+                "input_cache_miss_rate_micro_usd_per_million": int(r[14] or 0),
+                "output_rate_micro_usd_per_million": int(r[15] or 0),
             }
             for r in rows
         ]
@@ -2046,21 +2467,60 @@ class CreditLedger:
         currency: str,
         total_balance: float,
         is_available: bool,
+        granted_balance: float | None = None,
+        topped_up_balance: float | None = None,
         snapshot_at: float | None = None,
     ) -> None:
-        """Persist one provider account-balance snapshot (from the worker)."""
+        """Persist one provider account-balance snapshot (from the worker).
+
+        Non-finite balances/timestamps (NaN/inf) are rejected with
+        ``ValueError`` so the caller can skip the snapshot rather than store a
+        corrupted value.
+        """
         provider = str(provider or "").strip()[:64]
         currency = str(currency or "").strip()[:16]
         if not provider or not currency:
             raise ValueError("provider and currency are required")
-        now = _now_ts() if snapshot_at is None else float(snapshot_at)
+
+        def _finite_nonnegative(value, field, *, allow_none=False):
+            if allow_none and (value is None or value == ""):
+                return None
+            try:
+                f = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be numeric") from exc
+            if not math.isfinite(f):
+                raise ValueError(f"{field} must be finite")
+            if f < 0:
+                raise ValueError(f"{field} must be nonnegative")
+            return f
+
+        total = _finite_nonnegative(total_balance, "total_balance")
+        granted = _finite_nonnegative(
+            granted_balance, "granted_balance", allow_none=True
+        )
+        topped = _finite_nonnegative(
+            topped_up_balance, "topped_up_balance", allow_none=True
+        )
+
+        if snapshot_at is None or snapshot_at == "":
+            now = _now_ts()
+        else:
+            try:
+                now = float(snapshot_at)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("snapshot_at must be numeric") from exc
+            if not math.isfinite(now):
+                raise ValueError("snapshot_at must be finite")
+
         with self._conn() as conn:
             _begin_immediate(conn)
             conn.execute(
                 "INSERT INTO provider_balance_snapshots "
-                "(provider, currency, total_balance, is_available, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (provider, currency, max(0.0, float(total_balance)),
+                "(provider, currency, total_balance, granted_balance, "
+                "topped_up_balance, is_available, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (provider, currency, total, granted, topped,
                  int(bool(is_available)), now),
             )
             conn.execute("COMMIT")
@@ -2070,7 +2530,8 @@ class CreditLedger:
         provider = str(provider or "").strip()[:64]
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT currency, total_balance, is_available, created_at "
+                "SELECT currency, total_balance, granted_balance, "
+                "topped_up_balance, is_available, created_at "
                 "FROM provider_balance_snapshots "
                 "WHERE provider = ? "
                 "ORDER BY created_at DESC, snapshot_id DESC LIMIT 1",
@@ -2082,20 +2543,26 @@ class CreditLedger:
             "provider": provider,
             "currency": row[0],
             "total_balance": float(row[1] or 0),
-            "is_available": bool(row[2]),
-            "snapshot_at": float(row[3]),
+            "granted_balance": (float(row[2]) if row[2] is not None else None),
+            "topped_up_balance": (float(row[3]) if row[3] is not None else None),
+            "is_available": bool(row[4]),
+            "snapshot_at": float(row[5]),
         }
 
     def provider_cost_reconciliation(self, provider: str) -> dict:
         """Compare realized balance delta vs ledger-estimated spend.
 
-        Ground truth: provider account balance drops between *adjacent*
-        snapshots in one currency (prefer USD). Segments where the balance
-        increased (top-up / grant) are skipped — they would contaminate the
-        window. Expected: the sum of per-call estimated costs settled into
-        ``credit_provider_usage`` for this provider's models over the same
-        segments. ``drift_percent`` is positive when the provider charged us
-        MORE than our price table estimated (a stale/too-low price table).
+        Ground truth: provider account balance drops between snapshots in one
+        currency (prefer USD). Balance is reconciled over *monotonic spans* — a
+        maximal run of adjacent intervals that are each unchanged or decreasing.
+        An actual increase (top-up / grant) closes the span and the increasing
+        interval itself is skipped (it would otherwise contaminate the window).
+        Unchanged intervals (cent-rounding artifacts) stay inside the span so
+        their spend estimate is not lost. Expected spend is the sum of per-call
+        estimated costs settled into ``credit_provider_usage`` for this
+        provider's models across each span. ``drift_percent`` is positive when
+        the provider charged us MORE than our price schedule estimated (a stale
+        or too-low schedule).
         """
         provider = str(provider or "").strip()[:64]
         with self._conn() as conn:
@@ -2128,44 +2595,68 @@ class CreditLedger:
             }
 
         scope, _ = _provider_model_scope(provider)
+        epsilon = 1e-6
+        # Classify adjacent intervals and build monotonic spans. An interval is
+        # a top-up only when the balance strictly increased; unchanged balances
+        # are neither spend nor top-up and remain inside the current span.
+        spans: list[tuple[float, float, float, float]] = []
+        unchanged_segments = 0
+        topup_segments = 0
+        spend_segments = 0
+        i = 0
+        n = len(snaps)
+        while i < n:
+            span_start = i
+            i += 1
+            while i < n:
+                prev_ts, prev_bal = float(snaps[i - 1][2]), float(snaps[i - 1][1])
+                cur_ts, cur_bal = float(snaps[i][2]), float(snaps[i][1])
+                delta = prev_bal - cur_bal
+                if delta < -epsilon:
+                    # Strict increase → top-up boundary; close span before it.
+                    topup_segments += 1
+                    break
+                if delta > epsilon:
+                    spend_segments += 1
+                else:
+                    unchanged_segments += 1
+                i += 1
+            span_end = i - 1
+            if span_end > span_start:
+                spans.append((
+                    float(snaps[span_start][2]),
+                    float(snaps[span_end][2]),
+                    float(snaps[span_start][1]),
+                    float(snaps[span_end][1]),
+                ))
+
         actual_spend_usd = 0.0
         estimated_spend_micro = 0
         usable_segments = 0
-        topup_segments = 0
-        for prev, cur in zip(snaps, snaps[1:]):
-            prev_ts, prev_bal = float(prev[2]), float(prev[1])
-            cur_ts, cur_bal = float(cur[2]), float(cur[1])
-            delta = prev_bal - cur_bal
-            # FP tolerance: a truly unchanged balance ("11.32" stored as REAL)
-            # must never look like a spend or a top-up.
-            if delta <= 1e-6:
-                # Balance increased or unchanged (top-up / grant): the segment
-                # is unusable for spend measurement.
-                topup_segments += 1
+        for start_ts, end_ts, start_bal, end_bal in spans:
+            span_spend = start_bal - end_bal
+            if span_spend <= epsilon:
+                # A span with no net decrease carries no measurable spend.
                 continue
-            actual_spend_usd += delta
+            actual_spend_usd += span_spend
             usable_segments += 1
-            # The estimate window [prev_ts, cur_ts] aligns with the balance
-            # snapshots. A call submitted just before cur_ts but settled just
-            # after it is already reflected in the balance delta yet excluded
-            # here — so the estimate slightly undercounts and drift is biased
-            # toward a *warning*. That is the fail-safe direction for a
-            # stale-price detector (better to over-flag than silently under-
-            # charge the operator).
+            # Sum estimated cost across the whole span (inclusive endpoints).
+            # Spans are disjoint — each top-up interval between them is skipped,
+            # so inclusive boundaries cannot be double-counted across spans.
             with self._conn() as conn:
                 if scope is not None:
                     est = conn.execute(
                         "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
                         "FROM credit_provider_usage "
                         "WHERE created_at >= ? AND created_at <= ? AND model LIKE ?",
-                        (prev_ts, cur_ts, scope),
+                        (start_ts, end_ts, scope),
                     ).fetchone()
                 else:
                     est = conn.execute(
                         "SELECT COALESCE(SUM(provider_cost_micro_usd), 0) "
                         "FROM credit_provider_usage "
                         "WHERE created_at >= ? AND created_at <= ?",
-                        (prev_ts, cur_ts),
+                        (start_ts, end_ts),
                     ).fetchone()
             estimated_spend_micro += int(est[0] or 0)
 
@@ -2182,7 +2673,10 @@ class CreditLedger:
             "stale": False,
             "currency": preferred,
             "snapshot_count": len(snaps),
+            "span_count": len(spans),
             "usable_segments": usable_segments,
+            "spend_segments": spend_segments,
+            "unchanged_segments": unchanged_segments,
             "topup_segments": topup_segments,
             "first_snapshot_at": float(snaps[0][2]),
             "last_snapshot_at": float(snaps[-1][2]),

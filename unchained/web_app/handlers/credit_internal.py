@@ -190,9 +190,27 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
         prompt_cache_miss_tokens = max(
             0, int(body.get("prompt_cache_miss_tokens", 0) or 0)
         )
+        input_cache_hit_rate_micro_usd_per_million = max(
+            0, int(body.get("input_cache_hit_rate_micro_usd_per_million", 0) or 0)
+        )
+        input_cache_miss_rate_micro_usd_per_million = max(
+            0, int(body.get("input_cache_miss_rate_micro_usd_per_million", 0) or 0)
+        )
+        output_rate_micro_usd_per_million = max(
+            0, int(body.get("output_rate_micro_usd_per_million", 0) or 0)
+        )
     except (TypeError, ValueError):
         return _json_error(400, "cost and token fields must be integers")
     cost_absent = bool(body.get("cost_absent", False))
+    pricing_schedule_version = str(body.get("pricing_schedule_version", "") or "")
+    pricing_tier = str(body.get("pricing_tier", "") or "")
+    pricing_basis_ts_raw = body.get("pricing_basis_ts")
+    try:
+        pricing_basis_ts = (
+            float(pricing_basis_ts_raw) if pricing_basis_ts_raw is not None else None
+        )
+    except (TypeError, ValueError):
+        pricing_basis_ts = None
 
     ledger = _get_ledger()
     try:
@@ -207,6 +225,12 @@ async def handle_credit_settle(request: web.Request) -> web.Response:
             provider_cost_micro_usd=provider_cost_micro_usd,
             prompt_cache_hit_tokens=prompt_cache_hit_tokens,
             prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+            pricing_schedule_version=pricing_schedule_version,
+            pricing_tier=pricing_tier,
+            pricing_basis_ts=pricing_basis_ts,
+            input_cache_hit_rate_micro_usd_per_million=input_cache_hit_rate_micro_usd_per_million,
+            input_cache_miss_rate_micro_usd_per_million=input_cache_miss_rate_micro_usd_per_million,
+            output_rate_micro_usd_per_million=output_rate_micro_usd_per_million,
         )
         return web.json_response(result)
     except ValueError as e:
@@ -271,25 +295,24 @@ async def handle_credit_provider_balance(request: web.Request) -> web.Response:
             continue
         provider = str(raw.get("provider", "")).strip()
         currency = str(raw.get("currency", "")).strip()
-        total_balance_raw = raw.get("total_balance")
         if not provider or not currency:
             continue
         # Only accept known providers (reconciliation scopes by this set);
         # a typo'd/garbled provider would otherwise pollute the snapshots table.
         if provider not in _PROVIDER_MODEL_PREFIXES:
             continue
-        try:
-            total_balance = float(total_balance_raw)
-        except (TypeError, ValueError):
-            continue
+        # Pass raw values through to the ledger, which validates finiteness
+        # (NaN/inf) and non-negativity before storing.
         try:
             await asyncio.to_thread(
                 ledger.record_provider_balance_snapshot,
                 provider=provider,
                 currency=currency,
-                total_balance=total_balance,
+                total_balance=raw.get("total_balance"),
                 is_available=bool(raw.get("is_available", False)),
-                snapshot_at=float(raw.get("snapshot_at") or 0) or None,
+                granted_balance=raw.get("granted_balance"),
+                topped_up_balance=raw.get("topped_up_balance"),
+                snapshot_at=raw.get("snapshot_at"),
             )
             stored += 1
         except Exception as e:

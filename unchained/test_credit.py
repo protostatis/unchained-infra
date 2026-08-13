@@ -645,8 +645,12 @@ class TestCreditLedger(unittest.TestCase):
                 "google/gemini-3-flash-preview": 280_985,
                 "qwen/qwen3.6-plus": 710_593,
                 "qwen/qwen3.5-flash-02-23": 35_863,
-                "deepseek-v4-flash": 81_224,
-                "deepseek-v4-pro": 243_671,
+                # DeepSeek now certified against the time-of-use PEAK
+                # worst-case rates (Flash $0.44 miss / $1.32 output; Pro
+                # $1.32 miss / $3.96 output) while the fixed holds stay
+                # $0.25 (Flash) and $1.00 (Pro).
+                "deepseek-v4-flash": 240_509,
+                "deepseek-v4-pro": 721_526,
             },
         )
         self.assertEqual(HOSTED_MODEL_CATALOG["google/gemini-2.5-pro"], 1_500_000)
@@ -1641,6 +1645,99 @@ class TestCreditLedgerContextManager(unittest.TestCase):
         finally:
             CL._instances.pop(self._db_path, None)
 
+    def test_existing_provider_usage_table_migrates_pricing_columns(self):
+        """Pre-existing credit_provider_usage tables gain the nullable pricing
+        audit columns (historical rows stay NULL and are never repriced)."""
+        from credit import CreditLedger as CL
+
+        CL._instances.pop(self._db_path, None)
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE credit_provider_usage (
+                    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    call_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT '',
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    provider_cost_micro_usd INTEGER NOT NULL DEFAULT 0,
+                    provider_response_json TEXT DEFAULT '{}',
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT INTO credit_provider_usage "
+                "(call_id, run_id, account_id, model, created_at) "
+                "VALUES ('call-old', 'run-old', 'acct-old', 'deepseek-v4-flash', 1.0)"
+            )
+            conn.commit()
+
+        try:
+            CL(self._db_path)
+            with closing(sqlite3.connect(self._db_path)) as conn:
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        "PRAGMA table_info(credit_provider_usage)"
+                    ).fetchall()
+                }
+                row = conn.execute(
+                    "SELECT pricing_schedule_version, pricing_tier, "
+                    "pricing_basis_ts, input_cache_hit_rate_micro_usd_per_million "
+                    "FROM credit_provider_usage WHERE call_id = 'call-old'"
+                ).fetchone()
+            for column in (
+                "pricing_schedule_version",
+                "pricing_tier",
+                "pricing_basis_ts",
+                "input_cache_hit_rate_micro_usd_per_million",
+                "input_cache_miss_rate_micro_usd_per_million",
+                "output_rate_micro_usd_per_million",
+            ):
+                self.assertIn(column, columns)
+            # Historical row is not repriced: all audit fields remain NULL.
+            self.assertIsNone(row[0])
+            self.assertIsNone(row[1])
+            self.assertIsNone(row[2])
+            self.assertIsNone(row[3])
+        finally:
+            CL._instances.pop(self._db_path, None)
+
+    def test_existing_balance_snapshot_table_migrates_component_columns(self):
+        """Pre-existing provider_balance_snapshots tables gain nullable
+        granted/topped-up component balance columns."""
+        from credit import CreditLedger as CL
+
+        CL._instances.pop(self._db_path, None)
+        with closing(sqlite3.connect(self._db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE provider_balance_snapshots (
+                    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    total_balance REAL NOT NULL DEFAULT 0,
+                    is_available INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.commit()
+
+        try:
+            CL(self._db_path)
+            with closing(sqlite3.connect(self._db_path)) as conn:
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        "PRAGMA table_info(provider_balance_snapshots)"
+                    ).fetchall()
+                }
+            self.assertIn("granted_balance", columns)
+            self.assertIn("topped_up_balance", columns)
+        finally:
+            CL._instances.pop(self._db_path, None)
+
 
 # ---------------------------------------------------------------------------
 # Service token hierarchy tests
@@ -1922,3 +2019,533 @@ class TestDeepSeekProvider(unittest.TestCase):
         self.assertAlmostEqual(report["actual_spend_usd"], 0.40, places=6)
         # Only the DeepSeek row counts toward the estimate.
         self.assertAlmostEqual(report["estimated_spend_usd"], 0.10, places=6)
+
+    # ------------------------------------------------------------------
+    # Time-versioned pricing audit + reconciliation fixes
+    # ------------------------------------------------------------------
+
+    def test_settle_stores_pricing_audit_metadata(self):
+        from credit import deepseek_pricing_for_timestamp
+
+        self.ledger.grant("u-pricing", _usd_to_micro(2.0), idempotency_key="g-pricing")
+        run = self.ledger.create_run("u-pricing", idempotency_key="r-pricing")
+        call = self.ledger.reserve_call(
+            run["run_id"], model="deepseek-v4-flash", idempotency_key="c-pricing",
+        )
+        ts = 1_786_896_000 + 3600  # 2026-08-16T17:00:00Z → offpeak
+        pricing = deepseek_pricing_for_timestamp("deepseek-v4-flash", ts)
+        result = self.ledger.settle_call(
+            call["call_id"],
+            actual_cost_micro_usd=44_520,
+            prompt_tokens=1_000_000,
+            completion_tokens=100_000,
+            total_tokens=1_100_000,
+            prompt_cache_hit_tokens=900_000,
+            prompt_cache_miss_tokens=100_000,
+            provider_cost_micro_usd=44_520,
+            pricing_schedule_version=pricing["schedule_version"],
+            pricing_tier=pricing["tier"],
+            pricing_basis_ts=ts,
+            input_cache_hit_rate_micro_usd_per_million=pricing[
+                "input_cache_hit_micro_usd_per_million"
+            ],
+            input_cache_miss_rate_micro_usd_per_million=pricing[
+                "input_cache_miss_micro_usd_per_million"
+            ],
+            output_rate_micro_usd_per_million=pricing[
+                "output_micro_usd_per_million"
+            ],
+        )
+        self.assertEqual(result["pricing_tier"], "offpeak")
+        self.assertEqual(result["pricing_basis_ts"], ts)
+        self.assertEqual(result["output_rate_micro_usd_per_million"], 660_000)
+
+        rows = self.ledger.get_usage_for_run(run["run_id"])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(row["pricing_tier"], "offpeak")
+        self.assertEqual(row["pricing_basis_ts"], ts)
+        self.assertEqual(row["input_cache_hit_rate_micro_usd_per_million"], 7_000)
+        self.assertEqual(row["input_cache_miss_rate_micro_usd_per_million"], 220_000)
+        self.assertEqual(row["output_rate_micro_usd_per_million"], 660_000)
+
+    def test_settle_without_pricing_keeps_audit_defaults(self):
+        """Non-DeepSeek / legacy settles leave pricing columns NULL/empty."""
+        self.ledger.grant("u-noprice", _usd_to_micro(2.0), idempotency_key="g-noprice")
+        run = self.ledger.create_run("u-noprice", idempotency_key="r-noprice")
+        call = self.ledger.reserve_call(
+            run["run_id"], model="deepseek-v4-flash", idempotency_key="c-noprice",
+        )
+        self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=50_000, provider_cost_micro_usd=50_000,
+        )
+        rows = self.ledger.get_usage_for_run(run["run_id"])
+        self.assertEqual(rows[0]["pricing_schedule_version"], "")
+        self.assertEqual(rows[0]["pricing_tier"], "")
+        self.assertIsNone(rows[0]["pricing_basis_ts"])
+        self.assertEqual(rows[0]["input_cache_hit_rate_micro_usd_per_million"], 0)
+
+    # ------------------------------------------------------------------
+    # Settle pricing-metadata validation (worker is not fully trusted)
+    # ------------------------------------------------------------------
+
+    def _reserve_deepseek_call(self, user_id, key_prefix, model="deepseek-v4-flash"):
+        self.ledger.grant(user_id, _usd_to_micro(5.0), idempotency_key=f"g-{key_prefix}")
+        run = self.ledger.create_run(user_id, idempotency_key=f"r-{key_prefix}")
+        call = self.ledger.reserve_call(
+            run["run_id"], model=model, idempotency_key=f"c-{key_prefix}",
+        )
+        return call
+
+    _OFFPEAK_TS = 1_786_896_000.0  # 2026-08-16T16:00:00Z → off-peak
+    _PEAK_TS = 1_786_932_000.0     # 2026-08-17T02:00:00Z → peak
+
+    _OFFPEAK_FLASH_RATES = (7_000, 220_000, 660_000)
+    _PEAK_FLASH_RATES = (14_000, 440_000, 1_320_000)
+
+    def test_settle_rejects_unknown_pricing_schedule_version(self):
+        call = self._reserve_deepseek_call("u-val-sv", "val-sv")
+        with self.assertRaisesRegex(ValueError, "schedule version"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                pricing_schedule_version="2099-01-01T00:00:00Z",
+                pricing_tier="offpeak",
+                pricing_basis_ts=self._OFFPEAK_TS,
+                input_cache_hit_rate_micro_usd_per_million=7_000,
+                input_cache_miss_rate_micro_usd_per_million=220_000,
+                output_rate_micro_usd_per_million=660_000,
+            )
+
+    def test_settle_rejects_invalid_pricing_tier(self):
+        call = self._reserve_deepseek_call("u-val-tier", "val-tier")
+        with self.assertRaisesRegex(ValueError, "tier"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                pricing_schedule_version="2026-08-16T16:00:00Z",
+                pricing_tier="weekend",
+                pricing_basis_ts=self._OFFPEAK_TS,
+                input_cache_hit_rate_micro_usd_per_million=7_000,
+                input_cache_miss_rate_micro_usd_per_million=220_000,
+                output_rate_micro_usd_per_million=660_000,
+            )
+
+    def test_settle_rejects_nonfinite_pricing_basis_ts(self):
+        call = self._reserve_deepseek_call("u-val-nan", "val-nan")
+        for bad_ts in (float("nan"), float("inf"), -1.0):
+            with self.assertRaisesRegex(ValueError, "basis timestamp"):
+                self.ledger.settle_call(
+                    call["call_id"], actual_cost_micro_usd=1_000,
+                    provider_cost_micro_usd=1_000,
+                    pricing_schedule_version="2026-08-16T16:00:00Z",
+                    pricing_tier="offpeak",
+                    pricing_basis_ts=bad_ts,
+                    input_cache_hit_rate_micro_usd_per_million=7_000,
+                    input_cache_miss_rate_micro_usd_per_million=220_000,
+                    output_rate_micro_usd_per_million=660_000,
+                )
+
+    def test_settle_rejects_tier_timestamp_mismatch(self):
+        call = self._reserve_deepseek_call("u-val-mismatch", "val-mismatch")
+        # "peak" claimed for an off-peak timestamp → rejected.
+        with self.assertRaisesRegex(ValueError, "tier"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                pricing_schedule_version="2026-08-16T16:00:00Z",
+                pricing_tier="peak",
+                pricing_basis_ts=self._OFFPEAK_TS,
+                input_cache_hit_rate_micro_usd_per_million=14_000,
+                input_cache_miss_rate_micro_usd_per_million=440_000,
+                output_rate_micro_usd_per_million=1_320_000,
+            )
+
+    def test_settle_rejects_rate_mismatch(self):
+        call = self._reserve_deepseek_call("u-val-rate", "val-rate")
+        # Off-peak tier but peak rates supplied → rejected.
+        with self.assertRaisesRegex(ValueError, "rates"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                pricing_schedule_version="2026-08-16T16:00:00Z",
+                pricing_tier="offpeak",
+                pricing_basis_ts=self._OFFPEAK_TS,
+                input_cache_hit_rate_micro_usd_per_million=14_000,
+                input_cache_miss_rate_micro_usd_per_million=440_000,
+                output_rate_micro_usd_per_million=1_320_000,
+            )
+
+    def test_settle_rejects_pricing_for_unpriced_model(self):
+        call = self._reserve_deepseek_call(
+            "u-val-openrouter", "val-openrouter", model="google/gemini-3.1-flash-lite"
+        )
+        with self.assertRaisesRegex(ValueError, "unpriced model"):
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                pricing_schedule_version="2026-08-16T16:00:00Z",
+                pricing_tier="offpeak",
+                pricing_basis_ts=self._OFFPEAK_TS,
+                input_cache_hit_rate_micro_usd_per_million=7_000,
+                input_cache_miss_rate_micro_usd_per_million=220_000,
+                output_rate_micro_usd_per_million=660_000,
+            )
+
+    def test_already_settled_call_skips_pricing_validation(self):
+        call = self._reserve_deepseek_call("u-val-idem", "val-idem")
+        first = self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=1_000,
+            provider_cost_micro_usd=1_000,
+            pricing_schedule_version="2026-08-16T16:00:00Z",
+            pricing_tier="offpeak",
+            pricing_basis_ts=self._OFFPEAK_TS,
+            input_cache_hit_rate_micro_usd_per_million=7_000,
+            input_cache_miss_rate_micro_usd_per_million=220_000,
+            output_rate_micro_usd_per_million=660_000,
+        )
+        self.assertFalse(first["already_settled"])
+        # A duplicate settle with tampered metadata must return idempotently
+        # rather than error (the call is already settled).
+        replay = self.ledger.settle_call(
+            call["call_id"], actual_cost_micro_usd=1_000,
+            provider_cost_micro_usd=1_000,
+            pricing_schedule_version="2099-01-01T00:00:00Z",
+            pricing_tier="bogus",
+            pricing_basis_ts=float("nan"),
+            input_cache_hit_rate_micro_usd_per_million=999_999,
+            input_cache_miss_rate_micro_usd_per_million=999_999,
+            output_rate_micro_usd_per_million=999_999,
+        )
+        self.assertTrue(replay["already_settled"])
+
+    # ------------------------------------------------------------------
+    # Authoritative recompute: control plane prices from reservation
+    # submitted_at and overrides worker-supplied cost.
+    # ------------------------------------------------------------------
+
+    def _reserve_and_submit_deepseek_call(self, user_id, key_prefix, submitted_at):
+        self.ledger.grant(user_id, _usd_to_micro(10.0), idempotency_key=f"g-{key_prefix}")
+        run = self.ledger.create_run(user_id, idempotency_key=f"r-{key_prefix}")
+        call = self.ledger.reserve_call(
+            run["run_id"], model="deepseek-v4-flash", idempotency_key=f"c-{key_prefix}",
+        )
+        with patch("credit._now_ts", return_value=submitted_at):
+            self.ledger.mark_call_submitted(call["call_id"])
+        return call
+
+    def test_settle_recomputes_cost_overrides_buggy_worker_cost(self):
+        """Correct tier/rates but a wrong (zero) worker cost is overridden by
+        the authoritative recompute."""
+        call = self._reserve_and_submit_deepseek_call(
+            "u-recompute", "recompute", self._PEAK_TS
+        )
+        result = self.ledger.settle_call(
+            call["call_id"],
+            actual_cost_micro_usd=0,          # buggy worker: zero cost
+            provider_cost_micro_usd=0,
+            prompt_tokens=1_000_000,
+            prompt_cache_hit_tokens=1_000_000,
+            prompt_cache_miss_tokens=0,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+            pricing_schedule_version="2026-08-16T16:00:00Z",
+            pricing_tier="peak",
+            pricing_basis_ts=self._PEAK_TS,
+            input_cache_hit_rate_micro_usd_per_million=14_000,
+            input_cache_miss_rate_micro_usd_per_million=440_000,
+            output_rate_micro_usd_per_million=1_320_000,
+        )
+        # 1M hit × $0.014 + 1M out × $1.32 = $1.334 → 1_334_000 micro.
+        self.assertEqual(result["settled_micro_usd"], 1_334_000)
+        self.assertEqual(result["provider_cost_micro_usd"], 1_334_000)
+        self.assertEqual(result["pricing_tier"], "peak")
+
+    def test_settle_autoprices_old_worker_missing_metadata(self):
+        """An old worker that omits pricing metadata after the cutoff is priced
+        from the authoritative submitted_at and audit fields are populated."""
+        call = self._reserve_and_submit_deepseek_call(
+            "u-autoprice", "autoprice", self._PEAK_TS
+        )
+        result = self.ledger.settle_call(
+            call["call_id"],
+            actual_cost_micro_usd=0,
+            provider_cost_micro_usd=0,
+            prompt_tokens=1_000_000,
+            prompt_cache_hit_tokens=1_000_000,
+            prompt_cache_miss_tokens=0,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+        )
+        self.assertEqual(result["settled_micro_usd"], 1_334_000)
+        self.assertEqual(result["pricing_tier"], "peak")
+        self.assertEqual(result["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(result["pricing_basis_ts"], self._PEAK_TS)
+        self.assertEqual(result["input_cache_hit_rate_micro_usd_per_million"], 14_000)
+        self.assertEqual(result["input_cache_miss_rate_micro_usd_per_million"], 440_000)
+        self.assertEqual(result["output_rate_micro_usd_per_million"], 1_320_000)
+
+    def test_settle_rejects_basis_timestamp_mismatch_with_submitted_at(self):
+        """A worker pricing_basis_ts that differs from the reservation
+        submitted_at is rejected (even with otherwise-consistent metadata)."""
+        call = self._reserve_and_submit_deepseek_call(
+            "u-basis-mismatch", "basis-mismatch", self._PEAK_TS
+        )
+        # Correct peak tier/rates but a basis timestamp 1h off → rejected.
+        with self.assertRaisesRegex(ValueError, "basis timestamp"):
+            self.ledger.settle_call(
+                call["call_id"],
+                actual_cost_micro_usd=1_000,
+                provider_cost_micro_usd=1_000,
+                prompt_tokens=1_000_000,
+                prompt_cache_hit_tokens=1_000_000,
+                prompt_cache_miss_tokens=0,
+                completion_tokens=1_000_000,
+                total_tokens=2_000_000,
+                pricing_schedule_version="2026-08-16T16:00:00Z",
+                pricing_tier="peak",
+                pricing_basis_ts=self._PEAK_TS + 3600.0,
+                input_cache_hit_rate_micro_usd_per_million=14_000,
+                input_cache_miss_rate_micro_usd_per_million=440_000,
+                output_rate_micro_usd_per_million=1_320_000,
+            )
+
+    def test_settle_zero_token_rejection_stays_zero(self):
+        """A definitive zero-token rejection (cost_absent=False, no tokens)
+        recomputes to zero rather than falling back to the full hold."""
+        call = self._reserve_and_submit_deepseek_call(
+            "u-zero-token", "zero-token", self._PEAK_TS
+        )
+        result = self.ledger.settle_call(
+            call["call_id"],
+            actual_cost_micro_usd=0,
+            provider_cost_micro_usd=0,
+            prompt_tokens=0,
+            prompt_cache_hit_tokens=0,
+            prompt_cache_miss_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            cost_absent=False,
+        )
+        self.assertEqual(result["settled_micro_usd"], 0)
+        self.assertEqual(result["provider_cost_micro_usd"], 0)
+        self.assertEqual(result["pricing_tier"], "peak")
+
+    def test_deepseek_hold_certification_uses_peak_rates(self):
+        from credit import (
+            HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS,
+            HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD,
+            validate_hosted_context_budget,
+        )
+        rates = HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS
+        self.assertEqual(rates["deepseek-v4-flash"], (440_000, 1_320_000))
+        self.assertEqual(rates["deepseek-v4-pro"], (1_320_000, 3_960_000))
+        # Fixed holds remain $0.25 / $1.00 and stay above certified minimums.
+        self.assertEqual(HOSTED_MODEL_CATALOG["deepseek-v4-flash"], 250_000)
+        self.assertEqual(HOSTED_MODEL_CATALOG["deepseek-v4-pro"], 1_000_000)
+        self.assertLess(
+            HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD["deepseek-v4-flash"],
+            250_000,
+        )
+        self.assertLess(
+            HOSTED_HOLD_CERTIFIED_MIN_RESERVATION_MICRO_USD["deepseek-v4-pro"],
+            1_000_000,
+        )
+        validate_hosted_context_budget(400_000)
+
+    def test_reconciliation_unchanged_segments_are_not_topups(self):
+        """An unchanged balance is neither spend nor a top-up, and its spend
+        estimate is not lost (monotonic span includes it)."""
+        now = time.time()
+        # 10.00 -> 9.90 (spend) -> 9.90 (unchanged) -> 9.80 (spend)
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=10.00, is_available=True, snapshot_at=now - 100.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.90, is_available=True, snapshot_at=now - 80.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.90, is_available=True, snapshot_at=now - 60.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.80, is_available=True, snapshot_at=now - 40.0,
+        )
+        # Usage spanning the whole monotonic span ($0.10 + $0.10 estimate).
+        for i, amt in enumerate([50_000, 50_000]):
+            self.ledger.grant(f"u-unc-{i}", _usd_to_micro(5.0), idempotency_key=f"g-unc-{i}")
+            run = self.ledger.create_run(f"u-unc-{i}", idempotency_key=f"r-unc-{i}")
+            call = self.ledger.reserve_call(
+                run["run_id"], model="deepseek-v4-flash", idempotency_key=f"c-unc-{i}",
+            )
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=amt,
+                provider_cost_micro_usd=amt,
+            )
+        with self.ledger._conn() as conn:
+            rows = conn.execute(
+                "SELECT usage_id FROM credit_provider_usage ORDER BY usage_id ASC"
+            ).fetchall()
+            for j, (usage_id,) in enumerate(rows):
+                conn.execute(
+                    "UPDATE credit_provider_usage SET created_at = ? WHERE usage_id = ?",
+                    ([now - 90.0, now - 70.0][j], usage_id),
+                )
+        report = self.ledger.provider_cost_reconciliation("deepseek")
+        self.assertFalse(report["stale"])
+        self.assertEqual(report["unchanged_segments"], 1)
+        self.assertEqual(report["topup_segments"], 0)
+        self.assertFalse(report["balance_increased"])
+        # One monotonic span: 10.00 -> 9.80 = $0.20 actual.
+        self.assertAlmostEqual(report["actual_spend_usd"], 0.20, places=6)
+        # Estimate includes BOTH spend rows across the unchanged interval.
+        self.assertAlmostEqual(report["estimated_spend_usd"], 0.10, places=6)
+
+    def test_reconciliation_topup_creates_boundary_and_skips_interval(self):
+        """A real increase creates a span boundary; the increasing interval is
+        skipped, so a top-up cannot contaminate actual spend."""
+        now = time.time()
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=10.00, is_available=True, snapshot_at=now - 100.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.80, is_available=True, snapshot_at=now - 80.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=12.00, is_available=True, snapshot_at=now - 60.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=11.70, is_available=True, snapshot_at=now - 40.0,
+        )
+        report = self.ledger.provider_cost_reconciliation("deepseek")
+        self.assertFalse(report["stale"])
+        self.assertEqual(report["topup_segments"], 1)
+        self.assertTrue(report["balance_increased"])
+        # Actual spend only across the two monotonic spans: 0.20 + 0.30 = $0.50.
+        self.assertAlmostEqual(report["actual_spend_usd"], 0.50, places=6)
+        # The increasing interval [9.80 -> 12.00] contributed no estimate.
+        self.assertAlmostEqual(report["estimated_spend_usd"], 0.0, places=6)
+
+    def test_balance_snapshot_components_round_trip(self):
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=11.32, is_available=True,
+            granted_balance=8.00, topped_up_balance=3.32,
+            snapshot_at=time.time(),
+        )
+        latest = self.ledger.latest_provider_balance_snapshot("deepseek")
+        self.assertEqual(latest["total_balance"], 11.32)
+        self.assertEqual(latest["granted_balance"], 8.00)
+        self.assertEqual(latest["topped_up_balance"], 3.32)
+        self.assertTrue(latest["is_available"])
+
+    def test_balance_snapshot_components_absent_are_none(self):
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=11.32, is_available=True,
+            snapshot_at=time.time(),
+        )
+        latest = self.ledger.latest_provider_balance_snapshot("deepseek")
+        self.assertIsNone(latest["granted_balance"])
+        self.assertIsNone(latest["topped_up_balance"])
+
+    def test_balance_snapshot_rejects_nonfinite_total(self):
+        for bad in ("nan", "inf", "-inf"):
+            with self.assertRaises(ValueError):
+                self.ledger.record_provider_balance_snapshot(
+                    provider="deepseek", currency="USD",
+                    total_balance=bad, is_available=True,
+                )
+        # Nothing non-finite was stored.
+        self.assertIsNone(self.ledger.latest_provider_balance_snapshot("deepseek"))
+
+    def test_balance_snapshot_rejects_nonfinite_components(self):
+        for bad in ("nan", "inf"):
+            with self.assertRaises(ValueError):
+                self.ledger.record_provider_balance_snapshot(
+                    provider="deepseek", currency="USD",
+                    total_balance=11.32, is_available=True,
+                    granted_balance=bad,
+                )
+            with self.assertRaises(ValueError):
+                self.ledger.record_provider_balance_snapshot(
+                    provider="deepseek", currency="USD",
+                    total_balance=11.32, is_available=True,
+                    topped_up_balance=bad,
+                )
+
+    def test_balance_snapshot_rejects_nonfinite_snapshot_at(self):
+        for bad in ("nan", "inf"):
+            with self.assertRaises(ValueError):
+                self.ledger.record_provider_balance_snapshot(
+                    provider="deepseek", currency="USD",
+                    total_balance=11.32, is_available=True,
+                    snapshot_at=bad,
+                )
+
+    def test_reconciliation_excludes_topup_interval_usage(self):
+        """Usage inside the increasing (top-up) interval is excluded, and
+        disjoint monotonic spans never double-count boundary usage."""
+        now = time.time()
+        # 10.00 -> 9.80 (spend span 1) -> 12.00 (top-up) -> 11.70 (spend span 2)
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=10.00, is_available=True, snapshot_at=now - 100.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=9.80, is_available=True, snapshot_at=now - 80.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=12.00, is_available=True, snapshot_at=now - 60.0,
+        )
+        self.ledger.record_provider_balance_snapshot(
+            provider="deepseek", currency="USD",
+            total_balance=11.70, is_available=True, snapshot_at=now - 40.0,
+        )
+        # Four usage rows placed at: span1 interior, span1 boundary (end),
+        # top-up interval (must be excluded), span2 interior.
+        for i, cost in enumerate([50_000, 10_000, 999_000, 60_000]):
+            self.ledger.grant(
+                f"u-topup-boundary-{i}", _usd_to_micro(5.0),
+                idempotency_key=f"g-tb-{i}",
+            )
+            run = self.ledger.create_run(
+                f"u-topup-boundary-{i}", idempotency_key=f"r-tb-{i}"
+            )
+            call = self.ledger.reserve_call(
+                run["run_id"], model="deepseek-v4-flash",
+                idempotency_key=f"c-tb-{i}",
+            )
+            self.ledger.settle_call(
+                call["call_id"], actual_cost_micro_usd=cost,
+                provider_cost_micro_usd=cost,
+            )
+        with self.ledger._conn() as conn:
+            rows = conn.execute(
+                "SELECT usage_id FROM credit_provider_usage ORDER BY usage_id ASC"
+            ).fetchall()
+            timestamps = [now - 90.0, now - 80.0, now - 70.0, now - 50.0]
+            for j, (usage_id,) in enumerate(rows):
+                conn.execute(
+                    "UPDATE credit_provider_usage SET created_at = ? WHERE usage_id = ?",
+                    (timestamps[j], usage_id),
+                )
+        report = self.ledger.provider_cost_reconciliation("deepseek")
+        self.assertFalse(report["stale"])
+        self.assertEqual(report["topup_segments"], 1)
+        self.assertEqual(report["span_count"], 2)
+        # Actual spend across the two spans: 0.20 + 0.30 = $0.50.
+        self.assertAlmostEqual(report["actual_spend_usd"], 0.50, places=6)
+        # Estimate = span1 (50k + 10k boundary) + span2 (60k); the top-up
+        # interval row (999k) is excluded and the boundary is counted once.
+        self.assertAlmostEqual(report["estimated_spend_usd"], 0.12, places=6)

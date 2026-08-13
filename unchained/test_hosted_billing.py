@@ -162,6 +162,45 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["choices"])
         self.assertEqual(order, ["reserve", "submitted", "provider", "settle"])
 
+    async def test_openrouter_settle_uses_provider_cost_without_pricing(self):
+        """OpenRouter settlements keep cost math and send no DeepSeek pricing."""
+        settle = AsyncMock(return_value={"call_id": "call-test", "status": "settled"})
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+
+        async def provider(*_args, **_kwargs):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.00123},
+            }
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(
+                self.agent, "_credit_reserve",
+                new=AsyncMock(return_value={"call_id": "call-test"}),
+            ),
+            patch.object(
+                self.agent, "_credit_mark_submitted",
+                new=AsyncMock(return_value={"status": "submitted"}),
+            ),
+            patch.object(self.agent, "_credit_settle", new=settle),
+            patch.object(self.agent, "_credit_release", new=AsyncMock()),
+            patch.object(self.agent, "_do_openrouter_call", side_effect=provider),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                SimpleNamespace(),
+                [{"role": "user", "content": "hello"}],
+                session_id="s-test",
+            )
+
+        settle.assert_awaited_once()
+        kwargs = settle.await_args.kwargs
+        self.assertEqual(kwargs["actual_cost_micro_usd"], 1_230)
+        self.assertFalse(kwargs["cost_absent"])
+        self.assertEqual(kwargs["pricing_tier"], "")
+        self.assertEqual(kwargs["pricing_schedule_version"], "")
+
     async def test_provider_failure_never_releases_submitted_call(self):
         release = AsyncMock()
         settle = AsyncMock()
@@ -945,12 +984,17 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DeepSeekCostTests(unittest.TestCase):
-    """DeepSeek direct provider detection + cache-aware cost estimation."""
+    """DeepSeek direct provider detection + time-versioned pricing.
+
+    Official legacy schedule (in effect until the exact cutoff) vs the new
+    time-of-use schedule, priced by the local provider-submission timestamp.
+    """
+
+    EFFECTIVE = 1_786_896_000  # 2026-08-16T16:00:00Z
 
     def setUp(self):
         self._saved_env = {
-            k: os.environ.get(k, "__UNSET__")
-            for k in ("DEEPSEEK_API_KEY", "DEEPSEEK_PRICE_JSON")
+            k: os.environ.get(k, "__UNSET__") for k in ("DEEPSEEK_API_KEY",)
         }
 
     def tearDown(self):
@@ -960,6 +1004,14 @@ class DeepSeekCostTests(unittest.TestCase):
             else:
                 os.environ[k] = v
 
+    @staticmethod
+    def _utc_ts(year, month, day, hour, minute=0, second=0):
+        import datetime
+        dt = datetime.datetime(
+            year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc
+        )
+        return dt.timestamp()
+
     def test_deepseek_model_detection(self):
         from chat_agent_openrouter import _is_deepseek_model
         self.assertTrue(_is_deepseek_model("deepseek-v4-flash"))
@@ -967,7 +1019,85 @@ class DeepSeekCostTests(unittest.TestCase):
         self.assertFalse(_is_deepseek_model("google/gemini-3.1-flash-lite"))
         self.assertFalse(_is_deepseek_model(""))
 
-    def test_extract_deepseek_usage_cache_aware(self):
+    def test_legacy_schedule_applies_before_cutoff(self):
+        from credit import deepseek_pricing_for_timestamp
+        ts = self.EFFECTIVE - 1
+        flash = deepseek_pricing_for_timestamp("deepseek-v4-flash", ts)
+        pro = deepseek_pricing_for_timestamp("deepseek-v4-pro", ts)
+        self.assertEqual(flash["tier"], "legacy")
+        self.assertEqual(flash["input_cache_hit_micro_usd_per_million"], 2_800)
+        self.assertEqual(flash["input_cache_miss_micro_usd_per_million"], 140_000)
+        self.assertEqual(flash["output_micro_usd_per_million"], 280_000)
+        self.assertEqual(pro["tier"], "legacy")
+        self.assertEqual(pro["input_cache_hit_micro_usd_per_million"], 3_625)
+        self.assertEqual(pro["input_cache_miss_micro_usd_per_million"], 435_000)
+        self.assertEqual(pro["output_micro_usd_per_million"], 870_000)
+        self.assertEqual(flash["pricing_basis_ts"], ts)
+        self.assertIn("2026-08-16", flash["schedule_version"])
+
+    def test_exact_cutoff_switches_to_new_schedule(self):
+        from credit import deepseek_pricing_for_timestamp
+        # 2026-08-16T16:00:00Z is off-peak (hour 16).
+        pricing = deepseek_pricing_for_timestamp(
+            "deepseek-v4-flash", self.EFFECTIVE
+        )
+        self.assertEqual(pricing["tier"], "offpeak")
+        self.assertEqual(pricing["input_cache_hit_micro_usd_per_million"], 7_000)
+        self.assertEqual(pricing["input_cache_miss_micro_usd_per_million"], 220_000)
+        self.assertEqual(pricing["output_micro_usd_per_million"], 660_000)
+
+    def test_peak_window_boundary_hours(self):
+        from credit import deepseek_pricing_for_timestamp
+        cases = {
+            # (hour) -> tier
+            0: "offpeak",
+            1: "peak",    # [01:00, 04:00) starts inclusive
+            3: "peak",
+            4: "offpeak",  # [01:00, 04:00) ends exclusive
+            5: "offpeak",
+            6: "peak",    # [06:00, 10:00) starts inclusive
+            9: "peak",
+            10: "offpeak",  # [06:00, 10:00) ends exclusive
+            12: "offpeak",
+            16: "offpeak",
+        }
+        for hour, expected_tier in cases.items():
+            ts = self._utc_ts(2026, 8, 17, hour)
+            pricing = deepseek_pricing_for_timestamp("deepseek-v4-flash", ts)
+            self.assertEqual(
+                pricing["tier"], expected_tier,
+                f"hour {hour:02d} expected {expected_tier}, got {pricing['tier']}",
+            )
+
+    def test_peak_rates_for_both_models(self):
+        from credit import deepseek_pricing_for_timestamp
+        ts = self._utc_ts(2026, 8, 17, 2)  # peak
+        flash = deepseek_pricing_for_timestamp("deepseek-v4-flash", ts)
+        pro = deepseek_pricing_for_timestamp("deepseek-v4-pro", ts)
+        self.assertEqual(flash["tier"], "peak")
+        self.assertEqual(flash["input_cache_hit_micro_usd_per_million"], 14_000)
+        self.assertEqual(flash["input_cache_miss_micro_usd_per_million"], 440_000)
+        self.assertEqual(flash["output_micro_usd_per_million"], 1_320_000)
+        self.assertEqual(pro["tier"], "peak")
+        self.assertEqual(pro["input_cache_hit_micro_usd_per_million"], 44_000)
+        self.assertEqual(pro["input_cache_miss_micro_usd_per_million"], 1_320_000)
+        self.assertEqual(pro["output_micro_usd_per_million"], 3_960_000)
+
+    def test_offpeak_rates_for_both_models(self):
+        from credit import deepseek_pricing_for_timestamp
+        ts = self._utc_ts(2026, 8, 17, 16)  # off-peak
+        flash = deepseek_pricing_for_timestamp("deepseek-v4-flash", ts)
+        pro = deepseek_pricing_for_timestamp("deepseek-v4-pro", ts)
+        self.assertEqual(flash["tier"], "offpeak")
+        self.assertEqual(flash["input_cache_hit_micro_usd_per_million"], 7_000)
+        self.assertEqual(flash["input_cache_miss_micro_usd_per_million"], 220_000)
+        self.assertEqual(flash["output_micro_usd_per_million"], 660_000)
+        self.assertEqual(pro["tier"], "offpeak")
+        self.assertEqual(pro["input_cache_hit_micro_usd_per_million"], 22_000)
+        self.assertEqual(pro["input_cache_miss_micro_usd_per_million"], 660_000)
+        self.assertEqual(pro["output_micro_usd_per_million"], 1_980_000)
+
+    def test_extract_deepseek_usage_legacy_flash_cache_aware(self):
         from chat_agent_openrouter import _extract_deepseek_usage
         payload = {
             "id": "ds-1",
@@ -979,15 +1109,17 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 1_100_000,
             },
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
-        # 0.9M×$0.003 + 0.1M×$0.15 + 0.1M×$0.30 per 1M tokens
-        expected = (
-            0.9 * 0.003 + 0.1 * 0.15 + 0.1 * 0.30
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash", submitted_at_ts=self.EFFECTIVE - 1
         )
+        # 0.9M×$0.0028 + 0.1M×$0.14 + 0.1M×$0.28 per 1M tokens
+        expected = 0.9 * 0.0028 + 0.1 * 0.14 + 0.1 * 0.28
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["cost_micro_usd"], 44_520)
         self.assertEqual(usage["prompt_cache_hit_tokens"], 900_000)
         self.assertEqual(usage["prompt_cache_miss_tokens"], 100_000)
         self.assertTrue(usage["cost_present"])
+        self.assertEqual(usage["pricing"]["tier"], "legacy")
 
     def test_extract_deepseek_usage_falls_back_to_all_miss(self):
         from chat_agent_openrouter import _extract_deepseek_usage
@@ -998,21 +1130,16 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 1_100_000,
             }
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash", submitted_at_ts=self.EFFECTIVE - 1
+        )
         # No breakdown → all prompt tokens billed as cache miss (conservative).
-        expected = 1.0 * 0.15 + 0.1 * 0.30
+        expected = 1.0 * 0.14 + 0.1 * 0.28
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
         self.assertEqual(usage["prompt_cache_miss_tokens"], 1_000_000)
 
-    def test_extract_deepseek_usage_price_json_override(self):
+    def test_extract_deepseek_usage_peak_flash(self):
         from chat_agent_openrouter import _extract_deepseek_usage
-        os.environ["DEEPSEEK_PRICE_JSON"] = json.dumps({
-            "deepseek-v4-flash": {
-                "input_cache_hit_usd_per_1m": 0.01,
-                "input_cache_miss_usd_per_1m": 1.00,
-                "output_usd_per_1m": 2.00,
-            }
-        })
         payload = {
             "usage": {
                 "prompt_tokens": 1_000_000,
@@ -1022,29 +1149,14 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 1_100_000,
             }
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
-        expected = 0.5 * 0.01 + 0.5 * 1.00 + 0.1 * 2.00
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash",
+            submitted_at_ts=self._utc_ts(2026, 8, 17, 2),
+        )
+        # Peak: 0.5M×$0.014 + 0.5M×$0.44 + 0.1M×$1.32
+        expected = 0.5 * 0.014 + 0.5 * 0.44 + 0.1 * 1.32
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
-
-    def test_price_json_partial_override_keeps_other_rates(self):
-        """A partial override must not silently zero out unset prices."""
-        from chat_agent_openrouter import _extract_deepseek_usage
-        os.environ["DEEPSEEK_PRICE_JSON"] = json.dumps({
-            "deepseek-v4-flash": {"output_usd_per_1m": 2.00}
-        })
-        payload = {
-            "usage": {
-                "prompt_tokens": 1_000_000,
-                "prompt_cache_hit_tokens": 500_000,
-                "prompt_cache_miss_tokens": 500_000,
-                "completion_tokens": 100_000,
-                "total_tokens": 1_100_000,
-            }
-        }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
-        # Defaults for hit/miss are retained: 0.003 / 0.15.
-        expected = 0.5 * 0.003 + 0.5 * 0.15 + 0.1 * 2.00
-        self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["pricing"]["tier"], "peak")
 
     def test_extract_deepseek_usage_prices_unaccounted_remainder_as_miss(self):
         """If hit+miss < prompt_tokens, the remainder is billed as cache miss."""
@@ -1058,13 +1170,15 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 1_000_000,
             }
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-flash")
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash", submitted_at_ts=self.EFFECTIVE - 1
+        )
         # 400k hit, 600k miss (200k unaccounted priced as miss).
-        expected = 0.4 * 0.003 + 0.6 * 0.15
+        expected = 0.4 * 0.0028 + 0.6 * 0.14
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
         self.assertEqual(usage["prompt_cache_miss_tokens"], 600_000)
 
-    def test_pro_uses_pro_price_tier(self):
+    def test_pro_uses_pro_legacy_tier(self):
         from chat_agent_openrouter import _extract_deepseek_usage
         payload = {
             "usage": {
@@ -1075,9 +1189,37 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 2_000_000,
             }
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v4-pro")
-        expected = 1.0 * 0.004 + 0.0 + 1.0 * 0.90
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-pro", submitted_at_ts=self.EFFECTIVE - 1
+        )
+        expected = 1.0 * 0.003625 + 0.0 + 1.0 * 0.87
         self.assertAlmostEqual(usage["cost_usd"], expected, places=9)
+        self.assertEqual(usage["pricing"]["tier"], "legacy")
+
+    def test_extract_deepseek_usage_returns_audit_metadata(self):
+        """Pricing audit metadata (schedule/tier/basis/rates) is returned."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        payload = {
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "prompt_cache_hit_tokens": 1_000_000,
+                "prompt_cache_miss_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 1_000_000,
+            }
+        }
+        ts = self._utc_ts(2026, 8, 17, 8)  # peak
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash", submitted_at_ts=ts
+        )
+        pricing = usage["pricing"]
+        self.assertIsNotNone(pricing)
+        self.assertEqual(pricing["schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(pricing["tier"], "peak")
+        self.assertEqual(pricing["pricing_basis_ts"], ts)
+        self.assertEqual(pricing["input_cache_hit_micro_usd_per_million"], 14_000)
+        self.assertEqual(pricing["input_cache_miss_micro_usd_per_million"], 440_000)
+        self.assertEqual(pricing["output_micro_usd_per_million"], 1_320_000)
 
     def test_unknown_deepseek_model_reports_no_cost(self):
         """A model with no price entry reports cost_present=False so the
@@ -1092,9 +1234,44 @@ class DeepSeekCostTests(unittest.TestCase):
                 "total_tokens": 1_100_000,
             }
         }
-        usage = _extract_deepseek_usage(payload, "deepseek-v9-unknown")
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v9-unknown", submitted_at_ts=self.EFFECTIVE + 1
+        )
         self.assertEqual(usage["cost_usd"], 0.0)
         self.assertFalse(usage["cost_present"])
+        self.assertIsNone(usage["pricing"])
+
+    def test_round_cost_micro_boundaries(self):
+        from credit import round_cost_micro
+        self.assertEqual(round_cost_micro(0), 0)
+        self.assertEqual(round_cost_micro(499_999), 0)   # sub-0.5 micro → down
+        self.assertEqual(round_cost_micro(500_000), 1)   # exactly half → up
+        self.assertEqual(round_cost_micro(500_001), 1)   # above half → up
+        self.assertEqual(round_cost_micro(44_520_000_000), 44_520)
+        self.assertEqual(round_cost_micro(1_334_000_000_000), 1_334_000)
+
+    def test_extract_deepseek_usage_sub_half_micro_rounds_zero_but_present(self):
+        """A known-priced request with nonzero usage that rounds to zero micro
+        must stay cost_present (settle zero, not full-reservation)."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        # One cache-hit token at legacy flash hit rate (2800 micro/1M) →
+        # 0.0028 micro, rounds to 0.
+        payload = {
+            "usage": {
+                "prompt_tokens": 1,
+                "prompt_cache_hit_tokens": 1,
+                "prompt_cache_miss_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 1,
+            }
+        }
+        usage = _extract_deepseek_usage(
+            payload, "deepseek-v4-flash", submitted_at_ts=self.EFFECTIVE - 1
+        )
+        self.assertEqual(usage["cost_micro_usd"], 0)
+        self.assertEqual(usage["cost_usd"], 0.0)
+        self.assertTrue(usage["cost_present"])
+        self.assertEqual(usage["pricing"]["tier"], "legacy")
 
 
 class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
@@ -1150,6 +1327,104 @@ class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
             await self.agent._do_deepseek_call(
                 client, {"model": "deepseek-v4-flash"}, "deepseek-v4-flash"
             )
+
+    async def test_credit_settle_forwards_pricing_audit_metadata(self):
+        """The settle callback POSTs the immutable pricing audit fields."""
+        client = SimpleNamespace(post=AsyncMock())
+        client.post.return_value = SimpleNamespace(
+            is_success=True,
+            status_code=200,
+            json=lambda: {"call_id": "call-1", "status": "settled"},
+        )
+        await self.agent._credit_settle(
+            client,
+            "call-1",
+            actual_cost_micro_usd=44_520,
+            prompt_tokens=1_000_000,
+            completion_tokens=100_000,
+            total_tokens=1_100_000,
+            provider_cost_micro_usd=44_520,
+            prompt_cache_hit_tokens=900_000,
+            prompt_cache_miss_tokens=100_000,
+            pricing_schedule_version="2026-08-16T16:00:00Z",
+            pricing_tier="legacy",
+            pricing_basis_ts=1_786_895_999.0,
+            input_cache_hit_rate_micro_usd_per_million=2_800,
+            input_cache_miss_rate_micro_usd_per_million=140_000,
+            output_rate_micro_usd_per_million=280_000,
+        )
+        args, kwargs = client.post.call_args
+        body = kwargs["json"]
+        self.assertEqual(body["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(body["pricing_tier"], "legacy")
+        self.assertEqual(body["pricing_basis_ts"], 1_786_895_999.0)
+        self.assertEqual(
+            body["input_cache_hit_rate_micro_usd_per_million"], 2_800
+        )
+        self.assertEqual(
+            body["input_cache_miss_rate_micro_usd_per_million"], 140_000
+        )
+        self.assertEqual(body["output_rate_micro_usd_per_million"], 280_000)
+
+    async def test_deepseek_settle_prices_by_submission_timestamp(self):
+        """A successful DeepSeek call is priced by the callback-returned
+        authoritative ``submitted_at`` (not the worker's local clock)."""
+        settle = AsyncMock(return_value={"call_id": "call-ds", "status": "settled"})
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+        peak_ts = 1_786_932_000.0  # 2026-08-17T02:00:00Z — peak window
+        offpeak_ts = 1_786_896_000.0  # 2026-08-16T16:00:00Z — off-peak
+        self.agent._session_billing_runs["s-ds-billing"] = "run-ds-billing"
+
+        async def provider(*_args, **_kwargs):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {
+                    "prompt_tokens": 1_000_000,
+                    "prompt_cache_hit_tokens": 1_000_000,
+                    "prompt_cache_miss_tokens": 0,
+                    "completion_tokens": 1_000_000,
+                    "total_tokens": 2_000_000,
+                },
+            }
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(
+                self.agent, "_credit_reserve",
+                new=AsyncMock(return_value={"call_id": "call-ds"}),
+            ),
+            patch.object(
+                self.agent, "_credit_mark_submitted",
+                new=AsyncMock(
+                    return_value={"status": "submitted", "submitted_at": peak_ts}
+                ),
+            ),
+            patch.object(self.agent, "_credit_settle", new=settle),
+            patch.object(self.agent, "_credit_release", new=AsyncMock()),
+            patch.object(self.agent, "_do_openrouter_call", side_effect=provider),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+            # Worker's local clock is off-peak; the authoritative submitted_at is
+            # peak. The settle must follow submitted_at, not the local clock.
+            patch("chat_agent_openrouter.time.time", return_value=offpeak_ts),
+        ):
+            await self.agent._call_openrouter(
+                SimpleNamespace(),
+                [{"role": "user", "content": "hello"}],
+                model="deepseek-v4-flash",
+                session_id="s-ds-billing",
+            )
+
+        settle.assert_awaited_once()
+        kwargs = settle.await_args.kwargs
+        self.assertEqual(kwargs["pricing_tier"], "peak")
+        self.assertEqual(kwargs["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(kwargs["pricing_basis_ts"], peak_ts)
+        self.assertEqual(kwargs["input_cache_hit_rate_micro_usd_per_million"], 14_000)
+        self.assertEqual(kwargs["input_cache_miss_rate_micro_usd_per_million"], 440_000)
+        self.assertEqual(kwargs["output_rate_micro_usd_per_million"], 1_320_000)
+        # Peak flash: 1M hit × $0.014 + 1M out × $1.32 = $1.334 → 1_334_000 micro
+        self.assertEqual(kwargs["actual_cost_micro_usd"], 1_334_000)
+        self.assertEqual(kwargs["provider_cost_micro_usd"], 1_334_000)
 
     async def test_do_openrouter_call_dispatches_to_deepseek(self):
         client = SimpleNamespace(post=AsyncMock())

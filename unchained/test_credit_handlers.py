@@ -145,6 +145,198 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(settle_response.status, 200)
             self.assertEqual(_payload(settle_response)["settled_micro_usd"], 25_000)
 
+    async def test_internal_settle_passes_pricing_audit_metadata(self):
+        """The settle handler auto-prices a submitted DeepSeek call from the
+        authoritative reservation submitted_at and overrides a buggy zero cost."""
+        self.ledger.grant("u-target", 5_000_000, idempotency_key="seed-pricing")
+        run = self.ledger.create_run("u-target", idempotency_key="turn-pricing")
+        peak_ts = 1_786_932_000.0  # 2026-08-17T02:00:00Z — peak window
+
+        with (
+            patch.object(credit_internal, "_core", return_value=self.core),
+            patch("credit.time.time", return_value=peak_ts),
+        ):
+            reserved_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": run["run_id"],
+                        "model": "deepseek-v4-flash",
+                        "idempotency_key": "attempt-pricing",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            call_id = _payload(reserved_response)["call_id"]
+            # mark_submitted records the authoritative submitted_at (peak_ts).
+            await credit_internal.handle_credit_mark_submitted(
+                _Request({"call_id": call_id}, token="hosted-callback-test")
+            )
+            # Old worker: no pricing metadata and a buggy zero cost. The control
+            # plane must recompute cost and populate audit fields.
+            settle_response = await credit_internal.handle_credit_settle(
+                _Request(
+                    {
+                        "call_id": call_id,
+                        "actual_cost_micro_usd": 0,
+                        "provider_cost_micro_usd": 0,
+                        "prompt_tokens": 1_000_000,
+                        "prompt_cache_hit_tokens": 1_000_000,
+                        "prompt_cache_miss_tokens": 0,
+                        "completion_tokens": 1_000_000,
+                        "total_tokens": 2_000_000,
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+        self.assertEqual(settle_response.status, 200)
+        body = _payload(settle_response)
+        self.assertEqual(body["pricing_tier"], "peak")
+        self.assertEqual(body["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(body["pricing_basis_ts"], peak_ts)
+        self.assertEqual(body["output_rate_micro_usd_per_million"], 1_320_000)
+        # Authoritative recompute overrides the zero cost:
+        # 1M hit × $0.014 + 1M out × $1.32 = $1.334 → 1_334_000 micro.
+        self.assertEqual(body["settled_micro_usd"], 1_334_000)
+        self.assertEqual(body["provider_cost_micro_usd"], 1_334_000)
+
+        usage = self.ledger.get_usage_for_run(run["run_id"])
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0]["pricing_schedule_version"], "2026-08-16T16:00:00Z")
+        self.assertEqual(usage[0]["pricing_tier"], "peak")
+        self.assertEqual(usage[0]["input_cache_miss_rate_micro_usd_per_million"], 440_000)
+
+    async def test_internal_provider_balance_stores_component_balances(self):
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            response = await credit_internal.handle_credit_provider_balance(
+                _Request(
+                    {
+                        "snapshots": [
+                            {
+                                "provider": "deepseek",
+                                "currency": "USD",
+                                "total_balance": "11.32",
+                                "granted_balance": "8.00",
+                                "topped_up_balance": "3.32",
+                                "is_available": True,
+                                "snapshot_at": 1_700_000_000.0,
+                            }
+                        ]
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(_payload(response)["stored"], 1)
+        latest = self.ledger.latest_provider_balance_snapshot("deepseek")
+        self.assertEqual(latest["total_balance"], 11.32)
+        self.assertEqual(latest["granted_balance"], 8.00)
+        self.assertEqual(latest["topped_up_balance"], 3.32)
+
+    async def test_internal_provider_balance_missing_components_are_none(self):
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            response = await credit_internal.handle_credit_provider_balance(
+                _Request(
+                    {
+                        "snapshots": [
+                            {
+                                "provider": "deepseek",
+                                "currency": "USD",
+                                "total_balance": "11.32",
+                                "is_available": True,
+                                "snapshot_at": 1_700_000_000.0,
+                            }
+                        ]
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+        self.assertEqual(response.status, 200)
+        latest = self.ledger.latest_provider_balance_snapshot("deepseek")
+        self.assertIsNone(latest["granted_balance"])
+        self.assertIsNone(latest["topped_up_balance"])
+
+    async def test_internal_settle_rejects_tampered_pricing_metadata(self):
+        """Tampered tier/rates/NaN from the worker surface as HTTP 400."""
+        self.ledger.grant("u-target", 5_000_000, idempotency_key="seed-tamper")
+        run = self.ledger.create_run("u-target", idempotency_key="turn-tamper")
+        offpeak_ts = 1_786_896_000.0  # 2026-08-16T16:00:00Z — off-peak
+
+        with (
+            patch.object(credit_internal, "_core", return_value=self.core),
+            patch("credit.time.time", return_value=offpeak_ts),
+        ):
+            reserved_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": run["run_id"],
+                        "model": "deepseek-v4-flash",
+                        "idempotency_key": "attempt-tamper",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            call_id = _payload(reserved_response)["call_id"]
+            await credit_internal.handle_credit_mark_submitted(
+                _Request({"call_id": call_id}, token="hosted-callback-test")
+            )
+            # peak tier claimed for an authoritative off-peak submitted_at
+            # (reservation submitted_at = offpeak_ts) → inconsistent → 400.
+            bad_tier = await credit_internal.handle_credit_settle(
+                _Request(
+                    {
+                        "call_id": call_id,
+                        "actual_cost_micro_usd": 1_000,
+                        "provider_cost_micro_usd": 1_000,
+                        "pricing_schedule_version": "2026-08-16T16:00:00Z",
+                        "pricing_tier": "peak",
+                        "pricing_basis_ts": offpeak_ts,
+                        "input_cache_hit_rate_micro_usd_per_million": 14_000,
+                        "input_cache_miss_rate_micro_usd_per_million": 440_000,
+                        "output_rate_micro_usd_per_million": 1_320_000,
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            self.assertEqual(bad_tier.status, 400)
+            self.assertIn("tier", _payload(bad_tier)["error"])
+
+    async def test_internal_provider_balance_skips_nonfinite_values(self):
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            response = await credit_internal.handle_credit_provider_balance(
+                _Request(
+                    {
+                        "snapshots": [
+                            {
+                                "provider": "deepseek",
+                                "currency": "USD",
+                                "total_balance": "nan",
+                                "is_available": True,
+                                "snapshot_at": 1_700_000_000.0,
+                            },
+                            {
+                                "provider": "deepseek",
+                                "currency": "USD",
+                                "total_balance": "11.32",
+                                "granted_balance": "inf",
+                                "is_available": True,
+                                "snapshot_at": 1_700_000_000.0,
+                            },
+                            {
+                                "provider": "deepseek",
+                                "currency": "USD",
+                                "total_balance": "11.32",
+                                "is_available": True,
+                                "snapshot_at": "nan",
+                            },
+                        ]
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+        # Every snapshot carried a non-finite value → nothing stored.
+        self.assertEqual(response.status, 400)
+        self.assertIsNone(self.ledger.latest_provider_balance_snapshot("deepseek"))
+
     async def test_internal_callbacks_require_dedicated_token_and_object_json(self):
         with patch.object(credit_internal, "_core", return_value=self.core):
             unauthorized = await credit_internal.handle_credit_reserve(
