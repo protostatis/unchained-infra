@@ -91,10 +91,11 @@ class TestTemplateTransforms(unittest.TestCase):
                     html,
                 )
                 self.assertIn(
-                    "document.addEventListener('touchmove', function(event)",
+                    "document.addEventListener('touchmove', blockWorkspaceMultiTouchMove, {passive:false});",
                     html,
                 )
-                self.assertIn("event.touches.length > 1", html)
+                self.assertIn("document.removeEventListener('touchmove', blockWorkspaceMultiTouchMove);", html)
+                self.assertIn("event.touches.length <= 1", html)
 
     def test_workspace_zoom_guard_is_idempotent_and_requires_viewport(self):
         from web_app import templates
@@ -108,6 +109,10 @@ class TestTemplateTransforms(unittest.TestCase):
             templates._disable_workspace_zoom(guarded, template_name="sample"),
             guarded,
         )
+        partially_guarded = guarded.replace(templates._WORKSPACE_VIEWPORT, source.split("</head>", 1)[0].split("<head>", 1)[1])
+        repaired = templates._disable_workspace_zoom(partially_guarded, template_name="partial")
+        self.assertEqual(repaired.count('id="workspace-zoom-guard"'), 1)
+        self.assertEqual(repaired.count(templates._WORKSPACE_VIEWPORT), 1)
         self.assertIn(
             templates._WORKSPACE_VIEWPORT,
             templates._disable_workspace_zoom(

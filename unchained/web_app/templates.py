@@ -23679,17 +23679,25 @@ _WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
   function blockWorkspaceZoom(event) { event.preventDefault(); }
   document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});
   document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});
-  document.addEventListener('touchmove', function(event) {
-    if (event.touches && event.touches.length > 1) blockWorkspaceZoom(event);
-  }, {passive:false});
+  function blockWorkspaceMultiTouchMove(event) { blockWorkspaceZoom(event); }
+  function stopWorkspaceMultiTouchMove() {
+    document.removeEventListener('touchmove', blockWorkspaceMultiTouchMove);
+  }
+  document.addEventListener('touchstart', function(event) {
+    if (!event.touches || event.touches.length <= 1) return;
+    document.addEventListener('touchmove', blockWorkspaceMultiTouchMove, {passive:false});
+  }, {passive:true});
+  document.addEventListener('touchend', function(event) {
+    if (!event.touches || event.touches.length <= 1) stopWorkspaceMultiTouchMove();
+  }, {passive:true});
+  document.addEventListener('touchcancel', stopWorkspaceMultiTouchMove, {passive:true});
 })();
 </script>"""
 
 
 def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
     """Disable page-level pinch zoom on Agent View chat workspaces."""
-    if 'id="workspace-zoom-guard"' in html:
-        return html
+    has_guard = 'id="workspace-zoom-guard"' in html
     viewport_pattern = re.compile(
         r'<meta name=(?P<name_quote>["\'])viewport(?P=name_quote)\s+'
         r'content=(?P<content_quote>["\'])[^"\']+(?P=content_quote)\s*/?>'
@@ -23700,6 +23708,8 @@ def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
             f"{template_name}: expected one viewport meta tag for workspace zoom guard"
         )
     html = viewport_pattern.sub(_WORKSPACE_VIEWPORT, html, count=1)
+    if has_guard:
+        return html
     return apply_template_replacements(
         html,
         (
