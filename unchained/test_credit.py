@@ -2332,6 +2332,55 @@ class TestDeepSeekProvider(unittest.TestCase):
         self.assertEqual(result["provider_cost_micro_usd"], 0)
         self.assertEqual(result["pricing_tier"], "peak")
 
+    def test_settle_rejects_oversized_tokens_without_mutation(self):
+        """An impossible worker usage payload fails before any ledger write."""
+        from credit import MAX_PROVIDER_USAGE_TOKENS_PER_FIELD
+
+        call = self._reserve_and_submit_deepseek_call(
+            "u-token-cap", "token-cap", self._PEAK_TS
+        )
+        balance_before = self.ledger.get_balance("u-token-cap")
+
+        with self.assertRaisesRegex(ValueError, "prompt_tokens must be between"):
+            self.ledger.settle_call(
+                call["call_id"],
+                prompt_tokens=MAX_PROVIDER_USAGE_TOKENS_PER_FIELD + 1,
+                cost_absent=False,
+            )
+
+        self.assertEqual(self.ledger.get_balance("u-token-cap"), balance_before)
+        with self.ledger._conn() as conn:
+            status, settled = conn.execute(
+                "SELECT status, settled_micro_usd "
+                "FROM credit_call_reservations WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()
+            usage_count = conn.execute(
+                "SELECT COUNT(*) FROM credit_provider_usage WHERE call_id = ?",
+                (call["call_id"],),
+            ).fetchone()[0]
+        self.assertEqual(status, "held")
+        self.assertEqual(settled, 0)
+        self.assertEqual(usage_count, 0)
+
+    def test_already_settled_replay_ignores_oversized_tokens(self):
+        """Malformed retry payloads cannot break an idempotent settled replay."""
+        from credit import MAX_PROVIDER_USAGE_TOKENS_PER_FIELD
+
+        call = self._reserve_and_submit_deepseek_call(
+            "u-token-replay", "token-replay", self._PEAK_TS
+        )
+        first = self.ledger.settle_call(
+            call["call_id"], prompt_tokens=1, total_tokens=1,
+        )
+        self.assertFalse(first["already_settled"])
+
+        replay = self.ledger.settle_call(
+            call["call_id"],
+            prompt_tokens=MAX_PROVIDER_USAGE_TOKENS_PER_FIELD + 1,
+        )
+        self.assertTrue(replay["already_settled"])
+
     def test_deepseek_hold_certification_uses_peak_rates(self):
         from credit import (
             HOSTED_HOLD_CERTIFIED_RATES_MICRO_USD_PER_MILLION_TOKENS,

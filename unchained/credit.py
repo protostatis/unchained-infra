@@ -130,6 +130,26 @@ DEEPSEEK_PEAK_RATES_MICRO_USD_PER_MILLION: dict[str, tuple[int, int, int]] = {
     "deepseek-v4-pro": (44_000, 1_320_000, 3_960_000),
 }
 
+# Defensive ceiling for provider-reported per-call token fields. This is far
+# above the hosted request envelope while keeping every token/rate product and
+# persisted SQLite INTEGER safely bounded if an authenticated worker is buggy
+# or compromised.
+MAX_PROVIDER_USAGE_TOKENS_PER_FIELD = 1_000_000_000
+
+
+def validate_provider_usage_tokens(**token_fields: int) -> None:
+    """Reject negative or implausibly large provider usage token counts."""
+    for field, raw_value in token_fields.items():
+        try:
+            value = int(raw_value or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} must be an integer") from exc
+        if value < 0 or value > MAX_PROVIDER_USAGE_TOKENS_PER_FIELD:
+            raise ValueError(
+                f"{field} must be between 0 and "
+                f"{MAX_PROVIDER_USAGE_TOKENS_PER_FIELD}"
+            )
+
 
 def deepseek_pricing_for_timestamp(model: str, ts: float) -> dict | None:
     """Return the immutable time-versioned DeepSeek price for *model* at *ts*.
@@ -182,6 +202,13 @@ def normalize_deepseek_tokens(
     - hit+miss is never allowed to exceed prompt tokens;
     - any unaccounted remainder is billed as cache miss.
     """
+    validate_provider_usage_tokens(
+        prompt_tokens=prompt_tokens,
+        prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
     prompt = max(0, int(prompt_tokens or 0))
     hit = max(0, int(prompt_cache_hit_tokens or 0))
     miss = max(0, int(prompt_cache_miss_tokens or 0))
@@ -1794,6 +1821,16 @@ class CreditLedger:
                 conn.execute("ROLLBACK")
                 raise ValueError(f"Cannot settle call in state: {row[5]}")
 
+            # Preserve idempotent settled replays above, but reject impossible
+            # usage before any mutation of a live reservation.
+            validate_provider_usage_tokens(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+                prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+            )
+
             run_id = row[1]
             account_id = row[2]
             user_id = row[3]
@@ -1836,15 +1873,21 @@ class CreditLedger:
                 miss_rate = authoritative["input_cache_miss_micro_usd_per_million"]
                 out_rate = authoritative["output_micro_usd_per_million"]
 
-                pt, hit_t, miss_t, ct, tt = normalize_deepseek_tokens(
+                authoritative_usage = deepseek_cost_for_tokens(
+                    model_name,
+                    submitted_at,
                     prompt_tokens,
                     prompt_cache_hit_tokens,
                     prompt_cache_miss_tokens,
                     completion_tokens,
                     total_tokens,
                 )
-                numerator = hit_t * hit_rate + miss_t * miss_rate + ct * out_rate
-                authoritative_cost_micro = round_cost_micro(numerator)
+                pt = authoritative_usage["prompt_tokens"]
+                hit_t = authoritative_usage["prompt_cache_hit_tokens"]
+                miss_t = authoritative_usage["prompt_cache_miss_tokens"]
+                ct = authoritative_usage["completion_tokens"]
+                tt = authoritative_usage["total_tokens"]
+                authoritative_cost_micro = authoritative_usage["cost_micro_usd"]
             else:
                 # Fallback (non-DeepSeek, unpriced, or a direct ledger settle
                 # without a recorded submission): validate any worker-supplied

@@ -1273,6 +1273,79 @@ class DeepSeekCostTests(unittest.TestCase):
         self.assertTrue(usage["cost_present"])
         self.assertEqual(usage["pricing"]["tier"], "legacy")
 
+    def test_worker_and_control_plane_costs_match_all_pricing_tiers(self):
+        """Worker extraction and authoritative settlement stay byte-for-byte
+        equivalent across legacy, off-peak, and peak schedules."""
+        from chat_agent_openrouter import _extract_deepseek_usage
+        from credit import CreditLedger
+
+        cases = (
+            ("legacy", self.EFFECTIVE - 1),
+            ("offpeak", self._utc_ts(2026, 8, 17, 16)),
+            ("peak", self._utc_ts(2026, 8, 17, 2)),
+        )
+        usage_payload = {
+            "prompt_tokens": 1_000_000,
+            "prompt_cache_hit_tokens": 400_000,
+            # Deliberately leave 200k unaccounted; both paths must conservatively
+            # assign that remainder to cache misses.
+            "prompt_cache_miss_tokens": 400_000,
+            "completion_tokens": 123_456,
+            "total_tokens": 1_123_456,
+        }
+
+        for model in ("deepseek-v4-flash", "deepseek-v4-pro"):
+            for expected_tier, submitted_at in cases:
+                with self.subTest(model=model, tier=expected_tier):
+                    worker = _extract_deepseek_usage(
+                        {"usage": usage_payload}, model,
+                        submitted_at_ts=submitted_at,
+                    )
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        ledger = CreditLedger(os.path.join(temp_dir, "credit.db"))
+                        user_id = f"u-{model}-{expected_tier}"
+                        ledger.grant(
+                            user_id, 10_000_000,
+                            idempotency_key=f"grant-{model}-{expected_tier}",
+                        )
+                        run = ledger.create_run(
+                            user_id,
+                            idempotency_key=f"run-{model}-{expected_tier}",
+                        )
+                        call = ledger.reserve_call(
+                            run["run_id"], model=model,
+                            idempotency_key=f"call-{model}-{expected_tier}",
+                        )
+                        with patch("credit._now_ts", return_value=submitted_at):
+                            ledger.mark_call_submitted(call["call_id"])
+                        settled = ledger.settle_call(
+                            call["call_id"],
+                            actual_cost_micro_usd=0,
+                            provider_cost_micro_usd=0,
+                            prompt_tokens=usage_payload["prompt_tokens"],
+                            prompt_cache_hit_tokens=usage_payload[
+                                "prompt_cache_hit_tokens"
+                            ],
+                            prompt_cache_miss_tokens=usage_payload[
+                                "prompt_cache_miss_tokens"
+                            ],
+                            completion_tokens=usage_payload["completion_tokens"],
+                            total_tokens=usage_payload["total_tokens"],
+                        )
+                        CreditLedger._instances.pop(
+                            os.path.join(temp_dir, "credit.db"), None
+                        )
+
+                    self.assertEqual(settled["pricing_tier"], expected_tier)
+                    self.assertEqual(
+                        settled["provider_cost_micro_usd"],
+                        worker["cost_micro_usd"],
+                    )
+                    self.assertEqual(
+                        settled["prompt_cache_miss_tokens"],
+                        worker["prompt_cache_miss_tokens"],
+                    )
+
 
 class DeepSeekProviderCallTests(unittest.IsolatedAsyncioTestCase):
     """DeepSeek direct API call routing (URL/key/headers, body mapping)."""

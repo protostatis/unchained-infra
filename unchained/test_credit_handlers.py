@@ -300,6 +300,47 @@ class CreditHandlerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bad_tier.status, 400)
             self.assertIn("tier", _payload(bad_tier)["error"])
 
+    async def test_internal_settle_rejects_oversized_token_count(self):
+        """Authenticated worker token overflows surface as HTTP 400."""
+        from credit import MAX_PROVIDER_USAGE_TOKENS_PER_FIELD
+
+        self.ledger.grant("u-target", 1_000_000, idempotency_key="seed-token-cap")
+        run = self.ledger.create_run("u-target", idempotency_key="turn-token-cap")
+
+        with patch.object(credit_internal, "_core", return_value=self.core):
+            reserved_response = await credit_internal.handle_credit_reserve(
+                _Request(
+                    {
+                        "run_id": run["run_id"],
+                        "model": "deepseek-v4-flash",
+                        "idempotency_key": "attempt-token-cap",
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+            call_id = _payload(reserved_response)["call_id"]
+            await credit_internal.handle_credit_mark_submitted(
+                _Request({"call_id": call_id}, token="hosted-callback-test")
+            )
+            response = await credit_internal.handle_credit_settle(
+                _Request(
+                    {
+                        "call_id": call_id,
+                        "prompt_tokens": MAX_PROVIDER_USAGE_TOKENS_PER_FIELD + 1,
+                    },
+                    token="hosted-callback-test",
+                )
+            )
+
+        self.assertEqual(response.status, 400)
+        self.assertIn("prompt_tokens must be between", _payload(response)["error"])
+        with self.ledger._conn() as conn:
+            status = conn.execute(
+                "SELECT status FROM credit_call_reservations WHERE call_id = ?",
+                (call_id,),
+            ).fetchone()[0]
+        self.assertEqual(status, "held")
+
     async def test_internal_provider_balance_skips_nonfinite_values(self):
         with patch.object(credit_internal, "_core", return_value=self.core):
             response = await credit_internal.handle_credit_provider_balance(
