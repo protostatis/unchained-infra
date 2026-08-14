@@ -2675,8 +2675,9 @@ async def _provider_cost_metering_loop():
     Reconciliation: compare the realized provider balance delta (snapshots
     posted by the hosted worker from GET /user/balance) against the ledger's
     summed estimated spend, throttled to a configurable interval. When the
-    provider charged us more than our price table estimated, log a warning —
-    the signal that DEEPSEEK_PRICE_JSON (or the OpenRouter estimate) is stale.
+    provider charged us more than our price schedule estimated, log a warning —
+    the signal that the immutable time-of-use DeepSeek schedule (or the
+    OpenRouter estimate) is stale.
     """
     import os as _os
     check_interval = max(
@@ -2748,39 +2749,47 @@ async def _provider_cost_metering_loop():
                         )
                         continue
                     if not report.get("usable_segments"):
-                        # Every snapshot segment was a top-up/grant (or no
-                        # spend). A 0.00% drift here is meaningless — do not
-                        # let it mask a stale price table.
+                        # No spend span had a net decrease — a 0.00% drift here
+                        # is meaningless. Do not let it mask a stale schedule.
                         log.warning(
                             "[credit-reconcile] %s: no usable spend window "
-                            "(all segments top-ups/grants, topup_segments=%d); "
+                            "(unchanged_segments=%d, topup_segments=%d); "
                             "estimates could not be verified this window.",
-                            provider, report.get("topup_segments", 0),
+                            provider,
+                            report.get("unchanged_segments", 0),
+                            report.get("topup_segments", 0),
                         )
                         continue
                     drift = report.get("drift_percent", 0.0)
                     log.info(
                         "[credit-reconcile] %s: actual_spend=$%.4f "
-                        "estimated_spend=$%.4f drift=%.2f%% (balance %.2f -> %.2f)",
+                        "estimated_spend=$%.4f drift=%.2f%% (balance %.2f -> %.2f, "
+                        "spans=%d, unchanged=%d, topups=%d)",
                         provider,
                         report.get("actual_spend_usd", 0.0),
                         report.get("estimated_spend_usd", 0.0),
                         drift,
                         report.get("first_balance_usd", 0.0),
                         report.get("last_balance_usd", 0.0),
+                        report.get("span_count", 0),
+                        report.get("unchanged_segments", 0),
+                        report.get("topup_segments", 0),
                     )
                     if report.get("balance_increased"):
+                        # A real top-up was skipped as a span boundary. Note it,
+                        # but do not suppress the drift signal: drift is computed
+                        # only over the monotonic spend spans, so unchanged
+                        # (cent-rounded) snapshots can never mask a stale price.
                         log.warning(
-                            "[credit-reconcile] %s balance increased between "
-                            "snapshots; delta unusable (possible top-up) — "
-                            "estimates cannot be verified this window.",
-                            provider,
+                            "[credit-reconcile] %s: skipped %d top-up segment(s) "
+                            "when reconciling monotonic spend spans.",
+                            provider, report.get("topup_segments", 0),
                         )
-                    elif drift > drift_threshold:
+                    if drift > drift_threshold:
                         log.warning(
                             "[credit-reconcile] %s drift %.2f%% exceeds "
-                            "threshold %.2f%% — provider price table may be "
-                            "stale; update the price config for %s.",
+                            "threshold %.2f%% — provider price schedule may be "
+                            "stale; review the time-of-use price schedule for %s.",
                             provider, drift, drift_threshold, provider,
                         )
                 except Exception as e:
