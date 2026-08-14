@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from web_app.template_transforms import (
     TemplateReplacement,
     TemplateTransformError,
@@ -23661,6 +23663,66 @@ def _inject_sidebar(html: str, *, include_sidebar: bool = True) -> str:
     return html
 
 
+_WORKSPACE_VIEWPORT = (
+    '<meta name="viewport" content="width=device-width, initial-scale=1, '
+    'maximum-scale=1, user-scalable=no, viewport-fit=cover">'
+)
+# Temporary crash containment. Remove this zoom restriction after physical-iPhone
+# validation shows the semantic Agent View can safely keep accessibility zoom
+# (tracked in GitHub issue #531). Current workspace pages already require inline
+# scripts; a future strict CSP must nonce/hash this guard with those runtimes.
+_WORKSPACE_ZOOM_GUARD = """<script id="workspace-zoom-guard">
+(function() {
+  // Modern iOS may ignore viewport zoom limits. These non-passive handlers are
+  // the load-bearing guard; the viewport metadata is only complementary.
+  // gesture* is WebKit-specific; touchmove provides the cross-browser fallback.
+  function blockWorkspaceZoom(event) { event.preventDefault(); }
+  document.addEventListener('gesturestart', blockWorkspaceZoom, {passive:false});
+  document.addEventListener('gesturechange', blockWorkspaceZoom, {passive:false});
+  function stopWorkspaceMultiTouchMove() {
+    document.removeEventListener('touchmove', blockWorkspaceZoom);
+  }
+  document.addEventListener('touchstart', function(event) {
+    if (!event.touches || event.touches.length <= 1) return;
+    document.addEventListener('touchmove', blockWorkspaceZoom, {passive:false});
+  }, {passive:true});
+  function settleWorkspaceMultiTouch(event) {
+    if (!event.touches || event.touches.length <= 1) stopWorkspaceMultiTouchMove();
+  }
+  document.addEventListener('touchend', settleWorkspaceMultiTouch, {passive:true});
+  document.addEventListener('touchcancel', settleWorkspaceMultiTouch, {passive:true});
+})();
+</script>"""
+
+
+def _disable_workspace_zoom(html: str, *, template_name: str) -> str:
+    """Disable page-level pinch zoom on Agent View chat workspaces."""
+    has_guard = 'id="workspace-zoom-guard"' in html
+    viewport_pattern = re.compile(
+        r'<meta name=(?P<name_quote>["\'])viewport(?P=name_quote)\s+'
+        r'content=(?P<content_quote>["\'])[^"\']+(?P=content_quote)\s*/?>'
+    )
+    matches = viewport_pattern.findall(html)
+    if len(matches) != 1:
+        raise TemplateTransformError(
+            f"{template_name}: expected one viewport meta tag for workspace zoom guard"
+        )
+    html = viewport_pattern.sub(_WORKSPACE_VIEWPORT, html, count=1)
+    if has_guard:
+        return html
+    return apply_template_replacements(
+        html,
+        (
+            TemplateReplacement(
+                "</body>",
+                _WORKSPACE_ZOOM_GUARD + "\n</body>",
+                "workspace zoom guard injection",
+            ),
+        ),
+        template_name=template_name,
+    )
+
+
 TRIAL_CHAT_HTML = _inject_sidebar(TRIAL_CHAT_HTML, include_sidebar=False)
 
 CLAUDE_CHAT_HTML = _inject_sidebar(CLAUDE_CHAT_HTML)
@@ -23679,6 +23741,15 @@ CHAT_CLAUDE_SDK_HTML = apply_template_replacements(
 )
 CHAT_CLAUDE_SDK_HTML = _inject_sidebar(CHAT_CLAUDE_SDK_HTML)
 CHAT_CODEX_HTML = _inject_sidebar(CHAT_CODEX_HTML)
+
+TRIAL_CHAT_HTML = _disable_workspace_zoom(TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML")
+CLAUDE_CHAT_HTML = _disable_workspace_zoom(CLAUDE_CHAT_HTML, template_name="CLAUDE_CHAT_HTML")
+CHAT_GEMINI_HTML = _disable_workspace_zoom(CHAT_GEMINI_HTML, template_name="CHAT_GEMINI_HTML")
+CHAT_CLAUDE_SDK_HTML = _disable_workspace_zoom(
+    CHAT_CLAUDE_SDK_HTML,
+    template_name="CHAT_CLAUDE_SDK_HTML",
+)
+CHAT_CODEX_HTML = _disable_workspace_zoom(CHAT_CODEX_HTML, template_name="CHAT_CODEX_HTML")
 
 TRIAL_CHAT_HTML = _inject_safe_markdown_renderer(TRIAL_CHAT_HTML, template_name="TRIAL_CHAT_HTML")
 CHAT_GEMINI_HTML = _inject_safe_markdown_renderer(CHAT_GEMINI_HTML, template_name="CHAT_GEMINI_HTML")
