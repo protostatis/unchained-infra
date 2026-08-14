@@ -133,9 +133,9 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
             TRIAL_AGENT_ID="trial-agent",
             _FIRST_LOOK_GUEST_PROMPT_LIMIT=20,
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
-            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3.5-lightning:free",
             _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
-                "nvidia/nemotron-3-super-120b-a12b:free",
+                "nvidia/nemotron-3.5-lightning:free",
             ),
             _authenticate=lambda _request: None,
             _first_look_guest_auth=lambda _request: (
@@ -273,6 +273,7 @@ class FirstLookRunAnalyticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(accepted), 1)
         self.assertEqual(len(terminal), 1)
         dispatched = core.socket.messages[-1]
+        self.assertEqual(dispatched["model"], "nvidia/nemotron-3.5-lightning:free")
         self.assertTrue(dispatched.get("billing_run_id"))
         from credit import CreditLedger
         run = CreditLedger(self._db_path).get_run(dispatched["billing_run_id"])
@@ -548,9 +549,9 @@ class TestDeepSeekGuestGate(unittest.IsolatedAsyncioTestCase):
             TRIAL_AGENT_ID="trial-agent",
             ADMIN_EMAILS=[],
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
-            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3.5-lightning:free",
             _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
-                "nvidia/nemotron-3-super-120b-a12b:free",
+                "nvidia/nemotron-3.5-lightning:free",
             ),
             _authenticate=lambda r: None,
             _first_look_guest_auth=lambda r: (

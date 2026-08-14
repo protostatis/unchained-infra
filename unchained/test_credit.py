@@ -408,6 +408,9 @@ class TestCreditLedger(unittest.TestCase):
     def test_model_allowlist_accepts_catalog(self):
         self.assertTrue(is_hosted_model_allowed("google/gemini-3.1-flash-lite"))
         self.assertTrue(
+            is_hosted_model_allowed("nvidia/nemotron-3.5-lightning:free")
+        )
+        self.assertTrue(
             is_hosted_model_allowed("nvidia/nemotron-3-super-120b-a12b:free")
         )
         self.assertFalse(
@@ -900,6 +903,7 @@ class TestCreditModelAllowlist(unittest.TestCase):
             "google/gemma-3-27b-it:free",
             "meta-llama/llama-3.3-70b-instruct:free",
             "deepseek/deepseek-chat-v3-0324:free",
+            "nvidia/nemotron-3.5-lightning:free",
             "nvidia/nemotron-3-super-120b-a12b:free",
             "nvidia/nemotron-3-nano-30b-a3b:free",
             "poolside/laguna-xs-2.1:free",
@@ -1416,6 +1420,7 @@ class TestCreditFreeModels(unittest.TestCase):
         from credit import _default_reservation
         for free_model in (
             "google/gemma-3-27b-it:free",
+            "nvidia/nemotron-3.5-lightning:free",
             "nvidia/nemotron-3-super-120b-a12b:free",
             "deepseek/deepseek-chat:free",
         ):
@@ -1831,9 +1836,9 @@ class TestDeepSeekProvider(unittest.TestCase):
             _auth=auth,
             ADMIN_EMAILS=[],
             _OPENROUTER_TRIAL_DEFAULT_MODEL="google/gemini-3.1-flash-lite",
-            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3-super-120b-a12b:free",
+            _OPENROUTER_TRIAL_FALLBACK_MODEL="nvidia/nemotron-3.5-lightning:free",
             _OPENROUTER_TRIAL_POST_CAP_ALLOWED_MODELS=(
-                "nvidia/nemotron-3-super-120b-a12b:free",
+                "nvidia/nemotron-3.5-lightning:free",
             ),
         )
         policy = effective_hosted_model_policy(core)

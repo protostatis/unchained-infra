@@ -471,6 +471,7 @@ HOSTED_MODEL_CATALOG: dict[str, int] = {
     "deepseek/deepseek-chat-v3-0324:free": 0,
     "deepseek/deepseek-chat:free": 0,
     "deepseek/deepseek-r1:free": 0,
+    "nvidia/nemotron-3.5-lightning:free": 0,
     "nvidia/nemotron-3-super-120b-a12b:free": 0,
 }
 
