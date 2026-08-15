@@ -60,7 +60,11 @@ from conversation_transcript import (
     strip_internal_tool_payload as _strip_internal_tool_payload,
     visible_transcript_from_payload,
 )
-from context_compact import compact_messages, emergency_trim
+from context_compact import (
+    compact_active_browser_checkpoints,
+    compact_messages,
+    emergency_trim,
+)
 from tool_payloads import (
     _DSML_PREFIX,
     _XML_GT as _DSML_XML_GT,
@@ -2508,6 +2512,18 @@ class TrialAgent:
     ) -> dict:
         effective_model = model or self.model
         provider = "deepseek" if _is_deepseek_model(effective_model) else "openrouter"
+        billing_run_id = self._session_billing_runs.get(session_id, "")
+        if (
+            billing_run_id
+            and _serialized_context_chars(messages) > HOSTED_MAX_INTERNAL_CONTEXT_CHARS
+        ):
+            messages, browser_stats = compact_active_browser_checkpoints(messages)
+            if browser_stats["compacted"]:
+                print(
+                    f"[{session_id}] Compacted active browser checkpoints: "
+                    f"count={browser_stats['compacted']} "
+                    f"chars={browser_stats['chars_before']}→{browser_stats['chars_after']}"
+                )
         body: dict = {
             "model": effective_model,
             "messages": messages,
@@ -2538,7 +2554,6 @@ class TrialAgent:
             body["tool_choice"] = "auto"
 
         # --- Credit reserve before API call ---
-        billing_run_id = self._session_billing_runs.get(session_id, "")
         token = self._credit_service_token()
         credit_client: httpx.AsyncClient | None = None
         reserved_call_id: str | None = None

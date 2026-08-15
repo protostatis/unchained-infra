@@ -153,6 +153,9 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.agent, "_credit_release", new=AsyncMock()),
             patch.object(self.agent, "_do_openrouter_call", side_effect=provider),
             patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+            patch(
+                "chat_agent_openrouter.compact_active_browser_checkpoints"
+            ) as compact_active,
         ):
             result = await self.agent._call_openrouter(
                 SimpleNamespace(),
@@ -162,6 +165,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["choices"])
         self.assertEqual(order, ["reserve", "submitted", "provider", "settle"])
+        compact_active.assert_not_called()
 
     async def test_openrouter_settle_uses_provider_cost_without_pricing(self):
         """OpenRouter settlements keep cost math and send no DeepSeek pricing."""
@@ -367,6 +371,116 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             )
 
         provider.assert_awaited_once()
+
+    async def test_workspace_attempt_compacts_active_browser_checkpoints_before_limit(self):
+        """A long one-prompt browser loop should reach the billed provider."""
+        sid = "s-workspace-browser-compaction"
+        self.agent._session_billing_runs[sid] = "run-workspace-compaction"
+        messages = [
+            {"role": "system", "content": "You are a browser agent."},
+            {"role": "user", "content": "Research this site thoroughly."},
+        ]
+        tool_call_ids = []
+        for index in range(52):
+            call_id = f"checkpoint-{index}"
+            tool_call_ids.append(call_id)
+            messages.extend([
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": f"Inspect browser state {index}",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "navigate",
+                            "arguments": json.dumps({
+                                "url": f"https://example.test/{index}",
+                                "tab_id": "workspace-tab",
+                            }),
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": (
+                        f"Navigated to: https://example.test/{index}\n"
+                        f"Title: Page {index}\n\n=== Page Layout ===\n"
+                        + (f"checkpoint-{index}-layout " * 400)
+                    ),
+                },
+            ])
+
+        before_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
+        self.assertGreater(before_chars, HOSTED_MAX_INTERNAL_CONTEXT_CHARS)
+        original_assistants = [
+            json.loads(json.dumps(message))
+            for message in messages
+            if message.get("role") == "assistant"
+        ]
+        provider = AsyncMock(return_value={
+            "choices": [{"message": {"role": "assistant", "content": "done"}}],
+            "usage": {
+                "prompt_tokens": 1,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        })
+        reserve = AsyncMock(return_value={"call_id": "call-workspace-compaction"})
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(self.agent, "_credit_reserve", new=reserve),
+            patch.object(
+                self.agent,
+                "_credit_mark_submitted",
+                new=AsyncMock(return_value={"status": "submitted"}),
+            ),
+            patch.object(
+                self.agent,
+                "_credit_settle",
+                new=AsyncMock(return_value={"status": "settled"}),
+            ),
+            patch.object(self.agent, "_credit_release", new=AsyncMock()),
+            patch.object(self.agent, "_do_openrouter_call", new=provider),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                SimpleNamespace(),
+                messages,
+                model="deepseek-v4-flash",
+                session_id=sid,
+            )
+
+        provider.assert_awaited_once()
+        reserve.assert_awaited_once()
+        sent_body = provider.await_args.args[1]
+        self.assertEqual(sent_body["thinking"], {"type": "enabled"})
+        sent_messages = sent_body["messages"]
+        self.assertLessEqual(
+            len(json.dumps(sent_messages, ensure_ascii=False, default=str)),
+            HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
+        )
+        sent_assistants = [
+            message for message in sent_messages if message.get("role") == "assistant"
+        ]
+        self.assertEqual(sent_assistants, original_assistants)
+        sent_tool_results = [
+            message for message in sent_messages if message.get("role") == "tool"
+        ]
+        self.assertEqual(
+            [message["tool_call_id"] for message in sent_tool_results],
+            tool_call_ids,
+        )
+        self.assertTrue(all(
+            "Earlier browser DOM checkpoint omitted" in message["content"]
+            for message in sent_tool_results[:-1]
+        ))
+        self.assertIn("checkpoint-51-layout", sent_tool_results[-1]["content"])
 
     async def test_hosted_task_navigations_stay_in_background(self):
         self.agent.sessions["s-focus"] = []
