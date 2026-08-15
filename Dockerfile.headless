@@ -40,6 +40,7 @@ RUN useradd -m -u 10001 -s /bin/bash unchained \
 COPY unchained/auth.py .
 COPY unchained/chat_agent_openrouter.py .
 COPY unchained/chat_event_transport.py .
+COPY unchained/conversation_transcript.py .
 COPY unchained/chrome_bridge.py .
 COPY unchained/cloud_tools.py .
 COPY unchained/context_compact.py .
