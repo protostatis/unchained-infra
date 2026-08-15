@@ -982,7 +982,11 @@ class TestWebTemplateContracts(unittest.TestCase):
         runtime_context = (
             repo_root / "deploy" / "runtime_context_files.sh"
         ).read_text(encoding="utf-8")
-        for module in ("credit.py", "hosted_conversations.py"):
+        for module in (
+            "credit.py",
+            "hosted_conversations.py",
+            "conversation_transcript.py",
+        ):
             self.assertIn(f"COPY unchained/{module} .", dockerfile)
             self.assertIn(f'"{module}"', runtime_context)
 

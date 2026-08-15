@@ -25,6 +25,7 @@ UNCHAINED_RUNTIME_FILES=(
     "analytics.py"
     "credit.py"
     "hosted_conversations.py"
+    "conversation_transcript.py"
     "cloud_tools.py"
     "private_core_client.py"
     "private_core_contracts.py"

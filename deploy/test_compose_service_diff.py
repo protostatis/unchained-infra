@@ -43,6 +43,12 @@ class TestChangedServices(unittest.TestCase):
         self.assertEqual(classify_path("deploy.sh"), set())
         self.assertEqual(classify_path("deploy/compose_service_diff.py"), set())
 
+    def test_transcript_module_rebuilds_its_runtime_consumers(self):
+        self.assertEqual(
+            classify_path("unchained/conversation_transcript.py"),
+            {"web", "trial-agent"},
+        )
+
     def test_reports_only_the_service_with_an_effective_change(self):
         old = _config()
         new = copy.deepcopy(old)
