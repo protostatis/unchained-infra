@@ -14,6 +14,8 @@ Public API
 ----------
 compact_messages(messages, *, fmt, keep_recent=6, max_tool_result_chars=300)
     -> (list, dict)
+compact_active_browser_checkpoints(messages, *, checkpoint_identities)
+    -> (list, dict)
 emergency_trim(messages, *, fmt, keep_tail=10)
     -> list
 estimate_tokens(messages)
@@ -22,6 +24,8 @@ estimate_tokens(messages)
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 import json
 import re
 
@@ -40,6 +44,29 @@ _META_TOOLS = frozenset({
     "list_connected_agents", "cdp_provision_launch",
     "cdp_provision_cleanup", "list_provisioned_tabs",
 })
+
+_SUPERSEDED_DOM_CHECKPOINT = (
+    "[Earlier browser DOM checkpoint omitted; a newer checkpoint for this tab "
+    "and document state appears later in the active turn.]"
+)
+_DDM_ORIENTATION_RE = re.compile(
+    r"(?:@\d+\s*,\s*\d+|\bpx\(\d+\s*,\s*\d+\)|\bat grid\()",
+    re.IGNORECASE,
+)
+_CHECKPOINT_ERROR_MARKERS = (
+    "BROWSER_UNAVAILABLE:",
+    "LINK_SCAN_REPEAT_BLOCKED:",
+    "JS_EVAL_REPEAT_BLOCKED:",
+)
+_CHECKPOINT_SUFFIX_MARKERS = ("\n\nNAVIGATION_NOT_FOUND:",)
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserCheckpointIdentity:
+    """Concrete browser state identity captured by the execution layer."""
+
+    physical_tab_id: str
+    document_id: str
 
 
 def _classify_tool(name: str) -> str:
@@ -175,6 +202,229 @@ def _build_tool_name_index(messages: list, fmt: str) -> dict[str, str]:
                     index[tid] = tname
 
     return index
+
+
+# ---------------------------------------------------------------------------
+# Active-turn browser checkpoint compaction (OpenAI format)
+# ---------------------------------------------------------------------------
+
+
+def _decode_openai_tool_arguments(tool_call: dict) -> dict:
+    function = tool_call.get("function") or {}
+    raw = function.get("arguments", {})
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def is_browser_dom_checkpoint(tool_call: dict, content: str) -> bool:
+    """Return whether a tool result is a trustworthy DOM-state checkpoint."""
+    if not isinstance(content, str) or not content.strip():
+        return False
+    if _SUPERSEDED_DOM_CHECKPOINT in content:
+        return False
+    stripped = content.lstrip()
+    if stripped.lower().startswith(("error:", "tool error (")):
+        return False
+    if any(marker in content for marker in _CHECKPOINT_ERROR_MARKERS):
+        return False
+
+    function = tool_call.get("function") or {}
+    name = str(function.get("name", "") or "").rsplit("__", 1)[-1]
+    args = _decode_openai_tool_arguments(tool_call)
+
+    if name == "navigate":
+        if not stripped.startswith("Navigated to:") or "=== Page Layout ===" not in content:
+            return False
+    elif name in {"click", "cdp_click"}:
+        if not stripped.startswith("Clicked ") or "=== Page Layout ===" not in content:
+            return False
+    elif name == "ddm":
+        flags = str(args.get("flags", "--llm-2pass --cols 60") or "").strip()
+        tokens = set(flags.split())
+        if "--llm-2pass" not in tokens:
+            return False
+        if tokens.intersection({"--text", "--at", "--js", "--find", "--new", "--tabs", "--close"}):
+            return False
+        if any(token.startswith("--js=") for token in tokens):
+            return False
+        if not (_DDM_ORIENTATION_RE.search(content) or "=== Page Layout ===" in content):
+            return False
+    else:
+        return False
+
+    return True
+
+
+def _browser_checkpoint_bucket(
+    tool_call: dict,
+    content: str,
+    identity: BrowserCheckpointIdentity | None,
+) -> tuple[str, str] | None:
+    """Return a proven physical-tab and document bucket for one checkpoint."""
+    if (
+        not is_browser_dom_checkpoint(tool_call, content)
+        or not isinstance(identity, BrowserCheckpointIdentity)
+    ):
+        return None
+    physical_tab_id = str(identity.physical_tab_id or "").strip()
+    document_id = str(identity.document_id or "").strip()
+    if not physical_tab_id or physical_tab_id == "auto" or not document_id:
+        return None
+
+    return (physical_tab_id, document_id)
+
+
+def _compact_browser_checkpoint_content(tool_call: dict, content: str) -> str:
+    function = tool_call.get("function") or {}
+    name = str(function.get("name", "") or "").rsplit("__", 1)[-1]
+    if name == "ddm":
+        return _SUPERSEDED_DOM_CHECKPOINT
+
+    prefix, separator, layout = content.partition("=== Page Layout ===")
+    if not separator:
+        return content
+    prefix = prefix.rstrip()
+    suffix = ""
+    for marker in _CHECKPOINT_SUFFIX_MARKERS:
+        marker_index = layout.rfind(marker)
+        if marker_index >= 0:
+            suffix = layout[marker_index:].strip()
+            break
+    parts = [part for part in (prefix, _SUPERSEDED_DOM_CHECKPOINT, suffix) if part]
+    return "\n\n".join(parts)
+
+
+def _complete_openai_tool_groups(messages: list, start: int) -> list[dict]:
+    """Collect protocol-valid assistant/tool blocks after *start*."""
+    groups: list[dict] = []
+    index = start
+    while index < len(messages):
+        assistant = messages[index]
+        if not isinstance(assistant, dict) or assistant.get("role") != "assistant":
+            index += 1
+            continue
+
+        tool_calls = assistant.get("tool_calls") or []
+        if not isinstance(tool_calls, list) or not tool_calls:
+            index += 1
+            continue
+
+        expected_ids: list[str] = []
+        valid_calls = True
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                valid_calls = False
+                break
+            call_id = tool_call.get("id")
+            if not isinstance(call_id, str) or not call_id or call_id in expected_ids:
+                valid_calls = False
+                break
+            expected_ids.append(call_id)
+
+        result_index = index + 1
+        results: list[dict] = []
+        while result_index < len(messages):
+            result = messages[result_index]
+            if not isinstance(result, dict) or result.get("role") != "tool":
+                break
+            results.append(result)
+            result_index += 1
+
+        result_ids = [result.get("tool_call_id") for result in results]
+        if valid_calls and result_ids == expected_ids:
+            groups.append({
+                "index": index,
+                "tool_calls": tool_calls,
+                "results": results,
+            })
+        index = max(result_index, index + 1)
+    return groups
+
+
+def compact_active_browser_checkpoints(
+    messages: list,
+    *,
+    checkpoint_identities: Mapping[str, BrowserCheckpointIdentity] | None = None,
+) -> tuple[list, dict]:
+    """Collapse superseded DOM snapshots within the current OpenAI user turn.
+
+    The newest checkpoint for each proven physical-tab and document identity stays
+    raw. Older navigate/click layouts and orientation DDM maps are replaced in
+    place while assistant messages, tool-call IDs, evidence tools, failures,
+    and message ordering remain unchanged. Unresolved identities fail closed.
+    This intentionally mutates only the bounded provider working context; the
+    separately persisted visible transcript is not derived from tool results.
+    """
+    before_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
+    stats = {
+        "compacted": 0,
+        "preserved": 0,
+        "skipped_groups": 0,
+        "chars_before": before_chars,
+        "chars_after": before_chars,
+    }
+    if not isinstance(messages, list) or not messages:
+        return messages, stats
+
+    last_user_index = -1
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == "user":
+            last_user_index = index
+            break
+    if last_user_index < 0:
+        return messages, stats
+
+    identities = checkpoint_identities or {}
+    groups = _complete_openai_tool_groups(messages, last_user_index + 1)
+    checkpoint_records: list[dict] = []
+    latest_record_by_bucket: dict[tuple[str, str], int] = {}
+
+    for group in groups:
+        found_checkpoint = False
+        for tool_call, result in zip(group["tool_calls"], group["results"]):
+            call_id = tool_call.get("id")
+            identity = identities.get(call_id) if isinstance(call_id, str) else None
+            bucket = _browser_checkpoint_bucket(
+                tool_call,
+                result.get("content", ""),
+                identity,
+            )
+            if bucket is None:
+                continue
+            found_checkpoint = True
+            record_index = len(checkpoint_records)
+            checkpoint_records.append({
+                "bucket": bucket,
+                "tool_call": tool_call,
+                "result": result,
+            })
+            latest_record_by_bucket[bucket] = record_index
+        if not found_checkpoint:
+            stats["skipped_groups"] += 1
+
+    for record_index, record in enumerate(checkpoint_records):
+        if record_index == latest_record_by_bucket[record["bucket"]]:
+            stats["preserved"] += 1
+            continue
+        result = record["result"]
+        content = result.get("content", "")
+        compacted = _compact_browser_checkpoint_content(record["tool_call"], content)
+        if compacted != content:
+            result["content"] = compacted
+            stats["compacted"] += 1
+
+    stats["chars_after"] = len(
+        json.dumps(messages, ensure_ascii=False, default=str)
+    )
+    return messages, stats
 
 
 # ---------------------------------------------------------------------------

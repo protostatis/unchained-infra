@@ -15,9 +15,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from conversation_transcript import SESSION_SCHEMA_VERSION
+from context_compact import BrowserCheckpointIdentity
 from chat_agent_openrouter import (
     HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
     HOSTED_MAX_SESSION_MESSAGES,
+    BrowserCheckpointState,
+    ToolExecutionTrace,
     TrialAgent,
     _append_tool_followup_guidance,
     _hosted_user_error,
@@ -25,6 +28,8 @@ from chat_agent_openrouter import (
     _openrouter_user_error,
     _prepare_hosted_context,
     _recover_deepseek_dsml_tool_calls,
+    _capture_browser_checkpoint_identity,
+    _resolve_concrete_tab,
     _resolve_hosted_internal_context_chars,
 )
 
@@ -154,6 +159,9 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.agent, "_credit_release", new=AsyncMock()),
             patch.object(self.agent, "_do_openrouter_call", side_effect=provider),
             patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+            patch(
+                "chat_agent_openrouter.compact_active_browser_checkpoints"
+            ) as compact_active,
         ):
             result = await self.agent._call_openrouter(
                 SimpleNamespace(),
@@ -163,6 +171,7 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["choices"])
         self.assertEqual(order, ["reserve", "submitted", "provider", "settle"])
+        compact_active.assert_not_called()
 
     async def test_openrouter_settle_uses_provider_cost_without_pricing(self):
         """OpenRouter settlements keep cost math and send no DeepSeek pricing."""
@@ -369,6 +378,136 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         provider.assert_awaited_once()
 
+    async def test_workspace_attempt_compacts_active_browser_checkpoints_before_limit(self):
+        """A long one-prompt browser loop should reach the billed provider."""
+        sid = "s-workspace-browser-compaction"
+        self.agent._session_billing_runs[sid] = "run-workspace-compaction"
+        messages = [
+            {"role": "system", "content": "You are a browser agent."},
+            {"role": "user", "content": "Research this site thoroughly."},
+        ]
+        tool_call_ids = []
+        checkpoint_identities = {}
+        for index in range(52):
+            call_id = f"checkpoint-{index}"
+            tool_call_ids.append(call_id)
+            checkpoint_identities[call_id] = BrowserCheckpointIdentity(
+                physical_tab_id="workspace-tab",
+                document_id="document-1",
+            )
+            if index == 0:
+                tool_name = "navigate"
+                tool_arguments = json.dumps({
+                    "url": "https://example.test/catalog",
+                    "tab_id": "workspace-tab",
+                })
+                tool_content = (
+                    "Navigated to: https://example.test/catalog\n"
+                    "Title: Catalog\n\n=== Page Layout ===\n"
+                    + ("checkpoint-0-layout " * 400)
+                )
+            else:
+                tool_name = "ddm"
+                tool_arguments = json.dumps({
+                    "flags": "--llm-2pass --cols 60",
+                    "tab_id": "workspace-tab",
+                })
+                tool_content = (
+                    "Button@100,200|Link@300,400\n"
+                    + (f"checkpoint-{index}-layout " * 400)
+                )
+            messages.extend([
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": f"Inspect browser state {index}",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tool_arguments,
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": tool_content,
+                },
+            ])
+
+        before_chars = len(json.dumps(messages, ensure_ascii=False, default=str))
+        self.assertGreater(before_chars, HOSTED_MAX_INTERNAL_CONTEXT_CHARS)
+        original_assistants = [
+            json.loads(json.dumps(message))
+            for message in messages
+            if message.get("role") == "assistant"
+        ]
+        provider = AsyncMock(return_value={
+            "choices": [{"message": {"role": "assistant", "content": "done"}}],
+            "usage": {
+                "prompt_tokens": 1,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        })
+        reserve = AsyncMock(return_value={"call_id": "call-workspace-compaction"})
+        credit_client = SimpleNamespace(aclose=AsyncMock())
+
+        with (
+            patch("chat_agent_openrouter.httpx.AsyncClient", return_value=credit_client),
+            patch.object(self.agent, "_credit_reserve", new=reserve),
+            patch.object(
+                self.agent,
+                "_credit_mark_submitted",
+                new=AsyncMock(return_value={"status": "submitted"}),
+            ),
+            patch.object(
+                self.agent,
+                "_credit_settle",
+                new=AsyncMock(return_value={"status": "settled"}),
+            ),
+            patch.object(self.agent, "_credit_release", new=AsyncMock()),
+            patch.object(self.agent, "_do_openrouter_call", new=provider),
+            patch.object(self.agent, "_emit_openrouter_usage_event", new=AsyncMock()),
+        ):
+            await self.agent._call_openrouter(
+                SimpleNamespace(),
+                messages,
+                model="deepseek-v4-flash",
+                session_id=sid,
+                checkpoint_identities=checkpoint_identities,
+            )
+
+        provider.assert_awaited_once()
+        reserve.assert_awaited_once()
+        sent_body = provider.await_args.args[1]
+        self.assertEqual(sent_body["thinking"], {"type": "enabled"})
+        sent_messages = sent_body["messages"]
+        self.assertLessEqual(
+            len(json.dumps(sent_messages, ensure_ascii=False, default=str)),
+            HOSTED_MAX_INTERNAL_CONTEXT_CHARS,
+        )
+        sent_assistants = [
+            message for message in sent_messages if message.get("role") == "assistant"
+        ]
+        self.assertEqual(sent_assistants, original_assistants)
+        sent_tool_results = [
+            message for message in sent_messages if message.get("role") == "tool"
+        ]
+        self.assertEqual(
+            [message["tool_call_id"] for message in sent_tool_results],
+            tool_call_ids,
+        )
+        self.assertTrue(all(
+            "Earlier browser DOM checkpoint omitted" in message["content"]
+            for message in sent_tool_results[:-1]
+        ))
+        self.assertIn("checkpoint-51-layout", sent_tool_results[-1]["content"])
+
     async def test_hosted_task_navigations_stay_in_background(self):
         self.agent.sessions["s-focus"] = []
         tool_response = {
@@ -432,6 +571,71 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         first, second = execute_tool.await_args_list
         self.assertFalse(first.kwargs["bring_to_front"])
         self.assertFalse(second.kwargs["bring_to_front"])
+
+    async def test_hosted_turn_passes_captured_checkpoint_identity_to_next_call(self):
+        sid = "s-checkpoint-sidecar"
+        self.agent.sessions[sid] = []
+        self.agent._session_billing_runs[sid] = "run-checkpoint-sidecar"
+        tool_response = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "nav-1",
+                        "function": {
+                            "name": "navigate",
+                            "arguments": '{"url":"https://example.test/page"}',
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        }
+        final_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }],
+        }
+        model_snapshots = []
+
+        async def call_model(*_args, checkpoint_identities=None, **_kwargs):
+            model_snapshots.append(dict(checkpoint_identities or {}))
+            return tool_response if len(model_snapshots) == 1 else final_response
+
+        async def execute_tool(*_args, execution_trace=None, **_kwargs):
+            execution_trace.final_tab_id = "resolved-route"
+            return (
+                "Navigated to: https://example.test/page\n"
+                "=== Page Layout ===\nButton@10,20"
+            )
+
+        identity = BrowserCheckpointIdentity(
+            physical_tab_id="resolved-route",
+            document_id="document-1",
+        )
+        with (
+            patch.object(self.agent, "_call_openrouter", new=AsyncMock(side_effect=call_model)),
+            patch.object(self.agent, "_execute_tool", new=AsyncMock(side_effect=execute_tool)),
+            patch.object(self.agent, "_emit_live_preview", new=AsyncMock()),
+            patch.object(
+                self.agent,
+                "_sanitize_user_output",
+                new=AsyncMock(return_value="done"),
+            ),
+            patch.object(self.agent, "_send", new=AsyncMock()),
+            patch.object(self.agent, "_save_session"),
+        ):
+            await self.agent._handle_message({
+                "session_id": sid,
+                "agent_id": "client-browser",
+                "tab_id": "session-route",
+                "user_id": "u-checkpoint-sidecar",
+                "message": "inspect the page",
+            })
+
+        self.assertEqual(model_snapshots, [{}, {"nav-1": identity}])
 
     async def test_hosted_agent_keeps_followup_tools_on_new_provisioned_tab(self):
         sid = "s-new-tab"
@@ -543,6 +747,367 @@ class HostedBillingBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provisioned_new.args[1], "prov-slot-original-tab")
         self.assertEqual(provisioned_tabs.args[1], "auto")
         self.assertEqual(default_new.args[1], "auto")
+
+    def test_browser_checkpoint_state_separates_same_url_navigations(self):
+        state = BrowserCheckpointState()
+        tool_call = {
+            "id": "nav-1",
+            "function": {
+                "name": "navigate",
+                "arguments": '{"url":"https://example.test/page"}',
+            },
+        }
+        result = (
+            "Navigated to: https://example.test/page\n"
+            "=== Page Layout ===\nButton@10,20"
+        )
+
+        first = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            tool_call,
+            result,
+        )
+        second = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            tool_call,
+            result,
+        )
+
+        self.assertEqual(
+            first,
+            BrowserCheckpointIdentity(
+                physical_tab_id="physical-tab",
+                document_id="document-1",
+            ),
+        )
+        self.assertEqual(
+            second,
+            BrowserCheckpointIdentity(
+                physical_tab_id="physical-tab",
+                document_id="document-2",
+            ),
+        )
+
+    def test_browser_checkpoint_state_reuses_document_for_orientation_ddm(self):
+        state = BrowserCheckpointState()
+        navigate_call = {
+            "id": "nav-1",
+            "function": {
+                "name": "navigate",
+                "arguments": '{"url":"https://example.test/page"}',
+            },
+        }
+        ddm_call = {
+            "id": "ddm-1",
+            "function": {
+                "name": "ddm",
+                "arguments": '{"flags":"--llm-2pass --cols 60"}',
+            },
+        }
+        navigate_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            navigate_call,
+            "Navigated to: https://example.test/page\n"
+            "=== Page Layout ===\nButton@10,20",
+        )
+        ddm_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            ddm_call,
+            "Button@10,20|Link@30,40",
+        )
+        auto_identity = _capture_browser_checkpoint_identity(
+            state,
+            "auto",
+            ddm_call,
+            "Button@10,20|Link@30,40",
+        )
+        auto_click_identity = _capture_browser_checkpoint_identity(
+            state,
+            "auto",
+            {
+                "id": "click-auto",
+                "function": {"name": "click", "arguments": '{"x":10,"y":20}'},
+            },
+            "Clicked Button\n--- changed ---\n"
+            "=== Page Layout ===\nButton@10,20",
+        )
+
+        self.assertEqual(ddm_identity, navigate_identity)
+        self.assertIsNone(auto_identity)
+        self.assertIsNone(auto_click_identity)
+        self.assertEqual(state.documents, {})
+
+    def test_browser_checkpoint_state_advances_on_changed_click(self):
+        state = BrowserCheckpointState()
+        navigate_call = {
+            "id": "nav-1",
+            "function": {"name": "navigate", "arguments": '{"url":"https://example.test"}'},
+        }
+        click_call = {
+            "id": "click-1",
+            "function": {"name": "click", "arguments": '{"x":10,"y":20}'},
+        }
+        navigate_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            navigate_call,
+            "Navigated to: https://example.test\n=== Page Layout ===\nOld@10,20",
+        )
+        changed_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            click_call,
+            "Clicked Button\n--- changed ---\nurl: https://example.test/next\n"
+            "=== Page Layout ===\nNew@10,20",
+        )
+        unchanged_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            click_call,
+            "Clicked Button\n--- no change --- (focus: BODY | example.test)\n"
+            "=== Page Layout ===\nNew@10,20",
+        )
+        fallback_changed_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            click_call,
+            "Clicked Button\n--- no change --- (focus: BODY | example.test)\n"
+            "--- fallback ---\nfallback:clicked\n--- changed ---\n"
+            "url: https://example.test/final\n"
+            "=== Page Layout ===\nFinal@10,20",
+        )
+
+        self.assertNotEqual(changed_identity.document_id, navigate_identity.document_id)
+        self.assertEqual(unchanged_identity, changed_identity)
+        self.assertNotEqual(
+            fallback_changed_identity.document_id,
+            unchanged_identity.document_id,
+        )
+
+    def test_browser_checkpoint_state_invalidates_on_ddm_javascript(self):
+        state = BrowserCheckpointState()
+        navigate_call = {
+            "id": "nav-1",
+            "function": {"name": "navigate", "arguments": '{"url":"https://one.test"}'},
+        }
+        ddm_js_call = {
+            "id": "js-1",
+            "function": {
+                "name": "ddm",
+                "arguments": '{"flags":"--js location.href=\\"https://two.test\\""}',
+            },
+        }
+        orientation_call = {
+            "id": "ddm-1",
+            "function": {
+                "name": "ddm",
+                "arguments": '{"flags":"--llm-2pass --cols 60"}',
+            },
+        }
+        _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            navigate_call,
+            "Navigated to: https://one.test\n=== Page Layout ===\nOne@10,20",
+        )
+
+        js_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            ddm_js_call,
+            "https://two.test",
+        )
+        next_identity = _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            orientation_call,
+            "Two@10,20|Link@30,40",
+        )
+
+        self.assertIsNone(js_identity)
+        self.assertIsNone(next_identity)
+        self.assertEqual(state.documents, {})
+
+        _capture_browser_checkpoint_identity(
+            state,
+            "physical-tab",
+            navigate_call,
+            "Navigated to: https://one.test\n=== Page Layout ===\nOne@10,20",
+        )
+        unresolved_identity = _capture_browser_checkpoint_identity(
+            state,
+            "auto",
+            {
+                "id": "js-2",
+                "function": {
+                    "name": "ddm",
+                    "arguments": '{"flags":"--js=location.href=\\"https://two.test\\""}',
+                },
+            },
+            "https://two.test",
+        )
+
+        self.assertIsNone(unresolved_identity)
+        self.assertEqual(state.documents, {})
+
+    async def test_execute_tool_trace_records_concrete_fallback_target(self):
+        stale_tab = "A" * 32
+        recovered_tab = "B" * 32
+        trace = ToolExecutionTrace()
+        dispatch = AsyncMock(side_effect=[
+            "BROWSER_UNAVAILABLE: target missing",
+            "Clicked Button\n=== Page Layout ===\nButton@10,20",
+        ])
+        resolve = AsyncMock(return_value={
+            "targetInfo": {"targetId": recovered_tab, "url": "https://example.test"},
+        })
+
+        with (
+            patch.object(self.agent, "_dispatch_tool", new=dispatch),
+            patch(
+                "chat_agent_openrouter.cloud_tools.run_cdp_command",
+                new=resolve,
+            ),
+        ):
+            result = await self.agent._execute_tool(
+                "client-browser",
+                "click",
+                {"x": 10, "y": 20},
+                tab_id=stale_tab,
+                execution_trace=trace,
+            )
+
+        self.assertTrue(result.startswith("Clicked Button"))
+        self.assertEqual(trace.final_tab_id, recovered_tab)
+        self.assertEqual(trace.attempted_tab_ids, [stale_tab, recovered_tab])
+        self.assertEqual(
+            [call.args[1] for call in dispatch.await_args_list],
+            [stale_tab, recovered_tab],
+        )
+
+    async def test_auto_tab_resolution_pins_the_physical_target(self):
+        target_id = "A" * 32
+        resolve = AsyncMock(return_value={
+            "targetInfo": {
+                "targetId": target_id,
+                "url": "https://example.test/page",
+            },
+        })
+
+        with patch(
+            "chat_agent_openrouter.cloud_tools.run_cdp_command",
+            new=resolve,
+        ):
+            tab_id = await _resolve_concrete_tab(
+                "client-browser",
+                "auto",
+                "prov-slot-stale-target",
+            )
+
+        self.assertEqual(tab_id, f"prov-slot-{target_id}")
+        self.assertEqual(resolve.await_args.args[1:3], ("auto", "Target.getTargetInfo"))
+        self.assertFalse(resolve.await_args.kwargs["bring_to_front"])
+
+    async def test_execute_tool_pins_explicit_prefix_before_dispatch(self):
+        first_physical_tab = "C" * 32
+        second_physical_tab = "D" * 32
+        first_trace = ToolExecutionTrace()
+        second_trace = ToolExecutionTrace()
+        resolve = AsyncMock(side_effect=[
+            {
+                "targetInfo": {
+                    "targetId": first_physical_tab,
+                    "url": "https://example.test/one",
+                },
+            },
+            {
+                "targetInfo": {
+                    "targetId": second_physical_tab,
+                    "url": "https://example.test/two",
+                },
+            },
+        ])
+        dispatch = AsyncMock(return_value="Button@10,20|Link@30,40")
+
+        with (
+            patch(
+                "chat_agent_openrouter.cloud_tools.run_cdp_command",
+                new=resolve,
+            ),
+            patch.object(self.agent, "_dispatch_tool", new=dispatch),
+        ):
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--llm-2pass --cols 60", "tab_id": "CDEF"},
+                tab_id="session-tab",
+                execution_trace=first_trace,
+            )
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--llm-2pass --cols 60", "tab_id": "CDEF"},
+                tab_id="session-tab",
+                execution_trace=second_trace,
+            )
+
+        self.assertEqual(
+            [call.args[1] for call in dispatch.await_args_list],
+            [first_physical_tab, second_physical_tab],
+        )
+        self.assertEqual(first_trace.final_tab_id, first_physical_tab)
+        self.assertEqual(second_trace.final_tab_id, second_physical_tab)
+
+    async def test_prefix_resolution_timeout_preserves_requested_dispatch_route(self):
+        trace = ToolExecutionTrace()
+        resolve = AsyncMock(side_effect=asyncio.TimeoutError)
+        dispatch = AsyncMock(return_value="Button@10,20|Link@30,40")
+
+        with (
+            patch(
+                "chat_agent_openrouter.cloud_tools.run_cdp_command",
+                new=resolve,
+            ),
+            patch.object(self.agent, "_dispatch_tool", new=dispatch),
+        ):
+            await self.agent._execute_tool(
+                "client-browser",
+                "ddm",
+                {"flags": "--llm-2pass --cols 60", "tab_id": "CDEF"},
+                tab_id="session-tab",
+                execution_trace=trace,
+            )
+
+        self.assertEqual(dispatch.await_args.args[1], "CDEF")
+        self.assertEqual(trace.final_tab_id, "auto")
+        self.assertEqual(trace.attempted_tab_ids, ["auto"])
+
+    async def test_scheduler_tool_skips_browser_tab_resolution(self):
+        trace = ToolExecutionTrace()
+        resolve = AsyncMock()
+        dispatch = AsyncMock(return_value="[]")
+
+        with (
+            patch(
+                "chat_agent_openrouter.cloud_tools.run_cdp_command",
+                new=resolve,
+            ),
+            patch.object(self.agent, "_dispatch_tool", new=dispatch),
+        ):
+            await self.agent._execute_tool(
+                "client-browser",
+                "scheduler_list_jobs",
+                {},
+                tab_id="session-tab-prefix",
+                execution_trace=trace,
+            )
+
+        resolve.assert_not_awaited()
+        self.assertEqual(dispatch.await_args.args[1], "session-tab-prefix")
 
     async def test_hosted_agent_blocks_third_broad_link_scan_on_page(self):
         sid = "s-link-scan"

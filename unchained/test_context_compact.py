@@ -3,11 +3,13 @@
 import unittest
 
 from context_compact import (
+    BrowserCheckpointIdentity,
     _build_tool_name_index,
     _classify_tool,
     _compact_tool_result,
     _find_turn_boundary,
     _strip_page_layout,
+    compact_active_browser_checkpoints,
     compact_messages,
     emergency_trim,
     estimate_tokens,
@@ -437,6 +439,411 @@ class TestCompactMessagesOpenAI(unittest.TestCase):
         ie_result = messages[3]
         self.assertIn("[truncated from 5000 chars]", ie_result["content"])
         self.assertGreater(stats["compacted"], 0)
+
+
+# ---------------------------------------------------------------------------
+# Active-turn browser checkpoint compaction
+# ---------------------------------------------------------------------------
+
+
+class TestActiveBrowserCheckpointCompaction(unittest.TestCase):
+    @staticmethod
+    def _identities(*rows):
+        return {
+            call_id: BrowserCheckpointIdentity(
+                physical_tab_id=tab_id,
+                document_id=document_id,
+            )
+            for call_id, tab_id, document_id in rows
+        }
+
+    @staticmethod
+    def _append_group(
+        messages,
+        call_id,
+        name,
+        arguments,
+        content,
+        *,
+        reasoning_content=None,
+    ):
+        assistant = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments,
+                },
+            }],
+        }
+        if reasoning_content is not None:
+            assistant["reasoning_content"] = reasoning_content
+        messages.extend([
+            assistant,
+            {"role": "tool", "tool_call_id": call_id, "content": content},
+        ])
+        return assistant
+
+    def test_keeps_latest_checkpoint_and_compacts_superseded_layout(self):
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "inspect the page"},
+        ]
+        old_assistant = self._append_group(
+            messages,
+            "nav-1",
+            "navigate",
+            '{"url":"https://example.test","tab_id":"tab-a"}',
+            "Navigated to: https://example.test\nTitle: Example\n\n"
+            "=== Page Layout ===\n" + "old layout " * 1000,
+            reasoning_content="Open the page first.",
+        )
+        latest = (
+            "Clicked Search\n--- no change --- (focus: BODY | example.test)\n\n"
+            "=== Page Layout ===\n" + "latest layout " * 1000
+        )
+        self._append_group(
+            messages,
+            "click-1",
+            "click",
+            '{"x":100,"y":200,"tab_id":"tab-a"}',
+            latest,
+        )
+
+        identities = self._identities(
+            ("nav-1", "tab-a", "https://example.test"),
+            ("click-1", "tab-a", "https://example.test"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertEqual(stats["preserved"], 1)
+        self.assertLess(stats["chars_after"], stats["chars_before"])
+        self.assertIn("Navigated to: https://example.test", messages[3]["content"])
+        self.assertIn("Earlier browser DOM checkpoint omitted", messages[3]["content"])
+        self.assertNotIn("old layout", messages[3]["content"])
+        self.assertEqual(messages[-1]["content"], latest)
+        self.assertEqual(old_assistant["reasoning_content"], "Open the page first.")
+        self.assertEqual(old_assistant["tool_calls"][0]["id"], "nav-1")
+
+    def test_preserves_data_evidence_and_latest_multi_tool_block(self):
+        messages = [{"role": "user", "content": "compare the result"}]
+        self._append_group(
+            messages,
+            "nav-old",
+            "navigate",
+            '{"url":"https://example.test"}',
+            "Navigated to: https://example.test\n=== Page Layout ===\n" + "old " * 1000,
+        )
+        evidence = "price=19.99; availability=in stock" * 200
+        latest_layout = (
+            "Clicked Buy\n--- no change --- (focus: BODY | example.test)\n"
+            "=== Page Layout ===\n" + "new " * 1000
+        )
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "click-new",
+                        "type": "function",
+                        "function": {
+                            "name": "click",
+                            "arguments": '{"x":20,"y":30}',
+                        },
+                    },
+                    {
+                        "id": "evidence-new",
+                        "type": "function",
+                        "function": {
+                            "name": "js_eval",
+                            "arguments": '{"expression":"document.body.innerText"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "click-new", "content": latest_layout},
+            {"role": "tool", "tool_call_id": "evidence-new", "content": evidence},
+        ])
+
+        identities = self._identities(
+            ("nav-old", "tab-a", "https://example.test"),
+            ("click-new", "tab-a", "https://example.test"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertEqual(messages[-2]["content"], latest_layout)
+        self.assertEqual(messages[-1]["content"], evidence)
+
+    def test_ddm_text_is_evidence_but_orientation_maps_are_superseded(self):
+        messages = [{"role": "user", "content": "research this page"}]
+        page_text = "Article evidence that must remain" * 200
+        self._append_group(
+            messages,
+            "text-1",
+            "ddm",
+            '{"flags":"--text --max 8000"}',
+            page_text,
+        )
+        self._append_group(
+            messages,
+            "map-1",
+            "ddm",
+            '{"flags":"--llm-2pass --cols 60"}',
+            "OldButton@100,200|OldLink@300,400",
+        )
+        latest_map = "NewButton@120,220|NewLink@320,420"
+        self._append_group(
+            messages,
+            "map-2",
+            "ddm",
+            '{"flags":"--llm-2pass --cols 60"}',
+            latest_map,
+        )
+
+        identities = self._identities(
+            ("map-1", "tab-a", "https://example.test"),
+            ("map-2", "tab-a", "https://example.test"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertEqual(messages[2]["content"], page_text)
+        self.assertIn("Earlier browser DOM checkpoint omitted", messages[4]["content"])
+        self.assertEqual(messages[-1]["content"], latest_map)
+
+    def test_keeps_latest_checkpoint_for_each_explicit_tab(self):
+        messages = [{"role": "user", "content": "inspect both tabs"}]
+        tab_a_old = "Navigated to: https://a.test\n=== Page Layout ===\nA old"
+        tab_b = "Navigated to: https://b.test\n=== Page Layout ===\nB current"
+        tab_a_new = (
+            "Clicked A\n--- no change --- (focus: BODY | a.test)\n"
+            "=== Page Layout ===\nA current"
+        )
+        self._append_group(
+            messages, "a-old", "navigate",
+            '{"url":"https://a.test","tab_id":"tab-a"}', tab_a_old,
+        )
+        self._append_group(
+            messages, "b-current", "navigate",
+            '{"url":"https://b.test","tab_id":"tab-b"}', tab_b,
+        )
+        self._append_group(
+            messages, "a-current", "click",
+            '{"x":1,"y":2,"tab_id":"tab-a"}', tab_a_new,
+        )
+
+        identities = self._identities(
+            ("a-old", "tab-a", "https://a.test"),
+            ("b-current", "tab-b", "https://b.test"),
+            ("a-current", "tab-a", "https://a.test"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertIn("Earlier browser DOM checkpoint omitted", messages[2]["content"])
+        self.assertEqual(messages[4]["content"], tab_b)
+        self.assertEqual(messages[6]["content"], tab_a_new)
+
+    def test_compacts_not_found_layout_but_preserves_failure_guidance(self):
+        messages = [{"role": "user", "content": "find the article"}]
+        old_failure = (
+            "Navigated to: https://example.test/missing-one\nTitle: Not Found\n\n"
+            "=== Page Layout ===\n" + ("old 404 layout " * 500)
+            + "\n\nNAVIGATION_NOT_FOUND: Use a discovered href instead."
+        )
+        latest_failure = "Retry@100,200|Search@300,400\n" + ("latest 404 layout " * 500)
+        self._append_group(
+            messages, "missing-1", "navigate",
+            '{"url":"https://example.test/missing-one"}', old_failure,
+        )
+        self._append_group(
+            messages, "missing-2", "ddm",
+            '{"flags":"--llm-2pass --cols 60"}', latest_failure,
+        )
+
+        identities = self._identities(
+            ("missing-1", "tab-a", "https://example.test/missing-one"),
+            ("missing-2", "tab-a", "https://example.test/missing-one"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertNotIn("old 404 layout", messages[2]["content"])
+        self.assertIn("Earlier browser DOM checkpoint omitted", messages[2]["content"])
+        self.assertIn(
+            "NAVIGATION_NOT_FOUND: Use a discovered href instead.",
+            messages[2]["content"],
+        )
+        self.assertEqual(messages[-1]["content"], latest_failure)
+
+    def test_does_not_touch_prior_turn_or_malformed_tool_block(self):
+        prior = "Navigated to: https://old.test\n=== Page Layout ===\nold layout"
+        malformed = "Navigated to: https://bad.test\n=== Page Layout ===\nbad layout"
+        messages = [{"role": "user", "content": "old request"}]
+        self._append_group(
+            messages, "prior", "navigate", '{"url":"https://old.test"}', prior,
+        )
+        messages.extend([
+            {"role": "user", "content": "current request"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "expected",
+                    "type": "function",
+                    "function": {
+                        "name": "navigate",
+                        "arguments": '{"url":"https://bad.test"}',
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "different", "content": malformed},
+        ])
+
+        _, stats = compact_active_browser_checkpoints(messages)
+
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(messages[2]["content"], prior)
+        self.assertEqual(messages[-1]["content"], malformed)
+
+    def test_active_checkpoint_compaction_is_idempotent(self):
+        messages = [{"role": "user", "content": "inspect"}]
+        self._append_group(
+            messages, "old", "ddm", '{"flags":"--llm-2pass"}',
+            "Old@10,20|Other@30,40",
+        )
+        self._append_group(
+            messages, "new", "ddm", '{"flags":"--llm-2pass"}',
+            "New@50,60|Other@70,80",
+        )
+
+        identities = self._identities(
+            ("old", "tab-a", "https://example.test"),
+            ("new", "tab-a", "https://example.test"),
+        )
+        _, first = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+        snapshot = [dict(message) for message in messages]
+        _, second = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(first["compacted"], 1)
+        self.assertEqual(second["compacted"], 0)
+        self.assertEqual(messages, snapshot)
+
+    def test_preserves_same_tab_checkpoints_from_distinct_pages(self):
+        messages = [{"role": "user", "content": "compare both pages"}]
+        first = "Navigated to: https://one.test\n=== Page Layout ===\nfirst evidence"
+        second = "Navigated to: https://two.test\n=== Page Layout ===\nsecond evidence"
+        self._append_group(messages, "one", "navigate", '{"url":"https://one.test"}', first)
+        self._append_group(messages, "two", "navigate", '{"url":"https://two.test"}', second)
+
+        identities = self._identities(
+            ("one", "tab-a", "https://one.test"),
+            ("two", "tab-a", "https://two.test"),
+        )
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(messages[2]["content"], first)
+        self.assertEqual(messages[4]["content"], second)
+
+    def test_preserves_same_url_checkpoints_from_distinct_documents(self):
+        messages = [{"role": "user", "content": "compare reloads"}]
+        first = "Navigated to: https://one.test\n=== Page Layout ===\nfirst version"
+        second = "Navigated to: https://one.test\n=== Page Layout ===\nsecond version"
+        self._append_group(messages, "first", "navigate", '{"url":"https://one.test"}', first)
+        self._append_group(messages, "second", "navigate", '{"url":"https://one.test"}', second)
+        identities = self._identities(
+            ("first", "tab-a", "document-1"),
+            ("second", "tab-a", "document-2"),
+        )
+
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(messages[2]["content"], first)
+        self.assertEqual(messages[4]["content"], second)
+
+    def test_preserves_checkpoints_without_resolved_identity(self):
+        messages = [{"role": "user", "content": "inspect"}]
+        first = "Old@10,20|Other@30,40"
+        second = "New@50,60|Other@70,80"
+        self._append_group(messages, "old", "ddm", '{"flags":"--llm-2pass"}', first)
+        self._append_group(messages, "new", "ddm", '{"flags":"--llm-2pass"}', second)
+
+        _, stats = compact_active_browser_checkpoints(messages)
+
+        self.assertEqual(stats["compacted"], 0)
+        self.assertEqual(messages[2]["content"], first)
+        self.assertEqual(messages[4]["content"], second)
+
+    def test_parallel_checkpoints_use_individual_result_order(self):
+        messages = [{"role": "user", "content": "inspect"}]
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "first",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": '{"flags":"--llm-2pass"}'},
+                    },
+                    {
+                        "id": "second",
+                        "type": "function",
+                        "function": {"name": "ddm", "arguments": '{"flags":"--llm-2pass"}'},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "first", "content": "Old@10,20|Other@30,40"},
+            {"role": "tool", "tool_call_id": "second", "content": "New@50,60|Other@70,80"},
+        ])
+        identities = self._identities(
+            ("first", "tab-a", "https://example.test"),
+            ("second", "tab-a", "https://example.test"),
+        )
+
+        _, stats = compact_active_browser_checkpoints(
+            messages,
+            checkpoint_identities=identities,
+        )
+
+        self.assertEqual(stats["compacted"], 1)
+        self.assertIn("Earlier browser DOM checkpoint omitted", messages[2]["content"])
+        self.assertEqual(messages[3]["content"], "New@50,60|Other@70,80")
 
 
 # ---------------------------------------------------------------------------
