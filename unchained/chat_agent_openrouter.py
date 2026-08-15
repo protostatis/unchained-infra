@@ -61,9 +61,11 @@ from conversation_transcript import (
     visible_transcript_from_payload,
 )
 from context_compact import (
+    BrowserCheckpointIdentity,
     compact_active_browser_checkpoints,
     compact_messages,
     emergency_trim,
+    is_browser_dom_checkpoint,
 )
 from tool_payloads import (
     _DSML_PREFIX,
@@ -219,6 +221,9 @@ print(
 )
 TOOL_EXEC_TIMEOUT = int(os.environ.get("TOOL_EXEC_TIMEOUT", "45"))
 FORCE_FINAL_TIMEOUT = int(os.environ.get("FORCE_FINAL_TIMEOUT", "35"))
+AUTO_TAB_RESOLVE_TIMEOUT = 2.0
+_PHYSICAL_TARGET_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
+_PROVISIONED_PHYSICAL_TARGET_RE = re.compile(r"^prov-[^-]+-[0-9A-Fa-f]{32}$")
 LIVE_PREVIEW_TIMEOUT = int(os.environ.get("LIVE_PREVIEW_TIMEOUT", "20"))
 AUTO_LIVE_PREVIEW = os.environ.get("AUTO_LIVE_PREVIEW", "1").strip().lower() not in {
     "0",
@@ -318,6 +323,22 @@ class SchedulerTurnState:
     armed: bool = False
     grant_id: str = ""
     session_id: str = ""
+
+
+@dataclass(slots=True)
+class ToolExecutionTrace:
+    """Internal route metadata for one browser-tool execution."""
+
+    final_tab_id: str = ""
+    attempted_tab_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class BrowserCheckpointState:
+    """Task-local document generations for concrete browser routes."""
+
+    next_document: int = 0
+    documents: dict[str, str] = field(default_factory=dict)
 
 
 _scheduler_turn: ContextVar[SchedulerTurnState] = ContextVar(
@@ -941,6 +962,148 @@ def _navigation_result_succeeded(result: str) -> bool:
         or normalized.startswith("error:")
         or _navigation_result_is_not_found(result)
     )
+
+
+def _capture_browser_checkpoint_identity(
+    state: BrowserCheckpointState,
+    routed_tab_id: str,
+    tool_call: dict,
+    result: str,
+) -> BrowserCheckpointIdentity | None:
+    """Advance task-local browser state and identify a safe DOM checkpoint."""
+    routed = str(routed_tab_id or "").strip()
+    function = tool_call.get("function") or {}
+    name = str(function.get("name", "") or "").rsplit("__", 1)[-1]
+    result = result if isinstance(result, str) else str(result)
+    normalized = result.lstrip().lower()
+    failed = normalized.startswith(("browser_unavailable", "tool error (", "error:"))
+    candidate = is_browser_dom_checkpoint(tool_call, result)
+    args = _decode_tool_arguments(function.get("arguments"))
+    flags = str(args.get("flags", "") or "")
+    is_ddm_javascript = name == "ddm" and any(
+        token == "--js" or token.startswith("--js=")
+        for token in flags.split()
+    )
+
+    mutating_names = {
+        "navigate",
+        "click",
+        "cdp_click",
+        "type_text",
+        "submit_form",
+        "press_enter",
+        "js_eval",
+    }
+    if routed in {"", "auto"}:
+        if name in mutating_names or is_ddm_javascript:
+            # An automatic fallback may have changed any tab; do not reuse an
+            # earlier concrete-route generation after that ambiguity.
+            state.documents.clear()
+        return None
+
+    def _advance_document() -> str:
+        state.next_document += 1
+        document_id = f"document-{state.next_document}"
+        state.documents[routed] = document_id
+        return document_id
+
+    document_id = state.documents.get(routed, "")
+    if name == "navigate":
+        if candidate or (
+            not failed and result.lstrip().startswith("Navigated to:")
+        ):
+            # Every navigation is a new document, including same-URL reloads.
+            document_id = _advance_document()
+        else:
+            state.documents.pop(routed, None)
+            return None
+    elif name in {"click", "cdp_click"}:
+        if failed:
+            state.documents.pop(routed, None)
+            return None
+        click_was_unchanged = (
+            "--- no change ---" in result
+            and "--- changed ---" not in result
+            and not _page_url_from_tool_result(result)
+        )
+        if not document_id or not click_was_unchanged:
+            # A changed click can navigate, replace a same-URL document, or
+            # materially alter an SPA. Preserve checkpoints across that edge.
+            document_id = _advance_document()
+        if not candidate:
+            return None
+    elif name in {"type_text", "submit_form", "press_enter"}:
+        if failed:
+            state.documents.pop(routed, None)
+        else:
+            _advance_document()
+        return None
+    elif name == "js_eval":
+        # Arbitrary JavaScript can navigate without declaring it in the result.
+        state.documents.pop(routed, None)
+        return None
+    elif name == "ddm":
+        if is_ddm_javascript:
+            # DDM JavaScript has the same arbitrary mutation power as js_eval.
+            state.documents.pop(routed, None)
+            return None
+        if not candidate or not document_id:
+            return None
+    else:
+        return None
+
+    return BrowserCheckpointIdentity(
+        physical_tab_id=routed,
+        document_id=document_id,
+    )
+
+
+def _is_physical_tab_id(tab_id: str) -> bool:
+    """Return whether a route identifies one full Chrome target."""
+    value = str(tab_id or "").strip()
+    return bool(
+        _PHYSICAL_TARGET_RE.fullmatch(value)
+        or _PROVISIONED_PHYSICAL_TARGET_RE.fullmatch(value)
+    )
+
+
+async def _resolve_concrete_tab(
+    agent_id: str,
+    requested_tab_id: str,
+    active_tab_id: str,
+) -> str:
+    """Resolve an automatic, prefix, or alias route to one physical target."""
+    requested = str(requested_tab_id or "auto").strip() or "auto"
+    if _is_physical_tab_id(requested):
+        return requested
+    try:
+        target_result = await asyncio.wait_for(
+            cloud_tools.run_cdp_command(
+                agent_id,
+                requested,
+                "Target.getTargetInfo",
+                {},
+                RELAY_HOST,
+                RELAY_PORT,
+                bring_to_front=False,
+            ),
+            timeout=AUTO_TAB_RESOLVE_TIMEOUT,
+        )
+    except Exception:
+        return ""
+    target_info = (
+        target_result.get("targetInfo")
+        if isinstance(target_result, dict)
+        else None
+    )
+    raw_target_id = (
+        str(target_info.get("targetId", "") or "").strip()
+        if isinstance(target_info, dict)
+        else ""
+    )
+    provision_reference = requested if requested.startswith("prov-") else active_tab_id
+    physical_tab_id = canonical_session_tab(raw_target_id, provision_reference)
+    return physical_tab_id if _is_physical_tab_id(physical_tab_id) else ""
 
 
 def _message_content_as_text(message: dict) -> str:
@@ -1890,6 +2053,11 @@ class TrialAgent:
         reflex.set_user_goal(user_text)
 
         js_eval_cache: dict[tuple[str, str], dict] = {}
+        checkpoint_identities: dict[str, BrowserCheckpointIdentity] = {}
+        checkpoint_state = BrowserCheckpointState()
+        seen_tool_call_ids: set[str] = set()
+        ambiguous_tool_call_ids: set[str] = set()
+        capture_checkpoint_identities = bool(self._session_billing_runs.get(session_id))
 
         def _invalidate_js_eval_cache(tab_id: str):
             """Clear cached js_eval outputs after actions that may change page state."""
@@ -1915,6 +2083,7 @@ class TrialAgent:
                                 tool_choice="none",
                                 session_id=session_id,
                                 user_id=user_id,
+                                checkpoint_identities=checkpoint_identities,
                             ),
                             timeout=FORCE_FINAL_TIMEOUT,
                         )
@@ -1985,6 +2154,7 @@ class TrialAgent:
                             session_id=session_id,
                             user_id=user_id,
                             reasoning=not first_turn_fast,
+                            checkpoint_identities=checkpoint_identities,
                         )
                     except httpx.ReadTimeout:
                         print(f"[{session_id}] OpenRouter read timeout on turn {turn+1} — retrying once")
@@ -1995,6 +2165,7 @@ class TrialAgent:
                             tool_choice=next_tool_choice,
                             session_id=session_id,
                             user_id=user_id,
+                            checkpoint_identities=checkpoint_identities,
                         )
                     except httpx.HTTPStatusError as e:
                         provider_message = _openrouter_error_message(e.response)
@@ -2016,6 +2187,7 @@ class TrialAgent:
                                     session_id=session_id,
                                     user_id=user_id,
                                     reasoning=True,
+                                    checkpoint_identities=checkpoint_identities,
                                 )
                             except httpx.HTTPStatusError as retry_error:
                                 raise RuntimeError(
@@ -2032,6 +2204,7 @@ class TrialAgent:
                                     model,
                                     session_id=session_id,
                                     user_id=user_id,
+                                    checkpoint_identities=checkpoint_identities,
                                 )
                             except httpx.HTTPStatusError as retry_error:
                                 raise RuntimeError(
@@ -2048,6 +2221,16 @@ class TrialAgent:
                             print(f"[{session_id}] Recovered DSML tool call(s) from DeepSeek response")
                             message = recovered
                     tool_calls = message.get("tool_calls") or []
+                    call_id_counts: dict[str, int] = {}
+                    for tool_call in tool_calls:
+                        raw_call_id = tool_call.get("id")
+                        if isinstance(raw_call_id, str) and raw_call_id:
+                            call_id_counts[raw_call_id] = call_id_counts.get(raw_call_id, 0) + 1
+                    for call_id, count in call_id_counts.items():
+                        if count != 1 or call_id in seen_tool_call_ids:
+                            ambiguous_tool_call_ids.add(call_id)
+                            checkpoint_identities.pop(call_id, None)
+                        seen_tool_call_ids.add(call_id)
 
                     messages.append(message)
 
@@ -2183,6 +2366,11 @@ class TrialAgent:
                         tool_ms = 0.0
                         cache_hit = False
                         link_scan_blocked = False
+                        execution_trace = (
+                            ToolExecutionTrace()
+                            if capture_checkpoint_identities
+                            else None
+                        )
                         expr = ""
                         cache_key = None
                         if name == "js_eval":
@@ -2233,6 +2421,7 @@ class TrialAgent:
                                         name,
                                         args,
                                         tab_id=session_tab_id,
+                                        execution_trace=execution_trace,
                                         **execute_kwargs,
                                     ),
                                     timeout=TOOL_EXEC_TIMEOUT,
@@ -2352,6 +2541,32 @@ class TrialAgent:
                                 )
                                 tool_result_evt["new_tab_id"] = raw_new_tab_id
                         await self._send(session_id, tool_result_evt)
+
+                        checkpoint_call_id = tc.get("id")
+                        checkpoint_identity = None
+                        if (
+                            capture_checkpoint_identities
+                            and execution_trace is not None
+                            and execution_trace.final_tab_id
+                        ):
+                            for attempted_tab_id in execution_trace.attempted_tab_ids[:-1]:
+                                if attempted_tab_id == "auto":
+                                    checkpoint_state.documents.clear()
+                                else:
+                                    checkpoint_state.documents.pop(attempted_tab_id, None)
+                            checkpoint_identity = _capture_browser_checkpoint_identity(
+                                checkpoint_state,
+                                execution_trace.final_tab_id,
+                                tc,
+                                result,
+                            )
+                        if (
+                            checkpoint_identity is not None
+                            and isinstance(checkpoint_call_id, str)
+                            and checkpoint_call_id
+                            and checkpoint_call_id not in ambiguous_tool_call_ids
+                        ):
+                            checkpoint_identities[checkpoint_call_id] = checkpoint_identity
 
                         tool_failed = (
                             navigation_not_found
@@ -2509,6 +2724,7 @@ class TrialAgent:
         session_id: str = "",
         user_id: str = "",
         reasoning: bool = True,
+        checkpoint_identities: dict[str, BrowserCheckpointIdentity] | None = None,
     ) -> dict:
         effective_model = model or self.model
         provider = "deepseek" if _is_deepseek_model(effective_model) else "openrouter"
@@ -2517,7 +2733,10 @@ class TrialAgent:
             billing_run_id
             and _serialized_context_chars(messages) > HOSTED_MAX_INTERNAL_CONTEXT_CHARS
         ):
-            messages, browser_stats = compact_active_browser_checkpoints(messages)
+            messages, browser_stats = compact_active_browser_checkpoints(
+                messages,
+                checkpoint_identities=checkpoint_identities,
+            )
             if browser_stats["compacted"]:
                 print(
                     f"[{session_id}] Compacted active browser checkpoints: "
@@ -2966,6 +3185,7 @@ class TrialAgent:
         tab_id: str | None = None,
         *,
         bring_to_front: bool = True,
+        execution_trace: ToolExecutionTrace | None = None,
     ) -> str:
         # Model can override session tab by explicitly providing a non-default tab_id
         # Reject URLs/paths that models sometimes hallucinate as tab IDs
@@ -2993,24 +3213,62 @@ class TrialAgent:
         ):
             effective_tab = "auto"
 
+        is_tab_management = name == "ddm" and any(
+            flag in flags_str for flag in ("--new", "--tabs", "--close")
+        )
+        dispatch_tab = effective_tab
+        identity_tab = effective_tab
+        if (
+            execution_trace is not None
+            and not is_tab_management
+            and name not in SCHEDULER_TOOL_NAMES
+        ):
+            resolved_tab = await _resolve_concrete_tab(
+                agent_id,
+                effective_tab,
+                str(tab_id or ""),
+            )
+            if resolved_tab:
+                dispatch_tab = resolved_tab
+                identity_tab = resolved_tab
+            else:
+                # Keep the original route operational, but never treat an
+                # unresolved prefix/alias as a physical checkpoint identity.
+                identity_tab = "auto"
+        if execution_trace is not None:
+            execution_trace.final_tab_id = identity_tab
+            execution_trace.attempted_tab_ids.append(identity_tab)
         result = await self._dispatch_tool(
             agent_id,
-            effective_tab,
+            dispatch_tab,
             name,
             args,
             bring_to_front=bring_to_front,
         )
 
         # If session tab appears dead, retry on 'auto' (first alive tab)
-        if effective_tab != "auto" and ("BROWSER_UNAVAILABLE" in result or "4000" in result):
+        if dispatch_tab != "auto" and ("BROWSER_UNAVAILABLE" in result or "4000" in result):
+            fallback_tab = "auto"
+            if (
+                execution_trace is not None
+                and not is_tab_management
+                and name not in SCHEDULER_TOOL_NAMES
+            ):
+                fallback_tab = await _resolve_concrete_tab(
+                    agent_id,
+                    "auto",
+                    dispatch_tab,
+                ) or "auto"
+            if execution_trace is not None:
+                execution_trace.final_tab_id = fallback_tab
+                execution_trace.attempted_tab_ids.append(fallback_tab)
             result = await self._dispatch_tool(
                 agent_id,
-                "auto",
+                fallback_tab,
                 name,
                 args,
                 bring_to_front=bring_to_front,
             )
-
         return result
 
     async def _dispatch_tool(
