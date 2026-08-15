@@ -15,7 +15,12 @@ import uuid
 from aiohttp import web
 
 from web_app.core import get_core as _core
-from web_state import ChatTurnState
+from web_state import (
+    ChatTurnState,
+    finish_hosted_session_dispatch,
+    hosted_session_phase,
+    start_hosted_session_dispatch,
+)
 
 
 def _turn_registry(core):
@@ -58,6 +63,33 @@ def _route_failure(
     return _route_result(False, code, message, status)
 
 
+def _is_hosted_overlay(core, overlay, agent_id: str) -> bool:
+    """Return whether this follow-up can write through the hosted worker."""
+    trial_agent_id = str(getattr(core, "TRIAL_AGENT_ID", "") or "")
+    if trial_agent_id and agent_id == trial_agent_id:
+        return True
+    is_openrouter_model = getattr(core, "_is_openrouter_model", None)
+    return bool(callable(is_openrouter_model) and is_openrouter_model(overlay.model))
+
+
+def _lifecycle_failure(session_id: str, phase: str, *, notify_overlay: bool) -> dict:
+    if phase == "retired":
+        return _route_failure(
+            session_id,
+            "session_archived",
+            "Follow-up was not sent because this conversation was archived.",
+            409,
+            notify_overlay=notify_overlay,
+        )
+    return _route_failure(
+        session_id,
+        "session_transitioning",
+        "Follow-up was not sent because this conversation is being archived.",
+        503,
+        notify_overlay=notify_overlay,
+    )
+
+
 async def _route_followup(
     core,
     session_id: str,
@@ -78,6 +110,13 @@ async def _route_followup(
         )
 
     agent_id = core._session_agents.get(session_id) or overlay.agent_id
+    hosted = _is_hosted_overlay(core, overlay, agent_id)
+    if hosted:
+        phase = hosted_session_phase(core, session_id)
+        if phase != "open":
+            return _lifecycle_failure(
+                session_id, phase, notify_overlay=notify_overlay
+            )
     req_id = f"overlay-{uuid.uuid4().hex[:8]}"
     registry = _turn_registry(core)
     if registry:
@@ -177,6 +216,20 @@ async def _route_followup(
         if overlay.slot is not None:
             ws_msg["slot"] = overlay.slot
 
+        dispatch_lease = None
+        if hosted:
+            dispatch_lease = await start_hosted_session_dispatch(core, session_id)
+            if dispatch_lease is None:
+                from web_app.handlers.chat_stream import _publish_turn_failure
+
+                _publish_turn_failure(
+                    core, turn, "This conversation is being archived. Try again shortly."
+                )
+                return _lifecycle_failure(
+                    session_id,
+                    hosted_session_phase(core, session_id),
+                    notify_overlay=False,
+                )
         try:
             await agent_ws.send_json(ws_msg)
             print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
@@ -193,6 +246,9 @@ async def _route_followup(
                 502,
                 notify_overlay=False,
             )
+        finally:
+            if dispatch_lease is not None:
+                await finish_hosted_session_dispatch(core, session_id, dispatch_lease)
         return _route_result(True, "followup_routed", "Overlay follow-up sent.", 200)
 
     # Legacy fake-core and guest-compatible behavior. This remains queue based
@@ -227,6 +283,16 @@ async def _route_followup(
     if overlay.slot is not None:
         ws_msg["slot"] = overlay.slot
 
+    dispatch_lease = None
+    if hosted:
+        dispatch_lease = await start_hosted_session_dispatch(core, session_id)
+        if dispatch_lease is None:
+            core._response_queues.pop(session_id, None)
+            return _lifecycle_failure(
+                session_id,
+                hosted_session_phase(core, session_id),
+                notify_overlay=notify_overlay,
+            )
     try:
         await agent_ws.send_json(ws_msg)
         print(f"[overlay] follow-up routed to {agent_id}: {message[:60]}")
@@ -240,6 +306,9 @@ async def _route_followup(
             502,
             notify_overlay=notify_overlay,
         )
+    finally:
+        if dispatch_lease is not None:
+            await finish_hosted_session_dispatch(core, session_id, dispatch_lease)
 
     # Drain responses and push to overlay via CDP
     async def _drain():
